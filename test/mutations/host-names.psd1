@@ -162,7 +162,7 @@
            Find = 'if (-not $newNames.ContainsKey($k)) {'
            Replace = 'if ($false) {' }
         @{ Name = "shrink-removed-host-accepted"
-           Find = 'if ($p -match ''^hosts/([^/]+)/names\.txt$'' -and -not $here.ContainsKey($Matches[1])) {'
+           Find = 'if ($p -match ''^([^/]+/[^/]+)/names\.txt$'' -and -not $here.ContainsKey($Matches[1])) {'
            Replace = 'if ($false) {' }
         @{ Name = "shrink-every-host-new"
            Find = 'if (-not $onRef.ContainsKey($own + "/names.txt")) {'
