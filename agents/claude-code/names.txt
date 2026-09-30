@@ -12,5 +12,4 @@ claude | the harness's command and product name - as a substring it also catches
 #     other vendors' models through this harness, and the engine-settings design names wire protocols
 #     after their vendor (anthropic-messages): a provider is data that more than one harness can use.
 #   opus, sonnet, fable, haiku - model aliases, which live in the user's own engine file and never in
-#     the repository. opus is in 7 files today, every one a pane-session fixture recording the model
-#     the hook reported; a model id is the provider's vocabulary, not the harness's.
+#     the repository. A model id is the provider's vocabulary, not the harness's.

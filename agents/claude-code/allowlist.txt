@@ -36,26 +36,7 @@ test/test-roles.ps1 | 19 | builds old-system session records whose key field car
 test/test-schema-pane-session.ps1 | 2 | tests the pane-session schema, which documents a file the harness's hook writes
 test/test-schema-restore-plan.ps1 | 7 | tests the restore plan's per-harness resume kinds and quotes them
 
-# --- fixtures: copies of files the harness writes, and plans that resume under it.
-test/fixtures/pane-session/invalid/bad-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/invalid/no-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/invalid/session-id-trailing-newline.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/invalid/uppercase-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/invalid/wrong-event.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/invalid/wrong-type.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/compact-with-prompt.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/compact-with-prompt-no-title.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/minimal.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/resume-cache-fields-with-title.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/resume-with-prompt.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/resume-with-title.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/startup-with-model.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/startup-with-model-and-scratchpad.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/startup-with-model-scratchpad-title.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/unknown-source-and-field.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/wezfleet-backfill.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/with-cache-fields.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
-test/fixtures/pane-session/valid/with-model-and-title.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+# --- fixtures: restore plans whose sessions resume under the harness.
 test/fixtures/restore-plan/invalid/advisory-false.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
 test/fixtures/restore-plan/invalid/argv-empty.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
 test/fixtures/restore-plan/invalid/argv-empty-string.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
