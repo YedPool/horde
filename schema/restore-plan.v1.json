@@ -15,13 +15,13 @@
         "type": "object",
         "required": ["slot", "sessionId", "agent", "role", "label", "cwd", "resume"],
         "properties": {
-          "slot": { "type": "string", "description": "The name the layout uses for this session, unique in the plan. Never a pane number." },
+          "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The name the layout uses for this session, unique in the plan. Never a pane number: lower-case letters, digits and hyphens, starting with a letter, so it is never a bare number and no two slots differ only in case." },
           "sessionId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id: the session's stable identity, unique in the plan ignoring the case of its hex digits (a UUID in capitals is the same id). Same shape as schema/session-record.v1's sessionId." },
           "agent": { "type": "string", "description": "Which agent runs the session, e.g. claude or codex." },
           "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "description": "The native roles of core/roles.json; test/test-schema-restore-plan.ps1 fails if the two differ." },
           "label": { "type": "string", "description": "The session's fleet label, e.g. D or D1." },
           "parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The sessionId of the session that spawned this one. When present it names another session in this plan, ignoring case." },
-          "cwd": { "type": "string", "description": "The directory the session runs in." },
+          "cwd": { "type": "string", "pattern": "\\S", "description": "The directory the session runs in; never empty, since an empty directory would start the session wherever the host happens to be." },
           "resume": {
             "type": "object",
             "description": "How to bring the conversation back, produced by the AgentPort. A host runs argv as it is given and never turns kind into flags itself. No two sessions share a kind and id (ignoring case), so no conversation is resumed twice.",
@@ -87,7 +87,7 @@
       "type": "object",
       "description": "Either a leaf { slot } or a container { split, ratio?, children }. JSON Schema's subset here cannot say 'exactly one of the two', so core/RestorePlan.ps1 does.",
       "properties": {
-        "slot": { "type": "string", "description": "Leaf: the slot of a session in this plan." },
+        "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Leaf: the slot of a session in this plan, in the same shape as the session's." },
         "split": { "type": "string", "enum": ["right", "down"], "description": "Container: children side by side (right) or stacked (down), in order." },
         "ratio": { "type": "number", "description": "Container: the share of the first child, strictly between 0 and 1. Absent for a host with no sizes: dropped, never approximated." },
         "children": { "type": "array", "items": { "$ref": "#/definitions/node" }, "description": "Container: at least two nodes." }

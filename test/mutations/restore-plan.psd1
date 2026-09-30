@@ -103,10 +103,14 @@
            Replace = '$parent = $null' }
         @{ Name = "session-slots-ignore-case"
            Find = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::Ordinal)'
-           Replace = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+           Replace = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)'
+           Expect = "survives"
+           Reason = "Since the review of PR #17 the schema's slot pattern, ^[a-z][a-z0-9-]*$, admits lower case only, so the gate never sees two slots that differ only in case (slot-case-differs is now refused by the schema). The ordinal comparison stays, carried by its comment, for a plan checked against another schema." }
         @{ Name = "placements-ignore-case"
            Find = 'System.Collections.ArrayList]'' ([System.StringComparer]::Ordinal)'
-           Replace = 'System.Collections.ArrayList]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+           Replace = 'System.Collections.ArrayList]'' ([System.StringComparer]::OrdinalIgnoreCase)'
+           Expect = "survives"
+           Reason = "Since the review of PR #17 the schema's slot pattern, ^[a-z][a-z0-9-]*$, admits lower case only, so the gate never sees two slots that differ only in case (slot-case-differs is now refused by the schema). The ordinal comparison stays, carried by its comment, for a plan checked against another schema." }
         @{ Name = "unknown-slot-allowed"
            Find = 'if (-not $slotAt.ContainsKey($slot)) {'
            Replace = 'if ($false) {' }

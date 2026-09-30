@@ -34,7 +34,9 @@
 # findings about symptoms of the same fault. So a plan the schema refuses gets the schema's findings
 # only, and a plan it accepts gets every finding below, not just the first.
 #
-# Slots are compared exactly, case included, as the JSON holds them. Session ids, parents and resume
+# Slots are compared exactly, case included, as the JSON holds them; restore-plan.v1's slot pattern
+# admits lower case only, so under it no two slots differ only in case, and the exact comparison is
+# defence for a plan checked against another schema. Session ids, parents and resume
 # ids are UUIDs and are compared ignoring case: "AAAAAAAA-..." and "aaaaaaaa-..." are one conversation,
 # and an exact comparison let two sessions resume it (review of PR #17).
 

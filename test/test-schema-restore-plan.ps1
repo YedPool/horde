@@ -37,6 +37,32 @@ $names = @([regex]::Matches($schemaText, '"([A-Za-z_$][A-Za-z0-9_$-]*)"\s*:') | 
 Check ($names -ccontains "slot") "CONTROL: the key scan finds the slot key"
 $paneKeys = @($names | Where-Object { $_ -match 'pane' })
 Check ($paneKeys.Count -eq 0) ("no key of the schema names a pane (" + ($paneKeys -join ", ") + ")")
+# A host handle travels under other names too: a handle, a tty, or any something-Id. The ids the plan
+# may hold are the conversation's (sessionId, resume.id), the plan's own name (planId), and the
+# schema's ($id). CONTROL: the same filter, with no exceptions, finds those four.
+$allowedIds = @("sessionId", "planId", "id", '$id')
+$idLike = @($names | Where-Object { $_ -match 'handle|tty|id$' } | Sort-Object -Unique)
+Check ((@($idLike | Where-Object { $allowedIds -ccontains $_ }).Count) -eq 4) ("CONTROL: the handle/tty/id scan finds the four allowed ids (" + ($idLike -join ", ") + ")")
+$handleKeys = @($idLike | Where-Object { $allowedIds -cnotcontains $_ })
+Check ($handleKeys.Count -eq 0) ("no key of the schema is a handle, a tty or another id (" + ($handleKeys -join ", ") + ")")
+# AND NO KEY CAN BE ADDED THAT THE SCAN WOULD MISS: every object node of the schema refuses keys it
+# does not name. Walked on the parsed schema, $ref targets included via definitions.
+function Get-SchemaObjectNodes {
+    param($Node, [string]$At)
+    if ($Node -isnot [System.Management.Automation.PSCustomObject]) { return }
+    if ($null -ne $Node.PSObject.Properties["type"] -and "$($Node.type)" -ceq "object") { [pscustomobject]@{ At = $At; Node = $Node } }
+    foreach ($p in $Node.PSObject.Properties) {
+        if ($p.Value -is [System.Management.Automation.PSCustomObject]) { Get-SchemaObjectNodes $p.Value ($At + "/" + $p.Name) }
+    }
+}
+$objectNodes = @(Get-SchemaObjectNodes $schema "#")
+Check ($objectNodes.Count -eq 8) ("CONTROL: the walk finds the 8 object nodes: plan, session, resume, layout, workspace, window, tab, node (" + $objectNodes.Count + ")")
+$open = @($objectNodes | Where-Object { -not ($null -ne $_.Node.PSObject.Properties["additionalProperties"] -and $_.Node.additionalProperties -is [bool] -and $_.Node.additionalProperties -eq $false) } | ForEach-Object { $_.At })
+Check ($open.Count -eq 0) ("every object node of the schema has additionalProperties false (" + ($open -join ", ") + ")")
+$loose = [System.IO.File]::ReadAllText((Join-Path $root "schema\restore-plan.v1.json")) | ConvertFrom-Json
+$loose.properties.layout.PSObject.Properties.Remove("additionalProperties")
+$looseOpen = @(Get-SchemaObjectNodes $loose "#" | Where-Object { $null -eq $_.Node.PSObject.Properties["additionalProperties"] } | ForEach-Object { $_.At })
+Check (($looseOpen -join ",") -ceq "#/properties/layout") ("CONTROL: the walk sees one node that lacks it (" + ($looseOpen -join ", ") + ")")
 
 Write-Host ""
 Write-Host "--- valid plans ---" -ForegroundColor Cyan
@@ -132,7 +158,13 @@ $expect = [ordered]@{
     "duplicate-session-id"       = @{ like = '$.sessions`[1`].sessionId * is also the sessionId of $.sessions`[0`]'; n = 2; schema = $false }
     "parent-not-in-plan"         = @{ like = '$.sessions`[1`].parent * names no session in the plan'; n = 1; schema = $false }
     "parent-is-self"             = @{ like = '$.sessions`[1`].parent names the session itself'; n = 1; schema = $false }
-    "slot-case-differs"          = @{ like = '*.root.children`[0`] names slot ''S1'', which no session in the plan has'; n = 2; schema = $false }
+    # A slot is lower-case letters, digits and hyphens, starting with a letter, so no two slots differ
+    # only in case and none is a bare number that could be read as a pane (review of PR #17).
+    "slot-case-differs"          = @{ like = '*.root.children`[0`].slot does not match*'; n = 1; schema = $true }
+    "slot-bare-digit"            = @{ like = '$.sessions`[0`].slot does not match*'; n = 1; schema = $true }
+    "slot-empty"                 = @{ like = '$.sessions`[0`].slot does not match*'; n = 1; schema = $true }
+    "cwd-empty"                  = @{ like = '$.sessions`[0`].cwd does not match*'; n = 1; schema = $true }
+    "session-id-empty"           = @{ like = '$.sessions`[0`].sessionId does not match*'; n = 1; schema = $true }
     # What is restored: the conversation each session resumes, and the command a host runs for it.
     "resume-no-argv"             = @{ like = '$.sessions`[0`].resume has no ''argv'''; n = 1; schema = $true }
     "resume-kind-unknown"        = @{ like = '$.sessions`[0`].resume.kind is ''claude-continue'', not one of*'; n = 1; schema = $true }
