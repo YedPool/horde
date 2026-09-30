@@ -19,8 +19,8 @@
            Find = 'return [Math]::DivRem([long]$Time.ToUniversalTime().Ticks, [long]10, [ref]$rem)'
            Replace = 'return [long][Math]::Floor($Time.ToUniversalTime().Ticks / 10)' }
         @{ Name = "gone-process-trusted"
-           Find = 'return [pscustomobject]@{ same = $false; reason = ("process " + $ProcId + " is not running, so this control file is stale") }'
-           Replace = 'return [pscustomobject]@{ same = $true; reason = "" }' }
+           Find = 'return [pscustomobject]@{ same = $false; kind = "gone"; reason = ("process " + $ProcId + " is not running, so this control file is stale") }'
+           Replace = 'return [pscustomobject]@{ same = $true; kind = "verified"; reason = "" }' }
         @{ Name = "procstart-compared-as-text"
            Find = 'if ($null -eq $ProcStart -or -not [long]::TryParse("$ProcStart", [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ticks)) {'
            Replace = 'if ($null -eq $ProcStart -or "$ProcStart" -notmatch "^[1-9][0-9]*$" -or -not [long]::TryParse("$ProcStart", [ref]$ticks)) {' }
@@ -114,5 +114,11 @@
         @{ Name = "leaves-a-file-in-fixture-folders"
            Find = 'try { $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }'
            Replace = 'try { if ($File.FullName -like "*horde-identity-*") { [System.IO.File]::WriteAllText($File.FullName + ".seen", "") }; $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }' }
+        @{ Name = "uncheckable-file-not-reported"
+           Find = '@("gone", "reused", "uncheckable") -ccontains $verdict.kind'
+           Replace = '@("gone", "reused") -ccontains $verdict.kind' }
+        @{ Name = "gone-labelled-reused"
+           Find = 'kind = "gone"; reason'
+           Replace = 'kind = "reused"; reason' }
     )
 }

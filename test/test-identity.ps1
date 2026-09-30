@@ -185,6 +185,17 @@ $d9 = NewDir "claude"
 PutJson (Join-Path $d9 "221.json") (ClaudeRec 221 (Sid 41) (Created 0) -Set @{ procStart = "yesterday" })
 $r9 = Get-HordeIdentity -ClaudeDir $d9 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(, @(221, "claude.exe", (Created 0)))) -Now $now
 Check ((St $r9.records[(Sid 41)].fields.liveStatus) -eq "unknown" -and $r9.records[(Sid 41)].fields.liveStatus.reason -like "*procStart*") "a procStart that is not an integer leaves liveness unknown"
+# A FILE THAT CANNOT BE CHECKED IS A FINDING, like one that is stale. The verdict names its kind, and
+# the findings are chosen by that kind: they were chosen by words in the reason text, so a missing
+# procStart, or a process the table gives no start time, was a file nobody heard about (review
+# finding 3 of PR #19).
+$d9b = NewDir "claude"
+PutJson (Join-Path $d9b "222.json") (ClaudeRec 222 (Sid 42) (Created 0) -Drop @("procStart"))
+PutJson (Join-Path $d9b "223.json") (ClaudeRec 223 (Sid 43) (Created 0))
+$r9b = Get-HordeIdentity -ClaudeDir $d9b -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(222, "claude.exe", (Created 0)), @(223, "claude.exe", $null))) -Now $now
+Check (@($r9b.findings | Where-Object { $_ -like "222.json:*procStart*" }).Count -eq 1) "a control file with no procStart is reported as a finding"
+Check (@($r9b.findings | Where-Object { $_ -like "223.json:*no start time*" }).Count -eq 1) "a process the table gives no start time is reported as a finding"
+Check ("$($r9b.records[(Sid 42)].processCheck)" -ceq "uncheckable" -and "$($r1.processCheck)" -ceq "verified" -and "$($r2.processCheck)" -ceq "gone" -and "$($r3.processCheck)" -ceq "reused") "every control file says which process check it passed or failed"
 
 # L-031: startedAt is the session start inside the process, seconds after the process began. It is
 # never the process check - here startedAt equals the table's time and procStart does not.

@@ -228,3 +228,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: horde test/harness/Isolation.ps1:173-183 "Measured 2026-09-29: with / the CIM and .NET readings of the same process disagreed for 304 of 365 processes"; CIM reports creation time to the microsecond while procStart is written in 100-nanosecond ticks, so they are compared after [Math]::DivRem by 10. The reality check matched 10 of 10 live control files against the CIM table on 2026-09-30.
 - disposition: test
 - where: test/test-identity.ps1 :: "procStart matches the start time at microsecond precision"
+
+### L-044 A control file that cannot be checked against its process is a finding, chosen by kind
+- source: review finding 3 of PR #19, 2026-09-30: the reader chose which stale files to report by matching "not running" and "reused" in the verdict's reason text, so a control file with a missing or unparseable procStart, or one whose process the table gave no start time, left its live fields unknown and was reported nowhere. Get-HordeProcessVerdict now returns a kind - verified, gone, reused, uncheckable or no-table - every record carries it as processCheck, and gone, reused and uncheckable each produce a finding. An unreadable process table is reported once, in verifiedLive and the orphan answer, not once per file.
+- disposition: test
+- where: test/test-identity.ps1 :: "a control file with no procStart is reported as a finding"

@@ -129,41 +129,49 @@ function Get-HordeTimeField {
 
 function Get-HordeProcessVerdict {
     # Is the process a control file describes still the one running under its pid? Returns
-    # { same; reason }: same is $true only when the pid is running and its creation time equals
-    # procStart to the microsecond. The reason names which of the other cases it is.
+    # { same; kind; reason }: same is $true only when the pid is running and its creation time equals
+    # procStart to the microsecond. kind says which case it is, for callers to act on; the reason is
+    # for people. Callers choose by kind, never by words in the reason (review finding 3 of PR #19):
+    #   verified     the pid is running and is the process the file describes
+    #   gone         the pid is not running: the file is stale
+    #   reused       the pid is running but started at another time: the file is stale
+    #   uncheckable  procStart is missing or not a file time, or the table gives no start time
+    #   no-table     the process table could not be read
     #
     # procStart is a DECIMAL STRING of file-time ticks on disk (10 of 10 files, 2026-09-30), so it is
     # parsed as an integer and compared as one: as text, "0" + the same ticks would be another time.
     param([int]$ProcId, $ProcStart, $Processes)
-    if ($Processes.state -ne "known") { return [pscustomobject]@{ same = $false; reason = ("the process table could not be read (" + $Processes.reason + ")") } }
+    if ($Processes.state -ne "known") { return [pscustomobject]@{ same = $false; kind = "no-table"; reason = ("the process table could not be read (" + $Processes.reason + ")") } }
     $ticks = [long]0
     if ($null -eq $ProcStart -or -not [long]::TryParse("$ProcStart", [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ticks)) {
-        return [pscustomobject]@{ same = $false; reason = ("procStart '" + $ProcStart + "' is not an integer tick count, so the process cannot be checked") }
+        return [pscustomobject]@{ same = $false; kind = "uncheckable"; reason = ("procStart '" + $ProcStart + "' is not an integer tick count, so the process cannot be checked") }
     }
     $fileTime = $null
-    try { $fileTime = [DateTime]::FromFileTimeUtc($ticks) } catch { return [pscustomobject]@{ same = $false; reason = ("procStart " + $ticks + " is not a file time") } }
+    try { $fileTime = [DateTime]::FromFileTimeUtc($ticks) } catch { return [pscustomobject]@{ same = $false; kind = "uncheckable"; reason = ("procStart " + $ticks + " is not a file time") } }
     $table = $Processes.value
     if (-not $table.ContainsKey($ProcId)) {
-        return [pscustomobject]@{ same = $false; reason = ("process " + $ProcId + " is not running, so this control file is stale") }
+        return [pscustomobject]@{ same = $false; kind = "gone"; reason = ("process " + $ProcId + " is not running, so this control file is stale") }
     }
     $proc = $table[$ProcId]
-    if ($null -eq $proc.created) { return [pscustomobject]@{ same = $false; reason = ("the process table gives no start time for pid " + $ProcId) } }
+    if ($null -eq $proc.created) { return [pscustomobject]@{ same = $false; kind = "uncheckable"; reason = ("the process table gives no start time for pid " + $ProcId) } }
     if ((ConvertTo-HordeMicroseconds $proc.created) -ne (ConvertTo-HordeMicroseconds $fileTime)) {
-        return [pscustomobject]@{ same = $false; reason = ("pid " + $ProcId + " was reused: it now belongs to a process started " + $proc.created.ToString("o") + ", not the one this file describes (" + $fileTime.ToString("o") + ")") }
+        return [pscustomobject]@{ same = $false; kind = "reused"; reason = ("pid " + $ProcId + " was reused: it now belongs to a process started " + $proc.created.ToString("o") + ", not the one this file describes (" + $fileTime.ToString("o") + ")") }
     }
-    return [pscustomobject]@{ same = $true; reason = "" }
+    return [pscustomobject]@{ same = $true; kind = "verified"; reason = "" }
 }
 
 function New-HordeIdentityRecord {
-    # A record: the session id plainly, the file it came from, and every agent-owned field as an
-    # answer - unknown with $Missing's reason for each field this agent does not write.
-    param([string]$SessionId, [string]$Source, [hashtable]$Known, [string]$Missing, [hashtable]$Provisional)
+    # A record: the session id plainly, the file it came from, the kind of process check its file
+    # passed or failed (Get-HordeProcessVerdict; "unchecked" for an agent that writes no pid), and
+    # every agent-owned field as an answer - unknown with $Missing's reason for each field this agent
+    # does not write.
+    param([string]$SessionId, [string]$Source, [hashtable]$Known, [string]$Missing, [hashtable]$Provisional, [string]$ProcessCheck)
     $fields = [ordered]@{}
     foreach ($n in $script:HordeIdentityFields) {
         if ($Known.ContainsKey($n)) { $fields[$n] = $Known[$n] }
         else { $fields[$n] = New-HordeUnknown -Reason ($Missing + " " + $n) }
     }
-    return [pscustomobject]@{ PSTypeName = "Horde.IdentityRecord"; sessionId = $SessionId; source = $Source; fields = $fields; provisional = $Provisional }
+    return [pscustomobject]@{ PSTypeName = "Horde.IdentityRecord"; sessionId = $SessionId; source = $Source; processCheck = $ProcessCheck; fields = $fields; provisional = $Provisional }
 }
 
 function Get-HordeControlFiles {
@@ -243,8 +251,9 @@ function Read-HordeClaudeControlFiles {
         if ($procStartField.state -eq "known") { $procStartRaw = $procStartField.value }
         $verdict = Get-HordeProcessVerdict -ProcId $procId -ProcStart $procStartRaw -Processes $Processes
         if ($verdict.same) { [void]$verified.Add($sid) }
-        elseif ($verdict.reason -like "*not running*") { [void]$findings.Add($f.Name + ": " + $verdict.reason) }
-        elseif ($verdict.reason -like "*reused*") { [void]$findings.Add($f.Name + ": " + $verdict.reason) }
+        # A stale file and a file that cannot be checked are both findings. An unreadable process
+        # table is not one per file: it is said once, in verifiedLive and the orphan answer.
+        elseif (@("gone", "reused", "uncheckable") -ccontains $verdict.kind) { [void]$findings.Add($f.Name + ": " + $verdict.reason) }
 
         $k = @{}
         $k["agent"] = New-HordeKnown -Value "claude"
@@ -308,7 +317,7 @@ function Read-HordeClaudeControlFiles {
             else { $k["transcriptPath"] = New-HordeUnknown -Reason ("the derived transcript " + $tp + " does not exist") }
         } else { $k["transcriptPath"] = New-HordeUnknown -Reason "the control file gives no cwd to derive the transcript from" }
         $k["resumeCommand"] = New-HordeUnknown -Reason "the resume command is computed by the AgentPort (step 5.1), not read"
-        [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "the claude control file has no" -Provisional @{ formerNames = $script:HordeFormerNamesProvisional }))
+        [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "the claude control file has no" -Provisional @{ formerNames = $script:HordeFormerNamesProvisional } -ProcessCheck $verdict.kind))
     }
     # A CLAUDE PROCESS WITH NO CONTROL FILE yields no record: it says nothing about which session it
     # is. It is listed, because it is a real process holding resources (census 2026-09-30: one such
@@ -373,7 +382,7 @@ function Read-HordeCodexControlFiles {
         elseif ($script:HordeCodexStatuses -cnotcontains "$($st.value)") { $k["liveStatus"] = New-HordeUnknown -Reason ("the codex status '" + $st.value + "' is not one Horde knows") }
         elseif ("$($st.value)" -ceq "ended") { $k["liveStatus"] = New-HordeKnown -Value "ended" -ObservedAt $at }
         else { $k["liveStatus"] = Limit-HordeAge -Answer (New-HordeKnown -Value "$($st.value)" -ObservedAt $at) -TtlSeconds $TtlSeconds -Now $Now }
-        [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "codex writes no" -Provisional @{ transcriptPath = "taken from the codex control file; no derivation of a codex transcript path has been measured" }))
+        [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "codex writes no" -Provisional @{ transcriptPath = "taken from the codex control file; no derivation of a codex transcript path has been measured" } -ProcessCheck "unchecked"))
     }
     $orphans = New-HordeUnknown -Reason "codex writes no pid, so a codex process cannot be matched to a file"
     return (New-HordeAgentRead -Agent "codex" -Entries $entries -Gaps $gaps -Verified @() -Orphans $orphans -Findings @())
