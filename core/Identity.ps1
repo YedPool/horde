@@ -69,6 +69,11 @@ function Test-HordeSessionId {
     # Is this a session id that may become a key or a file name? The pattern wezfleet uses for both
     # codex file names and mail directories (lib/CodexStatus.ps1:196, lib/Mail.ps1:151): refused
     # rather than sanitised, because a silently altered id keys a session that does not exist.
+    #
+    # WIDER THAN THE STORED RECORD. schema/session-record.v1 (PR #16) takes only a UUID as a
+    # sessionId, while this accepts any 1-128 of [A-Za-z0-9._-], because codex ids and wezfleet's
+    # own checks allow that. So a record identity keys here may be one the engine's store refuses;
+    # which rule wins is for step 2.2, where identity feeds the store (review finding 9 of PR #19).
     param($Id)
     return ($Id -is [string] -and $Id -cmatch '^[A-Za-z0-9._-]{1,128}$')
 }

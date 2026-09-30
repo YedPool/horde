@@ -268,3 +268,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 8 of PR #19, 2026-09-30. Cross-checked the same day, read-only: for 10 of 10 live control files CIM's CreationDate (converted from local time with ToUniversalTime), .NET's Process.StartTime and procStart agreed to the microsecond, and .NET's ticks equalled procStart exactly; across all 339 processes readable both ways, CIM and .NET agreed to the microsecond. The machine's zone observes daylight saving and every process was started and read inside one daylight-saving period, so a process started before a change and read after it - above all one started in the repeated hour, where a local time names two instants - has not been measured; an hour's error there would read a live process as a reused pid. Recorded where the table is read.
 - disposition: comment
 - where: core/Identity.ps1 :: "a process started before a daylight-saving change and read after it"
+
+### L-052 Identity accepts session ids the stored record refuses
+- source: review finding 9 of PR #19, 2026-09-30: schema/session-record.v1 (PR #16, merged) takes only a UUID as sessionId - "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" - while Test-HordeSessionId accepts any 1-128 characters of [A-Za-z0-9._-], wezfleet's rule for codex file names and mail directories (L-036). A record identity keys may therefore be one the engine's store would refuse. Not settled here: step 2.2, where identity feeds the store, decides which rule wins; recorded where the rule lives so that step finds it.
+- disposition: comment
+- where: core/Identity.ps1 :: "which rule wins is for step 2.2"
