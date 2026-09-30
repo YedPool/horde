@@ -233,3 +233,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 3 of PR #19, 2026-09-30: the reader chose which stale files to report by matching "not running" and "reused" in the verdict's reason text, so a control file with a missing or unparseable procStart, or one whose process the table gave no start time, left its live fields unknown and was reported nowhere. Get-HordeProcessVerdict now returns a kind - verified, gone, reused, uncheckable or no-table - every record carries it as processCheck, and gone, reused and uncheckable each produce a finding. An unreadable process table is reported once, in verifiedLive and the orphan answer, not once per file.
 - disposition: test
 - where: test/test-identity.ps1 :: "a control file with no procStart is reported as a finding"
+
+### L-045 A leftover file beside one verified file is a finding, not a duplicate
+- source: review finding 1 of PR #19, 2026-09-30, with the reviewer's probe: a control file for a dead pid and a live, process-verified file naming the same session id made the whole claude listing incomplete and dropped the live session from records and from verifiedLive. A session resumed after its process died leaves exactly that pair on disk. When one file is verified and every other is proven stale (processCheck gone or reused), the verified file is the record and each other file is a finding; two verified files, or any file that cannot be checked (uncheckable, no-table, or a codex file, which carries no pid), is still a duplicate and never settled (L-020).
+- disposition: test
+- where: test/test-identity.ps1 :: "a leftover file for a dead process does not hide the live session it names"

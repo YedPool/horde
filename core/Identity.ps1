@@ -402,13 +402,16 @@ function Get-HordeIdentity {
     #   records          session id -> record (New-HordeIdentityRecord), ids compared ignoring case
     #   complete         agent -> answer: known true when that agent's listing is whole, unknown with
     #                    every reason otherwise - an unreadable, refused or duplicated file among them
-    #   duplicates       { sessionId; sources } for every id named by more than one file; none of
-    #                    them is in records, and each agent it came from is incomplete
+    #   duplicates       { sessionId; sources } for every id named by more than one file, unless
+    #                    exactly one is process-verified and every other is proven stale (then the
+    #                    verified one is the record and the rest are findings); none of them is in
+    #                    records, and each agent it came from is incomplete
     #   verifiedLive     answer: the session ids whose process was checked and is the one described.
     #                    Unknown when the process table or the claude listing is not whole, because a
     #                    session missing from it may be alive.
     #   orphanProcesses  answer: claude processes running with no control file
-    #   findings         stale files, reused pids, former names naming another session
+    #   findings         stale files, reused pids, files that cannot be checked, leftovers beside a
+    #                    verified file, former names naming another session
     param(
         [string]$ClaudeDir = (Get-HordeClaudeSessionsDir),
         [string]$ProjectsDir = (Get-HordeClaudeProjectsDir),
@@ -430,12 +433,29 @@ function Get-HordeIdentity {
     }
     $records = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
     $duplicates = New-Object System.Collections.ArrayList
+    $leftoverFindings = New-Object System.Collections.ArrayList
     $dupGaps = @{}
     foreach ($sid in $bySid.Keys) {
         $all = $bySid[$sid]
         if ($all.Count -eq 1) { $records[$sid] = $all[0].record; continue }
-        # Never choose. Which of two files is the live one is exactly the question that went wrong
-        # silently: "seven conversations ran in both with nothing noticing" (YedPool/wezfleet 0e1c75a).
+        # A LEFTOVER IS NOT A TIE. A session resumed after its process died leaves the dead process's
+        # file beside the live one. When exactly one file is process-verified and every other is
+        # PROVEN stale - its process gone, or its pid now another process - nothing is being chosen:
+        # the verified file is the session, and the others are reported. Calling that a duplicate made
+        # the whole claude listing incomplete and dropped the one session certainly running (review
+        # finding 1 of PR #19).
+        $liveOnes = @($all | Where-Object { "$($_.record.processCheck)" -ceq "verified" })
+        $deadOnes = @($all | Where-Object { @("gone", "reused") -ccontains "$($_.record.processCheck)" })
+        if ($liveOnes.Count -eq 1 -and ($liveOnes.Count + $deadOnes.Count) -eq $all.Count) {
+            $records[$sid] = $liveOnes[0].record
+            foreach ($x in $deadOnes) {
+                [void]$leftoverFindings.Add((Split-Path -Leaf $x.record.source) + " also names session " + $sid + ", but its process is " + $x.record.processCheck + "; the verified file " + (Split-Path -Leaf $liveOnes[0].record.source) + " is kept")
+            }
+            continue
+        }
+        # Otherwise never choose: two verified files, or any that cannot be checked, is a real tie.
+        # Which of two files is the live one is exactly the question that went wrong silently:
+        # "seven conversations ran in both with nothing noticing" (YedPool/wezfleet 0e1c75a).
         [void]$duplicates.Add([pscustomobject]@{ sessionId = $sid; sources = @($all | ForEach-Object { $_.record.source }) })
         foreach ($x in $all) {
             if (-not $dupGaps.ContainsKey($x.agent)) { $dupGaps[$x.agent] = New-Object System.Collections.ArrayList }
@@ -452,6 +472,7 @@ function Get-HordeIdentity {
         else { $complete[$rd.agent] = $rd.complete }
         foreach ($x in $rd.findings) { [void]$findings.Add($x) }
     }
+    foreach ($x in $leftoverFindings) { [void]$findings.Add($x) }
     $claudeRead = $reads[0]
     $verifiedLive = $null
     if ($Processes.state -ne "known") { $verifiedLive = New-HordeUnknown -Reason ("the process table could not be read (" + $Processes.reason + ")") }

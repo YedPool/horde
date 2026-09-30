@@ -274,6 +274,24 @@ $dup = @($r16.duplicates | Where-Object { $_.sessionId -eq (Sid 91) })
 Check ($dup.Count -eq 1 -and @($dup[0].sources).Count -eq 2 -and -not $r16.records.ContainsKey((Sid 91))) "two live control files naming one session are reported as a duplicate"
 Check ((St $r16.complete.claude) -eq "unknown" -and $r16.complete.claude.reason -like ("*" + (Sid 91) + "*") -and $r16.records.ContainsKey((Sid 93))) "a duplicated session leaves the listing incomplete, never silently shorter"
 Check (@(Val $r16.verifiedLive) -notcontains (Sid 91)) "a duplicated session is not in the live set"
+# A LEFTOVER IS NOT A TIE. A session resumed after a crash leaves the dead process's file beside the
+# live one; treating the pair as a duplicate made the whole listing incomplete and dropped the one
+# session that is certainly running (review finding 1 of PR #19). When exactly one file is verified
+# and every other is proven stale - its process gone, or its pid reused - the verified file is kept
+# and the rest are findings. Only a real tie stays a duplicate: two verified, or one not checkable.
+$d16b = NewDir "claude"
+PutJson (Join-Path $d16b "611.json") (ClaudeRec 611 (Sid 94) (Created 0))
+PutJson (Join-Path $d16b "612.json") (ClaudeRec 612 (Sid 94) (Created 5))
+PutJson (Join-Path $d16b "613.json") (ClaudeRec 613 (Sid 94) (Created 60))
+$r16b = Get-HordeIdentity -ClaudeDir $d16b -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(612, "claude.exe", (Created 500)), @(613, "claude.exe", (Created 60)))) -Now $now
+$d16c = NewDir "claude"
+PutJson (Join-Path $d16c "614.json") (ClaudeRec 614 (Sid 95) (Created 0) -Drop @("procStart"))
+PutJson (Join-Path $d16c "615.json") (ClaudeRec 615 (Sid 95) (Created 70))
+$r16c = Get-HordeIdentity -ClaudeDir $d16c -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(614, "claude.exe", (Created 0)), @(615, "claude.exe", (Created 70)))) -Now $now
+$kept94 = $null; if ($r16b.records.ContainsKey((Sid 94))) { $kept94 = $r16b.records[(Sid 94)] }
+Check ($null -ne $kept94 -and $kept94.source -like "*613.json" -and @(Val $r16b.verifiedLive) -contains (Sid 94) -and @($r16b.duplicates).Count -eq 0 -and (St $r16b.complete.claude) -eq "known") "a leftover file for a dead process does not hide the live session it names"
+Check (@($r16b.findings | Where-Object { $_ -like ("*611.json*" + (Sid 94) + "*") }).Count -eq 1 -and @($r16b.findings | Where-Object { $_ -like ("*612.json*" + (Sid 94) + "*") }).Count -eq 1) "each leftover beside the live file is reported as a finding"
+Check (@($r16c.duplicates | Where-Object { $_.sessionId -eq (Sid 95) }).Count -eq 1 -and -not $r16c.records.ContainsKey((Sid 95)) -and (St $r16c.complete.claude) -eq "unknown") "a leftover that cannot be checked beside a live file is still a duplicate"
 
 Write-Host ""
 Write-Host "--- codex ---" -ForegroundColor Cyan

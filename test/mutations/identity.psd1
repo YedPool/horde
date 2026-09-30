@@ -120,5 +120,14 @@
         @{ Name = "gone-labelled-reused"
            Find = 'kind = "gone"; reason'
            Replace = 'kind = "reused"; reason' }
+        @{ Name = "leftover-treated-as-tie"
+           Find = 'if ($liveOnes.Count -eq 1 -and ($liveOnes.Count + $deadOnes.Count) -eq $all.Count) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "uncheckable-leftover-resolved"
+           Find = 'if ($liveOnes.Count -eq 1 -and ($liveOnes.Count + $deadOnes.Count) -eq $all.Count) {'
+           Replace = 'if ($liveOnes.Count -eq 1) {' }
+        @{ Name = "leftover-not-reported"
+           Find = '[void]$leftoverFindings.Add('
+           Replace = '$null = (' }
     )
 }
