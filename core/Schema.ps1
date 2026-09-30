@@ -29,6 +29,19 @@
 # not resolve is refused there, not on the day a value first reaches it. definitions and properties
 # that are not objects are refused as well.
 #
+# HOW DEEP A VALUE CAN BE. Measured 2026-09-30 on Windows PowerShell 5.1.26100.9444, by bisection, on
+# this file as of this comment:
+#   - ConvertFrom-Json stops first, for anything read from a file. Its RecursionLimit refuses JSON
+#     nested more than 102 deep (103 nested arrays throw "RecursionLimit exceeded"). A restore plan's
+#     tab root is its 9th level of nesting and each layout container adds 2, so a plan FILE parses
+#     with a root 46 containers deep (deepest leaf at level 101) and not 47 (level 103).
+#   - A value built in PowerShell never meets that limit, and the call stack is what stops it:
+#     Test-HordeSchema throws "call depth overflow" on a layout tree 127 containers deep checked
+#     against restore-plan.v1's node definition (126 passes), Test-HordeRestorePlan on a whole plan
+#     built so at 125 (124 returns), and on plain nested properties with no $ref at 383 levels (382
+#     pass). The same layout tree, measured on this file before 2026-09-30's changes, failed at 110.
+#   A value past either limit is a thrown error, never a wrong finding.
+#
 # Keys starting "x-", and $schema, $id, title and description, are documentation and are ignored.
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
