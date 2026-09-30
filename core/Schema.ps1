@@ -166,10 +166,19 @@ function Get-HordeSchemaProps {
     return @($Node.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
 }
 
-function Get-HordeObjectProps {
+function Get-HordeObjectByKey {
+    # A value object's keys and values in an ordinal dictionary, parsed from JSON or built as a
+    # hashtable. KEYS ARE COMPARED EXACTLY, like JSON Schema and like wezterm-resurrect's Lua, which
+    # reads session_id with a case-sensitive lookup: a PowerShell hashtable ignores case, so with @{}
+    # a file holding SESSION_ID and no session_id passed (review of PR #15).
+    # A foreach, not a pipeline, and ::new, not New-Object: this runs once per object in every value,
+    # and measured 2026-09-30 on 5.1 the pipeline took 245 us for a field answer where the loop took
+    # 48 us, and New-Object 238 us for a dictionary. The comma keeps PowerShell from unrolling it.
     param($Value)
-    if ($Value -is [System.Collections.IDictionary]) { return @($Value.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = "$($_.Key)"; Value = $_.Value } }) }
-    return @($Value.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
+    $have = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)
+    if ($Value -is [System.Collections.IDictionary]) { foreach ($e in $Value.GetEnumerator()) { $have["$($e.Key)"] = $e.Value }; return ,$have }
+    foreach ($p in $Value.PSObject.Properties) { $have[$p.Name] = $p.Value }
+    return ,$have
 }
 
 function ConvertTo-HordeSchemaPattern {
@@ -335,7 +344,12 @@ function Get-HordeSchemaNode {
     # dictionary, as the value's keys do in Test-HordeSchema.
     $props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
     if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
-    $entry = [pscustomobject]@{ kw = $kw; props = $props }
+    # A PATTERN IS CONVERTED ONCE PER NODE: ConvertTo-HordeSchemaPattern walks the pattern a character at
+    # a time, 374 us for the timestamp pattern (measured 2026-09-30, 5.1), and session-view.v1 puts a
+    # pattern on most of its 6265 strings.
+    $re = $null
+    if ($kw.ContainsKey("pattern")) { $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])" }
+    $entry = [pscustomobject]@{ kw = $kw; props = $props; re = $re }
     if (-not $AtTop) { $script:HordeSchemaNodes.Add($nodeKey, $entry) }
     return $entry
 }
@@ -409,7 +423,8 @@ function Assert-HordeSchemaSubtrees {
 function Test-HordeSchema {
     # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
     param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
-    $findings = New-Object System.Collections.ArrayList
+    # ::new, not New-Object: 99 us against 323 us an ArrayList (measured 2026-09-30, 5.1), once per value.
+    $findings = [System.Collections.ArrayList]::new()
     $atTop = ($null -eq $Root)
     $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $atTop
     $kw = $node.kw
@@ -451,8 +466,7 @@ function Test-HordeSchema {
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
-        $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"
-        if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
+        if (-not [regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
     }
     if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {
         # NaN is at or above nothing, so it is refused, by name: "below" would not be true of it either.
@@ -461,12 +475,9 @@ function Test-HordeSchema {
     }
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     if ($isObject) {
-        # KEYS ARE COMPARED EXACTLY, like JSON Schema and like wezterm-resurrect's Lua, which reads
-        # session_id with a case-sensitive lookup. A PowerShell hashtable ignores case, so with @{} here
-        # a file holding SESSION_ID and no session_id passed (review of PR #15). Both the value's keys
-        # and the schema's property names go into ordinal dictionaries.
-        $have = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
-        foreach ($p in (Get-HordeObjectProps $Value)) { $have[$p.Name] = $p.Value }
+        # KEYS ARE COMPARED EXACTLY (review of PR #15): the value's keys and the schema's property names
+        # are both in ordinal dictionaries (Get-HordeObjectByKey, Get-HordeSchemaNode).
+        $have = Get-HordeObjectByKey $Value
         foreach ($r in @($kw["required"])) { if ($null -ne $r -and -not $have.ContainsKey("$r")) { [void]$findings.Add($Path + " has no '" + $r + "'") } }
         $props = $node.props
         foreach ($name in @($have.Keys)) {

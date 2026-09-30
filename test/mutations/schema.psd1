@@ -49,11 +49,11 @@
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
            Replace = 'if ($false) { [void]$findings.Add($Path + " is ''' }
         @{ Name = "pattern-not-checked"
-           Find = 'if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
+           Find = 'if (-not [regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
            Replace = 'if ($false) {' }
         @{ Name = "pattern-not-compiled-with-its-node"
-           Find = 'if ($kw.ContainsKey("pattern")) {'
-           Replace = 'if ($false) {' }
+           Find = '[void][regex]::Match("", (ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '$null' }
         @{ Name = "pattern-compile-error-swallowed"
            Find = 'catch { throw ("pattern at " + $Path'
            Replace = 'catch { [void]("pattern at " + $Path' }
@@ -67,11 +67,11 @@
            Find = 'elseif ($c -ceq ''['') { $inClass = $true }'
            Replace = '' }
         @{ Name = "pattern-dotnet-dialect"
-           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::None)' }
+           Find = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::None)' }
         @{ Name = "pattern-ignores-case"
-           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $re, ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
+           Find = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::IsMatch($Value, $node.re, ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
         @{ Name = "required-not-checked"
            Find = 'if ($null -ne $r -and -not $have.ContainsKey("$r")) {'
            Replace = 'if ($false) {' }
@@ -106,8 +106,8 @@
            Find = 'if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {'
            Replace = 'if ($Value -is [array] -and $kw.ContainsKey("items")) {' }
         @{ Name = "value-keys-ignore-case"
-           Find = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
-           Replace = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+           Find = '$have = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)'
+           Replace = '$have = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)' }
         @{ Name = "property-names-ignore-case"
            Find = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
            Replace = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
@@ -148,8 +148,11 @@
            Find = 'if ($Node -is [System.Collections.IDictionary]) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "hashtable-value-read-as-object"
-           Find = 'if ($Value -is [System.Collections.IDictionary]) { return'
-           Replace = 'if ($false) { return' }
+           Find = 'if ($Value -is [System.Collections.IDictionary]) { foreach ($e in $Value.GetEnumerator())'
+           Replace = 'if ($false) { foreach ($e in $Value.GetEnumerator())' }
+        @{ Name = "node-pattern-not-carried"
+           Find = '$entry = [pscustomobject]@{ kw = $kw; props = $props; re = $re }'
+           Replace = '$entry = [pscustomobject]@{ kw = $kw; props = $props; re = '''' }' }
         @{ Name = "schema-read-as-ansi"
            Find = '[System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)'
            Replace = '(Get-Content -LiteralPath $Path -Raw)' }
