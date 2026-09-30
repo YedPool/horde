@@ -232,6 +232,41 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": 
 Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = 1 }) -Schema (Obj '{ "definitions": { "n": {} }, "type": "object", "properties": { "a": { "$ref": 7 } } }') } "is not a string") "a `$ref given as a number is refused"
 $f = @(RefFindings (Obj '{ "a": 3 }') $intRef)
 Check ($f.Count -eq 0) ("CONTROL: a `$ref given as a string is still followed (" + ($f -join "; ") + ")")
+Write-Host ""
+Write-Host "--- every definition is checked, whether or not anything refers to it ---" -ForegroundColor Cyan
+# A DEFINITION NOTHING REFERS TO WAS NEVER READ (review of PR #17), so an unknown keyword, a node that
+# is not an object or a dangling $ref sat in a schema file unnoticed until the day something referred
+# to it. Each definition is now checked once, as a schema, when the top of the schema is.
+$unusedGood = Obj '{ "definitions": { "unused": { "type": "object", "properties": { "a": { "type": "integer" } } } }, "type": "integer" }'
+$f = @(RefFindings 1 $unusedGood)
+Check ($f.Count -eq 0) ("CONTROL: a valid definition nothing refers to changes nothing (" + ($f -join "; ") + ")")
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "maximum": 3 } }, "type": "integer" }') } "does not implement") "an unknown keyword in a definition nothing refers to is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": true }, "type": "integer" }') } "is not an object") "a definition that is not an object is refused though nothing refers to it"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "$ref": "#/definitions/gone" } }, "type": "integer" }') } "names no definition") "a `$ref in a definition nothing refers to must resolve"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "type": "object", "properties": { "a": { "type": "array", "items": { "$ref": "#/definitions/gone" } } } } }, "type": "integer" }') } "names no definition") "a dangling `$ref deep inside an unreferenced definition is found"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "properties": { "a": { "type": "decimal" } } } }, "type": "integer" }') } "does not know") "an unknown type name inside an unreferenced definition is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }') } "circular") "a `$ref loop among definitions nothing refers to is refused"
+# A CALLER THAT PASSES -Root CHECKS A PART OF A SCHEMA whose top is not re-checked (core/Projection.ps1
+# checks one field's value schema this way), so the loop guard that follows a $ref chain must hold on
+# its own. Measured by mutation: with the definitions check above, the old loop check alone was no
+# longer tested (circular-ref-followed and ref-chain-forgotten survived).
+$loopRoot = Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } } }'
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "$ref": "#/definitions/a" }') -Root $loopRoot } "circular") "a `$ref loop reached below the top, through -Root, is refused rather than followed until the stack overflows"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": [ { "type": "integer" } ], "type": "integer" }') } "definitions at $ must be an object") "definitions given as an array is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": "n", "type": "integer" }') } "definitions at $ must be an object") "definitions given as a string is refused"
+# properties read as an object when it is an array has .NET properties (Length, Rank) and no keys, so
+# "properties": ["a"] checked nothing and passed every value.
+Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = "x" }) -Schema (Obj '{ "type": "object", "properties": [ { "type": "integer" } ] }') } "properties at $ must be an object") "properties given as an array is refused, not read as no properties"
+$f = @(RefFindings 1 (Obj '{ "definitions": {}, "type": "integer" }'))
+Check ($f.Count -eq 0) ("CONTROL: an empty definitions object is accepted (" + ($f -join "; ") + ")")
+# EVERY SHIPPED SCHEMA PASSES THE DEFINITIONS CHECK: a throw here is the check refusing a schema Horde
+# ships. The value is null, so only the schema itself is under test.
+$shipped = @(Get-ChildItem -LiteralPath (Join-Path $root "schema") -Filter *.json -File)
+Check ($shipped.Count -ge 3) ("CONTROL: the shipped schemas are there (" + $shipped.Count + ")")
+foreach ($sf in $shipped) {
+    $sName = $sf.BaseName
+    Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the definitions check")
+}
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan

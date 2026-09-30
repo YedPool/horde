@@ -19,12 +19,18 @@
 # overflows.
 # A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
 #
+# EVERY DEFINITION IS CHECKED ONCE, when Test-HordeSchema is called on the top of a schema, whether or
+# not anything refers to it: an unknown keyword, a node that is not an object, or a $ref that does
+# not resolve is refused there, not on the day a value first reaches it. definitions and properties
+# that are not objects are refused as well.
+#
 # Keys starting "x-", and $schema, $id, title and description, are documentation and are ignored.
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
 $script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern",
                                  '$schema', '$id', "title", "description", "definitions", '$ref')
+$script:HordeSchemaTypes = @("object", "array", "string", "integer", "number", "boolean", "null")
 # The keywords that may sit beside a $ref: they say nothing about the value.
 $script:HordeSchemaInertKeywords = @('$schema', '$id', "title", "description", "definitions")
 
@@ -104,18 +110,18 @@ function Resolve-HordeSchemaRef {
     throw ("the schema's `$ref '" + $Ref + "' names no definition")
 }
 
-function Test-HordeSchema {
-    # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
-    param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
-    $findings = New-Object System.Collections.ArrayList
+function Get-HordeSchemaNodeKeywords {
+    # One schema node's keywords, after refusing everything about the node itself that this validator
+    # cannot honour. Nothing here looks at a value, so the same checks serve Test-HordeSchema, which
+    # then applies the keywords to one, and Assert-HordeSchemaNode, which checks definitions that no
+    # value may ever reach.
+    param($Schema, [string]$Path, [bool]$AtTop)
     # A schema node that is not an object is refused. Draft-07 allows true and false as schemas, and
     # read as an object they have no keywords, so the first version accepted everything for both
     # (review of PR #15). This covers a definition a $ref reaches, too.
     if (-not ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary])) {
         throw ("the schema at " + $Path + " is not an object; boolean and other schemas are not implemented")
     }
-    $atTop = ($null -eq $Root)
-    if ($atTop) { $Root = $Schema }
     $kw = @{}
     foreach ($p in (Get-HordeSchemaProps $Schema)) {
         if ($p.Name -like "x-*") { continue }
@@ -140,7 +146,20 @@ function Test-HordeSchema {
             if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings, whole numbers and booleans; '" + $e + "' is none of them") }
         }
     }
+    # A TYPE NAME IS CHECKED HERE as well as when a value meets it, so a definition nothing refers to
+    # cannot carry one this validator does not know.
+    if ($kw.ContainsKey("type") -and $script:HordeSchemaTypes -cnotcontains "$($kw['type'])") {
+        throw ("the schema names a type this validator does not know: '" + $kw["type"] + "'")
+    }
+    # properties AND definitions ARE OBJECTS. Read as one, an array or a string has .NET properties
+    # (Length, Rank) instead of keys, so "properties": ["a"] checked nothing and passed every value.
+    if ($kw.ContainsKey("properties") -and -not (Test-HordeSchemaType -Value $kw["properties"] -Type "object")) {
+        throw ("properties at " + $Path + " must be an object")
+    }
     if ($kw.ContainsKey("definitions") -and -not $atTop) { throw ("the schema has definitions below the top of a schema, at " + $Path + "; #/definitions/ would never find them") }
+    if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {
+        throw ("definitions at " + $Path + " must be an object, one schema per name")
+    }
     if ($kw.ContainsKey('$ref')) {
         $beside = @($kw.Keys | Where-Object { $_ -cne '$ref' -and $script:HordeSchemaInertKeywords -cnotcontains $_ })
         if ($beside.Count -gt 0) { throw ("the schema has " + ($beside -join ", ") + " beside a `$ref at " + $Path + ", which draft-07 ignores") }
@@ -148,6 +167,62 @@ function Test-HordeSchema {
         # became that pointer's text and was followed (review of PR #17): a schema no draft-07 validator
         # accepts was given a meaning. Nothing is converted, so nothing is guessed.
         if ($kw['$ref'] -isnot [string]) { throw ("the schema's `$ref at " + $Path + " is not a string") }
+    }
+    return $kw
+}
+
+function Assert-HordeSchemaDefinitions {
+    # EVERY DEFINITION IS CHECKED ONCE, whether or not anything refers to it. Before, a definition was
+    # read only when a $ref reached it (review of PR #17), so an unknown keyword, a node that is not an
+    # object or a dangling $ref could sit in a schema file until the day something referred to it -
+    # and then fail a caller that had changed nothing. Test-HordeSchema calls this at the top of a
+    # schema, before any value is looked at.
+    param($Root)
+    foreach ($p in (Get-HordeSchemaProps $Root)) {
+        if ($p.Name -cne "definitions") { continue }
+        foreach ($d in (Get-HordeSchemaProps $p.Value)) { Assert-HordeSchemaNode -Schema $d.Value -Path ("#/definitions/" + $d.Name) -Root $Root }
+    }
+}
+
+function Assert-HordeSchemaNode {
+    # A schema node and every node inside it, checked with no value: whatever Test-HordeSchema would
+    # refuse on reaching the node is refused here. A $ref is resolved, never followed into its
+    # definition, which is checked on its own; so a recursive definition is walked once, and the walk
+    # ends. Path is a JSON pointer into the schema, "#/definitions/node/properties/children/items".
+    param($Schema, [string]$Path, $Root)
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $false
+    if ($kw.ContainsKey('$ref')) {
+        # A chain of bare $refs that comes back to itself would make Test-HordeSchema throw on the
+        # first value to reach it, so it is refused now, as that throw would say.
+        $chain = @()
+        $ref = $kw['$ref']
+        while ($true) {
+            if ($chain -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
+            $chain += $ref
+            $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
+            $targetKw = Get-HordeSchemaNodeKeywords -Schema $target -Path $ref -AtTop $false
+            if (-not $targetKw.ContainsKey('$ref')) { break }
+            $ref = $targetKw['$ref']
+        }
+        return
+    }
+    if ($kw.ContainsKey("properties")) {
+        foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { Assert-HordeSchemaNode -Schema $p.Value -Path ($Path + "/properties/" + $p.Name) -Root $Root }
+    }
+    if ($kw.ContainsKey("items")) { Assert-HordeSchemaNode -Schema $kw["items"] -Path ($Path + "/items") -Root $Root }
+}
+
+function Test-HordeSchema {
+    # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
+    param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
+    $findings = New-Object System.Collections.ArrayList
+    $atTop = ($null -eq $Root)
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $atTop
+    if ($atTop) {
+        $Root = $Schema
+        Assert-HordeSchemaDefinitions -Root $Root
+    }
+    if ($kw.ContainsKey('$ref')) {
         $ref = $kw['$ref']
         if ($RefsHere -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
         $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
