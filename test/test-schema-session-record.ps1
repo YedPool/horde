@@ -121,7 +121,7 @@ Write-Host "--- golden records: the valid ones pass ---" -ForegroundColor Cyan
 $fx = Join-Path $root "test\fixtures\session-record"
 function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
-Check ($valid.Count -eq 2) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
+Check ($valid.Count -eq 3) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
 foreach ($f in $valid) {
     $found = @(Test-HordeSchema -Value (Read-Fixture ("valid\" + $f.Name)) -Schema $schema)
     Check ($found.Count -eq 0) ("valid: " + $f.BaseName + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
@@ -137,6 +137,16 @@ Write-Host "--- golden records: each invalid one fails for its one reason ---" -
 # expected one: a fixture that failed for some other reason would prove nothing about its rule.
 $invalid = [ordered]@{
     "no-session-id"              = "$ has no 'sessionId'"
+    "no-schema-version"          = "$ has no 'schemaVersion'"
+    "session-id-leading-junk"    = '$.sessionId does not match *'
+    "session-id-trailing-junk"   = '$.sessionId does not match *'
+    "parent-leading-junk"        = '$.parent does not match *'
+    "parent-trailing-junk"       = '$.parent does not match *'
+    "origin-empty"               = '$.origin is '''', not one of: *'
+    "title-empty"                = '$.title does not match *'
+    "depends-on-item-empty"      = '$.dependsOn`[0`] does not match *'
+    "run-id-slug-not-lowercase"  = '$.runId does not match *'
+    "label-letter-after-number"  = '$.label does not match *'
     "bad-session-id"             = '$.sessionId does not match *'
     "schema-version-2"           = '$.schemaVersion is ''2'', not one of: 1'
     "role-old-vocabulary"        = '$.role is ''master'', not one of: *'
