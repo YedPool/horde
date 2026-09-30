@@ -139,8 +139,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - disposition: test
 - where: test/test-identity.ps1 :: "self identity reads no pane record at all"
 
-### L-025 kind and entrypoint tell a nested session apart, and are carried as written
-- source: YedPool/wezfleet hooks/wf-registry-refresh.ps1:64-81 (measured 2026-09-15: sdk-cli against cli); census kind interactive 10, entrypoint cli 10; whether a nested session writes a control file is unmeasured
+### L-025 kind and entrypoint are carried as written; what they say for a nested session is unmeasured
+- source: census kind interactive 10, entrypoint cli 10; whether a nested session writes a control file is unmeasured. CORRECTED 2026-09-30, review finding 4 of PR #18: this entry first said the two keys tell a nested session apart, citing YedPool/wezfleet hooks/wf-registry-refresh.ps1:64-81, but what that hook measured on 2026-09-15 (sdk-cli for a nested claude -p against cli for a pane session) is the environment variable CLAUDE_CODE_ENTRYPOINT, not the control-file key
 - disposition: test
 - where: test/test-identity.ps1 :: "kind and entrypoint are carried as the agent wrote them"
 

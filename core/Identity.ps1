@@ -276,8 +276,11 @@ function Read-HordeClaudeControlFiles {
         $k["agentVersion"] = Get-HordeField -Record $j -Name "version"
         $k["peerProtocol"] = Get-HordeField -Record $j -Name "peerProtocol"
         $k["peerFeatures"] = Get-HordeField -Record $j -Name "peerFeatures"
-        # kind and entrypoint are what tells a nested `claude -p` (sdk-cli) from a pane session (cli)
-        # (YedPool/wezfleet hooks/wf-registry-refresh.ps1:64-81), so they are carried exactly as written.
+        # kind and entrypoint are carried exactly as written. What wezfleet measured to tell a nested
+        # `claude -p` (sdk-cli) from a pane session (cli) is the ENVIRONMENT VARIABLE
+        # CLAUDE_CODE_ENTRYPOINT (YedPool/wezfleet hooks/wf-registry-refresh.ps1:64-81), not this key;
+        # the key has been seen only as cli (10 of 10 files, 2026-09-30), so what a nested session's
+        # control file says here is unmeasured (core-ownership L-048).
         $k["sessionKind"] = Get-HordeField -Record $j -Name "kind"
         $k["entrypoint"] = Get-HordeField -Record $j -Name "entrypoint"
         $k["pidDomain"] = Get-HordeField -Record $j -Name "pidDomain"
