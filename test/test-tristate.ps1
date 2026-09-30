@@ -61,6 +61,42 @@ $missingPath = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "
 Check ($missingPath.state -eq "unknown") "a cmdlet error inside a reader is not swallowed into a known empty list"
 $prefAfterRead = & { $ErrorActionPreference = "Continue"; $null = Invoke-HordeRead -What "the pane list" -Read { Write-Error "boom"; 0 }; $ErrorActionPreference }
 Check ($prefAfterRead -eq "Continue") "the caller's error preference is untouched by a read"
+# Deciding by the error preference was wrong both ways (review, 2026-09-29). Under Stop, PowerShell
+# 5.1 turns a native program's stderr into a terminating error even when the reader discards it with
+# 2>$null, so a reader whose stderr is only logging read as unknown - for a caller on Stop as well.
+# And a reader defined in a module does not see the preference Invoke-HordeRead sets, so its
+# non-terminating error returned the fallback as known 0.
+$nativeLog = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "a native listing" -Read { cmd /c "echo out& echo INFO log 1>&2" 2>$null } }
+Check ($nativeLog.state -eq "known" -and "$($nativeLog.value)" -eq "out") "a native reader whose discarded stderr is only logging reads as known"
+$nativeLogStop = & { $ErrorActionPreference = "Stop"; Invoke-HordeRead -What "a native listing" -Read { cmd /c "echo out& echo INFO log 1>&2" 2>$null } }
+Check ($nativeLogStop.state -eq "known" -and "$($nativeLogStop.value)" -eq "out") "and so it does for a caller whose preference is Stop"
+$moduleReader = & (New-Module -Name "HordeTestReaderModule" -ScriptBlock { function Get-HordeTestModuleReader { { Write-Error "boom from a module"; 0 } } }) { Get-HordeTestModuleReader }
+# A module's code sees the GLOBAL preference, not its caller's, and under powershell -File this
+# suite's own scope is the global one (measured: Stop set here reads back from $global:). So the
+# global preference is set to the default for this one read, and put back whatever happens.
+$suitePreference = $global:ErrorActionPreference
+$moduleFail = $null
+try {
+    $global:ErrorActionPreference = "Continue"
+    $moduleFail = Invoke-HordeRead -What "the pane list" -Read $moduleReader
+} finally { $global:ErrorActionPreference = $suitePreference }
+Check ($moduleFail.state -eq "unknown" -and $moduleFail.reason -like "*boom from a module*") "a reader defined in a module that writes an error reads as unknown"
+# Only an error that ESCAPES the reader counts. One it catches or silences on purpose is its own
+# business: counting every entry added to $Error would have made both of these unknown.
+$handled = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "the registry" -Read { try { $null = Get-Item -LiteralPath $noSuchDir -ErrorAction Stop } catch { }; New-HordeAbsent -Note "no registry" } }
+Check ($handled.state -eq "absent") "CONTROL: a reader that catches its own error on purpose is not unknown"
+$silenced = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "the registry" -Read { $item = Get-Item -LiteralPath $noSuchDir -ErrorAction SilentlyContinue; if ($null -eq $item) { New-HordeAbsent -Note "no registry" } } }
+Check ($silenced.state -eq "absent") "CONTROL: nor is one that silences an error it expects"
+# A native program's stderr that the reader does NOT discard reaches Invoke-HordeRead as an error
+# record, and is read as a failure: logging must be discarded by the reader, which knows it is logging.
+$nativeNoisy = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "a native listing" -Read { cmd /c "echo out& echo INFO log 1>&2" } }
+Check ($nativeNoisy.state -eq "unknown" -and $nativeNoisy.reason -like "*INFO log*") "a native reader that leaves its stderr undiscarded reads as unknown"
+# Invoke-HordeRead cannot see a native exit code: a reader that ignores it returns what the program
+# printed as known. Pinned, so no caller relies on the opposite. The reader must check $LASTEXITCODE.
+$exitIgnored = Invoke-HordeRead -What "a native listing" -Read { cmd /c "echo partial& exit 3" }
+Check ($exitIgnored.state -eq "known" -and "$($exitIgnored.value)" -eq "partial") "a native reader that ignores its exit code reads as known, so the reader must check it"
+$exitChecked = Invoke-HordeRead -What "a native listing" -Read { $o = cmd /c "echo partial& exit 3"; if ($LASTEXITCODE -ne 0) { throw ("the program exited " + $LASTEXITCODE) }; $o }
+Check ($exitChecked.state -eq "unknown" -and $exitChecked.reason -like "*exited 3*") "a native reader that checks its exit code reads a failure as unknown"
 # What a NATURAL reader delivers, measured, because the module's comment once claimed otherwise: a
 # reader ending in a bare @() delivers nothing (so unknown), and one ending in @(5) delivers the bare
 # 5. A reader that means "an empty list" must return ,@() - or say absent in so many words.

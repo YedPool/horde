@@ -129,15 +129,36 @@ function Invoke-HordeRead {
     # in a bare @() delivers nothing, so it reads as UNKNOWN; one ending in @(5) delivers the bare 5,
     # so it reads as known Int32, not a list. A reader that means a collection must return it with
     # the unary comma - `, @()` or `, $list` - or return an answer itself.
-    param([Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][scriptblock]$Read)
-    $got = $null
+    #
+    # AN ERROR THAT ESCAPES THE READER MAKES IT UNKNOWN; one the reader catches or silences does not.
     # Most cmdlet failures are non-terminating: they write an error and the reader carries on to its
     # fallback, which came back KNOWN - { Write-Error boom; 0 } read as known 0 (review, 2026-09-29).
-    # Stop, set here, is local to this call and reaches the reader's scope, so any error it writes
-    # ends the read as unknown. The caller's own preference is untouched.
-    $ErrorActionPreference = "Stop"
-    try { $got = & $Read }
+    # So the reader's error stream is captured, and any error record on it ends the read as unknown.
+    # Two earlier designs were measured wrong (PS 5.1, 2026-09-29):
+    #   - Setting the preference to Stop did not reach a reader defined in a module, which sees the
+    #     global preference, and under Stop 5.1 turns a native program's stderr into a terminating
+    #     error even when the reader discards it with 2>$null - logging on stderr read as unknown.
+    #   - Counting new entries in $Error counts errors a reader caught on purpose, and ones it
+    #     silenced with -ErrorAction SilentlyContinue, as failures.
+    # The preference is set to Continue for this call so that nothing the reader writes is made
+    # terminating on the way out; the capture, not the preference, decides.
+    #
+    # READERS OF NATIVE PROGRAMS: stderr that the reader does not discard itself arrives here as an
+    # error record and reads as unknown - discard logging with 2>$null inside the reader. And
+    # Invoke-HordeRead cannot see an exit code: a reader must check $LASTEXITCODE and throw on
+    # failure, or a failed program's partial output reads as known. Both pinned by the suite.
+    param([Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][scriptblock]$Read)
+    $ErrorActionPreference = "Continue"
+    # The reader's output goes into the box, so the redirected stream carries nothing but its errors,
+    # and the output keeps the shape it would have had from `$got = & $Read`.
+    $box = @{ got = $null }
+    $escaped = @()
+    try { $escaped = @(& { $box.got = & $Read } 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) }
     catch { return (New-HordeUnknown -Reason ("could not read " + $What) -ErrorRecord $_) }
+    if ($escaped.Count -gt 0) {
+        return (New-HordeUnknown -Reason ("could not read " + $What + " (the reader wrote " + $escaped.Count + " error(s); the first follows)") -ErrorRecord $escaped[0])
+    }
+    $got = $box.got
     if (Test-HordeAnswer $got) { return $got }
     # A reader that returns an answer AND writes anything else to the pipeline delivers an array
     # holding both. Wrapping that as known turned an absent or unknown answer into a known Object[]
