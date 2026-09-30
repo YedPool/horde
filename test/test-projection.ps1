@@ -327,6 +327,11 @@ Check ($badAmb.state -eq "unknown" -and $badAmb.reason -like "*ambiguous*") "an 
 $longId = ("Ubuntu-24.04." + ("s" * 90) + ".12345")
 $okLong = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = $longId; running = 1; ambiguous = $false }))
 Check ($okLong.state -eq "known" -and "$($okLong.value.id)" -ceq $longId -and $longId.Length -gt 64) "an instance id composed of distro, socket and server pid is kept whole"
+# The boundary itself: 128 characters are an instance id, 129 are not (second review of PR #31, finding 3).
+$id128 = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = ("i" * 128); running = 1; ambiguous = $false }))
+Check ($id128.state -eq "known" -and "$($id128.value.id)".Length -eq 128) "an instance id of 128 characters is kept"
+$id129 = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = ("i" * 129); running = 1; ambiguous = $false }))
+Check ($id129.state -eq "unknown" -and $id129.reason -like "*at most 128*") "an instance id of 129 characters makes the instance unknown"
 
 Write-Host ""
 Write-Host "--- the process table is the platform's ---" -ForegroundColor Cyan

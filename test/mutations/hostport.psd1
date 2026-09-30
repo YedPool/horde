@@ -49,5 +49,11 @@
         @{ Name = "two-writers-of-one-store-accepted"
            Find = 'if ($script:HordeStoreWriters.ContainsKey($st) -and $script:HordeStoreWriters[$st] -cne $Name) {'
            Replace = 'if ($false) {' }
+        @{ Name = "instance-id-limit-129"
+           Find = 'if ($t -cmatch ''^[A-Za-z0-9._:-]{1,128}$'') { return $t }'
+           Replace = 'if ($t -cmatch ''^[A-Za-z0-9._:-]{1,129}$'') { return $t }' }
+        @{ Name = "instance-id-limit-127"
+           Find = 'if ($t -cmatch ''^[A-Za-z0-9._:-]{1,128}$'') { return $t }'
+           Replace = 'if ($t -cmatch ''^[A-Za-z0-9._:-]{1,127}$'') { return $t }' }
     )
 }
