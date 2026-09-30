@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "planId": "20260929-214500-horde",
+  "sessions": [
+    {
+      "slot": "s1",
+      "sessionId": "38d41f80-0000-4000-8000-000000000001",
+      "agent": "claude",
+      "role": "orc",
+      "label": "D",
+      "cwd": "C:\\Code\\wezfleet",
+      "resume": {
+        "kind": "claude-resume",
+        "id": "38d41f80-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "slot": "s2",
+      "sessionId": "01a0ef46-0000-4000-8000-000000000002",
+      "agent": "codex",
+      "role": "goblin",
+      "label": "D1",
+      "parent": "38d41f80-0000-4000-8000-000000000001",
+      "cwd": "C:\\Code\\wezfleet",
+      "resume": {
+        "kind": "codex-resume",
+        "id": "01a0ef46-0000-4000-8000-000000000002"
+      }
+    }
+  ],
+  "layout": {
+    "advisory": true,
+    "workspaces": [
+      {
+        "name": "wezfleet",
+        "windows": [
+          {
+            "tabs": [
+              {
+                "title": "D wezfleet orc",
+                "root": {
+                  "split": "right",
+                  "ratio": 0.6,
+                  "children": [
+                    {
+                      "slot": "s1"
+                    },
+                    {
+                      "split": "down",
+                      "children": [
+                        {
+                          "slot": "s2"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

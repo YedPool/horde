@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "planId": "20260929-220000-vscode",
+  "sessions": [
+    {
+      "slot": "w",
+      "sessionId": "7c1e2a90-0000-4000-8000-00000000000a",
+      "agent": "claude",
+      "role": "warchief",
+      "label": "W",
+      "cwd": "C:\\Code\\horde",
+      "resume": {
+        "kind": "claude-resume",
+        "id": "7c1e2a90-0000-4000-8000-00000000000a"
+      }
+    },
+    {
+      "slot": "d",
+      "sessionId": "7c1e2a90-0000-4000-8000-00000000000b",
+      "agent": "claude",
+      "role": "orc",
+      "label": "D",
+      "parent": "7c1e2a90-0000-4000-8000-00000000000a",
+      "cwd": "C:\\Code\\wezfleet",
+      "resume": {
+        "kind": "claude-resume",
+        "id": "7c1e2a90-0000-4000-8000-00000000000b"
+      }
+    },
+    {
+      "slot": "d1",
+      "sessionId": "7c1e2a90-0000-4000-8000-00000000000c",
+      "agent": "codex",
+      "role": "goblin",
+      "label": "D1",
+      "parent": "7c1e2a90-0000-4000-8000-00000000000b",
+      "cwd": "C:\\Code\\wezfleet",
+      "resume": {
+        "kind": "codex-resume",
+        "id": "7c1e2a90-0000-4000-8000-00000000000c"
+      }
+    },
+    {
+      "slot": "d2",
+      "sessionId": "7c1e2a90-0000-4000-8000-00000000000d",
+      "agent": "claude",
+      "role": "goblin",
+      "label": "D2",
+      "parent": "7c1e2a90-0000-4000-8000-00000000000b",
+      "cwd": "C:\\Code\\wezfleet",
+      "resume": {
+        "kind": "claude-resume",
+        "id": "7c1e2a90-0000-4000-8000-00000000000d"
+      }
+    },
+    {
+      "slot": "e",
+      "sessionId": "7c1e2a90-0000-4000-8000-00000000000e",
+      "agent": "claude",
+      "role": "orc",
+      "label": "E",
+      "parent": "7c1e2a90-0000-4000-8000-00000000000a",
+      "cwd": "C:\\Code\\horde",
+      "resume": {
+        "kind": "claude-resume",
+        "id": "7c1e2a90-0000-4000-8000-00000000000e"
+      }
+    }
+  ],
+  "layout": {
+    "advisory": true,
+    "workspaces": [
+      {
+        "windows": [
+          {
+            "tabs": [
+              {
+                "title": "fleet: W horde warchief",
+                "root": {
+                  "slot": "w"
+                }
+              }
+            ]
+          },
+          {
+            "tabs": [
+              {
+                "title": "fleet: D wezfleet orc",
+                "root": {
+                  "split": "right",
+                  "children": [
+                    {
+                      "slot": "d"
+                    },
+                    {
+                      "slot": "d1"
+                    },
+                    {
+                      "slot": "d2"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "tabs": [
+              {
+                "title": "horde: E horde orc",
+                "root": {
+                  "slot": "e"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
