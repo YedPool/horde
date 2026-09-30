@@ -115,7 +115,7 @@ sources:
 - where: test/test-cli.ps1 :: "horde called from inside a command binds its own colon value"
 
 ### L-020 A switch value that -File mode turned into a word is refused, never guessed at
-- source: second review of YedPool/horde PR #12, measured 2026-09-29 on PowerShell 5.1: from -File, `-Json:$false` arrives as the tagged "-Json" then the [string] "$false", exactly as `-Json $false` does. Any argument that is the word "$true" or "$false" exits 2 and says the value arrived as text. Not caught, because $args keeps no trace of them: "-Json:false" (arrives as "-Json false") and a bare "-Json:" (arrives as nothing, or swallows the next word)
+- source: second review of YedPool/horde PR #12, measured 2026-09-29 on PowerShell 5.1: from -File, `-Json:$false` arrives as the tagged "-Json" then the [string] "$false", exactly as `-Json $false` does. Any argument that is the word "$true" or "$false" exits 2 and says the value arrived as text. "-Json:false" (arrives as "-Json false") was not caught by this, and is now refused by L-026. Still not caught, because $args keeps no trace of it: a bare "-Json:" (arrives as nothing, or swallows the next word)
 - disposition: test
 - where: test/test-cli.ps1 :: "a colon value that arrived as text is refused, never guessed at"
 
@@ -143,3 +143,13 @@ sources:
 - source: second review of YedPool/horde PR #12, finding 7: the comment on the "..\Commands" dispatch test said it fails if the name check is removed, and it does not - dispatch compares names with the listing and never builds a path. The comment now says it guards against path joining; a unit test holds the name check in Find-HordeCommand, and fails when that check is removed (mutation-checked 2026-09-29)
 - disposition: test
 - where: test/test-cli.ps1 :: "a malformed name claims no broken file's findings"
+
+### L-026 A switch followed by the word true or false is refused, since from a script horde cannot tell what it was
+- source: third pass on YedPool/horde PR #12, measured 2026-09-29 on PowerShell 5.1: from -File, `horde echo-args -Json:false` arrives as the tagged "-Json" and the untagged word "false", exactly as `-Json false` does, and bound json=True target=[false] with exit 0 - the silent misbinding L-020 recorded as not caught. "false" is also a legitimate positional value, so the word is not refused alone; which parameters are switches is read from the run block's param AST without running it (exact name, alias, unambiguous prefix, and the common switches -Verbose, -Debug, -WhatIf and -Confirm), and a switch immediately followed by true, false, $true or $false in any case exits 2. Typed "-Json false" is refused the same way; typed "-Json:false" is still PowerShell's to refuse
+- disposition: test
+- where: test/test-cli.ps1 :: "a switch followed by a truth word from a script is refused, never bound as two arguments"
+
+### L-027 Every user-facing command is driven end to end, in a terminal that is not the user's
+- source: CONTRIBUTING.md section 2 "Test end to end, the way a user would", which the migration plan's step 0.9 makes the CLI's gate; and section 3, YedPool/wezfleet tasks/lessons.md 2026-08-16, for why the terminal is a separate WezTerm instance and never a window. test/e2e/e2e-cli.ps1 spawns `powershell -File horde.ps1 --help` and `... version` in panes of an isolated instance and reads their screens; run 2026-09-30: 20 PASS, exit 0
+- disposition: test
+- where: test/e2e/e2e-cli.ps1 :: "the help pane lists 'horde version' exactly once"
