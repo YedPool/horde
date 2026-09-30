@@ -15,6 +15,7 @@ Set-StrictMode -Off
 
 $script:HordeOwnershipFieldKeys = @("name", "owner", "read", "derived", "provisional")
 $script:HordeOwnershipDroppedKeys = @("name", "reason")
+$script:HordeOwnershipReadKeys = @("store", "field", "when")
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
@@ -124,11 +125,26 @@ function Test-HordeOwnership {
         # A READ RULE: at least one store to read from, each one real, each naming a field.
         $read = @($f.read | Where-Object { $null -ne $_ })
         if ($read.Count -eq 0) { [void]$findings.Add("field '" + $n + "' has no read rule") }
+        # Inside a read entry only store, field and when mean anything, so any other key is a
+        # misspelling of one of them - a "wehn" would silently drop a guard. A when that is present
+        # must say something, and one rule reading the same store and field twice is two orders
+        # for one source (review finding 3, 2026-09-29).
+        $readPairs = New-Object System.Collections.ArrayList
         foreach ($r in $read) {
             $s = "$($r.store)"
             if ($stores -notcontains $s) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "', which is not in the store list") }
             else { $usedStores[$s] = $true }
             if ("$($r.field)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' without naming what it reads") }
+            foreach ($k in @($r.PSObject.Properties | ForEach-Object { $_.Name })) {
+                if ($script:HordeOwnershipReadKeys -cnotcontains $k) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' with an unknown key '" + $k + "'") }
+            }
+            $w = $r.PSObject.Properties["when"]
+            if ($null -ne $w -and ($w.Value -isnot [string] -or "$($w.Value)".Trim() -eq "")) {
+                [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' under an empty condition")
+            }
+            $pair = $s + "|" + "$($r.field)"
+            if ($readPairs -ccontains $pair) { [void]$findings.Add("field '" + $n + "' reads '" + $r.field + "' from store '" + $s + "' twice") }
+            [void]$readPairs.Add($pair)
         }
         foreach ($k in @("derived", "provisional")) {
             $p = $f.PSObject.Properties[$k]

@@ -68,6 +68,10 @@ Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName pro
 Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "owner": "engine",') "appears more than once") "a field with a repeated owner key is refused"
 Check (Says (MutatedText '{ "store": "X2", "field": "sessionId" }' '{ "store": "X2", "store": "W1", "field": "sessionId" }') "appears more than once") "a read entry with a repeated key is refused"
 Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "Owner": "engine",') "appears more than once") "a key repeated in another case is refused, not thrown"
+Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName wehn -NotePropertyValue "x" }) "unknown key 'wehn'") "a misspelled key in a read entry is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue " " -Force }) "an empty condition") "a read with an empty condition is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue $false -Force }) "an empty condition") "a read whose condition is not text is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @($d.fields[0].read[0]) }) "twice") "a read of one store and field twice in one rule is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
     $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }
