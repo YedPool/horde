@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "kind": "bye",
+  "id": "0a000000-0000-4000-8000-00000000000e",
+  "seq": 11,
+  "ts": "2026-09-30T12:00:11Z",
+  "bye": {
+    "code": "no-common-protocol",
+    "reason": "the node speaks 2 and the hub speaks 1"
+  }
+}

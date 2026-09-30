@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "kind": "req",
+  "id": "0a000000-0000-4000-8000-000000000008",
+  "seq": 7,
+  "ts": "2026-09-30T12:00:06Z",
+  "verb": "session.spawn",
+  "requestId": "0b000000-0000-4000-8000-000000000008",
+  "args": {
+    "label": "B3",
+    "role": "goblin",
+    "parent": "11111111-2222-4333-8444-555555555555",
+    "runId": "20260930-120000-remote-r1",
+    "profile": "default",
+    "model": "example-model-1",
+    "repoId": "github.com/example/horde",
+    "worktree": {
+      "name": "remote-r2",
+      "branch": "feature/remote-r2-codec",
+      "base": "origin/main"
+    },
+    "prompt": {
+      "text": "Build the codec. Report with a handoff."
+    },
+    "closeOn": "proof"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "kind": "hello",
+  "id": "0a000000-0000-4000-8000-000000000001",
+  "seq": 1,
+  "ts": "2026-09-30T12:00:00.123Z",
+  "hello": {
+    "role": "node",
+    "id": "6f1c2a8e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+    "name": "desk-2",
+    "protocols": [
+      1
+    ],
+    "verbsVersions": [
+      1
+    ],
+    "hordeVersion": "0.1.0",
+    "t1": "2026-09-30T12:00:00.123Z"
+  }
+}

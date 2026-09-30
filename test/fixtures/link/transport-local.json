@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "transport": "example",
+  "maxFrameBytes": 1048576,
+  "capabilities": {
+    "auth.peer": {
+      "support": "yes",
+      "evidence": "fixture: a pipe whose ACL admits only the owning user"
+    },
+    "encrypt": {
+      "support": "no",
+      "evidence": "fixture: never leaves the machine"
+    },
+    "dial.out": {
+      "support": "yes",
+      "evidence": "fixture"
+    },
+    "dial.in": {
+      "support": "unverified",
+      "evidence": "fixture: not run"
+    },
+    "keepalive": {
+      "support": "declined",
+      "evidence": "fixture: the pipe closing is the signal"
+    },
+    "survives.peer.restart": {
+      "support": "no",
+      "evidence": "fixture: reconnects instead"
+    }
+  }
+}

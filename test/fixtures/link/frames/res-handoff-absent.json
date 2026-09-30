@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "kind": "res",
+  "id": "0a000000-0000-4000-8000-000000000005",
+  "seq": 4,
+  "ts": "2026-09-30T12:00:03Z",
+  "verb": "handoff.get",
+  "requestId": "0b000000-0000-4000-8000-000000000005",
+  "re": "0a000000-0000-4000-8000-000000000015",
+  "result": {
+    "state": "absent",
+    "reason": "the session has written no handoff",
+    "observedAt": "2026-09-30T12:00:02.900Z"
+  }
+}

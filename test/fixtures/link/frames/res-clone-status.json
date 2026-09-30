@@ -1,0 +1,60 @@
+{
+  "v": 1,
+  "kind": "res",
+  "id": "0a000000-0000-4000-8000-000000000009",
+  "seq": 8,
+  "ts": "2026-09-30T12:00:07Z",
+  "verb": "clone.status",
+  "requestId": "0b000000-0000-4000-8000-000000000009",
+  "re": "0a000000-0000-4000-8000-000000000018",
+  "result": {
+    "state": "known",
+    "reason": "",
+    "observedAt": "2026-09-30T12:00:06.800Z",
+    "value": {
+      "repoId": "github.com/example/horde",
+      "worktree": "remote-r2",
+      "branch": {
+        "state": "known",
+        "value": "feature/remote-r2-codec",
+        "reason": "",
+        "observedAt": "2026-09-30T12:00:06.800Z"
+      },
+      "head": {
+        "state": "known",
+        "value": "abddd21",
+        "reason": "",
+        "observedAt": "2026-09-30T12:00:06.800Z"
+      },
+      "upstream": {
+        "state": "absent",
+        "reason": "the branch has no upstream yet",
+        "observedAt": "2026-09-30T12:00:06.800Z"
+      },
+      "ahead": {
+        "state": "unknown",
+        "reason": "no upstream to count against"
+      },
+      "behind": {
+        "state": "unknown",
+        "reason": "no upstream to count against"
+      },
+      "dirty": {
+        "state": "known",
+        "value": 0,
+        "reason": "",
+        "observedAt": "2026-09-30T12:00:06.800Z"
+      },
+      "stashes": {
+        "state": "known",
+        "value": 0,
+        "reason": "",
+        "observedAt": "2026-09-30T12:00:06.800Z"
+      },
+      "pullRequest": {
+        "state": "unknown",
+        "reason": "the forge was not asked"
+      }
+    }
+  }
+}

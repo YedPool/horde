@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "overlay": "home",
+  "provider": "example",
+  "self": {
+    "address": "100.64.0.1",
+    "interface": "Example Adapter (1)"
+  },
+  "peers": [
+    {
+      "name": "hub",
+      "address": "100.64.0.2"
+    },
+    {
+      "name": "laptop",
+      "address": "fd7a:115c:a1e0::3"
+    }
+  ],
+  "health": {
+    "state": "known",
+    "value": true,
+    "reason": "",
+    "observedAt": "2026-09-30T12:00:00Z"
+  },
+  "observedAt": "2026-09-30T12:00:00Z"
+}
