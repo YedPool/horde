@@ -119,6 +119,17 @@ Check (Says $te "no entries") "a zero-byte ledger is refused as having no entrie
 Check (-not (Says $te "unnumbered")) "and not by accident - no phantom entry is invented from nothing"
 
 Write-Host ""
+Write-Host "--- a host's own test folder holds tests too (D12) ---" -ForegroundColor Cyan
+
+# D12: host-specific test tooling lives with its host, under hosts/<name>/test/. A lesson about a host
+# is enforced by a suite there, so the gate accepts that folder - and still refuses any other host
+# file, which here quotes the same test name so that its location is the only thing wrong with it.
+$ht = @(Findings "host-test.md")
+Check ($ht.Count -eq 0) "a test disposition naming a suite under hosts/<name>/test/ is accepted"
+if ($ht.Count -gt 0) { $ht | ForEach-Object { Write-Host ("         unexpected: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } }
+Refuses "host-not-test.md"       "test script under test/"         "a host file outside the host's test folder is refused as a test"
+
+Write-Host ""
 Write-Host "--- mutation: remove one disposition from the passing ledger ---" -ForegroundColor Cyan
 
 # The fixtures above were written to fail. This one starts from the ledger that PASSES and removes a

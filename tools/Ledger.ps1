@@ -159,7 +159,10 @@ function Test-HordeLedger {
                 if ($t.problem) { Add-Finding -Entry $id -Problem $t.problem; break }
                 # A TEST, not any file. The first version accepted the ledger itself - its own where:
                 # line contains the quoted text - so an entry could certify itself.
-                if ($t.rel -notmatch '^test/.+\.ps1$') { Add-Finding -Entry $id -Problem "must name a test script under test/, not $($t.rel)"; break }
+                # A HOST'S OWN TEST FOLDER COUNTS. D12 puts host-specific test tooling under
+                # hosts/<name>/test/, so a lesson about a host is enforced by a suite there; any other
+                # file in a host's folder is still refused.
+                if ($t.rel -notmatch '^(test|hosts/[^/]+/test)/.+\.ps1$') { Add-Finding -Entry $id -Problem "must name a test script under test/ or hosts/<name>/test/, not $($t.rel)"; break }
                 # ENOUGH TEXT TO MEAN SOMETHING. "e" appears in every file.
                 if ((Get-HordeWordCount -Text $assertion) -lt 3) { Add-Finding -Entry $id -Problem "the assertion must be at least three words, or it matches almost anything"; break }
                 $body = $null
