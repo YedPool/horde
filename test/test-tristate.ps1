@@ -87,6 +87,8 @@ Check ($texts[0] -like "known*" -and $texts[1] -like "absent*" -and $texts[2] -l
 Check (Throws { New-HordeUnknown -Reason "" } "needs a reason") "an unknown without a reason is refused"
 Check (Throws { New-HordeUnknown -Reason "   " } "needs a reason") "and so is one whose reason is only spaces"
 Check (Throws { New-HordeKnown -Value $null } "New-HordeAbsent") "a known nothing is refused and pointed at absent"
+# A database null is a nothing too, and one a data reader hands back where $null was meant.
+Check (Throws { New-HordeKnown -Value ([DBNull]::Value) } "New-HordeAbsent") "a known database null is refused as well"
 
 Write-Host ""
 Write-Host "--- real values are never sentinels ---" -ForegroundColor Cyan

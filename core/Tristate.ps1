@@ -43,7 +43,8 @@ function New-HordeKnown {
     # -Value is NOT mandatory on purpose. A mandatory parameter refuses an empty collection and an
     # empty string at binding, and both are legitimate known answers.
     param($Value, $ObservedAt = $null)
-    if (-not $PSBoundParameters.ContainsKey("Value") -or $null -eq $Value) {
+    # [DBNull]::Value is not $null to PowerShell, but it means nothing just the same.
+    if (-not $PSBoundParameters.ContainsKey("Value") -or $null -eq $Value -or $Value -is [System.DBNull]) {
         throw "a known answer needs a value; a known nothing is New-HordeAbsent"
     }
     return (New-HordeAnswer -State "known" -Value $Value -Reason "" -ObservedAt $ObservedAt)
@@ -89,7 +90,7 @@ function Test-HordeAnswer {
     if ($Answer.state -ceq "unknown" -and "$($Answer.reason)".Trim() -eq "") { return $false }
     # New-HordeKnown refuses $null; a hand-built "known" holding $null is refused here for the same
     # reason - a known nothing is New-HordeAbsent.
-    if ($Answer.state -ceq "known" -and $null -eq $Answer.value) { return $false }
+    if ($Answer.state -ceq "known" -and ($null -eq $Answer.value -or $Answer.value -is [System.DBNull])) { return $false }
     # NOT DONE, on purpose: .value is an ordinary property, so `$answer.value` reads it without the
     # state check Get-HordeValue makes. Hiding it would break Resolve-HordeAnswer and the stored form;
     # the rule is carried by review and by this comment (ledger L-040).
