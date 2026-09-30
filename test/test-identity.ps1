@@ -537,8 +537,17 @@ if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
     # so it must be shown to have read something whenever there were files to read (review finding 6
     # of PR #19).
     Check ($realFiles.Count -eq 0 -or ($keyFiles -ge 1 -and @($realKeys).Count -ge 1)) ("CONTROL: the keys of the real control files were read (" + $keyFiles + " of " + $realFiles.Count + " files, " + @($realKeys | Sort-Object -Unique).Count + " distinct keys)")
+    # A KEY ON THIS MACHINE WITH NO ROW IS DRIFT TO REPORT, NOT A FAILURE. Which keys a control file
+    # holds depends on what its session is doing when the suite runs, not on Horde's code: on
+    # 2026-09-30 main went red with no change because 1 of 10 sessions sat at a permission prompt and
+    # its file carried waitingFor (core-identity L-056). The Claude Code 2.1.285 reader accepts 11
+    # more keys no file here has carried - jobId, parkedJobId, spare, logPath, hostSessionId, agent,
+    # state, detail, tempo, needs and tmux - and each would do the same on the right day. A key with
+    # no row is not lost silently: nothing reads it, and this line names it. The fixture checks above
+    # hold every key known to the table strictly, and the CONTROL above proves the keys were read.
     $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
-    Check ($realNoRow.Count -eq 0) ("every key in this machine's control files has a row in the ownership table (" + ($realNoRow -join ", ") + ")")
+    foreach ($nr in $realNoRow) { Write-Host ("  REPORT: a key in this machine's control files has no row in the ownership table: " + $nr + " (give it a row in core/ownership.json, kept or dropped)") -ForegroundColor Yellow }
+    if ($realNoRow.Count -eq 0) { Write-Host ("  every key in this machine's control files has a row in the ownership table (" + @($realKeys | Sort-Object -Unique).Count + " distinct keys)") -ForegroundColor DarkGray }
 }
 
 Complete-HordeSuite -Success "every agent's control files read into one record shape, and nothing written"
