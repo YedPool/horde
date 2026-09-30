@@ -505,7 +505,7 @@ PutJson (Join-Path $clean "processes.json") @(@(ReadJson (Join-Path $clean "proc
 $pcl = Project $clean
 $notFalse = @($pcl.faults | Where-Object { (FSt $_) -ne "false" } | ForEach-Object { $_.kind + "=" + (FSt $_) + " " + $_.answer.reason })
 foreach ($x in $notFalse) { Write-Host ("  not false on the clean fleet: " + $x) -ForegroundColor Red }
-Check (@($pcl.sessions).Count -eq 2 -and @($pcl.faults).Count -eq 18 -and $notFalse.Count -eq 0) "CONTROL: a clean fleet has no fault, and every check says so"
+Check (@($pcl.sessions).Count -eq 2 -and @($pcl.faults).Count -eq 19 -and $notFalse.Count -eq 0) "CONTROL: a clean fleet has no fault, and every check says so"
 Check ((FSt (Fault $pu "handle-claimed-twice")) -eq "unknown" -and (FSt (Fault $pu "session-in-two-handles")) -eq "unknown") "with no host to ask, the handle checks are unknown, not clean"
 
 Write-Host ""
@@ -529,6 +529,23 @@ Check ("$((ReadJson (RegPath $base 4)).owner)" -eq "" -and (Val (Ans $p 4 "owner
 $noorigin = New-Fleet "noorigin"
 EditReg $noorigin 4 { param($r) $r.PSObject.Properties.Remove("origin") }
 Check ((St (Ans (Project $noorigin) 4 "origin")) -eq "absent") "a missing origin is not the string unknown"
+
+Write-Host ""
+Write-Host "--- no silent winner ---" -ForegroundColor Cyan
+# Where two records answer one question, nothing picks the last or the first (review of PR #31,
+# finding 8): the question is unknown and the pair is reported.
+$hold = New-Fleet "two-holders"
+EditReg $hold 2 { param($r) $r.pane = "10" }
+$phd = Project $hold
+$hij10 = @((Fault $phd "pane-sessions-hijack").found | Where-Object { @($_.subjects) -contains "handle 10" })
+Check ($hij10.Count -eq 0 -and (St (Ans $phd 1 "pane")) -eq "unknown" -and (Subjects (Fault $phd "handle-claimed-twice")) -contains "handle 10") "two running sessions holding one handle leave its pane file unjudged, and are reported"
+$dupr = New-Fleet "roster-twice"
+$rp = Join-Path $dupr "wezfleet\proj\runs\20260601-100000-alpha\roster.json"
+$rj = ReadJson $rp; $rj.sessions = @($rj.sessions) + @($rj.sessions[0]); PutJson $rp $rj
+$pdr = Project $dupr
+$rt = Fault $pdr "roster-entry-twice"
+Check ((St (Ans $pdr 3 "runId")) -eq "unknown" -and (Why (Ans $pdr 3 "runId")) -like "*twice*" -and (FSt $rt) -eq "true" -and (Subjects $rt) -contains "alpha" -and (Subjects $rt) -contains "20260601-100000-alpha") "a roster that lists one fleet id twice is reported, and chooses neither entry"
+Check ((FSt (Fault $p "roster-entry-twice")) -eq "false") "CONTROL: rosters that list each id once are not a fault"
 
 Write-Host ""
 Write-Host "--- the layout and the resume command ---" -ForegroundColor Cyan

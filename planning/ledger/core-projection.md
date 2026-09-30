@@ -469,3 +469,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 7; planning/execution-plan-engines.md step 12 (K1: "the same id under two harnesses gives two records"), sequenced after the remote plan's R10 and before Phase 3 step 3.8, changing the record, view and restore-plan schemas together
 - disposition: comment
 - where: core/Projection.ps1 :: "THE KEY IS THE BARE ID, IGNORING CASE, UNTIL ENGINES K1"
+
+### L-089 Where two records answer one question, neither is picked
+- source: review of horde PR #31, finding 8: the pane-sessions holder map kept the last running session read, and a roster or manifest listing one fleet id twice gave its first entry
+- disposition: test
+- where: test/test-projection.ps1 :: "a roster that lists one fleet id twice is reported, and chooses neither entry"

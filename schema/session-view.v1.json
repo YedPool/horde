@@ -2568,6 +2568,7 @@
             "handle-claimed-twice",
             "pane-sessions-hijack",
             "run-ambiguous",
+            "roster-entry-twice",
             "warchief-claim-pending",
             "running-but-retired",
             "orphan-process",

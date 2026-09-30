@@ -237,6 +237,9 @@ function Get-HordePaneFileVerdicts {
         [void]$groups[$k].Add($f)
     }
     # Which verified-live session the registry puts in each handle, for the hijack check.
+    # Every running session the registry puts in each handle - all of them, never the last one read
+    # (review of PR #31, finding 8). Two holders of one handle cannot say whose file it is, so the file
+    # does not answer; the two are reported as claimants of one handle by the fault checks.
     $holder = @{}
     if ($VerifiedLive.state -eq "known") {
         foreach ($sid in @($VerifiedLive.value)) {
@@ -249,7 +252,7 @@ function Get-HordePaneFileVerdicts {
             $ri = Get-HordeField -Record $r -Name "instance"
             $ls = Get-HordeField -Record $r -Name "lastSeen"
             $inInstance = Test-HordeWrittenInInstance -Context $Context -RecordInstance $(if ($ri.state -eq "known") { "$($ri.value)" } else { "" }) -Written $ls.value -What "registry record"
-            if ($inInstance -eq "") { $holder[$h] = $sid }
+            if ($inInstance -eq "") { if (-not $holder.ContainsKey($h)) { $holder[$h] = New-Object System.Collections.ArrayList }; [void]$holder[$h].Add($sid) }
         }
     }
     foreach ($k in $groups.Keys) {
@@ -259,8 +262,9 @@ function Get-HordePaneFileVerdicts {
             continue
         }
         $f = $g[0]
-        if ($holder.ContainsKey($f.handle) -and $holder[$f.handle] -ine $f.sessionId) {
-            [void]$findings.Add([pscustomobject]@{ kind = "pane-sessions-hijack"; subjects = @($holder[$f.handle], $f.sessionId, ("handle " + $f.handle)); detail = ("the pane-sessions file for handle " + $f.handle + " names session " + $f.sessionId + ", while running session " + $holder[$f.handle] + " holds that handle in the registry; the file does not answer") })
+        if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { continue }
+        if ($holder.ContainsKey($f.handle) -and @($holder[$f.handle])[0] -ine $f.sessionId) {
+            [void]$findings.Add([pscustomobject]@{ kind = "pane-sessions-hijack"; subjects = @(@($holder[$f.handle])[0], $f.sessionId, ("handle " + $f.handle)); detail = ("the pane-sessions file for handle " + $f.handle + " names session " + $f.sessionId + ", while running session " + $holder[$f.handle] + " holds that handle in the registry; the file does not answer") })
             continue
         }
         $bySession[$f.sessionId] = $f
@@ -349,6 +353,9 @@ function Resolve-HordeRun {
     foreach ($run in $listing) {
         $e = @($run.entries | Where-Object { $_.id -ceq $FleetId })
         if ($e.Count -eq 0) { continue }
+        # A roster that lists the id twice cannot say which entry is the session's; neither is chosen,
+        # and the fault checks report the roster (review of PR #31, finding 8).
+        if ($e.Count -gt 1) { return [pscustomobject]@{ answer = (New-HordeUnknown -Reason ("run " + $run.runId + " lists fleet id " + $FleetId + " twice, so which entry is the session's is not chosen")); ambiguous = @() } }
         if ($run.closed.state -ne "known") { [void]$unsure.Add($run.runId); continue }
         $sp = Get-HordeField -Record $e[0].entry -Name "spawned"
         $spawned = $true
@@ -549,7 +556,10 @@ function Get-HordeRosterCandidate {
     if ($Manifest) {
         if ($null -eq $S.run.manifest) { return (New-HordeCandidate -Store $store -Field $Field -Answer (New-HordeUnknown -Reason "the run manifest could not be read")) }
         $ms = $S.run.manifest.PSObject.Properties["sessions"]
-        if ($null -ne $ms) { foreach ($x in @($ms.Value)) { if ($null -ne $x -and $null -ne $x.PSObject.Properties["id"] -and "$($x.id)" -ceq $S.fleetId) { $entry = $x; break } } }
+        $hits = @()
+        if ($null -ne $ms) { $hits = @(@($ms.Value) | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["id"] -and "$($_.id)" -ceq $S.fleetId }) }
+        if ($hits.Count -gt 1) { return (New-HordeUnsure -Store $store -Field $Field -Reason ("the run manifest lists fleet id " + $S.fleetId + " twice")) }
+        if ($hits.Count -eq 1) { $entry = $hits[0] }
     } else { $entry = $S.rosterEntry }
     if ($null -eq $entry) { return (New-HordeCandidate -Store $store -Field $Field -Skip "the run lists no entry for the session") }
     $p = $entry.PSObject.Properties[$Name]

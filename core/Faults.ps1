@@ -257,6 +257,19 @@ function Get-HordeFaults {
     $lf = @(); foreach ($k in @($lg.Keys | Sort-Object)) { if ($lg[$k].Count -gt 1) { $lf += New-HordeFinding -Subjects @($lg[$k] | Sort-Object) -Detail ("label " + $k + " is held by " + $lg[$k].Count + " live records") } }
     [void]$out.Add((New-HordeFault -Kind "label-held-twice" -Found $lf -UnknownReason $regIncomplete))
 
+    # roster-entry-twice: a roster or run manifest that lists one fleet id twice. The run resolver
+    # chooses neither entry (review of PR #31, finding 8); this says which run and which id.
+    $twice = @()
+    foreach ($run in @($C.wf.runs.runs)) {
+        foreach ($g in @($run.entries | Group-Object -Property id -CaseSensitive | Where-Object { $_.Count -gt 1 })) { $twice += New-HordeFinding -Subjects @($g.Name, $run.runId) -Detail ("the roster of run " + $run.runId + " lists fleet id " + $g.Name + " " + $g.Count + " times") }
+        if ($null -ne $run.manifest -and $null -ne $run.manifest.PSObject.Properties["sessions"]) {
+            $mids = @(@($run.manifest.sessions) | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["id"] } | ForEach-Object { "$($_.id)" })
+            foreach ($g in @($mids | Group-Object -CaseSensitive | Where-Object { $_.Count -gt 1 })) { $twice += New-HordeFinding -Subjects @($g.Name, $run.runId) -Detail ("the manifest of run " + $run.runId + " lists fleet id " + $g.Name + " " + $g.Count + " times") }
+        }
+    }
+    $twWhy = @(@($C.wf.runs.runsComplete, $C.wf.runs.rostersComplete) | Where-Object { $_.state -ne "known" } | ForEach-Object { $_.reason })
+    [void]$out.Add((New-HordeFault -Kind "roster-entry-twice" -Found $twice -UnknownReason ($twWhy -join "; ")))
+
     # session-id-not-uuid: keyed, because identity accepts it, and flagged, because the stored record
     # refuses it (schema/session-record.v1 sessionId).
     $nu = @(); foreach ($S in $States) { if ($S.id -cnotmatch $script:HordeUuidPattern) { $nu += New-HordeFinding -Subjects @($S.id) -Detail ("session id " + $S.id + " is not a UUID; the view keys it, and the engine's stored record would refuse it") } }

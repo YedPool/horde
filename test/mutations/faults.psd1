@@ -66,6 +66,9 @@
         @{ Name = "label-cycle-not-defaulted"
            Find = '$cyc = "0"; if ($cy.state -eq "known")'
            Replace = '$cyc = "none"; if ($cy.state -eq "known")' }
+        @{ Name = "roster-listing-twice-not-reported"
+           Find = '| Group-Object -Property id -CaseSensitive | Where-Object { $_.Count -gt 1 })) { $twice +='
+           Replace = '| Group-Object -Property id -CaseSensitive | Where-Object { $false })) { $twice +=' }
         @{ Name = "non-uuid-id-not-flagged"
            Find = 'if ($S.id -cnotmatch $script:HordeUuidPattern) {'
            Replace = 'if ($false) {' }

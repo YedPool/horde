@@ -78,6 +78,12 @@
         @{ Name = "closed-runs-first-wins"
            Find = 'if ($hits.Count -gt 1) {'
            Replace = 'if ($hits.Count -gt 1) { return [pscustomobject]@{ answer = (New-HordeKnown -Value $hits[0].run); ambiguous = @() } }; if ($false) {' }
+        @{ Name = "roster-listing-twice-takes-first"
+           Find = 'if ($e.Count -gt 1) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "pane-file-holder-last-wins"
+           Find = 'if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { continue }'
+           Replace = '' }
         # Work state and activity.
         @{ Name = "terminal-event-not-trusted"
            Find = 'if ($script:HordeTerminalEvents -ccontains $last) {'
