@@ -278,6 +278,10 @@ Check ((Val $r12.records[(Sid 65)].fields["liveStatus"]) -ceq "waiting") "a clau
 Check ($null -ne $wb -and $null -ne $w1 -and (St $wb) -eq "absent" -and (St $w1) -eq "absent") "a session that is not waiting waits for nothing"
 Check ($null -ne $w6 -and (St $w6) -eq "unknown") "a waiting session that names nothing is unknown, not absent"
 Check ($null -ne $w7 -and (St $w7) -eq "unknown" -and $w7.reason -like "*not running*") "a stale control file says nothing about a wait"
+# Review of PR #24: 301's status 'thinking' is not one Horde knows, so it cannot say the session is
+# not waiting; the first reader called its wait absent.
+$w61 = $a.fields["waitingFor"]
+Check ($null -ne $w61 -and (St $w61) -eq "unknown" -and $w61.reason -like "*'thinking'*") "a status Horde does not know leaves the wait unknown"
 
 Write-Host ""
 Write-Host "--- a claude listing is complete or it says why not ---" -ForegroundColor Cyan

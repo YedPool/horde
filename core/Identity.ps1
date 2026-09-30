@@ -314,11 +314,13 @@ function Read-HordeClaudeControlFiles {
             # the session waits on the user and drops the key otherwise: on 2026-09-30 it was in 1 of
             # 10 control files, the one whose status was waiting, as "permission prompt", and in none
             # of the 9 idle ones (core-ownership L-055). So a missing key is the agent saying it waits
-            # for nothing - unless its status says waiting, or says nothing, and then it is unknown.
+            # for nothing - but only when its status is one Horde knows and is not waiting. A status
+            # that says waiting, says nothing, or is one Horde does not know leaves the wait unknown.
             $wf = $j.PSObject.Properties["waitingFor"]
             if ($null -ne $wf -and $wf.Value -is [string] -and $wf.Value -ne "") { $k["waitingFor"] = New-HordeKnown -Value $wf.Value }
             elseif ($null -ne $wf) { $k["waitingFor"] = New-HordeUnknown -Reason "the control file's waitingFor is not text" }
             elseif ($st.state -ne "known") { $k["waitingFor"] = New-HordeUnknown -Reason "the control file has no status, so whether the session waits is unknown" }
+            elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["waitingFor"] = New-HordeUnknown -Reason ("the control file's status '" + $st.value + "' is not one Horde knows, so whether the session waits is unknown") }
             elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"] = New-HordeUnknown -Reason "the status is waiting but the control file does not say for what" }
             else { $k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for" }
         } else {
