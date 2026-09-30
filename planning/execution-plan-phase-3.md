@@ -394,7 +394,13 @@ H. Planned when reached
   `Get-WfRunSnapshot`. The step's first decision is what wezfleet's run-scoped output corresponds to
   in Horde's fleet-wide view.
 - **3.7 the Warchief's loop.** Last, because the whole fleet depends on it.
-- **3.8 the record writer.** Unchanged from the migration table.
+- **3.8 the record writer.** Unchanged from the migration table, except that it has a gate. The first record writer must not merge until these four in-place
+  `session-record.v1` edits have merged, in this order:
+  1. remote R10, the fleet/binding split (`planning/execution-plan-remote.md`);
+  2. engines K1, the (harness, id) key;
+  3. engines R1, `engine` and `resume` in the binding record (`planning/execution-plan-engines.md`);
+  4. lifecycle 24, the rest of the binding fields (`planning/execution-plan-lifecycle.md`).
+  Once a writer exists, every later change is a v2. The 3.8 PR states in its body that all four have merged.
 
 ## The working-day rule (decision 8)
 
