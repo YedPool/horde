@@ -184,6 +184,10 @@ try {
     $wrongWord = $null
     try { $wrongWord = Get-HordeRoleCount -Read $readClean -Role "master" } catch { $wrongWord = "threw: " + $_.Exception.Message }
     Check ("$wrongWord" -like "threw:*warchief*") "counting a role that is not a native horde role is refused, naming the native ones"
+    # Passed nothing, or the wrong thing, a count failed with a strict-mode property error that named
+    # neither the parameter nor what it should hold (review, 2026-09-29).
+    Check ((Throws { Get-HordeRoleCount -Read $null -Role "warchief" } "Read-HordeWezfleetRoles") -and (Throws { Get-HordeRoleClaimCount -Read $null -Role "warchief" } "Read-HordeWezfleetRoles")) "counting over no store read is refused, naming the function that makes one"
+    Check (Throws { Get-HordeRoleCount -Read ([pscustomobject]@{ sessions = @() }) -Role "warchief" } "Read-HordeWezfleetRoles") "and so is counting over something that is not a store read"
 
     # One record that cannot be parsed: the counts become unknown instead of silently shrinking.
     Set-Content -LiteralPath (Join-Path $sess "broken.json") -Value "{ not json"

@@ -156,7 +156,18 @@ function Read-HordeWezfleetRoles {
     if ($unreadable.Count -gt 0) { [void]$gaps.Add("" + $unreadable.Count + " record(s) could not be read") }
     $complete = New-HordeKnown -Value $true
     if ($gaps.Count -gt 0) { $complete = New-HordeUnknown -Reason (@($gaps) -join "; ") }
-    return [pscustomobject]@{ sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); mismatched = @($mismatched); complete = $complete }
+    return [pscustomobject]@{ PSTypeName = "Horde.RoleRead"; sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); mismatched = @($mismatched); complete = $complete }
+}
+
+function Assert-HordeRoleRead {
+    # A count is taken over what Read-HordeWezfleetRoles returned, and nothing else. Passed $null, a
+    # count used to fail with a strict-mode property error naming neither the parameter nor what it
+    # should hold (review, 2026-09-29). The read carries a type name, so the check does not depend on
+    # which fields it has.
+    param($Read)
+    if ($null -eq $Read -or @($Read.PSObject.TypeNames) -notcontains "Horde.RoleRead") {
+        throw "-Read must be what Read-HordeWezfleetRoles returned"
+    }
 }
 
 function Get-HordeRoleCount {
@@ -172,6 +183,7 @@ function Get-HordeRoleCount {
     # SESSIONS ONLY. Pending spawn claims - spawned, no record yet - are counted by
     # Get-HordeRoleClaimCount and deliberately not added in here; see there for why.
     param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null)
+    Assert-HordeRoleRead $Read
     # Only a native role can be counted. Stored roles are translated on read, so wezfleet's "master"
     # never matches anything and used to answer a known 0 while a master was running.
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
@@ -223,6 +235,7 @@ function Get-HordeRoleClaimCount {
     # be the role asked about). A claim whose role is empty names no role and is not counted, as in
     # wezfleet, where "" never equals "master".
     param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null, [datetime]$Now = (Get-Date))
+    Assert-HordeRoleRead $Read
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
     if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count claims: " + $Read.complete.reason)) }
