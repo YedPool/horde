@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/node-manifest.v1",
+  "title": "node-manifest v1",
+  "description": "What a node says about itself, the known value of node.info (schema/link-verbs.v1). Names only: engine profiles are offered by NAME with whether each credential reference resolves - set, missing or unknown, never the value (engine-settings 6) - and repositories by id, never by path. The hub chooses among what is offered here and can name nothing else. Every string and array names its cap, as schema/link-verbs.v1 says, and remote/Contract.ps1 checks this file by the same rules as a verb's result.",
+  "type": "object",
+  "required": ["schemaVersion", "deviceId", "deviceName", "hordeVersion", "os", "spaces", "hosts", "harnesses", "profiles", "repos", "admission", "protocols", "verbsVersions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "deviceId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "x-horde-cap": "nameBytes", "description": "A random id made once on the node (plan step R7), never from a host name or hardware." },
+    "deviceName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "x-horde-cap": "nameBytes", "description": "A handle for people, never identity." },
+    "hordeVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.+-][A-Za-z0-9.-]{1,64})?$", "x-horde-cap": "nameBytes" },
+    "os": {
+      "type": "object", "required": ["family", "version"], "additionalProperties": false,
+      "properties": {
+        "family": { "type": "string", "enum": ["windows", "linux", "macos"] },
+        "version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$", "x-horde-cap": "nameBytes" }
+      }
+    },
+    "spaces": {
+      "type": "array", "x-horde-cap": "listItems",
+      "description": "The process-id spaces this node can look pids up in (hosts decision 5).",
+      "items": { "type": "string", "pattern": "^(win32|posix|synthetic|wsl:[A-Za-z0-9._-]{1,64})$", "x-horde-cap": "nameBytes" }
+    },
+    "hosts": {
+      "type": "array", "x-horde-cap": "listItems",
+      "description": "The host adapters installed on this node, by folder name.",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "x-horde-cap": "nameBytes" }
+    },
+    "harnesses": {
+      "type": "array", "x-horde-cap": "listItems",
+      "description": "The agent adapters installed on this node, by folder name.",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "x-horde-cap": "nameBytes" }
+    },
+    "profiles": {
+      "type": "array", "x-horde-cap": "listItems",
+      "items": {
+        "type": "object", "required": ["name", "resolves"], "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "x-horde-cap": "nameBytes" },
+          "resolves": { "type": "string", "enum": ["set", "missing", "unknown"], "description": "Whether the profile's credential reference resolves on this node. Never the value." }
+        }
+      }
+    },
+    "repos": {
+      "type": "array", "x-horde-cap": "listItems",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*(/[A-Za-z0-9._-]+){1,4}$", "x-horde-cap": "nameBytes" }
+    },
+    "admission": {
+      "type": "object", "required": ["tier", "state"], "additionalProperties": false,
+      "properties": {
+        "tier": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "x-horde-cap": "nameBytes" },
+        "state": { "type": "string", "enum": ["open", "throttled", "closed", "unknown"] }
+      }
+    },
+    "protocols": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "x-horde-cap": "listItems" },
+    "verbsVersions": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "x-horde-cap": "listItems" }
+  }
+}

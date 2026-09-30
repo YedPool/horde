@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/transport-capabilities.v1",
+  "title": "transport-capabilities v1",
+  "description": "What one transport says it can do, as data: transports/<name>/capabilities.json (plan steps R4 and R5). A transport turns 'reach node D' into an ordered, authenticated byte stream and knows nothing of verbs, sessions, terminals or engines. Each capability is declared in the one vocabulary the host capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no, and a capability is yes only with evidence that was run on this machine. declined means the transport chooses not to offer it: the in-process test pair declares auth.peer declined so that no production path can pick it. The list of capabilities is closed: a transport declares every one, and nothing else.",
+  "type": "object",
+  "required": ["schemaVersion", "transport", "maxFrameBytes", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "transport": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under transports/." },
+    "maxFrameBytes": { "type": "integer", "minimum": 1, "description": "The largest frame, in bytes, the transport carries intact. The protocol caps a frame at schema/link-frame.v1's frameBytes, and a transport below that cap is refused by the conformance suite (step R4)." },
+    "capabilities": {
+      "type": "object",
+      "required": ["auth.peer", "encrypt", "dial.out", "dial.in", "keepalive", "survives.peer.restart"],
+      "additionalProperties": false,
+      "properties": {
+        "auth.peer": { "$ref": "#/definitions/capability", "description": "The peer at the other end is cryptographically or by OS identity known to be who it says." },
+        "encrypt": { "$ref": "#/definitions/capability", "description": "Bytes are encrypted between the ends. A transport that never leaves the machine says no, with that as its evidence." },
+        "dial.out": { "$ref": "#/definitions/capability", "description": "A node can open the link." },
+        "dial.in": { "$ref": "#/definitions/capability", "description": "A hub can open the link." },
+        "keepalive": { "$ref": "#/definitions/capability", "description": "A dead peer is noticed without a frame being sent." },
+        "survives.peer.restart": { "$ref": "#/definitions/capability", "description": "The same link carries on after the other end restarts." }
+      }
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+        "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, and when. Never blank." }
+      }
+    }
+  }
+}

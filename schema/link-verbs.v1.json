@@ -1,0 +1,265 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/link-verbs.v1",
+  "title": "link-verbs v1",
+  "description": "Every verb of the Horde link protocol, version 1: the complete list of what one end may ask of the other. It is never a remote shell: there is no verb that takes a command line, a script, a program path, an environment map or a file path, and none that returns a transcript, tool output or any other raw worker context; remote/Contract.ps1 refuses a table that has one, and test/test-link-contracts.ps1 proves it refuses each. THE TABLE is x-horde-verbs, one row per verb: its name, which way it travels, its effect class (read, write, spawn or kill, lifecycle H13), since (the protocol version that introduced it), its args (a definition below, always a closed object) and its result (the value a KNOWN answer carries; a definition below or a whole schema by name). The table lives under an x- key because core/Schema.ps1 cannot say 'these arguments go with that verb'; remote/Contract.ps1 reads it, checks every row against definitions/verb-row, and checks each verb's arguments and result. EVERY STRING AND EVERY ARRAY NAMES ITS CAP with x-horde-cap, a key of schema/link-frame.v1's x-horde-limits: core/Schema.ps1 has no size keywords, so the caps are data here and remote/Protocol.ps1 enforces them (step R2). A result string may use nameBytes, reasonBytes or summaryBytes, never textBytes: the most one string in a result can hold is a distilled summary. A nested answer (answer-* below) follows core/tristate as schema/link-frame.v1's answer does: value present exactly when state is known, which remote/Contract.ps1 checks. DEFERRED, each to the step that builds it, because its shape rests on work not yet merged: sessions.list and session.get (the node projection, plan step R12 after step 2.2), binding.get (the binding record, R10), observe.since and metrics.since and the evt frames they stream (R12, R15), session.park and session.route (lifecycle H16, R19). Each is added to this file by its step, and passes the same checks. A change is a new file, link-verbs.v2, once any node could hold this one; until the first node ships (plan step R12) v1 may still be edited.",
+  "x-horde-protocol": 1,
+  "x-horde-verbs": [
+    { "name": "node.info",        "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/no-args",            "result": "node-manifest.v1" },
+    { "name": "request.status",   "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/request-status-args", "result": "#/definitions/request-entry" },
+    { "name": "handoff.get",      "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/handoff-get-args",    "result": "#/definitions/handoff" },
+    { "name": "clone.status",     "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/clone-status-args",   "result": "#/definitions/clone-status" },
+    { "name": "delivery.status",  "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/delivery-status-args", "result": "#/definitions/delivery" },
+    { "name": "session.spawn",    "direction": "hub-to-node", "effect": "spawn", "since": 1, "args": "#/definitions/session-spawn-args",  "result": "#/definitions/request-entry" },
+    { "name": "session.resume",   "direction": "hub-to-node", "effect": "spawn", "since": 1, "args": "#/definitions/session-resume-args", "result": "#/definitions/request-entry" },
+    { "name": "session.deliver",  "direction": "hub-to-node", "effect": "write", "since": 1, "args": "#/definitions/session-deliver-args", "result": "#/definitions/delivery" },
+    { "name": "session.close",    "direction": "hub-to-node", "effect": "kill",  "since": 1, "args": "#/definitions/session-close-args",  "result": "#/definitions/request-entry" },
+    { "name": "worktree.create",  "direction": "hub-to-node", "effect": "write", "since": 1, "args": "#/definitions/worktree-create-args", "result": "#/definitions/request-entry" },
+    { "name": "worktree.remove",  "direction": "hub-to-node", "effect": "kill",  "since": 1, "args": "#/definitions/worktree-remove-args", "result": "#/definitions/request-entry" },
+    { "name": "alert.raise",      "direction": "node-to-hub", "effect": "write", "since": 1, "args": "#/definitions/alert-raise-args",    "result": "#/definitions/alert-receipt" },
+    { "name": "unowned.report",   "direction": "node-to-hub", "effect": "read",  "since": 1, "args": "#/definitions/unowned-report-args", "result": "#/definitions/report-receipt" }
+  ],
+  "definitions": {
+    "verb-row": {
+      "type": "object",
+      "required": ["name", "direction", "effect", "since", "args", "result"],
+      "additionalProperties": false,
+      "description": "One row of x-horde-verbs. remote/Contract.ps1 checks every row of every table against THIS definition, in this file, so a table under test cannot loosen it.",
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)+$" },
+        "direction": { "type": "string", "enum": ["hub-to-node", "node-to-hub"] },
+        "effect": { "type": "string", "enum": ["read", "write", "spawn", "kill"] },
+        "since": { "type": "integer", "minimum": 1 },
+        "args": { "type": "string", "pattern": "^#/definitions/[a-z0-9-]+$" },
+        "result": { "type": "string", "pattern": "^(#/definitions/[a-z0-9-]+|[a-z][a-z0-9-]*\\.v[0-9]+)$" }
+      }
+    },
+
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "x-horde-cap": "nameBytes" },
+    "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "x-horde-cap": "nameBytes" },
+    "session-id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "x-horde-cap": "nameBytes", "description": "The agent's own session id. Not assumed to be a UUID (engines K1)." },
+    "label": { "type": "string", "pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$", "x-horde-cap": "nameBytes", "description": "As schema/session-record.v1. Allocated only by the hub, before a request leaves." },
+    "role": { "type": "string", "enum": ["warchief", "orc", "goblin"] },
+    "run-id": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$", "x-horde-cap": "nameBytes" },
+    "token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "x-horde-cap": "nameBytes", "description": "A name the node offers or knows (a profile, a model id, a host name, a harness). Never a path: no slash, no backslash, no colon." },
+    "repo-id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*(/[A-Za-z0-9._-]+){1,4}$", "x-horde-cap": "nameBytes", "description": "A repository's normalised origin, host then owner then name. The node looks it up in its own registered clones (its L1); it is never opened as a path." },
+    "worktree-name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", "x-horde-cap": "nameBytes", "description": "A folder name under the node's own worktree root for that repo. No separator, so it cannot leave that root." },
+    "branch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$", "x-horde-cap": "nameBytes", "description": "A branch name. The node checks it with git's own rules before using it." },
+    "reason": { "type": "string", "pattern": "\\S", "x-horde-cap": "reasonBytes" },
+
+    "answer-token": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["known", "absent", "unknown"] },
+        "value": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$", "x-horde-cap": "nameBytes" },
+        "reason": { "type": "string", "x-horde-cap": "reasonBytes" },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
+    "answer-count": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["known", "absent", "unknown"] },
+        "value": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string", "x-horde-cap": "reasonBytes" },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
+
+    "no-args": { "type": "object", "additionalProperties": false, "properties": {} },
+    "request-status-args": {
+      "type": "object", "required": ["requestId"], "additionalProperties": false,
+      "properties": { "requestId": { "$ref": "#/definitions/uuid" } }
+    },
+    "handoff-get-args": {
+      "type": "object", "required": ["sessionId"], "additionalProperties": false,
+      "properties": { "sessionId": { "$ref": "#/definitions/session-id" }, "handoffId": { "$ref": "#/definitions/uuid" } }
+    },
+    "clone-status-args": {
+      "type": "object", "required": ["repoId"], "additionalProperties": false,
+      "properties": { "repoId": { "$ref": "#/definitions/repo-id" }, "worktree": { "$ref": "#/definitions/worktree-name" } }
+    },
+    "delivery-status-args": {
+      "type": "object", "required": ["messageId"], "additionalProperties": false,
+      "properties": { "messageId": { "$ref": "#/definitions/uuid" } }
+    },
+    "session-spawn-args": {
+      "type": "object",
+      "required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt", "closeOn"],
+      "additionalProperties": false,
+      "description": "Everything the node needs to start one session, and nothing it could run: the program, its arguments and its environment come from the node's own profile, chosen here by name (engine-settings 2.3). prompt carries text or handoffRef, not both; the node refuses anything else (step R19), because this validator cannot say 'exactly one'.",
+      "properties": {
+        "label": { "$ref": "#/definitions/label" },
+        "role": { "$ref": "#/definitions/role" },
+        "parent": { "$ref": "#/definitions/session-id" },
+        "runId": { "$ref": "#/definitions/run-id" },
+        "fleetSessionId": { "$ref": "#/definitions/uuid" },
+        "profile": { "$ref": "#/definitions/token" },
+        "model": { "$ref": "#/definitions/token" },
+        "repoId": { "$ref": "#/definitions/repo-id" },
+        "worktree": {
+          "type": "object", "required": ["name", "branch", "base"], "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/definitions/worktree-name" },
+            "branch": { "$ref": "#/definitions/branch" },
+            "base": { "type": "string", "enum": ["origin/main"] }
+          }
+        },
+        "prompt": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "text": { "type": "string", "pattern": "\\S", "x-horde-cap": "textBytes" },
+            "handoffRef": { "$ref": "#/definitions/uuid" }
+          }
+        },
+        "host": { "$ref": "#/definitions/token" },
+        "closeOn": { "type": "string", "enum": ["proof", "routed"] }
+      }
+    },
+    "session-resume-args": {
+      "type": "object", "required": ["sessionId"], "additionalProperties": false,
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "reresolve": { "type": "boolean" },
+        "model": { "$ref": "#/definitions/token" }
+      }
+    },
+    "session-deliver-args": {
+      "type": "object", "required": ["messageId", "sessionId", "from", "body", "ttlSeconds"], "additionalProperties": false,
+      "properties": {
+        "messageId": { "$ref": "#/definitions/uuid" },
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "from": {
+          "type": "object", "required": ["deviceId", "sessionId"], "additionalProperties": false,
+          "properties": {
+            "deviceId": { "$ref": "#/definitions/uuid" },
+            "sessionId": { "$ref": "#/definitions/session-id" },
+            "label": { "$ref": "#/definitions/label" }
+          }
+        },
+        "body": { "type": "string", "pattern": "\\S", "x-horde-cap": "textBytes" },
+        "ttlSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "session-close-args": {
+      "type": "object", "required": ["sessionId", "expect", "reason"], "additionalProperties": false,
+      "description": "expect is what the hub last saw; the node refuses when its own view differs (step R19). It is a guard, never a target: there is no verb that kills a process by pid.",
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "expect": {
+          "type": "object", "required": ["pid", "procStart"], "additionalProperties": false,
+          "properties": {
+            "pid": { "type": "integer", "minimum": 1 },
+            "procStart": { "type": "string", "pattern": "^[0-9]{1,20}$", "x-horde-cap": "nameBytes" }
+          }
+        },
+        "reason": { "$ref": "#/definitions/reason" }
+      }
+    },
+    "worktree-create-args": {
+      "type": "object", "required": ["repoId", "name", "branch", "base"], "additionalProperties": false,
+      "properties": {
+        "repoId": { "$ref": "#/definitions/repo-id" },
+        "name": { "$ref": "#/definitions/worktree-name" },
+        "branch": { "$ref": "#/definitions/branch" },
+        "base": { "type": "string", "enum": ["origin/main"] }
+      }
+    },
+    "worktree-remove-args": {
+      "type": "object", "required": ["repoId", "name"], "additionalProperties": false,
+      "properties": { "repoId": { "$ref": "#/definitions/repo-id" }, "name": { "$ref": "#/definitions/worktree-name" } }
+    },
+    "alert-raise-args": {
+      "type": "object", "required": ["alertId", "sessionId", "kind", "summary", "raisedAt"], "additionalProperties": false,
+      "properties": {
+        "alertId": { "$ref": "#/definitions/uuid" },
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "label": { "$ref": "#/definitions/label" },
+        "kind": { "type": "string", "enum": ["stalled", "looping", "reported", "dead", "park-expired", "closed", "reaped"] },
+        "summary": { "type": "string", "pattern": "\\S", "x-horde-cap": "reasonBytes" },
+        "raisedAt": { "$ref": "#/definitions/time" }
+      }
+    },
+    "unowned-report-args": {
+      "type": "object", "required": ["sessions", "observedAt"], "additionalProperties": false,
+      "properties": {
+        "sessions": {
+          "type": "array", "x-horde-cap": "listItems",
+          "items": {
+            "type": "object", "required": ["sessionId"], "additionalProperties": false,
+            "properties": {
+              "sessionId": { "$ref": "#/definitions/session-id" },
+              "harness": { "$ref": "#/definitions/token" },
+              "startedAt": { "$ref": "#/definitions/time" }
+            }
+          }
+        },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
+
+    "request-entry": {
+      "type": "object", "required": ["requestId", "verb", "state", "receivedAt"], "additionalProperties": false,
+      "description": "The node's journal entry for one request (plan step R3). A resend of the same requestId returns it and acts nothing.",
+      "properties": {
+        "requestId": { "$ref": "#/definitions/uuid" },
+        "verb": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)+$", "x-horde-cap": "nameBytes" },
+        "argsHash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "x-horde-cap": "nameBytes" },
+        "state": { "type": "string", "enum": ["accepted", "done", "failed", "refused"] },
+        "receivedAt": { "$ref": "#/definitions/time" },
+        "doneAt": { "$ref": "#/definitions/time" },
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "reason": { "$ref": "#/definitions/reason" }
+      }
+    },
+    "handoff": {
+      "type": "object", "required": ["handoffId", "sessionId", "writtenAt", "document"], "additionalProperties": false,
+      "description": "A goblin's handoff, distilled on the node. Transcripts, tool output and exploratory notes stay on the node and may be NAMED in the document, never sent (design section 10).",
+      "properties": {
+        "handoffId": { "$ref": "#/definitions/uuid" },
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "writtenAt": { "$ref": "#/definitions/time" },
+        "document": { "type": "string", "pattern": "\\S", "x-horde-cap": "summaryBytes" }
+      }
+    },
+    "clone-status": {
+      "type": "object", "required": ["repoId", "branch", "head", "upstream", "ahead", "behind", "dirty", "stashes", "pullRequest"], "additionalProperties": false,
+      "description": "What git says about one clone or worktree, one answer per fact, so a fact git could not give is unknown and never zero. Never a file's contents.",
+      "properties": {
+        "repoId": { "$ref": "#/definitions/repo-id" },
+        "worktree": { "$ref": "#/definitions/worktree-name" },
+        "branch": { "$ref": "#/definitions/answer-token" },
+        "head": { "$ref": "#/definitions/answer-token" },
+        "upstream": { "$ref": "#/definitions/answer-token" },
+        "ahead": { "$ref": "#/definitions/answer-count" },
+        "behind": { "$ref": "#/definitions/answer-count" },
+        "dirty": { "$ref": "#/definitions/answer-count" },
+        "stashes": { "$ref": "#/definitions/answer-count" },
+        "pullRequest": { "$ref": "#/definitions/answer-count" }
+      }
+    },
+    "delivery": {
+      "type": "object", "required": ["messageId", "sessionId", "stage", "at"], "additionalProperties": false,
+      "description": "Where one message is (design 7.2). held is known-not-delivered, never failed.",
+      "properties": {
+        "messageId": { "$ref": "#/definitions/uuid" },
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "stage": { "type": "string", "enum": ["queued", "accepted", "handed-over", "seen", "expired", "held"] },
+        "at": { "$ref": "#/definitions/time" },
+        "reason": { "$ref": "#/definitions/reason" }
+      }
+    },
+    "alert-receipt": {
+      "type": "object", "required": ["alertId", "receivedAt"], "additionalProperties": false,
+      "properties": { "alertId": { "$ref": "#/definitions/uuid" }, "receivedAt": { "$ref": "#/definitions/time" } }
+    },
+    "report-receipt": {
+      "type": "object", "required": ["count", "receivedAt"], "additionalProperties": false,
+      "properties": { "count": { "type": "integer", "minimum": 0 }, "receivedAt": { "$ref": "#/definitions/time" } }
+    }
+  }
+}
