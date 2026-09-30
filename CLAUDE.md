@@ -41,10 +41,12 @@ reason.
 - A search that finds nothing proves nothing until the same instrument finds something known to be
   present. A line that prints "done" must have checked that it is.
 
-## Code (CONTRIBUTING 8 to 13)
+## Code (CONTRIBUTING 8 to 14)
 
 - ASCII only. Glyphs as escape sequences.
 - Comments say why and cite the measurement.
 - No absolute home paths, private project names or references to people in shipping code.
 - Ported code keeps its original licence notice.
 - Do not wrap a native command in `2>&1` under PowerShell 5.1.
+- Nothing outside `hosts/<name>/` names a terminal. `hosts/<name>/allowlist.txt` lists the exceptions
+  and only shrinks; `test/test-host-names.ps1` fails on anything new.

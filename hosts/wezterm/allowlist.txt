@@ -1,0 +1,35 @@
+# The files outside hosts/wezterm/ that may name WezTerm, and on exactly how many lines (decision D12).
+# tools/HostNames.ps1 fails test/test-host-names.ps1 on a file not listed here, on a listed file that
+# names the terminal on more lines than listed, and on an entry that allows more than its file needs -
+# so this list can only shrink. When a mention goes, lower the count or delete the line; when one
+# must be added, the entry and its reason are the thing a reviewer has to agree with.
+#
+# planning/ is not scanned at all, by rule (see tools/HostNames.ps1): plans and ledgers are records of
+# the WezTerm-based system being replaced and cannot be accurate without naming it.
+#
+# path | lines | why this file may name the host
+
+# --- the working rules. Rule 3's incidents happened in WezTerm, and its isolation recipe is WezTerm's.
+CLAUDE.md | 2 | the short form of CONTRIBUTING rule 3 gives the WezTerm isolation recipe, socket pin and skip-config, that every session must follow before spawning anything
+CONTRIBUTING.md | 10 | rule 3 cites the two WezTerm outages that made isolation a rule and the recipe measured against them; it moves under hosts/wezterm when a second host brings its own isolation rule
+README.md | 1 | the project summary names the WezTerm session-restore plugin Horde is strangling; a statement of history, not of design
+
+# --- core: citations of the old system, and its store catalogue.
+core/Identity.ps1 | 1 | a comment cites the wezfleet fallback through WEZTERM_PANE as the thing this function refuses to do (commit 88aab20); rule 8 comments cite what was measured
+core/Schema.ps1 | 1 | a comment cites the plugin's case-sensitive Lua lookup of session_id as the reason keys are compared exactly (review of PR 15)
+core/Tristate.ps1 | 1 | the header quotes the historical unknown "wezterm did not answer" that the old code resolved four different ways, which is why this module exists
+core/ownership.json | 6 | the ownership table catalogues the stores of the system being replaced, and three are WezTerm's own: its live pane list, the pane environment and the plugin's layout saves; they leave core when a host contributes its own stores
+
+# --- the contract: the existing pane-session file format, documented exactly as the old system writes it.
+schema/pane-session.v1.json | 2 | Phase 1 documents the existing pane-session file, whose name is a WezTerm pane number and whose only reader today is the WezTerm-side wezfleet code
+
+# --- tests of the above, which must quote what they test.
+test/test-identity.ps1 | 2 | proves the WEZTERM_PANE fallback cited in core/Identity.ps1 is never taken, so it must set that variable
+test/test-ownership.ps1 | 3 | asserts the ownership table's WezTerm guard and socket field, quoting the table
+test/test-schema-pane-session.ps1 | 1 | cites the plugin's case-sensitive session_id lookup that one fixture exists to prove
+test/test-tristate.ps1 | 2 | uses the historical "wezterm did not answer" reason from the Tristate header as its example unknown
+test/test-schema-restore-plan.ps1 | 13 | the restore plan's per-host degraded fixtures (migration-plan step 11) include WezTerm's plan and its capability row; they move to a host conformance suite when one exists
+test/fixtures/restore-plan/valid/host-wezterm.json | 2 | WezTerm's degraded restore-plan fixture, named for its host in path and planId like host-vscode.json and host-console.json beside it
+
+# --- the CLI's end-to-end gate, which runs in the one isolated terminal that exists.
+test/e2e/e2e-cli.ps1 | 16 | horde's own CLI scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance; it leaves this list when spawn and read-text reach it through a host-neutral port

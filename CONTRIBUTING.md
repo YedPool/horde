@@ -186,3 +186,17 @@ review finding of its own.
 
 No emoji and no non-ASCII characters in code, scripts or generated artefacts. Where a glyph is
 wanted, write it as an escape sequence so the source stays ASCII.
+
+## 14. A terminal is named only in its own host folder
+
+Nothing outside `hosts/<name>/` names a terminal (migration-plan decision D12): the engine, the
+schemas and the read model speak of sessions, slots and capabilities, so that the next host is a new
+adapter and not an engine change. Host-specific test tooling lives with its host too, in
+`hosts/<name>/test/`.
+
+`test/test-host-names.ps1` enforces it. Each host lists what identifies it in
+`hosts/<name>/names.txt`, and every file elsewhere that still names it in
+`hosts/<name>/allowlist.txt`, with a reason and its exact number of lines. The list may only
+shrink: a new mention fails, and so does an entry that allows more than its file needs. `planning/`
+is not scanned, because plans and ledgers record the system being replaced and cannot be accurate
+without naming it.

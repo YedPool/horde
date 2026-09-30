@@ -1,0 +1,21 @@
+# What identifies WezTerm. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of these
+# appears in a file outside hosts/wezterm/ (and outside planning/, by rule) that
+# hosts/wezterm/allowlist.txt does not list, exactly as often as it lists (decision D12).
+# Each is matched as a case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this host
+wezterm | the product's own name - as a substring it also catches WEZTERM_UNIX_SOCKET, WEZTERM_PANE, wezterm-gui, wezterm-resurrect and every Horde function named after the terminal
+gui-sock | the name WezTerm gives its mux socket file, gui-sock-<pid>, which the harness parses and which does not contain the product's name
+wezurrect | the short name of the WezTerm session-restore plugin, which migration-plan step 6.3 brings under hosts/wezterm/plugin
+#
+# CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside hosts/wezterm/ and planning/:
+#   WEZTERM_, wezterm-gui - contain "wezterm"; listing them would only count the same lines twice.
+#   gui-startup, skip-config, always-new-process - WezTerm vocabulary, but every file holding one
+#     also names the terminal (0 files had one without the other), so they would catch nothing new.
+#   mux - a generic word for a multiplexer. tmux and psmux, both named in D12 as candidate hosts,
+#     are muxes too, and test/test-tristate.ps1 uses "the mux did not answer" as a host-neutral
+#     example on 5 lines. A name that fires on host-neutral text gets allowlisted into meaning nothing.
+#   resurrect - an English word, and a restore feature will use it host-neutrally; both names of the
+#     plugin (wezterm-resurrect, resurrect.wezterm) already contain "wezterm".
+#   wezfleet - the orchestrator Horde replaces, not a terminal. Phase 2 reads its stores by design.
+#   pane - every host candidate has panes or their equivalent; it is D12's host-neutral vocabulary.
