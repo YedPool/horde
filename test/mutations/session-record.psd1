@@ -125,5 +125,11 @@
         @{ Name = "key-repeated-in-text"
            Find = '"properties": {'
            Replace = '"properties": { "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "x-horde-owner": "engine", "x-horde-read": "W1 role, then W2 role" },' }
+        @{ Name = "label-cycle-negative-allowed"
+           Find = '"labelCycle": { "type": "integer", "minimum": 0,'
+           Replace = '"labelCycle": { "type": "integer",' }
+        @{ Name = "label-cycle-minimum-one"
+           Find = '"labelCycle": { "type": "integer", "minimum": 0,'
+           Replace = '"labelCycle": { "type": "integer", "minimum": 1,' }
     )
 }
