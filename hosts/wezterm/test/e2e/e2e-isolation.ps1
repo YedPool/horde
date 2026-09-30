@@ -2,7 +2,7 @@
 #
 # This launches real, minimized terminals. It is safe to run beside a working one because each is a
 # separate instance with its own mux, and because it asserts that before doing anything - see
-# test/harness/Isolation.ps1. No agent session is started, so it costs nothing to run.
+# hosts/wezterm/test/Isolation.ps1. No agent session is started, so it costs nothing to run.
 #
 # TWO SCENARIOS. The first is the ordinary one. The second FAILS ON PURPOSE partway through, because a
 # teardown that only runs when everything went well is the leak - and the first version of this file
@@ -10,8 +10,7 @@
 
 $ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent (Split-Path -Parent $here)
-. (Join-Path $root "test\harness\Isolation.ps1")
+. (Join-Path (Split-Path -Parent $here) "Isolation.ps1")
 
 $fails = @()
 function Check { param($Cond, [string]$What)

@@ -1,7 +1,7 @@
 # Isolation.ps1 - a WezTerm that is ours alone, for tests that are allowed to break a terminal.
 #
 # Ported from YedPool/wezfleet lib/Isolation.ps1. Every lesson it carried, and what Horde did with
-# each, is in planning/ledger/test-harness-isolation.md. The short version of why this file exists:
+# each, is in planning/ledger/hosts-wezterm-isolation.md. The short version of why this file exists:
 #
 #   Every WezTerm window on a machine shares ONE mux server. The suite this replaces took down every
 #   window on its machine twice - the second time while believing it had isolated itself, because it
@@ -453,7 +453,7 @@ function Stop-HordeIsolatedWezterm {
     # measured the same day did leave an agent running, and hosts differ.
     #
     # And the original's actual fault that night was a NAME: a probe called a teardown function that
-    # did not exist, so no check inside it ever ran. test/test-isolation.ps1 guards that class.
+    # did not exist, so no check inside it ever ran. hosts/wezterm/test/test-isolation.ps1 guards it.
     #
     # -KillWith: see Invoke-HordeKill. Tests pass a guard; real use leaves it out.
     param($Instance, [scriptblock]$KillWith = $null)
