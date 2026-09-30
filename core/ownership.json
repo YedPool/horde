@@ -17,7 +17,7 @@
     "W6": { "system": "wezfleet", "what": "command log", "path": "<run dir>\\sessions\\<fleetId>\\cmdlog.txt, or loose\\<claudeSessionId>.cmdlog.txt" },
     "W8": { "system": "wezfleet", "what": "codex control file", "path": "<wezfleet root>\\codex-sessions\\<codexSessionId>.json" },
     "X1": { "system": "claude", "what": "pane-sessions file", "path": "~\\.claude\\pane-sessions\\<pane>.json",
-            "guard": "the file passes every check Read-WfPaneSessionFile makes - a numeric pane, only one wezterm-gui running, a well-formed session_id, and written after this terminal instance started - its pane is live and it is the only live pane-sessions file naming that session, and no live X2 session contradicts it (the hijack case)" },
+            "guard": "the file passes every check Read-WfPaneSessionFile makes - a numeric pane, at most one wezterm-gui running, a well-formed session_id, and written after this terminal instance started - its pane is live, it is the only live pane-sessions file naming that session (the rule of the finder that picks a pane to act on; census reads each live pane's file without it, and Horde adopts the stricter rule), and no live X2 session contradicts it (the hijack case)" },
     "X2": { "system": "claude", "what": "claude control file", "path": "~\\.claude\\sessions\\<pid>.json" },
     "X3": { "system": "claude", "what": "transcript", "path": "~\\.claude\\projects\\<cwd key>\\<sessionId>.jsonl" },
     "X4": { "system": "wezterm", "what": "live pane list", "path": "wezterm cli list (not persistent)" },

@@ -45,9 +45,14 @@ $paneW1 = @($pane.read | Where-Object { "$($_.store)" -ceq "W1" })[0]
 Check ("$($paneW1.when)" -like "*written in this terminal instance*" -and "$($paneW1.when)" -like "*no age limit*" -and "$($paneW1.when)" -notlike "*900 seconds old*") "the registry's pane is read by census's rule, with no age limit"
 Check ("$($pane.provisional)" -like "*no single wezfleet function*") "the order of the pane-sessions file before the status snapshot is marked as a new decision"
 # X1 IS GUARDED ON THE STORE, so no read of it can be bare. It was guarded for sessionId and pane
-# and read bare for projectCwd, transcriptPath and name (review finding 6).
+# and read bare for projectCwd, transcriptPath and name (review finding 6). The guard says AT MOST
+# one wezterm-gui, because Read-WfPaneSessionFile refuses only more than one (lib/Registry.ps1:247,
+# guiCount -gt 1); with none running there is no pane to misattribute. The "only live file naming
+# the session" rule is the act-on finder's (:672), not census's, which reads each live pane's file
+# on its own (:839-848); the guard adopts the stricter rule and must say whose it is.
 $x1Guard = "$($doc.stores.X1.guard)"
-Check ($x1Guard -like "*after this terminal instance started*" -and $x1Guard -like "*one wezterm-gui*" -and $x1Guard -like "*hijack*") "every read of the pane-sessions file carries one guard"
+Check ($x1Guard -like "*after this terminal instance started*" -and $x1Guard -like "*at most one wezterm-gui*" -and $x1Guard -like "*hijack*") "every read of the pane-sessions file carries one guard"
+Check ($x1Guard -like "*finder that picks a pane to act on*" -and $x1Guard -like "*census*") "the pane-sessions guard says whose rule the one-live-file check is"
 # W2 LIKEWISE: the claim reader's TTL and cwd checks, and the hook's "only for a session with no
 # record", on every read of a claim (review finding 7). The claim carries owner, so owner reads it.
 $w2Guard = "$($doc.stores.W2.guard)"

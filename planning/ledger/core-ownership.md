@@ -146,7 +146,7 @@ sources:
 - where: test/test-ownership.ps1 :: "the order of the pane-sessions file before the status snapshot is marked as a new decision"
 
 ### L-027 Every read of the pane-sessions file passes the same guards, whatever field it takes
-- source: YedPool/wezfleet lib/Registry.ps1:215-217 "There were FIVE readers of that file ... each applying its own subset of the guards"; the guards at :229 (numeric pane), :247 (one wezterm-gui), :251 (well-formed session_id), :254 (written in this instance), and :672 (exactly one live match); lib/Protocol.ps1:422 adds that the transcript it names must exist. The first draft of this table repeated that mistake: guarded for sessionId and pane, bare for projectCwd, transcriptPath and name. Review finding 6, 2026-09-29.
+- source: YedPool/wezfleet lib/Registry.ps1:215-217 "There were FIVE readers of that file ... each applying its own subset of the guards"; the guards at :229 (numeric pane), :247 (at most one wezterm-gui: "if ($Instance.guiCount -gt 1) { return $null }"), :251 (well-formed session_id), :254 (written in this instance), and :672 (exactly one live match - a rule of the act-on finder Find-WfLivePaneForSession only; census at :839-848 reads each live pane's file with no uniqueness check, and the table adopts the stricter rule, saying so in the guard; review finding 3, second review); lib/Protocol.ps1:422 adds that the transcript it names must exist. The first draft of this table repeated that mistake: guarded for sessionId and pane, bare for projectCwd, transcriptPath and name. Review finding 6, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "every read of the pane-sessions file carries one guard"
 
