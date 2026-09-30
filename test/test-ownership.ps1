@@ -3,17 +3,11 @@
 # Step 0.6's gate. The table is core\ownership.json; the lessons behind each rule are in
 # planning/ledger/core-ownership.md.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Ownership.ps1")
-
-$fails = @()
-# A condition must be exactly true or false; anything else fails loudly (see test-isolation.ps1).
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
 $rawText = Get-Content -LiteralPath (Join-Path $root "core\ownership.json") -Raw
 $doc = Get-HordeOwnership
@@ -187,11 +181,4 @@ $dupControl = @(try { Find-HordeJsonDuplicateKey -Text $rawText } catch { "THE S
 $storeKeys = ([regex]::Matches($rawText, '"store"')).Count
 Check ($dupControl.Count -eq 0 -and $storeKeys -ge 20) ("CONTROL: one key in many objects is not a repeat (" + $storeKeys + " store keys, " + $dupControl.Count + " repeats)")
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== every field has one owner and one way to be read ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "every field has one owner and one way to be read"
