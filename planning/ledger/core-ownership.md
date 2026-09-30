@@ -1,5 +1,5 @@
 module: core/ownership
-replaces: YedPool/wezfleet lib/Protocol.ps1 (Get-WfRunSnapshot pane and transcript precedence), lib/Registry.ps1 (Get-WfPaneIndex, Get-WfPaneIdentity, Find-WfLivePaneForSession, Resolve-WfFleetTarget, Get-WfFleetCensus source order), lib/Common.ps1 (Resolve-WfRunForSession, instance validity), lib/Mail.ps1 (Get-WfMailSelfId order) - the read orders only, recorded as data; no code is replaced yet
+replaces: YedPool/wezfleet lib/Protocol.ps1 (Get-WfRunSnapshot pane and transcript precedence), lib/Registry.ps1 (Get-WfPaneIndex, Get-WfPaneIdentity, Get-WfLivePaneForFleetSession, Find-WfLivePaneForSession, Resolve-WfFleetTarget, Get-WfFleetCensus source order, Read-WfPaneSessionFile and Read-WfPaneClaim guards), lib/Common.ps1 (Resolve-WfRunForSession, Get-WfCurrentInstance, Test-WfWrittenInInstance), lib/Mail.ps1 (Get-WfMailSelfId order), hooks/wf-registry-refresh.ps1 (spawn claim consumption: which fields a claim supplies, and only for a session with no record) - the read orders only, recorded as data; no code is replaced yet
 sources:
 - comments: searched
 - history: searched
