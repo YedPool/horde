@@ -66,6 +66,24 @@ function Resolve-HordeLedgerTarget {
     return [pscustomobject]@{ full = $full; rel = $relOut; problem = "" }
 }
 
+function Get-HordeOnDiskRel {
+    # The forward-slash path of an existing file relative to the root, each part spelled as the
+    # filesystem spells it. GetFullPath keeps whatever case it is given, and Windows matches names
+    # ignoring case, so the true spelling is read back one part at a time from its parent folder.
+    # Called only after Resolve-HordeLedgerTarget found the file, so every part exists.
+    param([string]$RepoRoot, [string]$Rel)
+    $cur = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    $out = New-Object System.Collections.ArrayList
+    foreach ($part in @($Rel -split '/' | Where-Object { $_ })) {
+        $hit = @([System.IO.Directory]::GetFileSystemEntries($cur, $part))
+        $name = $part
+        if ($hit.Count -eq 1) { $name = Split-Path -Leaf $hit[0] }
+        [void]$out.Add($name)
+        $cur = Join-Path $cur $name
+    }
+    return ($out -join '/')
+}
+
 function Get-HordeWordCount {
     # Words, or DISTINCT words - the second exists because "a a a a" is four words and no sentence.
     param([string]$Text, [switch]$Distinct)
@@ -157,12 +175,23 @@ function Test-HordeLedger {
                 $wantFile = $Matches["file"].Trim(); $assertion = $Matches["text"]
                 $t = Resolve-HordeLedgerTarget -RepoRoot $RepoRoot -Rel $wantFile
                 if ($t.problem) { Add-Finding -Entry $id -Problem $t.problem; break }
-                # A TEST, not any file. The first version accepted the ledger itself - its own where:
-                # line contains the quoted text - so an entry could certify itself.
-                # A HOST'S OWN TEST FOLDER COUNTS. D12 puts host-specific test tooling under
-                # hosts/<name>/test/, so a lesson about a host is enforced by a suite there; any other
-                # file in a host's folder is still refused.
-                if ($t.rel -notmatch '^(test|hosts/[^/]+/test)/.+\.ps1$') { Add-Finding -Entry $id -Problem "must name a test script under test/ or hosts/<name>/test/, not $($t.rel)"; break }
+                # THE PATH EXACTLY AS IT IS ON DISK. Windows opens the same file whatever the case,
+                # with a trailing dot, or through "..", so a rule matched against the written path can
+                # be walked around: the review of PR 21 got a host's harness accepted when written as
+                # HOSTS/<Host>/TEST/isolation.PS1, and as "Isolation.ps1." with a trailing dot. Only
+                # the on-disk spelling is judged from here on.
+                $disk = Get-HordeOnDiskRel -RepoRoot $RepoRoot -Rel $t.rel
+                if (-not [string]::Equals(($wantFile -replace '\\', '/'), $disk, [System.StringComparison]::Ordinal)) {
+                    Add-Finding -Entry $id -Problem "names $wantFile - write the path exactly as it is on disk: $disk"; break
+                }
+                # A SUITE, not any file. The first version accepted the ledger itself - its own where:
+                # line contains the quoted text - so an entry could certify itself. A suite is a
+                # test-*.ps1 or e2e-*.ps1 directly in test/ or in a host's own hosts/<name>/test/
+                # (D12), or in the e2e/ folder of either. That leaves out, by name or by place, a
+                # host's harness (which suites dot-source and which asserts nothing itself), the
+                # helpers in test/lib/, and everything under test/fixtures/. -cnotmatch, because
+                # -notmatch ignores case, and the on-disk spelling is what is being judged.
+                if ($disk -cnotmatch '^(test|hosts/[^/]+/test)/(e2e/)?(test|e2e)-[^/]+\.ps1$') { Add-Finding -Entry $id -Problem "must name a test script under test/ or hosts/<name>/test/ (test-*.ps1 or e2e-*.ps1, directly or in e2e/), not $disk"; break }
                 # ENOUGH TEXT TO MEAN SOMETHING. "e" appears in every file.
                 if ((Get-HordeWordCount -Text $assertion) -lt 3) { Add-Finding -Entry $id -Problem "the assertion must be at least three words, or it matches almost anything"; break }
                 $body = $null
