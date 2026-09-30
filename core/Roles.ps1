@@ -123,7 +123,10 @@ function Read-HordeWezfleetRoles {
             try { $c = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
             if ($null -eq $c) { [void]$unreadable.Add($f.FullName); continue }
             $r = Read-HordeRecordRole -Record $c -Table $Table
-            [void]$claims.Add([pscustomobject]@{ pane = [System.IO.Path]::GetFileNameWithoutExtension($f.Name); role = $r.role; raw = $r.raw; field = $r.field })
+            $spawned = $null
+            $spProp = $c.PSObject.Properties["spawnedAt"]
+            if ($null -ne $spProp) { $spawned = $spProp.Value }
+            [void]$claims.Add([pscustomobject]@{ pane = [System.IO.Path]::GetFileNameWithoutExtension($f.Name); role = $r.role; raw = $r.raw; field = $r.field; spawnedAt = $spawned })
         }
     }
     if ($unreadable.Count -gt 0) { [void]$gaps.Add("" + $unreadable.Count + " record(s) could not be read") }
@@ -141,6 +144,9 @@ function Get-HordeRoleCount {
     # master or orchestrator (ledger L-003). One master plus one live roleless session used to count
     # as "warchief known 1" (review, 2026-09-29). A retired session's role does not matter to a live
     # count, so it is not consulted.
+    #
+    # SESSIONS ONLY. Pending spawn claims - spawned, no record yet - are counted by
+    # Get-HordeRoleClaimCount and deliberately not added in here; see there for why.
     param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null)
     # Only a native role can be counted. Stored roles are translated on read, so wezfleet's "master"
     # never matches anything and used to answer a known 0 while a master was running.
@@ -153,4 +159,53 @@ function Get-HordeRoleCount {
     }
     $n = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count
     return (New-HordeKnown -Value $n)
+}
+
+# wezfleet's backstop for a spawn claim: older than this, it no longer applies
+# (YedPool/wezfleet lib/Registry.ps1:1235, $script:WfClaimTtlMinutes = 10080, seven days).
+$script:HordeWezfleetClaimTtlMinutes = 10080
+
+function Test-HordeClaimPending {
+    # Is this claim still pending by wezfleet's own rule? Read-WfPaneClaim (lib/Registry.ps1:1294-1307),
+    # called with no cwd as `master ensure` calls it, accepts a claim with a parseable spawnedAt no
+    # older than the backstop, and nothing else. Mirrored exactly, so a shadow count agrees with it.
+    param($Claim, [datetime]$Now = (Get-Date))
+    $at = $Claim.spawnedAt
+    if ($null -eq $at -or "$at" -eq "") { return $false }
+    $when = $null
+    if ($at -is [datetime]) { $when = $at }
+    else {
+        $parsed = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$at", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $false }
+        $when = $parsed
+    }
+    # Both in UTC: a local Now against a UTC spawnedAt is off by the zone offset - the defect fixed in
+    # core/tristate's Limit-HordeAge on 2026-09-29.
+    $ageMinutes = ($Now.ToUniversalTime() - $when.ToUniversalTime()).TotalMinutes
+    return ($ageMinutes -le $script:HordeWezfleetClaimTtlMinutes)
+}
+
+function Get-HordeRoleClaimCount {
+    # How many PENDING spawn claims name a role: sessions spawned and not yet visible, because a
+    # claim is consumed only by the session's first tool call. wezfleet's `master ensure` counts a
+    # pending master claim AS a master (lib/Master.ps1:118-137): a master idle for three days once
+    # had no record, and a second one was nearly spawned.
+    #
+    # THE CHOICE: this number is kept apart from Get-HordeRoleCount, not added into it. "Running" and
+    # "spawned but not yet seen" are different facts, and a sum would hide which one a caller saw.
+    # A caller asking wezfleet's question - is there a master at all? - adds the two. (Ledger L-023.)
+    #
+    # Unknown when the store read was incomplete, or when a pending claim's role is unknown (it may
+    # be the role asked about). A claim whose role is empty names no role and is not counted, as in
+    # wezfleet, where "" never equals "master".
+    param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null, [datetime]$Now = (Get-Date))
+    if ($null -eq $Table) { $Table = Get-HordeRoleTable }
+    if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
+    if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count claims: " + $Read.complete.reason)) }
+    $pending = @($Read.claims | Where-Object { Test-HordeClaimPending -Claim $_ -Now $Now })
+    $unsure = @($pending | Where-Object { $_.role.state -ne "known" -and $_.field -ne "empty" } | ForEach-Object { $_.pane })
+    if ($unsure.Count -gt 0) {
+        return (New-HordeUnknown -Reason ("cannot count claims: the role of " + $unsure.Count + " pending claim(s) is unknown (pane " + ($unsure -join ", ") + ")"))
+    }
+    return (New-HordeKnown -Value @($pending | Where-Object { $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count)
 }

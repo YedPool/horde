@@ -132,3 +132,8 @@ sources:
 - source: measured 2026-09-29 while building this module: YedPool/wezfleet lib/Registry.ps1:197 swaps a record in with [System.IO.File]::Replace, and that Replace fails while a reader holds the record with the ordinary read share that ReadAllText uses; with read, write and delete sharing it succeeds
 - disposition: test
 - where: test/test-roles.ps1 :: "a wezfleet write succeeds while horde holds the file open for reading"
+
+### L-023 A pending master claim is a master that is not visible yet; Horde counts it, as its own number
+- source: YedPool/wezfleet lib/Master.ps1:118-137 ("a PENDING claim naming a master counts as one"; a master idle three days came up with no role, 2026-09-14); pending means lib/Registry.ps1:1294-1307 with the 10080-minute backstop at :1235; horde PR #10 review, 2026-09-29, finding 4
+- disposition: test
+- where: test/test-roles.ps1 :: "a pending master claim is counted as a pending warchief, separately from sessions"

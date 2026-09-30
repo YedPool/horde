@@ -89,6 +89,10 @@ Put (Join-Path $sess "wrong-name.json") @{ claudeSessionId = "someone-else"; rol
 Set-Content -LiteralPath (Join-Path $sess "m1.12345.abcd1234.tmp") -Value '{"claudeSessionId":"m1","role":"master"}'
 Put (Join-Path $claimsDir "7.json") @{ role = "master"; claimedAt = "2026-09-29T00:00:00Z" }
 Put (Join-Path $claimsDir "8.json") @{ role = "" }
+# Pending by wezfleet's rule (lib/Registry.ps1 Read-WfPaneClaim, as lib/Master.ps1:130-137 calls it):
+# a spawnedAt no older than the 10080-minute backstop. 7 has no spawnedAt, so it is not pending.
+Put (Join-Path $claimsDir "9.json") @{ role = "master"; spawnedAt = (Get-Date).ToUniversalTime().AddHours(-1).ToString("o") }
+Put (Join-Path $claimsDir "10.json") @{ role = "orchestrator"; spawnedAt = (Get-Date).ToUniversalTime().AddDays(-8).ToString("o") }
 Set-Content -LiteralPath (Join-Path $store "registry\labels\A.claim") -Value "2026-09-29T00:00:00Z"
 Put (Join-Path $store "index.json") @{ repos = @() }
 Set-Content -LiteralPath (Join-Path $store "delivery.jsonl") -Value "{}"
@@ -140,6 +144,18 @@ try {
     Check ($wc.state -eq "known" -and $wc.value -eq 1) "CONTROL: with every record readable, the warchief count is known"
     $oc = Get-HordeRoleCount -Read $readClean -Role "orc"
     Check ($oc.state -eq "known" -and $oc.value -eq 1) "a retired orc is not counted among the live ones"
+    # A spawned master that has not yet run a tool has a claim and no record. wezfleet counts it as a
+    # master (lib/Master.ps1:130-137); Horde reports it as its own number beside the session count.
+    $pendingW = Get-HordeRoleClaimCount -Read $readClean -Role "warchief"
+    Check ($pendingW.state -eq "known" -and $pendingW.value -eq 1) "a pending master claim is counted as a pending warchief, separately from sessions"
+    $pendingO = Get-HordeRoleClaimCount -Read $readClean -Role "orc"
+    Check ($pendingO.state -eq "known" -and $pendingO.value -eq 0) "a claim past wezfleet's seven-day backstop is not pending"
+    Set-Content -LiteralPath (Join-Path $claimsDir "11.json") -Value ('{"role":"lane","spawnedAt":"' + (Get-Date).ToUniversalTime().ToString("o") + '"}')
+    $readOddClaim = Read-HordeWezfleetRoles
+    $pendingOdd = Get-HordeRoleClaimCount -Read $readOddClaim -Role "warchief"
+    Check ($pendingOdd.state -eq "unknown" -and $pendingOdd.reason -like "*11*") "a pending claim whose role is unknown makes the pending count unknown"
+    Remove-Item -LiteralPath (Join-Path $claimsDir "11.json") -Force
+
     # Counting "master" - wezfleet's word - matched nothing and answered a known 0 while a master ran.
     $wrongWord = $null
     try { $wrongWord = Get-HordeRoleCount -Read $readClean -Role "master" } catch { $wrongWord = "threw: " + $_.Exception.Message }
