@@ -1,0 +1,114 @@
+# The files outside agents/claude-code/ that may name the claude-code harness, and exactly how many times
+# (CONTRIBUTING rule 14; engine-settings design, 2026-09-30, section 9 and build step E1). A mention is
+# one occurrence of any name in names.txt, plus one if the file's path has one. tools/HostNames.ps1
+# fails test/test-host-names.ps1 on a file not listed here, on a listed file that names the harness
+# more times than listed, and on an entry that allows more than its file needs - and, when the checkout
+# has origin/main, on an entry origin/main lacks or a count above its count - so this list only grows
+# through a reviewed record. When a mention goes, lower the count or delete the line. When one must be
+# added, add or raise the entry here AND append a line to growth.txt in this folder -
+# path | old -> new | YYYY-MM-DD | reason - with old being origin/main's count (0 for a new path).
+#
+# MEASURED, NOT WRITTEN BY HAND: every count below is what the shipped counting function
+# (Get-HordeNameMentionCount in tools/HostNames.ps1) returned on 2026-09-30, when this list was made.
+# Core names the harness today because Phases 0 to 2 read the old system's stores, which are the
+# harness's own files. These entries shrink as those reads move behind the AgentPort (engine-settings
+# steps E8 to E11); none may be added for new code.
+#
+# The .md and .html files under planning/ are not scanned, by rule (see tools/HostNames.ps1).
+#
+# path | mentions | why this file may name the harness
+
+CLAUDE.md | 1 | the agent-session rules file carries the name the harness itself looks for at startup, so its path is fixed by the harness and not by Horde
+CONTRIBUTING.md | 1 | the working rules name CLAUDE.md, the session rules file whose name the harness fixes, as the short form of this document
+core/Identity.ps1 | 72 | identifies a session from the harness's own control files, process names and transcripts; these reads move behind the AgentPort in engine-settings step E9
+core/ownership.json | 35 | the ownership table catalogues the stores of the system being replaced, and several of them are the harness's own control files, transcripts and status files
+core/RestorePlan.ps1 | 10 | checks each resume kind's argv for the restore plan, and the kinds are named per harness until the AgentPort builds resume argv in engine-settings step E11
+core/Roles.ps1 | 2 | reads the old system's session records, whose key field carries the harness's name; the name belongs to the store being read on the way out
+hosts/wezterm/allowlist.txt | 2 | the host's own allowlist lists CLAUDE.md, the session rules file whose name the harness fixes
+hosts/wezterm/test/Isolation.ps1 | 1 | a comment cites the 2026-09-29 incident in which isolated instances and the agent sessions inside them were left running
+schema/pane-session.v1.json | 5 | documents the existing pane-session file exactly as the harness's SessionStart hook writes it, including where the harness keeps it
+schema/restore-plan.v1.json | 6 | the restore plan's resume kinds and agent field name the harness that produced each argv, until the AgentPort owns resume
+test/mutations/identity.psd1 | 10 | mutations of core code that names the harness must quote that code exactly to apply
+test/mutations/restore-plan.psd1 | 6 | mutations of core code that names the harness must quote that code exactly to apply
+test/test-identity.ps1 | 187 | tests core/Identity.ps1, which reads the harness's control files and processes, and must name what it builds and reads
+test/test-ownership.ps1 | 13 | asserts the ownership table's rows for the harness's own stores, quoting the table
+test/test-roles.ps1 | 19 | builds old-system session records whose key field carries the harness's name, to test the role reader
+test/test-schema-pane-session.ps1 | 2 | tests the pane-session schema, which documents a file the harness's hook writes
+test/test-schema-restore-plan.ps1 | 7 | tests the restore plan's per-harness resume kinds and quotes them
+
+# --- fixtures: copies of files the harness writes, and plans that resume under it.
+test/fixtures/pane-session/invalid/bad-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/invalid/no-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/invalid/session-id-trailing-newline.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/invalid/uppercase-session-id.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/invalid/wrong-event.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/invalid/wrong-type.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/compact-with-prompt.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/compact-with-prompt-no-title.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/minimal.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/resume-cache-fields-with-title.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/resume-with-prompt.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/resume-with-title.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/startup-with-model.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/startup-with-model-and-scratchpad.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/startup-with-model-scratchpad-title.json | 3 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/unknown-source-and-field.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/wezfleet-backfill.json | 1 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/with-cache-fields.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/pane-session/valid/with-model-and-title.json | 2 | a pane-session fixture, a copy of the record the harness's SessionStart hook writes, which names the harness's own folder
+test/fixtures/restore-plan/invalid/advisory-false.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/argv-empty.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/argv-empty-string.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/claude-argv-no-resume.json | 4 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/claude-argv-other-id.json | 4 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/claude-resume-other-id.json | 4 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/container-no-children.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/container-no-split.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/cwd-empty.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/dropped-session.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/duplicate-session-id.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/duplicate-slot.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/leaf-and-container.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/leaf-pane-key.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/neither-leaf-nor-container.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/no-layout.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/one-child.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/parent-cycle.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/parent-is-self.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/parent-not-in-plan.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/parent-not-uuid.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/plan-keyed-by-pane.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/ratio-one.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/ratio-text.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/ratio-three-children.json | 6 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/ratio-zero.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/resume-kind-unknown.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/resume-no-argv.json | 2 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/resume-no-id.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/role-alias.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/session-id-case-differs.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/session-id-empty.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/session-id-not-uuid.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/session-no-cwd.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/session-pane-key.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-and-children.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-and-ratio.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-and-split.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-bare-digit.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-case-differs.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-empty.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-names-no-session.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/slot-used-twice.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/split-left.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/tab-no-root.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/window-no-tabs.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/workspace-no-windows.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/invalid/wrong-version.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/valid/host-console.json | 12 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/valid/host-vscode.json | 12 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/valid/host-wezterm.json | 12 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+test/fixtures/restore-plan/valid/section-4-example.json | 3 | a restore-plan fixture whose sessions resume under a named harness, as schema/restore-plan.v1 requires of every plan
+
+# --- the other ports' own lists, which name this harness's files by path.
+hosts/wezterm/growth.txt | 1 | the other ports' lists name this harness's files and paths by path, so they must be listed here
+agents/codex/allowlist.txt | 4 | the other ports' lists name this harness's files and paths by path, so they must be listed here

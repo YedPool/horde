@@ -1,0 +1,17 @@
+# What identifies the codex agent harness. tools/HostNames.ps1 fails test/test-host-names.ps1 when
+# any of these appears in a file outside agents/codex/ (and outside the prose under planning/, by rule)
+# that agents/codex/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule 14;
+# engine-settings design, 2026-09-30, section 9). Each is matched as a case-insensitive substring, on
+# every line and on the file's path.
+#
+# name | why it identifies this harness
+codex | the harness's command and product name - as a substring it also catches the .codex folder that holds its configuration and rollouts, CODEX_HOME, and the codex-resume kind of a restore plan
+#
+# CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside agents/ and planning/:
+#   openai - the harness's native PROVIDER, not the harness (0 files). The engine-settings design
+#     names wire protocols after their vendor (openai-responses, openai-chat), and a provider is data
+#     that more than one harness can use.
+#   rollout - the name of the harness's transcript files, but an ordinary English word that a
+#     host-neutral release or migration text would use (0 files today).
+#   gpt-, sol - model ids and aliases, which live in the user's own engine file; sol is also shorter
+#     than the four characters the scan requires of a name.

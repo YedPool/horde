@@ -1,0 +1,16 @@
+# What identifies the claude-code agent harness. tools/HostNames.ps1 fails test/test-host-names.ps1
+# when any of these appears in a file outside agents/claude-code/ (and outside the prose under
+# planning/, by rule) that agents/claude-code/allowlist.txt does not list, exactly as often as it lists
+# (CONTRIBUTING rule 14; engine-settings design, 2026-09-30, section 9). Each is matched as a
+# case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this harness
+claude | the harness's command and product name - as a substring it also catches the session rules file named after it, its CLAUDE_CODE_ environment variables, the .claude folder that holds its control files and transcripts, and the claudeSessionId key of the old system's records
+#
+# CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside agents/ and planning/:
+#   anthropic - the harness's native PROVIDER, not the harness (0 files). Decision 2 of 2026-09-30 runs
+#     other vendors' models through this harness, and the engine-settings design names wire protocols
+#     after their vendor (anthropic-messages): a provider is data that more than one harness can use.
+#   opus, sonnet, fable, haiku - model aliases, which live in the user's own engine file and never in
+#     the repository. opus is in 7 files today, every one a pane-session fixture recording the model
+#     the hook reported; a model id is the provider's vocabulary, not the harness's.

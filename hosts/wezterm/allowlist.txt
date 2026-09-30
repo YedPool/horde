@@ -38,3 +38,7 @@ test/fixtures/restore-plan/valid/host-wezterm.json | 2 | WezTerm's degraded rest
 
 # --- the CLI's end-to-end gate, which runs in the one isolated terminal that exists.
 test/e2e/e2e-cli.ps1 | 16 | horde's own CLI scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance; it leaves this list when spawn and read-text reach it through a host-neutral port
+
+# --- the agent harnesses' allowlists, which must name this host's files by path to list them.
+agents/claude-code/allowlist.txt | 4 | the harness's allowlist names this host's own files by path, and each such path names the host
+agents/codex/allowlist.txt | 3 | the harness's allowlist names this host's own files by path, and each such path names the host
