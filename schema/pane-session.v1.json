@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/pane-session.v1",
+  "title": "pane-session v1",
+  "description": "A file in ~/.claude/pane-sessions, named <pane number>.json, written by Claude Code's SessionStart hook: the hook's input, verbatim. This schema DESCRIBES the format as it is on disk (census of 163 real files, 2026-09-29); Horde never writes these files. A file with no schemaVersion is v1.",
+  "type": "object",
+  "required": ["session_id", "transcript_path", "cwd", "hook_event_name", "source"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "description": "Absent in every file today; absence means 1. Reserved so a later format can say what it is." },
+    "session_id": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id. wezfleet refuses a file whose id does not have this shape." },
+    "transcript_path": { "type": "string", "description": "Where the conversation's transcript is. A snapshot that can rot: Horde derives the path rather than trusting this (core/ownership.json)." },
+    "cwd": { "type": "string", "description": "The working directory when the session started." },
+    "hook_event_name": { "type": "string", "enum": ["SessionStart"], "description": "Always SessionStart: 163 of 163 files." },
+    "source": { "type": "string", "description": "Why the session started. Seen: startup 117, resume 32, compact 11, wezfleet-backfill 2 (written by wezfleet pane-sessions -Apply, not the hook), clear 1. Not an enum: Claude Code may add values." },
+    "model": { "type": "string" },
+    "session_title": { "type": "string" },
+    "scratchpad_dir": { "type": "string" },
+    "prompt_id": { "type": "string" },
+    "context_tokens": { "type": "integer" },
+    "estimated_cache_write_usd": { "type": "number" },
+    "prompt_cache_likely_expired": { "type": "boolean" },
+    "seconds_since_last_response": { "type": "integer" }
+  },
+  "additionalProperties": true,
+  "x-horde-file": {
+    "directory": "~/.claude/pane-sessions",
+    "name": "^[0-9]{1,9}\\.json$, the WezTerm pane number - which names no terminal instance",
+    "written": "The file's last-write time is the only record of when it was written; nothing inside says so.",
+    "readers": "wezfleet Read-WfPaneSessionFile (lib/Registry.ps1) refuses a file whose name is not a pane number, whose session_id has the wrong shape, that was written before the current terminal instance started, or while more than one wezterm-gui runs. wezterm-resurrect read_pane_session (plugin/resurrect/process_handlers.lua) reads session_id and transcript_path.",
+    "writers": "Claude Code's SessionStart hook (cat > <pane>.json); wezfleet Write-WfPaneSessionRecord with source wezfleet-backfill."
+  }
+}

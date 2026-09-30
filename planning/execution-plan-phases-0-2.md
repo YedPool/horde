@@ -36,6 +36,11 @@ D. Phase 1: the contract
 E. Phase 2: the read model
 12. `core/identity`: one record shape from every agent's control files; no terminal in it.
 13. The projection: reads every old store, writes nothing, proven by test.
-14. `horde status --json`, with parity against today's commands on the same fixtures.
+14. `horde status --json`, with parity against today's commands on the same fixtures. Its output is
+    described by `schema/session-view.v1`, deferred here from step 10, which describes only the record
+    the engine stores: one answer for every field in `core/ownership.json`'s `required`, over every
+    owner; each answer in `core/tristate`'s form (known, absent, unknown); its provenance (the store
+    and field it was read from); the provisional mark wherever the ownership table has one; and a
+    value type per field, the same as `schema/session-record.v1`'s for a field the engine stores.
 15. Battle test (D11): the Warchief runs `horde status` beside `wezfleet status` and logs every
     disagreement. MILESTONE 2: reported.
