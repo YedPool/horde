@@ -72,15 +72,17 @@ function Test-HordeSchemaType {
             }
             return $false
         }
-        "number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }
+        # EVERY INTEGER IS A NUMBER. This listed its own types and left out Int16 and Byte, which
+        # "integer" accepts (issue #23), so one list now serves both "number" and minimum.
+        "number"  { return (Test-HordeSchemaIsNumber $Value) }
     }
     throw ("the schema names a type this validator does not know: '" + $Type + "'")
 }
 
 function Test-HordeSchemaIsNumber {
     # Every .NET type a number reaches the validator as: ConvertFrom-Json gives Int32, Int64, Decimal or
-    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" already
-    # accepts Int16 and Byte). Never a string or a boolean.
+    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" also
+    # accepts Int16 and Byte). Never a string or a boolean. "type": "number" asks this same question.
     param($Value)
     return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or
             $Value -is [double] -or $Value -is [single] -or $Value -is [decimal])

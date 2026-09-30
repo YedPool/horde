@@ -90,6 +90,12 @@ foreach ($c in $typeCases) {
     Check (@(Test-HordeSchema -Value $c.Good -Schema $ts).Count -eq 0) ($c.Type + ": CONTROL - a right value is accepted")
 }
 Check (Has (Test-HordeSchema -Value @{ a = 1 } -Schema ([pscustomobject]@{ type = "array" })) '$ should be array') "array: a hashtable is not an array"
+# EVERY INTEGER IS A NUMBER, however PowerShell holds it (issue #23). "integer" accepted Int16 and Byte
+# while "number" refused them, so a value built in PowerShell passed the narrower type and failed the
+# wider one. Measured 2026-09-30 on 5.1, before the fix: both gave "$ should be number".
+foreach ($v in @([int16]1, [byte]1, [single]1.5)) {
+    Check (@(Test-HordeSchema -Value $v -Schema ([pscustomobject]@{ type = "number" })).Count -eq 0) ("number: a value held as " + $v.GetType().Name + " is a number")
+}
 
 Write-Host ""
 Write-Host "--- a schema built as a hashtable means the same ---" -ForegroundColor Cyan
@@ -178,8 +184,16 @@ $found = Enum-Findings $true $one
 Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''True'', not one of: 1') ("true is not the whole number 1 (" + ($found -join "; ") + ")")
 $found = Enum-Findings (,@(1)) $one
 Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a list holding 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+# NOR "IS A NUMBER": [decimal] rounds a Double or Single to 15 or 7 significant digits, so the Double
+# 1.0000000000000002 and the Single 1.0000001 each became the Decimal 1 and matched enum [1] under that
+# guard (measured 2026-09-30; mutant enum-whole-number-guard-as-number survived once "type": "number"
+# took Int16 and Byte, issue #23, and nothing else told the two guards apart).
+foreach ($v in @([double]1.0000000000000002, [single]1.0000001)) {
+    $found = Enum-Findings $v $one
+    Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a " + $v.GetType().Name + " a hair above 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+}
 # EVERY INTEGER TYPE Test-HordeSchemaType ACCEPTS IS ACCEPTED HERE TOO, including Int16 and Byte,
-# which the "number" type does not list.
+# which the "number" type also accepts since issue #23.
 foreach ($v in @([int16]1, [byte]1, [long]1)) {
     $found = Enum-Findings $v $one
     Check ($found.Count -eq 0) ("a whole-number enum accepts 1 held as " + $v.GetType().Name + " (" + ($found -join "; ") + ")")

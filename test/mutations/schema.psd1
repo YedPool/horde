@@ -127,8 +127,11 @@
            Find = '"null"    { return ($null -eq $Value) }'
            Replace = '"null"    { return $true }' }
         @{ Name = "type-number-accepts-anything"
-           Find = '"number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }'
+           Find = '"number"  { return (Test-HordeSchemaIsNumber $Value) }'
            Replace = '"number"  { return $true }' }
+        @{ Name = "number-omits-int16-and-byte"
+           Find = '"number"  { return (Test-HordeSchemaIsNumber $Value) }'
+           Replace = '"number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }' }
         @{ Name = "type-array-accepts-anything"
            Find = '"array"   { return ($Value -is [System.Collections.IList]) }'
            Replace = '"array"   { return $true }' }
