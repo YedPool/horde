@@ -33,6 +33,9 @@
         @{ Name = "any-host-trusts-stored-handles"
            Find = 'if (@($Context.wrote) -cnotcontains $Store) {'
            Replace = 'if ($false) {' }
+        @{ Name = "running-session-assumed-in-this-instance"
+           Find = 'if ($S.fields["pane"].answer.state -eq "known" -and $inst.state -eq "known" -and $inst.value.running -eq 1'
+           Replace = 'if (($S.alive -or $S.fields["pane"].answer.state -eq "known") -and $inst.state -eq "known" -and $inst.value.running -eq 1' }
         # Decision 1: claimants.
         @{ Name = "claimed-handle-newest-wins"
            Find = 'if ($claims[$h].Count -lt 2) { continue }'

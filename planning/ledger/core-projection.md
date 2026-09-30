@@ -444,3 +444,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 2: roster, report, pane-sessions and claim handles carry no host or instance, so another host's handle 17 would match a pane 17 the first host wrote; horde planning/migration-plan.html D12 "a handle is never a key"
 - disposition: test
 - where: test/test-projection.ps1 :: "a stored handle counts only when this host declares it wrote that store"
+
+### L-084 A session's host instance is proven by its live handle, never by its running
+- source: review of horde PR #31, finding 3: hostInstance was the host's one running instance for any session a control file called alive, so a session in another terminal was labelled with this one
+- disposition: test
+- where: test/test-projection.ps1 :: "a running session whose handle is unknown is in no proven host instance"

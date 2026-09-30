@@ -306,6 +306,14 @@ $pw1 = Project $base -HostPort (HostOf $base -Stores @("W1"))
 Check ((Val (Ans $pw1 1 "pane")) -eq "10" -and (St (Ans $pw1 10 "pane")) -eq "unknown") "CONTROL: a host that wrote the registry but not the pane-sessions files is trusted for the registry only"
 
 Write-Host ""
+Write-Host "--- a session's host instance is proven, never assumed ---" -ForegroundColor Cyan
+# A running session is not proven to be in this host's instance: it may run in another terminal
+# (review of PR #31, finding 3). The one instance running names it only when the session's handle is
+# live in it.
+Check ((St (Ans $p "codex-thread-1" "hostInstance")) -eq "unknown" -and (St (Ans $p 12 "hostInstance")) -eq "unknown") "a running session whose handle is unknown is in no proven host instance"
+Check ((Val (Ans $p 10 "hostInstance")) -eq "inst-1" -and (Src (Ans $p 10 "hostInstance")) -eq "X5") "CONTROL: a session whose handle is live in the one instance is in it"
+
+Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan
 $two = Fault $p "session-in-two-handles"
 Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (Ans $p 13 "pane")) -eq "unknown") "a session in two handles is reported"

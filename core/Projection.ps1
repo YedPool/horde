@@ -945,10 +945,13 @@ function Complete-HordeSession {
     else { [void]$wc.Add((New-HordeCandidate -Store "W3" -Field "windowId" -Skip "no run manifest gives a window")) }
     Set-HordeField $S $C "window" (Resolve-HordeField $wc)
 
-    # hostInstance: as the hook recorded it, else the one instance running, for a running session.
+    # hostInstance: as the hook recorded it, else the one instance running - but only for a session
+    # whose handle is live in it. A running session with no live handle here may be in another
+    # terminal altogether, so it is in no proven instance (review of PR #31, finding 3).
     $inst = $C.host.instance
-    $x5i = New-HordeCandidate -Store "X5" -Field "instance" -Skip "not a running session under exactly one known host instance"
-    if ($S.alive -and $inst.state -eq "known" -and $inst.value.running -eq 1 -and -not $inst.value.ambiguous -and $null -ne $inst.value.id) { $x5i = New-HordeCandidate -Store "X5" -Field "instance" -Answer (New-HordeKnown -Value $inst.value.id) }
+    $x5i = New-HordeCandidate -Store "X5" -Field "instance" -Skip "the session holds no handle in this host and is not running"
+    if ($S.fields["pane"].answer.state -eq "known" -and $inst.state -eq "known" -and $inst.value.running -eq 1 -and -not $inst.value.ambiguous -and $null -ne $inst.value.id) { $x5i = New-HordeCandidate -Store "X5" -Field "instance" -Answer (New-HordeKnown -Value $inst.value.id) }
+    elseif ($S.alive -or $S.fields["pane"].answer.state -eq "unknown") { $x5i = New-HordeUnsure -Store "X5" -Field "instance" -Reason "the session's handle is not proven live in this host's one instance, so it may run in another terminal" }
     Set-HordeField $S $C "hostInstance" (Resolve-HordeField @((Get-HordeRegistryCandidate $S "instance" -Agentish), $x5i))
 
     # The agent's own fields.
