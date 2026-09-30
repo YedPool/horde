@@ -177,6 +177,10 @@ function Get-HordeFaults {
         if ($noLines -gt 0) { $why5 = "" + $noLines + " claude process(es) show no command line, so a second copy among them cannot be seen" }
         elseif ($C.identity.complete["claude"].state -ne "known") { $why5 = "the claude control listing is incomplete (" + $C.identity.complete["claude"].reason + ")" }
     }
+    # Only claude processes' command lines are read, so a session of any other agent could run twice
+    # unseen: while one exists, "no duplicate" is not known (review of PR #31, finding 9).
+    $unread = @($C.identity.records.Values | Where-Object { $_.fields.agent.state -ne "known" -or "$($_.fields.agent.value)" -cne "claude" } | ForEach-Object { $_.sessionId } | Sort-Object)
+    if ($why5 -eq "" -and $unread.Count -gt 0) { $why5 = "only claude processes' command lines are read, and " + $unread.Count + " session(s) of another agent are known (" + ($unread -join ", ") + "), and a second copy of one could not be seen" }
     [void]$out.Add((New-HordeFault -Kind "conversation-in-two-processes" -Found $dupes -UnknownReason $why5))
 
     # registry-hook-silent: running claude sessions exist and not one has a registry record - the

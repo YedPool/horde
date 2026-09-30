@@ -548,6 +548,18 @@ Check ((St (Ans $pdr 3 "runId")) -eq "unknown" -and (Why (Ans $pdr 3 "runId")) -
 Check ((FSt (Fault $p "roster-entry-twice")) -eq "false") "CONTROL: rosters that list each id once are not a fault"
 
 Write-Host ""
+Write-Host "--- a check that reads one agent's processes speaks only for that agent ---" -ForegroundColor Cyan
+# conversation-in-two-processes reads the command lines of one agent's processes. A session of any
+# other agent could be running twice unseen, so while one exists the clean answer is unknown, not
+# false (review of PR #31, finding 9).
+$onec = New-Fleet "one-copy"
+PutJson (Join-Path $onec "processes.json") @(@(ReadJson (Join-Path $onec "processes.json")) | Where-Object { @(1100, 1101) -notcontains [int]$_.pid })
+$c2p = Fault (Project $onec) "conversation-in-two-processes"
+Check ((FSt $c2p) -eq "unknown" -and $c2p.answer.reason -like "*codex-thread-1*") "a session of an agent whose processes are not read leaves the duplicate check unknown"
+Remove-Item -LiteralPath (Join-Path $onec "wezfleet\codex-sessions\codex-thread-1.json") -Force
+Check ((FSt (Fault (Project $onec) "conversation-in-two-processes")) -eq "false") "CONTROL: with only sessions whose processes are read, no duplicate is a known false"
+
+Write-Host ""
 Write-Host "--- the layout and the resume command ---" -ForegroundColor Cyan
 $rc1 = Ans $p 1 "resumeCommand"
 Check ((St $rc1) -eq "unknown" -and @($rc1.shadow | Where-Object { $_.store -eq "R1" }).Count -eq 1 -and "$(@($rc1.shadow)[0].value)" -like "*--resume*") "a layout save never answers resumeCommand"

@@ -474,3 +474,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 8: the pane-sessions holder map kept the last running session read, and a roster or manifest listing one fleet id twice gave its first entry
 - disposition: test
 - where: test/test-projection.ps1 :: "a roster that lists one fleet id twice is reported, and chooses neither entry"
+
+### L-090 A check that reads one agent's processes is unknown while another agent's sessions exist
+- source: review of horde PR #31, finding 9: conversation-in-two-processes reads only claude processes' command lines (YedPool/wezfleet lib/Common.ps1:684-708 has the same blind spot), yet answered a known false with a codex session present
+- disposition: test
+- where: test/test-projection.ps1 :: "a session of an agent whose processes are not read leaves the duplicate check unknown"

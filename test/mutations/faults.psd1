@@ -69,6 +69,9 @@
         @{ Name = "roster-listing-twice-not-reported"
            Find = '| Group-Object -Property id -CaseSensitive | Where-Object { $_.Count -gt 1 })) { $twice +='
            Replace = '| Group-Object -Property id -CaseSensitive | Where-Object { $false })) { $twice +=' }
+        @{ Name = "other-agents-duplicates-called-none"
+           Find = 'if ($why5 -eq "" -and $unread.Count -gt 0) {'
+           Replace = 'if ($false) {' }
         @{ Name = "non-uuid-id-not-flagged"
            Find = 'if ($S.id -cnotmatch $script:HordeUuidPattern) {'
            Replace = 'if ($false) {' }
