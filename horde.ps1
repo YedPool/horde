@@ -7,7 +7,7 @@
 # the literal string "-Json" bound to the first positional parameter - silently. test\test-cli.ps1
 # fails if this file grows a param block. A value joined to its parameter with a colon (-Json:$false)
 # arrives in $args as two items; cli\Arguments.ps1 rejoins them when PowerShell kept the colon, and
-# refuses the word "$false" when -File mode dropped it.
+# refuses the word "$false" when -File mode dropped it, and a switch followed by the word "false".
 #
 # EXIT CODES ARE 0, 1 OR 2, AND NOTHING ELSE, so a caller can act on them:
 #   0  the command ran and returned, or help was asked for: `horde`, `horde --help`, or -?, -h or
@@ -67,7 +67,7 @@ if (@($rest | Where-Object { @("-?", "-h", "--help") -contains "$_" }).Count -gt
     exit 0
 }
 
-$private:bound = Resolve-HordeArguments -Items $rest
+$private:bound = Resolve-HordeArguments -Items $rest -Parameters $lookup.command.parameters
 if ($bound.problem) {
     [Console]::Error.WriteLine("horde " + $name + ": " + $bound.problem)
     [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)

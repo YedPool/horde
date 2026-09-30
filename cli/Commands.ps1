@@ -87,6 +87,28 @@ function Get-HordeRunProblem {
     return $null
 }
 
+function Get-HordeRunParameters {
+    # The run block's declared parameters, as { name; aliases; switch }, read from its syntax tree -
+    # never by running it. cli\Arguments.ps1 needs to know which parameters are switches, to refuse
+    # a switch followed by the word "false" (see there); nothing else can say so before the file loads.
+    # Call only on a value Get-HordeRunProblem accepted.
+    param($ValueAst)
+    $v = $ValueAst
+    if ($v -is [System.Management.Automation.Language.PipelineAst] -and @($v.PipelineElements).Count -eq 1) { $v = $v.PipelineElements[0] }
+    if ($v -is [System.Management.Automation.Language.CommandExpressionAst]) { $v = $v.Expression }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($p in @($v.ScriptBlock.ParamBlock.Parameters)) {
+        # [Alias("a", "b")]: each positional argument that is a constant string is one alias.
+        $aliases = @($p.Attributes | Where-Object { $_ -is [System.Management.Automation.Language.AttributeAst] -and $_.TypeName.Name -eq "Alias" } |
+            ForEach-Object { $_.PositionalArguments } |
+            Where-Object { $_ -is [System.Management.Automation.Language.StringConstantExpressionAst] } | ForEach-Object { $_.Value })
+        # StaticType is the type the last type constraint names: [switch] and
+        # [System.Management.Automation.SwitchParameter] both give SwitchParameter.
+        [void]$out.Add([pscustomobject]@{ name = $p.Name.VariablePath.UserPath; aliases = $aliases; switch = ($p.StaticType -eq [System.Management.Automation.SwitchParameter]) })
+    }
+    return @($out)
+}
+
 function Read-HordeCommandAst {
     # Parse a command file and return { info; findings }. info is $null when there are findings.
     # Nothing in the file is executed.
@@ -151,6 +173,7 @@ function Read-HordeCommandAst {
             $hasRun = $true
             $why = Get-HordeRunProblem -ValueAst $pair.Item2
             if ($why) { [void]$findings.Add($why) }
+            else { $info["parameters"] = @(Get-HordeRunParameters -ValueAst $pair.Item2) }
             continue
         }
         if ((Get-HordeCommandKeys) -notcontains $key) { [void]$findings.Add("declares an unknown key '" + $key + "'"); continue }

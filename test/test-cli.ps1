@@ -255,11 +255,36 @@ try {
     Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*'--' is not supported*") ("a double dash from a script is refused, not bound as a value" + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "-Json") -AsTyped
     Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[-Json] json=False count=0") ("typed, a double dash is PowerShell's and what follows it is a word (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
-    # Typed, a colon value a switch cannot take is PowerShell's to refuse. From a script "-Json:false"
-    # arrives exactly as "-Json false" does - a switch and a word - so horde cannot tell them apart
-    # and does not try (measured 2026-09-29; see cli\Arguments.ps1).
+    # Typed, a colon value a switch cannot take is PowerShell's to refuse.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped
     Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + ")")
+    # A SWITCH FOLLOWED BY A TRUTH WORD IS REFUSED. From a script "-Json:false" arrives exactly as
+    # "-Json false" does - the tagged switch, then the untagged word "false" - and bound json=True
+    # target=[false] with exit 0 (measured 2026-09-29, before this refusal). Nothing in $args says
+    # whether the word was the switch's value or an argument, so a switch (read from the run block's
+    # param AST, by exact name, prefix or alias, common switches included) followed by the word
+    # true, false, $true or $false in any case exits 2 instead of guessing (see cli\Arguments.ps1).
+    $switchWords = @(
+        @("-Json:false"), @("-Json", "false"), @("-Json:TRUE"), @("-json", "False"),
+        @("-J", "false"), @("abc", "-Json", "true"), @("-Verbose", "false"))
+    foreach ($w in $switchWords) {
+        $r = Invoke-Horde -Root $tmp -Arguments (@("echo-args") + $w)
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the word*omit the switch*" -and $r.err -like "*usage: horde echo-args*") ("a switch followed by a truth word from a script is refused, never bound as two arguments: " + ($w -join " ") + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    # Typed, where PowerShell parsed the line, the same two items stand apart the same way, and are
+    # refused the same way; a colon value typed keeps its own handling above.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "false") -AsTyped
+    Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch followed by a truth word is refused typed at a prompt too (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # CONTROLS: the refusal is about switches and truth words only.
+    foreach ($typed in @($false, $true)) {
+        $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "abc") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a genuine positional after a switch still binds, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Target", "false")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=False count=0") ("the word false after a parameter that is not a switch is its value (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "false", "-Json")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=True count=0") ("the word false before a switch is a positional, as the refusal says to reorder it (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # Asking a command for help is not an error: `horde echo-args -?` exited 1 with PowerShell's
     # '"helpTarget" is null' (review of PR #12, finding 6). -?, -h and --help after a command name
     # print its usage and summary and exit 0, as they print horde's help before one.

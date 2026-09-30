@@ -18,10 +18,18 @@
 # a typed $false is - is refused with exit 2, saying why. It can only have come from a script, where
 # it almost certainly meant a switch's value, and horde does not guess which parameter it was for.
 #
-# WHAT IS NOT CAUGHT, measured 2026-09-29, from a script: "-Json:false" arrives as "-Json" "false",
-# the same as "-Json false", and binds that way; "-Json:" with nothing after it arrives as nothing,
-# or swallows the next word ("-Json: -Count 5" delivers -Json, then the words "-Count" and "5").
-# Neither leaves a trace in $args.
+# A SWITCH FOLLOWED BY A TRUTH WORD IS REFUSED TOO. From a script "-Json:false" arrives as "-Json"
+# "false", the same as "-Json false", and bound json=True target=[false] with exit 0 (measured
+# 2026-09-29). The word "false" is also a perfectly good positional value, so the word alone cannot
+# be refused as "$false" is. What horde can know is which parameters are switches - the registry
+# reads them from the run block's param AST without running it - so a switch followed IMMEDIATELY by
+# an untagged word that is true, false, $true or $false, in any case, exits 2: the user is told to
+# omit the switch, give it bare, or put the word before it. Typed, "-Json false" arrives the same way
+# and is refused the same way; typed "-Json:false" keeps the colon and is PowerShell's to refuse.
+#
+# WHAT IS STILL NOT CAUGHT, measured 2026-09-29, from a script: "-Json:" with nothing after it
+# arrives as nothing, or swallows the next word ("-Json: -Count 5" delivers -Json, then the words
+# "-Count" and "5"). It leaves no trace in $args.
 #
 # "--" IS REFUSED WHEREVER IT ARRIVES. Typed, PowerShell consumes it before horde runs and what
 # follows is plain words, so horde never sees it. From a script it arrives as an argument, and a
@@ -52,8 +60,9 @@ function Resolve-HordeArguments {
     # holds everything else, in order, as the very objects $args held. problem is a message when the
     # arguments cannot be read faithfully, and the caller exits 2 with it.
     #
-    # Items: the command's items from $args.
-    param($Items)
+    # Items: the command's items from $args. Parameters: the run block's parameters, as the registry
+    # read them ({ name; aliases; switch }); with none, no argument is taken for a switch.
+    param($Items, $Parameters = @())
     $named = @{}
     $positional = @()
     $items = @($Items)
@@ -86,9 +95,47 @@ function Resolve-HordeArguments {
         if ($item -is [string] -and ($item -ieq '$true' -or $item -ieq '$false')) {
             return (& $fail (Get-HordeTextBoolProblem -Text $item))
         }
+        if ($pname -and $j + 1 -lt $items.Count) {
+            $next = $items[$j + 1]
+            if ($next -is [string] -and $null -eq (Get-HordeParameterName -Item $next) -and $next -imatch '\A\$?(true|false)\z' -and
+                (Test-HordeSwitchParameter -Name $pname -Parameters $Parameters)) {
+                return (& $fail (Get-HordeSwitchWordProblem -Switch "$item" -Word $next))
+            }
+        }
         $positional += $item
     }
     return [pscustomobject]@{ named = $named; positional = $positional; problem = $null }
+}
+
+function Test-HordeSwitchParameter {
+    # Whether a parameter name, as typed, names a switch of the run block. PowerShell accepts a
+    # parameter's full name, an alias, or any unambiguous prefix, and every [CmdletBinding()] block
+    # also takes the common parameters, -Verbose and -Debug among them as switches ("-Verbose false"
+    # bound target=[false], measured 2026-09-29). An exact name or alias decides; otherwise the name is
+    # taken for a switch if ANY parameter it is a prefix of is one. Where that prefix is ambiguous,
+    # PowerShell refuses the line with exit 2 anyway, so the refusal here costs nothing.
+    param([string]$Name, $Parameters)
+    $switches = @("Verbose", "Debug", "WhatIf", "Confirm")
+    $others = @("ErrorAction", "WarningAction", "InformationAction", "ErrorVariable", "WarningVariable",
+        "InformationVariable", "OutVariable", "OutBuffer", "PipelineVariable")
+    $names = New-Object System.Collections.ArrayList
+    foreach ($p in @($Parameters)) {
+        foreach ($n in @(@($p.name) + @($p.aliases))) { if ("$n") { [void]$names.Add([pscustomobject]@{ n = "$n"; s = [bool]$p.switch }) } }
+    }
+    foreach ($n in $switches) { [void]$names.Add([pscustomobject]@{ n = $n; s = $true }) }
+    foreach ($n in $others) { [void]$names.Add([pscustomobject]@{ n = $n; s = $false }) }
+    $exact = @($names | Where-Object { $_.n -ieq $Name })
+    if ($exact.Count -gt 0) { return [bool]$exact[0].s }
+    return (@($names | Where-Object { $_.s -and $_.n.StartsWith($Name, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0)
+}
+
+function Get-HordeSwitchWordProblem {
+    # The message for a switch followed by the word true or false.
+    param([string]$Switch, [string]$Word)
+    return ("the switch " + $Switch + " is followed by the word '" + $Word + "', which arrived as text: run as a script " +
+        "(powershell -File), PowerShell passes " + $Switch + ":" + $Word + " as " + $Switch + " and a separate word, so horde " +
+        "cannot tell whether '" + $Word + "' was the switch's value or an argument. Omit the switch to keep it off, give it " +
+        "bare to turn it on, or reorder the arguments so the word comes before the switch if it is an argument")
 }
 
 function Get-HordeTextBoolProblem {
