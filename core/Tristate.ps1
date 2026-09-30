@@ -33,6 +33,12 @@ $script:HordeClockSkewSeconds = 5
 
 function New-HordeAnswer {
     param([string]$State, $Value, [string]$Reason, $ObservedAt)
+    # Refused here, where the mistake is made: -ObservedAt "yesterday" was accepted and Limit-HordeAge
+    # later threw a cast error far from it (review, 2026-09-29). Text is not parsed on purpose - a
+    # stored time is read by ConvertFrom-HordeAnswerRecord, which knows about zones.
+    if ($null -ne $ObservedAt -and $ObservedAt -isnot [datetime]) {
+        throw ("an observation time must be a [datetime] or nothing, not '" + $ObservedAt + "'")
+    }
     return [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = $State; value = $Value; reason = $Reason; observedAt = $ObservedAt }
 }
 
@@ -92,6 +98,8 @@ function Test-HordeAnswer {
     # New-HordeKnown refuses $null; a hand-built "known" holding $null is refused here for the same
     # reason - a known nothing is New-HordeAbsent.
     if ($Answer.state -ceq "known" -and ($null -eq $Answer.value -or $Answer.value -is [System.DBNull])) { return $false }
+    # The same rule as New-HordeAnswer, for a hand-built answer: an observation time is a date or nothing.
+    if ($null -ne $Answer.observedAt -and $Answer.observedAt -isnot [datetime]) { return $false }
     # NOT DONE, on purpose: .value is an ordinary property, so `$answer.value` reads it without the
     # state check Get-HordeValue makes. Hiding it would break Resolve-HordeAnswer and the stored form;
     # the rule is carried by review and by this comment (ledger L-040).

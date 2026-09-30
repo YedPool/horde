@@ -160,6 +160,13 @@ Check ((Test-HordeAnswer $shouted) -eq $false) "an answer whose state word is in
 $hollow = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "known"; value = $null; reason = ""; observedAt = $null }
 Check ((Test-HordeAnswer $hollow) -eq $false) "a known answer holding null is not an answer"
 Check ((Test-HordeAnswer (New-HordeKnown -Value 0)) -eq $true) "CONTROL: a well-formed known answer is an answer"
+# An observation time that is not a date was accepted when the answer was made, and Limit-HordeAge
+# then threw a cast error far from the mistake (review, 2026-09-29: -ObservedAt "yesterday").
+Check (Throws { New-HordeKnown -Value 1 -ObservedAt "yesterday" } "observation time") "a known answer refuses an observation time that is not a date"
+Check (Throws { New-HordeAbsent -ObservedAt "yesterday" } "observation time") "and so does an absent one"
+$textTime = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "known"; value = 1; reason = ""; observedAt = "yesterday" }
+Check ((Test-HordeAnswer $textTime) -eq $false) "an answer whose observation time is text is not an answer"
+Check ((Test-HordeAnswer (New-HordeKnown -Value 1 -ObservedAt (Get-Date))) -eq $true) "CONTROL: an answer observed at a real date is an answer"
 
 Write-Host ""
 Write-Host "--- stored answers and missing fields ---" -ForegroundColor Cyan
