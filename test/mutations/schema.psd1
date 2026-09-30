@@ -163,8 +163,17 @@
            Find = 'throw ("the schema''s `$ref ''" + $Ref + "'' names no definition")'
            Replace = 'return $null' }
         @{ Name = "definition-name-ignores-case"
-           Find = 'if ($d.Name -ceq $name) { return $d.Value }'
-           Replace = 'if ($d.Name -eq $name) { return $d.Value }' }
+           Find = '$defs = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
+           Replace = '$defs = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "cache-shared-across-roots"
+           Find = '$rootKey = $Root'
+           Replace = '$rootKey = $Root.PSObject.BaseObject' }
+        @{ Name = "cache-shared-across-nodes"
+           Find = '$nodeKey = $Schema'
+           Replace = '$nodeKey = $Schema.PSObject.BaseObject' }
+        @{ Name = "cycle-not-detected-after-first-call"
+           Find = 'if ($rootCache.walked) { return }'
+           Replace = 'if ($rootCache.walked) { return }; $rootCache.walked = $true' }
         @{ Name = "keyword-beside-ref-allowed"
            Find = 'if ($beside.Count -gt 0) { throw'
            Replace = 'if ($false) { throw' }
@@ -187,8 +196,8 @@
            Find = 'Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
            Replace = '' }
         @{ Name = "root-walked-under-caller-root"
-           Find = '        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
-           Replace = '    }; if ($true) { Assert-HordeSchemaSubtrees -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true) -Path "#" -Root $Root' }
+           Find = '        Assert-HordeSchemaWalkedOnce -Root $Root -Kw $kw'
+           Replace = '    }; if ($true) { Assert-HordeSchemaWalkedOnce -Root $Root -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true)' }
         @{ Name = "definitions-any-value"
            Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
            Replace = 'if ($false) {' }

@@ -196,16 +196,47 @@ function ConvertTo-HordeSchemaPattern {
     return $sb.ToString()
 }
 
+# WHAT IS WORKED OUT ONCE PER SCHEMA OBJECT, not once per value (review of PR #31). Resolving a $ref
+# enumerated the root and every definition through a pipeline, about 1.6 ms a $ref with 52
+# definitions, and every node's keywords were re-checked for every value it met, so validating the
+# 34-session fixture view against schema/session-view.v1 took 85 s. Two caches now hold that work:
+#   - per ROOT: the definitions by name, and whether the root has been walked (every node checked);
+#   - per NODE: its checked keywords and its properties by name.
+# Both are ConditionalWeakTables keyed on the schema object itself, so an entry lives exactly as long
+# as its schema and a new schema object is a new entry. Measured 2026-09-30 on 5.1: the table tells
+# two parsed schemas apart although their PSObject.BaseObject is one shared PSCustomObject, because
+# PowerShell passes a custom object's PSObject wrapper, not that base object, as the key.
+# A SCHEMA THAT CHANGES MUST BE A NEW OBJECT. A schema object edited in place after its first use
+# keeps what was worked out from it before the edit: read the file again (Get-HordeSchema returns a
+# new object on every call) or build a new object. Nothing in Horde edits a schema after reading it.
+# Only what passed is cached: a node or a walk that threw is worked out, and throws, again next time.
+$script:HordeSchemaRoots = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
+$script:HordeSchemaNodes = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
+
+function Get-HordeSchemaRootCache {
+    # The per-root entry: definitions by exact name, and walked, set once every node has passed.
+    param($Root)
+    $rootKey = $Root
+    $entry = $null
+    if ($script:HordeSchemaRoots.TryGetValue($rootKey, [ref]$entry)) { return $entry }
+    $defs = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    foreach ($p in (Get-HordeSchemaProps $Root)) {
+        if ($p.Name -cne "definitions") { continue }
+        foreach ($d in (Get-HordeSchemaProps $p.Value)) { $defs[$d.Name] = $d.Value }
+    }
+    $entry = [pscustomobject]@{ definitions = $defs; walked = $false }
+    $script:HordeSchemaRoots.Add($rootKey, $entry)
+    return $entry
+}
+
 function Resolve-HordeSchemaRef {
     # The definition a local $ref names, from the top of the schema.
     param([string]$Ref, $Root)
     $m = [regex]::Match($Ref, '\A#/definitions/([A-Za-z0-9_-]+)\z')
     if (-not $m.Success) { throw ("the schema's `$ref '" + $Ref + "' is not one this validator follows: only local ones, #/definitions/<name>") }
     $name = $m.Groups[1].Value
-    foreach ($p in (Get-HordeSchemaProps $Root)) {
-        if ($p.Name -cne "definitions") { continue }
-        foreach ($d in (Get-HordeSchemaProps $p.Value)) { if ($d.Name -ceq $name) { return $d.Value } }
-    }
+    $defs = (Get-HordeSchemaRootCache $Root).definitions
+    if ($defs.ContainsKey($name)) { return $defs[$name] }
     throw ("the schema's `$ref '" + $Ref + "' names no definition")
 }
 
@@ -291,6 +322,39 @@ function Get-HordeSchemaNodeKeywords {
     return $kw
 }
 
+function Get-HordeSchemaNode {
+    # One node's checked keywords (kw) and its properties by exact name (props), from the cache when
+    # this node object has passed before. The top of a schema is not cached: whether definitions may
+    # sit on a node depends on AtTop, and the top is checked once per call anyway.
+    param($Schema, [string]$Path, [bool]$AtTop)
+    $nodeKey = $Schema
+    $entry = $null
+    if (-not $AtTop -and $null -ne $nodeKey -and $script:HordeSchemaNodes.TryGetValue($nodeKey, [ref]$entry)) { return $entry }
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $AtTop
+    # KEYS ARE COMPARED EXACTLY (review of PR #15): the schema's property names go into an ordinal
+    # dictionary, as the value's keys do in Test-HordeSchema.
+    $props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
+    $entry = [pscustomobject]@{ kw = $kw; props = $props }
+    if (-not $AtTop) { $script:HordeSchemaNodes.Add($nodeKey, $entry) }
+    return $entry
+}
+
+function Assert-HordeSchemaWalkedOnce {
+    # Every node of the schema whose top is Root, checked once for that schema object: its definitions
+    # and its root's own subtrees. Kw is the root's keywords, checked by the caller. Marked walked only
+    # after the whole walk has passed, so a schema that fails - a $ref loop, say - fails on every call.
+    param($Root, $Kw)
+    $rootCache = Get-HordeSchemaRootCache $Root
+    if ($rootCache.walked) { return }
+    Assert-HordeSchemaDefinitions -Root $Root
+    # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
+    # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
+    # 2026-09-30, before the fix).
+    Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root
+    $rootCache.walked = $true
+}
+
 function Assert-HordeSchemaDefinitions {
     # EVERY DEFINITION IS CHECKED ONCE, whether or not anything refers to it. Before, a definition was
     # read only when a $ref reached it (review of PR #17), so an unknown keyword, a node that is not an
@@ -312,7 +376,7 @@ function Assert-HordeSchemaNode {
     # checked on its own; so a recursive definition is walked once, and the walk ends. Path is a JSON
     # pointer into the schema, "#/definitions/node/properties/children/items".
     param($Schema, [string]$Path, $Root)
-    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $false
+    $kw = (Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false).kw
     if ($kw.ContainsKey('$ref')) {
         # A chain of bare $refs that comes back to itself would make Test-HordeSchema throw on the
         # first value to reach it, so it is refused now, as that throw would say.
@@ -322,7 +386,7 @@ function Assert-HordeSchemaNode {
             if ($chain -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
             $chain += $ref
             $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
-            $targetKw = Get-HordeSchemaNodeKeywords -Schema $target -Path $ref -AtTop $false
+            $targetKw = (Get-HordeSchemaNode -Schema $target -Path $ref -AtTop $false).kw
             if (-not $targetKw.ContainsKey('$ref')) { break }
             $ref = $targetKw['$ref']
         }
@@ -347,17 +411,14 @@ function Test-HordeSchema {
     param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
     $findings = New-Object System.Collections.ArrayList
     $atTop = ($null -eq $Root)
-    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $atTop
+    $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $atTop
+    $kw = $node.kw
     if ($atTop) {
         $Root = $Schema
-        Assert-HordeSchemaDefinitions -Root $Root
-        # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
-        # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
-        # 2026-09-30, before this line). The root node itself was checked just above, by
-        # Get-HordeSchemaNodeKeywords. A caller passing -Root is inside a schema whose top it has
-        # checked already - core/Projection.ps1 (feature/core-projection) checks one field's value that way,
-        # once per field per session - so this runs for a top-level call only.
-        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root
+        # The root node itself was checked just above. A caller passing -Root is inside a schema whose
+        # top it has checked already - core/Projection.ps1 (feature/core-projection) checks one field's
+        # value that way, once per field per session - so the walk runs for a top-level call only.
+        Assert-HordeSchemaWalkedOnce -Root $Root -Kw $kw
     }
     if ($kw.ContainsKey('$ref')) {
         $ref = $kw['$ref']
@@ -407,8 +468,7 @@ function Test-HordeSchema {
         $have = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
         foreach ($p in (Get-HordeObjectProps $Value)) { $have[$p.Name] = $p.Value }
         foreach ($r in @($kw["required"])) { if ($null -ne $r -and -not $have.ContainsKey("$r")) { [void]$findings.Add($Path + " has no '" + $r + "'") } }
-        $props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
-        if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
+        $props = $node.props
         foreach ($name in @($have.Keys)) {
             if ($props.ContainsKey($name)) {
                 foreach ($f in @(Test-HordeSchema -Value $have[$name] -Schema $props[$name] -Path ($Path + "." + $name) -Root $Root)) { [void]$findings.Add($f) }

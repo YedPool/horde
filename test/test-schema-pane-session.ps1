@@ -313,6 +313,57 @@ foreach ($sf in $shipped) {
     Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the check of every node, its definitions and its root's subtrees")
 }
 Write-Host ""
+Write-Host "--- what is worked out once per schema object stays with that object ---" -ForegroundColor Cyan
+# core/Schema.ps1 caches each root's definitions and walk, and each node's keywords, keyed on the
+# schema object (review of PR #31, where validating a view took 85 s). A cache is only right if it can
+# never answer for another schema. Each call below turns a throw into a finding, so a wrong answer
+# FAILS a check rather than crashing the suite.
+$rootInt = Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/n" }'
+$rootStr = Obj '{ "definitions": { "n": { "type": "string" } }, "$ref": "#/definitions/n" }'
+$f = @(RefFindings "x" $rootInt)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ should be integer') ("a root whose n is an integer refuses a string (" + ($f -join "; ") + ")")
+$f = @(RefFindings "x" $rootStr)
+Check ($f.Count -eq 0) ("then a second root, same shape, whose n is a string, accepts it: its own definitions, not the first root's (" + ($f -join "; ") + ")")
+$f = @(RefFindings 1 $rootStr)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ should be string') ("and refuses a number (" + ($f -join "; ") + ")")
+$f = @(RefFindings "x" $rootInt)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ should be integer') ("and the first root still answers for itself (" + ($f -join "; ") + ")")
+# ONE NODE OBJECT IN TWO SCHEMAS resolves its $ref against whichever root the call is under: the
+# node's own keywords are cached, never the definition its $ref leads to.
+$sharedNode = Obj '{ "$ref": "#/definitions/n" }'
+$shareInt = [pscustomobject]@{ definitions = [pscustomobject]@{ n = (Obj '{ "type": "integer" }') }; properties = [pscustomobject]@{ a = $sharedNode } }
+$shareStr = [pscustomobject]@{ definitions = [pscustomobject]@{ n = (Obj '{ "type": "string" }') }; properties = [pscustomobject]@{ a = $sharedNode } }
+$f = @(RefFindings (Obj '{ "a": "x" }') $shareInt)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$.a should be integer') ("a node shared by two schemas follows the integer root's definition under it (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "a": "x" }') $shareStr)
+Check ($f.Count -eq 0) ("and the string root's under that one (" + ($f -join "; ") + ")")
+# A NEW SCHEMA OBJECT IS WALKED AFRESH. The first is valid; the second, parsed from text that differs
+# by one unknown keyword in a definition nothing uses, must be refused though the first was walked.
+$walkedGood = Obj '{ "definitions": { "unused": { "type": "integer" } }, "type": "integer" }'
+$f = @(RefFindings 1 $walkedGood)
+Check ($f.Count -eq 0) ("CONTROL: a valid schema is walked and accepted (" + ($f -join "; ") + ")")
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "type": "integer", "maximum": 3 } }, "type": "integer" }') } "does not implement") "a new schema object is walked afresh, though one of the same shape was walked before"
+# A SCHEMA THAT FAILS FAILS EVERY TIME: only a walk that passed is remembered, so a $ref loop nothing
+# reaches is refused on the second call as on the first.
+$loopTwice = Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }'
+Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "a `$ref loop is refused on the first call"
+Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "and on the second call with the same schema object"
+# -Root WALKS NOTHING, AND MARKS NOTHING WALKED: a later top-level call on that root still checks it.
+$badRoot = Obj '{ "definitions": { "n": { "type": "integer" } }, "properties": { "q": { "maximum": 3 } } }'
+Check (-not (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "$ref": "#/definitions/n" }') -Root $badRoot })) "a call with -Root resolves against that root without walking it"
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema $badRoot } "the schema uses 'maximum' at #/properties/q") "and a top-level call on that root afterwards still walks it"
+# DOCUMENTED LIMIT (core/Schema.ps1): a schema edited IN PLACE after its first use is not re-read. The
+# check holds the comment to the truth; a new object from the edited text is the supported way.
+$edited = Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/n" }'
+$f = @(RefFindings 1 $edited)
+Check ($f.Count -eq 0) ("CONTROL: before the edit, 1 is an integer (" + ($f -join "; ") + ")")
+$edited.definitions.n.type = "string"
+$f = @(RefFindings 1 $edited)
+Check ($f.Count -eq 0) ("DOCUMENTED LIMIT: after an in-place edit the schema object answers as before (" + ($f -join "; ") + ")")
+$f = @(RefFindings 1 (Obj '{ "definitions": { "n": { "type": "string" } }, "$ref": "#/definitions/n" }'))
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ should be string') ("and a new object from the edited text answers for the edit (" + ($f -join "; ") + ")")
+
+Write-Host ""
 Write-Host "--- minimum, compared exactly whatever type holds the number ---" -ForegroundColor Cyan
 # Added so schema/session-record.v1 can say labelCycle is never negative, which until now was a
 # writer's rule the schema could not state. Inclusive, as draft-07's minimum is.
