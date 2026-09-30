@@ -52,7 +52,7 @@
                 { "store": "W1", "field": "firstCwd" },
                 { "store": "X1", "field": "cwd", "when": "its Claude path key is the name of the folder holding the transcript_path in the same file; the hook writes the current directory, and only that folder shows it is also the launch directory" },
                 { "store": "W1", "field": "cwd", "when": "a record older than firstCwd" } ] },
-    { "name": "transcriptPath", "owner": "agent", "derived": "Claude: from sessionId and the cwd in its own control file, with every character that is not an ASCII letter or digit replaced by a dash, then checked to exist; from projectCwd only when no control file is read, as for a session that is no longer running. Codex: from its control file until a derivation is measured",
+    { "name": "transcriptPath", "owner": "agent", "derived": "Claude: from sessionId and the cwd in its own control file - the launch directory - with every character that is not an ASCII letter or digit replaced by a dash, then checked to exist; for a session that is no longer running, and so has no control file, the one file named for its sessionId in any project folder, taken only when exactly one exists, because one id can be filed in many folders. Codex: from its control file until a derivation is measured",
       "provisional": "the Codex derivation is unmeasured",
       "read": [ { "store": "X1", "field": "transcript_path", "when": "the transcript it names exists" }, { "store": "W5", "field": "session.transcriptPath" } ] },
     { "name": "resumeCommand", "owner": "agent", "derived": "computed by the AgentPort from the agent kind and session id",

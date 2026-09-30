@@ -269,3 +269,8 @@ sources:
 - source: the same census: session b12f72ab's control file kept the directory it started in while its pane-sessions file, written after a cd, named a subfolder (review finding 1 of PR #18, 2026-09-30). The cwd row reads the control file first, so the row says which directory that is.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the control file's cwd is labelled as the launch directory"
+
+### L-052 A stopped session's transcript is the one file named for its id, never projectCwd's folder
+- source: review finding 2 of PR #18, 2026-09-30: with no control file the derivation fell back to projectCwd, whose remaining sources (the registry, and the hook's cwd) can hold the current directory (L-050). The pane-sessions file's transcript_path is already the first read. The derivation's fallback is now a search of ~/.claude/projects/*/<sessionId>.jsonl that takes the hit only when there is exactly one: measured 2026-09-30, 265 top-level transcripts, and one session id (cccccccc-9999-4999-8999-cccccccccccc, a fixture id written by wezfleet's apply tests) filed in 55 folders at once, so "the first hit" would be a guess.
+- disposition: test
+- where: test/test-ownership.ps1 :: "a stopped session's transcript is the one file named for its id, never projectCwd's folder"

@@ -121,6 +121,12 @@ $pcX1 = @($projectCwd.read | Where-Object { "$($_.store)" -ceq "X1" })
 Check (@($pcX1 | Where-Object { "$($_.when)" -notlike "*transcript_path*" }).Count -eq 0) "the hook's cwd is never the project directory unless its transcript folder agrees"
 $cwdX2 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "X2" })[0]
 Check ("$($cwdX2.when)" -like "*launch directory*" -and "$($cwdX2.when)" -like "*not the current directory*") "the control file's cwd is labelled as the launch directory"
+# A SESSION THAT IS NOT RUNNING HAS NO CONTROL FILE, and the fallback was projectCwd - whose other
+# sources can hold the current directory (L-050). The fallback is now the one file named for the
+# session id in any project folder, taken only when there is exactly one: on 2026-09-30 one test
+# session id had a transcript in 55 folders (ledger L-052).
+$tpDerived = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').derived)"
+Check ($tpDerived -notlike "*from projectCwd*" -and $tpDerived -like "*exactly one*") "a stopped session's transcript is the one file named for its id, never projectCwd's folder"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
 Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'resumeCommand').provisional)" -ne "") "a rule that depends on something unmeasured is marked provisional"
 $role = Get-HordeOwnershipField -Doc $doc -Name "role"
