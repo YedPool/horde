@@ -209,7 +209,8 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    - `events`, a map from the harness's hook names to Horde's four events: session-started,
      turn-started, turn-ended and session-ended;
    - `permissionLevels`, for the remote plan's step R9. The remote plan owns the closed, ordered
-     vocabulary of Horde permission levels. This field maps each level to this harness's own flags:
+     vocabulary of Horde permission levels, landed on its own by remote step R0 as
+     `core/permission-levels.json`; E2 waits for R0 and reads the vocabulary from that file. This field maps each level to this harness's own flags:
      for claude-code, a `--permission-mode` value or `--dangerously-skip-permissions`; for codex, its
      approval and sandbox settings. Every level in the vocabulary appears exactly once, either with
      its argv fragment and the evidence that the flag was read off `--help` here, or as
