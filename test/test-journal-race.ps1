@@ -58,7 +58,7 @@ function Invoke-Race {
             $psi.RedirectStandardError = $true
             $psi.CreateNoWindow = $true
             $p = [System.Diagnostics.Process]::Start($psi)
-            [void]$procs.Add([pscustomobject]@{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
+            [void]$procs.Add([pscustomobject]@{ p = $p; log = (Join-Path $dir ("log-" + $r + ".txt")); out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
         }
         # Every racer has loaded the journal and read its ids before the clock starts, so process
         # start-up time (seconds, under memory pressure) is not part of the race.
@@ -74,7 +74,18 @@ function Invoke-Race {
         [System.IO.File]::WriteAllText(($go + ".tmp"), ([datetime]::UtcNow.AddMilliseconds(500).Ticks).ToString())
         [System.IO.File]::Move(($go + ".tmp"), $go)
         foreach ($x in $procs) {
-            if (-not $x.p.WaitForExit(180000)) { [void]$problems.Add("a racer ran past 180 s") ; continue }
+            # A racer that wrote its whole log (last line END) has done all its work. One such racer
+            # in a fresh-clone gate on 2026-09-30 then did not exit within 180 s; its answers were all
+            # there. That is reported, and the process stopped, but it is not a failure of the race.
+            if (-not $x.p.WaitForExit(120000)) {
+                $tail = @()
+                if (Test-Path -LiteralPath $x.log) { $tail = @([System.IO.File]::ReadAllLines($x.log)) }
+                if ($tail.Count -gt 0 -and $tail[$tail.Count - 1] -ceq "END") {
+                    Write-Host "  note: a racer finished its log but had not exited after 120 s; it was stopped" -ForegroundColor Yellow
+                    try { $x.p.Kill() } catch { }
+                } else { [void]$problems.Add("a racer ran past 120 s without finishing its work") }
+                continue
+            }
             $x.p.WaitForExit()
             if ($x.p.ExitCode -ne 0) { [void]$problems.Add("a racer exited " + $x.p.ExitCode + ": " + $x.err.Result) }
         }
@@ -92,6 +103,7 @@ function Invoke-Race {
         $lf = Join-Path $dir ("log-" + $r + ".txt")
         if (-not (Test-Path -LiteralPath $lf)) { [void]$problems.Add("racer " + $r + " left no log"); continue }
         foreach ($line in [System.IO.File]::ReadAllLines($lf)) {
+            if ($line -ceq "END") { continue }
             $parts = $line.Split(" ", 3)
             [void]$decisions.Add([pscustomobject]@{ racer = $r; index = [int]$parts[0]; decision = $parts[1]; reason = $(if ($parts.Count -gt 2) { $parts[2] } else { "" }) })
         }

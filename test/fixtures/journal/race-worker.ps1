@@ -56,5 +56,6 @@ for ($i = 0; $i -lt $ids.Count; $i++) {
     }
     [void]$log.Add(($i.ToString() + " " + $o.decision + " " + ("$($o.reason)" -replace "[\r\n]", " ")))
 }
+[void]$log.Add("END")
 [System.IO.File]::WriteAllLines($LogFile, [string[]]$log.ToArray())
 exit 0
