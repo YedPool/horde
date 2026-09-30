@@ -86,7 +86,8 @@ function Test-HordeAnswer {
     }
     # Case-sensitive, like the stored form: "KNOWN" is not a state Horde writes, and -notcontains
     # would have accepted it.
-    if ($script:HordeAnswerStates -cnotcontains "$($Answer.state)") { return $false }
+    # A string, not something that stringifies to one: @("known") interpolates as "known".
+    if ($Answer.state -isnot [string] -or $script:HordeAnswerStates -cnotcontains $Answer.state) { return $false }
     if ($Answer.state -ceq "unknown" -and "$($Answer.reason)".Trim() -eq "") { return $false }
     # New-HordeKnown refuses $null; a hand-built "known" holding $null is refused here for the same
     # reason - a known nothing is New-HordeAbsent.
@@ -255,7 +256,9 @@ function ConvertFrom-HordeAnswerRecord {
     if ($null -eq $Record) { return (New-HordeUnknown -Reason "no record was found; silence is not a report") }
     $state = Get-HordeField -Record $Record -Name "state"
     if ($state.state -ne "known") { return (New-HordeUnknown -Reason "the record has no state") }
-    $word = "$($state.value)"
+    # The stored state must be a string. ["known"] interpolates to "known", so it was accepted.
+    if ($state.value -isnot [string]) { return (New-HordeUnknown -Reason "the record's state is not a single word") }
+    $word = $state.value
     if ($script:HordeAnswerStates -cnotcontains $word) { return (New-HordeUnknown -Reason ("the record's state '" + $word + "' is not one Horde knows")) }
     $at = $null
     $atField = Get-HordeField -Record $Record -Name "observedAt"

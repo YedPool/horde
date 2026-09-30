@@ -137,6 +137,11 @@ Check ($weird.state -eq "unknown" -and $weird.reason -like "*probably*") "an unr
 $cased = ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "Known"; value = 1 })
 Check ($cased.state -eq "unknown") "a state word in the wrong case is not recognised either"
 Check ((ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ value = 1 })).state -eq "unknown") "a stored answer with no state is unknown, never inferred from its value"
+# ["known"] is not "known": it only stringifies to it. JSON can carry either.
+$listState = ConvertFrom-HordeAnswerRecord -Record ('{"state":["known"],"value":1}' | ConvertFrom-Json)
+Check ($listState.state -eq "unknown") "a stored state that is a list, not a word, is not recognised"
+$forgedList = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = @("known"); value = 1; reason = ""; observedAt = $null }
+Check ((Test-HordeAnswer $forgedList) -eq $false) "an answer whose state is a list is not an answer"
 Check ((ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "known" })).state -eq "unknown") "a stored known with no value is unknown"
 Check ((ConvertFrom-HordeAnswerRecord -Record $null).state -eq "unknown") "no report is unknown, not absent"
 
