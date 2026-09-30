@@ -25,7 +25,6 @@ core/ownership.json | 35 | the ownership table catalogues the stores of the syst
 core/RestorePlan.ps1 | 10 | checks each resume kind's argv for the restore plan, and the kinds are named per harness until the AgentPort builds resume argv in engine-settings step E11
 core/Roles.ps1 | 2 | reads the old system's session records, whose key field carries the harness's name; the name belongs to the store being read on the way out
 hosts/wezterm/allowlist.txt | 2 | the host's own allowlist lists CLAUDE.md, the session rules file whose name the harness fixes
-hosts/wezterm/test/Isolation.ps1 | 1 | a comment cites the 2026-09-29 incident in which isolated instances and the agent sessions inside them were left running
 schema/pane-session.v1.json | 5 | documents the existing pane-session file exactly as the harness's SessionStart hook writes it, including where the harness keeps it
 schema/restore-plan.v1.json | 6 | the restore plan's resume kinds and agent field name the harness that produced each argv, until the AgentPort owns resume
 test/mutations/identity.psd1 | 10 | mutations of core code that names the harness must quote that code exactly to apply
