@@ -25,20 +25,55 @@ function Check { param($Cond, [string]$What)
     else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 function Throws { param([scriptblock]$Block, [string]$Like)
     try { $null = & $Block; return $false } catch { return ("$($_.Exception.Message)" -like "*$Like*") } }
-function Start-OwnPing {
-    # A throwaway process this suite owns, identified by pid AND creation time from the moment it exists.
-    #
-    # IN THIS PROCESS'S OWN CONSOLE, output to a file. Started with a window of its own, ping gets a
-    # console host as a CHILD, which outlives ping by a moment - and a teardown test that kills ping
-    # and then asserts "nothing else was killed" would kill that console host and fail at random. The
-    # re-review found it.
-    param([int]$Seconds = 60)
-    $out = Join-Path $env:TEMP ("horde-test-ping-" + [guid]::NewGuid().ToString("N") + ".txt")
-    $p = Start-Process -FilePath "ping.exe" -ArgumentList @("-n", "$Seconds", "127.0.0.1") -PassThru -NoNewWindow -RedirectStandardOutput $out
-    $script:pingOutputs += $out
-    Start-Sleep -Milliseconds 300
-    return (Get-HordeProcessInfo -Id $p.Id) }
-$script:pingOutputs = @()
+# EVERY PROCESS THIS SUITE STARTS IS HELD, AND ONLY THOSE MAY BE KILLED.
+#
+# The third review found that mutation testing ran deliberately broken kill code against real
+# processes: a mutant walker handed teardown whatever it found, and teardown killed it. So:
+#   - every process the suite starts is created through the process API, which keeps its handle from
+#     the moment of creation - its pid can never be reused while the suite runs;
+#   - every kill the harness makes during this suite goes through $guard, which kills only a pid in
+#     that held set, and records - never kills - anything else.
+# A broken walker therefore turns into a failed check, not a killed stranger.
+$script:ownProcs = New-Object System.Collections.ArrayList
+$script:violations = New-Object System.Collections.ArrayList
+$guard = { param($Id, $Created)
+    if (@($script:ownProcs | Where-Object { $_.Id -eq $Id }).Count -eq 0) { [void]$script:violations.Add([int]$Id); return "refused-by-test" }
+    return (Stop-HordeProcessIfSame -Id $Id -Created $Created) }
+
+function Start-OwnProcess {
+    # Start a process and hold it. Returns { pid; created; name; proc }. It shares this suite's console
+    # (so it gets no console-host child of its own) and its output is drained and discarded.
+    param([string]$File, [string]$Arguments)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $File
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.BeginOutputReadLine()
+    [void]$script:ownProcs.Add($p)
+    return [pscustomobject]@{ pid = $p.Id; created = $p.StartTime; name = [System.IO.Path]::GetFileName($File); proc = $p }
+}
+function Start-OwnPing { param([int]$Seconds = 60) return (Start-OwnProcess -File "ping.exe" -Arguments ("-n " + $Seconds + " 127.0.0.1")) }
+function Stop-Own { param($Own) if ($Own -and -not $Own.proc.HasExited) { try { $Own.proc.Kill() } catch { }; [void]$Own.proc.WaitForExit(5000) } }
+function Hold-OwnChild {
+    # A child of a process this suite holds, found by its parent link AND created after that parent -
+    # decided here, independently of the code under test - and then held too.
+    param($Parent, [string]$Name, [int]$WaitMs = 3000)
+    $deadline = (Get-Date).AddMilliseconds($WaitMs)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($c in @(Get-HordeProcessTable | Where-Object { $_.ppid -eq $Parent.pid -and $_.name -eq $Name })) {
+            if ((Get-HordeMicroseconds $c.created) -lt (Get-HordeMicroseconds $Parent.created)) { continue }
+            try { $h = [System.Diagnostics.Process]::GetProcessById($c.pid) } catch { continue }
+            $null = $h.Handle
+            if ((Get-HordeMicroseconds $h.StartTime) -ne (Get-HordeMicroseconds $c.created)) { $h.Dispose(); continue }
+            [void]$script:ownProcs.Add($h)
+            return [pscustomobject]@{ pid = $c.pid; created = $c.created; name = $Name; proc = $h }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return $null
+}
 
 Write-Host ""
 Write-Host "--- parsing the pane list: the collapse that disarmed the old guard ---" -ForegroundColor Cyan
@@ -213,7 +248,7 @@ if ($own) {
 Write-Host ""
 Write-Host "--- teardown refuses any instance it did not create ---" -ForegroundColor Cyan
 
-$v = Stop-HordeIsolatedWezterm -Instance $null
+$v = Stop-HordeIsolatedWezterm -Instance $null -KillWith $guard
 Check ($null -ne $v -and -not $v.stopped -and $v.refused) "passing no instance returns a refusal, not a claim that something stopped"
 Check ("$($v.reason)" -like "*nothing was verified*") "and it says nothing was verified"
 
@@ -221,28 +256,28 @@ $victim = Start-OwnPing
 if ($victim) {
     $forged = [pscustomobject]@{ pid = $victim.pid; created = $victim.created; socket = (Join-Path $env:TEMP "horde-no-such-socket")
                                  store = $null; originalSocket = $env:WEZTERM_UNIX_SOCKET; originalRoot = $env:HORDE_ROOT }
-    $r1 = Stop-HordeIsolatedWezterm -Instance $forged
+    $r1 = Stop-HordeIsolatedWezterm -Instance $forged -KillWith $guard
     Check ($r1.refused -and -not $r1.stopped) "an instance with no token is refused"
     Check ($null -ne (Get-HordeProcessInfo -Id $victim.pid)) "and the process it named is still running - nothing was killed"
     $forged | Add-Member -NotePropertyName token -NotePropertyValue "horde-iso:1:1" -Force
-    $r2 = Stop-HordeIsolatedWezterm -Instance $forged
+    $r2 = Stop-HordeIsolatedWezterm -Instance $forged -KillWith $guard
     Check ($r2.refused) "an instance with a forged token is refused"
     # A token in exactly the shape Start issues, computed by hand from the victim's real pid and
     # creation time. The first version accepted this, because it only recomputed the token from the
     # object it was handed. Only a token this process registered counts.
     $shaped = "horde-iso:" + $victim.pid + ":" + (Get-HordeMicroseconds $victim.created) + ":" + [guid]::NewGuid().ToString("N")
     $forged | Add-Member -NotePropertyName token -NotePropertyValue $shaped -Force
-    $r2b = Stop-HordeIsolatedWezterm -Instance $forged
+    $r2b = Stop-HordeIsolatedWezterm -Instance $forged -KillWith $guard
     Check ($r2b.refused -and -not $r2b.stopped) "a correctly shaped token that this process never registered is refused"
     Check ($null -ne (Get-HordeProcessInfo -Id $victim.pid)) "and the process it named is still running after that too"
     # REGISTERED, BUT NOT A WEZTERM. Teardown must refuse to kill a live process that is not a
     # wezterm-gui, even when this process registered it - the one registration made outside Start.
     $notWez = Register-HordeIsolatedInstance -GuiPid $victim.pid -Created $victim.created -Socket "" -Store ""
     $inst0 = [pscustomobject]@{ token = $notWez; originalSocket = $env:WEZTERM_UNIX_SOCKET; originalRoot = $env:HORDE_ROOT }
-    $r2c = Stop-HordeIsolatedWezterm -Instance $inst0
+    $r2c = Stop-HordeIsolatedWezterm -Instance $inst0 -KillWith $guard
     Check ($r2c.refused -and "$($r2c.reason)" -like "*not a WezTerm*") "a registered process that is not a WezTerm is refused, not killed"
     Check ($null -ne (Get-HordeProcessInfo -Id $victim.pid)) "and that process is still running afterwards"
-    [void](Stop-HordeProcessIfSame -Id $victim.pid -Created $victim.created)
+    Stop-Own $victim
 }
 
 # REGISTRATION PINS, AND REFUSES A PROCESS IT CANNOT PROVE. A creation time that does not match means
@@ -250,7 +285,7 @@ if ($victim) {
 $wrongTime = Start-OwnPing
 if ($wrongTime) {
     Check (Throws { Register-HordeIsolatedInstance -GuiPid $wrongTime.pid -Created $wrongTime.created.AddSeconds(-5) -Socket "" } "refusing to register") "registering a pid whose creation time does not match is refused"
-    [void](Stop-HordeProcessIfSame -Id $wrongTime.pid -Created $wrongTime.created)
+    Stop-Own $wrongTime
 }
 
 # LOADING THE HARNESS AGAIN MUST NOT FORGET WHAT IT STARTED. The first version reset the registry on
@@ -258,9 +293,9 @@ if ($wrongTime) {
 $again = Start-OwnPing
 if ($again) {
     $tokA = Register-HordeIsolatedInstance -GuiPid $again.pid -Created $again.created -Socket "" -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
-    [void](Stop-HordeProcessIfSame -Id $again.pid -Created $again.created)
+    Stop-Own $again
     . (Join-Path $root "test\harness\Isolation.ps1")
-    $rA = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tokA })
+    $rA = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tokA }) -KillWith $guard
     Check (-not $rA.refused -and $rA.stopped) "loading the harness a second time does not forget an instance it already started"
 }
 
@@ -273,15 +308,15 @@ if ($gone) {
     $wantSock = "C:\horde-test\original-socket"; $wantRoot = "C:\horde-test\original-root"
     $tok = Register-HordeIsolatedInstance -GuiPid $gone.pid -Created $gone.created -Socket (Join-Path $env:TEMP "horde-no-such-socket") -OriginalSocket $wantSock -OriginalRoot $wantRoot
     $inst = [pscustomobject]@{ token = $tok; originalSocket = "C:\horde-test\from-the-object"; originalRoot = "C:\horde-test\from-the-object" }
-    [void](Stop-HordeProcessIfSame -Id $gone.pid -Created $gone.created)
+    Stop-Own $gone
     $keepSock = $env:WEZTERM_UNIX_SOCKET; $keepRoot = $env:HORDE_ROOT
     $env:WEZTERM_UNIX_SOCKET = "C:\horde-test\something-else"; $env:HORDE_ROOT = "C:\horde-test\something-else"
-    $r3 = Stop-HordeIsolatedWezterm -Instance $inst
+    $r3 = Stop-HordeIsolatedWezterm -Instance $inst -KillWith $guard
     Check ($r3.stopped -and -not $r3.survived -and -not $r3.refused) "a valid instance whose terminal is already gone reads as stopped"
     Check (@($r3.orphansKilled).Count -eq 0) "and nothing else is killed on its behalf"
     Check ("$env:WEZTERM_UNIX_SOCKET" -eq $wantSock -and "$env:HORDE_ROOT" -eq $wantRoot) "teardown restores the environment registration recorded, not what the object handed to it says"
     $env:WEZTERM_UNIX_SOCKET = $keepSock; $env:HORDE_ROOT = $keepRoot
-    $r3b = Stop-HordeIsolatedWezterm -Instance $inst
+    $r3b = Stop-HordeIsolatedWezterm -Instance $inst -KillWith $guard
     Check ($r3b.refused) "a token is spent once used - the same instance cannot be torn down twice"
 }
 
@@ -298,8 +333,8 @@ if ($gone2) {
     Set-Content -LiteralPath $fakeSock -Value "not a socket"
     [void](New-Item -ItemType Directory -Path $fakeStore)
     $tok2 = Register-HordeIsolatedInstance -GuiPid $gone2.pid -Created $gone2.created -Socket $fakeSock -Store $fakeStore -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
-    [void](Stop-HordeProcessIfSame -Id $gone2.pid -Created $gone2.created)
-    $r4 = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok2 })
+    Stop-Own $gone2
+    $r4 = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok2 }) -KillWith $guard
     Check (Test-Path -LiteralPath $fakeSock) "a socket file named like ours but outside WezTerm's socket folder is not deleted"
     Check (Test-Path -LiteralPath $fakeStore) "a store named like ours but outside the temp folder itself is not deleted"
     Check (-not $r4.socketRemoved) "and teardown reports the socket as not removed rather than claiming it"
@@ -316,8 +351,8 @@ if ($gone3) {
         Set-Content -LiteralPath $wrongSock -Value "not a socket"
     }
     $tok3 = Register-HordeIsolatedInstance -GuiPid $gone3.pid -Created $gone3.created -Socket "$wrongSock" -Store $wrongName -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
-    [void](Stop-HordeProcessIfSame -Id $gone3.pid -Created $gone3.created)
-    [void](Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok3 }))
+    Stop-Own $gone3
+    [void](Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok3 }) -KillWith $guard)
     Check (Test-Path -LiteralPath $wrongName) "a store in the temp folder itself but not named like ours is not deleted"
     Remove-Item -LiteralPath $wrongName -Recurse -Force -ErrorAction SilentlyContinue
     if ($wrongSock) {
@@ -338,29 +373,66 @@ if ($gone4 -and (Test-Path -LiteralPath $sockDir)) {
     Set-Content -LiteralPath $ownSock -Value "stands in for a socket"
     [void](New-Item -ItemType Directory -Path $ownStore)
     $tok4 = Register-HordeIsolatedInstance -GuiPid $gone4.pid -Created $gone4.created -Socket $ownSock -Store $ownStore -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
-    [void](Stop-HordeProcessIfSame -Id $gone4.pid -Created $gone4.created)
-    $r5 = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok4 })
+    Stop-Own $gone4
+    $r5 = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tok4 }) -KillWith $guard
     Check (-not (Test-Path -LiteralPath $ownSock) -and $r5.socketRemoved) "our own socket file is deleted, and reported as removed"
     Check (-not (Test-Path -LiteralPath $ownStore)) "our own throwaway store is deleted"
     Remove-Item -LiteralPath $ownSock, $ownStore -Recurse -Force -ErrorAction SilentlyContinue
 } elseif ($gone4) {
-    [void](Stop-HordeProcessIfSame -Id $gone4.pid -Created $gone4.created)
+    Stop-Own $gone4
     Write-Host "  (inconclusive: this machine has no WezTerm socket folder - the positive control did not run)" -ForegroundColor Yellow
 }
 
 Write-Host ""
 Write-Host "--- finding what ran inside a process, on a real process tree this suite started ---" -ForegroundColor Cyan
 
-$tree = Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "ping -n 30 127.0.0.1 >nul") -PassThru -WindowStyle Hidden
-Start-Sleep -Milliseconds 1500
-$treeInfo = Get-HordeProcessInfo -Id $tree.Id
-$found = @()
-if ($treeInfo) { $found = @(Get-HordeDescendantPids -RootPid $tree.Id -RootCreated $treeInfo.created) }
-$pings = @($found | Where-Object { (Get-HordeProcessInfo -Id $_.pid).name -eq "PING.EXE" })
-Check ($pings.Count -ge 1) "the walker finds the child that ran inside the process"
-# Cleanup kills only what this suite started, each by pid AND creation time.
-foreach ($x in $found) { [void](Stop-HordeProcessIfSame -Id $x.pid -Created $x.created) }
-if ($treeInfo) { [void](Stop-HordeProcessIfSame -Id $treeInfo.pid -Created $treeInfo.created) }
+# The walker's answer is only CHECKED here, never acted on. The processes are stopped through the
+# handles this suite holds, so a broken walker cannot make this section kill anything else.
+$tree = Start-OwnProcess -File "cmd.exe" -Arguments "/c ping -n 30 127.0.0.1 >nul"
+$treePing = Hold-OwnChild -Parent $tree -Name "PING.EXE"
+Check ($null -ne $treePing) "PRECONDITION: the suite holds the ping its own cmd started"
+$found = @(Get-HordeDescendantPids -RootPid $tree.pid -RootCreated $tree.created | ForEach-Object { $_.pid })
+Check ($null -ne $treePing -and $found -contains $treePing.pid) "the walker finds the child that ran inside the process"
+Stop-Own $treePing; Stop-Own $tree
+
+Write-Host ""
+Write-Host "--- a terminal that died first: its orphans are still found and killed ---" -ForegroundColor Cyan
+
+# A registered root that has ALREADY died, with a child still running. Teardown must find the orphan
+# through the pin and kill it. Without the pin, or without the orphan kill, the child leaks - both were
+# mutations the third review found no test would notice.
+$dead = Start-OwnProcess -File "cmd.exe" -Arguments "/c ping -n 60 127.0.0.1 >nul"
+$orphan = Hold-OwnChild -Parent $dead -Name "PING.EXE"
+if ($orphan) {
+    $tokO = Register-HordeIsolatedInstance -GuiPid $dead.pid -Created $dead.created -Socket "" -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
+    Stop-Own $dead
+    $rO = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tokO }) -KillWith $guard
+    Check (@($rO.orphansKilled) -contains $orphan.pid -and $orphan.proc.HasExited) "the child of a terminal that already died is found through the pin and killed"
+    Stop-Own $orphan
+} else { Check $false "PRECONDITION: the suite holds the orphan-to-be" }
+
+Write-Host ""
+Write-Host "--- tearing down a launch: only the launcher we recorded ---" -ForegroundColor Cyan
+
+$launch = Start-OwnProcess -File "cmd.exe" -Arguments "/c ping -n 60 127.0.0.1 >nul"
+$launchChild = Hold-OwnChild -Parent $launch -Name "PING.EXE"
+Stop-HordeLaunchTree -Launcher $launch.proc -LauncherUs ((Get-HordeMicroseconds $launch.created) - 1) -KillWith $guard
+Check (-not $launch.proc.HasExited) "a launcher whose start time is not the one recorded is left alone"
+Stop-HordeLaunchTree -Launcher $launch.proc -LauncherUs (Get-HordeMicroseconds $launch.created) -KillWith $guard
+Start-Sleep -Milliseconds 300
+Check ($launch.proc.HasExited -and $null -ne $launchChild -and $launchChild.proc.HasExited) "the recorded launcher and everything it started are stopped"
+Stop-Own $launchChild; Stop-Own $launch
+
+Write-Host ""
+Write-Host "--- adopting only the terminal our launcher started ---" -ForegroundColor Cyan
+
+$lt = Get-Date "2026-09-29T12:00:00"
+$lus = Get-HordeMicroseconds $lt
+$gui = [pscustomobject]@{ pid = 50; ppid = 40; name = "wezterm-gui.exe"; created = $lt.AddSeconds(1) }
+Check (Test-HordeAdoptableGui -Gui $gui -LauncherPid 40 -LauncherUs $lus) "CONTROL: the gui our launcher started is adopted"
+Check (-not (Test-HordeAdoptableGui -Gui ([pscustomobject]@{ pid = 51; ppid = 99; name = "wezterm-gui.exe"; created = $lt.AddSeconds(1) }) -LauncherPid 40 -LauncherUs $lus)) "a gui with another parent is not adopted"
+Check (-not (Test-HordeAdoptableGui -Gui ([pscustomobject]@{ pid = 52; ppid = 40; name = "wezterm-gui.exe"; created = $lt.AddSeconds(-1) }) -LauncherPid 40 -LauncherUs $lus)) "a gui older than our launcher is not adopted, though it records the launcher's pid"
+Check (-not (Test-HordeAdoptableGui -Gui ([pscustomobject]@{ pid = 53; ppid = 40; name = "cmd.exe"; created = $lt.AddSeconds(1) }) -LauncherPid 40 -LauncherUs $lus)) "a process that is not a wezterm-gui is not adopted"
 
 Write-Host ""
 Write-Host "--- the CLI can never start a server by accident ---" -ForegroundColor Cyan
@@ -396,8 +468,15 @@ foreach ($s in $starters) { Write-Host ("  starter: " + $s.Name) -ForegroundColo
 Check ($missing.Count -eq 0) "every script that starts an instance calls Stop-HordeIsolatedWezterm by its real name"
 Check (-not ("Start-HordeIsolatedWezterm" -match "Stop-HordeIsolatedWezterm")) "CONTROL: the matcher does not confuse the start name for the stop name"
 
-# The ping output files this suite wrote.
-$script:pingOutputs | ForEach-Object { Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue }
+Write-Host ""
+Write-Host "--- nothing outside this suite was ever asked to be killed ---" -ForegroundColor Cyan
+
+Check ($script:violations.Count -eq 0) ("the harness asked to kill only processes this suite started (" + (@($script:violations) -join ", ") + ")")
+
+# Everything the suite started is stopped through its own handle, then every handle is released -
+# including registry pins left by instances a test deliberately left registered.
+foreach ($p in @($script:ownProcs)) { try { if (-not $p.HasExited) { $p.Kill(); [void]$p.WaitForExit(5000) } } catch { }; $p.Dispose() }
+foreach ($k in @($script:HordeIsoStarted.Keys)) { $e = $script:HordeIsoStarted[$k]; if ($e.pin) { $e.pin.Dispose() }; $script:HordeIsoStarted.Remove($k) }
 
 Write-Host ""
 if ($fails.Count) {

@@ -193,12 +193,19 @@ function Stop-HordeProcessIfSame {
     # could come to name a different process. The first version checked, then killed by pid - a
     # millisecond window, but a window, found by the re-review. In .NET Framework the first read of
     # .Handle opens and caches the handle, and StartTime and Kill() then use it.
+    #
+    # AND "NO HANDLE" IS CHECKED BY VALUE, NOT CAUGHT. The third review measured that PowerShell 5.1
+    # swallows the exception from the .Handle getter and returns $null - so the first version's
+    # try/catch around it never caught anything, "cannot-open" could not happen, and StartTime and
+    # Kill() each quietly opened a fresh handle by pid, reopening the gap.
     param([int]$Id, $Created)
     if ($null -eq $Created) { return "not-same" }
     $p = $null
     try { $p = [System.Diagnostics.Process]::GetProcessById($Id) } catch { return "gone" }
     try {
-        try { $null = $p.Handle } catch { return "cannot-open" }
+        $h = $null
+        try { $h = $p.Handle } catch { $h = $null }
+        if ($null -eq $h -or $h -eq [IntPtr]::Zero) { return "cannot-open" }
         if ($p.HasExited) { return "gone" }
         if ((Get-HordeMicroseconds $p.StartTime) -ne (Get-HordeMicroseconds $Created)) { return "not-same" }
         try { $p.Kill() } catch { }
@@ -235,7 +242,12 @@ function Register-HordeIsolatedInstance {
     # whatever the object handed to it says.
     param([int]$GuiPid, $Created, [string]$Socket, [string]$Store = "", [string]$OriginalSocket = "", [string]$OriginalRoot = "")
     $pin = [System.Diagnostics.Process]::GetProcessById($GuiPid)
-    $null = $pin.Handle
+    $h = $null
+    try { $h = $pin.Handle } catch { $h = $null }
+    if ($null -eq $h -or $h -eq [IntPtr]::Zero) {
+        $pin.Dispose()
+        throw ("refusing to register pid " + $GuiPid + ": no handle could be held, so it cannot be pinned")
+    }
     if ($pin.HasExited -or (Get-HordeMicroseconds $pin.StartTime) -ne (Get-HordeMicroseconds $Created)) {
         $pin.Dispose()
         throw ("refusing to register pid " + $GuiPid + ": it is not the process created at " + $Created)
@@ -255,15 +267,44 @@ function Test-HordeOwnedPath {
     return [string]::Equals($parent, [System.IO.Path]::GetFullPath($Folder).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Invoke-HordeKill {
+    # The one place the harness kills a process. -KillWith lets a test put its own guard in the way:
+    # the fast suite passes a killer that refuses - and records - any pid it did not start and still
+    # hold, so even a deliberately broken walker (which mutation testing creates) can never reach a
+    # process that is not the suite's own. The third review found that without it, mutation runs
+    # executed broken kill code against real processes.
+    param([int]$Id, $Created, [scriptblock]$KillWith = $null)
+    if ($KillWith) { return (& $KillWith $Id $Created) }
+    return (Stop-HordeProcessIfSame -Id $Id -Created $Created)
+}
+
+function Test-HordeAdoptableGui {
+    # Is this wezterm-gui the one OUR launcher started? Its recorded parent is the launcher's pid, and
+    # it was created no earlier than the launcher - a gui that predates the launcher had a different
+    # parent that once held that pid. A pure decision, so every branch is testable without a terminal.
+    param($Gui, [int]$LauncherPid, $LauncherUs)
+    if ($null -eq $Gui -or $null -eq $LauncherUs -or -not $Gui.created) { return $false }
+    if ("$($Gui.name)" -ne "wezterm-gui.exe") { return $false }
+    if ([int]$Gui.ppid -ne $LauncherPid) { return $false }
+    return ((Get-HordeMicroseconds $Gui.created) -ge [long]$LauncherUs)
+}
+
 function Stop-HordeLaunchTree {
-    # Kill a launcher and everything it started, each by pid AND creation time. The launcher's Process
-    # object holds its handle, so its pid cannot be reused and its orphans can be attributed.
-    param($Launcher)
-    if (-not $Launcher) { return }
+    # Kill a launcher and everything it started, each by pid AND creation time, walking BEFORE killing
+    # so nothing loses its parent link first.
+    #
+    # ONLY THE LAUNCHER START RECORDED. The launcher's start time is passed in as Start read it, and
+    # the Process object must still report that same start time - through the handle it has held since
+    # launch. Without that, a Process object holding no handle (what -NoNewWindow or a redirected
+    # launch gives, measured) would open whatever process now has the pid, and its whole tree would be
+    # walked as ours.
+    param($Launcher, $LauncherUs, [scriptblock]$KillWith = $null)
+    if (-not $Launcher -or $null -eq $LauncherUs) { return }
     $lc = $null
-    try { $null = $Launcher.Handle; $lc = $Launcher.StartTime } catch { return }
-    foreach ($d in @(Get-HordeDescendantPids -RootPid $Launcher.Id -RootCreated $lc -RootPinned)) { [void](Stop-HordeProcessIfSame -Id $d.pid -Created $d.created) }
-    [void](Stop-HordeProcessIfSame -Id $Launcher.Id -Created $lc)
+    try { $lc = $Launcher.StartTime } catch { return }
+    if ($null -eq $lc -or (Get-HordeMicroseconds $lc) -ne [long]$LauncherUs) { return }
+    foreach ($d in @(Get-HordeDescendantPids -RootPid $Launcher.Id -RootCreated $lc -RootPinned)) { [void](Invoke-HordeKill -Id $d.pid -Created $d.created -KillWith $KillWith) }
+    [void](Invoke-HordeKill -Id $Launcher.Id -Created $lc -KillWith $KillWith)
 }
 
 function Start-HordeIsolatedWezterm {
@@ -283,27 +324,32 @@ function Start-HordeIsolatedWezterm {
     # --skip-config is LOAD-BEARING: the user's wezterm.lua loads a session-restore plugin that, on a
     # fresh mux, either restores copies of their real sessions inside the test terminal or sits on a
     # modal prompt that looks exactly like a timeout.
-    $launcher = Start-Process -FilePath "wezterm" -PassThru `
-        -ArgumentList @("--skip-config", "start", "--always-new-process", "--class", "horde-iso") `
-        -WindowStyle Minimized
-    # THE LAUNCHER'S IDENTITY COMES FROM ITS OWN PROCESS OBJECT, which holds its handle - so its pid
-    # cannot be reused while we wait, and its start time is read even if it has already exited. The
-    # first version looked it up again through CIM, which misses a launcher that exits quickly and
-    # then adopted nothing and killed nothing.
+    #
+    # THE LAUNCHER'S PROCESS OBJECT HOLDS ITS HANDLE FROM THE MOMENT IT IS CREATED. Started through
+    # the shell (UseShellExecute), .NET asks for the process handle back and keeps it - the third
+    # review measured that Start-Process -WindowStyle Minimized, which is this path, holds it, while
+    # a redirected or -NoNewWindow start does not. So the launcher's pid cannot be reused while we
+    # wait, and its start time, read at once, is its own. The first version looked it up again through
+    # CIM, which misses a launcher that exits quickly and then adopted nothing and killed nothing.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "wezterm"
+    $psi.Arguments = "--skip-config start --always-new-process --class horde-iso"
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Minimized
+    $launcher = $null
+    try { $launcher = [System.Diagnostics.Process]::Start($psi) } catch { $launcher = $null }
     $launcherUs = $null
-    if ($launcher) { try { $null = $launcher.Handle; $launcherUs = Get-HordeMicroseconds $launcher.StartTime } catch { $launcherUs = $null } }
+    if ($launcher) { try { $launcherUs = Get-HordeMicroseconds $launcher.StartTime } catch { $launcherUs = $null } }
 
     $sockDir = Join-Path $env:USERPROFILE ".local\share\wezterm"
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         foreach ($g in @(Get-HordeProcessTable | Where-Object { $_.name -eq "wezterm-gui.exe" })) {
-            if ($null -eq $launcherUs -or $g.ppid -ne $launcher.Id -or -not $g.created) { continue }
-            # CREATED NO EARLIER THAN OUR LAUNCHER. A gui whose recorded parent pid is our launcher's
-            # but which predates it had a different parent that once held that pid.
-            if ((Get-HordeMicroseconds $g.created) -lt $launcherUs) { continue }
+            if ($null -eq $launcher -or -not (Test-HordeAdoptableGui -Gui $g -LauncherPid $launcher.Id -LauncherUs $launcherUs)) { continue }
             $sock = Join-Path $sockDir ("gui-sock-" + $g.pid)
             if (-not (Test-Path -LiteralPath $sock)) { continue }
 
+            $store = $null
             # FROM HERE ON, ANY FAILURE UNDOES EVERYTHING. A throw between pinning and returning used to
             # leave this process pinned to the new socket and the instance running with nobody holding
             # it - found by the same review.
@@ -338,10 +384,15 @@ function Start-HordeIsolatedWezterm {
             } catch {
                 # Everything this launch produced goes, not only the gui: the first version's failure
                 # path killed the gui and left the launcher and anything else it had started.
+                # The launch tree is walked FIRST and the gui killed as part of it: killing the gui
+                # before the walk (as the previous version did) cut its children off from the launcher
+                # and leaked them. And a store made before registration failed is removed.
                 $env:WEZTERM_UNIX_SOCKET = $origSocket
                 $env:HORDE_ROOT = $origRoot
-                [void](Stop-HordeProcessIfSame -Id $g.pid -Created $g.created)
-                Stop-HordeLaunchTree -Launcher $launcher
+                Stop-HordeLaunchTree -Launcher $launcher -LauncherUs $launcherUs
+                if ($store -and (Test-HordeOwnedPath -Path $store -Folder $env:TEMP -LeafPattern '^horde-iso-store-[0-9a-f]{32}$')) {
+                    Remove-Item -LiteralPath $store -Recurse -Force -ErrorAction SilentlyContinue
+                }
                 throw
             }
         }
@@ -351,7 +402,7 @@ function Start-HordeIsolatedWezterm {
     # TIMED OUT. The terminal may still come up after we stop waiting, and nobody would hold it, so the
     # launch is torn down now - identified by creation time, never by pid alone.
     $env:WEZTERM_UNIX_SOCKET = $origSocket
-    Stop-HordeLaunchTree -Launcher $launcher
+    Stop-HordeLaunchTree -Launcher $launcher -LauncherUs $launcherUs
     return $null
 }
 
@@ -403,7 +454,9 @@ function Stop-HordeIsolatedWezterm {
     #
     # And the original's actual fault that night was a NAME: a probe called a teardown function that
     # did not exist, so no check inside it ever ran. test/test-isolation.ps1 guards that class.
-    param($Instance)
+    #
+    # -KillWith: see Invoke-HordeKill. Tests pass a guard; real use leaves it out.
+    param($Instance, [scriptblock]$KillWith = $null)
     # A REFUSAL IS SAID OUT LOUD. It kills nothing and restores nothing, so an instance refused by
     # mistake is a leaked terminal and a process still pinned to it - which nobody would notice if the
     # refusal were only a field in a return value.
@@ -441,8 +494,9 @@ function Stop-HordeIsolatedWezterm {
 
     # Descendants are recorded BEFORE the kill. The registry holds a handle to the gui, so its pid
     # cannot have been reused, and orphans of a gui that already died can be attributed to it safely.
-    $descendants = @(Get-HordeDescendantPids -RootPid $gpid -RootCreated $gcreated -RootPinned:([bool]$known.pin))
-    $gui = Stop-HordeProcessIfSame -Id $gpid -Created $gcreated
+    $pinned = [bool]$known.pin
+    $descendants = @(Get-HordeDescendantPids -RootPid $gpid -RootCreated $gcreated -RootPinned:$pinned)
+    $gui = Invoke-HordeKill -Id $gpid -Created $gcreated -KillWith $KillWith
     $deadline = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $deadline) {
         $now = Get-HordeProcessInfo -Id $gpid
@@ -454,11 +508,22 @@ function Stop-HordeIsolatedWezterm {
 
     # Anything that outlived its terminal is killed now - each by pid AND creation time - and whatever
     # still will not die is reported by pid rather than assumed gone.
+    #
+    # AND THE WALK IS REPEATED AFTER THE KILL. Anything started between the first walk and the kill, or
+    # by a surviving orphan afterwards, was never killed - the third review's leak. The pin is still
+    # held, so a second walk from our dead gui is as safe as the first.
     $killed = @(); $still = @()
-    foreach ($d in $descendants) {
-        $r = Stop-HordeProcessIfSame -Id $d.pid -Created $d.created
-        if ($r -eq "killed") { $killed += $d.pid }
-        if ($r -eq "survived") { $still += $d.pid }
+    $done = @{}
+    foreach ($pass in 1..2) {
+        if ($pass -eq 2) { $descendants = @(Get-HordeDescendantPids -RootPid $gpid -RootCreated $gcreated -RootPinned:$pinned) }
+        foreach ($d in $descendants) {
+            $key = "" + $d.pid + ":" + (Get-HordeMicroseconds $d.created)
+            if ($done.ContainsKey($key)) { continue }
+            $done[$key] = $true
+            $r = Invoke-HordeKill -Id $d.pid -Created $d.created -KillWith $KillWith
+            if ($r -eq "killed") { $killed += $d.pid }
+            if ($r -eq "survived") { $still += $d.pid }
+        }
     }
 
     # The socket file outlives its process; left behind, the runtime directory collects one dead
