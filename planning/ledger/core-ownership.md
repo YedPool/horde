@@ -58,7 +58,7 @@ sources:
 ### L-009 A pane-sessions file can be hijacked by a session with an inherited pane number
 - source: YedPool/wezfleet f09f4e1: a session started with an inherited WEZTERM_PANE=27 wrote 27.json claiming another session's pane; the proposed tie-break by live control file is unimplemented
 - disposition: dropped
-- reason: The table records the condition in pane's read rule, but detecting a hijack is core/identity's job and belongs in that module's ledger with this commit cited.
+- reason: The table records the condition in the guard on the pane-sessions store (X1), which applies to every read of it, but detecting a hijack is core/identity's job and belongs in that module's ledger with this commit cited.
 
 ### L-010 Acting on a pane - typing or killing - trusts the registry alone
 - source: YedPool/wezfleet lib/Registry.ps1:736-755 "REGISTRY ONLY. A pane-sessions file can name this session in a live pane and still not justify typing into it"
@@ -144,3 +144,8 @@ sources:
 - source: YedPool/wezfleet lib/Registry.ps1:833-840 (census: the registry index, else the pane-sessions file) against lib/Protocol.ps1:533-536 (run snapshot: roster, then status.json, then registry; no pane-sessions read). No function orders X1 against W5. Review finding 5, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the order of the pane-sessions file before the status snapshot is marked as a new decision"
+
+### L-027 Every read of the pane-sessions file passes the same guards, whatever field it takes
+- source: YedPool/wezfleet lib/Registry.ps1:215-217 "There were FIVE readers of that file ... each applying its own subset of the guards"; the guards at :229 (numeric pane), :247 (one wezterm-gui), :251 (well-formed session_id), :254 (written in this instance), and :672 (exactly one live match); lib/Protocol.ps1:422 adds that the transcript it names must exist. The first draft of this table repeated that mistake: guarded for sessionId and pane, bare for projectCwd, transcriptPath and name. Review finding 6, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "every read of the pane-sessions file carries one guard"

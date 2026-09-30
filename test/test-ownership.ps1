@@ -44,6 +44,10 @@ Check ($null -ne $pane -and $w1 -ge 0 -and $w1 -lt $w5 -and $w5 -lt $w4) "pane, 
 $paneW1 = @($pane.read | Where-Object { "$($_.store)" -ceq "W1" })[0]
 Check ("$($paneW1.when)" -like "*written in this terminal instance*" -and "$($paneW1.when)" -like "*no age limit*" -and "$($paneW1.when)" -notlike "*900 seconds old*") "the registry's pane is read by census's rule, with no age limit"
 Check ("$($pane.provisional)" -like "*no single wezfleet function*") "the order of the pane-sessions file before the status snapshot is marked as a new decision"
+# X1 IS GUARDED ON THE STORE, so no read of it can be bare. It was guarded for sessionId and pane
+# and read bare for projectCwd, transcriptPath and name (review finding 6).
+$x1Guard = "$($doc.stores.X1.guard)"
+Check ($x1Guard -like "*after this terminal instance started*" -and $x1Guard -like "*one wezterm-gui*" -and $x1Guard -like "*hijack*") "every read of the pane-sessions file carries one guard"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
