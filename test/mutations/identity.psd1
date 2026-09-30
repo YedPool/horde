@@ -33,8 +33,8 @@
            Find = 'if ($verdict.same -eq $true) {'
            Replace = 'if ($true) {' }
         @{ Name = "unverified-session-in-live-set"
-           Find = 'if ($verdict.same) { [void]$verified.Add($sid) }'
-           Replace = 'if ($true) { [void]$verified.Add($sid) }' }
+           Find = 'if ($verdict.same) { [void]$verified.Add($sid); $verifiedPids[$procId] = $true }'
+           Replace = 'if ($true) { [void]$verified.Add($sid); $verifiedPids[$procId] = $true }' }
         @{ Name = "unreadable-file-skipped-silently"
            Find = '[void]$Gaps.Add($File.Name + " could not be read: " + $_.Exception.Message); return $null }'
            Replace = 'return $null }' }
