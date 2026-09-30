@@ -12,6 +12,13 @@
 # Called straight from horde.ps1, a command's `exit 7` made horde exit 7 and a bare `exit` made it
 # exit 0 (review of PR #12, finding 6). Called from here, it ends this script instead, the line after
 # the call never runs, and horde sees $State.completed still false. Measured 2026-09-29.
+#
+# AND WHY THE LOOP THAT NEVER LOOPS. `break` and `continue` travel up the call stack to the nearest
+# enclosing loop, across script boundaries. With no loop here, a body's `cmd /c exit 3; break` left
+# this script and horde's without running either's remaining lines, and horde exited 0 (second
+# review of PR #12, finding 3). The do-while is that nearest loop: it takes an unlabelled break or
+# continue, the completion line is skipped, and horde reports the command as not having returned.
+# A LABELLED break whose label matches nothing passes this loop too - measured 2026-09-29 - and
+# horde.ps1 catches that in its finally block.
 param($Run, $Named, $Positional, $State)
-& $Run @Named @Positional
-$State.completed = $true
+do { & $Run @Named @Positional; $State.completed = $true } while ($false)

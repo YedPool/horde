@@ -123,3 +123,8 @@ sources:
 - source: second review of YedPool/horde PR #12, finding 8, measured 2026-09-29 on PowerShell 5.1: typed, "-- -Json" reached horde as the plain word "-Json"; from -File, "--" arrived as an argument and a -Name after it was still a parameter, giving target=[--] json=True unquoted and "parameter name '' is ambiguous" quoted
 - disposition: test
 - where: test/test-cli.ps1 :: "a double dash from a script is refused, not bound as a value"
+
+### L-022 break and continue in a command body are a command not returning, like exit
+- source: second review of YedPool/horde PR #12, finding 3: a body `cmd /c exit 3; break` made horde exit 0, because break travels up the call stack to the nearest loop and skipped horde's completion and $LASTEXITCODE checks. Measured 2026-09-29 on PowerShell 5.1: a do-while in cli/Runner.ps1 takes an unlabelled break or continue, but a labelled break whose label matches nothing passes it and ended horde with exit 0, so horde.ps1 also checks in a finally block
+- disposition: test
+- where: test/test-cli.ps1 :: "a command that leaves its body with break or continue makes horde exit 1"

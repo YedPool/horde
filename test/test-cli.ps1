@@ -265,6 +265,24 @@ try {
         $r = Invoke-Horde -Root $tmp -Arguments @($f)
         Check ($r.code -eq 1 -and $r.out -like ($f + " started*") -and $r.err -like ("horde " + $f + ": *exit*")) ("a command that calls exit makes horde exit 1 and says so" + ": " + $f + " (got " + $r.code + ": " + $r.err.Trim() + ")")
     }
+    # `break` and `continue` in a body travel up the call stack to the nearest loop. With none in the
+    # runner, a body's `cmd /c exit 3; break` skipped horde's completion and $LASTEXITCODE checks and
+    # horde exited 0 (second review of PR #12, finding 3). A label that matches no loop escapes any
+    # loop, the runner's included: measured 2026-09-29, it ended horde itself with exit 0.
+    foreach ($typed in @($false, $true)) {
+        $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
+        # Each is told apart by its message, so that the runner's loop (break, continue) and horde's
+        # finally block (the unmatched label) are each held by a test: without the loop, a plain break
+        # would reach the finally block too and still exit 1.
+        foreach ($f in @("break", "continue", "label")) {
+            $said = "horde flow: the command did not return*break or continue*"
+            if ($f -eq "label") { $said = "horde flow: *break or continue, and no loop took it*" }
+            $r = Invoke-Horde -Root $tmp -Arguments @("flow", $f) -AsTyped:$typed
+            Check ($r.code -eq 1 -and $r.out.Trim() -eq "flow started" -and $r.err -like $said) ("a command that leaves its body with break or continue makes horde exit 1" + ": " + $f + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + " / " + $r.err.Trim() + ")")
+        }
+    }
+    $r = Invoke-Horde -Root $tmp -Arguments @("flow", "return")
+    Check ($r.code -eq 0 -and $r.out -like "flow started*flow returned*") ("CONTROL: the same command, returning, exits 0 (got " + $r.code + ": " + $r.err.Trim() + ")")
     # HELP DESCRIBES THE COMMANDS AS THEY ARE, NOT AS THEY WERE (YedPool/wezfleet 80aa026: a help text
     # that described the old kill and the old tell). The summary is read here from the file's text,
     # not through the registry, then changed on disk; help must follow the file.

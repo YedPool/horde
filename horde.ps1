@@ -14,7 +14,8 @@
 #      --help anywhere after a command name, which prints that command's usage
 #   1  the command failed: it threw, its file is broken, it called `exit` - with any code, 0
 #      included, because a command reports failure by throwing and success by returning, and an
-#      `exit` skips horde's own reporting - or it returned with $LASTEXITCODE not 0, meaning the
+#      `exit` skips horde's own reporting - or it left its body with `break` or `continue` outside a
+#      loop of its own, which skips it the same way, or it returned with $LASTEXITCODE not 0, meaning the
 #      last program it ran failed and it did not say it had handled that. A command that handles a
 #      program's failure itself sets $global:LASTEXITCODE = 0 (see cli\commands\version.ps1).
 #   2  the command line was wrong: an unknown command, or arguments the command does not accept
@@ -61,15 +62,22 @@ $named = $bound.named
 $positional = $bound.positional
 $runner = Join-Path $PSScriptRoot "cli\Runner.ps1"
 
+$state = @{ completed = $false }
+# Whether control came back to this script by any ordinary route: the runner returned, or a catch
+# block took an exception. A labelled `break` or `continue` whose label matches no loop is neither -
+# it is not an exception a catch can take, and it passes the runner's loop - and measured 2026-09-29
+# it ended horde with exit 0. Only the finally block below sees it go by.
+$settled = $false
 try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $command = Import-HordeCommand -Path $lookup.command.path
-    $state = @{ completed = $false }
     $global:LASTEXITCODE = 0
     & $runner -Run $command.run -Named $named -Positional $positional -State $state
+    $settled = $true
 }
 catch [System.Management.Automation.ParameterBindingException] {
+    $settled = $true
     # Only the run block's own binding is a command-line error; cli\Runner.ps1 says how that is told.
     $isOwn = $null -ne $_.Exception.CommandInvocation -and "$($_.Exception.CommandInvocation.ScriptName)" -ieq $runner
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
@@ -78,11 +86,18 @@ catch [System.Management.Automation.ParameterBindingException] {
     exit 2
 }
 catch {
+    $settled = $true
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
     exit 1
 }
+finally {
+    if (-not $settled) {
+        [Console]::Error.WriteLine("horde " + $name + ": the command left its body with break or continue, and no loop took it; a command returns, or throws to fail")
+        exit 1
+    }
+}
 if (-not $state.completed) {
-    [Console]::Error.WriteLine("horde " + $name + ": the command called exit (code " + $LASTEXITCODE + "); a command returns, or throws to fail")
+    [Console]::Error.WriteLine("horde " + $name + ": the command did not return - it called exit, or used break or continue outside a loop (last exit code " + $LASTEXITCODE + "); a command returns, or throws to fail")
     exit 1
 }
 # A program the command ran and left failed. Only the LAST program's code survives in $LASTEXITCODE,
