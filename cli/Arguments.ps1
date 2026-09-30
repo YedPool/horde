@@ -103,22 +103,30 @@ function Resolve-HordeArguments {
             # No separate "is it untagged" test: a tagged item's text starts with "-", so it never
             # matches the pattern, and a check that cannot change the outcome is one no test can hold.
             if ($next -is [string] -and $next -imatch '\A\$?(true|false)\z' -and
-                (Test-HordeSwitchParameter -Name $pname -Parameters $Parameters)) {
+                (Get-HordeParameterKind -Name $pname -Parameters $Parameters) -eq "switch") {
                 return (& $fail (Get-HordeSwitchWordProblem -Switch "$item" -Word $next))
             }
+        }
+        if ($pname -and @("-?", "-h", "--help") -contains "$item" -and
+            (Test-HordeParameterValue -Items $items -Index $j -Parameters $Parameters)) {
+            # A help word that is a parameter's value (see Test-HordeHelpRequest) goes on as plain
+            # text. Still tagged, "-?" is PowerShell's own help switch: -Verb -? failed with
+            # '"helpTarget" is null', exit 1 (measured 2026-09-30); "$item" is a new string, untagged.
+            $item = "$item"
         }
         $positional += $item
     }
     return [pscustomobject]@{ named = $named; positional = $positional; problem = $null }
 }
 
-function Test-HordeSwitchParameter {
-    # Whether a parameter name, as typed, names a switch of the run block. PowerShell accepts a
-    # parameter's full name, an alias, or any unambiguous prefix, and every [CmdletBinding()] block
-    # also takes the common parameters, -Verbose and -Debug among them as switches ("-Verbose false"
-    # bound target=[false], measured 2026-09-29). An exact name or alias decides; otherwise the name is
-    # taken for a switch if ANY parameter it is a prefix of is one. Where that prefix is ambiguous,
-    # PowerShell refuses the line with exit 2 anyway, so the refusal here costs nothing.
+function Get-HordeParameterKind {
+    # What a parameter name, as typed, names in the run block: "switch", "value" for a parameter that
+    # takes a value, or "" for none. PowerShell accepts a parameter's full name, an alias, or any
+    # unambiguous prefix, and every [CmdletBinding()] block also takes the common parameters, -Verbose
+    # and -Debug among them as switches ("-Verbose false" bound target=[false], measured 2026-09-29).
+    # An exact name or alias decides; otherwise the name is a switch if ANY parameter it is a prefix of
+    # is one, and a value if it is a prefix only of parameters that take one. Where that prefix is
+    # ambiguous, PowerShell refuses the line with exit 2 anyway, so either answer costs nothing.
     param([string]$Name, $Parameters)
     $switches = @("Verbose", "Debug", "WhatIf", "Confirm")
     $others = @("ErrorAction", "WarningAction", "InformationAction", "ErrorVariable", "WarningVariable",
@@ -130,8 +138,39 @@ function Test-HordeSwitchParameter {
     foreach ($n in $switches) { [void]$names.Add([pscustomobject]@{ n = $n; s = $true }) }
     foreach ($n in $others) { [void]$names.Add([pscustomobject]@{ n = $n; s = $false }) }
     $exact = @($names | Where-Object { $_.n -ieq $Name })
-    if ($exact.Count -gt 0) { return [bool]$exact[0].s }
-    return (@($names | Where-Object { $_.s -and $_.n.StartsWith($Name, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0)
+    if ($exact.Count -gt 0) { if ($exact[0].s) { return "switch" } else { return "value" } }
+    $prefixed = @($names | Where-Object { $_.n.StartsWith($Name, [System.StringComparison]::OrdinalIgnoreCase) })
+    if (@($prefixed | Where-Object { $_.s }).Count -gt 0) { return "switch" }
+    if ($prefixed.Count -gt 0) { return "value" }
+    return ""
+}
+
+function Test-HordeParameterValue {
+    # Whether the item at Index is the VALUE of the item before it, and so means nothing on its own:
+    # the item before is a parameter joined to it by a colon (typed "-Target:" then "-h"), or a
+    # parameter that takes a value ("-Verb" then "-h"; from a script "-Target:-h" arrives this way too,
+    # the colon gone). After a switch, or a name the run block does not have, it stands on its own.
+    param($Items, [int]$Index, $Parameters)
+    if ($Index -lt 1) { return $false }
+    $before = $Items[$Index - 1]
+    $name = Get-HordeParameterName -Item $before
+    if (-not $name) { return $false }
+    if ("$before".EndsWith(":")) { return $true }
+    return ((Get-HordeParameterKind -Name $name -Parameters $Parameters) -eq "value")
+}
+
+function Test-HordeHelpRequest {
+    # Whether a command's items ask for its help: -?, -h or --help anywhere, UNLESS it is a
+    # parameter's value. `echo-args -Target:-h`, `-Verb:--help` and `-Verb -h` printed the usage and
+    # exited 0 instead of running with that value (third review of PR #12, finding 2).
+    # Resolve-HordeArguments passes such a value on as plain text; see there for why.
+    param($Items, $Parameters)
+    $items = @($Items)
+    for ($j = 0; $j -lt $items.Count; $j++) {
+        if (@("-?", "-h", "--help") -contains "$($items[$j])" -and
+            -not (Test-HordeParameterValue -Items $items -Index $j -Parameters $Parameters)) { return $true }
+    }
+    return $false
 }
 
 function Get-HordeSwitchWordProblem {

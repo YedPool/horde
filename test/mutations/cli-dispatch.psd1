@@ -16,11 +16,11 @@
            Find = 'if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }'
            Replace = 'if ($name -eq "") { $name = "help" }' }
         @{ Name = "command-help-not-asked-for"
-           Find = 'if (@($rest | Where-Object { @("-?", "-h", "--help") -contains "$_" }).Count -gt 0) {'
+           Find = 'if (Test-HordeHelpRequest -Items $rest -Parameters $lookup.command.parameters) {'
            Replace = 'if ($false) {' }
-        @{ Name = "command-help-forgets-h"
-           Find = '@("-?", "-h", "--help") -contains "$_"'
-           Replace = '@("-?", "--help") -contains "$_"' }
+        @{ Name = "command-help-without-parameters"
+           Find = 'Test-HordeHelpRequest -Items $rest -Parameters $lookup.command.parameters'
+           Replace = 'Test-HordeHelpRequest -Items $rest' }
         @{ Name = "command-help-exits-one"
            Find = 'Write-Output ("    " + $lookup.command.summary)'
            Replace = 'Write-Output ("    " + $lookup.command.summary); exit 1' }

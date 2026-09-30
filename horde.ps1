@@ -66,7 +66,8 @@ if (-not $lookup.command) {
 # -?, -h or --help after a command name asks for that command's help, as they ask for horde's before
 # one. Left to PowerShell, -? failed with '"helpTarget" is null' and exit 1, -h was an unknown
 # parameter, and typed --help became the value of the first positional parameter (review of PR #12).
-if (@($rest | Where-Object { @("-?", "-h", "--help") -contains "$_" }).Count -gt 0) {
+# Not when it is a parameter's value: -Verb -h runs the command with -Verb "-h" (cli\Arguments.ps1).
+if (Test-HordeHelpRequest -Items $rest -Parameters $lookup.command.parameters) {
     Write-Output ("usage: horde " + $lookup.command.usage)
     Write-Output ("    " + $lookup.command.summary)
     exit 0

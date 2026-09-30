@@ -346,6 +346,33 @@ try {
             Check ($r.code -eq 0 -and $r.out -like 'usage: horde echo-args `[<target>`]*reports how its arguments were bound*' -and $r.err.Trim() -eq "") ("asking a command for help prints its usage and exits 0: " + $ask + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         }
     }
+    # A HELP WORD THAT IS A PARAMETER'S VALUE IS THE VALUE. `echo-args -Target:-h`, `-Verb:--help` and
+    # `-Verb -h` printed the usage and exited 0 instead of running the command with that value (third
+    # review of PR #12, finding 2). After a colon, or after a parameter that takes a value, the word
+    # belongs to the parameter; the registry says which parameters are switches.
+    $helpValues = @(
+        @(@("-Target:-h"), "target=[-h] json=False count=0 verb=[]"),
+        @(@("-Verb:--help"), "target=[] json=False count=0 verb=[--help]"),
+        @(@("-Verb", "-h"), "target=[] json=False count=0 verb=[-h]"),
+        @(@("-Verb", "-?"), "target=[] json=False count=0 verb=[-?]"),
+        @(@("-Verb", "--help"), "target=[] json=False count=0 verb=[--help]"))
+    foreach ($typed in @($false, $true)) {
+        $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
+        foreach ($hv in $helpValues) {
+            $r = Invoke-Horde -Root $tmp -Arguments (@("echo-args") + $hv[0]) -AsTyped:$typed
+            Check ($r.code -eq 0 -and $r.out.Trim() -eq $hv[1]) ("a help word that is a parameter's value is bound, not taken as a request for help" + ": " + ($hv[0] -join " ") + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        }
+        # CONTROL: after a switch it is still a request for help.
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "-h") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out -like "usage: horde echo-args*") ("a help word after a switch still asks for help" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    # By a prefix of a parameter that takes a value, as PowerShell accepts one.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Targ", "-h")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[-h] json=False count=0 verb=[]") ("a help word after a prefix of a parameter that takes a value is bound to it (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # Typed, a colon joins the word to the switch, so it is the switch's value - which PowerShell then
+    # refuses, exit 2 - and not a request for help.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:-h") -AsTyped
+    Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*usage: horde echo-args*") ("a help word joined to a switch by a colon is its value, not a request for help, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # Typed at a prompt, "-Json:" with nothing after it is a PowerShell parse error before horde runs.
     # From a script it reaches horde as nothing at all, or swallows the next word, depending on
     # position (measured 2026-09-29) - and $args keeps no trace of it, so horde cannot refuse it.
