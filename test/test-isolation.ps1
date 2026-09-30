@@ -16,17 +16,8 @@ $root = Split-Path -Parent $here
 # for that one reason, and a mutation run would read a harness that no longer loads as a catch.
 try { . (Join-Path $root "test\harness\Isolation.ps1") } catch { Write-Host ("  the harness did not load: " + $_.Exception.Message); exit 3 }
 
-$fails = @()
-# A CONDITION MUST BE EXACTLY TRUE OR FALSE. Anything else fails, loudly. The first Throws below
-# returned whatever its block printed AND $false, and PowerShell reads that array as true - so a
-# "must be refused" check passed when nothing was refused. A mutation of the refusal survived, which
-# is how it was found.
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
-function Throws { param([scriptblock]$Block, [string]$Like)
-    try { $null = & $Block; return $false } catch { return ("$($_.Exception.Message)" -like "*$Like*") } }
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 # EVERY PROCESS THIS SUITE STARTS IS HELD, AND ONLY THOSE MAY BE KILLED.
 #
 # The third review found that mutation testing ran deliberately broken kill code against real
@@ -488,11 +479,4 @@ Check ($script:violations.Count -eq 0) ("the harness asked to kill only processe
 foreach ($p in @($script:ownProcs)) { try { if (-not $p.HasExited) { $p.Kill(); [void]$p.WaitForExit(5000) } } catch { }; $p.Dispose() }
 foreach ($k in @($script:HordeIsoStarted.Keys)) { $e = $script:HordeIsoStarted[$k]; if ($e.pin) { $e.pin.Dispose() }; $script:HordeIsoStarted.Remove($k) }
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== the harness refuses a terminal, or a process, it did not start ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "the harness refuses a terminal, or a process, it did not start"

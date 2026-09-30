@@ -9,12 +9,8 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 $tool = Join-Path $root "tools\Mutate.ps1"
 
-$fails = @()
-# A condition must be exactly true or false; anything else fails loudly (see test-isolation.ps1).
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 
 $target = Join-Path $root "test\fixtures\mutate\target.ps1"
 $before = [System.IO.File]::ReadAllText($target)
@@ -56,11 +52,4 @@ Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's c
 $left = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | Where-Object { $foldersBefore -notcontains $_.Name })
 Check ($left.Count -eq 0) "and no throwaway copy is left behind"
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== the mutation tool rejects every way a mutation run can lie ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "the mutation tool rejects every way a mutation run can lie"
