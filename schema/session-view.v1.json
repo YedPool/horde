@@ -629,7 +629,7 @@
         },
         "value": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
         },
         "observedAt": {
           "type": "string",
@@ -2511,7 +2511,7 @@
           "properties": {
             "id": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
             },
             "startedAt": {
               "type": "string",

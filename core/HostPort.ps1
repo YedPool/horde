@@ -38,7 +38,10 @@
 #     builds, where PowerShell would try to expand it.
 #   THE ADAPTER BUILDS THE INSTANCE ID, from whatever names the running server, and the id must change
 #     when the server restarts: a host that reuses a socket name for its next server would otherwise
-#     hand a new instance's handles the old one's records.
+#     hand a new instance's handles the old one's records. It is plain text of letters, digits and
+#     . _ : - up to 128 characters - room for <distro>.<socket>.<server pid> - and an adapter whose
+#     natural name is longer or holds other characters maps it (a path to its leaf, say), one to one.
+#     A malformed id is never dropped: the instance is unknown, with the reason.
 #   WINDOW AND TAB ARE THE FIRST HOST'S WORDS, kept because the restore plan uses them. A host maps its
 #     own levels onto them - a multiplexer's session onto window and its window onto tab; a host with
 #     windows and tabs maps them directly - and gives $null for a level it does not have.
@@ -170,6 +173,15 @@ function ConvertTo-HordeHandleText {
     return $null
 }
 
+function ConvertTo-HordeInstanceText {
+    # An instance id as text, or $null: plain text of letters, digits and . _ : -, 1 to 128 characters.
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    $t = "$Value"
+    if ($t -cmatch '^[A-Za-z0-9._:-]{1,128}$') { return $t }
+    return $null
+}
+
 function Read-HordeHandleNamespaced {
     # A row's pid or cwd as an answer, in core's namespace only. Unknown when the host does not offer
     # it, the row gives none, the row names no space, or the space is not core's: a pid from a Linux
@@ -243,11 +255,21 @@ function Read-HordeHostInstance {
     if ($run.state -ne "known" -or ($run.value -isnot [int] -and $run.value -isnot [long]) -or $run.value -lt 0) {
         return (New-HordeUnknown -Reason "the host did not say how many instances are running")
     }
+    # Neither field is dropped or defaulted when it is malformed (review of PR #31, finding 4): an id
+    # that is not plain instance text, or an ambiguity flag that is not true or false, makes the whole
+    # instance unknown, because which instance the handles belong to is then not known.
     $amb = Get-HordeField -Record $v -Name "ambiguous"
-    $ambiguous = ($amb.state -eq "known" -and $amb.value -is [bool] -and $amb.value)
+    $ambiguous = $false
+    if ($amb.state -eq "known") {
+        if ($amb.value -isnot [bool]) { return (New-HordeUnknown -Reason ("the host's ambiguous flag is '" + $amb.value + "', not true or false")) }
+        $ambiguous = $amb.value
+    }
     $idf = Get-HordeField -Record $v -Name "id"
     $id = $null
-    if ($idf.state -eq "known") { $id = ConvertTo-HordeHandleText $idf.value }
+    if ($idf.state -eq "known") {
+        $id = ConvertTo-HordeInstanceText $idf.value
+        if ($null -eq $id) { return (New-HordeUnknown -Reason "the host gave an instance id that is not plain text of at most 128 characters; its adapter maps the native name") }
+    }
     $started = $null
     if (Test-HordeHostCapability -Port $Port -Name "instance.startedAt") {
         $sf = Get-HordeField -Record $v -Name "startedAt"

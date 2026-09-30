@@ -314,6 +314,21 @@ Check ((St (Ans $p "codex-thread-1" "hostInstance")) -eq "unknown" -and (St (Ans
 Check ((Val (Ans $p 10 "hostInstance")) -eq "inst-1" -and (Src (Ans $p 10 "hostInstance")) -eq "X5") "CONTROL: a session whose handle is live in the one instance is in it"
 
 Write-Host ""
+Write-Host "--- the host instance is read whole, or not at all ---" -ForegroundColor Cyan
+# A malformed instance id and an ambiguity flag that is not a boolean were dropped or read as false
+# (review of PR #31, finding 4). Both are unknown, with the reason.
+function InstPort { param($Inst) $ib = { return $Inst }.GetNewClosure(); return (New-HordeHostPort -Name "fake" -StoredHandles @() -Capabilities @{ "list" = "yes"; "instance.startedAt" = "yes" } -Handles { , @() } -Instance $ib) }
+$badId = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = "a/b c"; running = 1; ambiguous = $false }))
+Check ($badId.state -eq "unknown" -and $badId.reason -like "*instance id*") "a malformed instance id makes the instance unknown, never nameless"
+$badAmb = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = "i1"; running = 1; ambiguous = "no" }))
+Check ($badAmb.state -eq "unknown" -and $badAmb.reason -like "*ambiguous*") "an ambiguity flag that is not true or false makes the instance unknown"
+# An adapter composes the instance id from what names its server, for a multiplexer
+# <distro>.<socket>.<server pid>, which can pass 64 characters; the rule allows 128.
+$longId = ("Ubuntu-24.04." + ("s" * 90) + ".12345")
+$okLong = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = $longId; running = 1; ambiguous = $false }))
+Check ($okLong.state -eq "known" -and "$($okLong.value.id)" -ceq $longId -and $longId.Length -gt 64) "an instance id composed of distro, socket and server pid is kept whole"
+
+Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan
 $two = Fault $p "session-in-two-handles"
 Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (Ans $p 13 "pane")) -eq "unknown") "a session in two handles is reported"

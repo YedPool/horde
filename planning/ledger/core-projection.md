@@ -449,3 +449,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 3: hostInstance was the host's one running instance for any session a control file called alive, so a session in another terminal was labelled with this one
 - disposition: test
 - where: test/test-projection.ps1 :: "a running session whose handle is unknown is in no proven host instance"
+
+### L-085 A malformed instance is unknown, never nameless or unambiguous by default
+- source: review of horde PR #31, finding 4: a malformed instance id was dropped silently and a non-boolean ambiguous flag read as false; host research 2026-09-30 C2 (a composed <distro>.<socket>.<server pid> id can pass 64 characters)
+- disposition: test
+- where: test/test-projection.ps1 :: "a malformed instance id makes the instance unknown, never nameless"
