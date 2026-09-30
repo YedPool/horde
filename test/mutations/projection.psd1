@@ -84,8 +84,8 @@
            Find = 'if ($e.Count -gt 1) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "pane-file-holder-last-wins"
-           Find = 'if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { continue }'
-           Replace = '' }
+           Find = 'if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { $unsure[$f.sessionId]'
+           Replace = 'if ($false) { $unsure[$f.sessionId]' }
         # Work state and activity.
         @{ Name = "terminal-event-not-trusted"
            Find = 'if ($script:HordeTerminalEvents -ccontains $last) {'
@@ -130,6 +130,25 @@
         @{ Name = "unread-command-line-proves-no-process"
            Find = 'elseif ($unreadLines.Count -gt 0) { $pidX5 = New-HordeUnsure'
            Replace = 'elseif ($false) { $pidX5 = New-HordeUnsure' }
+        # The pane-file judge and the claim matcher (second review of PR #31, finding 8).
+        @{ Name = "pane-files-judged-without-their-writer"
+           Find = 'foreach ($st in @("X1", "W1")) { if (@($Context.wrote) -cnotcontains $st) {'
+           Replace = 'foreach ($st in @("X1", "W1")) { if ($false) {' }
+        @{ Name = "two-files-prove-no-handle"
+           Find = '$unsure[$g[0].sessionId] = ("the session is named by the pane-sessions files of " + $g.Count + " handles, so none answers")'
+           Replace = '$null = 0' }
+        @{ Name = "contradicted-file-proves-no-handle"
+           Find = '$unsure[$f.sessionId] = ("the pane-sessions file for handle " + $f.handle + " names this session, but a running session holds that handle, so where this one is is unknown")'
+           Replace = '$null = 0' }
+        @{ Name = "claim-matched-without-writing-claims"
+           Find = 'if (@($C.host.wrote) -cnotcontains "W2") { return (New-HordeUnsure'
+           Replace = 'if ($false) { return (New-HordeUnsure' }
+        @{ Name = "claim-matched-beside-incomplete-registry"
+           Find = 'if ($S.regComplete.state -ne "known") { return (New-HordeUnsure -Store "W2"'
+           Replace = 'if ($false) { return (New-HordeUnsure -Store "W2"' }
+        @{ Name = "unknown-handle-proves-no-claim"
+           Find = 'if ($S.pane.answer.state -eq "unknown") { return (New-HordeUnsure -Store "W2"'
+           Replace = 'if ($false) { return (New-HordeUnsure -Store "W2"' }
         # The engine's fields.
         @{ Name = "claim-read-beside-a-record"
            Find = 'if ($S.w1Unreadable -or $null -ne $S.w1) { return (New-HordeCandidate -Store "W2"'

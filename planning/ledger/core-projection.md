@@ -506,3 +506,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 5: core/Identity.ps1 Get-HordeProcessTable still read Win32_Process outside core/Platform.ps1, and the seam's reader was named after the projection
 - disposition: test
 - where: test/test-projection.ps1 :: "the process table is read only behind the platform seam"
+
+### L-096 Every rule of the pane-file judge and the claim matcher has a mutant a test catches
+- source: second review of horde PR #31, finding 8: the checks added to the pane-sessions judge (writer, two files, contradicted file) and the claim matcher (writer, incomplete registry, unknown handle) had no mutants
+- disposition: test
+- where: test/test-projection.ps1 :: "a claim is not matched when this host did not write the claims"

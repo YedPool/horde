@@ -369,6 +369,21 @@ Check ($firstOk -and -not (Throws { New-HordeHostPort -Name "fake" -StoredHandle
 Check (Throws { New-HordeHostPort -Name "writer-host-b" -StoredHandles @("W4") -Capabilities @{ "list" = "yes" } -Handles $wb -Instance $wi } "one writer") "two hosts declaring the same store are refused"
 
 Write-Host ""
+Write-Host "--- the pane-file judge and the claim matcher, rule by rule ---" -ForegroundColor Cyan
+# Each check below isolates one rule a mutant of core/Projection.ps1 breaks (second review of
+# PR #31, finding 8).
+$hv = New-Fleet "hijack-victim"
+$f18 = Join-Path $hv "claude\pane-sessions\18.json"; $j18 = ReadJson $f18; $j18.session_id = (Sid 4); PutJson $f18 $j18; [System.IO.File]::SetLastWriteTimeUtc($f18, $now.AddMinutes(-45))
+Check ((St (Ans (Project $hv) 4 "pane")) -eq "unknown") "a contradicted pane file leaves the session it names in no proven handle"
+$pnoc = Project $base -HostPort (HostOf $base -Stores @("W1", "W4", "W5", "X1"))
+Check ((Val (Ans $pnoc 10 "pane")) -eq "17" -and (St (Ans $pnoc 10 "role")) -eq "unknown" -and (Why (Ans $pnoc 10 "role")) -like "*claims' handles were not written by this host*") "a claim is not matched when this host did not write the claims"
+$nrc = New-Fleet "noreg-claim"
+Remove-Item -LiteralPath (RegPath $nrc 23) -Force
+PutText (Join-Path $nrc "wezfleet\registry\sessions\not-json.json") "{ torn"
+$pnrc = Project $nrc
+Check ($pnrc.complete["W1"].state -eq "unknown" -and (Val (Ans $pnrc 10 "pane")) -eq "17" -and (St (Ans $pnrc 10 "role")) -eq "unknown") "an incomplete registry leaves a claim unmatched, since the session's record may be the one missing"
+
+Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan
 $two = Fault $p "session-in-two-handles"
 Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (Ans $p 13 "pane")) -eq "unknown") "a session in two handles is reported"
