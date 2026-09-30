@@ -125,8 +125,8 @@ sources:
 
 ### L-021 No code assigns orchestrator or session; own sets a parent without a role
 - source: YedPool/wezfleet commands/own.ps1:75 (Set-WfSessionParent without -Role); lib/Master.ps1:192 is the only literal role write
-- disposition: test
-- where: test/test-roles.ps1 :: "an unrecognised role reads as unknown and keeps its raw value"
+- disposition: comment
+- where: core/Roles.ps1 :: "no wezfleet code assigns orchestrator or session"
 
 ### L-022 Reading must never block wezfleet's writer, so every read shares write and delete
 - source: measured 2026-09-29 while building this module: YedPool/wezfleet lib/Registry.ps1:197 swaps a record in with [System.IO.File]::Replace, and that Replace fails while a reader holds the record with the ordinary read share that ReadAllText uses; with read, write and delete sharing it succeeds

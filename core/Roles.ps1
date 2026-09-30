@@ -10,6 +10,11 @@
 # key, and in every case where a missing role mattered the session was really a master or an
 # orchestrator. Defaulting to the humblest role would have mislabelled exactly those.
 #
+# WHY SO MANY HAVE NONE: no wezfleet code assigns orchestrator or session. `own` sets a parent and no
+# role (commands/own.ps1:75), and lib/Master.ps1:192 - the master - is the only literal role write, so
+# the other two roles exist only where someone set them by hand. A missing role is the normal case,
+# which is why it must never be guessed (ledger L-021).
+#
 # MATCHING AGREES WITH WEZFLEET, so a shadow run beside it cannot disagree over spelling: case is
 # ignored (every wezfleet comparison uses -eq or -contains, which ignore case), and padding is NOT
 # trimmed (wezfleet never trims, so " master" is not a master to it either).
