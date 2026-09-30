@@ -45,12 +45,15 @@
 # The fields core/ownership.json gives to the agent, sessionId aside (it is the record's key). Every
 # record carries exactly these, as answers; test/test-identity.ps1 checks the list against the table.
 $script:HordeIdentityFields = @("agent", "pid", "procStart", "cwd", "transcriptPath", "resumeCommand", "name", "nameSource",
-    "nameSince", "formerNames", "liveStatus", "startedAt", "messagingAddress", "bridgeSessionId", "agentVersion",
+    "nameSince", "formerNames", "liveStatus", "waitingFor", "startedAt", "messagingAddress", "bridgeSessionId", "agentVersion",
     "peerProtocol", "peerFeatures", "sessionKind", "entrypoint", "pidDomain")
 # How long a codex status reading is believed: wezfleet's default, lib/CodexStatus.ps1:68.
 $script:HordeCodexTtlDefault = 900
-# The statuses each agent is seen to write. Anything else is not guessed at.
-$script:HordeClaudeStatuses = @("idle", "busy")
+# The statuses each agent is seen to write. Anything else is not guessed at. waiting is Claude's
+# status while it waits on the user: 1 of 10 control files on 2026-09-30, beside waitingFor
+# (core-identity L-055). The 2.1.285 binary can also write shell to its terminal-tab status; no
+# control file has shown it, so it stays unknown.
+$script:HordeClaudeStatuses = @("idle", "busy", "waiting")
 $script:HordeCodexStatuses = @("idle", "busy", "ended")
 # The process names an orphan is looked for under, and the names of a host Claude Code can run
 # inside. PROVISIONAL: claude.exe is the only name seen (11 claude.exe processes on 2026-09-30, all
@@ -307,8 +310,21 @@ function Read-HordeClaudeControlFiles {
             if ($st.state -ne "known") { $k["liveStatus"] = $st }
             elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["liveStatus"] = New-HordeUnknown -Reason ("the control file's status '" + $st.value + "' is not one Horde knows") }
             else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }
+            # WHAT A WAITING SESSION WAITS FOR. Claude Code writes waitingFor beside status only while
+            # the session waits on the user and drops the key otherwise: on 2026-09-30 it was in 1 of
+            # 10 control files, the one whose status was waiting, as "permission prompt", and in none
+            # of the 9 idle ones (core-ownership L-055). So a missing key is the agent saying it waits
+            # for nothing - but only when its status is one Horde knows and is not waiting. A status
+            # that says waiting, says nothing, or is one Horde does not know leaves the wait unknown.
+            $wf = $j.PSObject.Properties["waitingFor"]
+            if ($null -ne $wf -and $wf.Value -is [string] -and $wf.Value -ne "") { $k["waitingFor"] = New-HordeKnown -Value $wf.Value -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }
+            elseif ($null -ne $wf) { $k["waitingFor"] = New-HordeUnknown -Reason "the control file's waitingFor is not text, or is empty" }
+            elseif ($st.state -ne "known") { $k["waitingFor"] = New-HordeUnknown -Reason "the control file has no status, so whether the session waits is unknown" }
+            elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["waitingFor"] = New-HordeUnknown -Reason ("the control file's status '" + $st.value + "' is not one Horde knows, so whether the session waits is unknown") }
+            elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"] = New-HordeUnknown -Reason "the status is waiting but the control file does not say for what" }
+            else { $k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for" }
         } else {
-            foreach ($n in @("pid", "procStart", "messagingAddress", "liveStatus")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }
+            foreach ($n in @("pid", "procStart", "messagingAddress", "liveStatus", "waitingFor")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }
         }
         $k["cwd"] = Get-HordeField -Record $j -Name "cwd"
         $k["name"] = Get-HordeField -Record $j -Name "name"

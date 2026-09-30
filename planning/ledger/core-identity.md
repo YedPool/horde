@@ -145,7 +145,7 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - where: test/test-identity.ps1 :: "kind and entrypoint are carried as the agent wrote them"
 
 ### L-026 Eight control-file keys had no row in the ownership table
-- source: census 2026-09-30 against horde core/ownership.json: version, peerProtocol, peerFeatures, kind, entrypoint, pidDomain, nameSince and statusUpdatedAt appeared in 10 of 10 control files and in no X2 read, though core-ownership L-029 claimed every field the old stores hold is kept or dropped. Resolved in core-ownership L-048 (seven kept, statusUpdatedAt dropped); the suite checks the fixture's 20 keys, and the reality check every key on this machine, against the table.
+- source: census 2026-09-30 against horde core/ownership.json: version, peerProtocol, peerFeatures, kind, entrypoint, pidDomain, nameSince and statusUpdatedAt appeared in 10 of 10 control files and in no X2 read, though core-ownership L-029 claimed every field the old stores hold is kept or dropped. Resolved in core-ownership L-048 (seven kept, statusUpdatedAt dropped); the suite checks the fixture's keys (32 since core-ownership L-056) against the table, and the reality check fails on any key on this machine that the table neither keeps nor drops (L-056).
 - disposition: test
 - where: test/test-identity.ps1 :: "every control file key is kept or dropped"
 
@@ -278,3 +278,18 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: the identity mutation run of 2026-09-30 after review finding 6 of PR #19: the mutant microseconds-by-float, which divides the tick count as a double, survived. Before, only the reality check caught it ("every live pid on this machine matches its procStart", 7 of 10 real files), and that check now reports instead of failing; the fixture times happen to survive the double. The procStart 134350994473105437, read from a live control file on 2026-09-30, lands in another microsecond than its own truncated start time when divided as a double (84 of 100 nearby values do), so it is pinned in a fixture. Seen failing under that mutant.
 - disposition: test
 - where: test/test-identity.ps1 :: "a real 18-digit procStart matches its own microsecond-truncated start time"
+
+### L-054 What a waiting session waits for is carried, and only while its process runs
+- source: core-ownership L-055: waitingFor was in 1 of 10 control files on 2026-09-30, the one whose status was waiting, and absent from the 9 idle ones; the Claude Code 2.1.285 writer sets it with status and leaves it out when nothing is awaited. It is live state, so a stale file's wait is unknown like its status; a running session with no key waits for nothing (absent) unless its status is waiting or missing, when the wait is unknown rather than guessed.
+- disposition: test
+- where: test/test-identity.ps1 :: "a waiting session that names nothing is unknown, not absent"
+
+### L-055 waiting is a Claude status, measured on disk
+- source: read-only census of ~/.claude/sessions at 2026-09-30T09:17Z: 1 of 10 control files had status waiting (the other 9 idle), beside waitingFor "permission prompt" (core-ownership L-055). Horde believed only idle and busy, so that session's live status read unknown while its file said plainly what it was doing. In the Claude Code 2.1.285 binary the writer sets status and waitingFor together, and its own reader maps waiting to a blocked tempo. It also can write shell to its terminal-tab status, which no control file has shown, so shell is not believed.
+- disposition: test
+- where: test/test-identity.ps1 :: "a claude session waiting on the user reads its status as known"
+
+### L-056 The live key check fails only on drift: an undecided key, or a newer Claude Code
+- source: main (022c2f8) went red on 2026-09-30T09:17:37Z with no code change: "every key in this machine's control files has a row in the ownership table (waitingFor)". The key was in 1 of 10 control files, the one whose session was at a permission prompt, and was written by 2.1.284, the version the census behind the table read, so the check's answer turned on whether some session was waiting when the suite ran. The first fix in PR #24 (d4862a7) made an undecided key a yellow REPORT line in a green run. Its review showed that line reaches no one, and asked for the signal back without the flakiness. The table now keeps or drops every key the surveyed version can write: the 21 seen on disk, plus 11 the Claude Code 2.1.285 control-file reader accepts and no file here has carried, dropped provisionally (core-ownership L-056). It also records that version in surveyedVersions. The live check fails on a key in neither list, and on a file whose version is newer than the survey; a waiting session cannot trip either. Seen: the unchanged machine, with the waiting session and waitingFor still present, green. A copy of the suite that adds the key zzInjectedControlKey to the real keys: red. A copy that adds the version 2.1.999 to the real versions: red.
+- disposition: test
+- where: test/test-identity.ps1 :: "no control file on this machine was written by a Claude Code newer than the table's survey (surveyed "

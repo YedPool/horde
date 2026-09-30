@@ -57,8 +57,32 @@
            Find = 'if ($dupGaps.ContainsKey($rd.agent)) {'
            Replace = 'if ($false) {' }
         @{ Name = "unrecognised-status-trusted"
-           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") {'
-           Replace = 'elseif ($false) {' }
+           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["liveStatus"]'
+           Replace = 'elseif ($false) { $k["liveStatus"]' }
+        @{ Name = "unrecognised-status-means-not-waiting"
+           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "stale-wait-carried"
+           Find = '"liveStatus", "waitingFor")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }'
+           Replace = '"liveStatus")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }' }
+        @{ Name = "wait-guessed-while-waiting"
+           Find = 'elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "missing-wait-is-unknown"
+           Find = '$k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for"'
+           Replace = '$k["waitingFor"] = New-HordeUnknown -Reason "no waitingFor key"' }
+        @{ Name = "waiting-status-unrecognised"
+           Find = '$script:HordeClaudeStatuses = @("idle", "busy", "waiting")'
+           Replace = '$script:HordeClaudeStatuses = @("idle", "busy")' }
+        @{ Name = "wait-not-text-falls-through"
+           Find = 'elseif ($null -ne $wf) { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "wait-with-no-status-guessed"
+           Find = 'elseif ($st.state -ne "known") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "empty-wait-known"
+           Find = '$wf.Value -is [string] -and $wf.Value -ne "")'
+           Replace = '$wf.Value -is [string])' }
         @{ Name = "status-time-dropped"
            Find = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }'
            Replace = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" }' }

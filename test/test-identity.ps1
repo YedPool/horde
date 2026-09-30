@@ -249,7 +249,16 @@ PutJson (Join-Path $d12 "301.json") (ClaudeRec 301 (Sid 61) $c12 -Set @{ status 
 PutJson (Join-Path $d12 "302.json") (ClaudeRec 302 (Sid 62) $c12 -Set @{ status = "busy"; statusUpdatedAt = (EpochMs $stamp); bridgeSessionId = $null; kind = "odd-kind"; entrypoint = "sdk-cli" })
 PutJson (Join-Path $d12 "303.json") (ClaudeRec 303 (Sid 63) $c12 -Drop @("bridgeSessionId", "status"))
 PutJson (Join-Path $d12 "304.json") (ClaudeRec 304 (Sid 64) $c12 -Set @{ formerNames = @(@{ name = "old-name"; until = (EpochMs $c12); sessionId = (Sid 64) }, @{ name = "older"; until = (EpochMs $c12); sessionId = (Sid 99) }) })
-$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12))
+# core-identity L-054: waitingFor is written beside status only while the session waits on the user - "permission
+# prompt" in the one waiting file of 10 on 2026-09-30, and absent from the 9 idle ones. 305 waits and
+# says for what; 306 waits and says nothing; 307 waited, but its process is gone.
+PutJson (Join-Path $d12 "305.json") (ClaudeRec 305 (Sid 65) $c12 -Set @{ status = "waiting"; waitingFor = "permission prompt" })
+PutJson (Join-Path $d12 "306.json") (ClaudeRec 306 (Sid 66) $c12 -Set @{ status = "waiting" })
+PutJson (Join-Path $d12 "307.json") (ClaudeRec 307 (Sid 67) $c12 -Set @{ status = "waiting"; waitingFor = "dialog open" })
+# Review of PR #24: 308 names its wait as a number, not text; 309 names it as the empty string.
+PutJson (Join-Path $d12 "308.json") (ClaudeRec 308 (Sid 68) $c12 -Set @{ waitingFor = 5 })
+PutJson (Join-Path $d12 "309.json") (ClaudeRec 309 (Sid 69) $c12 -Set @{ status = "waiting"; waitingFor = "" })
+$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12), @(305, "claude.exe", $c12), @(306, "claude.exe", $c12), @(308, "claude.exe", $c12), @(309, "claude.exe", $c12))
 $r12 = Get-HordeIdentity -ClaudeDir $d12 -ProjectsDir $pDir -CodexDir $empty -Processes $tab12 -Now $now
 $a = $r12.records[(Sid 61)]; $b = $r12.records[(Sid 62)]; $c = $r12.records[(Sid 63)]; $e = $r12.records[(Sid 64)]
 Check ((St $a.fields.liveStatus) -eq "unknown" -and $a.fields.liveStatus.reason -like "*'thinking'*") "an unrecognised claude status reads as unknown"
@@ -263,6 +272,27 @@ Check ($fn.Count -eq 2 -and "$($fn[0].name)" -eq "old-name" -and "$($fn[1].sessi
 Check ("$($e.provisional['formerNames'])" -like "*/clear*") "a rule that rests on the unmeasured clear behaviour is marked provisional"
 Check (-not $r12.records.ContainsKey((Sid 99)) -and @($r12.findings | Where-Object { $_ -like ("*" + (Sid 99) + "*") }).Count -eq 1) "a former name naming another session is reported, not merged"
 Check ((St $a.fields.resumeCommand) -eq "unknown" -and $a.fields.resumeCommand.reason -like "*AgentPort*") "the resume command is left to the agent port"
+# Read by index, so a record with no waitingFor at all fails these checks instead of stopping the suite.
+$w5 = $r12.records[(Sid 65)].fields["waitingFor"]; $w6 = $r12.records[(Sid 66)].fields["waitingFor"]; $w7 = $r12.records[(Sid 67)].fields["waitingFor"]
+$wb = $b.fields["waitingFor"]; $w1 = $r1.fields["waitingFor"]
+Check ($null -ne $w5 -and (Val $w5) -ceq "permission prompt") "a waiting session says what it waits for"
+# Review of PR #24: the wait is observed when the status beside it was written, like the status.
+$ls5 = $r12.records[(Sid 65)].fields["liveStatus"]
+Check ($null -ne $w5 -and $null -ne $w5.observedAt -and $null -ne $ls5 -and $w5.observedAt -eq $ls5.observedAt) "a wait is observed at the agent's own status time"
+# L-055: waiting is a status Claude Code writes (1 of 10 control files on 2026-09-30), not a guess.
+Check ((Val $r12.records[(Sid 65)].fields["liveStatus"]) -ceq "waiting") "a claude session waiting on the user reads its status as known"
+Check ($null -ne $wb -and $null -ne $w1 -and (St $wb) -eq "absent" -and (St $w1) -eq "absent") "a session that is not waiting waits for nothing"
+Check ($null -ne $w6 -and (St $w6) -eq "unknown") "a waiting session that names nothing is unknown, not absent"
+Check ($null -ne $w7 -and (St $w7) -eq "unknown" -and $w7.reason -like "*not running*") "a stale control file says nothing about a wait"
+# Review of PR #24, hand mutants R3-R5, each of which these three checks did not exist to catch.
+$w8 = $r12.records[(Sid 68)].fields["waitingFor"]; $w9 = $r12.records[(Sid 69)].fields["waitingFor"]; $w63 = $c.fields["waitingFor"]
+Check ($null -ne $w8 -and (St $w8) -eq "unknown" -and $w8.reason -like "*not text*") "a wait that is not text is unknown, whatever the status"
+Check ($null -ne $w63 -and (St $w63) -eq "unknown" -and $w63.reason -like "*no status*") "a control file with no status leaves the wait unknown"
+Check ($null -ne $w9 -and (St $w9) -eq "unknown") "an empty wait is unknown, not a known empty text"
+# Review of PR #24: 301's status 'thinking' is not one Horde knows, so it cannot say the session is
+# not waiting; the first reader called its wait absent.
+$w61 = $a.fields["waitingFor"]
+Check ($null -ne $w61 -and (St $w61) -eq "unknown" -and $w61.reason -like "*'thinking'*") "a status Horde does not know leaves the wait unknown"
 
 Write-Host ""
 Write-Host "--- a claude listing is complete or it says why not ---" -ForegroundColor Cyan
@@ -410,13 +440,15 @@ Write-Host "--- keys and names ---" -ForegroundColor Cyan
 Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Code\Dist Folders\Dist_12_23_25_ai-latency.v2") -ceq "C--Code-Dist-Folders-Dist-12-23-25-ai-latency-v2") "a cwd with spaces and underscores maps to dashes"
 Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Users\x\Code") -ceq "C--Users-x-Code") "CONTROL: a plain cwd maps as wezfleet's colon-and-slash rule would"
 Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b") -and -not (Test-HordeSessionId -Id "") -and -not (Test-HordeSessionId -Id ("x" * 129))) "a session id is validated before it becomes a key"
-# L-026: every key a fixture control file carries - the census's 19 plus formerNames - has a row.
-$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames")
-$x2Reads = @($ownership.fields | ForEach-Object { @($_.read) } | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { "$($_.field)" })
-$droppedN = @($ownership.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
-$noRow = @($keys | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
+# L-026: every key a fixture control file carries - the census's 19 plus formerNames, and waitingFor,
+# which only a waiting session writes (core-identity L-054) - has a row.
+# The 11 more are the keys the Claude Code 2.1.285 reader accepts that no file here has carried,
+# dropped provisionally in the table (core-ownership L-056).
+$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor") + @("jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux")
+$x2Known = @(Get-HordeOwnershipStoreKeys -Doc $ownership -Store "X2")
+$noRow = @($keys | Where-Object { $x2Known -cnotcontains $_ })
 foreach ($n in $noRow) { Write-Host ("  control file key with no row: " + $n) -ForegroundColor Red }
-Check ($keys.Count -eq 20 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
+Check ($keys.Count -eq 32 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
 
 Write-Host ""
 Write-Host "--- self identity ---" -ForegroundColor Cyan
@@ -515,14 +547,33 @@ if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
         Check ($verified.Count -ge 1) ("CONTROL: at least one real control file names its running process (" + $verified.Count + ")")
     }
     $realKeys = @()
+    $realVersions = @()
     $keyFiles = 0
-    foreach ($f in $realFiles) { try { $realKeys += @(((Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }); $keyFiles++ } catch { Write-Host ("  keys not read from " + $f.Name + ": " + $_.Exception.Message) -ForegroundColor Yellow } }
+    foreach ($f in $realFiles) {
+        try {
+            $o = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json
+            $realKeys += @($o.PSObject.Properties | ForEach-Object { $_.Name })
+            $vp = $o.PSObject.Properties["version"]
+            if ($null -ne $vp) { $realVersions += "$($vp.Value)" }
+            $keyFiles++
+        } catch { Write-Host ("  keys not read from " + $f.Name + ": " + $_.Exception.Message) -ForegroundColor Yellow }
+    }
     # The key check below passes vacuously on no keys, and the read above swallows each file's error,
     # so it must be shown to have read something whenever there were files to read (review finding 6
     # of PR #19).
     Check ($realFiles.Count -eq 0 -or ($keyFiles -ge 1 -and @($realKeys).Count -ge 1)) ("CONTROL: the keys of the real control files were read (" + $keyFiles + " of " + $realFiles.Count + " files, " + @($realKeys | Sort-Object -Unique).Count + " distinct keys)")
-    $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
-    Check ($realNoRow.Count -eq 0) ("every key in this machine's control files has a row in the ownership table (" + ($realNoRow -join ", ") + ")")
+    # DRIFT FAILS, AND WAITING DOES NOT (core-identity L-056). The table keeps or drops every key the
+    # Claude Code version it was surveyed against can write - the 21 seen on disk and the 11 more its
+    # 2.1.285 reader accepts - so a session that happens to be waiting, or in any state that version
+    # knows, cannot turn this red. What does: a key in neither list, which a newer or unsurveyed
+    # writer added, and a file written by a Claude Code newer than the survey, which must be looked
+    # at before its keys are trusted to be the known ones. A yellow line in a green run reached no
+    # one (review of PR #24), so both fail.
+    $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Known -cnotcontains $_ })
+    Check ($realNoRow.Count -eq 0) ("every key in this machine's control files is kept or dropped in the ownership table (" + ($realNoRow -join ", ") + ")")
+    $surveyed = Get-HordeOwnershipSurveyedVersion -Doc $ownership -Store "X2"
+    $newer = @($realVersions | Sort-Object -Unique | Where-Object { $pv = $null; (-not [version]::TryParse("$_", [ref]$pv)) -or $null -eq $surveyed -or $pv -gt $surveyed })
+    Check ($null -ne $surveyed -and ($realFiles.Count -eq 0 -or $realVersions.Count -ge 1) -and $newer.Count -eq 0) ("no control file on this machine was written by a Claude Code newer than the table's survey (surveyed " + $surveyed + "; newer: " + ($newer -join ", ") + ")")
 }
 
 Complete-HordeSuite -Success "every agent's control files read into one record shape, and nothing written"
