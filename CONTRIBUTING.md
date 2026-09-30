@@ -159,6 +159,19 @@ review finding of its own.
 - **`/tmp` means `C:\tmp` to PowerShell**, and with `core.autocrlf` on, a checked-out file has CRLF
   line endings: collapse `\r` as well as `\n` before comparing text, and assert the match count
   after every scripted edit.
+- **A `[string]` parameter never holds `$null`.** Defaulting one to `$null`, or passing `$null` to
+  it, gives `""`. Test for an empty string, or leave the parameter untyped when "not given" and
+  "empty" must differ.
+- **Variable names are case-insensitive.** `$rel` and `$Rel` are one variable; a local named like a
+  parameter overwrites it. Give locals names no parameter uses.
+- **A function returning one element returns the element, not an array.** The caller gets a scalar,
+  and `.Count` on a single `[pscustomobject]` is `$null`, so `-eq 1` fails. Wrap the call:
+  `@(Get-Thing)`.
+- **Inside a `Where-Object` or `ForEach-Object` block, `$MyInvocation` describes the block**, not the
+  script. Use `$PSCommandPath` for the running file.
+- **Dividing two integers gives a double.** `$ticks / 10` loses precision past about 16 digits, and
+  a tick count has 18: two readings of one process's creation time disagreed for 304 of 365
+  processes. Use `[Math]::DivRem` when the result must be exact.
 
 ## 13. Source files are ASCII
 
