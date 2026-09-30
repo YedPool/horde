@@ -18,6 +18,12 @@
         @{ Name = "enum-whole-number-matches-its-string"
            Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
            Replace = 'elseif ("$Value" -eq "$e") { $ok = $true }' }
+        @{ Name = "enum-boolean-matches-anything"
+           Find = 'elseif ($e -is [bool]) { if ($Value -is [bool] -and $Value -eq $e) { $ok = $true } }'
+           Replace = 'elseif ($e -is [bool]) { if ($Value -eq $e) { $ok = $true } }' }
+        @{ Name = "enum-boolean-refused-in-schema"
+           Find = 'if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw'
+           Replace = 'if ($e -isnot [string] -and -not $isWhole) { throw' }
         @{ Name = "enum-whole-number-never-matches"
            Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
            Replace = 'elseif ($false) { $ok = $true }' }

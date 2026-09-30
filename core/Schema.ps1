@@ -126,16 +126,17 @@ function Test-HordeSchema {
     if ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -isnot [bool]) {
         throw ("additionalProperties at " + $Path + " must be true or false; a schema there is not implemented")
     }
-    # ENUM HOLDS STRINGS AND WHOLE NUMBERS ONLY, checked before the value is looked at so a bad schema is
-    # refused whatever the value. The first version compared other values as text: a null threw, 1 and
-    # 1.0 differed, and objects matched by their string form (review of PR #15). A string matches only an
-    # identical string; a whole number matches a value that is an integer (as "type": "integer" reads it)
-    # of equal value, so 1 and 1.0 are the same and "1" is not. Whole numbers are needed for
-    # schemaVersion, which every Horde record pins to 1.
+    # ENUM HOLDS STRINGS, WHOLE NUMBERS AND BOOLEANS ONLY, checked before the value is looked at so a bad
+    # schema is refused whatever the value. The first version compared other values as text: a null
+    # threw, 1 and 1.0 differed, and objects matched by their string form (review of PR #15). A string
+    # matches only an identical string; a boolean only the same boolean (never "true" or 1); a whole
+    # number a value that is an integer (as "type": "integer" reads it) of equal value, so 1 and 1.0 are
+    # the same and "1" is not. Whole numbers pin schemaVersion to 1 in every Horde record; a boolean
+    # pins the restore plan's layout to advisory.
     if ($kw.ContainsKey("enum")) {
         foreach ($e in @($kw["enum"])) {
             $isWhole = ($e -is [int] -or $e -is [long])
-            if ($e -isnot [string] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings and whole numbers; '" + $e + "' is neither") }
+            if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings, whole numbers and booleans; '" + $e + "' is none of them") }
         }
     }
     if ($kw.ContainsKey("definitions") -and -not $atTop) { throw ("the schema has definitions below the top of a schema, at " + $Path + "; #/definitions/ would never find them") }
@@ -166,6 +167,7 @@ function Test-HordeSchema {
         $ok = $false
         foreach ($e in @($kw["enum"])) {
             if ($e -is [string]) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }
+            elseif ($e -is [bool]) { if ($Value -is [bool] -and $Value -eq $e) { $ok = $true } }
             elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }
         }
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }

@@ -47,15 +47,20 @@ Check (Has (Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @("1") 
 # threw, 1 and 1.0 differed, and objects were compared by their string form (review of PR #15). Whole
 # numbers are needed for schemaVersion; anything else is refused - even when the value's type already
 # failed.
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a null in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1.5) }) } "enum at $ may hold only strings and whole numbers") "a fraction in an enum is refused"
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings and whole numbers") "an object in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a bad enum is refused even when the value fails its type first"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings, whole numbers and booleans") "a null in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1.5) }) } "enum at $ may hold only strings, whole numbers and booleans") "a fraction in an enum is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings, whole numbers and booleans") "an object in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @($null) }) } "enum at $ may hold only strings, whole numbers and booleans") "a bad enum is refused even when the value fails its type first"
 $one = [pscustomobject]@{ enum = @(1) }
 Check (@(Test-HordeSchema -Value 1 -Schema $one).Count -eq 0) "a whole-number enum accepts that number"
 Check (@(Test-HordeSchema -Value ([decimal]1.0) -Schema $one).Count -eq 0) "and accepts it written as 1.0, which PowerShell reads as a decimal"
 Check (Has (Test-HordeSchema -Value "1" -Schema $one) "$ is '1', not one of: 1") "but not the string of its digits"
 Check (Has (Test-HordeSchema -Value 2 -Schema $one) "$ is '2', not one of: 1") "and not another number"
+$yes = [pscustomobject]@{ enum = @($true) }
+Check (@(Test-HordeSchema -Value $true -Schema $yes).Count -eq 0) "a boolean enum accepts that boolean"
+Check (Has (Test-HordeSchema -Value $false -Schema $yes) "$ is 'False', not one of: True") "but not the other one"
+Check (Has (Test-HordeSchema -Value "true" -Schema $yes) "$ is 'true', not one of: True") "and not the word true"
+Check (Has (Test-HordeSchema -Value 1 -Schema $yes) "$ is '1', not one of: True") "and not the number one"
 $twoKeys = [pscustomobject]@{ a = 1; b = 2 }
 $aOnly = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }
 Check (Has (Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly; additionalProperties = $false })) "$ has 'b', which the schema does not allow") "additionalProperties false refuses a key the schema does not name"
