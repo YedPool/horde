@@ -46,6 +46,11 @@ $missing = Read-HordeRecordRole -Record ([pscustomobject]@{ claudeSessionId = "x
 $empty = Read-HordeRecordRole -Record ([pscustomobject]@{ claudeSessionId = "x"; role = "" }) -Table $table
 Check ($missing.role.state -eq "unknown") "a record with no role reads as unknown"
 Check ($missing.field -eq "missing" -and $empty.field -eq "empty" -and $missing.role.reason -ne $empty.role.reason) "an absent role and an empty role are reported apart"
+# A record built in memory is often a hashtable, not a parsed-JSON object. Its keys are not
+# properties, and a lookup written for objects read @{ role = "master" } as having no role.
+$fromMap = Read-HordeRecordRole -Record @{ claudeSessionId = "x"; role = "master" } -Table $table
+Check ((RoleOf $fromMap) -eq "warchief" -and $fromMap.field -eq "present") "a record held as a hashtable reads its role"
+Check ((Read-HordeRecordRole -Record @{ claudeSessionId = "x" } -Table $table).field -eq "missing") "and a hashtable with no role key reads as missing"
 $labelled = Read-HordeRecordRole -Record ([pscustomobject]@{ claudeSessionId = "x"; label = "M" }) -Table $table
 Check ($labelled.role.state -eq "unknown") "role is never inferred from the label"
 

@@ -53,11 +53,13 @@ function Resolve-HordeRole {
 function Read-HordeRecordRole {
     # The role of one parsed record. Only the role field is consulted: never the label, even though
     # wezfleet's labels M, A and A7 look like roles.
+    #
+    # The field is looked up by core/tristate's Get-HordeField, which reads hashtables as well as
+    # parsed JSON. A lookup of its own read @{ role = "master" } as having no role (review, 2026-09-29).
     param($Record, $Table = $null)
-    $prop = $null
-    if ($null -ne $Record) { $prop = $Record.PSObject.Properties["role"] }
-    if ($null -eq $prop) { return (Resolve-HordeRole -Missing -Table $Table) }
-    return (Resolve-HordeRole -Raw $prop.Value -Table $Table)
+    $field = Get-HordeField -Record $Record -Name "role"
+    if ($field.state -ne "known") { return (Resolve-HordeRole -Missing -Table $Table) }
+    return (Resolve-HordeRole -Raw $field.value -Table $Table)
 }
 
 function Get-HordeWezfleetRoot {
