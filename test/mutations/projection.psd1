@@ -30,6 +30,9 @@
         @{ Name = "host-port-ignored"
            Find = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort)'
            Replace = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port (New-HordeUnavailableHostPort -Reason "mutant"))' }
+        @{ Name = "any-host-trusts-stored-handles"
+           Find = 'if (@($Context.wrote) -cnotcontains $Store) {'
+           Replace = 'if ($false) {' }
         # Decision 1: claimants.
         @{ Name = "claimed-handle-newest-wins"
            Find = 'if ($claims[$h].Count -lt 2) { continue }'

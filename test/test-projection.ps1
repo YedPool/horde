@@ -73,7 +73,7 @@ function EditReg { param([string]$D, $N, [scriptblock]$Edit) $p = RegPath $D $N;
 
 function HostOf {
     # The fake host port, from host.json, with optional overrides.
-    param([string]$D, $Running = $null, $Id = $null, [switch]$Ambiguous, [string[]]$Add = @(), [switch]$NoHandles, [hashtable]$Caps = @{})
+    param([string]$D, $Running = $null, $Id = $null, [switch]$Ambiguous, [string[]]$Add = @(), [switch]$NoHandles, [hashtable]$Caps = @{}, [string[]]$Stores = @("W1", "W2", "W4", "W5", "X1"))
     $h = ReadJson (Join-Path $D "host.json")
     $rows = @($h.handles | ForEach-Object { [pscustomobject]@{ handle = $_.handle; window = $_.window; tab = $_.tab; hostTitle = $_.hostTitle } })
     foreach ($a in $Add) { $rows += [pscustomobject]@{ handle = $a; window = "1"; tab = "9"; hostTitle = "added" } }
@@ -87,7 +87,8 @@ function HostOf {
     # What the fake declares: the two facts the view relies on, and nothing it has not measured.
     $capTable = @{ "list" = "yes"; "instance.startedAt" = "yes"; "text.read" = "unverified" }
     foreach ($k in $Caps.Keys) { $capTable[$k] = $Caps[$k] }
-    return (New-HordeHostPort -Name "fake" -Capabilities $capTable -Handles $handlesBlock -Instance $instanceBlock)
+    # The fake is the host that wrote the legacy stores, unless a test says otherwise.
+    return (New-HordeHostPort -Name "fake" -Capabilities $capTable -StoredHandles $Stores -Handles $handlesBlock -Instance $instanceBlock)
 }
 function ProcsOf {
     param([string]$D)
@@ -257,7 +258,7 @@ Write-Host "--- the host port contract (core/HostPort.ps1) ---" -ForegroundColor
 # CAPABILITIES ARE DECLARED. A port without a declaration is refused, and so is a name or a state
 # outside the vocabulary; core relies on a capability only when it is yes.
 $noop = { return , @() }
-Check ((Throws { New-HordeHostPort -Name "x" -Capabilities $null -Handles $noop -Instance $noop } "Capabilities") -and (Throws { New-HordeHostPort -Name "x" -Capabilities @{ "list" = "maybe" } -Handles $noop -Instance $noop } "yes, no, declined or unverified") -and (Throws { New-HordeHostPort -Name "x" -Capabilities @{ "readMinds" = "yes" } -Handles $noop -Instance $noop } "not a host capability")) "a host port must declare its capabilities from the closed vocabulary"
+Check ((Throws { New-HordeHostPort -Name "x" -StoredHandles @() -Capabilities $null -Handles $noop -Instance $noop } "Capabilities") -and (Throws { New-HordeHostPort -Name "x" -StoredHandles @() -Capabilities @{ "list" = "maybe" } -Handles $noop -Instance $noop } "yes, no, declined or unverified") -and (Throws { New-HordeHostPort -Name "x" -StoredHandles @() -Capabilities @{ "readMinds" = "yes" } -Handles $noop -Instance $noop } "not a host capability")) "a host port must declare its capabilities from the closed vocabulary"
 $offPort = New-HordeUnavailableHostPort -Reason "switched off"
 Check (@($script:HordeHostCapabilityNames | Where-Object { Test-HordeHostCapability -Port $offPort -Name $_ }).Count -eq 0 -and $script:HordeHostCapabilityNames.Count -ge 10) "the unavailable host declares every capability no"
 $pnl2 = Project $base -HostPort (HostOf $base -Caps @{ "list" = "no" })
@@ -267,7 +268,7 @@ Check ((St (Ans $pun 1 "pane")) -eq "unknown" -and (Why (Ans $pun 1 "pane")) -li
 $declPort = HostOf $base -Caps @{ "text.read" = "declined" }
 Check ((Test-HordeHostCapability -Port $declPort -Name "text.read") -eq $false -and (Test-HordeHostCapability -Port $declPort -Name "list") -eq $true) "a declined capability is not relied on"
 # A HANDLE IS UNIQUE WITHIN ITS INSTANCE, as plain text; a native id with a sigil is the adapter's to map.
-function RowsPort { param([object[]]$Rows, [hashtable]$Caps = @{ "list" = "yes" }) $rb = { return , $Rows }.GetNewClosure(); return (New-HordeHostPort -Name "fake" -Capabilities $Caps -Handles $rb -Instance $noop) }
+function RowsPort { param([object[]]$Rows, [hashtable]$Caps = @{ "list" = "yes" }) $rb = { return , $Rows }.GetNewClosure(); return (New-HordeHostPort -Name "fake" -StoredHandles @() -Capabilities $Caps -Handles $rb -Instance $noop) }
 $sigil = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = ([string][char]37 + "1") }))
 Check ($sigil.state -eq "unknown" -and $sigil.reason -like "*plain handle text*") "a native id with a sigil is refused, so adapters map it to handle text"
 $twice = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = "p1" }, [pscustomobject]@{ handle = "p1" }))
@@ -290,6 +291,19 @@ Check ($nsRows["c"].pid.state -eq "unknown" -and $nsRows["c"].pid.reason -like "
 Check ((Val $nsRows["a"].pid) -eq 4242 -and (Val $nsRows["a"].cwd) -eq "C:\work") "CONTROL: a pid in core's own namespace is known"
 $nsNo = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = "a"; pid = 4242; space = "windows" }))
 Check (@(Val $nsNo)[0].pid.state -eq "unknown" -and @(Val $nsNo)[0].pid.reason -like "*does not offer pid*") "a pid the host does not declare is not relied on"
+
+Write-Host ""
+Write-Host "--- a stored handle belongs to the host that wrote it ---" -ForegroundColor Cyan
+# The registry, rosters, reports, pane-sessions files and claims hold bare handle text, written by the
+# first host. Another host's handle 17 is not that host's pane 17 (review of PR #31, finding 2), so a
+# port declares which stores' handles it wrote, and a handle from any other store is unknown.
+Check ((Throws { New-HordeHostPort -Name "x" -Capabilities @{ "list" = "yes" } -StoredHandles @("W9") -Handles { , @() } -Instance { $null } } "not a store") -and (Throws { New-HordeHostPort -Name "x" -Capabilities @{ "list" = "yes" } -StoredHandles $null -Handles { , @() } -Instance { $null } } "StoredHandles")) "a host port must say which stores' handles it wrote"
+$pns = Project $base -HostPort (HostOf $base -Stores @())
+$nsKnown = @($pns.sessions | Where-Object { $_.fields["pane"].answer.state -eq "known" } | ForEach-Object { $_.sessionId })
+Check ($nsKnown.Count -eq 0 -and (Why (Ans $pns 1 "pane")) -like "*not written by this host*" -and (Why (Ans $pns 10 "pane")) -like "*not written by this host*") "a stored handle counts only when this host declares it wrote that store"
+Check ((St (Ans $pns 10 "role")) -eq "unknown") "a claim is matched by handle only when this host wrote the claims"
+$pw1 = Project $base -HostPort (HostOf $base -Stores @("W1"))
+Check ((Val (Ans $pw1 1 "pane")) -eq "10" -and (St (Ans $pw1 10 "pane")) -eq "unknown") "CONTROL: a host that wrote the registry but not the pane-sessions files is trusted for the registry only"
 
 Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan

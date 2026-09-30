@@ -175,7 +175,7 @@ function Get-HordeHostContext {
     # What the host lets us verify. Returns { handles; instance; live; verify } where verify is an
     # answer: known $true when a stored handle CAN be checked, unknown with the reason otherwise
     # (the lead's decision 2). live maps handle text to its row when the list is known.
-    param($HandlesAnswer, $InstanceAnswer)
+    param($HandlesAnswer, $InstanceAnswer, $Port = $null)
     $live = @{}
     if ($HandlesAnswer.state -eq "known") { foreach ($h in @($HandlesAnswer.value)) { $live[$h.handle] = $h } }
     $verify = New-HordeKnown -Value $true
@@ -185,7 +185,8 @@ function Get-HordeHostContext {
     elseif ($InstanceAnswer.value.ambiguous) { $verify = New-HordeUnknown -Reason "the host instance is ambiguous, and an ambiguous instance trusts no stored handle" }
     elseif (-not $InstanceAnswer.value.startedAtOffered) { $verify = New-HordeUnknown -Reason "the host does not offer instance.startedAt, so whether a record was written in this instance cannot be checked" }
     elseif ($null -eq $InstanceAnswer.value.startedAt) { $verify = New-HordeUnknown -Reason "the host did not say when its instance started, so whether a record was written in it cannot be checked" }
-    return [pscustomobject]@{ handles = $HandlesAnswer; instance = $InstanceAnswer; live = $live; verify = $verify }
+    $wrote = @(); if ($null -ne $Port) { $wrote = @($Port.storedHandles) }
+    return [pscustomobject]@{ handles = $HandlesAnswer; instance = $InstanceAnswer; live = $live; verify = $verify; wrote = $wrote }
 }
 
 function Test-HordeWrittenInInstance {
@@ -210,6 +211,7 @@ function Get-HordeStoredHandleCandidate {
     $h = ConvertTo-HordeHandleText $Handle
     if ($null -eq $h) { return (New-HordeCandidate -Store $Store -Field $Field -Skip ($What + " names no handle")) }
     if ($Context.verify.state -ne "known") { return (New-HordeCandidate -Store $Store -Field $Field -Answer (New-HordeUnknown -Reason ($What + " names handle " + $h + ", and " + $Context.verify.reason))) }
+    if (@($Context.wrote) -cnotcontains $Store) { return (New-HordeUnsure -Store $Store -Field $Field -Reason ($What + " names handle " + $h + ", but the handles in store " + $Store + " were not written by this host")) }
     $notHere = Test-HordeWrittenInInstance -Context $Context -RecordInstance $RecordInstance -Written $Written -What $What
     if ($notHere -ne "") { return (New-HordeCandidate -Store $Store -Field $Field -Skip $notHere) }
     if (-not $Context.live.ContainsKey($h)) { return (New-HordeCandidate -Store $Store -Field $Field -Skip ($What + " names handle " + $h + ", which is not live")) }
@@ -234,6 +236,8 @@ function Get-HordePaneFileVerdicts {
     if ($Context.verify.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("no pane-sessions file can be judged: " + $Context.verify.reason)) } }
     # running counts instances - the namespaces handles are unique in - not server processes
     # (core/HostPort.ps1), so a host with one server per session reports 1 here and its files are read.
+    # The files and the registry's handles must both be this host's: the hijack check compares them.
+    foreach ($st in @("X1", "W1")) { if (@($Context.wrote) -cnotcontains $st) { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the handles in store " + $st + " were not written by this host, so no pane-sessions file can be judged")) } } }
     if ($Context.instance.value.running -gt 1) { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("" + $Context.instance.value.running + " host instances are running, and a pane-sessions file names no instance, so none can be attributed")) } }
     if ($PaneRead.complete.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the pane-sessions listing is incomplete (" + $PaneRead.complete.reason + "), so no file can be shown to be the only one naming its session")) } }
     $liveFiles = New-Object System.Collections.ArrayList
@@ -579,6 +583,7 @@ function Get-HordeClaimCandidate {
     if ($S.pane.answer.state -eq "unknown") { return (New-HordeUnsure -Store "W2" -Field $Field -Reason ("the session's handle is unknown, so its claim cannot be matched: " + $S.pane.answer.reason)) }
     if ($S.pane.answer.state -ne "known") { return (New-HordeCandidate -Store "W2" -Field $Field -Skip "the session is in no live handle, so no claim is its") }
     $h = "$($S.pane.answer.value)"
+    if (@($C.host.wrote) -cnotcontains "W2") { return (New-HordeUnsure -Store "W2" -Field $Field -Reason "the claims' handles were not written by this host, so none can be matched to the session's handle") }
     if (-not $C.wf.claims.claims.ContainsKey($h)) {
         if ($C.wf.claims.complete.state -ne "known") { return (New-HordeCandidate -Store "W2" -Field $Field -Answer (New-HordeUnknown -Reason ("the claims are incomplete (" + $C.wf.claims.complete.reason + ")"))) }
         return (New-HordeCandidate -Store "W2" -Field $Field -Skip ("there is no claim for handle " + $h))
@@ -1081,7 +1086,7 @@ function Get-HordeProjection {
         host = $null; paneVerdicts = $null; transcripts = (Get-HordeTranscriptIndex -ProjectsDir $ProjectsDir)
         layout = (Read-HordeLayoutSaves -LayoutPort $LayoutPort); links = $null; idSources = $null
     }
-    $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort)
+    $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort) -Port $HostPort
     $C.paneVerdicts = Get-HordePaneFileVerdicts -PaneRead $C.paneRead -Context $C.host -Registry $C.wf.registry -VerifiedLive $C.identity.verifiedLive
     $C.links = Get-HordeReportLinks -Runs $C.wf.runs
     $C.idSources = Get-HordeSessionIds -Identity $C.identity -Registry $C.wf.registry -PaneVerdicts $C.paneVerdicts -ReportLinks $C.links

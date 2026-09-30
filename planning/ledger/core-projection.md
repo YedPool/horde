@@ -439,3 +439,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 1, with probes: sessions whose run could not be chosen read title, dependsOn and spawnedAt absent; with no host, a session with no record read its fleet id absent (decision 2 leaking); an incomplete registry proved sessions had no record; a codex file that failed to re-read counted as no file
 - disposition: test
 - where: test/test-projection.ps1 :: "an incomplete registry never proves a session has no record"
+
+### L-083 A stored handle belongs to the host that wrote it
+- source: review of horde PR #31, finding 2: roster, report, pane-sessions and claim handles carry no host or instance, so another host's handle 17 would match a pane 17 the first host wrote; horde planning/migration-plan.html D12 "a handle is never a key"
+- disposition: test
+- where: test/test-projection.ps1 :: "a stored handle counts only when this host declares it wrote that store"

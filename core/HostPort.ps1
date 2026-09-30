@@ -42,6 +42,11 @@
 #   WINDOW AND TAB ARE THE FIRST HOST'S WORDS, kept because the restore plan uses them. A host maps its
 #     own levels onto them - a multiplexer's session onto window and its window onto tab; a host with
 #     windows and tabs maps them directly - and gives $null for a level it does not have.
+#   A STORED HANDLE BELONGS TO THE HOST THAT WROTE IT. wezfleet's registry, rosters and reports, the
+#     pane-sessions files and the spawn claims hold bare handle text with no host in it, written by
+#     the first host. Another host's handle 17 is not that pane 17, so a port declares, with
+#     -StoredHandles, the stores whose handles it wrote; a handle from any other store is unknown to
+#     it (review of PR #31, finding 2). A record that names its instance is also checked against it.
 #   PID AND CWD CARRY A NAMESPACE. A row that gives a pid or cwd names its space: windows,
 #     wsl:<distro>, posix or synthetic. A multiplexer running inside a Linux subsystem returns that
 #     system's pids and paths. Core's process table is the windows one (CIM), so a pid or cwd from
@@ -62,6 +67,9 @@
 $script:HordeHostCapabilityNames = @("list", "pid", "tty", "cwd", "title.read", "title.set", "text.read", "text.send",
     "spawn", "spawn.env", "spawn.cwd", "kill", "focus", "selfHandle", "instance.startedAt")
 $script:HordeHostCapabilityStates = @("yes", "no", "declined", "unverified")
+# The stores that hold bare handle text (core/ownership.json): registry, claims, roster, reports and
+# pane-sessions files.
+$script:HordeHandleStores = @("W1", "W2", "W4", "W5", "X1")
 # The namespace core's own process table lives in (Get-HordeProcessTable reads Win32_Process).
 $script:HordeLocalProcessSpace = "windows"
 
@@ -84,16 +92,38 @@ function ConvertTo-HordeHostCapabilities {
     return $table
 }
 
+function ConvertTo-HordeHandleStores {
+    # The stores whose handle text a host wrote: a list of store ids from $script:HordeHandleStores,
+    # possibly empty. Refuses $null and anything else, so an adapter has to decide.
+    param($StoredHandles)
+    if ($null -eq $StoredHandles) { throw "-StoredHandles must list the stores whose handles this host wrote (it may be empty)" }
+    $out = @()
+    foreach ($x in @($StoredHandles)) {
+        if ($x -isnot [string] -or $script:HordeHandleStores -cnotcontains $x) { throw ("'" + $x + "' is not a store that holds handles; one of " + ($script:HordeHandleStores -join ", ")) }
+        if ($out -cnotcontains $x) { $out += $x }
+    }
+    return , $out
+}
+
+function Test-HordeHostWroteStore {
+    # Did this host write the handle text in this store?
+    param($Port, [string]$Store)
+    Assert-HordeHostPort $Port
+    return ($Port.available -and @($Port.storedHandles) -ccontains $Store)
+}
+
 function New-HordeHostPort {
     # A host port. -Name is the host's own name, supplied by its adapter; core never spells one.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][AllowNull()]$Capabilities,
+        [Parameter(Mandatory = $true)][AllowNull()][AllowEmptyCollection()]$StoredHandles,
         [Parameter(Mandatory = $true)][scriptblock]$Handles,
         [Parameter(Mandatory = $true)][scriptblock]$Instance
     )
     $table = ConvertTo-HordeHostCapabilities $Capabilities
-    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = $Name; available = $true; reason = ""; capabilities = $table; handles = $Handles; instance = $Instance }
+    $stores = ConvertTo-HordeHandleStores $StoredHandles
+    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = $Name; available = $true; reason = ""; capabilities = $table; storedHandles = $stores; handles = $Handles; instance = $Instance }
 }
 
 function New-HordeUnavailableHostPort {
@@ -102,7 +132,7 @@ function New-HordeUnavailableHostPort {
     # stored handle is never verified against it (the lead's decision 2, 2026-09-30).
     param([Parameter(Mandatory = $true)][string]$Reason)
     if ("$Reason".Trim() -eq "") { throw "an unavailable host port needs a reason" }
-    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = ""; available = $false; reason = $Reason; capabilities = (ConvertTo-HordeHostCapabilities @{}); handles = $null; instance = $null }
+    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = ""; available = $false; reason = $Reason; capabilities = (ConvertTo-HordeHostCapabilities @{}); storedHandles = @(); handles = $null; instance = $null }
 }
 
 function Assert-HordeHostPort {
