@@ -143,6 +143,7 @@ try {
     Check ($byId.Count -eq 6) ("six records are read (" + (@($byId.Keys | Sort-Object) -join ", ") + ")")
     Check (-not $byId.ContainsKey("m1.12345.abcd1234") -and -not $byId.ContainsKey("wrong-name")) "a temp file beside the records is not read as a record"
     Check ((RoleOf $byId["o2"]) -eq "orc" -and $byId["o2"].retired) "a retired record still reads its role"
+    Check ($byId["m1"].retired -eq $false) "a record with no retired field reads as not retired, as wezfleet reads it"
     # wezfleet skips a record whose claudeSessionId disagrees with its file name (lib/Registry.ps1:122).
     # Horde skips it too, but says so: a silently dropped record is how a master goes missing.
     Check (@($read.mismatched | Where-Object { $_ -like "*wrong-name.json" }).Count -eq 1) "a record whose id does not match its file name is listed, not silently skipped"

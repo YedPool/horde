@@ -114,6 +114,10 @@ function Read-HordeWezfleetRoles {
             # a master included, goes missing without anyone being told.
             if ("$($rec.claudeSessionId)" -ne $id) { [void]$mismatched.Add($f.FullName); continue }
             $r = Read-HordeRecordRole -Record $rec -Table $Table
+            # RETIRED IS READ AS WEZFLEET READS IT: by truthiness, so a record with no retired field is
+            # LIVE. Every wezfleet test is `if ($r.retired)` or `-not $_.retired` (lib/Hierarchy.ps1:42,
+            # lib/Registry.ps1:393 and :509 casts [bool] the same way). This is the one missing field
+            # NOT read as unknown: records predate retiring, and a live count must match wezfleet's.
             [void]$sessions.Add([pscustomobject]@{ id = $id; retired = [bool]$rec.retired; role = $r.role; raw = $r.raw; field = $r.field })
         }
     }
