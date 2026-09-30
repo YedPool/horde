@@ -121,7 +121,7 @@
     { "name": "bridgeSessionId", "owner": "agent",
       "read": [ { "store": "X2", "field": "bridgeSessionId" } ] },
     { "name": "formerNames", "owner": "agent",
-      "provisional": "each former name carries a sessionId; whether that is an earlier id of this same conversation or another conversation shown in this process is unmeasured",
+      "provisional": "each former name carries a sessionId. Compaction keeps the session id (measured 2026-09-30: 12 compactions inside 7 live processes, and 51 in 265 transcripts, with no second id), so across a compaction the entry names this conversation; whether /clear gives the process a new id, and so whether an entry can name an earlier conversation, is unmeasured",
       "read": [ { "store": "X2", "field": "formerNames" } ] }
   ],
   "dropped": [

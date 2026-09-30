@@ -36,7 +36,7 @@ sources:
 - where: test/test-ownership.ps1 :: "owner is a derived display name; parent is the edge"
 
 ### L-005 A rule that rests on something unmeasured is marked provisional, not encoded as fact
-- source: the installed wezterm-resurrect takes the session id from the saved argv first and its main branch from the pane-sessions file first (plugin/resurrect/process_handlers.lua:282-299 on main); and whether a session id changes on compaction is asserted by YedPool/wezfleet lib/Mail.ps1:116 but contradicted by one observation on 2026-09-29
+- source: the installed wezterm-resurrect takes the session id from the saved argv first and its main branch from the pane-sessions file first (plugin/resurrect/process_handlers.lua:282-299 on main); and whether a session id changes on compaction is asserted by YedPool/wezfleet lib/Mail.ps1:116 but contradicted by one observation on 2026-09-29, and by measurement on 2026-09-30 (L-047); /clear remains unmeasured
 - disposition: test
 - where: test/test-ownership.ps1 :: "a rule that depends on something unmeasured is marked provisional"
 
@@ -183,7 +183,7 @@ sources:
 ### L-034 What a former name's sessionId means is unmeasured
 - source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) was recorded here as listing a formerNames entry whose sessionId differed from the file's own. CORRECTED 2026-09-30: re-read for the core/identity research, that file's one formerNames entry (until 1790626048401, 2026-09-28T20:07:28.401Z) carries a sessionId EQUAL to the file's own, and its until equals the file's nameSince; it is still the only file of 10 with the field. Whether the file changed between the two readings or the first reading was wrong cannot be reconstructed, so the earlier "different" is withdrawn, not explained. Nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
 - disposition: comment
-- where: core/ownership.json :: "whether that is an earlier id of this same conversation"
+- where: core/ownership.json :: "whether /clear gives the process a new id"
 
 ### L-035 A run's window is the run's, not the session's
 - source: YedPool/wezfleet lib/Protocol.ps1:513-516 "The window this run owns. -1 means not pinned yet" read from run.json windowId; and :524-527, a session that moved windows became unreachable through its spawn-time record. Review finding 9, 2026-09-29.
@@ -244,3 +244,8 @@ sources:
 - source: YedPool/wezfleet lib/Common.ps1:586-590 "elseif ($GuiProcesses.Count -eq 1)" takes the one wezterm-gui as the instance, and :591 "elseif ($GuiProcesses.Count -gt 1) { $out.ambiguous = $true }". Review finding 7, second review, 2026-09-29.
 - disposition: comment
 - where: core/ownership.json :: "exactly one terminal process is running"
+
+### L-047 Compaction does not change a Claude session id; /clear is unmeasured
+- source: measured 2026-09-30 for the core/identity research. 12 auto-compactions inside 7 live claude processes (pid and procStart unchanged across them) left the id unchanged in the transcript (one distinct sessionId, with entries after the boundary), in the control file for that pid, in the SessionStart hook's source=compact pane-sessions file and, for 6 of the 7, in the --resume argument fixed at process start. Across 265 top-level transcripts under ~/.claude/projects: 51 compact_boundary records (47 auto, 4 manual) in 13 files, and 0 files carrying a second sessionId or one different from the file name. Contradicts YedPool/wezfleet lib/Mail.ps1:116 "A Claude session id changes on compact, on /clear" and b50b2d4, whose own measurement found no stranded mail "only because nothing has compacted"; agrees with YedPool/wezfleet planning/registry-design.md:51-52 "The founder's premise that compaction renames a transcript is not supported by the data". /clear: the only evidence is transcript 33059eb5, which opens with the /clear command (2026-08-21T04:30:03Z), and a source=clear pane-sessions file naming d08701e5, which has no transcript; no pair of a pre-clear and a post-clear id in one process exists on disk. Manual /compact is seen only in 4 historical transcripts with no live process to pair.
+- disposition: comment
+- where: core/ownership.json :: "Compaction keeps the session id"
