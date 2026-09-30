@@ -12,7 +12,7 @@ wezurrect | the short name of the WezTerm session-restore plugin, which migratio
 #   WEZTERM_, wezterm-gui - contain "wezterm"; listing them would only count the same lines twice.
 #   gui-startup, skip-config, always-new-process - WezTerm vocabulary, but every file holding one
 #     also names the terminal (0 files had one without the other), so they would catch nothing new.
-#   mux - a generic word for a multiplexer. tmux and psmux, both named in D12 as candidate hosts,
+#   mux - a generic word for a multiplexer. The other multiplexers named in D12 as candidate hosts
 #     are muxes too, and test/test-tristate.ps1 uses "the mux did not answer" as a host-neutral
 #     example on 5 lines. A name that fires on host-neutral text gets allowlisted into meaning nothing.
 #   resurrect - an English word, and a restore feature will use it host-neutrally; both names of the

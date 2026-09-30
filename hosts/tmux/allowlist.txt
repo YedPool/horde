@@ -1,0 +1,18 @@
+# The files outside hosts/tmux/ that may name tmux, and exactly how many times (decision D12).
+# A mention is one occurrence of any name in names.txt, plus one if the file's path has one.
+# tools/HostNames.ps1 fails test/test-host-names.ps1 on a file not listed here, on a listed file that
+# names the host more times than listed, and on an entry that allows more than its file needs - and,
+# once this list is on origin/main, on an entry origin/main lacks or a count above its count. When a
+# mention must be added, add or raise the entry here AND append a line to growth.txt in this folder -
+# path | old -> new | YYYY-MM-DD | reason - with old being origin/main's count (0 for a new path).
+#
+# The .md and .html files under planning/ are not scanned, by rule (see tools/HostNames.ps1).
+#
+# path | mentions | why this file may name the host
+
+# --- core: the agent control-file key named after the multiplexer.
+core/ownership.json | 6 | the Claude Code 2.1.285 control file has a key called tmux, holding the tmux pane the agent ran in; the ownership table must name the key to drop it, and says a tmux host adapter reads it
+
+# --- tests that list every control-file key, which must quote that key.
+test/test-identity.ps1 | 1 | lists every key the agent's control file can carry, and one of them is literally named tmux
+test/test-ownership.ps1 | 1 | lists every key the agent's control file can carry, and one of them is literally named tmux
