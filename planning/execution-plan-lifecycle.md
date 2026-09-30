@@ -4,9 +4,9 @@ Proposed 2026-09-30, from designs whose decisions the founder settled the same d
 the work that makes the fleet (1) admit work by measured resources in named tiers, (2) own every
 process a goblin starts so nothing is orphaned, (3) close a finished goblin automatically once its
 report is proven and its resume binding is current, (4) read every engine's transcript through one
-port and one per-machine follower, and (5) show and push what every goblin is doing. It cuts across
-Phase 3 (the read half) and Phase 5 (the writers) of `planning/migration-plan.html`, and carries three
-wezfleet stopgaps that cannot wait for either.
+port and one per-machine follower, and (5) show and push what every goblin is doing, in a form that
+does not flood an orc's context. It cuts across Phase 3 (the read half) and Phase 5 (the writers) of
+`planning/migration-plan.html`, and carries three wezfleet stopgaps that cannot wait for either.
 
 Planning prose may name terminals and engines. Code may not: CONTRIBUTING 14 keeps terminal names in
 `hosts/<name>/`, and the same ratchet extended to `agents/<name>/` (engine-settings design section 9)
@@ -17,15 +17,18 @@ is under the right folder.
 
 The designs were written in a working session and are not yet committed; their measurement ids are
 cited here as written there, and the rows this plan depends on are copied into "Measurements" below
-so the plan stands alone.
+so the plan stands alone. Every decision below is settled; nothing in this plan is waiting on the
+founder.
 
 | design | settled decisions this plan implements |
 |---|---|
 | lifecycle-admission design (2026-09-30) | Its "Decisions taken (founder, 2026-09-30)": 1 named admission tiers, the proposed values are "conservative", a bolder "standard" is the default, set through the engine-settings layers, tuned by metrics; 2 Horde prevents orphans (descendants tied to the goblin's lifetime, e.g. a Job Object with kill-on-close) and reclaims escapes only with proven ownership, reporting the rest; 3 automatic close after proof, on the precondition that the resume information is the single source of truth, current, and easy for an orc to read and use; 4 a transcript port with an adapter per engine under `agents/<name>/`, core naming none; 5 its recommendations 2, 3, 4, 5, 7, 8, 9, 10, 11, 12 and 13 stand (park with mandatory expiry, handle-based end, no shell around the agent, report-only for unproven orphans, reaper left on, pause-never-kill ladder, one follower as the only transcript reader, follower in PowerShell first, wake messages, `horde job run` for heavy work, the wezfleet stopgaps) |
-| metrics design | Its "Decisions taken": no environment switch for metrics; the project layer may lower the level, never raise it; prompts only as a salted fingerprint; quota plus labelled notionalUsd on subscriptions; retention 30 days / 1 year / forever; scoring published; **decision 7 as changed by the founder: tokens and usage are counted only from local sources (transcripts, rollouts, harness logs), never from a provider's usage or billing API; cost is computed separately from token counts and a versioned price table; `reconcile` and the `metered` tier are dropped**; no backfill from before consent |
-| engine-settings design | The layer model L0 to L5, selectors, the `engine` field and `modelObserved`, secrets as references, resume never re-resolving by default. Its section 12 questions were not answered in the file; where this plan depends on one, it is listed under "Still with the founder" |
+| engine-settings design | Its "Decisions taken": 1 no environment-variable layer for engine values; **2 `HORDE_HOME` defaults to `%USERPROFILE%\.horde`**; **3 the project engine file waits until a repo needs one, and may then only choose among user-defined providers and only lower the metrics and admission levels, never raise them**; 4 aliases pinned to a concrete id at spawn; **5 the engine and resume-binding fields are added by editing `session-record.v1` in place, safe because no writer exists until migration step 3.8; after that, any change needs a v2**; 6 resume uses the launched binding, and `/model` drift is shown in status and does not rebind; 7 the model ids; 8 selector ranks as designed; **9 the admission tuner may raise reserves automatically after a reap while the gate was open, as a live rule that expires after 7 days, capped at conservative + 1 GB; lowering is only ever proposed**; **10 the pane anchor is a small compiled executable, following `wf-cmdlog.exe`** |
+| metrics design | Its "Decisions taken": no environment switch for metrics; the project layer may lower the level, never raise it; prompts only as a salted fingerprint; quota plus labelled notionalUsd on subscriptions; retention 30 days / 1 year / forever; scoring published; **decision 7 as changed by the founder: tokens and usage are counted only from local sources (transcripts, rollouts, harness logs), never from a provider's usage or billing API; cost is computed separately from token counts and a versioned price table; `reconcile` and the `metered` tier are dropped**; no backfill from before consent. Its "Founder direction": goblin-versus-agent is a central pillar; stalls, loops, missed communications and wasted tokens are first-class detectors that record their token and time cost and feed an improvement backlog; orc and warchief context is reserved for big-picture thinking, and context tokens per delivered result are measured |
 | agent-engines research | Its "Decisions taken": every role resolves a named profile of harness + provider profile + model; GLM, Qwen models and DeepSeek run through the Claude Code harness on Anthropic-format endpoints first; Gemini CLI gets `agents/gemini-cli/`; the session-record key stops assuming a UUID; subscription credentials only on their own vendor's CLI; keys read from named environment variables, never stored |
 | hosts research | Its "Decisions taken": Windows agents only for now; capability flags per host in `hosts/<name>/capabilities.json` with `state` yes, no, declined or unverified (unverified treated as no); mandatory `-Capabilities` on the host port; pid and cwd tagged with a namespace (`space`) |
+
+`<HordeHome>` below is `%USERPROFILE%\.horde` unless `HORDE_HOME` is set (engine-settings decision 2).
 
 ## How every step is done
 
@@ -39,25 +42,41 @@ independent adversarial review. `gh pr merge --merge`, never squash. Every count
 copied from command output. Heavy suites run one at a time in one background job with a `DONE=`
 marker, because memory is the constraint this whole plan is about.
 
+## Dependencies outside this plan
+
+| this plan's steps | need first | why |
+|---|---|---|
+| 4, 5 | nothing; they must land **before Phase 3's commands** (the Phase 3 census PR, step 3.3, onward) | they are the guards every later command is checked against: read commands reach no spawn or kill verb, and core names no engine. Landing them after the commands would mean retro-fitting the commands to pass |
+| 17 (tiers), 24 and 25 (binding, resume) | **engine-settings Half A**: `schema/engine-config.v1`, the layered resolver, `Test-HordeEngineConfig`, `horde config explain/set/validate` | the tier and the binding's `engine` field are resolved and checked by that machinery; this plan adds keys to it and builds none of it |
+| 22, 27 (anchor, spawn) | **engine-settings Half B**: the launch stub `horde launch --job <id>` | the anchor runs the stub to resolve the binding, references and scrub |
+| 24 | **migration step 3.8**, the record writer | the binding lives in the engine's session record, which has one writer |
+| 3 (W5's adoption line) | **Phase 3 step 4**, `adoption/capabilities.txt` | the line W5 adds goes in that file |
+| 15, 16, 20 | **metrics Stage A**: the event writer, the consent sentinel, the span model | detectors, the backlog and the tuner write metrics events |
+
 ## Measurements this plan rests on
 
-From the lifecycle design's ledger (read-only, this machine, 2026-09-30 15:05 to 15:23 UTC), plus
-four taken for this plan (J-1 to J-4).
+From the lifecycle design's ledger (read-only, this machine, 2026-09-30 15:05 to 15:23 UTC), four
+taken for this plan (J-1 to J-4), one read from a committed file (O-1), and one derived row (P-1).
+Numbers that no row backs are labelled **estimate** where they are used: each is a starting value the
+metrics tune, not a measurement.
 
 | id | what | value |
 |---|---|---|
 | M-01 | memory at 15:05:15 | 1,176 MB available; committed 34,257 of 37,120 MB (92%) |
 | M-02 | memory at 15:12:56 and 15:22:25 | available 2,018 then 2,431 MB; committed 31,411 then 30,431 MB; 6,793 pages/s at 15:22 |
-| M-04..M-06 | claude.exe footprint | busy 608 to 1,004 MB private; idle 642 to 862 MB private, 158 to 316 MB working set; fresh goblin 608 to 659 MB private, 300 to 370 MB working set |
+| M-03 | conhost.exe at 15:05 | 17 processes, 128 MB working set and 26 MB private in total: about 7.5 MB and 1.5 MB each |
+| M-04..M-06 | claude.exe footprint | busy 608 to 1,004 MB private; idle 642 to 862 MB private, 158 to 316 MB working set; fresh goblin (0.3 to 0.5 h) 608 to 659 MB private, 300 to 370 MB working set |
 | M-07 | orphan claude.exe | 555 MB private, 21.9 h, parent dead, no pane, no control file |
 | M-08 | node.exe ancestry | 9 of 9 descend from a dead root; 2,832 MB private; the largest a `next dev` at 1,965 MB; roots dead 14.9 to 36.8 h |
-| M-10 | pane host shell | 58 to 66 MB private |
-| M-11 | test processes | 62 to 80 MB each; one suite 417 MB; the mutation runner fans out to 4 to 6 at once |
+| M-10 | pane host shell | 58 to 66 MB private, 5 to 38 MB working set |
+| M-11 | test processes | 62 to 80 MB private and 77 to 106 MB working set each; one suite 417 MB; the mutation runner fans out to 4 to 6 at once (about 350 to 640 MB working set) |
+| M-12 | terminal GUI process per pane | 1,274 MB private at 15 panes, 1,260 MB at 12: about 5 MB per pane, within noise |
 | M-21 | closing 4 goblins | commit fell 2,846 MB; available rose 842 MB |
 | M-22 | work after a report | a goblin ran a tool 43 s after `done`; its background task wrote until killed |
 | M-26 | leftover panes | one goblin pane idle 18.4 h with close off; one bare shell 38.4 h old |
 | M-30 | Claude Code reaper | acts only at pressure `critical`; skips a session with terminal input in the last 30 min, a running turn, or running delegated agents; on Windows memory is reported scarce unconditionally; the Windows threshold behind `critical` was NOT found |
 | M-31..M-34 | reaps and waits | reaps 31.1 and 32.2 min after the only prompt; each reap notice woke its session in 1 to 3 s; 123 reap notices since 2026-09-09; "stalls" were waits on live background jobs |
+| M-42 | a report call that hung | `wezreport start` called 14:36:30; its `started` event on disk 14:36:34; no return within 122 s; a second call under `timeout 60` returned DONE=124 |
 | M-50 | transcript write latency | at most 0.53 s |
 | M-51 | transcript growth | 44 to 68 KB/min per busy goblin |
 | M-52 | instrument cost | CIM process table 315 ms; `Get-Process` 34 ms |
@@ -65,6 +84,8 @@ four taken for this plan (J-1 to J-4).
 | J-2 | the probing shell's immediate job | `LimitFlags` 0x800: `JOB_OBJECT_LIMIT_BREAKAWAY_OK` only, no kill-on-close; 70 active processes, 658,145 created over its life. An ambient desktop-wide job, not a per-session one |
 | J-3 | post-spawn assignment and kill-on-close, probe in the scratchpad (`jobtest.ps1`), acting only on processes it created | A new job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; `AssignProcessToJobObject` on two running cmd.exe that were already in the ambient job: **ok, ok** (the jobs nested). A ping that cmd A started 1.5 s **before** its assignment: **not in the job**, and **still alive** after the job's last handle closed. A ping that cmd B started about 2 s **after** its assignment: **in the job**, and **dead** after the close. Both cmd.exe dead after the close |
 | J-4 | libuv, the runtime under node, `src/win/process.c` on its v1.x branch | Non-detached children go into libuv's own job (non-inheritable handle, kill-on-close, `BREAKAWAY_OK` and `SILENT_BREAKAWAY_OK`). Detached children get `DETACHED_PROCESS` and deliberately **not** `CREATE_BREAKAWAY_FROM_JOB`, "because CREATE_BREAKAWAY_FROM_JOB makes the CreateProcess call fail if we're under job control that doesn't allow breakaway" |
+| O-1 | compaction keeps the session id | `core/ownership.json`, field `formerNames`, provisional text: 12 compactions inside 7 live processes, and 51 in 265 transcripts, with no second id (measured 2026-09-30) |
+| P-1 | the goblin cost prior, **derived** from rows above | commit: claude.exe fresh 608 to 659 (M-06) + pane shell 58 to 66 (M-10) + conhost 1.5 (M-03) + terminal per pane about 5 (M-12) = **about 673 to 732 MB, used as 730**. Working set: 300 to 370 (M-06) + 5 to 38 (M-10) + 7.5 (M-03) + noise (M-12) = **about 313 to 416 MB, used as 420**. So a goblin's RAM is 300 to 370 MB for the claude process alone and about 320 to 420 MB with its shell and console; the design's "320 to 420" is the second. The anchor replaces the shell, so the prior should fall; step 22 measures it, and the learned cost replaces the prior after 20 spans |
 
 ---
 
@@ -81,9 +102,10 @@ P averaged over pagingWindowSec           <  pagingLimit
 ```
 
 `A` available MB, `C` committed MB, `L` commit limit, `P` pages/s, `R` reservations held for
-`reservationHoldSec` after an admission. The gate enters `constrained` when any reserve is breached
-and returns to `open` only after both reserves are exceeded by `hysteresisMb` for `stableSec`. A read
-that fails is unknown, and unknown queues, never admits. Only the numbers change by tier.
+`reservationHoldSec` after an admission. `cost(k)` starts at the prior (P-1 for a goblin) and becomes
+the learned p90 after 20 spans. The gate enters `constrained` when any reserve is breached and returns
+to `open` only after both reserves are exceeded by `hysteresisMb` for `stableSec`. A read that fails is
+unknown, and unknown queues, never admits. Only the numbers change by tier.
 
 ## 1.2 The tiers
 
@@ -105,38 +127,39 @@ time, with the risk each accepts.
 
 - **`ramReserveMb` 2,048.** The lowest available memory at which reaping was seen is 1,176 MB (M-01,
   with four reaps from 15:04:19 to 15:05:35). 2,048 keeps the gate's floor 872 MB above it. 872 MB is
-  about two goblin starts of working set (320 to 420 MB each, B1 of the design), so even if two
-  admissions' reservations were both wrong by their whole RAM cost, the machine would still sit above
-  where the reaper was seen. **Risk accepted:** one unwrapped heavy job (a mutation run is 350 to
-  640 MB of working set, M-11) started by a goblin on top of a fresh admission can take the machine
-  into the reaper's observed range. **On overshoot:** the gate goes `constrained` and admits nothing;
-  the closer acts on everything `closable`; proven-owned orphans are reclaimed; orcs are asked about
-  idle sessions. If the reaper still fires, it kills a background shell of a goblin whose terminal
-  input is older than 30 minutes (M-30), the follower surfaces the reap within one poll (M-32), and
-  the owning orc is woken. Horde itself ends no work. Because the reaper's Windows threshold is
-  unproven (M-30), this number is a starting point for the tuner, not a derivation.
+  about two goblin starts of working set (420 MB each, P-1), so even if two admissions' reservations
+  were both wrong by their whole RAM cost, the machine would still sit above where the reaper was
+  seen. **Risk accepted:** one unwrapped heavy job (a mutation run is about 350 to 640 MB of working
+  set, M-11) started by a goblin on top of a fresh admission can take the machine into the reaper's
+  observed range. **On overshoot:** the gate goes `constrained` and admits nothing; the closer acts on
+  everything `closable`; proven-owned orphans are reclaimed; orcs are asked about idle sessions. If the
+  reaper still fires, it kills a background shell of a goblin whose terminal input is older than 30
+  minutes (M-30), the follower surfaces the reap within one poll (M-32), and the owning orc is woken.
+  Horde itself ends no work. Because the reaper's Windows threshold is unproven (M-30), this number is
+  a starting point for the tuner, not a derivation.
 - **`commitReserveMb` 3,072.** Commit is what makes allocations fail; RAM only makes them slow
   (design finding 3). So this reserve moves least: 3,072 MB is 8.3 percent of the 37,120 MB limit and
-  holds four fresh goblins' commit (4 x 730 = 2,920) before the limit. It still refuses at today's
-  worst reading: at 15:05 headroom was 2,863 MB (M-01), below 3,072 before any cost is subtracted.
-  **Risk accepted:** whether the pagefile is system-managed is unmeasured (design, "Unproven"). If it
-  is, commit near the limit grows the pagefile under paging load; if it is fixed, an allocation can
-  fail inside a running process. **On overshoot:** the same ladder; commit is only returned by ending
-  processes, so the reclaim rungs (closable goblins, proven orphans: 2,846 MB from four goblins, M-21;
-  2,832 MB of orphans, M-08) are what move it.
+  holds four fresh goblins' commit (4 x 730 = 2,920, P-1) before the limit. It still refuses at
+  today's worst reading: at 15:05 headroom was 2,863 MB (M-01), below 3,072 before any cost is
+  subtracted. **Risk accepted:** whether the pagefile is system-managed is unmeasured (design,
+  "Unproven"). If it is, commit near the limit grows the pagefile under paging load; if it is fixed, an
+  allocation can fail inside a running process. **On overshoot:** the same ladder; commit is only
+  returned by ending processes, so the reclaim rungs (closable goblins, proven orphans: 2,846 MB from
+  four goblins, M-21; 2,832 MB of orphans, M-08) are what move it.
 - **`pagingLimit` 3,000 pages/s.** The only measured paging figure is 6,793 pages/s, taken while
-  sessions sat unresponsive (M-02, M-42). 3,000 is under half of it. Conservative's 2,000 has no
-  measured baseline behind it, and ordinary compile and test bursts may pass 2,000 briefly; the 30 s
-  average already smooths spikes. **Risk accepted:** if thrash begins between 3,000 and 6,793 on this
-  machine, admitted work slows everything down. **On overshoot:** queue, and the `-Pausable` rung of
-  the ladder (suspend declared-pausable jobs, which frees working set, never commit).
+  sessions sat unresponsive (M-02; the hung report call of M-42 was in the same window). 3,000 is under
+  half of it. Conservative's 2,000 has no measured baseline behind it, and ordinary compile and test
+  bursts may pass 2,000 briefly; the 30 s average already smooths spikes. **Risk accepted:** if thrash
+  begins between 3,000 and 6,793 on this machine, admitted work slows everything down. **On
+  overshoot:** queue, and the `-Pausable` rung of the ladder (suspend declared-pausable jobs, which
+  frees working set, never commit).
 - **`hysteresisMb` 768.** Not a boldness knob but a correctness floor. The design's reason for
   hysteresis is that closing one goblin frees about 700 MB of commit and would otherwise re-admit at
-  once. The margin must therefore exceed one goblin's commit (730 MB at the prior's top, B1), so one
-  close can never re-open the gate on its own. 768 is the smallest round value above 730; closing one
-  goblin also frees only about 210 MB of available memory (842 / 4, M-21), so the RAM side needs
-  several closes. The checker refuses any tier whose `hysteresisMb` is below the current learned
-  p90 commit cost of a goblin, whichever tier it is.
+  once. The margin must therefore exceed one goblin's commit (730 MB, P-1), so one close can never
+  re-open the gate on its own. 768 is the smallest round value above 730; closing one goblin also frees
+  only about 210 MB of available memory (842 / 4, M-21), so the RAM side needs several closes. The
+  checker refuses any tier whose `hysteresisMb` is below the current goblin commit cost (prior or
+  learned), whichever tier it is.
 - **`stableSec`, `reservationHoldSec`, `pagingWindowSec`** are unchanged: a goblin reaches its steady
   footprint in 1 to 3 minutes (design B2.2), and nothing measured argues for other values.
 - **Backstop count 46**: `floor((37,120 - 3,072) / 730)`. A runaway guard only; it should never bind.
@@ -144,42 +167,52 @@ time, with the risk each accepts.
 Replayed against today: at 15:05 standard refuses (commit headroom 2,863 < 3,072). At 15:12:56
 (available 2,018) standard refuses on RAM: 2,018 - 420 < 2,048. At 15:22:25 (available 2,431, 6,793
 pages/s) it refuses on RAM (2,431 - 420 = 2,011) and on paging. Conservative refuses at all three.
-These are the fixtures of step 12.
+These are the fixtures of step 18.
 
 ### Aggressive, clearly labelled
 
-`aggressive` is for a founder who is watching the machine and prefers throughput to headroom.
-`ramReserveMb` 1,536 is 360 MB above the lowest observed reap point, less than one goblin's working
-set: **expect reaps**. `commitReserveMb` 2,048 is 5.5 percent of the limit. `pagingLimit` 4,000.
-Hysteresis stays 768 for the correctness reason above. It still never kills: the ladder is the same
-and every reap is surfaced. It can be selected only in the founder's user file (L1) or as a live rule
-(L4) with an `until`; the checker refuses it anywhere else, and `horde watch` prints the tier in its
-header whenever it is not `standard`.
+`aggressive` is for a founder who is watching the machine and prefers throughput to headroom; the
+founder asked for tiers, and this is the bold end of them. `ramReserveMb` 1,536 is 360 MB above the
+lowest observed reap point, less than one goblin's working set: **expect reaps**. `commitReserveMb`
+2,048 is 5.5 percent of the limit. `pagingLimit` 4,000. Hysteresis stays 768 for the correctness reason
+above. It still never kills: the ladder is the same and every reap is surfaced. It can be selected only
+in the founder's user file (L1) or as a live rule (L4) with an `until`, and `horde watch` prints the
+tier in its header whenever it is not `standard`.
 
 ## 1.3 Through the engine-settings layers
 
 The tier is one more key in the layered configuration, the way metrics adds `metrics.*` (metrics
-design 7.1): one resolver, one `explain`, no second configuration system.
+design 7.1): one resolver, one `explain`, no second configuration system. This needs engine-settings
+Half A (Dependencies).
 
 - **Keys.** `admission.tier` names a tier. `admission.tiers[]` defines tiers: `{ name, rank, label,
   ramReserveMb, commitReserveMb, pagingLimit, pagingWindowSec, hysteresisMb, stableSec,
   reservationHoldSec }`. `rank` orders tiers from cautious (0) upward; the three built-ins are 0, 1, 2.
-- **Where each may be set.** L0 ships `core/admission-tiers.json` with the three tiers and
-  `admission.tier = standard`. L1 may select a tier and define custom tiers. L4 (live, `horde config
-  set admission.tier conservative --scope live --until <t>`) lets the warchief tighten mid-work.
-  **L2, L3 and L5 may not set it**: memory is a per-machine fact (design C3.4), so neither a cloned
-  repository, a run spec nor a single spawn may change how full the whole machine gets. The checker
-  (`Test-HordeEngineConfig`) refuses the key there, with the file and rule id.
+- **Where each may be set.**
+  - L0 ships `core/admission-tiers.json` with the three tiers and `admission.tier = standard`.
+  - L1, the founder's file, may select any tier and define custom tiers.
+  - **L2, a project's file, may lower the tier and never raise it** (engine-settings decision 3, the
+    same rule metrics has): it may select a tier whose `rank` is at most the rank resolved from the
+    layers below it, and may not define tiers. A repository that needs a quieter machine, for example
+    a heavy build, can ask for `conservative`; a cloned repository can never make the machine bolder.
+    The project file itself waits until a repository needs one (decision 3).
+  - L3 (a run spec) and L5 (a spawn flag) may not set it: memory is a per-machine fact (design C3.4),
+    and one run or one spawn choosing the reserve for the whole machine would let the boldest caller
+    win.
+  - L4 (live, `horde config set admission.tier conservative --scope live --until <t>`) lets the
+    warchief change it mid-work, and is where the tuner writes (1.4).
 - **Selectors.** A rule that sets `admission.*` must have an empty `match`; the gate resolves one tier
   per machine. Each machine resolves its own L1, so a remote machine can differ.
 - **Checker findings**, all errors: a tier without every numeric key; a number below its floor
-  (`hysteresisMb` below the goblin commit p90; any reserve below 0); two tiers with one name or one
-  rank; an L4 rule selecting a higher rank than L1's resolved tier without an `until`.
+  (`hysteresisMb` below the goblin commit cost; any reserve below 0); two tiers with one name or one
+  rank; an L2 rule selecting a higher rank than the layers below it resolve, or defining a tier; an L3
+  or L5 rule that sets `admission.*`; an L4 rule selecting a higher rank than L1's resolved tier
+  without an `until`.
 - **`horde config explain --key admission.tier`** shows the tier, its layer and rule, every number,
   and, per number, whether the tuner has raised it (1.4).
 - **Schema.** `schema/engine-config.v1` has `additionalProperties: false`; its `rule.set` gains an
   `admission` object. The engine-config schema has not shipped, so this lands in v1 before its first
-  release (engine-settings Half A).
+  release.
 
 ## 1.4 How the metrics system tunes the numbers
 
@@ -190,14 +223,18 @@ section 12, Stage E).
 - **Signals, per machine per day**: `obs.reap` events that happened while the gate was `open`, with
   the counters and tier at that moment; the minimum available memory and maximum paging seen while
   `open`; queue wait time and refusals per kind (the cost of caution); per-kind learned costs
-  (p90 over the last 20 spans, floored at the design's priors).
-- **Tightening is automatic.** A reap while `open` means the reserve was too small. The tuner writes an
-  L4 rule raising `ramReserveMb` by 256 MB per such reap, with `until` seven days out and a `note`
-  naming the reap events, capped at conservative's value plus 1,024 MB. `explain` shows it as the
-  tuner's.
-- **Loosening is a proposal.** After 14 days with no reap while `open`, `horde metrics tune --propose`
-  prints a lower value with its evidence (minimum available seen, reaps, refusals); the founder
-  applies it at L1 with `horde config set`. Nothing lowers a reserve on its own.
+  (p90 over the last 20 spans, floored at the priors).
+- **Raising is automatic** (engine-settings decision 9). A reap while `open` means the reserve was too
+  small. The tuner writes an L4 rule raising `ramReserveMb`, with `until` seven days out and a `note`
+  naming the reap events, capped at conservative's value plus 1,024 MB. The step is 256 MB per such
+  reap, an **estimate**: about half of one goblin's RAM prior (P-1), small enough that a single reap
+  does not flip standard to conservative. The tuner records the step's effect (reaps while open in
+  the following week) so the step itself can be revised. `explain` shows each raise as the tuner's.
+- **Lowering is only ever proposed** (decision 9). After a quiet period with no reap while `open`,
+  `horde metrics tune --propose` prints a lower value with its evidence (minimum available seen, reaps,
+  refusals); the founder applies it at L1 with `horde config set`. The quiet period starts at 14 days,
+  an **estimate**: two working weeks, so that a proposal has seen at least two wave cycles. Nothing
+  lowers a reserve on its own.
 - **Costs are not tier values.** Learned per-kind costs change `cost(k)` in the rule, not the tier.
   They are measured by the follower's `obs.resources` samples and, for jobs, exactly by the job
   object's `PeakJobMemoryUsed` (Part 2).
@@ -214,12 +251,12 @@ Every orphan class seen today must become impossible or reported.
 
 | class | today | made impossible by | otherwise |
 |---|---|---|---|
-| O1 node dev servers and test runners outliving their goblin | 9 processes, 2,832 MB, 14 to 37 h (M-08) | the goblin's job, kill-on-close, held only by its anchor (2.2) | pre-Horde ones: reported |
-| O2 a claude.exe with no pane and no control file | pid 5616, 555 MB, 21.9 h (M-07) | the harness is the anchor's child in the same job; when the pane dies the anchor dies and the job ends | reported |
-| O3 a bare shell left in a pane | pane 26, 38.4 h (M-26) | the anchor is the pane's only program, no `-NoExit` shell (design decision 4) | old-style panes: closer fallback A3.3 |
+| O1 node dev servers and test runners outliving their goblin | 9 processes, 2,832 MB, 14 to 37 h (M-08) | the goblin's job, kill-on-close, held only by its anchor (2.2) | pre-Horde ones: reported by `horde orphans` (step 14) |
+| O2 a harness process with no pane and no control file | pid 5616, 555 MB, 21.9 h (M-07) | the harness is the anchor's child in the same job; when the pane dies the anchor dies and the job ends | reported by `horde orphans` |
+| O3 a bare shell left in a pane | pane 26, 38.4 h (M-26) | the anchor is the pane's only program, no `-NoExit` shell (design decision 4) | **deferred**: detecting it needs host reads Phase 3 keeps on wezfleet (2.6); reported by wezfleet until step 33 |
 | O4 a goblin's background job still running at close | M-22 | the closer refuses while a live job member is not a declared service; after the close the job ends it | - |
 | O5 a process a goblin starts outside its job (WMI create, a scheduled task, an out-of-process COM server, a shell hand-off) | not seen today; documented escape | cannot be prevented by a job (2.4) | found by ancestry and job membership; reclaimed only with proof, else reported |
-| O6 goblins spawned before Horde's spawn path, and the founder's own sessions | all of today's fleet | - | reported; W5 lists them in wezfleet now |
+| O6 goblins spawned before Horde's spawn path, and the founder's own sessions | all of today's fleet | - | reported; `wezfleet orphans` (W5) lists them now |
 
 ## 2.2 The anchor: how a job exists when the terminal, not Horde, is the parent
 
@@ -228,8 +265,8 @@ Horde asks the host to run an argv. The host creates the process, so its parent 
 from `CreateProcess` that it could assign before the child runs. The fix is to make the first program
 in the pane assign **itself**:
 
-1. The argv the host runs is the **anchor**, a small compiled helper (the design's CTRL_C helper,
-   grown; the `wf-cmdlog.exe` precedent for a compiled tool). It is the pane's only program.
+1. The argv the host runs is the **anchor**, a small compiled executable (engine-settings decision 10,
+   following `wf-cmdlog.exe`; it absorbs the design's CTRL_C helper). It is the pane's only program.
 2. The anchor creates a job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and **no** breakaway flag, with
    a **non-inheritable** handle, named `Local\horde-<spawn token>` so the follower can open it by
    name.
@@ -248,8 +285,8 @@ in the pane assign **itself**:
    closes (host flag `spawn.exitCloses`, 2.5).
 
 The anchor also receives the closer's graceful-end request (a named event per spawn token), sends
-CTRL_C twice to its console group, waits up to 12 s, then calls `TerminateJobObject`. That replaces
-the design's separate console-attach helper: the anchor already shares the console.
+CTRL_C twice to its console group, waits up to 12 s (design A3.1), then calls `TerminateJobObject`.
+That replaces the design's separate console-attach helper: the anchor already shares the console.
 
 **Who else holds the job handle.** The follower opens the job by name only to query it
 (`JobObjectBasicProcessIdList`, `JobObjectExtendedLimitInformation` for `PeakJobMemoryUsed`) and
@@ -257,8 +294,9 @@ closes it in the same call. While it holds a handle, a close is deferred by at m
 duration, and then happens anyway, because kill-on-close fires on the last close. A test pins the
 query's handle lifetime.
 
-**Resident cost.** A native helper waiting on one process should be a few MB, against 58 to 66 MB
-for today's `-NoExit` shell (M-10). That is a target, measured in step 15, not a claim.
+**Resident cost.** Compiled because a PowerShell anchor would stay resident for the goblin's life at
+about what a pane shell costs today, 58 to 66 MB private (M-10). A native helper waiting on one
+process should be a few MB: a target, measured in step 22, not a claim.
 
 ## 2.3 What the Windows documentation says, and what was measured here
 
@@ -307,7 +345,7 @@ for today's `-NoExit` shell (M-10). That is a target, measured in step 15, not a
 | escape | disposition |
 |---|---|
 | E1 a child created before the anchor assigns itself | impossible by construction: the anchor assigns itself before its first `CreateProcess` (J-3 is the control that shows the hole it closes) |
-| E2 `CREATE_BREAKAWAY_FROM_JOB` | impossible: the goblin's job never sets a breakaway limit, so the create fails instead of escaping. That failure is honest and visible as a tool error. Whether the harness itself ever asks for breakaway is **unmeasured**; step 15 runs a real harness session inside such a job in the isolated instance and must pass |
+| E2 `CREATE_BREAKAWAY_FROM_JOB` | impossible: the goblin's job never sets a breakaway limit, so the create fails instead of escaping. That failure is honest and visible as a tool error. Whether the harness itself ever asks for breakaway is **unmeasured**; step 22 runs a real harness session inside such a job in the isolated instance and must pass |
 | E3 WMI `Win32_Process.Create`, scheduled tasks, services, out-of-process COM, shell hand-off | cannot be prevented by a job. Found by the backstop; reclaimed only with proof (2.6), otherwise reported |
 | E4 a goblin spawning another goblin through the host | not an escape: the new pane gets its own anchor and job, and its own record naming its parent |
 | E5 the anchor killed or crashed | the handle closes and the job ends everything in it: the intended result |
@@ -327,6 +365,7 @@ evidence, minVersion?, space? }`, measured in the host's isolated instance by it
 | `spawn.env` (existing) | the host can pass environment | the spawn token reaches the anchor; with `no`, the token goes in the argv |
 | `pid` with `space` (existing) | the anchor's pid and its namespace | containment is resolved in that space: a `win32` pid uses a job; a `wsl:` or `posix` pid uses the POSIX mechanism below |
 | `contain.inherited` | the host's own pane processes already sit in a job or control group, and whether it allows breakaway | nesting is required; recorded so a change in the host is noticed (J-1, J-2) |
+| `pane.bareShell` | the host adapter can say whether a pane it spawned now holds only its own shell, from the pane's program pid and the shell images it knows | O3 detection without title reads (step 33) |
 
 The containment mechanism itself is the operating system's, not the terminal's. It is a small port,
 `core/Contain.ps1`, with adapters `platform/windows/` (job objects, above) and later
@@ -351,11 +390,24 @@ Windows does not re-parent orphans, and a dead parent's pid may already belong t
    before its child (a reused pid fails this), and the walk reaches a Horde session's recorded
    pid+procStart, live or tombstoned.
 
-Anything else is `orphaned, owner unknown` in `horde status` and `horde watch`, with memory, age, image
-name and cwd, for the founder to decide. Reclaim acts only on proof 1 to 3, never on a declared live
-service, through the handle method (open by pid, compare the creation time read from the handle,
-terminate through that handle), and writes `obs.orphan` with the proof used. The report is read-only
-and ships in Phase 3's read half; the reclaim ships with the closer in Phase 5.
+Anything else is `orphaned, owner unknown` in `horde orphans`, `horde status` and `horde watch`, with
+memory, age, image name and cwd, for the founder to decide. Reclaim acts only on proof 1 to 3, never on
+a declared live service, through the handle method (open by pid, compare the creation time read from
+the handle, terminate through that handle), and writes `obs.orphan` with the proof used. The report is
+read-only and ships in the read half; the reclaim ships with the closer in Phase 5.
+
+**Where process knowledge lives.** Core matches no image name. The classes are defined by structure:
+O1 is "a process tree whose root is dead", whatever its image; the image name is carried as display
+data only, never matched on. O2 needs to know which processes are harness processes and where their
+control files are: that is each adapter's, `agents/<name>/agent.json` gaining `processImages` and the
+control-file location, asked through the AgentPort (`Get-AgentProcessClaims`: which pids are this
+harness's, and which of those have a live control file). O3 needs to know which images are a pane's
+shell: that is each host's, in `hosts/<name>/`, answered by the `pane.bareShell` capability.
+
+**O3 is deferred.** Phase 3 keeps bare-shell detection on wezfleet, because it reads host tab titles
+and was dropped from the projection (the Phase 3 plan's `census-bare-shell` line, L-058). Horde does
+not re-introduce title reads for it. Until step 33, bare shells are reported by wezfleet census; after
+the anchor ships (step 27) new goblins cannot leave one.
 
 ---
 
@@ -370,7 +422,7 @@ session record, is current, and an orc can read and use it in one step. The bind
 |---|---|---|---|
 | harness | `engine.harness` | `engine` | fixed at spawn; resume can never change it (engine-settings 7) |
 | provider profile | `engine.providerProfile` | `engine` | a profile name, never an endpoint copy or a key |
-| model | `engine.model` (concrete id), `engine.requested` | `engine` | pinned at spawn; `modelObserved` (owner `agent`, derived) is shown beside it, never merged |
+| model | `engine.model` (concrete id), `engine.requested` | `engine` | pinned at spawn (engine-settings decision 4); `modelObserved` (owner `agent`, derived) is shown beside it, never merged |
 | session id | `sessionId` | `agent` | set in advance where the harness allows it (`--session-id` for claude-code, local help); learned from the harness's files otherwise |
 | cwd | `projectCwd` | `engine` | the launch directory, which names the transcript folder |
 | argv | `launch.argv` | `engine` | the argv the AgentPort built, without the session-specific resume flag, which the AgentPort adds |
@@ -386,13 +438,14 @@ resume path, which is what makes the binding the single source.
 
 ## 3.2 Kept current
 
-- **Compaction keeps the session id** (measured: 12 compactions in 7 live processes and 51 in 265
-  transcripts, no second id; `core/ownership.json`, `formerNames`). So compaction needs no rebind.
-- **What does need one**: an orc re-resuming a goblin (`horde resume` writes the new revision itself),
-  a harness that forks a new id on resume, and anything that starts a new conversation in the same
-  process (whether `/clear` does is unmeasured). The follower watches the agent's control file for the
-  goblin's pid+procStart; when the session id it carries changes, it emits `obs.rebind` with both
-  ids. The follower never writes records; the record writer (migration-plan step 3.8, its one writer)
+- **Compaction keeps the session id** (O-1). So compaction needs no rebind.
+- **`/model` drift does not rebind** (engine-settings decision 6). It is shown in status as
+  `modelObserved` beside the launched `engine.model`, and resume uses the launched binding.
+- **What does need a rebind**: an orc re-resuming a goblin (`horde resume` writes the new revision
+  itself), a harness that forks a new id on resume, and anything that starts a new conversation in the
+  same process (whether `/clear` does is unmeasured). The follower watches the agent's control file for
+  the goblin's pid+procStart; when the session id it carries changes, it emits `obs.rebind` with both
+  ids. The follower never writes records; the record writer (migration step 3.8, its one writer)
   subscribes and writes the new revision.
 - **The file name is the session id** (step 3.8). A rebind that changes the id writes a new record and
   links the two (`predecessor`, `successor`); `horde goblin show` follows the chain to its head, so an
@@ -427,13 +480,15 @@ and does nothing. `--dry-run` shows what `resume` would do, with the gate's answ
   derived); `resumeCommand`'s `derived` text changes as in 3.1. New stores, so provenance can name
   them: `H1` Horde session record (`<HordeHome>\store\sessions\<sessionId>.json`), `H2` the
   observation stream (`<HordeHome>\store\observe\<date>\<machineId>.jsonl`), `H3` closure tombstones,
-  `H4` spawn claims (`runs\<id>\spawns\<fleetId>.claim`), `X7` the Codex rollout, `X8` the harness's
-  background task output files, `X9` the loop-guard state file.
-- `schema/session-record.v1`: `additionalProperties` is false, and
-  `test/test-schema-session-record.ps1` computes the property list from the ownership table, so each
-  row and its schema property land in one PR. The session-id pattern stops assuming a UUID (agent
-  engines decision 6). Edit v1 or publish v2 is still open (engine-settings decision 5, below); it is
-  safe as an edit only until step 3.8 writes the first record.
+  `H4` spawn claims (`runs\<id>\spawns\<fleetId>.claim`), `H5` orc mailboxes
+  (`<HordeHome>\store\mailbox\<sessionId>\`), `X7` the Codex rollout, `X8` the harness's background
+  task output files, `X9` the loop-guard state file.
+- `schema/session-record.v1` is **edited in place** (engine-settings decision 5). That is safe because
+  no record writer exists until migration step 3.8; the rows and properties must therefore land
+  before step 3.8 ships its first writer, and any change after that is a `session-record.v2`.
+  `additionalProperties` is false and `test/test-schema-session-record.ps1` computes the property
+  list from the ownership table, so each row and its schema property land in one PR (step 24). The
+  session-id pattern stops assuming a UUID in the same edit (agent-engines decision 6).
 - `schema/observe-event.v1`: the metrics envelope (metrics design 4.2) with the `obs.*` kinds.
 - `schema/host-capabilities.v1`: the flags of 2.5.
 
@@ -497,13 +552,25 @@ text and asserts the marker appears in no output line.
 | `tokens.cumulative` | no | yes: `total_token_usage` (metrics 2.5) | unmeasured | no |
 | `cache.fields` | yes | unmeasured | unmeasured | **no** for DeepSeek, which ignores `cache_control` (agent-engines section 3) |
 | `model.perMessage` | yes | yes: session start `model` | unmeasured | yes, the provider's id |
-| `compact.marker`, `sessionId.stableAcrossCompact` | yes, yes (ownership `formerNames`) | unmeasured | unmeasured | as claude-code |
+| `compact.marker`, `sessionId.stableAcrossCompact` | yes, yes (O-1) | unmeasured | unmeasured | as claude-code |
 | `status.file` | yes: control file (X2) | no native file (measured); Horde's hook-written file stands in | unmeasured | as claude-code |
 | `loopGuard` | yes where the founder's hook is installed | no | no | as claude-code |
 
 `unmeasured` never satisfies a requirement: the classifier answers `unknown: <flag> unmeasured for
-<harness>` rather than guessing. A flag moves to `yes` only through a measurement recorded in that
-agent's ledger (`planning/ledger/agent-<name>.md`), as agent-engines 6.4 requires.
+<harness>` rather than guessing.
+
+**How a flag becomes `yes`.** Only through a test. Each adapter keeps
+`agents/<name>/measurements/<flag>.json` for every flag it declares `yes` or `no`: the instrument, the
+date, the harness version, the fixture it ran against (a cut-down copy under
+`agents/<name>/test/fixtures/`), and the result. `agents/<name>/test/test-capabilities.ps1` then, for
+every flag in the capability file: fails if a `yes` or `no` has no measurement file or its result
+disagrees; re-runs the adapter over the recorded fixture and asserts the behaviour the flag claims
+(assertion text of the form "capability tokens.perTurn holds on its recorded fixture"); and fails if
+the harness version in use is newer than the newest measured one, until that version is surveyed (the
+`surveyedVersions` rule `core/ownership.json` already applies). The agent's ledger,
+`planning/ledger/agent-<name>.md`, records each measurement as an entry with disposition `test`
+and `where:` that suite and its assertion, which the ledger gate checks is a quoted string on a code
+line. A flag with no measurement stays `unmeasured`, with no file.
 
 ## 4.4 The follower: one per machine, one reader
 
@@ -515,16 +582,51 @@ scheduled task at logon (design C3.1). It is the **only** reader of transcripts:
   queries for anchored goblins), and writes one stream, H2, one file per writer with a daily cap.
 - **Two consumers, one input.** The watcher classifier (`core/Observe.ps1`: working, waiting on a job,
   waiting on a human, stalled, looping, dead, plus reported, closable, parked; design C2's evidence
-  and thresholds) and the metrics collector both read H2. The metrics harvester reads transcripts
-  directly only for spans the follower never saw and that have consent; there is no backfill from
-  before consent (metrics decision 8). Token counts reach metrics only through `Get-UsageFacts`, from
-  local files (metrics decision 7); cost is computed later from the versioned price table
-  (`core/Price.ps1`).
-- **It never acts.** The observer's files hold no spawn, kill or send verb, checked by the same
-  tripwire as the Phase 3 read adapter. The actors (closer, gate pump, reclaimer, service keeper) are
-  separate modules that subscribe to H2; they may share the process from Phase 5, but not the files.
-- Footprint target under 100 MB private, measured in step 8 (design decision 10: PowerShell first,
+  and thresholds; plus the detectors of 4.5) and the metrics collector both read H2. The metrics
+  harvester reads transcripts directly only for spans the follower never saw and that have consent;
+  there is no backfill from before consent (metrics decision 8). Token counts reach metrics only
+  through `Get-UsageFacts`, from local files (metrics decision 7); cost is computed later from the
+  versioned price table (`core/Price.ps1`).
+- **It never acts.** The observer's files hold no spawn, kill or send verb, checked by the `effects`
+  tripwire (step 4). The actors (closer, gate pump, reclaimer, service keeper, alerter) are separate
+  modules that subscribe to H2; they may share the process from Phase 5, but not the files.
+- Footprint target under 100 MB private, measured in step 11 (design decision 10: PowerShell first,
   compiled only if the measurement exceeds the target).
+
+## 4.5 Detectors, the improvement backlog, and context purity
+
+The founder asked to see where goblins stall, loop, miss communications and waste tokens, so they can
+be improved, and to keep orc and warchief context for big-picture thinking (metrics design, "Founder
+direction"). Each detector is a pure function over H2, emitting `obs.detect { pattern, spanId,
+evidence[], tokens, seconds }`; tokens come from `Get-UsageFacts` only (local, metrics decision 7), and
+are `unknown` when the span has no consent.
+
+| detector | evidence | cost recorded |
+|---|---|---|
+| `stalled` | design C2 | seconds from the last activity to the wake or the report |
+| `looping` | design C2 (repeated tool signature, repeated error hash, oscillating file hash) | tokens and seconds from the first repeat to the loop's end |
+| `missed-communication` | a wake with no delivery receipt (Part 5); a goblin's `blocked` or question with no orc reply before the goblin moved on or stalled; a handoff the orc never opened (no read of the handoff path in the orc's transcript within its next N turns, N an **estimate** starting at 20); a message the orc sent that never arrived in the goblin's transcript | seconds the recipient waited; tokens the sender spent after the miss |
+| `wasted-tokens` | tokens spent inside a `looping` span; tokens after a reap until the goblin reported or stalled; the same file read three or more times in one span with no edit between (by path hash); tokens of a span whose work was abandoned, reverted or duplicated by a second spawn of the same fleet id | the tokens themselves, by kind |
+
+**The improvement backlog.** The metrics compactor folds `obs.detect` into
+`<HordeHome>\store\metrics\backlog\<pattern>.json`: one item per pattern and cause key (for example
+"loop on the same failing test command"), with count, total tokens, total seconds, first and last seen,
+up to ten example span ids (ids only, never content), and a status (`open`, `accepted`, `fixed`,
+`wontfix`, with a reason). `horde metrics backlog [--pattern p] [--json]` lists it, ranked by tokens
+and seconds lost. An item marked `fixed` that recurs reopens itself.
+
+**Context purity.** Per delivered result, the metrics record what it cost the orc's (and the
+warchief's) context: the size of the inbound result in tokens (the orc's input-token growth on the turn
+that received it); the orc's own follow-up reads caused by it (tool calls on the worker's files in the
+orc's next N turns, N as above); and the ratio of those to the worker's own tokens. `horde metrics
+report` shows it per orc and per routing choice (goblin versus agent, handoff format), beside cost and
+speed, so routing and the handoff format are judged on purity too.
+
+**Distilled, never raw.** Nothing from H2 reaches an orc's context as stream lines. An orc receives
+wake messages (Part 5), each a distilled summary of at most three lines and 400 bytes (an
+**estimate**, tuned by the context-purity measure) with pointers, and pulls detail on demand through
+`horde why --brief` (at most five lines) or `horde goblin show`. `horde watch` is for the founder and
+the warchief's terminal, not for an orc's prompt.
 
 ---
 
@@ -534,18 +636,45 @@ scheduled task at logon (design C3.1). It is the **only** reader of transcripts:
   the reason in one line, age of the newest evidence, RAM and commit (from the job when anchored),
   the running tool or job, and the gate's state and tier in the header. It tails the stream; it never
   opens a transcript. Orphans of unknown owner get their own section.
-- **`horde why <goblin> [-Json]`**: the current state and every piece of evidence behind it, each with
-  its source store, file, offset and time, in `core/ownership.json`'s vocabulary. The command an orc
-  runs when a goblin looks idle. It is the same answer `horde goblin show` embeds.
-- **Wake messages.** On a transition to `stalled`, `looping`, `reported`, `dead`, `park-expired`,
-  `closed` or `reaped`, the alerter sends one message to the owning orc, keyed by (goblin, transition,
-  evidence seq) so a restart never repeats one. Content: goblin, state, one-line reason, handoff path,
-  and the next command (`horde why`, `horde goblin show`, `horde resume`). Delivery goes through the
-  target resolution of Phase 3 step 3.6 and the platform's messaging path; until that lands,
-  wezfleet's `tell`. Unreachable orc: the warchief. Unreachable warchief: a Windows notification to the
-  founder. A message arrives as a new turn, which is what wakes an orc that ended its turn to wait.
-  Rate limit: one per goblin per transition, and at most 10 per orc per minute with the rest folded
-  into one summary.
+- **`horde why <goblin> [--brief] [-Json]`**: the current state and every piece of evidence behind it,
+  each with its source store, file, offset and time, in `core/ownership.json`'s vocabulary; `--brief`
+  is the distilled form for an orc. It is the same answer `horde goblin show` embeds.
+
+## Wake messages
+
+On a transition to `stalled`, `looping`, `reported`, `dead`, `park-expired`, `closed` or `reaped`,
+the alerter wakes the owning orc. Delivery does **not** go through Phase 3's target resolution, whose
+first form refuses any session without a verified host handle, and does **not** use wezfleet's `tell`,
+which types into a pane. It addresses the orc by session id, taken from the goblin's `parent` in the
+engine's record, and uses two channels:
+
+1. **The mailbox, always.** The alerter writes each wake as one file,
+   `<HordeHome>\store\mailbox\<orcSessionId>\<utc>-<seq>.json`, created with `CreateNew` and never
+   appended (one writer per file, as metrics 4.3 requires). It holds the distilled summary: goblin,
+   state, one-line reason, and the next command (`horde why --brief`, `horde goblin show`, `horde
+   resume`). Nothing is lost if every other channel fails, and `horde inbox [--unread]` (a read
+   command) lists it. The mailbox alone does not wake a session that has ended its turn.
+2. **The engine's own message channel, as the doorbell.** When the orc's harness declares
+   `message-inject: yes` in `agents/<name>/agent.json` (claude-code: the peer socket named by the
+   control file's `messagingSocketPath`, the `messagingAddress` field, owner `agent`), the alerter asks
+   that adapter to deliver a one-line doorbell carrying the mailbox entry's id. A message arrives as a
+   new turn, which is what wakes an orc that ended its turn to wait. The follower confirms delivery
+   when that id appears as a user turn in the orc's transcript (`delivery-receipt`), and marks the
+   entry delivered.
+
+**Host unknown changes nothing**: neither channel needs a host handle, so an orc whose pane is unknown,
+or which has no pane, is still reached. **What does change the path**: the orc's harness has
+`message-inject` `no` or `unmeasured`, its messaging address is unknown, or no receipt arrives within
+60 s (an **estimate**; the one measured wake latency is 1 to 3 s, M-32). Then the alerter escalates the
+same entry to the warchief by the same two channels, and if the warchief cannot be reached either, to a
+Windows notification to the founder through `platform/windows/`. Horde never types into a pane to
+deliver a wake.
+
+Each wake is keyed by (goblin, transition, evidence seq), so a restart never repeats one. **Rate
+limit**: one per goblin per transition, and at most 10 per orc per minute with the rest folded into
+one summary entry. The 10 is a **starting guess** with no measurement behind it; the metrics tune it
+from the wakes per orc per minute seen during waves, the orc context tokens spent on wakes (4.5), and
+the `missed-communication` detector.
 
 ---
 
@@ -556,11 +685,26 @@ are done in `YedPool/wezfleet`, under its own CONTRIBUTING (worktree in `wezflee
 test against the working terminal, `--merge`), because Horde's writers are phases away and these are
 live defects.
 
+**Timing against the Phase 3 shadow.** A qualifying working day in the Phase 3 census shadow needs
+wezfleet's commit constant through the day, or each change logged (the Phase 3 plan's working-day
+rule). So each stopgap merges between shadow days, never during one, and its merge is logged in the
+shadow log with its commit.
+
 | # | change | tests first | why now |
 |---|---|---|---|
 | W3 | `Close-WfOwnPane` (lib/Notify.ps1:178): re-verify identity at kill time; skip the kill while any descendant of the claude process is alive; go through Kill.ps1's ladder and its never-empty-a-window guard, not a raw `kill-pane` after a sleep | "closeOnDone spares a goblin with a live child"; "closeOnDone re-verifies the pane at kill time"; "closeOnDone never empties a window" - each mutation-tested, in the isolated instance only | issue #38 and M-22: a destructive path with a known pane-reuse hole that also kills work started after the report |
 | W4 | `Test-WfPaneMatchesRoster` answers "cannot prove" for a roster pane of -1, and closeOnDone does not fire on it | "a roster pane of -1 cannot prove identity"; "closeOnDone does not fire without proven identity" | design A5.5: after an interrupted launch the check passed for any pane |
-| W5 | census lists orphaned process trees with memory, read-only: roots dead, a claude with no control file, a bare shell in a spawned pane | "census lists a tree whose root is dead"; "census lists a claude with no control file"; a read-only tripwire over the new code | 2.8 GB was invisible to every command (M-08); this is O6's report until Horde's ships |
+| W5 | **a separate verb, `wezfleet orphans`**, read-only: process trees whose root is dead, a claude with no control file, with memory and age. **census is not changed**, so the census shadow's output and its comparisons are untouched | "orphans lists a tree whose root is dead"; "orphans lists a claude with no control file"; "census output is unchanged by the orphans verb"; a read-only tripwire over the new code | 2.8 GB was invisible to every command (M-08); this is O6's report until Horde's ships |
+
+W5 adds one line to `adoption/capabilities.txt` (created by Phase 3 step 4), in that file's format:
+
+```
+orphans            | wezfleet orphans                | horde orphans       | processes no live session owns, with their memory
+```
+
+If W5 merges before Phase 3 step 4, the step 4 PR seeds the line; otherwise W5's companion Horde PR adds
+it. `horde orphans` (step 14) is its Horde form and is adopted through that ledger like any other
+capability.
 
 Not a stopgap: making reaped jobs visible in wezfleet. That belongs to the follower, and doing it twice
 is what the one-reader rule forbids.
@@ -571,110 +715,160 @@ is what the one-reader rule forbids.
 
 Numbered through; the design's H-numbers in brackets for traceability. Phase gates follow the
 migration plan: read-only steps sit beside Phase 3; anything that spawns, kills or writes a record
-waits for Phase 5 (and step 3.8 for the record writer).
+waits for Phase 5 (and step 3.8 for the record writer). Dependencies on other plans are in the table
+near the top.
 
 ## A. Now, in wezfleet
 
 1. **W3.** Tests first as in Part 6; ledger not required (wezfleet is not being replaced by this step).
 2. **W4.**
-3. **W5.**
+3. **W5**, as `wezfleet orphans`, merged between census shadow days.
 
-## B. The read half (beside Phase 3; no writer, no act verb)
+## B. Guards, before Phase 3's commands
 
-4. **`core/ProcessTree.ps1`** [H1]. One CIM snapshot to a tree with pid+procStart; the dead-root walk;
+These two land before the first Phase 3 command PR (census, step 3.3) merges, because every later
+command, in this plan and in Phase 3, is checked against them.
+
+4. **`effects` declarations** [H13]. Every command declares `read`, `write`, `spawn` or `kill`; a suite
+   parses each `read` command's call graph from its entry point and fails on any spawn or kill verb,
+   with a planted-verb control. Tests first: "a read command reaches no spawn verb"; "a read command
+   reaches no kill verb"; "a planted spawn verb turns the check red". Ledger: none replaced; the PR
+   cites wezfleet's `status`-pumps defect (issue #33) as the reason.
+5. **The port-names ratchet over `agents/`** (engine-settings section 9, its E1). `tools/HostNames.ps1`
+   and `test/test-host-names.ps1` generalise to `hosts/*` and `agents/*`: `agents/<name>/names.txt`,
+   `allowlist.txt` and `growth.txt`, same shrink-only rules against `origin/main`. The first PR
+   measures and allowlists today's engine mentions in core (`core/ownership.json` stores X1 to X3 and
+   W8, `schema/session-record.v1` descriptions, `core/Identity.ps1`), each with its count, so they can
+   only shrink. Tests first: "core names no engine beyond its allowlist"; "a planted engine name in
+   core is caught"; "an engine's allowlist can only shrink".
+
+## C. The read half (beside Phase 3; no writer, no act verb)
+
+6. **`core/ProcessTree.ps1`** [H1]. One CIM snapshot to a tree with pid+procStart; the dead-root walk;
    descendants of a session; the three ownership proofs of 2.6 as pure functions over injected tables.
    Tests first: "a reused pid never extends an ancestry"; "a child older than its parent breaks the
-   walk"; "an unreadable table reads as unknown"; "ownership needs one of three proofs". Ledger
-   `planning/ledger/core-processtree.md`: wezfleet `lib/Mail.ps1` liveness, census, lesson L-019.
-5. **`core/Transcript.ps1` and `schema/observe-event.v1`** [H5]. The port of 4.1, the event of 4.2,
+   walk"; "an unreadable table reads as unknown"; "ownership needs one of three proofs"; "core matches
+   no process image name". Ledger `planning/ledger/core-processtree.md`: wezfleet `lib/Mail.ps1`
+   liveness, census, lesson L-019.
+7. **`core/Transcript.ps1` and `schema/observe-event.v1`** [H5]. The port of 4.1, the event of 4.2,
    the stream writer (one file per writer, cap, `truncated` marker, `seq` from the writer's counter).
    Tests first: "a shorter file is truncated, never restarted"; "a partial last line is carried";
-   "seq is strictly increasing within a file"; "core names no engine" (the port-names ratchet,
-   engine-settings 9, extended to `agents/`). Ledger: none replaced.
-6. **`agents/claude-code/Transcript.ps1`** [H3]. Tail by byte offset; control file; task outputs;
-   loop-guard read; capability file with evidence. Tests first against copies of today's four goblin
+   "seq is strictly increasing within a file". Ledger: none replaced.
+8. **`agents/claude-code/Transcript.ps1`** [H3], with its `measurements/`, fixtures and
+   `test-capabilities.ps1` (4.3), and `processImages` in `agent.json` (2.6). Tail by byte offset;
+   control file; task outputs; loop-guard read. Tests first against copies of today's four goblin
    transcripts cut down: "a reap notice becomes a reap event"; "no message text reaches the output"
-   (planted marker); "an unmatched tool call stays open". Ledger `planning/ledger/agent-claude-code.md`
-   (transcript half): wezfleet `lib/Delivery.ps1` receipt reading, cmdlog hook, loop-guard hook.
-7. **`agents/codex/Transcript.ps1`** [H4]. Rollout tail; cumulative tokens as `usage.snapshot`, never
-   summed. Tests first from the one real rollout. Ledger: `lib/CodexStatus.ps1`.
-8. **`core/Observe.ps1`, the classifier** [H2]. The pure function of design C2 over injected
-   observations. Tests first, one fixture per state from today's transcripts (M-31 to M-34): "waiting
-   on a live job is never stalled"; "a report with a live child is not closable"; "a reap then silence
-   is stalled after two minutes"; "an unmeasured flag answers unknown, never a state".
-9. **`horde follow`** [H6]. The loop, the scheduled-task install through `horde install`, the tripwire
-   that finds no act verb in the observer's files, the job-handle lifetime test. Gate: one hour in the
-   isolated harness, private bytes measured and reported against the 100 MB target.
-10. **`horde watch` and `horde why`** [H7]. Read commands over H2, `-Json`, two end-to-end scenarios
-    each (Phase 3 rule). Tests first: "watch never opens a transcript".
-11. **Wake messages** [H8]. Tests first with a fake orc target in the isolated harness: "one message per
-    goblin per transition"; "a restart does not repeat a message"; "an unreachable orc escalates to the
-    warchief". Uses wezfleet's `tell` until step 3.6's target resolution is adopted.
-12. **Orphan report** [H18, first half]. Read-only: classes O1 to O6 in `horde status` and `horde
-    watch`. Tests first: "an orphan without proof is reported, never reclaimed"; "a planted kill verb
-    turns the tripwire red".
-13. **`effects` declarations** [H13]. Every command declares read, write, spawn or kill; a suite proves
-    read commands reach no spawn or kill verb, with a planted-verb control. Early, because it guards
-    every step after it.
+   (planted marker); "an unmatched tool call stays open"; one "capability ... holds on its recorded
+   fixture" per declared flag. Ledger `planning/ledger/agent-claude-code.md` (transcript half):
+   wezfleet `lib/Delivery.ps1` receipt reading, the cmdlog hook, the loop-guard hook, and one `test`
+   entry per capability measurement.
+9. **`agents/codex/Transcript.ps1`** [H4]. Rollout tail; cumulative tokens as `usage.snapshot`, never
+   summed; its own measurements and capability suite. Tests first from the one real rollout. Ledger
+   `planning/ledger/agent-codex.md`: `lib/CodexStatus.ps1`.
+10. **`core/Observe.ps1`, the classifier** [H2], with the `stalled` and `looping` detectors of 4.5.
+    The pure function of design C2 over injected observations. Tests first, one fixture per state from
+    today's transcripts (M-31 to M-34): "waiting on a live job is never stalled"; "a report with a live
+    child is not closable"; "a reap then silence is stalled after two minutes"; "an unmeasured flag
+    answers unknown, never a state".
+11. **`horde follow`** [H6]. The loop, the scheduled-task install through `horde install`, the
+    job-handle lifetime test; the observer's files pass step 4's tripwire. Gate: one hour in the
+    isolated harness, private bytes measured and reported against the 100 MB target.
+12. **`horde watch` and `horde why`** [H7]. Read commands over H2, `-Json`, `why --brief`, two
+    end-to-end scenarios each (Phase 3 rule). Tests first: "watch never opens a transcript"; "why brief
+    is at most five lines".
+13. **Wake messages** [H8]. The alerter, the mailbox (H5), `horde inbox`, the doorbell through the
+    agent adapter's `message-inject`, receipts, escalation. Tests first with a fake orc session in the
+    isolated harness: "one wake per goblin per transition"; "a restart does not repeat a wake"; "a wake
+    is in the mailbox before any doorbell"; "a wake reaches an orc whose host handle is unknown"; "no
+    receipt escalates to the warchief"; "a wake never types into a pane". Ledger
+    `planning/ledger/core-alerter.md`: wezfleet `lib/Notify.ps1` notices, `lib/Mail.ps1` and
+    `lib/Delivery.ps1` (their lessons on receipts and lost messages; the typed path itself stays unported,
+    migration step 6.1).
+14. **`horde orphans`** [H18, first half]. Read-only report of O1, O2 and O4 (O3 deferred to step 33),
+    also shown in `horde status` and `horde watch`. Tests first: "an orphan without proof is reported,
+    never reclaimed"; "harness processes are recognised only through the agent adapter"; "a planted kill
+    verb turns the tripwire red". Adopted through the `orphans` line of `adoption/capabilities.txt`.
 
-## C. Admission, consulted then shadowed
+## D. Metrics: detectors, backlog, context (needs metrics Stage A)
 
-14. **Tiers in configuration.** `core/admission-tiers.json` (L0), the `admission` keys in
+15. **`missed-communication` and `wasted-tokens` detectors, and the backlog** (4.5). Tests first on
+    fixtures cut from today's transcripts: "a wake with no receipt is a missed communication"; "tokens
+    inside a loop are counted as wasted"; "the backlog stores ids, never content"; "a fixed item that
+    recurs reopens". `horde metrics backlog`.
+16. **Context purity per delivered result** (4.5), in `horde metrics report`. Tests first: "orc input
+    growth on the receiving turn is attributed to the result"; "follow-up reads within N turns are
+    counted"; "a span with no consent reports unknown, never zero".
+
+## E. Admission, consulted then shadowed (needs engine-settings Half A)
+
+17. **Tiers in configuration.** `core/admission-tiers.json` (L0), the `admission` keys in
     `schema/engine-config.v1`, the checker findings of 1.3, `explain` output. Tests first: "a project
-    file may not set the admission tier"; "hysteresis below a goblin's commit is refused"; "aggressive
-    needs an until at the live layer"; "no environment variable changes the tier" (with a control that
-    the config file does).
-15. **`core/Admission.ps1`** [H9]. Rule, reservations, hysteresis, priority queue, as a pure function;
+    file may lower the admission tier"; "a project file may not raise the admission tier"; "a run spec
+    may not set the admission tier"; "hysteresis below a goblin's commit is refused"; "aggressive needs
+    an until at the live layer"; "no environment variable changes the tier" (with a control that the
+    config file does).
+18. **`core/Admission.ps1`** [H9]. Rule, reservations, hysteresis, priority queue, as a pure function;
     `horde admit --kind k --json` answers admit or queue with reasons and acts on nothing. Tests first:
     "standard refuses a goblin at 15:05 counters"; "standard refuses at 15:12 and 15:22 counters";
     "conservative refuses at all three"; "one close never reopens the gate". Ledger
     `planning/ledger/core-admission.md`: wezfleet `commands/pump.ps1` caps, `liveTotal + spawned`,
     "wezterm did not answer" queues.
-16. **Per-kind costs** [H10]. `obs.resources` to p90 per kind over 20 spans, floored at the priors.
-17. **Tier tuning.** The tighten-only L4 writer and `horde metrics tune --propose` of 1.4. Tests first:
-    "a reap while open raises the reserve"; "nothing lowers a reserve without the founder". Shadowed:
-    proposals logged for a working week before any L4 write.
+19. **Per-kind costs** [H10]. `obs.resources` to p90 per kind over 20 spans, floored at the priors
+    (P-1).
+20. **Tier tuning** (1.4, engine-settings decision 9). The automatic raise as an expiring L4 rule and
+    `horde metrics tune --propose` for lowering. Tests first: "a reap while open raises the reserve";
+    "a raise expires after seven days"; "a raise never exceeds conservative plus one gigabyte";
+    "nothing lowers a reserve without the founder". Shadowed: raises logged, not written, for a working
+    week first.
 
-## D. Containment
+## F. Containment (the anchor needs engine-settings Half B)
 
-18. **`core/Contain.ps1` and `platform/windows/`**. Create, name, self-assign, query members and peak,
+21. **`core/Contain.ps1` and `platform/windows/`**. Create, name, self-assign, query members and peak,
     terminate. Tests first, turning J-3 into a suite that acts only on processes it created: "a child
     created before assignment escapes" (the control); "a child created after assignment dies with the
     job"; "the job handle is not inherited by a child"; "assignment nests under an ambient job".
     Machine probe for `horde install`.
-19. **The anchor**, compiled, plus the host flags of 2.5 in `hosts/wezterm/capabilities.json`, measured
+22. **The anchor**, compiled, plus the host flags of 2.5 in `hosts/wezterm/capabilities.json`, measured
     in the isolated instance. Tests first: "a pane whose program exits closes"; "closing the pane ends
     the harness and its children"; "a real harness session runs inside a no-breakaway job" (E2, the
-    cheapest prompt that proves it, CONTRIBUTING 3); the anchor's resident memory measured.
-20. **`horde job run`** [H11]. Admission request, a nested job per heavy job, `PeakJobMemoryUsed`
+    cheapest prompt that proves it, CONTRIBUTING 3); the anchor's resident memory measured and
+    reported, and the goblin prior of P-1 re-measured without a shell.
+23. **`horde job run`** [H11]. Admission request, a nested job per heavy job, `PeakJobMemoryUsed`
     recorded, the `DONE=` marker, `-Pausable`, `-Service -Until`. Tests first: "a job's peak equals the
     job object's figure"; "a service outlives its goblin only until its expiry". The pause mechanism is
     unmeasured and chosen in this step.
 
-## E. The writers (Phase 5, and step 3.8 for the record)
+## G. The writers (Phase 5, and step 3.8 for the record)
 
-21. **The binding in the record.** Ownership rows and schema of 3.4 in one PR; the record writer applies
-    `obs.rebind`. Tests first: "a compaction keeps the binding revision"; "a new session id links
+24. **The binding in the record.** Ownership rows and the in-place `session-record.v1` edit of 3.4 in
+    one PR, merged before step 3.8's writer ships; the record writer applies `obs.rebind`. Tests first:
+    "a compaction keeps the binding revision"; "model drift does not rebind"; "a new session id links
     predecessor and successor"; "a secret-shaped env value is refused".
-22. **`horde goblin show` and `horde resume`.** Tests first: "resume refuses a shorter transcript";
+25. **`horde goblin show` and `horde resume`.** Tests first: "resume refuses a shorter transcript";
     "resume refuses a harness change"; "resume never falls back to the default profile"; end-to-end in
     the isolated harness.
-23. **Spawn claims** [H12]. `CreateNew` claims, spawn token, `spawn-unknown`, `launch --resume`. Tests
+26. **Spawn claims** [H12]. `CreateNew` claims, spawn token, `spawn-unknown`, `launch --resume`. Tests
     first: "two pumps, one spawn"; "a killed pump leaves no duplicate". Ledger: `commands/pump.ps1`.
-24. **Goblin spawn through the anchor** [H15]. The pane's program is the anchor, never a shell.
-25. **The closer** [H14]. Design A1 states, A3 order, the handle-based end through the anchor, the
-    tombstone, the orc notice. Isolated harness only; every refusal mutation-tested; the victim guard of
-    CONTRIBUTING 9. Ledger `planning/ledger/core-closer.md`: `lib/Cleanup.ps1`, `lib/Kill.ps1`,
-    `lib/Notify.ps1` `Close-WfOwnPane`, wezreport's closeOnDone and `resume.txt`.
-26. **`horde route` and `horde park`** [H16]. Park requires a reason and an expiry capped at 24 h.
-27. **Worktree reaper** [H17]. The design's four conditions on `work-merged`, each refusal tested.
-28. **Orphan reclaim** [H18, second half]. Proven ownership only, handle method, `obs.orphan` with
+27. **Goblin spawn through the anchor** [H15]. The pane's program is the anchor, never a shell.
+28. **The closer** [H14]. Design A1 states, A3 order, the handle-based end through the anchor, the
+    tombstone, the orc notice through the alerter. Isolated harness only; every refusal
+    mutation-tested; the victim guard of CONTRIBUTING 9. Ledger `planning/ledger/core-closer.md`:
+    `lib/Cleanup.ps1`, `lib/Kill.ps1`, `lib/Notify.ps1` `Close-WfOwnPane`, wezreport's closeOnDone and
+    `resume.txt`.
+29. **`horde route` and `horde park`** [H16]. Park requires a reason and an expiry capped at 24 h.
+30. **Worktree reaper** [H17]. The design's four conditions on `work-merged`, each refusal tested.
+31. **Orphan reclaim** [H18, second half]. Proven ownership only, handle method, `obs.orphan` with
     the proof. Tests first: "reclaim cannot choose its victim".
-29. **The gate acting** [H19]. The actor pumps queued spawns on `open`; the ladder of design B2.6.
+32. **The gate acting** [H19]. The actor pumps queued spawns on `open`; the ladder of design B2.6.
     Shadowed against wezfleet's pump for a working day before it acts.
+33. **O3, bare-shell panes** (deferred). Only after Phase 3 has settled what Horde reads from hosts:
+    the host adapter answers `pane.bareShell` from the pane's program pid and its own list of shell
+    images, and core never reads a title. Until then wezfleet census reports them, and after step 27
+    new goblins cannot leave one.
 
-Order: A now. B next, in the order given; it answers "what is every goblin doing, and what holds
-memory" with no writer. C and D after B, consulted and shadowed before anything acts. E with Phase 5.
+Order: A now. B before any Phase 3 command merges. C next, in the order given; it answers "what is
+every goblin doing, and what holds memory" with no writer. D once metrics Stage A exists. E and F
+after C, consulted and shadowed before anything acts. G with Phase 5.
 
 ---
 
@@ -684,24 +878,14 @@ memory" with no writer. C and D after B, consulted and shadowed before anything 
   reaping was observed, not on that threshold.
 - Whether the pagefile is system-managed, which decides what commit near its limit does.
 - Whether the Claude Code harness, or any tool it runs, ever creates a process with
-  `CREATE_BREAKAWAY_FROM_JOB`; if it does, that create fails inside a goblin's job (step 19 measures).
+  `CREATE_BREAKAWAY_FROM_JOB`; if it does, that create fails inside a goblin's job (step 22 measures).
 - Whether `/clear` gives a running session a new id (ownership `formerNames` is provisional on it).
 - The anchor's resident memory, and the follower's (targets, not measurements).
+- The goblin cost prior without a shell (P-1 includes one; step 22 re-measures).
 - Windows 10 nesting: documented, not measured here (J-3 ran on 10.0.26200).
 - Whether the terminal's default closes a pane only on a clean exit; a harness that exits non-zero
-  might leave its pane open (step 19 measures `spawn.exitCloses`).
+  might leave its pane open (step 22 measures `spawn.exitCloses`).
 - Every `unmeasured` cell in 4.3.
-
-# Still with the founder
-
-1. Should the tuner raise admission reserves by itself after a reap while the gate was open (as a live
-   rule that expires after 7 days, capped at the conservative value plus 1 GB), with any lowering only
-   ever proposed to you, or should it only propose in both directions?
-2. Adding the resume binding and the `engine` field changes the stored session record, whose schema
-   refuses unknown properties: edit `session-record.v1` in place (safe only until the record writer of
-   step 3.8 has written a first record) or publish `session-record.v2`?
-3. Where should Horde's home folder default to when `HORDE_HOME` is not set: a `.horde` folder under the
-   user profile (the unmerged Phase 3 plan already puts its shadow logs under `%USERPROFILE%\.horde`),
-   or somewhere else?
-4. May the anchor be a small compiled executable (like wezfleet's `wf-cmdlog.exe`), since a PowerShell
-   anchor would stay resident at about the 58 to 66 MB a pane shell costs today for every goblin?
+- The estimates, each a starting value the metrics tune: the 256 MB raise step and the 14-day quiet
+  period (1.4); the 20-turn follow-up window (4.5); the 400-byte, three-line wake size (4.5); the 60 s
+  receipt timeout and the 10 wakes per orc per minute (Part 5).
