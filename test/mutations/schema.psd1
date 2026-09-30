@@ -54,6 +54,12 @@
         @{ Name = "property-names-ignore-case"
            Find = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
            Replace = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "non-object-schema-accepted"
+           Find = 'if (-not ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary])) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "additional-properties-any-value"
+           Find = 'if ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -isnot [bool]) {'
+           Replace = 'if ($false) {' }
         @{ Name = "schema-name-unchecked"
            Find = 'if ($Name -cnotmatch ''\A[a-z][a-z0-9-]*\.v[0-9]+\z'') { throw'
            Replace = 'if ($false) { throw' }

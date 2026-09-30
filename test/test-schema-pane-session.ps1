@@ -17,11 +17,22 @@ $schema = Get-HordeSchema -Name "pane-session.v1"
 $fx = Join-Path $root "test\fixtures\pane-session"
 function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
 function Findings { param($Value) return @(Test-HordeSchema -Value $Value -Schema $schema) }
+# Does any finding match Like? Findings are asserted by their TEXT, so a check cannot pass on some other finding.
+function Has { param($Found, [string]$Like) return (@(@($Found) | Where-Object { $_ -clike $Like }).Count -gt 0) }
 
 Write-Host ""
 Write-Host "--- the validator refuses what it does not implement ---" -ForegroundColor Cyan
 Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = 3 }) } "does not implement") "a schema keyword the validator does not implement is refused, never silently skipped"
 Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "decimal" }) } "does not know") "an unknown type name is refused"
+# A rule the validator cannot apply is refused, never read as "anything goes". Draft-07 allows
+# additionalProperties to be a schema and allows a schema to be true or false; this validator does not
+# implement either, and the first version accepted everything for both (review of PR #15).
+$oneKey = [pscustomobject]@{ a = 1 }
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = [pscustomobject]@{ type = "string" } }) } "additionalProperties at $ must be true or false") "additionalProperties given as a schema is refused"
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = 0 }) } "additionalProperties at $ must be true or false") "additionalProperties 0 is refused, not read as false"
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema $false } "the schema at $ is not an object") "a boolean schema is refused"
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at $.a is not an object") "a boolean schema under properties is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema "integer" } "the schema at $ is not an object") "a schema that is a string is refused"
 Check (@(Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ "x-note" = "anything" })).Count -eq 0) "x- keys are documentation and are ignored"
 Check (@(Test-HordeSchema -Value "a" -Schema ([pscustomobject]@{ enum = @("A") })).Count -eq 1) "enum compares strings case-sensitively"
 Check (@(Test-HordeSchema -Value ([pscustomobject]@{ a = 1; b = 2 }) -Schema ([pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }; additionalProperties = $false })).Count -eq 1) "additionalProperties false refuses a key the schema does not name"
@@ -34,7 +45,6 @@ Write-Host "--- keys are compared exactly, as the readers compare them ---" -For
 # wezterm-resurrect's Lua reads session_id with a case-sensitive table lookup, so a file whose only
 # id is SESSION_ID has no id as far as it is concerned. The validator must agree, for the keys of the
 # value AND for the names in the schema's properties.
-function Has { param($Found, [string]$Like) return (@(@($Found) | Where-Object { $_ -clike $Like }).Count -gt 0) }
 $exactSchema = [pscustomobject]@{ type = "object"; required = @("a"); properties = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }; additionalProperties = $false }
 Check (Has (Test-HordeSchema -Value ([pscustomobject]@{ A = 1 }) -Schema $exactSchema) "$ has no 'a'") "a required key is not satisfied by one differing only in case"
 Check (Has (Test-HordeSchema -Value ([pscustomobject]@{ A = 1 }) -Schema $exactSchema) "$ has 'A', which the schema does not allow") "a key differing only in case from a property is not that property"

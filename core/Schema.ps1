@@ -70,11 +70,22 @@ function ConvertTo-HordeSchemaPattern {
 function Test-HordeSchema {
     param($Value, $Schema, [string]$Path = '$')
     $findings = New-Object System.Collections.ArrayList
+    # A schema node that is not an object is refused. Draft-07 allows true and false as schemas, and
+    # read as an object they have no keywords, so the first version accepted everything for both
+    # (review of PR #15).
+    if (-not ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary])) {
+        throw ("the schema at " + $Path + " is not an object; boolean and other schemas are not implemented")
+    }
     $kw = @{}
     foreach ($p in (Get-HordeSchemaProps $Schema)) {
         if ($p.Name -like "x-*") { continue }
         if ($script:HordeSchemaKeywords -cnotcontains $p.Name) { throw ("the schema uses '" + $p.Name + "' at " + $Path + ", which this validator does not implement") }
         $kw[$p.Name] = $p.Value
+    }
+    # additionalProperties may also be a schema in draft-07; that is not implemented, and 0 or "false"
+    # must not be read as false either. Only a real boolean is accepted.
+    if ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -isnot [bool]) {
+        throw ("additionalProperties at " + $Path + " must be true or false; a schema there is not implemented")
     }
     if ($kw.ContainsKey("type")) {
         if (-not (Test-HordeSchemaType -Value $Value -Type "$($kw['type'])")) {
