@@ -181,7 +181,7 @@ sources:
 - where: core/ownership.json :: "but no shipped caller passes it, so it is always empty"
 
 ### L-034 What a former name's sessionId means is unmeasured
-- source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) lists formerNames entries of name, until and a sessionId different from the file's own; nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
+- source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) was recorded here as listing a formerNames entry whose sessionId differed from the file's own. CORRECTED 2026-09-30: re-read for the core/identity research, that file's one formerNames entry (until 1790626048401, 2026-09-28T20:07:28.401Z) carries a sessionId EQUAL to the file's own, and its until equals the file's nameSince; it is still the only file of 10 with the field. Whether the file changed between the two readings or the first reading was wrong cannot be reconstructed, so the earlier "different" is withdrawn, not explained. Nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
 - disposition: comment
 - where: core/ownership.json :: "whether that is an earlier id of this same conversation"
 
