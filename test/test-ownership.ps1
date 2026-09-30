@@ -37,6 +37,13 @@ $paneOrder = @($pane.read | ForEach-Object { "$($_.store)" })
 $w1 = [array]::IndexOf($paneOrder, "W1"); $w5 = [array]::IndexOf($paneOrder, "W5"); $w4 = [array]::IndexOf($paneOrder, "W4")
 Write-Host ("  pane is read from: " + ($paneOrder -join ", ")) -ForegroundColor DarkGray
 Check ($null -ne $pane -and $w1 -ge 0 -and $w1 -lt $w5 -and $w5 -lt $w4) "pane, stored three times in wezfleet, has one read order across all of them"
+# ONE FRESHNESS RULE FOR THE REGISTRY'S PANE, and it is census's. wezfleet has two: 900 seconds of
+# lastSeen (lib/Registry.ps1:537, :779) and the instance rule with no age (census through
+# Get-WfPaneIndex, :393-394, and the act-on finder, :658-659). Horde shadows census, so it reads by
+# census's rule and a comparison against it is predictable.
+$paneW1 = @($pane.read | Where-Object { "$($_.store)" -ceq "W1" })[0]
+Check ("$($paneW1.when)" -like "*written in this terminal instance*" -and "$($paneW1.when)" -like "*no age limit*" -and "$($paneW1.when)" -notlike "*900 seconds old*") "the registry's pane is read by census's rule, with no age limit"
+Check ("$($pane.provisional)" -like "*no single wezfleet function*") "the order of the pane-sessions file before the status snapshot is marked as a new decision"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"

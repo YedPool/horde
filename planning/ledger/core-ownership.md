@@ -134,3 +134,13 @@ sources:
 - source: the first draft of core/ownership.json listed the environment as a store and no field read it; the gate caught it before commit
 - disposition: test
 - where: test/test-ownership.ps1 :: "a store no field reads is refused"
+
+### L-025 wezfleet has two freshness rules for the registry's pane; Horde reads by census's
+- source: YedPool/wezfleet lib/Registry.ps1:537 and :779 "[int]$MaxAgeSeconds = 900" measured against lastSeen (Get-WfLivePaneForFleetSession, used by the run snapshot at lib/Protocol.ps1:536; Get-WfPaneIdentity), against lib/Registry.ps1:393-394 "if ($r.retired) { continue }" and "Test-WfWrittenInInstance ... lastSeen" with no age (Get-WfPaneIndex, which census uses at :833) and :658-659, the same rule in Find-WfLivePaneForSession, which cleanup, tell and kill use to pick a pane to act on. Review finding 5, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the registry's pane is read by census's rule, with no age limit"
+
+### L-026 The pane-sessions file before the status snapshot is a new order, not an inherited one
+- source: YedPool/wezfleet lib/Registry.ps1:833-840 (census: the registry index, else the pane-sessions file) against lib/Protocol.ps1:533-536 (run snapshot: roster, then status.json, then registry; no pane-sessions read). No function orders X1 against W5. Review finding 5, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the order of the pane-sessions file before the status snapshot is marked as a new decision"
