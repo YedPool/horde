@@ -249,7 +249,7 @@ PutJson (Join-Path $d12 "301.json") (ClaudeRec 301 (Sid 61) $c12 -Set @{ status 
 PutJson (Join-Path $d12 "302.json") (ClaudeRec 302 (Sid 62) $c12 -Set @{ status = "busy"; statusUpdatedAt = (EpochMs $stamp); bridgeSessionId = $null; kind = "odd-kind"; entrypoint = "sdk-cli" })
 PutJson (Join-Path $d12 "303.json") (ClaudeRec 303 (Sid 63) $c12 -Drop @("bridgeSessionId", "status"))
 PutJson (Join-Path $d12 "304.json") (ClaudeRec 304 (Sid 64) $c12 -Set @{ formerNames = @(@{ name = "old-name"; until = (EpochMs $c12); sessionId = (Sid 64) }, @{ name = "older"; until = (EpochMs $c12); sessionId = (Sid 99) }) })
-# L-054: waitingFor is written beside status only while the session waits on the user - "permission
+# core-identity L-054: waitingFor is written beside status only while the session waits on the user - "permission
 # prompt" in the one waiting file of 10 on 2026-09-30, and absent from the 9 idle ones. 305 waits and
 # says for what; 306 waits and says nothing; 307 waited, but its process is gone.
 PutJson (Join-Path $d12 "305.json") (ClaudeRec 305 (Sid 65) $c12 -Set @{ status = "waiting"; waitingFor = "permission prompt" })
@@ -441,7 +441,7 @@ Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Code\Dist Folders\Dist_12_23_25
 Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Users\x\Code") -ceq "C--Users-x-Code") "CONTROL: a plain cwd maps as wezfleet's colon-and-slash rule would"
 Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b") -and -not (Test-HordeSessionId -Id "") -and -not (Test-HordeSessionId -Id ("x" * 129))) "a session id is validated before it becomes a key"
 # L-026: every key a fixture control file carries - the census's 19 plus formerNames, and waitingFor,
-# which only a waiting session writes (L-054) - has a row.
+# which only a waiting session writes (core-identity L-054) - has a row.
 $keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor")
 $x2Reads = @($ownership.fields | ForEach-Object { @($_.read) } | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { "$($_.field)" })
 $droppedN = @($ownership.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
