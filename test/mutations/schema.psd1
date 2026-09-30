@@ -64,7 +64,7 @@
            Find = 'if ($null -ne $r -and -not $have.ContainsKey("$r")) {'
            Replace = 'if ($false) {' }
         @{ Name = "properties-not-recursed"
-           Find = 'foreach ($f in @(Test-HordeSchema -Value $have[$name] -Schema $props[$name] -Path ($Path + "." + $name))) { [void]$findings.Add($f) }'
+           Find = 'foreach ($f in @(Test-HordeSchema -Value $have[$name] -Schema $props[$name] -Path ($Path + "." + $name) -Root $Root)) { [void]$findings.Add($f) }'
            Replace = '' }
         @{ Name = "additional-properties-ignored"
            Find = '} elseif ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -eq $false) {'
@@ -141,5 +141,35 @@
         @{ Name = "schema-name-unchecked"
            Find = 'if ($Name -cnotmatch ''\A[a-z][a-z0-9-]*\.v[0-9]+\z'') { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "ref-not-anchored"
+           Find = '[regex]::Match($Ref, ''\A#/definitions/([A-Za-z0-9_-]+)\z'')'
+           Replace = '[regex]::Match($Ref, ''#/definitions/([A-Za-z0-9_-]+)'')' }
+        @{ Name = "missing-definition-yields-nothing"
+           Find = 'throw ("the schema''s `$ref ''" + $Ref + "'' names no definition")'
+           Replace = 'return $null' }
+        @{ Name = "definition-name-ignores-case"
+           Find = 'if ($d.Name -ceq $name) { return $d.Value }'
+           Replace = 'if ($d.Name -eq $name) { return $d.Value }' }
+        @{ Name = "keyword-beside-ref-allowed"
+           Find = 'if ($beside.Count -gt 0) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "nested-definitions-allowed"
+           Find = 'if ($kw.ContainsKey("definitions") -and -not $atTop) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "circular-ref-followed"
+           Find = 'if ($RefsHere -ccontains $ref) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "ref-chain-forgotten"
+           Find = '-RefsHere (@($RefsHere) + $ref))'
+           Replace = '-RefsHere @())' }
+        @{ Name = "ref-not-followed"
+           Find = 'return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))'
+           Replace = 'return @()' }
+        @{ Name = "root-lost-in-properties"
+           Find = '-Path ($Path + "." + $name) -Root $Root)'
+           Replace = '-Path ($Path + "." + $name))' }
+        @{ Name = "root-lost-in-items"
+           Find = '-Path ($Path + "[" + $i + "]") -Root $Root)'
+           Replace = '-Path ($Path + "[" + $i + "]"))' }
     )
 }

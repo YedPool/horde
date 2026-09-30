@@ -6,14 +6,26 @@
 # than silently skipping a rule it does not understand:
 #
 #   type (object, array, string, integer, number, boolean, null), required, properties,
-#   additionalProperties (true or false), items, enum, pattern
+#   additionalProperties (true or false), items, enum, pattern, definitions, $ref
+#
+# $ref IS LOCAL ONLY, "#/definitions/<name>", resolved against the top of the schema being checked.
+# It exists so a recursive shape - the layout tree of schema/restore-plan.v1 - can be described. A
+# $ref to another document, to any other part of this one, or to a definition that is not there is
+# refused (thrown), exactly as an unknown keyword is: fetching or skipping it would change what
+# "valid" means without saying so. Also refused: a validation keyword beside a $ref, which draft-07
+# IGNORES, so a reader would believe a rule that no conforming validator applies; definitions
+# anywhere but the top, where "#/definitions/" would never find them; and a chain of $refs that
+# comes back to itself without reaching a value, which would otherwise recurse until the call stack
+# overflows.
 #
 # Keys starting "x-", and $schema, $id, title and description, are documentation and are ignored.
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
 $script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern",
-                                 '$schema', '$id', "title", "description")
+                                 '$schema', '$id', "title", "description", "definitions", '$ref')
+# The keywords that may sit beside a $ref: they say nothing about the value.
+$script:HordeSchemaInertKeywords = @('$schema', '$id', "title", "description", "definitions")
 
 function Test-HordeSchemaType {
     param($Value, [string]$Type)
@@ -78,15 +90,31 @@ function ConvertTo-HordeSchemaPattern {
     return $sb.ToString()
 }
 
+function Resolve-HordeSchemaRef {
+    # The definition a local $ref names, from the top of the schema.
+    param([string]$Ref, $Root)
+    $m = [regex]::Match($Ref, '\A#/definitions/([A-Za-z0-9_-]+)\z')
+    if (-not $m.Success) { throw ("the schema's `$ref '" + $Ref + "' is not one this validator follows: only local ones, #/definitions/<name>") }
+    $name = $m.Groups[1].Value
+    foreach ($p in (Get-HordeSchemaProps $Root)) {
+        if ($p.Name -cne "definitions") { continue }
+        foreach ($d in (Get-HordeSchemaProps $p.Value)) { if ($d.Name -ceq $name) { return $d.Value } }
+    }
+    throw ("the schema's `$ref '" + $Ref + "' names no definition")
+}
+
 function Test-HordeSchema {
-    param($Value, $Schema, [string]$Path = '$')
+    # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
+    param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
     $findings = New-Object System.Collections.ArrayList
     # A schema node that is not an object is refused. Draft-07 allows true and false as schemas, and
     # read as an object they have no keywords, so the first version accepted everything for both
-    # (review of PR #15).
+    # (review of PR #15). This covers a definition a $ref reaches, too.
     if (-not ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary])) {
         throw ("the schema at " + $Path + " is not an object; boolean and other schemas are not implemented")
     }
+    $atTop = ($null -eq $Root)
+    if ($atTop) { $Root = $Schema }
     $kw = @{}
     foreach ($p in (Get-HordeSchemaProps $Schema)) {
         if ($p.Name -like "x-*") { continue }
@@ -109,6 +137,15 @@ function Test-HordeSchema {
             $isWhole = ($e -is [int] -or $e -is [long])
             if ($e -isnot [string] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings and whole numbers; '" + $e + "' is neither") }
         }
+    }
+    if ($kw.ContainsKey("definitions") -and -not $atTop) { throw ("the schema has definitions below the top of a schema, at " + $Path + "; #/definitions/ would never find them") }
+    if ($kw.ContainsKey('$ref')) {
+        $beside = @($kw.Keys | Where-Object { $_ -cne '$ref' -and $script:HordeSchemaInertKeywords -cnotcontains $_ })
+        if ($beside.Count -gt 0) { throw ("the schema has " + ($beside -join ", ") + " beside a `$ref at " + $Path + ", which draft-07 ignores") }
+        $ref = "$($kw['$ref'])"
+        if ($RefsHere -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
+        $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
+        return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))
     }
     if ($kw.ContainsKey("type")) {
         if (-not (Test-HordeSchemaType -Value $Value -Type "$($kw['type'])")) {
@@ -150,7 +187,7 @@ function Test-HordeSchema {
         if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
         foreach ($name in @($have.Keys)) {
             if ($props.ContainsKey($name)) {
-                foreach ($f in @(Test-HordeSchema -Value $have[$name] -Schema $props[$name] -Path ($Path + "." + $name))) { [void]$findings.Add($f) }
+                foreach ($f in @(Test-HordeSchema -Value $have[$name] -Schema $props[$name] -Path ($Path + "." + $name) -Root $Root)) { [void]$findings.Add($f) }
             } elseif ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -eq $false) {
                 [void]$findings.Add($Path + " has '" + $name + "', which the schema does not allow")
             }
@@ -158,7 +195,7 @@ function Test-HordeSchema {
     }
     if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {
         $i = 0
-        foreach ($item in $Value) { foreach ($f in @(Test-HordeSchema -Value $item -Schema $kw["items"] -Path ($Path + "[" + $i + "]"))) { [void]$findings.Add($f) }; $i++ }
+        foreach ($item in $Value) { foreach ($f in @(Test-HordeSchema -Value $item -Schema $kw["items"] -Path ($Path + "[" + $i + "]") -Root $Root)) { [void]$findings.Add($f) }; $i++ }
     }
     return @($findings)
 }
