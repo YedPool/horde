@@ -492,15 +492,24 @@ if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
     $verified = @($real.verified)
     $reused = @($recs | Where-Object { (St $_.fields.liveStatus) -eq "unknown" -and $_.fields.liveStatus.reason -like "*reused*" })
     $stale = @($recs | Where-Object { (St $_.fields.liveStatus) -eq "unknown" -and $_.fields.liveStatus.reason -like "*not running*" })
-    $orph = @(); if ((St $real.orphans) -eq "known") { $orph = @(Val $real.orphans) }
-    Write-Host ("  " + $realFiles.Count + " control files, " + $recs.Count + " records, " + $verified.Count + " verified live, " + $stale.Count + " stale, " + $reused.Count + " pid reused, " + $orph.Count + " claude processes with no file") -ForegroundColor DarkGray
+    $orphText = "orphans unknown: " + $real.orphans.reason
+    if ((St $real.orphans) -eq "known") { $orphText = "" + @(Val $real.orphans).Count + " claude processes no file verifies" }
+    Write-Host ("  " + $realFiles.Count + " control files, " + $recs.Count + " records, " + $verified.Count + " verified live, " + $stale.Count + " stale, " + $reused.Count + " pid reused; " + $orphText) -ForegroundColor DarkGray
     Check ((St $real.complete) -eq "known" -and $recs.Count -eq $realFiles.Count) ("every real control file is read without error (" + $recs.Count + " of " + $realFiles.Count + $(if ((St $real.complete) -ne "known") { "; " + $real.complete.reason } else { "" }) + ")")
-    Check ($reused.Count -eq 0) ("every live pid on this machine matches its procStart (" + (@($reused | ForEach-Object { $_.source }) -join ", ") + ")")
+    # A REUSED PID ON THIS MACHINE IS A FACT ABOUT THE MACHINE, not a failure of the code: a crashed
+    # session's file can outlive its process while Windows hands the pid on. It is reported, and the
+    # suite stays green (review finding 6 of PR #19); the fixtures above prove the reuse rule.
+    foreach ($ru in $reused) { Write-Host ("  REPORT: a real control file's pid now belongs to another process: " + $ru.source) -ForegroundColor Yellow }
     if ($realFiles.Count -gt 0) {
         Check ($verified.Count -ge 1) ("CONTROL: at least one real control file names its running process (" + $verified.Count + ")")
     }
     $realKeys = @()
-    foreach ($f in $realFiles) { try { $realKeys += @(((Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }) } catch { } }
+    $keyFiles = 0
+    foreach ($f in $realFiles) { try { $realKeys += @(((Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }); $keyFiles++ } catch { Write-Host ("  keys not read from " + $f.Name + ": " + $_.Exception.Message) -ForegroundColor Yellow } }
+    # The key check below passes vacuously on no keys, and the read above swallows each file's error,
+    # so it must be shown to have read something whenever there were files to read (review finding 6
+    # of PR #19).
+    Check ($realFiles.Count -eq 0 -or ($keyFiles -ge 1 -and @($realKeys).Count -ge 1)) ("CONTROL: the keys of the real control files were read (" + $keyFiles + " of " + $realFiles.Count + " files, " + @($realKeys | Sort-Object -Unique).Count + " distinct keys)")
     $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
     Check ($realNoRow.Count -eq 0) ("every key in this machine's control files has a row in the ownership table (" + ($realNoRow -join ", ") + ")")
 }
