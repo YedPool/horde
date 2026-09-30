@@ -4,27 +4,27 @@
   "sessions": [
     {
       "slot": "s1",
-      "sessionId": "38d41f80-0000-4000-8000-000000000001",
+      "sessionId": "aaaaaaaa-0000-4000-8000-000000000001",
       "agent": "claude",
       "role": "orchestrator",
       "label": "D",
       "cwd": "C:\\Code\\wezfleet",
       "resume": {
         "kind": "claude-resume",
-        "id": "38d41f80-0000-4000-8000-000000000001"
+        "id": "aaaaaaaa-0000-4000-8000-000000000001"
       }
     },
     {
       "slot": "s2",
-      "sessionId": "01a0ef46-0000-4000-8000-000000000002",
+      "sessionId": "bbbbbbbb-0000-4000-8000-000000000002",
       "agent": "codex",
       "role": "goblin",
       "label": "D1",
-      "parent": "38d41f80-0000-4000-8000-000000000001",
+      "parent": "aaaaaaaa-0000-4000-8000-000000000001",
       "cwd": "C:\\Code\\wezfleet",
       "resume": {
         "kind": "codex-resume",
-        "id": "01a0ef46-0000-4000-8000-000000000002"
+        "id": "bbbbbbbb-0000-4000-8000-000000000002"
       }
     }
   ],
