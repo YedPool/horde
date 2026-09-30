@@ -70,7 +70,8 @@ where the next reader can disagree with it.
   absence.
 - **A `test` disposition names a real test and quotes one of its assertions.** The file must be a
   `.ps1` under `test/`, inside the repository, and must contain the quoted text *as a quoted string*
-  of at least three words. Each part closes a way an independent review found to pass the gate
+  of at least three words on a line of code, never a comment, reached through no link. Each part
+  closes a way an independent review found to pass the gate
   without reading anything: naming a directory, naming the ledger itself, climbing out with `..`,
   or quoting a single letter that appears in every file.
 - **A `comment` disposition names a file and quotes the phrase that carries the lesson.** The file
@@ -90,8 +91,12 @@ Stated so nobody relies on a guarantee the code does not give.
   still pass. Until something enforces it, review does.
 - **That a source is real.** Any non-empty `source:` is accepted. A reader can follow it; the gate
   cannot.
-- **That a quoted assertion is the right one.** The gate proves the quoted test name exists. It
-  cannot prove that test actually enforces the lesson. That is a reviewer's question.
+- **That a quoted assertion is the right one.** The gate proves the quoted test name exists on a line
+  of code, not in a comment. It cannot prove that test actually enforces the lesson. That is a
+  reviewer's question.
+- **That the quoted string is a test's name.** Any quoted string on a code line counts - a
+  `Write-Host` printing the same words would satisfy the gate. Comment lines no longer do, which closes
+  the case that matters most: a test that was deleted while a comment still quotes its name.
 - **Assertions that contain a double quote.** They cannot be cited, because the quote ends the
   `where:` text. The gate refuses them rather than guessing, so the failure is safe but real.
 - **Anything, automatically.** There is no CI yet. The suite runs when someone runs it.
