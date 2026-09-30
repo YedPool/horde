@@ -138,3 +138,8 @@ sources:
 - source: second review of YedPool/horde PR #12, findings 4 and 6, measured 2026-09-29 on PowerShell 5.1: `[Environment]::Exit(5)` in a body gave horde exit 5; `powershell -Command "& horde.ps1 no-such-command"` exited 1, and 2 only with `; exit $LASTEXITCODE` appended
 - disposition: comment
 - where: horde.ps1 :: "caller that wants 0, 1 or 2 appends"
+
+### L-025 A test says what it guards, and is mutation-checked against that claim
+- source: second review of YedPool/horde PR #12, finding 7: the comment on the "..\Commands" dispatch test said it fails if the name check is removed, and it does not - dispatch compares names with the listing and never builds a path. The comment now says it guards against path joining; a unit test holds the name check in Find-HordeCommand, and fails when that check is removed (mutation-checked 2026-09-29)
+- disposition: test
+- where: test/test-cli.ps1 :: "a malformed name claims no broken file's findings"

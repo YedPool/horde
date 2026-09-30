@@ -138,11 +138,34 @@ Check ($r.code -eq 2 -and $r.err -like "*unknown command 'no-such-command'*") "a
 $r = Invoke-Horde -Root $root -Arguments @("version", "-Bogus")
 Check ($r.code -eq 2 -and $r.err -like "*usage: horde version*") "a flag the command does not take exits 2 with its usage, never silently ignored"
 # "..\Commands" is aimed at a file that EXISTS - cli\Commands.ps1, one folder up from cli\commands -
-# so this fails if the name check is removed. The first version aimed at "..\cli\Commands", which is
-# missing either way, and could not fail (review of PR #12).
+# so this fails if dispatch ever joins a typed name onto a path again, as its first version did. It
+# does NOT fail if the name check in Find-HordeCommand is removed: a name is only ever compared with
+# the names in the listing, which a path never equals (second review of PR #12, finding 7). The unit
+# tests after it hold the name check itself.
 Check (Test-Path -LiteralPath (Join-Path $root "cli\Commands.ps1") -PathType Leaf) "CONTROL: the file a path-shaped name would reach really exists"
 $r = Invoke-Horde -Root $root -Arguments @("..\Commands")
 Check ($r.code -eq 2 -and $r.err -like "*unknown command*") "a command name that is a path reaches no file"
+$found = Find-HordeCommand -Name "..\Commands"
+Check ($null -eq $found.command -and @($found.findings).Count -eq 0) "looking up a path-shaped name finds no command and no broken file"
+# THE NAME CHECK IN Find-HordeCommand: only a well-formed name may claim a broken file's findings.
+# A broken file whose own name is malformed (bad_name.ps1) is listed as a finding; looked up by that
+# malformed name it must give nothing, as every other malformed name does - so `horde bad_name` is an
+# unknown command (exit 2), never "its command file is broken" (exit 1). This fails if the
+# Test-HordeCommandName call is removed from Find-HordeCommand (mutation-checked 2026-09-29).
+$malformed = Join-Path $env:TEMP ("horde-cli-name-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $malformed | Out-Null
+try {
+    Set-Content -LiteralPath (Join-Path $malformed "bad_name.ps1") -Value '$HordeCommand = @{ name = "bad_name"; group = "about"; usage = "bad_name"; summary = "a malformed name"; run = { [CmdletBinding()] param() } }'
+    Check ((Test-HordeCommandName -Name "bad_name") -eq $false) "CONTROL: bad_name is not a well-formed command name"
+    $all = Get-HordeCommands -Dir $malformed
+    Check (@($all.findings | Where-Object { $_ -like "bad_name.ps1: *not lowercase*" }).Count -eq 1) "CONTROL: bad_name.ps1 is listed as a broken command file"
+    $found = Find-HordeCommand -Name "bad_name" -Dir $malformed
+    Check ($null -eq $found.command -and @($found.findings).Count -eq 0) "a malformed name claims no broken file's findings"
+}
+finally {
+    if ((Split-Path -Leaf $malformed) -match '^horde-cli-name-[0-9a-f]{32}$') { Remove-Item -LiteralPath $malformed -Recurse -Force -ErrorAction SilentlyContinue }
+}
+Check (-not (Test-Path -LiteralPath $malformed)) "the malformed-name folder was removed"
 
 # A STAND-IN ROOT with two extra commands, so forwarding and failure can be tested without shipping
 # test commands: the real dispatcher and registry, copied, with fixture commands beside them.
