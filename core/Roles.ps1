@@ -79,10 +79,16 @@ function Get-HordeWezfleetRoot {
 
 function Read-HordeWezfleetRoles {
     # Every role wezfleet holds - session records and pending spawn claims - read, never written.
-    # Returns { sessions; claims; unreadable; mismatched; complete }, where complete is an answer: known when
-    # the sessions directory was there and listed and every record could be read, unknown with every
-    # reason otherwise. wezfleet's own reader skips an
-    # unreadable record silently, which can make it report "no master" when there is one.
+    # Returns { sessions; claims; unreadable; mismatched; sessionsComplete; claimsComplete; complete }.
+    # The three completes are answers, known when that part was read whole and unknown with every
+    # reason otherwise: sessionsComplete covers the sessions directory and its records,
+    # claimsComplete the claims directory and its claims, complete both. wezfleet's own reader skips
+    # an unreadable record silently, which can make it report "no master" when there is one.
+    #
+    # TWO COMPLETENESSES, NOT ONE: a single one let one corrupt claim make every SESSION count unknown,
+    # and wezfleet never deletes a claim it cannot read (lib/Registry.ps1 Read-WfPaneClaim returns
+    # $null on a parse error), so that would have lasted (review, 2026-09-29). Each count checks only
+    # the half it reads.
     param([string]$Root = (Get-HordeWezfleetRoot), $Table = $null)
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     $sessions = New-Object System.Collections.ArrayList
@@ -90,8 +96,11 @@ function Read-HordeWezfleetRoles {
     $unreadable = New-Object System.Collections.ArrayList
     $mismatched = New-Object System.Collections.ArrayList
 
-    # Problems that leave the read incomplete, beyond single unreadable records.
-    $gaps = New-Object System.Collections.ArrayList
+    # Problems that leave each half of the read incomplete.
+    $sessionGaps = New-Object System.Collections.ArrayList
+    $claimGaps = New-Object System.Collections.ArrayList
+    $unreadableSessions = 0
+    $unreadableClaims = 0
 
     # A MISSING SESSIONS DIRECTORY IS NOT AN EMPTY FLEET. wezfleet creates it with its first record, so
     # its absence says the root is wrong (a mistyped WEZFLEET_ROOT), not that nothing runs - and it
@@ -102,18 +111,18 @@ function Read-HordeWezfleetRoles {
     $sessDir = Join-Path $Root "registry\sessions"
     $sessFiles = @()
     if (-not (Test-Path -LiteralPath $sessDir -PathType Container)) {
-        [void]$gaps.Add("there is no sessions directory at " + $sessDir)
+        [void]$sessionGaps.Add("there is no sessions directory at " + $sessDir)
     } else {
         try { $sessFiles = @(Get-ChildItem -LiteralPath $sessDir -File -ErrorAction Stop | Where-Object { $_.Extension -eq ".json" }) }
-        catch { [void]$gaps.Add("the sessions directory could not be listed: " + $_.Exception.Message) }
+        catch { [void]$sessionGaps.Add("the sessions directory could not be listed: " + $_.Exception.Message) }
     }
     if ($sessFiles.Count -gt 0) {
         # Only <id>.json whose claudeSessionId is that id is a record. A writer's temp file
         # (<id>.<pid>.<guid>.tmp) sits beside the records mid-write and is not one.
         foreach ($f in $sessFiles) {
             $rec = $null
-            try { $rec = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
-            if ($null -eq $rec) { [void]$unreadable.Add($f.FullName); continue }
+            try { $rec = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); $unreadableSessions++; continue }
+            if ($null -eq $rec) { [void]$unreadable.Add($f.FullName); $unreadableSessions++; continue }
             $id = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
             # Skipped as wezfleet skips it (lib/Registry.ps1:122, "corrupt, not authoritative"), so
             # counts agree with it - but listed, because a silently dropped record is how a session,
@@ -139,13 +148,13 @@ function Read-HordeWezfleetRoles {
     $claimFiles = @()
     if (Test-Path -LiteralPath $claimDir) {
         try { $claimFiles = @(Get-ChildItem -LiteralPath $claimDir -File -ErrorAction Stop | Where-Object { $_.Extension -eq ".json" }) }
-        catch { [void]$gaps.Add("the claims directory could not be listed: " + $_.Exception.Message) }
+        catch { [void]$claimGaps.Add("the claims directory could not be listed: " + $_.Exception.Message) }
     }
     if ($claimFiles.Count -gt 0) {
         foreach ($f in $claimFiles) {
             $c = $null
-            try { $c = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
-            if ($null -eq $c) { [void]$unreadable.Add($f.FullName); continue }
+            try { $c = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); $unreadableClaims++; continue }
+            if ($null -eq $c) { [void]$unreadable.Add($f.FullName); $unreadableClaims++; continue }
             $r = Read-HordeRecordRole -Record $c -Table $Table
             $spawned = $null
             $spProp = $c.PSObject.Properties["spawnedAt"]
@@ -153,10 +162,16 @@ function Read-HordeWezfleetRoles {
             [void]$claims.Add([pscustomobject]@{ pane = [System.IO.Path]::GetFileNameWithoutExtension($f.Name); role = $r.role; raw = $r.raw; field = $r.field; spawnedAt = $spawned })
         }
     }
-    if ($unreadable.Count -gt 0) { [void]$gaps.Add("" + $unreadable.Count + " record(s) could not be read") }
+    if ($unreadableSessions -gt 0) { [void]$sessionGaps.Add("" + $unreadableSessions + " session record(s) could not be read") }
+    if ($unreadableClaims -gt 0) { [void]$claimGaps.Add("" + $unreadableClaims + " claim(s) could not be read") }
+    $sessionsComplete = New-HordeKnown -Value $true
+    if ($sessionGaps.Count -gt 0) { $sessionsComplete = New-HordeUnknown -Reason (@($sessionGaps) -join "; ") }
+    $claimsComplete = New-HordeKnown -Value $true
+    if ($claimGaps.Count -gt 0) { $claimsComplete = New-HordeUnknown -Reason (@($claimGaps) -join "; ") }
+    $allGaps = @($sessionGaps) + @($claimGaps)
     $complete = New-HordeKnown -Value $true
-    if ($gaps.Count -gt 0) { $complete = New-HordeUnknown -Reason (@($gaps) -join "; ") }
-    return [pscustomobject]@{ PSTypeName = "Horde.RoleRead"; sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); mismatched = @($mismatched); complete = $complete }
+    if ($allGaps.Count -gt 0) { $complete = New-HordeUnknown -Reason ($allGaps -join "; ") }
+    return [pscustomobject]@{ PSTypeName = "Horde.RoleRead"; sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); mismatched = @($mismatched); sessionsComplete = $sessionsComplete; claimsComplete = $claimsComplete; complete = $complete }
 }
 
 function Assert-HordeRoleRead {
@@ -171,8 +186,9 @@ function Assert-HordeRoleRead {
 }
 
 function Get-HordeRoleCount {
-    # How many live (not retired) sessions hold a role, as an answer. Unknown when any record could
-    # not be read - a count taken over a store with a hole in it is not a count.
+    # How many live (not retired) sessions hold a role, as an answer. Unknown when any session record
+    # could not be read - a count taken over a store with a hole in it is not a count. Claims are not
+    # consulted, readable or not.
     #
     # Unknown too when any LIVE session's role is unknown, naming those sessions. Such a session may
     # hold the very role being counted: every roleless record that mattered in wezfleet was a lost
@@ -188,7 +204,7 @@ function Get-HordeRoleCount {
     # never matches anything and used to answer a known 0 while a master was running.
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
-    if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count: " + $Read.complete.reason)) }
+    if ($Read.sessionsComplete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count: " + $Read.sessionsComplete.reason)) }
     $unsure = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -ne "known" } | ForEach-Object { $_.id })
     if ($unsure.Count -gt 0) {
         return (New-HordeUnknown -Reason ("cannot count: the role of " + $unsure.Count + " live session(s) is unknown (" + ($unsure -join ", ") + ")"))
@@ -231,14 +247,14 @@ function Get-HordeRoleClaimCount {
     # "spawned but not yet seen" are different facts, and a sum would hide which one a caller saw.
     # A caller asking wezfleet's question - is there a master at all? - adds the two. (Ledger L-023.)
     #
-    # Unknown when the store read was incomplete, or when a pending claim's role is unknown (it may
+    # Unknown when the claims could not all be read, or when a pending claim's role is unknown (it may
     # be the role asked about). A claim whose role is empty names no role and is not counted, as in
     # wezfleet, where "" never equals "master".
     param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null, [datetime]$Now = (Get-Date))
     Assert-HordeRoleRead $Read
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
-    if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count claims: " + $Read.complete.reason)) }
+    if ($Read.claimsComplete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count claims: " + $Read.claimsComplete.reason)) }
     $pending = @($Read.claims | Where-Object { Test-HordeClaimPending -Claim $_ -Now $Now })
     $unsure = @($pending | Where-Object { $_.role.state -ne "known" -and $_.field -ne "empty" } | ForEach-Object { $_.pane })
     if ($unsure.Count -gt 0) {

@@ -193,7 +193,19 @@ try {
     Set-Content -LiteralPath (Join-Path $sess "broken.json") -Value "{ not json"
     $read2 = Read-HordeWezfleetRoles
     Check ((Get-HordeRoleCount -Read $read2 -Role "warchief").state -eq "unknown") "an unreadable record makes the role count unknown"
+    $pendingBadRecord = Get-HordeRoleClaimCount -Read $read2 -Role "warchief"
+    Check ($pendingBadRecord.state -eq "known" -and $pendingBadRecord.value -eq 1) "but not the pending count, which reads only claims"
     Remove-Item -LiteralPath (Join-Path $sess "broken.json") -Force
+    # One corrupt claim made every session count unknown too, and wezfleet never deletes a claim it
+    # cannot read (lib/Registry.ps1 Read-WfPaneClaim returns $null on a parse error), so the counts
+    # would have stayed unknown for good (review, 2026-09-29). Each count checks only its own files.
+    Set-Content -LiteralPath (Join-Path $claimsDir "broken.json") -Value "{ not json"
+    $readBadClaim = Read-HordeWezfleetRoles
+    $wcBadClaim = Get-HordeRoleCount -Read $readBadClaim -Role "warchief"
+    Check ($wcBadClaim.state -eq "known" -and $wcBadClaim.value -eq 1) "an unreadable claim does not make the session count unknown"
+    Check ((Get-HordeRoleClaimCount -Read $readBadClaim -Role "warchief").state -eq "unknown") "but it does make the pending count unknown"
+    Check ($readBadClaim.complete.state -eq "unknown" -and $readBadClaim.sessionsComplete.state -eq "known" -and $readBadClaim.claimsComplete.state -eq "unknown") "the read says which half is incomplete"
+    Remove-Item -LiteralPath (Join-Path $claimsDir "broken.json") -Force
 }
 finally {
     $env:WEZFLEET_ROOT = $keepRoot
