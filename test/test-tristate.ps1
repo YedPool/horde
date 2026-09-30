@@ -241,6 +241,24 @@ $utcStamped = New-HordeKnown -Value "idle" -ObservedAt ([datetime]::UtcNow.AddSe
 Check ((Limit-HordeAge -Answer $utcStamped -TtlSeconds 60).state -eq "unknown") "an answer stamped in UTC expires against the default clock"
 $freshJson = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value "idle" -ObservedAt (Get-Date).AddSeconds(-10)) | ConvertTo-Json -Compress -Depth 5
 Check ((Limit-HordeAge -Answer (ConvertFrom-HordeAnswerRecord -Record ($freshJson | ConvertFrom-Json)) -TtlSeconds 60).state -eq "known") "CONTROL: a stored answer read back inside its TTL stays known"
+# The checks above do not isolate the UTC rule (review, 2026-09-29): west of UTC the broken module
+# reads a stored answer as observed in the future, and the future-skew rule makes it unknown anyway.
+# So the same instant is put on both clocks - observedAt in UTC, -Now in local time, and the reverse -
+# and the answer must age by its TRUE age: a fresh one stays known, and a stale one reports the age it
+# really has. Aged as they stood, each is off by the local offset, in either direction.
+$localOffsetSeconds = [int][System.TimeZoneInfo]::Local.GetUtcOffset([datetime]::UtcNow).TotalSeconds
+if ($localOffsetSeconds -eq 0) {
+    Write-Host "  [SKIP] the local clock is UTC here, so a local time and a UTC time cannot disagree; the next two checks did not run" -ForegroundColor Yellow
+} else {
+    $instantUtc = [datetime]::UtcNow
+    $instantLocal = $instantUtc.ToLocalTime()
+    $freshUtc = Limit-HordeAge -Answer (New-HordeKnown -Value "idle" -ObservedAt $instantUtc.AddSeconds(-10)) -TtlSeconds 60 -Now $instantLocal
+    $freshLocal = Limit-HordeAge -Answer (New-HordeKnown -Value "idle" -ObservedAt $instantLocal.AddSeconds(-10)) -TtlSeconds 60 -Now $instantUtc
+    Check ($freshUtc.state -eq "known" -and $freshLocal.state -eq "known") ("an answer 10s old stays known when observedAt and the clock are in different zones (offset " + $localOffsetSeconds + "s)")
+    $offsetMagnitude = [Math]::Abs($localOffsetSeconds)
+    $staleUtc = Limit-HordeAge -Answer (New-HordeKnown -Value "idle" -ObservedAt $instantUtc.AddSeconds(-2 * $offsetMagnitude)) -TtlSeconds (1.5 * $offsetMagnitude) -Now $instantLocal
+    Check ($staleUtc.state -eq "unknown" -and $staleUtc.reason -like ("stale: observed " + (2 * $offsetMagnitude) + "s ago*")) "an answer observed in UTC and aged against a local clock expires by its true age"
+}
 
 Write-Host ""
 Write-Host "--- the caller states what an unknown costs ---" -ForegroundColor Cyan
