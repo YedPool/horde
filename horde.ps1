@@ -19,15 +19,23 @@ $rest = @($args | Select-Object -Skip 1)
 
 if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }
 
-$found = (Find-HordeCommand -Name $name).command
-if (-not $found) {
+$lookup = Find-HordeCommand -Name $name
+if (-not $lookup.command) {
+    # A file of that name that is broken is not an unknown command: the command line was right and
+    # the installation is wrong, so it is exit 1, under the command's own name.
+    if (@($lookup.findings).Count -gt 0) {
+        [Console]::Error.WriteLine("horde " + $name + ": its command file is broken: " + ($lookup.findings -join "; "))
+        exit 1
+    }
     [Console]::Error.WriteLine("horde: unknown command '" + $name + "'")
     Format-HordeHelp | ForEach-Object { [Console]::Error.WriteLine($_) }
     exit 2
 }
 
-$command = Import-HordeCommand -Path $found.path
 try {
+    # Loading is inside the handled path, so a file that fails to load is reported under the
+    # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
+    $command = Import-HordeCommand -Path $lookup.command.path
     & $command.run @rest
 }
 catch [System.Management.Automation.ParameterBindingException] {

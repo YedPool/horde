@@ -129,6 +129,7 @@ Copy-Item -LiteralPath (Join-Path $root "VERSION") -Destination $tmp
 Copy-Item -Path (Join-Path $root "cli\*.ps1") -Destination (Join-Path $tmp "cli")
 Copy-Item -LiteralPath (Join-Path $root "cli\commands\help.ps1") -Destination (Join-Path $tmp "cli\commands")
 Copy-Item -Path (Join-Path $root "test\fixtures\cli\extra\*.ps1") -Destination (Join-Path $tmp "cli\commands")
+Copy-Item -LiteralPath (Join-Path $root "test\fixtures\cli\bad\side-effect.ps1") -Destination (Join-Path $tmp "cli\commands")
 # Two files that look like commands and are not. zeta.ps1x is matched by `Get-ChildItem -Filter *.ps1`
 # through its 8.3 short name (ZETA~1.PS1), measured 2026-09-29 in %TEMP%. nul.ps1 is a reserved
 # device name: it can only be created through a \?\ path, and was listed by help while `horde nul`
@@ -156,7 +157,7 @@ try {
     $h = Invoke-Horde -Root $tmp -Arguments @("help")
     Check ($h.code -eq 0 -and $h.out -like "*    horde echo-args*") "CONTROL: help in the stand-in root lists its commands"
     $r = Invoke-Horde -Root $tmp -Arguments @("nul")
-    Check ($h.out -notlike "*    horde nul*" -and $r.code -eq 2) "help does not list a command that dispatch cannot reach"
+    Check ($h.out -notlike "*    horde nul*" -and $r.code -ne 0 -and $r.err -like "*reserved device name*") "help does not list a command that dispatch cannot reach"
     $unreached = @($listedNames | Where-Object { -not ((Get-Command Find-HordeCommand -ErrorAction SilentlyContinue) -and (Find-HordeCommand -Name $_ -Dir $standInCommands).command) })
     Check ($listedNames.Count -gt 0 -and $unreached.Count -eq 0) ("dispatch finds every command that help lists" + $(if ($unreached.Count) { ": not " + ($unreached -join ", ") } else { "" }))
 
@@ -167,6 +168,10 @@ try {
     }
     $r = Invoke-Horde -Root $tmp -Arguments @("boom")
     Check ($r.code -eq 1 -and $r.err -like "*boom failed on purpose*") "a command that fails exits 1 and says why"
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    $r = Invoke-Horde -Root $tmp -Arguments @("side-effect")
+    Check ($r.code -eq 1 -and $r.err.StartsWith("horde side-effect: ") -and $r.err -like "*top-level statements*") ("a broken command file is reported under its command's name and exits 1 (got " + $r.code + ": " + $r.err.Trim() + ")")
+    Check (-not (Test-Path -LiteralPath $marker)) "and none of the broken file ran"
 }
 finally {
     # nul.ps1 first, through the same \?\ path that made it: an ordinary path names the device.
