@@ -16,7 +16,8 @@
 #
 #   names.txt, one per line:      <name> | <why it identifies this host>
 #   allowlist.txt, one per line:  <path> | <mentions> | <why this file may name the host>
-#   Blank lines and lines beginning with # are ignored in both.
+#   growth.txt, one per line:     <path> | <old> -> <new> | <YYYY-MM-DD> | <why the list must grow>
+#   Blank lines and lines beginning with # are ignored in all three.
 #
 # WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
@@ -30,6 +31,18 @@
 # CI, so Test-HordeHostShrink compares each host's lists with origin/main: no new entry, no higher
 # count, no name or host folder removed. With no git, no .git or no origin/main it returns a reason
 # instead, which the suite prints as [SKIP]; a host new on the branch is reported, not compared.
+#
+# GROWTH IS RECORDED, NOT FORBIDDEN. Refusing every increase with no override was a deadlock: a
+# branch that genuinely needs a new mention could never pass until the entry was already on main,
+# and nothing but merging a failing branch could put it there. So an increase - a new path (old
+# count 0) or a higher count - passes when hosts/<name>/growth.txt has a line for exactly that path,
+# that old count and that new count, dated, with a reason of at least four distinct words. That line
+# is what the reviewer agrees to. Only lines added since origin/main count: a line already on main
+# recorded an increase that was merged, and letting it permit the same increase again would let a
+# mention be removed and later restored with no review. growth.txt is append-only against
+# origin/main - its lines there must still open the file, in order and unchanged - so the record of
+# what was agreed cannot be rewritten. A line that matches no current difference is history, not a
+# finding. There is no growth path for names.txt: a name is never removed.
 #
 # SWAPPING ONE MENTION FOR ANOTHER IS STILL INVISIBLE. The count is a number per file, so deleting a
 # mention and adding a different one in the same file - a comment's citation traded for a call to the
@@ -134,8 +147,10 @@ function Test-HordeHostShrink {
     # says, but the entry is edited in the same working tree: the review of PR 21 raised a count with
     # the mention it allowed, added a new file with its own entry, and deleted a name from names.txt,
     # and each gave 0 findings. There is no CI to hold the old list, so origin/main is the old list:
-    #   - no allowlist path that origin/main does not list may appear;
-    #   - no count may be higher than origin/main's;
+    #   - no allowlist path that origin/main does not list may appear, and no count may be higher
+    #     than origin/main's, UNLESS a growth.txt line added since origin/main records exactly that
+    #     path, old count (0 for a new path) and new count - the header says why;
+    #   - growth.txt's lines on origin/main must still open the file, in order and unchanged;
     #   - no name origin/main's names.txt declares may be missing, and no host folder may vanish.
     # A host whose names.txt is not on origin/main at all is NEW: it is listed in newHosts and not
     # compared, because its first pull request is where its lists are agreed.
@@ -176,6 +191,8 @@ function Test-HordeHostShrink {
         foreach ($k in @($oldNames.Keys | Sort-Object)) {
             if (-not $newNames.ContainsKey($k)) { Add-Finding $hn ($own + "/names.txt") ("the name '" + $oldNames[$k] + "' is declared on " + $Ref + " and missing here - a name may not be removed") }
         }
+        $growth = Get-HordeGrowthPermits -RepoRoot $RepoRoot -Ref $Ref -HostName $hn -HostDir $here[$hn] -OnRef $onRef
+        foreach ($g in $growth.problems) { Add-Finding $hn $g.path $g.problem }
         $oldAllow = @{}
         if ($onRef.ContainsKey($own + "/allowlist.txt")) { $oldAllow = Get-HordeAllowMap -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/allowlist.txt"))) -join "`n") }
         $newAllow = @{}
@@ -183,9 +200,57 @@ function Test-HordeHostShrink {
         if (Test-Path -LiteralPath $ap -PathType Leaf) { $newAllow = Get-HordeAllowMap -Text ([System.IO.File]::ReadAllText($ap)) }
         foreach ($k in @($newAllow.Keys | Sort-Object)) {
             $e = $newAllow[$k]
-            if (-not $oldAllow.ContainsKey($k)) { Add-Finding $hn $e.path ("is in " + $own + "/allowlist.txt but not on " + $Ref + " - an entry may not be added") }
-            elseif ($e.count -gt $oldAllow[$k].count) { Add-Finding $hn $e.path ("is allowed " + $e.count + " mention(s) here and " + $oldAllow[$k].count + " on " + $Ref + " - a count may not rise") }
+            $was = 0
+            if ($oldAllow.ContainsKey($k)) { $was = $oldAllow[$k].count }
+            if ($e.count -le $was) { continue }
+            if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }
+            $record = " without a line added to " + $own + "/growth.txt recording '" + $e.path + " | " + $was + " -> " + $e.count + " | <date> | <reason>'"
+            if ($was -eq 0) { Add-Finding $hn $e.path ("is in " + $own + "/allowlist.txt but not on " + $Ref + " - an entry may not be added" + $record) }
+            else { Add-Finding $hn $e.path ("is allowed " + $e.count + " mention(s) here and " + $was + " on " + $Ref + " - a count may not rise" + $record) }
         }
+    }
+    return $out
+}
+
+function Get-HordeGrowthPermits {
+    # What a host's growth.txt permits, and what is wrong with it: { permits; problems }. permits is a
+    # set of "path|old|new" keys from the lines added since the ref ONLY; problems
+    # lists { path; problem } for a ref line gone or changed here and for a malformed added line.
+    # The header says why each rule exists.
+    param([string]$RepoRoot, [string]$Ref, [string]$HostName, [string]$HostDir, [hashtable]$OnRef)
+    $out = [pscustomobject]@{ permits = @{}; problems = (New-Object System.Collections.ArrayList) }
+    $rel = "hosts/" + $HostName + "/growth.txt"
+    $old = New-Object System.Collections.ArrayList
+    if ($OnRef.ContainsKey($rel)) { $old = Split-HordeHostTable -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $rel))) -join "`n") }
+    $new = New-Object System.Collections.ArrayList
+    $gp = Join-Path $HostDir "growth.txt"
+    if (Test-Path -LiteralPath $gp -PathType Leaf) { $new = Read-HordeHostTable -Path $gp }
+    # APPEND-ONLY: the ref's lines must still open the file, in order. The cells are compared, so the
+    # spacing around a "|" is not a change; any other edit, a removal or an insertion above them is.
+    # One problem, at the first difference: every line after it has shifted and would repeat it.
+    for ($i = 0; $i -lt $old.Count; $i++) {
+        $was = $old[$i].cells -join " | "
+        if ($i -ge $new.Count -or ($new[$i].cells -join " | ") -cne $was) {
+            [void]$out.problems.Add([pscustomobject]@{ path = $rel; problem = ("the line '" + $was + "' is on " + $Ref + " and removed or changed here - growth.txt is append-only; add new lines at its end") })
+            break
+        }
+    }
+    for ($i = $old.Count; $i -lt $new.Count; $i++) {
+        $r = $new[$i]
+        $where = $rel + ":" + $r.line
+        $bad = ""
+        $p = ConvertTo-HordeAllowPath $r.cells[0]
+        $from = -1; $to = -1; $d = [datetime]::MinValue
+        if ($r.cells.Count -eq 4 -and $r.cells[1] -match '^(\d{1,9})\s*->\s*(\d{1,9})$') { $from = [int]$Matches[1]; $to = [int]$Matches[2] }
+        if ($r.cells.Count -ne 4) { $bad = "a growth line is <path> | <old> -> <new> | <YYYY-MM-DD> | <why the list must grow>" }
+        elseif ($from -lt 0) { $bad = "the counts for " + $p + " must read <old> -> <new>, two whole numbers" }
+        elseif ($to -le $from) { $bad = "the line for " + $p + " records " + $from + " -> " + $to + ", which is not an increase - a decrease needs no record" }
+        elseif (-not [datetime]::TryParseExact($r.cells[2], "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) { $bad = "the date for " + $p + " must be a real date written YYYY-MM-DD" }
+        elseif ((Get-HordeDistinctWordCount $r.cells[3]) -lt 4) { $bad = $p + " needs a reason of at least a sentence for its growth" }
+        if ($bad) { [void]$out.problems.Add([pscustomobject]@{ path = $where; problem = $bad }); continue }
+        # Not lower-cased: a PowerShell hashtable compares keys ignoring case already, and the mutation
+        # that removed a ToLowerInvariant here survived because it changed nothing.
+        $out.permits[$p + "|" + $from + "|" + $to] = $true
     }
     return $out
 }

@@ -230,6 +230,69 @@ try {
     Check ($ng.skip -like "*no .git*" -and @($ng.findings).Count -eq 0) "with no .git the comparison is skipped, and says why"
     $nr = Shrink "sh-no-ref" { Invoke-FakeGit @("update-ref", "-d", "refs/remotes/origin/main") }
     Check ($nr.skip -like "*origin/main does not exist*" -and @($nr.findings).Count -eq 0) "with no origin/main the comparison is skipped, and says why"
+    Write-Host ""
+    Write-Host "--- growth passes only with a matching line added to growth.txt, which is append-only ---" -ForegroundColor Cyan
+
+    # Refusing every increase, with no override, deadlocked: a branch that needs a new mention could
+    # never pass until the entry was already on main. A line in hosts/<name>/growth.txt recording
+    # exactly the path, the old count and the new count is the override, and the thing the reviewer
+    # agrees to. Each refusal below breaks exactly one part of that line; a malformed line is its own
+    # finding, and the growth it failed to record is the second.
+    function ShrinkRefusesAll {
+        param([string]$Name, [scriptblock]$Change, [string[]]$Texts, [string]$What)
+        $r = Shrink $Name $Change
+        $f = @($r.findings)
+        $ok = ($r.skip -eq "" -and $f.Count -eq $Texts.Count)
+        foreach ($t in $Texts) { $ok = ($ok -and (Says $f $t)) }
+        Check $ok $What
+        if (-not $ok) { Write-Host ("         skip: " + $r.skip) -ForegroundColor Red; Show $f }
+    }
+    function Save-FakeMain {
+        # Make what the change has written so far origin/main, so the case can then change it.
+        Invoke-FakeGit @("add", "-A"); Invoke-FakeGit @("commit", "-q", "--no-verify", "-m", "main"); Invoke-FakeGit @("update-ref", "refs/remotes/origin/main", "HEAD")
+    }
+    $grow = "hosts/zorbterm/growth.txt"
+    $why = "a third mention documents the spawn command of the invented terminal"
+    $three = "Run tests in a separate Zorbterm.`nNever aim at the zorb-sock you work in.`nzorbterm cli spawn`n"
+    function Raise-Rules {
+        # docs/rules.md goes from 2 mentions to 3, and its entry with it.
+        Write-FakeFile "docs/rules.md" $three
+        Write-FakeFile $allow "docs/rules.md | 3 | the rules describe how tests isolate the invented terminal`n"
+    }
+    ShrinkPasses "gr-raised" { Raise-Rules; Write-FakeFile $grow ("# growth`ndocs/rules.md | 2 -> 3 | 2026-09-30 | " + $why + "`n") } "a raised count passes with a growth line for that path, that old count and that new count"
+    ShrinkPasses "gr-new-entry" {
+        Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
+        Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
+        Write-FakeFile $grow "core/engine.ps1 | 0 -> 1 | 2026-09-30 | the engine spawns panes in the invented terminal directly`n"
+    } "a new entry passes with a growth line recording 0 -> its count"
+    ShrinkPasses "gr-path-form" { Raise-Rules; Write-FakeFile $grow ("docs\Rules.MD | 2 -> 3 | 2026-09-30 | " + $why + "`r`n") } "a growth path is read as an allowlist path is: backslashes, any case, CRLF"
+    ShrinkPasses "gr-history" { Write-FakeFile $grow ("docs/rules.md | 2 -> 3 | 2026-09-30 | " + $why + "`n") } "a growth line that matches no current difference is history, not a finding"
+    ShrinkRefuses "gr-no-file" { Raise-Rules } "growth.txt recording 'docs/rules.md | 2 -> 3" "a raised count with no growth.txt is refused, and the line it needs is named"
+    ShrinkRefuses "gr-other-path" { Raise-Rules; Write-FakeFile $grow ("core/engine.ps1 | 2 -> 3 | 2026-09-30 | " + $why + "`n") } "may not rise" "a growth line for another path does not permit the increase"
+    ShrinkRefuses "gr-new-wrong" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 2 -> 4 | 2026-09-30 | " + $why + "`n") } "may not rise" "a growth line whose new count is not the allowlist's is refused"
+    ShrinkRefuses "gr-old-wrong" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 1 -> 3 | 2026-09-30 | " + $why + "`n") } "may not rise" "a growth line whose old count is not origin/main's is refused"
+    ShrinkRefuses "gr-new-entry-old-wrong" {
+        Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
+        Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
+        Write-FakeFile $grow "core/engine.ps1 | 1 -> 2 | 2026-09-30 | the engine spawns panes in the invented terminal directly`n"
+    } "an entry may not be added" "a new entry's growth line must start from 0"
+    ShrinkRefusesAll "gr-short-reason" { Raise-Rules; Write-FakeFile $grow "docs/rules.md | 2 -> 3 | 2026-09-30 | more more more more`n" } @("reason of at least a sentence for its growth", "may not rise") "a growth line with fewer than four distinct words of reason is refused, and permits nothing"
+    ShrinkRefusesAll "gr-shape" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 2 -> 3 | " + $why + "`n") } @("a growth line is", "may not rise") "a growth line with no date cell is refused, and permits nothing"
+    ShrinkRefusesAll "gr-arrow" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 2 to 3 | 2026-09-30 | " + $why + "`n") } @("must read <old> -> <new>", "may not rise") "a growth line whose counts are not <old> -> <new> is refused, and permits nothing"
+    ShrinkRefusesAll "gr-not-increase" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 3 -> 3 | 2026-09-30 | " + $why + "`n") } @("not an increase", "may not rise") "a growth line that records no increase is refused"
+    ShrinkRefusesAll "gr-bad-date" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 2 -> 3 | 2026-13-40 | " + $why + "`n") } @("real date", "may not rise") "a growth line whose date is not a real date is refused, and permits nothing"
+    ShrinkRefusesAll "gr-date-form" { Raise-Rules; Write-FakeFile $grow ("docs/rules.md | 2 -> 3 | 30-09-2026 | " + $why + "`n") } @("real date", "may not rise") "a growth line whose date is not written YYYY-MM-DD is refused, and permits nothing"
+    $onMain = "docs/rules.md | 1 -> 2 | 2026-09-01 | the rules gained a second mention of the socket file`n"
+    ShrinkPasses "gr-appended" { Write-FakeFile $grow $onMain; Save-FakeMain; Raise-Rules; Write-FakeFile $grow ($onMain + "docs/rules.md | 2 -> 3 | 2026-09-30 | " + $why + "`n") } "CONTROL: a growth line appended after origin/main's lines passes"
+    ShrinkRefuses "gr-removed" { Write-FakeFile $grow $onMain; Save-FakeMain; Write-FakeFile $grow "# emptied`n" } "append-only" "a growth line on origin/main that is removed here is refused"
+    ShrinkRefuses "gr-file-deleted" { Write-FakeFile $grow $onMain; Save-FakeMain; Remove-Item -LiteralPath (Join-Path $script:repo $grow) } "append-only" "a growth.txt on origin/main that is deleted here is refused"
+    ShrinkRefuses "gr-edited" { Write-FakeFile $grow $onMain; Save-FakeMain; Write-FakeFile $grow "docs/rules.md | 1 -> 2 | 2026-09-01 | the rules gained a second mention of something`n" } "append-only" "a growth line on origin/main that is edited here is refused"
+    ShrinkRefuses "gr-inserted" { Write-FakeFile $grow $onMain; Save-FakeMain; Write-FakeFile $grow ("core/engine.ps1 | 0 -> 1 | 2026-09-30 | the engine spawns panes in the invented terminal`n" + $onMain) } "append-only" "a growth line inserted above origin/main's lines is refused - new lines go at the end"
+    ShrinkRefuses "gr-reused" {
+        Write-FakeFile $grow "core/engine.ps1 | 0 -> 1 | 2026-09-01 | the engine once spawned panes in the invented terminal`n"; Save-FakeMain
+        Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
+        Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
+    } "an entry may not be added" "a growth line already on origin/main permits nothing again - a removed mention cannot come back unreviewed"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }

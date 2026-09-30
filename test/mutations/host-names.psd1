@@ -98,11 +98,66 @@
            Replace = 'return $Path.TrimStart(''/'')' }
         # --- shrink-only, against origin/main
         @{ Name = "shrink-new-entry-accepted"
-           Find = 'if (-not $oldAllow.ContainsKey($k)) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($was -eq 0) { Add-Finding $hn $e.path ('
+           Replace = 'if ($was -eq 0) { continue; Add-Finding $hn $e.path (' }
         @{ Name = "shrink-raised-count-accepted"
-           Find = 'elseif ($e.count -gt $oldAllow[$k].count) {'
+           Find = 'else { Add-Finding $hn $e.path ("is allowed "'
+           Replace = 'else { continue; Add-Finding $hn $e.path ("is allowed "' }
+        @{ Name = "shrink-old-count-ignored"
+           Find = 'if ($oldAllow.ContainsKey($k)) { $was = $oldAllow[$k].count }'
+           Replace = '' }
+        @{ Name = "shrink-equal-count-is-growth"
+           Find = 'if ($e.count -le $was) { continue }'
+           Replace = 'if ($e.count -lt $was) { continue }' }
+        # --- growth recorded in growth.txt
+        @{ Name = "growth-unrecorded-accepted"
+           Find = 'if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }'
+           Replace = 'if ($true) { continue }' }
+        @{ Name = "growth-record-ignored"
+           Find = 'if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }'
+           Replace = 'if ($false) { continue }' }
+        @{ Name = "growth-old-count-not-matched"
+           Find = 'if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }'
+           Replace = 'if (@($growth.permits.Keys | Where-Object { $_ -like ($k + "|*|" + $e.count) }).Count) { continue }' }
+        @{ Name = "growth-new-count-not-matched"
+           Find = 'if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }'
+           Replace = 'if (@($growth.permits.Keys | Where-Object { $_ -like ($k + "|" + $was + "|*") }).Count) { continue }' }
+        @{ Name = "growth-path-not-matched"
+           Find = 'if ($growth.permits.ContainsKey($k + "|" + $was + "|" + $e.count)) { continue }'
+           Replace = 'if (@($growth.permits.Keys | Where-Object { $_ -like ("*|" + $was + "|" + $e.count) }).Count) { continue }' }
+        @{ Name = "growth-problems-dropped"
+           Find = 'foreach ($g in $growth.problems) { Add-Finding $hn $g.path $g.problem }'
+           Replace = '' }
+        @{ Name = "growth-shape-unchecked"
+           Find = 'if ($r.cells.Count -ne 4) { $bad ='
+           Replace = 'if ($false) { $bad =' }
+        @{ Name = "growth-arrow-unchecked"
+           Find = 'elseif ($from -lt 0) {'
            Replace = 'elseif ($false) {' }
+        @{ Name = "growth-non-increase-accepted"
+           Find = 'elseif ($to -le $from) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "growth-date-unchecked"
+           Find = 'elseif (-not [datetime]::TryParseExact('
+           Replace = 'elseif ($false -and -not [datetime]::TryParseExact(' }
+        @{ Name = "growth-reason-unchecked"
+           Find = 'elseif ((Get-HordeDistinctWordCount $r.cells[3]) -lt 4) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "growth-bad-line-still-permits"
+           Find = 'if ($bad) { [void]$out.problems.Add([pscustomobject]@{ path = $where; problem = $bad }); continue }'
+           Replace = 'if ($bad) { [void]$out.problems.Add([pscustomobject]@{ path = $where; problem = $bad }) }' }
+        @{ Name = "growth-not-append-only"
+           Find = 'if ($i -ge $new.Count -or ($new[$i].cells -join " | ") -cne $was) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "growth-edit-accepted"
+           Find = 'if ($i -ge $new.Count -or ($new[$i].cells -join " | ") -cne $was) {'
+           Replace = 'if ($i -ge $new.Count) {' }
+        @{ Name = "growth-main-file-not-read"
+           Find = 'if ($OnRef.ContainsKey($rel)) { $old ='
+           Replace = 'if ($false) { $old =' }
+        @{ Name = "growth-history-line-reused"
+           Find = 'for ($i = $old.Count; $i -lt $new.Count; $i++) {'
+           Replace = 'for ($i = 0; $i -lt $new.Count; $i++) {' }
         @{ Name = "shrink-removed-name-accepted"
            Find = 'if (-not $newNames.ContainsKey($k)) {'
            Replace = 'if ($false) {' }
