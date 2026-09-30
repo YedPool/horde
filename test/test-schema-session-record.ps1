@@ -180,6 +180,7 @@ $invalid = [ordered]@{
     "label-number-five-digits"   = '$.label does not match *'
     "origin-unknown"             = '$.origin is ''robot'', not one of: *'
     "label-cycle-not-integer"    = '$.labelCycle should be integer'
+    "label-cycle-negative"       = '$.labelCycle is -1, below the minimum 0'
     "run-id-malformed"           = '$.runId does not match *'
     "fleet-session-id-empty"     = '$.fleetSessionId does not match *'
     "project-cwd-empty"          = '$.projectCwd does not match *'

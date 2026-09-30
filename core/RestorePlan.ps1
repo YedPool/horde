@@ -99,8 +99,12 @@ function Test-HordePlanNode {
     if (-not $hasSplit) { [void]$Findings.Add($Path + " is a container with no split") }
     if ($hasRatio) {
         $ratio = Get-HordePlanProp $Node "ratio"
-        $r = [double]$ratio
-        if (-not ($r -gt 0 -and $r -lt 1)) { [void]$Findings.Add($Path + ".ratio is " + $ratio + "; a ratio lies strictly between 0 and 1") }
+        # COMPARED AS THE NUMBER IT WAS READ AS, never through [double]. 5.1's ConvertFrom-Json reads
+        # 0.99999999999999999999 as a Decimal, strictly below 1, that is 1 as a Double, so the [double]
+        # this line once had refused a valid ratio (review of PR #17; measured 2026-09-30). The schema
+        # has already made it a number, and PowerShell compares a Decimal with 0 and 1 as Decimals and a
+        # Double as a Double, both exactly.
+        if (-not ($ratio -gt 0 -and $ratio -lt 1)) { [void]$Findings.Add($Path + ".ratio is " + $ratio + "; a ratio lies strictly between 0 and 1") }
     }
     if (-not $hasChildren) { [void]$Findings.Add($Path + " is a container with no children"); return }
     $kids = @(Get-HordePlanProp $Node "children")

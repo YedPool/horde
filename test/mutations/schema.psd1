@@ -168,6 +168,69 @@
         @{ Name = "ref-chain-forgotten"
            Find = '-RefsHere (@($RefsHere) + $ref))'
            Replace = '-RefsHere @())' }
+        @{ Name = "ref-non-string-stringified"
+           Find = 'if ($kw[''$ref''] -isnot [string]) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "definitions-not-checked"
+           Find = 'Assert-HordeSchemaDefinitions -Root $Root'
+           Replace = '' }
+        @{ Name = "definitions-any-value"
+           Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "properties-any-value"
+           Find = 'if ($kw.ContainsKey("properties") -and -not (Test-HordeSchemaType -Value $kw["properties"] -Type "object")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "type-name-unchecked-without-a-value"
+           Find = 'if ($kw.ContainsKey("type") -and $script:HordeSchemaTypes -cnotcontains'
+           Replace = 'if ($false -and $script:HordeSchemaTypes -cnotcontains' }
+        @{ Name = "definition-walk-skips-properties"
+           Find = 'foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { Assert-HordeSchemaNode'
+           Replace = 'foreach ($p in @()) { Assert-HordeSchemaNode' }
+        @{ Name = "definition-walk-skips-items"
+           Find = 'if ($kw.ContainsKey("items")) { Assert-HordeSchemaNode'
+           Replace = 'if ($false) { Assert-HordeSchemaNode' }
+        @{ Name = "definition-ref-not-resolved"
+           Find = '$chain = @()'
+           Replace = 'return' }
+        @{ Name = "definition-ref-chain-not-walked"
+           Find = 'if (-not $targetKw.ContainsKey(''$ref'')) { break }'
+           Replace = 'break' }
+        @{ Name = "minimum-not-applied"
+           Find = 'elseif ((Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "minimum-exclusive"
+           Find = '(Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0)'
+           Replace = '(Compare-HordeSchemaNumber $Value $kw["minimum"]) -le 0)' }
+        @{ Name = "minimum-compared-as-double"
+           Find = '$fa = ConvertTo-HordeSchemaFraction $A'
+           Replace = 'return ([double]$A).CompareTo([double]$B); $fa = ConvertTo-HordeSchemaFraction $A' }
+        @{ Name = "minimum-compared-as-decimal"
+           Find = '$fa = ConvertTo-HordeSchemaFraction $A'
+           Replace = 'return ([decimal]$A).CompareTo([decimal]$B); $fa = ConvertTo-HordeSchemaFraction $A' }
+        @{ Name = "minimum-schema-value-unchecked"
+           Find = 'if (-not $finite) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "minimum-nan-allowed-in-schema"
+           Find = ' -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m)))'
+           Replace = '' }
+        @{ Name = "minimum-nan-value-accepted"
+           Find = '[void]$findings.Add($Path + " is NaN'
+           Replace = '[void]($Path + " is NaN' }
+        @{ Name = "minimum-applied-to-non-numbers"
+           Find = 'if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {'
+           Replace = 'if ($kw.ContainsKey("minimum") -and $null -ne $Value) {' }
+        @{ Name = "minimum-ignores-int16"
+           Find = 'return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or'
+           Replace = 'return ($Value -is [int] -or $Value -is [long] -or' }
+        @{ Name = "fraction-double-sign-lost"
+           Find = 'if ($bits -lt 0) { $mantissa = [System.Numerics.BigInteger]::Negate($mantissa) }'
+           Replace = '' }
+        @{ Name = "fraction-decimal-scale-lost"
+           Find = '$scale = $text.Length - $point - 1; '
+           Replace = '' }
+        @{ Name = "fraction-double-implied-bit-lost"
+           Find = '$mantissa = [System.Numerics.BigInteger]::Add($mantissa, [System.Numerics.BigInteger]::Pow(2, 52)); '
+           Replace = '' }
         @{ Name = "ref-not-followed"
            Find = 'return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))'
            Replace = 'return @()' }

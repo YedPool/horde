@@ -6,7 +6,12 @@
 # than silently skipping a rule it does not understand:
 #
 #   type (object, array, string, integer, number, boolean, null), required, properties,
-#   additionalProperties (true or false), items, enum, pattern, definitions, $ref
+#   additionalProperties (true or false), items, enum, pattern, minimum, definitions, $ref
+#
+# minimum is draft-07's, inclusive, and applies to numbers only: a value that is not a number is the
+# type keyword's to refuse. It is compared EXACTLY, whatever .NET type holds either side (see
+# Compare-HordeSchemaNumber), because 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a
+# Decimal that is 1 as a Double. It exists so schema/session-record.v1 can say labelCycle >= 0.
 #
 # $ref IS LOCAL ONLY, "#/definitions/<name>", resolved against the top of the schema being checked.
 # It exists so a recursive shape - the layout tree of schema/restore-plan.v1 - can be described. A
@@ -17,13 +22,33 @@
 # anywhere but the top, where "#/definitions/" would never find them; and a chain of $refs that
 # comes back to itself without reaching a value, which would otherwise recurse until the call stack
 # overflows.
+# A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
+#
+# EVERY DEFINITION IS CHECKED ONCE, when Test-HordeSchema is called on the top of a schema, whether or
+# not anything refers to it: an unknown keyword, a node that is not an object, or a $ref that does
+# not resolve is refused there, not on the day a value first reaches it. definitions and properties
+# that are not objects are refused as well.
+#
+# HOW DEEP A VALUE CAN BE. Measured 2026-09-30 on Windows PowerShell 5.1.26100.9444, by bisection, on
+# this file as of this comment:
+#   - ConvertFrom-Json stops first, for anything read from a file. Its RecursionLimit refuses JSON
+#     nested more than 102 deep (103 nested arrays throw "RecursionLimit exceeded"). A restore plan's
+#     tab root is its 9th level of nesting and each layout container adds 2, so a plan FILE parses
+#     with a root 46 containers deep (deepest leaf at level 101) and not 47 (level 103).
+#   - A value built in PowerShell never meets that limit, and the call stack is what stops it:
+#     Test-HordeSchema throws "call depth overflow" on a layout tree 127 containers deep checked
+#     against restore-plan.v1's node definition (126 passes), Test-HordeRestorePlan on a whole plan
+#     built so at 125 (124 returns), and on plain nested properties with no $ref at 383 levels (382
+#     pass). The same layout tree, measured on this file before 2026-09-30's changes, failed at 110.
+#   A value past either limit is a thrown error, never a wrong finding.
 #
 # Keys starting "x-", and $schema, $id, title and description, are documentation and are ignored.
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
-$script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern",
+$script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern", "minimum",
                                  '$schema', '$id', "title", "description", "definitions", '$ref')
+$script:HordeSchemaTypes = @("object", "array", "string", "integer", "number", "boolean", "null")
 # The keywords that may sit beside a $ref: they say nothing about the value.
 $script:HordeSchemaInertKeywords = @('$schema', '$id', "title", "description", "definitions")
 
@@ -50,6 +75,65 @@ function Test-HordeSchemaType {
         "number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }
     }
     throw ("the schema names a type this validator does not know: '" + $Type + "'")
+}
+
+function Test-HordeSchemaIsNumber {
+    # Every .NET type a number reaches the validator as: ConvertFrom-Json gives Int32, Int64, Decimal or
+    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" already
+    # accepts Int16 and Byte). Never a string or a boolean.
+    param($Value)
+    return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or
+            $Value -is [double] -or $Value -is [single] -or $Value -is [decimal])
+}
+
+function ConvertTo-HordeSchemaFraction {
+    # A finite number as the exact fraction it holds, numerator over a positive denominator, both
+    # BigInteger. A Decimal's invariant text is exact (it has no exponent form); a Double is its
+    # mantissa times a power of two, read from its bits, so 0.1 as a Double is
+    # 3602879701896397 / 36028797018963968, slightly more than one tenth.
+    param($N)
+    $one = [System.Numerics.BigInteger]::One
+    if ($N -is [decimal]) {
+        $text = $N.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        $point = $text.IndexOf('.')
+        $scale = 0
+        if ($point -ge 0) { $scale = $text.Length - $point - 1; $text = $text.Remove($point, 1) }
+        return @([System.Numerics.BigInteger]::Parse($text, [System.Globalization.CultureInfo]::InvariantCulture), [System.Numerics.BigInteger]::Pow(10, $scale))
+    }
+    if ($N -is [double] -or $N -is [single]) {
+        # IEEE 754 binary64: 1 sign bit, 11 exponent bits (bias 1023), 52 mantissa bits with an implied
+        # leading 1 unless the exponent field is 0. [double] of a Single is exact.
+        $bits = [BitConverter]::DoubleToInt64Bits([double]$N)
+        $expField = [int](($bits -shr 52) -band 0x7FF)
+        $mantissa = [System.Numerics.BigInteger]($bits -band 0xFFFFFFFFFFFFF)
+        if ($expField -eq 0) { $exp = -1074 } else { $mantissa = [System.Numerics.BigInteger]::Add($mantissa, [System.Numerics.BigInteger]::Pow(2, 52)); $exp = $expField - 1075 }
+        if ($bits -lt 0) { $mantissa = [System.Numerics.BigInteger]::Negate($mantissa) }
+        if ($exp -ge 0) { return @([System.Numerics.BigInteger]::Multiply($mantissa, [System.Numerics.BigInteger]::Pow(2, $exp)), $one) }
+        return @($mantissa, [System.Numerics.BigInteger]::Pow(2, -$exp))
+    }
+    return @([System.Numerics.BigInteger][long]$N, $one)
+}
+
+function Compare-HordeSchemaNumber {
+    # -1, 0 or 1 as A is below, equal to or above B, EXACTLY. Neither may be NaN. Comparing through
+    # [double] called the Decimal 0.99999999999999999999 equal to 1; comparing through [decimal]
+    # throws past Decimal's range (1e30 - the enum's lesson, second review of PR #16) and rounds a
+    # Double to 15 significant digits. As exact fractions, neither happens. An infinity is above or
+    # below every finite number, and equal only to itself.
+    param($A, $B)
+    $aInf = (($A -is [double] -or $A -is [single]) -and [double]::IsInfinity([double]$A))
+    $bInf = (($B -is [double] -or $B -is [single]) -and [double]::IsInfinity([double]$B))
+    if ($aInf -or $bInf) {
+        $ad = 0.0; $bd = 0.0
+        if ($aInf) { $ad = [double]$A } elseif ($A -lt 0) { $ad = -1.0 } elseif ($A -gt 0) { $ad = 1.0 }
+        if ($bInf) { $bd = [double]$B } elseif ($B -lt 0) { $bd = -1.0 } elseif ($B -gt 0) { $bd = 1.0 }
+        if ($aInf -and -not $bInf) { if ($ad -gt 0) { return 1 } else { return -1 } }
+        if ($bInf -and -not $aInf) { if ($bd -gt 0) { return -1 } else { return 1 } }
+        return $ad.CompareTo($bd)
+    }
+    $fa = ConvertTo-HordeSchemaFraction $A
+    $fb = ConvertTo-HordeSchemaFraction $B
+    return [System.Numerics.BigInteger]::Compare([System.Numerics.BigInteger]::Multiply($fa[0], $fb[1]), [System.Numerics.BigInteger]::Multiply($fb[0], $fa[1]))
 }
 
 function Get-HordeSchemaProps {
@@ -103,18 +187,18 @@ function Resolve-HordeSchemaRef {
     throw ("the schema's `$ref '" + $Ref + "' names no definition")
 }
 
-function Test-HordeSchema {
-    # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
-    param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
-    $findings = New-Object System.Collections.ArrayList
+function Get-HordeSchemaNodeKeywords {
+    # One schema node's keywords, after refusing everything about the node itself that this validator
+    # cannot honour. Nothing here looks at a value, so the same checks serve Test-HordeSchema, which
+    # then applies the keywords to one, and Assert-HordeSchemaNode, which checks definitions that no
+    # value may ever reach.
+    param($Schema, [string]$Path, [bool]$AtTop)
     # A schema node that is not an object is refused. Draft-07 allows true and false as schemas, and
     # read as an object they have no keywords, so the first version accepted everything for both
     # (review of PR #15). This covers a definition a $ref reaches, too.
     if (-not ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary])) {
         throw ("the schema at " + $Path + " is not an object; boolean and other schemas are not implemented")
     }
-    $atTop = ($null -eq $Root)
-    if ($atTop) { $Root = $Schema }
     $kw = @{}
     foreach ($p in (Get-HordeSchemaProps $Schema)) {
         if ($p.Name -like "x-*") { continue }
@@ -139,11 +223,91 @@ function Test-HordeSchema {
             if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings, whole numbers and booleans; '" + $e + "' is none of them") }
         }
     }
+    # minimum IS A FINITE NUMBER, never a string, a boolean or null. PowerShell compares "0" or $true
+    # with a number by converting it, so a bad minimum would work, wrongly, instead of failing.
+    if ($kw.ContainsKey("minimum")) {
+        $m = $kw["minimum"]
+        $finite = ((Test-HordeSchemaIsNumber $m) -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m))))
+        if (-not $finite) { throw ("minimum at " + $Path + " must be a number; '" + $m + "' is not one") }
+    }
+    # A TYPE NAME IS CHECKED HERE as well as when a value meets it, so a definition nothing refers to
+    # cannot carry one this validator does not know.
+    if ($kw.ContainsKey("type") -and $script:HordeSchemaTypes -cnotcontains "$($kw['type'])") {
+        throw ("the schema names a type this validator does not know: '" + $kw["type"] + "'")
+    }
+    # properties AND definitions ARE OBJECTS. Read as one, an array or a string has .NET properties
+    # (Length, Rank) instead of keys, so "properties": ["a"] checked nothing and passed every value.
+    if ($kw.ContainsKey("properties") -and -not (Test-HordeSchemaType -Value $kw["properties"] -Type "object")) {
+        throw ("properties at " + $Path + " must be an object")
+    }
     if ($kw.ContainsKey("definitions") -and -not $atTop) { throw ("the schema has definitions below the top of a schema, at " + $Path + "; #/definitions/ would never find them") }
+    if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {
+        throw ("definitions at " + $Path + " must be an object, one schema per name")
+    }
     if ($kw.ContainsKey('$ref')) {
         $beside = @($kw.Keys | Where-Object { $_ -cne '$ref' -and $script:HordeSchemaInertKeywords -cnotcontains $_ })
         if ($beside.Count -gt 0) { throw ("the schema has " + ($beside -join ", ") + " beside a `$ref at " + $Path + ", which draft-07 ignores") }
-        $ref = "$($kw['$ref'])"
+        # A $ref IS A STRING OR IT IS REFUSED. Read as "$($kw['$ref'])", an array holding one pointer
+        # became that pointer's text and was followed (review of PR #17): a schema no draft-07 validator
+        # accepts was given a meaning. Nothing is converted, so nothing is guessed.
+        if ($kw['$ref'] -isnot [string]) { throw ("the schema's `$ref at " + $Path + " is not a string") }
+    }
+    return $kw
+}
+
+function Assert-HordeSchemaDefinitions {
+    # EVERY DEFINITION IS CHECKED ONCE, whether or not anything refers to it. Before, a definition was
+    # read only when a $ref reached it (review of PR #17), so an unknown keyword, a node that is not an
+    # object or a dangling $ref could sit in a schema file until the day something referred to it -
+    # and then fail a caller that had changed nothing. Test-HordeSchema calls this at the top of a
+    # schema, before any value is looked at.
+    param($Root)
+    foreach ($p in (Get-HordeSchemaProps $Root)) {
+        if ($p.Name -cne "definitions") { continue }
+        foreach ($d in (Get-HordeSchemaProps $p.Value)) { Assert-HordeSchemaNode -Schema $d.Value -Path ("#/definitions/" + $d.Name) -Root $Root }
+    }
+}
+
+function Assert-HordeSchemaNode {
+    # A schema node and every node inside it, checked with no value: whatever Test-HordeSchema would
+    # refuse on reaching the node is refused here. A $ref is resolved, never followed into its
+    # definition, which is checked on its own; so a recursive definition is walked once, and the walk
+    # ends. Path is a JSON pointer into the schema, "#/definitions/node/properties/children/items".
+    param($Schema, [string]$Path, $Root)
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $false
+    if ($kw.ContainsKey('$ref')) {
+        # A chain of bare $refs that comes back to itself would make Test-HordeSchema throw on the
+        # first value to reach it, so it is refused now, as that throw would say.
+        $chain = @()
+        $ref = $kw['$ref']
+        while ($true) {
+            if ($chain -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
+            $chain += $ref
+            $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
+            $targetKw = Get-HordeSchemaNodeKeywords -Schema $target -Path $ref -AtTop $false
+            if (-not $targetKw.ContainsKey('$ref')) { break }
+            $ref = $targetKw['$ref']
+        }
+        return
+    }
+    if ($kw.ContainsKey("properties")) {
+        foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { Assert-HordeSchemaNode -Schema $p.Value -Path ($Path + "/properties/" + $p.Name) -Root $Root }
+    }
+    if ($kw.ContainsKey("items")) { Assert-HordeSchemaNode -Schema $kw["items"] -Path ($Path + "/items") -Root $Root }
+}
+
+function Test-HordeSchema {
+    # Root and RefsHere are for the validator's own recursion; a caller passes Value and Schema.
+    param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
+    $findings = New-Object System.Collections.ArrayList
+    $atTop = ($null -eq $Root)
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $atTop
+    if ($atTop) {
+        $Root = $Schema
+        Assert-HordeSchemaDefinitions -Root $Root
+    }
+    if ($kw.ContainsKey('$ref')) {
+        $ref = $kw['$ref']
         if ($RefsHere -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
         $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
         return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))
@@ -175,6 +339,11 @@ function Test-HordeSchema {
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
         $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"
         if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
+    }
+    if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {
+        # NaN is at or above nothing, so it is refused, by name: "below" would not be true of it either.
+        if (($Value -is [double] -or $Value -is [single]) -and [double]::IsNaN([double]$Value)) { [void]$findings.Add($Path + " is NaN, which is not at or above the minimum " + $kw["minimum"]) }
+        elseif ((Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0) { [void]$findings.Add($Path + " is " + $Value + ", below the minimum " + $kw["minimum"]) }
     }
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     if ($isObject) {
