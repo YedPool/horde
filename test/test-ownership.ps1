@@ -68,6 +68,19 @@ Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName pro
 Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "owner": "engine",') "appears more than once") "a field with a repeated owner key is refused"
 Check (Says (MutatedText '{ "store": "X2", "field": "sessionId" }' '{ "store": "X2", "store": "W1", "field": "sessionId" }') "appears more than once") "a read entry with a repeated key is refused"
 Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "Owner": "engine",') "appears more than once") "a key repeated in another case is refused, not thrown"
+$aDroppedField = { param($d, $reason)
+    $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
+    $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }
+Check (Says (Mutated { param($d) $d.fields = @() }) "is missing") "an empty table is refused"
+Check (Says (Mutated { param($d) $d.fields = @($d.fields | Where-Object { $_.name -cne "pane" }) }) "'pane' is missing") "a deleted field is refused"
+Check (Says (Mutated { param($d) $d.fields += [pscustomobject]@{ name = "extra"; owner = "engine"; read = @([pscustomobject]@{ store = "W1"; field = "extra" }) } }) "not in the required list") "a field the required list does not name is refused"
+Check (Says (Mutated { param($d) $d.PSObject.Properties.Remove("required") }) "needs a required list") "a table with no required list is refused"
+Check (Says (Mutated { param($d) & $aDroppedField $d "" }) "dropped without a reason") "a dropped field with no reason is refused"
+Check (Says (Mutated { param($d) & $aDroppedField $d $false }) "dropped without a reason") "a dropped field whose reason is not text is refused"
+Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "pane"; reason = "a reason of several words" }) -Force }) "both kept and dropped") "a field both kept and dropped is refused"
+Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reasn = "x" }) -Force }) "unknown key") "a misspelled key in a dropped entry is refused"
+$droppedControl = @(Mutated { param($d) & $aDroppedField $d "a reason of several words" })
+Check ($droppedControl.Count -eq 0) ("CONTROL: a field dropped with a reason is accounted for (" + $droppedControl.Count + " findings)")
 $dupControl = @(try { Find-HordeJsonDuplicateKey -Text $rawText } catch { "THE SCAN THREW: " + $_.Exception.Message })
 $storeKeys = ([regex]::Matches($rawText, '"store"')).Count
 Check ($dupControl.Count -eq 0 -and $storeKeys -ge 20) ("CONTROL: one key in many objects is not a repeat (" + $storeKeys + " store keys, " + $dupControl.Count + " repeats)")

@@ -23,6 +23,9 @@
     "X6": { "system": "env", "what": "environment in the pane", "path": "WEZTERM_PANE, WEZFLEET_SESSION_ID, CLAUDE_CODE_SESSION_ID and others; inherited, so can be wrong" },
     "R1": { "system": "wezterm-resurrect", "what": "layout saves", "path": "<plugin>\\state\\{workspace,window,tab}\\<name>.json" }
   },
+  "required": [ "sessionId", "agent", "pid", "cwd", "projectCwd", "transcriptPath", "resumeCommand", "pane", "window",
+                "hostInstance", "role", "parent", "owner", "label", "name", "origin", "fleetSessionId", "liveStatus",
+                "workState", "report", "lastActivity", "startedAt", "retired", "messagingAddress" ],
   "fields": [
     { "name": "sessionId", "owner": "agent",
       "read": [ { "store": "X2", "field": "sessionId" }, { "store": "W1", "field": "file name" },

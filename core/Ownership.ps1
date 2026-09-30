@@ -14,6 +14,7 @@
 Set-StrictMode -Off
 
 $script:HordeOwnershipFieldKeys = @("name", "owner", "read", "derived", "provisional")
+$script:HordeOwnershipDroppedKeys = @("name", "reason")
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
@@ -106,11 +107,13 @@ function Test-HordeOwnership {
     $stores = @($Doc.stores.PSObject.Properties | ForEach-Object { $_.Name })
     $seen = @{}
     $usedStores = @{}
+    $fieldNames = New-Object System.Collections.ArrayList
     foreach ($f in @($Doc.fields)) {
         $n = "$($f.name)"
         if ($n.Trim() -eq "") { [void]$findings.Add("a field has no name"); continue }
         if ($seen.ContainsKey($n)) { [void]$findings.Add("field '" + $n + "' is listed twice") }
         $seen[$n] = $true
+        [void]$fieldNames.Add($n)
         foreach ($k in @($f.PSObject.Properties | ForEach-Object { $_.Name })) {
             if ($script:HordeOwnershipFieldKeys -notcontains $k) { [void]$findings.Add("field '" + $n + "' has an unknown key '" + $k + "'") }
         }
@@ -134,6 +137,42 @@ function Test-HordeOwnership {
     }
     foreach ($s in $stores) {
         if (-not $usedStores.ContainsKey($s)) { [void]$findings.Add("store '" + $s + "' is listed but no field reads it") }
+    }
+
+    # EVERY FIELD ACCOUNTED FOR. Without a list of what must be there, an empty table passed and a
+    # deleted field was invisible (review finding 2, 2026-09-29): every check above runs per field,
+    # so a field that is not there is never checked. The list lives in the JSON until
+    # schema/session-record.v1 exists (migration plan step 1.2), and then that schema is the list.
+    # A field is accounted for by being in `fields` (kept, with an owner and a read rule) or in
+    # `dropped` (not carried into Horde, with the reason) - never both, never neither.
+    $droppedNames = New-Object System.Collections.ArrayList
+    foreach ($x in @($Doc.dropped | Where-Object { $null -ne $_ })) {
+        $dn = "$($x.name)"
+        if ($dn.Trim() -eq "") { [void]$findings.Add("a dropped entry has no name"); continue }
+        foreach ($k in @($x.PSObject.Properties | ForEach-Object { $_.Name })) {
+            if ($script:HordeOwnershipDroppedKeys -cnotcontains $k) { [void]$findings.Add("dropped field '" + $dn + "' has an unknown key '" + $k + "'") }
+        }
+        if ($droppedNames -ccontains $dn) { [void]$findings.Add("field '" + $dn + "' is dropped twice") }
+        [void]$droppedNames.Add($dn)
+        if ($x.reason -isnot [string] -or "$($x.reason)".Trim() -eq "") { [void]$findings.Add("field '" + $dn + "' is dropped without a reason") }
+        if ($fieldNames -ccontains $dn) { [void]$findings.Add("field '" + $dn + "' is both kept and dropped") }
+    }
+    if ($null -eq $Doc.PSObject.Properties["required"]) {
+        [void]$findings.Add("the table needs a required list naming every field of the session record")
+        return @($findings)
+    }
+    $required = @($Doc.required | Where-Object { $null -ne $_ } | ForEach-Object { "$_" })
+    if ($required.Count -eq 0) { [void]$findings.Add("the required list is empty") }
+    $requiredSeen = New-Object System.Collections.ArrayList
+    foreach ($r in $required) {
+        if ($requiredSeen -ccontains $r) { [void]$findings.Add("the required list names '" + $r + "' twice") }
+        [void]$requiredSeen.Add($r)
+        if ($fieldNames -cnotcontains $r -and $droppedNames -cnotcontains $r) {
+            [void]$findings.Add("required field '" + $r + "' is missing: it is neither in fields nor dropped")
+        }
+    }
+    foreach ($x in @($fieldNames) + @($droppedNames)) {
+        if ($required -cnotcontains $x) { [void]$findings.Add("field '" + $x + "' is not in the required list") }
     }
     return @($findings)
 }
