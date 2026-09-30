@@ -105,6 +105,11 @@ function Invoke-HordeRead {
     # New-HordeAbsent.
     param([Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][scriptblock]$Read)
     $got = $null
+    # Most cmdlet failures are non-terminating: they write an error and the reader carries on to its
+    # fallback, which came back KNOWN - { Write-Error boom; 0 } read as known 0 (review, 2026-09-29).
+    # Stop, set here, is local to this call and reaches the reader's scope, so any error it writes
+    # ends the read as unknown. The caller's own preference is untouched.
+    $ErrorActionPreference = "Stop"
     try { $got = & $Read }
     catch { return (New-HordeUnknown -Reason ("could not read " + $What) -ErrorRecord $_) }
     if (Test-HordeAnswer $got) { return $got }

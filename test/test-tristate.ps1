@@ -38,6 +38,14 @@ $noisyAbsent = Invoke-HordeRead -What "the pane list" -Read { "listing panes"; N
 Check ($noisyAbsent.state -eq "unknown") "a reader that emits an answer plus other output reads as unknown"
 $noisyUnknown = Invoke-HordeRead -What "the pane list" -Read { New-HordeUnknown -Reason "mux silent"; 0 }
 Check ($noisyUnknown.state -eq "unknown" -and $noisyUnknown.reason -like "*plus other output*") "and so does one whose stray output follows an unknown"
+# Most cmdlet failures are non-terminating: they write an error and carry on. Under this suite's
+# Continue preference, a reader that failed that way still returned its fallback as known.
+$softFail = Invoke-HordeRead -What "the pane list" -Read { Write-Error "boom"; 0 }
+Check ($softFail.state -eq "unknown" -and $softFail.reason -like "*boom*") "a reader that writes a non-terminating error reads as unknown"
+$noSuchDir = Join-Path $env:TEMP ("horde-no-such-dir-" + [guid]::NewGuid().ToString("N"))
+$missingPath = Invoke-HordeRead -What "the registry" -Read { , @(Get-ChildItem -LiteralPath $noSuchDir) }
+Check ($missingPath.state -eq "unknown") "a cmdlet error inside a reader is not swallowed into a known empty list"
+Check ($ErrorActionPreference -eq "Continue") "the caller's error preference is untouched by a read"
 
 Write-Host ""
 Write-Host "--- absent and unknown stay apart ---" -ForegroundColor Cyan
