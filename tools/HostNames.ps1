@@ -32,14 +32,17 @@
 #
 # WHAT IS NOT SCANNED, by rule:
 #   - hosts/<name>/ itself: the one place the host's name belongs.
-#   - planning/: plans, ledgers and handoffs are prose records of the system being replaced and of
-#     the migration away from it. They cannot be accurate without naming the terminal, and D12
-#     governs the code and the contracts, not the history. Listing them would make every plan edit
-#     an allowlist edit and protect nothing.
+#   - the .md and .html files under planning/: plans, ledgers and handoffs are prose records of the
+#     system being replaced and of the migration away from it. They cannot be accurate without naming
+#     the terminal, and D12 governs the code and the contracts, not the history. Listing them would
+#     make every plan edit an allowlist edit and protect nothing. ONLY PROSE: the first version
+#     skipped planning/ whatever the file, and the review of PR 21 hid a script there that core
+#     dot-sourced. Any other file under planning/ is a finding of its own, and is scanned as well.
 #   - .git/: not the repository's content.
 # Other hosts' folders ARE scanned: hosts/vscode naming another terminal would be the same leak.
 
-$script:HordeHostNamesExcluded = @("planning")
+$script:HordeHostNamesProseFolder = "planning"
+$script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 
 function Read-HordeHostTable {
@@ -75,6 +78,14 @@ function Test-HordeUnderFolder {
     return $false
 }
 
+function Test-HordePlanningProse {
+    # Is the forward-slash relative path a .md or .html file under planning/? The extension is
+    # compared ignoring case, as the filesystem compares names.
+    param([string]$Rel)
+    if (-not (Test-HordeUnderFolder -Rel $Rel -Folders @($script:HordeHostNamesProseFolder))) { return $false }
+    return ($script:HordeHostNamesProseTypes -contains ([System.IO.Path]::GetExtension($Rel).ToLowerInvariant()))
+}
+
 function Get-HordeRepoFiles {
     # Every file under the root except .git/ and the given folders, as forward-slash paths relative
     # to the root. The filesystem, not `git ls-files`: tools/Mutate.ps1 runs suites in a copy with no
@@ -88,6 +99,7 @@ function Get-HordeRepoFiles {
         # name anything: the worktree this ratchet was written in had the terminal's name in its
         # folder name, and the first count reported .git as a mention. Skipped as a file as well.
         if ($rel -eq ".git" -or (Test-HordeUnderFolder -Rel $rel -Folders (@(".git") + $Skip))) { continue }
+        if (Test-HordePlanningProse -Rel $rel) { continue }
         [void]$out.Add([pscustomobject]@{ rel = $rel; full = $f.FullName })
     }
     return , $out
@@ -125,9 +137,19 @@ function Test-HordeHostNames {
     function Add-Finding { param([string]$HostName, [string]$Where, [string]$Problem)
         [void]$found.Add([pscustomobject]@{ host = $HostName; path = $Where; problem = $Problem }) }
 
+    # ANYTHING BUT PROSE UNDER planning/ is refused, once for the repository and whatever it names:
+    # only prose is exempt from the scan, so only prose may live there.
+    # Get-HordeRepoFiles already leaves the prose out, so whatever it returns under planning/ is not.
+    foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip @())) {
+        if (Test-HordeUnderFolder -Rel $f.rel -Folders @($script:HordeHostNamesProseFolder)) {
+            Add-Finding "(repository)" $f.rel "is under planning/, where only .md and .html are allowed and skipped - move it out of planning/"
+        }
+    }
+
     $hostsDir = Join-Path $RepoRoot "hosts"
-    if (-not (Test-Path -LiteralPath $hostsDir -PathType Container)) { return }
-    foreach ($h in @(Get-ChildItem -LiteralPath $hostsDir -Directory)) {
+    $hostDirs = @()
+    if (Test-Path -LiteralPath $hostsDir -PathType Container) { $hostDirs = @(Get-ChildItem -LiteralPath $hostsDir -Directory) }
+    foreach ($h in $hostDirs) {
         $hn = $h.Name
         $own = "hosts/" + $hn
         $namesPath = Join-Path $h.FullName "names.txt"
@@ -148,7 +170,7 @@ function Test-HordeHostNames {
         }
         if ($names.Count -eq 0) { Add-Finding $hn ($own + "/names.txt") "lists no usable name, so nothing is checked"; continue }
 
-        $skip = @($own) + $script:HordeHostNamesExcluded
+        $skip = @($own)
         $allowed = @{}
         $allowPath = Join-Path $h.FullName "allowlist.txt"
         if (Test-Path -LiteralPath $allowPath -PathType Leaf) {
@@ -162,7 +184,7 @@ function Test-HordeHostNames {
                 $key = $p.ToLowerInvariant()
                 if ($allowed.ContainsKey($key)) { Add-Finding $hn $where ($p + " is listed twice"); continue }
                 # AN ENTRY FOR A PATH THE SCAN NEVER READS allows nothing, and would sit there forever.
-                if (Test-HordeUnderFolder -Rel $p -Folders $skip) { Add-Finding $hn $where ($p + " is excluded from the scan by rule, so the entry is not needed"); continue }
+                if ((Test-HordeUnderFolder -Rel $p -Folders $skip) -or (Test-HordePlanningProse -Rel $p)) { Add-Finding $hn $where ($p + " is excluded from the scan by rule, so the entry is not needed"); continue }
                 $allowed[$key] = [pscustomobject]@{ path = $p; count = $allowCount }
             }
         }

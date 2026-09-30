@@ -21,9 +21,21 @@
            Find = 'if ($t -eq "" -or $t.StartsWith("#")) { continue }'
            Replace = 'if ($t -eq "") { continue }' }
         # --- what is scanned
-        @{ Name = "planning-scanned"
-           Find = '$script:HordeHostNamesExcluded = @("planning")'
-           Replace = '$script:HordeHostNamesExcluded = @()' }
+        @{ Name = "planning-prose-scanned"
+           Find = 'if (Test-HordePlanningProse -Rel $rel) { continue }'
+           Replace = '' }
+        @{ Name = "planning-any-type-skipped"
+           Find = 'return ($script:HordeHostNamesProseTypes -contains ([System.IO.Path]::GetExtension($Rel).ToLowerInvariant()))'
+           Replace = 'return $true' }
+        @{ Name = "planning-extension-compared-with-case"
+           Find = '([System.IO.Path]::GetExtension($Rel).ToLowerInvariant())'
+           Replace = '([System.IO.Path]::GetExtension($Rel))' }
+        @{ Name = "planning-other-type-not-refused"
+           Find = 'Add-Finding "(repository)" $f.rel'
+           Replace = 'continue; Add-Finding "(repository)" $f.rel' }
+        @{ Name = "planning-prose-entry-kept"
+           Find = ' -or (Test-HordePlanningProse -Rel $p)) {'
+           Replace = ') {' }
         @{ Name = "own-folder-scanned"
            Find = '$skip = @($own) + $script:HordeHostNamesExcluded'
            Replace = '$skip = @() + $script:HordeHostNamesExcluded' }

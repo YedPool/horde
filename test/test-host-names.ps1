@@ -121,7 +121,19 @@ try {
     Write-Host ""
     Write-Host "--- what is not scanned, and how lines are counted ---" -ForegroundColor Cyan
 
-    Passes "planning" { Write-FakeFile "planning/ledger/old-fleet.md" "The Zorbterm fleet and its zorb-sock.`n" } "planning/ is not scanned: plans and ledgers describe the old system by rule"
+    Passes "planning" { Write-FakeFile "planning/ledger/old-fleet.md" "The Zorbterm fleet and its zorb-sock.`n" } "a .md under planning/ is not scanned: plans and ledgers describe the old system by rule"
+    Passes "planning-html" { Write-FakeFile "planning/Plan.HTML" "<p>The Zorbterm fleet.</p>`n" } "nor is a .html under planning/, whatever the case of its extension"
+    # PROSE ONLY. The review of PR 21 put a script under planning/lib/, dot-sourced it from core, and
+    # the scan never read it: planning/ was skipped whatever the file. Only prose is skipped now, and
+    # any other file there is refused outright, so planning/ cannot hold code at all.
+    Refuses "planning-code" { Write-FakeFile "planning/lib/spawn.ps1" "function Invoke-Spawn { }`n" } "only .md and .html" "a script under planning/ is refused, though it names nothing"
+    function RefusesPlanningData {
+        $f = @(Scan "planning-data" { Write-FakeFile "planning/host.json" "{ `"host`": `"zorbterm`" }`n" })
+        $ok = ((Says $f "only .md and .html") -and (Says $f "is not in hosts/zorbterm/allowlist.txt") -and $f.Count -eq 2)
+        Check $ok "a data file under planning/ is refused, and is scanned like any other file, so its mention is reported too"
+        if (-not $ok) { Show $f }
+    }
+    RefusesPlanningData
     Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
     # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already

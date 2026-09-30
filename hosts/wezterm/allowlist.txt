@@ -5,8 +5,9 @@
 # so this list can only shrink. When a mention goes, lower the count or delete the line; when one
 # must be added, the entry and its reason are the thing a reviewer has to agree with.
 #
-# planning/ is not scanned at all, by rule (see tools/HostNames.ps1): plans and ledgers are records of
-# the WezTerm-based system being replaced and cannot be accurate without naming it.
+# The .md and .html files under planning/ are not scanned, by rule (see tools/HostNames.ps1): plans
+# and ledgers are records of the WezTerm-based system being replaced and cannot be accurate without
+# naming it. Any other file under planning/ fails the suite.
 #
 # path | mentions | why this file may name the host
 
