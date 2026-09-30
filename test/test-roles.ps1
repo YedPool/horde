@@ -55,7 +55,8 @@ $labelled = Read-HordeRecordRole -Record ([pscustomobject]@{ claudeSessionId = "
 Check ($labelled.role.state -eq "unknown") "role is never inferred from the label"
 
 # DRIFT: every role wezfleet can store must have an alias, so a fourth wezfleet role cannot arrive
-# unmapped. Read from the wezfleet repository's own source when it is checked out beside this one.
+# unmapped. Read from the wezfleet repository's own source, checked out beside this one or named by
+# HORDE_WEZFLEET_REPO. With neither, the check FAILS unless HORDE_SKIP_DRIFT=1 asks to skip it.
 $hier = $null
 foreach ($up in @("..", "..\..", "..\..\..")) {
     $cand = Join-Path $root ($up + "\wezfleet\lib\Hierarchy.ps1")
@@ -71,8 +72,13 @@ if ($hier -and (Test-Path -LiteralPath $hier)) {
     Check ($wf.Count -ge 3) "CONTROL: wezfleet's role list was found and read"
     $unmapped = @($wf | Where-Object { -not $table.aliases.ContainsKey($_.ToLowerInvariant()) })
     Check ($unmapped.Count -eq 0) ("every role wezfleet can store has an alias (" + ($unmapped -join ", ") + ")")
+} elseif ($env:HORDE_SKIP_DRIFT -eq "1") {
+    # Skipping is allowed only when asked for by name, and says so on every run.
+    Write-Host "  [SKIP] the drift check did not run: HORDE_SKIP_DRIFT=1 and no wezfleet checkout was found" -ForegroundColor Yellow
 } else {
-    Write-Host "  (inconclusive: no wezfleet checkout found beside this repository - the drift check did not run)" -ForegroundColor Yellow
+    # A check that did not run is not a pass. It used to print "inconclusive" and exit 0, so a
+    # machine without wezfleet beside Horde passed a check it never made (review, 2026-09-29).
+    Check $false ("the drift check ran: no wezfleet lib\Hierarchy.ps1 was found (set HORDE_WEZFLEET_REPO to a wezfleet checkout, or HORDE_SKIP_DRIFT=1 to skip it on purpose)")
 }
 
 Write-Host ""
