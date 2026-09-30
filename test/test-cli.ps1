@@ -77,6 +77,17 @@ try { [void](Import-HordeCommand -Path (Join-Path $root "test\fixtures\cli\bad\s
 Check $refused "loading a malformed command file is refused"
 Check (-not (Test-Path -LiteralPath $marker)) "and refused before any of it ran"
 
+# A REDIRECTION'S TARGET IS CODE, evaluated when the statement runs: `@{...} 2> $(...)` or
+# `summary = "x" 2> $(...)` ran the $(...) at load, and passed validation (review of PR #12, finding 2).
+# Each fixture here writes the marker if it is ever loaded.
+foreach ($f in @("redirect-top", "redirect-value", "redirect-run")) {
+    Check (HasFinding ($f + ".ps1") "redirection") ("a redirection in a declaration is refused: " + $f)
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    try { [void](Import-HordeCommand -Path (Join-Path $root ("test\fixtures\cli\bad\" + $f + ".ps1"))) } catch { }
+    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it: " + $f)
+}
+Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "--- the real commands, and the help generated from them ---" -ForegroundColor Cyan
 

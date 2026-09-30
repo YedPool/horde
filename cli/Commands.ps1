@@ -37,6 +37,20 @@ function Test-HordeCommandName {
     return ($Name -cmatch '\A[a-z][a-z0-9-]*\z')
 }
 
+function Test-HordeRedirected {
+    # Whether a statement or hashtable value carries a redirection (`2> $(...)`, `> file`).
+    #
+    # A REDIRECTION'S TARGET IS CODE, run when the statement runs - which for a declaration is load
+    # time. Measured 2026-09-29: `$HordeCommand = @{...} 2> $(Set-Content marker)` and
+    # `summary = "x" 2> $(...)` both passed validation and wrote the marker when loaded, because the
+    # checks looked through the CommandExpressionAst to what it held and never at its Redirections
+    # (review of PR #12, finding 2).
+    param($Ast)
+    $v = $Ast
+    if ($v -is [System.Management.Automation.Language.PipelineAst] -and @($v.PipelineElements).Count -eq 1) { $v = $v.PipelineElements[0] }
+    return ($v -is [System.Management.Automation.Language.CommandBaseAst] -and @($v.Redirections).Count -gt 0)
+}
+
 function Get-HordeConstantString {
     # The string a hashtable value is, if it is a plain constant; otherwise $null.
     param($ValueAst)
@@ -99,6 +113,9 @@ function Read-HordeCommandAst {
         [void]$findings.Add("its one statement is not `$HordeCommand = @{ ... }")
         return [pscustomobject]@{ info = $null; findings = @($findings) }
     }
+    if (Test-HordeRedirected -Ast $s.Right) {
+        [void]$findings.Add("the declaration has a redirection, whose target would run when the file loads")
+    }
     $info = [ordered]@{ path = $Path }
     $hasRun = $false
     foreach ($pair in $table.KeyValuePairs) {
@@ -110,6 +127,10 @@ function Read-HordeCommandAst {
             continue
         }
         $key = $pair.Item1.Value
+        if (Test-HordeRedirected -Ast $pair.Item2) {
+            [void]$findings.Add("'" + $key + "' has a redirection, whose target would run when the file loads")
+            continue
+        }
         if ($key -eq "run") {
             $hasRun = $true
             $why = Get-HordeRunProblem -ValueAst $pair.Item2
