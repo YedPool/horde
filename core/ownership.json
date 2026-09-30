@@ -136,6 +136,7 @@
     { "name": "sessionKind", "owner": "agent",
       "read": [ { "store": "X2", "field": "kind" } ] },
     { "name": "entrypoint", "owner": "agent",
+      "provisional": "the control file's entrypoint has been seen only as cli, in 10 of 10 files on 2026-09-30; that a nested claude -p would write sdk-cli is inferred from the environment variable of the same name, which wezfleet measured, and is unmeasured for this key",
       "read": [ { "store": "X2", "field": "entrypoint" } ] },
     { "name": "pidDomain", "owner": "agent",
       "read": [ { "store": "X2", "field": "pidDomain" } ] },

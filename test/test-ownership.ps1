@@ -132,6 +132,10 @@ Check ($tpDerived -notlike "*from projectCwd*" -and $tpDerived -like "*exactly o
 # provisional and says why it still fails safe (ledger L-053).
 $tpProvisional = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').provisional)"
 Check ($tpProvisional -like "*137 characters*" -and $tpProvisional -like "*checked to exist*") "the transcript folder key is provisional beyond the longest path measured"
+# WHAT THE CONTROL FILE'S ENTRYPOINT SAYS FOR A NESTED SESSION IS UNMEASURED. wezfleet measured
+# the environment variable of that name (sdk-cli for a nested claude -p), not this key, which has
+# been seen only as cli (ledger L-048).
+Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'entrypoint').provisional)" -like "*environment variable*") "the entrypoint's meaning for a nested session is marked unmeasured"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
 Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'resumeCommand').provisional)" -ne "") "a rule that depends on something unmeasured is marked provisional"
 $role = Get-HordeOwnershipField -Doc $doc -Name "role"
