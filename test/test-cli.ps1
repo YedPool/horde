@@ -67,6 +67,7 @@ Check (HasFinding "plain-run.ps1" "CmdletBinding") "a run block that would silen
 Check (HasFinding "no-summary.ps1" "has no summary") "a command with no summary is refused"
 Check (HasFinding "no-summary.ps1" "unknown key") "and so is a key the registry does not know"
 Check (HasFinding "wrong-usage.ps1" "usage does not start with its own name") "a usage line for a different command is refused"
+Check (HasFinding "quoted-key.ps1" "unknown key") "a key that spells another key inside its quotes is not taken for it"
 Check ((Test-HordeCommandName -Name "version") -eq $true) "CONTROL: a plain command name is well-formed"
 Check ((Test-HordeCommandName -Name "version`n") -eq $false) "a command name with a trailing newline is not well-formed"
 Check (-not (Test-Path -LiteralPath $marker)) "listing the commands ran none of their code"

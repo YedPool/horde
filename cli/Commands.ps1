@@ -102,7 +102,14 @@ function Read-HordeCommandAst {
     $info = [ordered]@{ path = $Path }
     $hasRun = $false
     foreach ($pair in $table.KeyValuePairs) {
-        $key = "$($pair.Item1.Extent.Text)".Trim('"', "'")
+        # The key is the VALUE of a string constant - a bare word or a quoted string - never its
+        # source text with quotes trimmed. Trimming read "'summary'" (quotes inside quotes) as
+        # summary (review of PR #12, finding 9).
+        if ($pair.Item1 -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            [void]$findings.Add("has a key that is not a plain name: " + $pair.Item1.Extent.Text)
+            continue
+        }
+        $key = $pair.Item1.Value
         if ($key -eq "run") {
             $hasRun = $true
             $why = Get-HordeRunProblem -ValueAst $pair.Item2
