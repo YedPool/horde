@@ -255,7 +255,10 @@ PutJson (Join-Path $d12 "304.json") (ClaudeRec 304 (Sid 64) $c12 -Set @{ formerN
 PutJson (Join-Path $d12 "305.json") (ClaudeRec 305 (Sid 65) $c12 -Set @{ status = "waiting"; waitingFor = "permission prompt" })
 PutJson (Join-Path $d12 "306.json") (ClaudeRec 306 (Sid 66) $c12 -Set @{ status = "waiting" })
 PutJson (Join-Path $d12 "307.json") (ClaudeRec 307 (Sid 67) $c12 -Set @{ status = "waiting"; waitingFor = "dialog open" })
-$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12), @(305, "claude.exe", $c12), @(306, "claude.exe", $c12))
+# Review of PR #24: 308 names its wait as a number, not text; 309 names it as the empty string.
+PutJson (Join-Path $d12 "308.json") (ClaudeRec 308 (Sid 68) $c12 -Set @{ waitingFor = 5 })
+PutJson (Join-Path $d12 "309.json") (ClaudeRec 309 (Sid 69) $c12 -Set @{ status = "waiting"; waitingFor = "" })
+$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12), @(305, "claude.exe", $c12), @(306, "claude.exe", $c12), @(308, "claude.exe", $c12), @(309, "claude.exe", $c12))
 $r12 = Get-HordeIdentity -ClaudeDir $d12 -ProjectsDir $pDir -CodexDir $empty -Processes $tab12 -Now $now
 $a = $r12.records[(Sid 61)]; $b = $r12.records[(Sid 62)]; $c = $r12.records[(Sid 63)]; $e = $r12.records[(Sid 64)]
 Check ((St $a.fields.liveStatus) -eq "unknown" -and $a.fields.liveStatus.reason -like "*'thinking'*") "an unrecognised claude status reads as unknown"
@@ -278,6 +281,11 @@ Check ((Val $r12.records[(Sid 65)].fields["liveStatus"]) -ceq "waiting") "a clau
 Check ($null -ne $wb -and $null -ne $w1 -and (St $wb) -eq "absent" -and (St $w1) -eq "absent") "a session that is not waiting waits for nothing"
 Check ($null -ne $w6 -and (St $w6) -eq "unknown") "a waiting session that names nothing is unknown, not absent"
 Check ($null -ne $w7 -and (St $w7) -eq "unknown" -and $w7.reason -like "*not running*") "a stale control file says nothing about a wait"
+# Review of PR #24, hand mutants R3-R5, each of which these three checks did not exist to catch.
+$w8 = $r12.records[(Sid 68)].fields["waitingFor"]; $w9 = $r12.records[(Sid 69)].fields["waitingFor"]; $w63 = $c.fields["waitingFor"]
+Check ($null -ne $w8 -and (St $w8) -eq "unknown" -and $w8.reason -like "*not text*") "a wait that is not text is unknown, whatever the status"
+Check ($null -ne $w63 -and (St $w63) -eq "unknown" -and $w63.reason -like "*no status*") "a control file with no status leaves the wait unknown"
+Check ($null -ne $w9 -and (St $w9) -eq "unknown") "an empty wait is unknown, not a known empty text"
 # Review of PR #24: 301's status 'thinking' is not one Horde knows, so it cannot say the session is
 # not waiting; the first reader called its wait absent.
 $w61 = $a.fields["waitingFor"]

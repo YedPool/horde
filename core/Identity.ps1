@@ -318,7 +318,7 @@ function Read-HordeClaudeControlFiles {
             # that says waiting, says nothing, or is one Horde does not know leaves the wait unknown.
             $wf = $j.PSObject.Properties["waitingFor"]
             if ($null -ne $wf -and $wf.Value -is [string] -and $wf.Value -ne "") { $k["waitingFor"] = New-HordeKnown -Value $wf.Value }
-            elseif ($null -ne $wf) { $k["waitingFor"] = New-HordeUnknown -Reason "the control file's waitingFor is not text" }
+            elseif ($null -ne $wf) { $k["waitingFor"] = New-HordeUnknown -Reason "the control file's waitingFor is not text, or is empty" }
             elseif ($st.state -ne "known") { $k["waitingFor"] = New-HordeUnknown -Reason "the control file has no status, so whether the session waits is unknown" }
             elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["waitingFor"] = New-HordeUnknown -Reason ("the control file's status '" + $st.value + "' is not one Horde knows, so whether the session waits is unknown") }
             elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"] = New-HordeUnknown -Reason "the status is waiting but the control file does not say for what" }

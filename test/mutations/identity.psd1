@@ -71,6 +71,15 @@
         @{ Name = "waiting-status-unrecognised"
            Find = '$script:HordeClaudeStatuses = @("idle", "busy", "waiting")'
            Replace = '$script:HordeClaudeStatuses = @("idle", "busy")' }
+        @{ Name = "wait-not-text-falls-through"
+           Find = 'elseif ($null -ne $wf) { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "wait-with-no-status-guessed"
+           Find = 'elseif ($st.state -ne "known") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "empty-wait-known"
+           Find = '$wf.Value -is [string] -and $wf.Value -ne "")'
+           Replace = '$wf.Value -is [string])' }
         @{ Name = "status-time-dropped"
            Find = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }'
            Replace = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" }' }
