@@ -47,7 +47,7 @@
     { "name": "cwd", "owner": "agent",
       "read": [ { "store": "X2", "field": "cwd", "when": "the control file's cwd is the launch directory, not the current directory: after a cd the hook reports the new directory and the control file keeps the one the process started in, which is the directory its transcript is filed under" }, { "store": "W1", "field": "cwd", "when": "not retired, and written in this terminal instance: the record's instance matches this one when the record names one, and its lastSeen, the time the hook last saw a tool call, is not before the instance started. No age limit, as census reads it" }, { "store": "W8", "field": "cwd" },
                 { "store": "W5", "field": "session.cwd" }, { "store": "W4", "field": "cwd" } ] },
-    { "name": "projectCwd", "owner": "agent",
+    { "name": "projectCwd", "owner": "engine",
       "read": [ { "store": "X2", "field": "cwd", "when": "the session is running; the control file keeps the launch directory, which names the transcript folder, while the hook's cwd follows every cd" },
                 { "store": "W1", "field": "firstCwd" },
                 { "store": "X1", "field": "cwd", "when": "its Claude path key is the name of the folder holding the transcript_path in the same file; the hook writes the current directory, and only that folder shows it is also the launch directory" },

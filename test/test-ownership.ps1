@@ -86,9 +86,13 @@ $unaccounted = @($controlKeys | Where-Object { @($x2Reads | ForEach-Object { $_.
 foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
 Check ($controlKeys.Count -eq 20 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
 Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
-# updatedAt is the one exception, and it is not a copy: lastActivity, the engine's derived "newest
-# sign of life", takes it as one of its inputs.
-$notAgent = @($x2Reads | Where-Object { $_.owner -cne "agent" -and $_.key -cne "updatedAt" } | ForEach-Object { $_.name })
+# Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
+# of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
+# the engine must still hold after the session exits and Claude removes its control file - a
+# stopped session's transcript and resume need it - so the engine owns it and reads it from the
+# control file while the session runs (ledger L-054). schema/session-record.v1 stores it for that
+# reason: "fixed at start and never revised".
+$notAgent = @($x2Reads | Where-Object { $_.owner -cne "agent" -and $_.key -cne "updatedAt" -and -not ($_.key -ceq "cwd" -and $_.name -ceq "projectCwd") } | ForEach-Object { $_.name })
 Check ($notAgent.Count -eq 0) ("a field kept from the claude control file is owned by the agent (" + ($notAgent -join ", ") + ")")
 $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
@@ -115,6 +119,7 @@ Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like 
 # cwd (ledger L-050). So the control file is read first, and the hook's cwd only when the folder
 # of the transcript it names in the same file says it is the launch directory.
 $projectCwd = Get-HordeOwnershipField -Doc $doc -Name "projectCwd"
+Check ("$($projectCwd.owner)" -ceq "engine") "the project directory stays the engine's, because it must outlive the control file"
 $pcFirst = @($projectCwd.read)[0]
 Check ("$($pcFirst.store)" -ceq "X2" -and "$($pcFirst.field)" -ceq "cwd" -and "$($pcFirst.when)" -like "*running*") "the project directory is read first from the running session's control file"
 $pcX1 = @($projectCwd.read | Where-Object { "$($_.store)" -ceq "X1" })
