@@ -72,6 +72,28 @@ $missedOnce = @("lastSeen", "runId", "labelCycle", "nameSource", "remoteControl"
 $notRequired = @($missedOnce | Where-Object { @($doc.required) -cnotcontains $_ })
 foreach ($x in $notRequired) { Write-Host ("  not in the required list: " + $x) -ForegroundColor Red }
 Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dropped"
+# EVERY KEY A CLAUDE CONTROL FILE HOLDS IS KEPT OR DROPPED, not only the ones a reader happened to
+# want. The census of ~/.claude/sessions on 2026-09-30 found these 20 keys across 10 files - 19 in
+# nine of them, bridgeSessionId missing from one, formerNames in one - and eight had no row at all
+# (ledger L-048). A key is kept when some field reads it from X2, and dropped when a dropped entry
+# names it; a key the agent writes is the agent's, so a kept one is owned by the agent.
+$controlKeys = @("pid", "sessionId", "cwd", "startedAt", "procStart", "version", "peerProtocol", "peerFeatures", "kind",
+                 "entrypoint", "pidDomain", "messagingSocketPath", "name", "nameSource", "nameSince", "updatedAt", "status",
+                 "statusUpdatedAt", "bridgeSessionId", "formerNames")
+$x2Reads = @($doc.fields | ForEach-Object { $ownField = $_; @($ownField.read) | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { [pscustomobject]@{ key = "$($_.field)"; owner = "$($ownField.owner)"; name = "$($ownField.name)" } } })
+$droppedNames = @($doc.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
+$unaccounted = @($controlKeys | Where-Object { @($x2Reads | ForEach-Object { $_.key }) -cnotcontains $_ -and $droppedNames -cnotcontains $_ })
+foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
+Check ($controlKeys.Count -eq 20 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
+Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
+# Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
+# of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
+# the engine must still hold after the session exits and Claude removes its control file - a
+# stopped session's transcript and resume need it - so the engine owns it and reads it from the
+# control file while the session runs (ledger L-054). schema/session-record.v1 stores it for that
+# reason: "fixed at start and never revised".
+$notAgent = @($x2Reads | Where-Object { $_.owner -cne "agent" -and $_.key -cne "updatedAt" -and -not ($_.key -ceq "cwd" -and $_.name -ceq "projectCwd") } | ForEach-Object { $_.name })
+Check ($notAgent.Count -eq 0) ("a field kept from the claude control file is owned by the agent (" + ($notAgent -join ", ") + ")")
 $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
 $cwdW1 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "W1" })[0]
@@ -89,6 +111,36 @@ $windowW3 = @((Get-HordeOwnershipField -Doc $doc -Name "window").read | Where-Ob
 Check ("$($windowW3.when)" -like "*run-level*") "the run's window is marked as the run's, a fallback for the session"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
+# THE PROJECT DIRECTORY IS THE LAUNCH DIRECTORY, and while the session runs its own control file
+# holds it. The pane-sessions file's cwd is what the hook saw at that moment - the CURRENT
+# directory - and was read second: census of 2026-09-30, 163 pane-sessions files, 1 (23.json,
+# written at a compaction) whose cwd was not the folder its own transcript_path names, and 265
+# transcripts, 210 with a cwd, 21 that changed directory, every one under the folder of its FIRST
+# cwd (ledger L-050). So the control file is read first, and the hook's cwd only when the folder
+# of the transcript it names in the same file says it is the launch directory.
+$projectCwd = Get-HordeOwnershipField -Doc $doc -Name "projectCwd"
+Check ("$($projectCwd.owner)" -ceq "engine") "the project directory stays the engine's, because it must outlive the control file"
+$pcFirst = @($projectCwd.read)[0]
+Check ("$($pcFirst.store)" -ceq "X2" -and "$($pcFirst.field)" -ceq "cwd" -and "$($pcFirst.when)" -like "*running*") "the project directory is read first from the running session's control file"
+$pcX1 = @($projectCwd.read | Where-Object { "$($_.store)" -ceq "X1" })
+Check (@($pcX1 | Where-Object { "$($_.when)" -notlike "*transcript_path*" }).Count -eq 0) "the hook's cwd is never the project directory unless its transcript folder agrees"
+$cwdX2 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "X2" })[0]
+Check ("$($cwdX2.when)" -like "*launch directory*" -and "$($cwdX2.when)" -like "*not the current directory*") "the control file's cwd is labelled as the launch directory"
+# A SESSION THAT IS NOT RUNNING HAS NO CONTROL FILE, and the fallback was projectCwd - whose other
+# sources can hold the current directory (L-050). The fallback is now the one file named for the
+# session id in any project folder, taken only when there is exactly one: on 2026-09-30 one test
+# session id had a transcript in 55 folders (ledger L-052).
+$tpDerived = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').derived)"
+Check ($tpDerived -notlike "*from projectCwd*" -and $tpDerived -like "*exactly one*") "a stopped session's transcript is the one file named for its id, never projectCwd's folder"
+# THE FOLDER KEY IS MEASURED ONLY ON SHORT PATHS: the longest of 149 project folders is 137
+# characters. A tool may shorten a long key and add a hash; that is unverified, so the rule is
+# provisional and says why it still fails safe (ledger L-053).
+$tpProvisional = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').provisional)"
+Check ($tpProvisional -like "*137 characters*" -and $tpProvisional -like "*checked to exist*") "the transcript folder key is provisional beyond the longest path measured"
+# WHAT THE CONTROL FILE'S ENTRYPOINT SAYS FOR A NESTED SESSION IS UNMEASURED. wezfleet measured
+# the environment variable of that name (sdk-cli for a nested claude -p), not this key, which has
+# been seen only as cli (ledger L-048).
+Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'entrypoint').provisional)" -like "*environment variable*") "the entrypoint's meaning for a nested session is marked unmeasured"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
 Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'resumeCommand').provisional)" -ne "") "a rule that depends on something unmeasured is marked provisional"
 $role = Get-HordeOwnershipField -Doc $doc -Name "role"
