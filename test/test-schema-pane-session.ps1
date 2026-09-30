@@ -80,6 +80,25 @@ Check (Has (Test-HordeSchema -Value ([string][char]0x0663) -Schema ([pscustomobj
 Check (@(Test-HordeSchema -Value "abc" -Schema $uuidOnly).Count -eq 0) "CONTROL: a string the pattern describes still matches"
 
 Write-Host ""
+Write-Host "--- an integer or an array is recognised however PowerShell holds it ---" -ForegroundColor Cyan
+
+# MEASURED 2026-09-29, Windows PowerShell 5.1 ConvertFrom-Json: 1.0 gives Decimal, 1e3 gives Double,
+# 99999999999999999999 gives Decimal, 1 gives Int32. JSON Schema calls any number with no fractional
+# part an integer, so all but 1.5 are integers.
+$intSchema = [pscustomobject]@{ type = "integer" }
+function Read-JsonNumber { param([string]$Text) return ('{"n":' + $Text + '}' | ConvertFrom-Json).n }
+Check ((Read-JsonNumber "1.0") -is [decimal] -and (Read-JsonNumber "1e3") -is [double]) "CONTROL: 5.1 parses 1.0 as Decimal and 1e3 as Double"
+foreach ($t in @("1.0", "1e3", "99999999999999999999")) {
+    Check (@(Test-HordeSchema -Value (Read-JsonNumber $t) -Schema $intSchema).Count -eq 0) ($t + " is an integer")
+}
+Check (Has (Test-HordeSchema -Value (Read-JsonNumber "1.5") -Schema $intSchema) '$ should be integer') "1.5 is not an integer"
+Check (Has (Test-HordeSchema -Value 1.5 -Schema $intSchema) '$ should be integer') "a Double with a fraction is not an integer"
+# A value built in PowerShell may hold a list as an ArrayList rather than an array.
+$listSchema = [pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ list = [pscustomobject]@{ type = "array"; items = $intSchema } } }
+Check (@(Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, 2) } -Schema $listSchema).Count -eq 0) "an ArrayList is an array"
+Check (Has (Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, "x") } -Schema $listSchema) '$.list`[1`] should be integer') "items checks every element of an ArrayList"
+
+Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
 Check ($valid.Count -ge 6) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")

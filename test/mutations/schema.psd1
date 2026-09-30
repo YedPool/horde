@@ -49,11 +49,29 @@
            Find = '} elseif ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -eq $false) {'
            Replace = '} elseif ($false) {' }
         @{ Name = "items-not-checked"
-           Find = 'if ($Value -is [array] -and $kw.ContainsKey("items")) {'
+           Find = 'if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {'
            Replace = 'if ($false) {' }
         @{ Name = "integer-accepts-string"
-           Find = '"integer" { return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte]) }'
-           Replace = '"integer" { return $true }' }
+           Find = 'if ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte]) { return $true }'
+           Replace = 'return $true' }
+        @{ Name = "integer-refuses-decimal"
+           Find = 'if ($Value -is [decimal]) { return ($Value -eq [decimal]::Truncate($Value)) }'
+           Replace = '' }
+        @{ Name = "integer-accepts-decimal-fraction"
+           Find = 'return ($Value -eq [decimal]::Truncate($Value))'
+           Replace = 'return $true' }
+        @{ Name = "integer-refuses-double"
+           Find = 'if ($Value -is [double] -or $Value -is [single]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "integer-accepts-double-fraction"
+           Find = '-and $d -eq [Math]::Truncate($d))'
+           Replace = ')' }
+        @{ Name = "array-type-only-dotnet-array"
+           Find = '"array"   { return ($Value -is [System.Collections.IList]) }'
+           Replace = '"array"   { return ($Value -is [array]) }' }
+        @{ Name = "items-only-dotnet-array"
+           Find = 'if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {'
+           Replace = 'if ($Value -is [array] -and $kw.ContainsKey("items")) {' }
         @{ Name = "value-keys-ignore-case"
            Find = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
            Replace = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }

@@ -19,11 +19,22 @@ function Test-HordeSchemaType {
     param($Value, [string]$Type)
     switch ($Type) {
         "object"  { return ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary]) }
-        "array"   { return ($Value -is [array]) }
+        # A value built in PowerShell may hold a list as an ArrayList or other IList, not an array.
+        "array"   { return ($Value -is [System.Collections.IList]) }
         "string"  { return ($Value -is [string]) }
         "boolean" { return ($Value -is [bool]) }
         "null"    { return ($null -eq $Value) }
-        "integer" { return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte]) }
+        "integer" {
+            if ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte]) { return $true }
+            # JSON Schema calls any number with no fractional part an integer. MEASURED 2026-09-29, 5.1
+            # ConvertFrom-Json: 1.0 gives Decimal, 1e3 gives Double, a number beyond Int64 gives Decimal.
+            if ($Value -is [decimal]) { return ($Value -eq [decimal]::Truncate($Value)) }
+            if ($Value -is [double] -or $Value -is [single]) {
+                $d = [double]$Value
+                return ((-not [double]::IsNaN($d)) -and (-not [double]::IsInfinity($d)) -and $d -eq [Math]::Truncate($d))
+            }
+            return $false
+        }
         "number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }
     }
     throw ("the schema names a type this validator does not know: '" + $Type + "'")
@@ -127,7 +138,7 @@ function Test-HordeSchema {
             }
         }
     }
-    if ($Value -is [array] -and $kw.ContainsKey("items")) {
+    if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {
         $i = 0
         foreach ($item in $Value) { foreach ($f in @(Test-HordeSchema -Value $item -Schema $kw["items"] -Path ($Path + "[" + $i + "]"))) { [void]$findings.Add($f) }; $i++ }
     }
