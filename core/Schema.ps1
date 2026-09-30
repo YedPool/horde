@@ -13,6 +13,25 @@
 # Compare-HordeSchemaNumber), because 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a
 # Decimal that is 1 as a Double. It exists so schema/session-record.v1 can say labelCycle >= 0.
 #
+# THE MINIMUM ITSELF IS A WHOLE NUMBER FROM -(2^53 - 1) TO 2^53 - 1, and anything else is refused
+# (issue #25). 5.1's ConvertFrom-Json reads 0.1 as a Decimal and 1e-1 as a Double, which is slightly
+# more than one tenth, so compared exactly, {"minimum": 1e-1} refused the value 0.1 that
+# {"minimum": 0.1} accepted (measured 2026-09-30). Whole numbers do the same from 2^53 up:
+# 9007199254740995.0 is a Decimal of that number, 9.007199254740995e15 the Double 9007199254740996,
+# and 9.007199254740993e15 the Double 2^53. Within the bound - JavaScript's "safe integers" - Int32,
+# Int64, Decimal and Double each hold every whole number exactly and no other whole number rounds to
+# it, so 1, 1.0 and 1e0 are one minimum.
+# Normalising both sides instead - reading a Double as the shortest decimal that parses back to it -
+# was rejected: it would change how every Double VALUE compares, not just the minimum; .NET
+# Framework's "R" format is not guaranteed to give that shortest text, so it would have to be searched
+# for; and it still could not recover a text with more digits than a Double keeps, so it would narrow
+# the gap, not close it. Refusing costs nothing today: the one minimum in Horde's schemas is 0.
+# WHAT THIS DOES NOT CLOSE: a text with more significant digits than a Double keeps is rounded by the
+# parser before this file sees it, and nothing here can tell. For a VALUE: 9.9999999999999999999e-1
+# parses as the Double 1 and passes minimum 1, while 0.99999999999999999999 parses as a Decimal and is
+# refused (measured 2026-09-30). For a minimum, the same holds of a fraction written with an exponent
+# and so many digits that the Double it becomes is whole.
+#
 # $ref IS LOCAL ONLY, "#/definitions/<name>", resolved against the top of the schema being checked.
 # It exists so a recursive shape - the layout tree of schema/restore-plan.v1 - can be described. A
 # $ref to another document, to any other part of this one, or to a definition that is not there is
@@ -24,10 +43,11 @@
 # overflows.
 # A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
 #
-# EVERY DEFINITION IS CHECKED ONCE, when Test-HordeSchema is called on the top of a schema, whether or
-# not anything refers to it: an unknown keyword, a node that is not an object, or a $ref that does
-# not resolve is refused there, not on the day a value first reaches it. definitions and properties
-# that are not objects are refused as well.
+# EVERY NODE OF A SCHEMA IS CHECKED ONCE, when Test-HordeSchema is called on the top of it: each
+# definition, whether or not anything refers to it, and every node under the root's own properties and
+# items, whether or not a value reaches it (issue #25). An unknown keyword, a node that is not an
+# object, a pattern that does not compile, or a $ref that does not resolve is refused there, not on the
+# day a value first reaches it. definitions and properties that are not objects are refused as well.
 #
 # HOW DEEP A VALUE CAN BE. Measured 2026-09-30 on Windows PowerShell 5.1.26100.9444, by bisection, on
 # this file as of this comment:
@@ -72,15 +92,17 @@ function Test-HordeSchemaType {
             }
             return $false
         }
-        "number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }
+        # EVERY INTEGER IS A NUMBER. This listed its own types and left out Int16 and Byte, which
+        # "integer" accepts (issue #23), so one list now serves both "number" and minimum.
+        "number"  { return (Test-HordeSchemaIsNumber $Value) }
     }
     throw ("the schema names a type this validator does not know: '" + $Type + "'")
 }
 
 function Test-HordeSchemaIsNumber {
     # Every .NET type a number reaches the validator as: ConvertFrom-Json gives Int32, Int64, Decimal or
-    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" already
-    # accepts Int16 and Byte). Never a string or a boolean.
+    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" also
+    # accepts Int16 and Byte). Never a string or a boolean. "type": "number" asks this same question.
     param($Value)
     return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or
             $Value -is [double] -or $Value -is [single] -or $Value -is [decimal])
@@ -229,11 +251,25 @@ function Get-HordeSchemaNodeKeywords {
         $m = $kw["minimum"]
         $finite = ((Test-HordeSchemaIsNumber $m) -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m))))
         if (-not $finite) { throw ("minimum at " + $Path + " must be a number; '" + $m + "' is not one") }
+        # AND A WHOLE NUMBER OF MAGNITUDE AT MOST 2^53 - 1, so it means one number however the JSON wrote
+        # it (issue #25; the reasons are in the header).
+        $bound = [long]9007199254740991
+        $sameHoweverWritten = ((Test-HordeSchemaType -Value $m -Type "integer") -and (Compare-HordeSchemaNumber $m $bound) -le 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0)
+        if (-not $sameHoweverWritten) { throw ("minimum at " + $Path + " must be a whole number from -(2^53 - 1) to 2^53 - 1, which means the same however JSON writes it; '" + $m + "' is not one") }
     }
     # A TYPE NAME IS CHECKED HERE as well as when a value meets it, so a definition nothing refers to
     # cannot carry one this validator does not know.
     if ($kw.ContainsKey("type") -and $script:HordeSchemaTypes -cnotcontains "$($kw['type'])") {
         throw ("the schema names a type this validator does not know: '" + $kw["type"] + "'")
+    }
+    # A PATTERN IS COMPILED HERE, exactly as Test-HordeSchema will match it, so one that does not compile
+    # is refused with its node and not on the day a string first reaches it (issue #25: "(" in a
+    # definition passed the definitions walk, and "(" anywhere passed a value that was not a string;
+    # measured 2026-09-30). The static [regex] methods share a cache of recent patterns (15 by default,
+    # Regex.CacheSize), so the match below usually reuses what this compiles.
+    if ($kw.ContainsKey("pattern")) {
+        try { [void][regex]::Match("", (ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript) }
+        catch { throw ("pattern at " + $Path + " is not a regular expression this validator can compile: " + $_.Exception.Message) }
     }
     # properties AND definitions ARE OBJECTS. Read as one, an array or a string has .NET properties
     # (Length, Rank) instead of keys, so "properties": ["a"] checked nothing and passed every value.
@@ -270,9 +306,11 @@ function Assert-HordeSchemaDefinitions {
 
 function Assert-HordeSchemaNode {
     # A schema node and every node inside it, checked with no value: whatever Test-HordeSchema would
-    # refuse on reaching the node is refused here. A $ref is resolved, never followed into its
-    # definition, which is checked on its own; so a recursive definition is walked once, and the walk
-    # ends. Path is a JSON pointer into the schema, "#/definitions/node/properties/children/items".
+    # refuse on reaching the node is refused here, because both refuse through
+    # Get-HordeSchemaNodeKeywords. (A pattern that did not compile was the exception until issue #25:
+    # only the match compiled it.) A $ref is resolved, never followed into its definition, which is
+    # checked on its own; so a recursive definition is walked once, and the walk ends. Path is a JSON
+    # pointer into the schema, "#/definitions/node/properties/children/items".
     param($Schema, [string]$Path, $Root)
     $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $false
     if ($kw.ContainsKey('$ref')) {
@@ -290,6 +328,14 @@ function Assert-HordeSchemaNode {
         }
         return
     }
+    Assert-HordeSchemaSubtrees -Kw $kw -Path $Path -Root $Root
+}
+
+function Assert-HordeSchemaSubtrees {
+    # The nodes under one node's properties and items, each checked by Assert-HordeSchemaNode. Kw is
+    # the node's keywords, already checked by Get-HordeSchemaNodeKeywords. Used for every definition's
+    # subtrees and, from Test-HordeSchema, for the root's own.
+    param($Kw, [string]$Path, $Root)
     if ($kw.ContainsKey("properties")) {
         foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { Assert-HordeSchemaNode -Schema $p.Value -Path ($Path + "/properties/" + $p.Name) -Root $Root }
     }
@@ -305,6 +351,13 @@ function Test-HordeSchema {
     if ($atTop) {
         $Root = $Schema
         Assert-HordeSchemaDefinitions -Root $Root
+        # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
+        # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
+        # 2026-09-30, before this line). The root node itself was checked just above, by
+        # Get-HordeSchemaNodeKeywords. A caller passing -Root is inside a schema whose top it has
+        # checked already - core/Projection.ps1 (feature/core-projection) checks one field's value that way,
+        # once per field per session - so this runs for a top-level call only.
+        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root
     }
     if ($kw.ContainsKey('$ref')) {
         $ref = $kw['$ref']

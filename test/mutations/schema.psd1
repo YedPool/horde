@@ -51,6 +51,12 @@
         @{ Name = "pattern-not-checked"
            Find = 'if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "pattern-not-compiled-with-its-node"
+           Find = 'if ($kw.ContainsKey("pattern")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pattern-compile-error-swallowed"
+           Find = 'catch { throw ("pattern at " + $Path'
+           Replace = 'catch { [void]("pattern at " + $Path' }
         @{ Name = "pattern-dollar-kept"
            Find = 'elseif ($c -ceq ''$'') { [void]$sb.Append(''\z''); continue }'
            Replace = '' }
@@ -127,8 +133,11 @@
            Find = '"null"    { return ($null -eq $Value) }'
            Replace = '"null"    { return $true }' }
         @{ Name = "type-number-accepts-anything"
-           Find = '"number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }'
+           Find = '"number"  { return (Test-HordeSchemaIsNumber $Value) }'
            Replace = '"number"  { return $true }' }
+        @{ Name = "number-omits-int16-and-byte"
+           Find = '"number"  { return (Test-HordeSchemaIsNumber $Value) }'
+           Replace = '"number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }' }
         @{ Name = "type-array-accepts-anything"
            Find = '"array"   { return ($Value -is [System.Collections.IList]) }'
            Replace = '"array"   { return $true }' }
@@ -174,6 +183,12 @@
         @{ Name = "definitions-not-checked"
            Find = 'Assert-HordeSchemaDefinitions -Root $Root'
            Replace = '' }
+        @{ Name = "root-subtrees-not-checked"
+           Find = 'Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Replace = '' }
+        @{ Name = "root-walked-under-caller-root"
+           Find = '        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Replace = '    }; if ($true) { Assert-HordeSchemaSubtrees -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true) -Path "#" -Root $Root' }
         @{ Name = "definitions-any-value"
            Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
            Replace = 'if ($false) {' }
@@ -213,6 +228,24 @@
         @{ Name = "minimum-nan-allowed-in-schema"
            Find = ' -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m)))'
            Replace = '' }
+        @{ Name = "minimum-fraction-allowed"
+           Find = '$sameHoweverWritten = ((Test-HordeSchemaType -Value $m -Type "integer") -and'
+           Replace = '$sameHoweverWritten = ($true -and' }
+        @{ Name = "minimum-upper-bound-removed"
+           Find = ' -and (Compare-HordeSchemaNumber $m $bound) -le 0'
+           Replace = '' }
+        @{ Name = "minimum-lower-bound-removed"
+           Find = ' -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0'
+           Replace = '' }
+        @{ Name = "minimum-bound-2-to-the-53"
+           Find = '$bound = [long]9007199254740991'
+           Replace = '$bound = [long]9007199254740992' }
+        @{ Name = "minimum-bound-exclusive"
+           Find = '(Compare-HordeSchemaNumber $m $bound) -le 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0'
+           Replace = '(Compare-HordeSchemaNumber $m $bound) -lt 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -gt 0' }
+        @{ Name = "minimum-whole-number-rule-not-enforced"
+           Find = 'if (-not $sameHoweverWritten) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "minimum-nan-value-accepted"
            Find = '[void]$findings.Add($Path + " is NaN'
            Replace = '[void]($Path + " is NaN' }

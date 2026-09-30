@@ -33,7 +33,7 @@ $oneKey = [pscustomobject]@{ a = 1 }
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = [pscustomobject]@{ type = "string" } }) } "additionalProperties at $ must be true or false") "additionalProperties given as a schema is refused"
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = 0 }) } "additionalProperties at $ must be true or false") "additionalProperties 0 is refused, not read as false"
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema $false } "the schema at $ is not an object") "a boolean schema is refused"
-Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at $.a is not an object") "a boolean schema under properties is refused"
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at #/properties/a is not an object") "a boolean schema under properties is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema "integer" } "the schema at $ is not an object") "a schema that is a string is refused"
 # x- keys: the check must FAIL, not crash, when they stop being ignored - a crash is an [ERROR], which
 # tools/Mutate.ps1 rightly does not count as caught. So the call is caught here and its result judged.
@@ -90,6 +90,12 @@ foreach ($c in $typeCases) {
     Check (@(Test-HordeSchema -Value $c.Good -Schema $ts).Count -eq 0) ($c.Type + ": CONTROL - a right value is accepted")
 }
 Check (Has (Test-HordeSchema -Value @{ a = 1 } -Schema ([pscustomobject]@{ type = "array" })) '$ should be array') "array: a hashtable is not an array"
+# EVERY INTEGER IS A NUMBER, however PowerShell holds it (issue #23). "integer" accepted Int16 and Byte
+# while "number" refused them, so a value built in PowerShell passed the narrower type and failed the
+# wider one. Measured 2026-09-30 on 5.1, before the fix: both gave "$ should be number".
+foreach ($v in @([int16]1, [byte]1, [single]1.5)) {
+    Check (@(Test-HordeSchema -Value $v -Schema ([pscustomobject]@{ type = "number" })).Count -eq 0) ("number: a value held as " + $v.GetType().Name + " is a number")
+}
 
 Write-Host ""
 Write-Host "--- a schema built as a hashtable means the same ---" -ForegroundColor Cyan
@@ -178,8 +184,16 @@ $found = Enum-Findings $true $one
 Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''True'', not one of: 1') ("true is not the whole number 1 (" + ($found -join "; ") + ")")
 $found = Enum-Findings (,@(1)) $one
 Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a list holding 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+# NOR "IS A NUMBER": [decimal] rounds a Double or Single to 15 or 7 significant digits, so the Double
+# 1.0000000000000002 and the Single 1.0000001 each became the Decimal 1 and matched enum [1] under that
+# guard (measured 2026-09-30; mutant enum-whole-number-guard-as-number survived once "type": "number"
+# took Int16 and Byte, issue #23, and nothing else told the two guards apart).
+foreach ($v in @([double]1.0000000000000002, [single]1.0000001)) {
+    $found = Enum-Findings $v $one
+    Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a " + $v.GetType().Name + " a hair above 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+}
 # EVERY INTEGER TYPE Test-HordeSchemaType ACCEPTS IS ACCEPTED HERE TOO, including Int16 and Byte,
-# which the "number" type does not list.
+# which the "number" type also accepts since issue #23.
 foreach ($v in @([int16]1, [byte]1, [long]1)) {
     $found = Enum-Findings $v $one
     Check ($found.Count -eq 0) ("a whole-number enum accepts 1 held as " + $v.GetType().Name + " (" + ($found -join "; ") + ")")
@@ -246,6 +260,13 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unus
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "type": "object", "properties": { "a": { "type": "array", "items": { "$ref": "#/definitions/gone" } } } } }, "type": "integer" }') } "names no definition") "a dangling `$ref deep inside an unreferenced definition is found"
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "properties": { "a": { "type": "decimal" } } } }, "type": "integer" }') } "does not know") "an unknown type name inside an unreferenced definition is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }') } "circular") "a `$ref loop among definitions nothing refers to is refused"
+# A PATTERN IS COMPILED WITH ITS NODE, not when a string first meets it (issue #25). The walk above
+# claimed to refuse whatever Test-HordeSchema would, but "(" in a definition passed, and so did "(" at
+# the top when the value was not a string (both measured 2026-09-30, before the fix).
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "z": { "pattern": "(" } }, "type": "integer" }') } "pattern at #/definitions/z is not a regular expression") "a pattern that does not compile, in a definition nothing refers to, is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "pattern": "(" }') } "pattern at $ is not a regular expression") "a pattern that does not compile is refused though the value is not a string"
+$f = @(RefFindings 1 (Obj '{ "definitions": { "z": { "pattern": "^[a-z]+$" } }, "type": "integer" }'))
+Check ($f.Count -eq 0) ("CONTROL: a pattern that compiles, in a definition, is accepted (" + ($f -join "; ") + ")")
 # A CALLER THAT PASSES -Root CHECKS A PART OF A SCHEMA whose top is not re-checked (core/Projection.ps1
 # checks one field's value schema this way), so the loop guard that follows a $ref chain must hold on
 # its own. Measured by mutation: with the definitions check above, the old loop check alone was no
@@ -259,13 +280,37 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": "n", "t
 Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = "x" }) -Schema (Obj '{ "type": "object", "properties": [ { "type": "integer" } ] }') } "properties at $ must be an object") "properties given as an array is refused, not read as no properties"
 $f = @(RefFindings 1 (Obj '{ "definitions": {}, "type": "integer" }'))
 Check ($f.Count -eq 0) ("CONTROL: an empty definitions object is accepted (" + ($f -join "; ") + ")")
-# EVERY SHIPPED SCHEMA PASSES THE DEFINITIONS CHECK: a throw here is the check refusing a schema Horde
-# ships. The value is null, so only the schema itself is under test.
+
+Write-Host ""
+Write-Host "--- the root's own subtrees are checked too, whether or not a value reaches them ---" -ForegroundColor Cyan
+# ISSUE #25: the reason for checking every definition applies to the root's own properties and items,
+# and {"properties": {"q": {"maximum": 3}}} accepted {} because no value reached q (measured 2026-09-30,
+# before the fix, with a dangling $ref and an items node the same).
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "maximum": 3 } } }') } "the schema uses 'maximum' at #/properties/q") "an unknown keyword under a property no value has is refused"
+Check (Throws { Test-HordeSchema -Value (Obj '[]') -Schema (Obj '{ "items": { "maximum": 3 } }') } "the schema uses 'maximum' at #/items") "an unknown keyword under the items of an empty array is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema (Obj '{ "properties": { "q": { "maximum": 3 } } }') } "the schema uses 'maximum' at #/properties/q") "and under a property of a schema whose value is not an object at all"
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "type": "array", "items": { "$ref": "#/definitions/gone" } } } }') } "names no definition") "a dangling `$ref deep under a property no value has is found"
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "pattern": "(" } } }') } "pattern at #/properties/q is not a regular expression") "a pattern that does not compile, under a property no value has, is refused"
+# A RECURSIVE SCHEMA STILL ENDS: the walk resolves a $ref and never follows it, so a tree whose root
+# property refers back to a definition that refers to itself is walked once. A throw or a stack
+# overflow here fails the check rather than the suite.
+$f = @(RefFindings (Obj '{}') (Obj '{ "definitions": { "node": { "type": "object", "properties": { "kids": { "type": "array", "items": { "$ref": "#/definitions/node" } } } } }, "type": "object", "properties": { "tree": { "$ref": "#/definitions/node" }, "trees": { "type": "array", "items": { "$ref": "#/definitions/node" } } } }'))
+Check ($f.Count -eq 0) ("CONTROL: a root whose properties refer to a recursive definition is walked and accepted (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "q": 1 }') (Obj '{ "type": "object", "properties": { "q": { "type": "integer" }, "r": { "type": "array", "items": { "type": "string", "pattern": "^a$" } } } }'))
+Check ($f.Count -eq 0) ("CONTROL: a valid root with a property no value has is accepted (" + ($f -join "; ") + ")")
+# A CALLER PASSING -Root HAS CHECKED THAT ROOT ALREADY, and is not made to pay for the walk again:
+# core/Projection.ps1 on feature/core-projection checks one field's value this way, once per field per
+# session. So a -Root call walks nothing, and a bad node elsewhere under that root is not its concern.
+$checkedElsewhere = Obj '{ "properties": { "elsewhere": { "maximum": 3 } } }'
+Check (-not (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "type": "integer" }') -Root $checkedElsewhere })) "a call with -Root does not walk that root again"
+
+# EVERY SHIPPED SCHEMA PASSES THE CHECK OF ITS DEFINITIONS AND ITS ROOT'S SUBTREES: a throw here is the
+# check refusing a schema Horde ships. The value is null, so only the schema itself is under test.
 $shipped = @(Get-ChildItem -LiteralPath (Join-Path $root "schema") -Filter *.json -File)
 Check ($shipped.Count -ge 3) ("CONTROL: the shipped schemas are there (" + $shipped.Count + ")")
 foreach ($sf in $shipped) {
     $sName = $sf.BaseName
-    Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the definitions check")
+    Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the check of every node, its definitions and its root's subtrees")
 }
 Write-Host ""
 Write-Host "--- minimum, compared exactly whatever type holds the number ---" -ForegroundColor Cyan
@@ -297,9 +342,20 @@ $nines = Read-JsonNumber "0.99999999999999999999"
 $justOver = Read-JsonNumber "1.00000000000000000001"
 Check ($nines -is [decimal] -and [double]$nines -eq 1 -and $justOver -is [decimal] -and [double]$justOver -eq 1) "CONTROL: 5.1 reads both as Decimal, and each is 1 as a Double"
 Check (Has (Test-HordeSchema -Value $nines -Schema ([pscustomobject]@{ minimum = 1 })) '$ is 0.99999999999999999999, below the minimum 1') "a Decimal a hair below a whole-number minimum is refused"
-Check (Has (Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $justOver })) '$ is 1, below the minimum 1.00000000000000000001') "a Double below a Decimal minimum that rounds to it is refused"
-Check (@(Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $nines })).Count -eq 0) "CONTROL: a Double above a Decimal minimum that rounds to it is accepted"
-Check (Has (Test-HordeSchema -Value (Read-JsonNumber "0.1") -Schema ([pscustomobject]@{ minimum = 0.1 })) '$ is 0.1, below the minimum 0.1') "the Decimal 0.1 is below the Double 0.1, which is slightly more than one tenth"
+# 1 - 2^-53, the largest Double below 1: it prints as 1 and [decimal] rounds it to 1 (15 significant
+# digits), so only an exact comparison refuses it.
+$f = @(RefFindings ([double]0.99999999999999989) ([pscustomobject]@{ minimum = 1 }))
+Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 1') ("a Double a hair below a whole-number minimum is refused (" + ($f -join "; ") + ")")
+Check (@(Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = 1 })).Count -eq 0) "CONTROL: a Double equal to a whole-number minimum is accepted"
+# A WHOLE-NUMBER MINIMUM MEANS ONE NUMBER HOWEVER THE JSON WROTE IT: 1, 1.0 (Decimal) and 1e0 (Double).
+foreach ($t in @("1", "1.0", "1e0")) {
+    $mt = [pscustomobject]@{ minimum = (Read-JsonNumber $t) }
+    $f = @(RefFindings $nines $mt)
+    Check ($f.Count -eq 1 -and $f[0] -clike '$ is 0.99999999999999999999, below the minimum *') ("minimum written " + $t + " refuses 0.99999999999999999999 (" + ($f -join "; ") + ")")
+    $f = @(RefFindings 1 $mt)
+    Check ($f.Count -eq 0) ("CONTROL: minimum written " + $t + " accepts 1 (" + ($f -join "; ") + ")")
+}
+
 # BEYOND DECIMAL'S RANGE IS A RESULT, NEVER A CRASH (the enum's lesson, second review of PR #16).
 $f = @(RefFindings (Read-JsonNumber "1e30") $min0)
 Check ($f.Count -eq 0) ("1e30 is above the minimum 0, and nothing throws (" + ($f -join "; ") + ")")
@@ -309,6 +365,29 @@ $f = @(RefFindings ([double]::NegativeInfinity) $min0)
 Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 0') ("negative infinity is below the minimum 0 (" + ($f -join "; ") + ")")
 $f = @(RefFindings ([double]::NaN) $min0)
 Check ($f.Count -eq 1 -and $f[0] -ceq '$ is NaN, which is not at or above the minimum 0') ("NaN is refused: it is at or above nothing (" + ($f -join "; ") + ")")
+
+Write-Host ""
+Write-Host "--- a minimum means the same number however the JSON wrote it (issue #25) ---" -ForegroundColor Cyan
+# 5.1's ConvertFrom-Json reads 0.1 as a Decimal and 1e-1 as a Double, slightly more than one tenth.
+# Compared exactly, {"minimum": 1e-1} refused the value 0.1 that {"minimum": 0.1} accepted (measured
+# 2026-09-30, before the fix). So a minimum must be a whole number of magnitude at most 2^53 - 1, which every
+# type the parser gives holds exactly; a fraction is refused, never normalised (see core/Schema.ps1).
+Check ((Read-JsonNumber "0.1") -is [decimal] -and (Read-JsonNumber "1e-1") -is [double]) "CONTROL: 5.1 parses 0.1 as Decimal and 1e-1 as Double"
+foreach ($t in @("0.1", "1e-1", "-0.5", "1.00000000000000000001")) {
+    Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + " is refused: a fraction's meaning depends on how it was written")
+}
+# FROM 2^53 UP A WHOLE NUMBER DEPENDS ON ITS TEXT TOO: 9007199254740995.0 is a Decimal of that value,
+# 9.007199254740995e15 the Double 9007199254740996, and 9.007199254740993e15 the Double 2^53. At
+# 2^53 - 1 the two readings agree.
+$safe = [long]9007199254740991
+Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9.007199254740993e15") ([long]9007199254740992)) -eq 0) "CONTROL: 5.1 reads 9.007199254740993e15 as 2^53, one less than it says"
+Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740991.0") (Read-JsonNumber "9.007199254740991e15")) -eq 0 -and (Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740995.0") (Read-JsonNumber "9.007199254740995e15")) -ne 0) "CONTROL: 2^53 - 1 read as Decimal and as Double is one number; 2^53 + 3 is two"
+foreach ($t in @("9007199254740995.0", "9.007199254740995e15", "9.007199254740993e15", "9007199254740992", "-9007199254740995.0", "-9007199254740992", "1e30")) {
+    Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + ", beyond 2^53 - 1, is refused")
+}
+foreach ($m in @($safe, (-$safe), (Read-JsonNumber "9.007199254740991e15"), 0)) {
+    Check (-not (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = $m }) })) ("CONTROL: a whole-number minimum of " + $m + ", within 2^53 - 1, is accepted")
+}
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
