@@ -9,15 +9,11 @@
 # A gate that rejected every ledger would also pass a "must fail" check. The complete fixture is the
 # control against that: it must produce zero findings.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "tools\Ledger.ps1")
-
-$fails = @()
-function Check { param($Cond, [string]$What)
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
 $fx = Join-Path $here "fixtures\ledger"
 
@@ -176,11 +172,4 @@ if ($real.Count -eq 0) {
 Check (Test-Path -LiteralPath (Join-Path $root "planning\ledger\README.md")) "PRECONDITION: the format README exists, so the next check means something"
 Check (@(Get-HordeLedgerFiles -Dir (Join-Path $root "planning\ledger") | Where-Object { $_.Name -eq "README.md" }).Count -eq 0) "the format README is not mistaken for a ledger"
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== the ledger gate refuses a module nobody read ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "the ledger gate refuses a module nobody read"

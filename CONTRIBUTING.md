@@ -135,6 +135,14 @@ A test acts on the run or session it just made, named explicitly, never on whate
 resolution returns. Ambient behaviour is a thing to test, not a thing to depend on while testing
 something else (`YedPool/wezfleet`, `tasks/lessons.md`, 2026-08-17).
 
+A test of code that kills or deletes never lets that code choose the victim: it passes a guard that
+acts only on what the test created and still holds (see `test/test-isolation.ps1`).
+
+Every suite is built on `test/lib/Suite.ps1`: dot-source it, put its one `trap` line at the suite's
+top level, and end with `Complete-HordeSuite`. It makes a check's condition be exactly true or
+false, and it fails the suite when a check's own expression raises an error - which otherwise makes
+the check vanish while the suite exits 0.
+
 ## 10. Code brought in from elsewhere keeps its licence notice
 
 Horde is MIT. Code ported from another project keeps that project's copyright and permission notice

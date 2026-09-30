@@ -4,17 +4,11 @@
 # declared as one, a find that never applied, a find that matches more than once, and a gap declared
 # without a reason - each of which it must reject.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 $tool = Join-Path $root "tools\Mutate.ps1"
-
-$fails = @()
-# A condition must be exactly true or false; anything else fails loudly (see test-isolation.ps1).
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
 $target = Join-Path $root "test\fixtures\mutate\target.ps1"
 $before = [System.IO.File]::ReadAllText($target)
@@ -52,15 +46,12 @@ $rt = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\
 $rtCode = $LASTEXITCODE
 Check ($rtCode -ne 0 -and @($rt | Where-Object { $_ -match '\[BAD\] throws-at-run-time: the suite broke' }).Count -eq 1) "a mutation that only crashes the suite is not counted as caught"
 
+$hc = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-helper-crash.psd1" | ForEach-Object { "$_" })
+$hcCode = $LASTEXITCODE
+Check ($hcCode -ne 0 -and @($hc | Where-Object { $_ -match '\[BAD\] throws-under-the-helper: the suite broke' }).Count -eq 1) "a mutant that crashes a suite built on the shared helper is not counted as caught"
+
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
 $left = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | Where-Object { $foldersBefore -notcontains $_.Name })
 Check ($left.Count -eq 0) "and no throwaway copy is left behind"
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== the mutation tool rejects every way a mutation run can lie ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "the mutation tool rejects every way a mutation run can lie"
