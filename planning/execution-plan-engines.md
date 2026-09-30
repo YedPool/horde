@@ -11,8 +11,8 @@ companion for terminals is `planning/execution-plan-hosts.md`.
 
 Four designs written on 2026-09-30, read-only, and not committed: the engine-settings design, the
 agent-engines research, the lifecycle and admission design, and the metrics design. What this plan
-needs from them is carried below. Their decisions are cited as "agent-engines decision N",
-"lifecycle decision N" and "metrics decision N".
+needs from them is carried below. Their decisions are cited as "engine-settings decision N",
+"agent-engines decision N", "lifecycle decision N" and "metrics decision N".
 
 Vendors, confirmed:
 
@@ -38,7 +38,7 @@ Settled:
   because that fix is cheap (6).
 - **A Claude Max or ChatGPT subscription credential runs only on its vendor's own CLI**
   (agent-engines 7).
-- **Aliases pin to a concrete id.** "sol" pins to the id the installed Codex lists, `gpt-5.6-sol`
+- **Aliases pin to a concrete id, at spawn** (engine-settings 4). "sol" pins to the id the installed Codex lists, `gpt-5.6-sol`
   today; the founder is offered a Codex upgrade to reach `gpt-6.1-sol` (8). opus = `claude-opus-5-5`,
   fable = `claude-fable-5-1`, sonnet = `claude-sonnet-5-5`, haiku = `claude-haiku-4-5` (10).
 - **Provider keys are read from named environment variables, and Horde never stores them**
@@ -51,13 +51,37 @@ Settled:
 - **Transcripts are read through a transcript port**, with one adapter per engine under
   `agents/<name>/`. Claude Code and Codex come first, then Gemini CLI. GLM, Qwen and DeepSeek are read
   through their harness's adapter. Core never names an engine (lifecycle 4).
-- **No environment variable turns metrics on** (metrics 1). **A committed project file may lower the
-  metrics level, never raise it** (2). **Tokens are counted only from local files**: transcripts,
-  rollouts and harness logs. Horde never calls a vendor's usage or billing API. `reconcile` and the
-  `metered` tier are dropped (7).
+- **No environment variable turns metrics on** (metrics 1). **Tokens are counted only from local
+  files**: transcripts, rollouts and harness logs. Horde never calls a vendor's usage or billing API.
+  `reconcile` and the `metered` tier are dropped (7).
 - **Windows agents only for now** (hosts decision 1, in the hosts plan).
 
-These decisions change the engine-settings design in five places, and the steps below use the
+From the engine-settings design's own "Decisions taken":
+
+1. **There is no environment-variable layer for harness, provider or model** (engine-settings 1).
+   The environment carries paths only: `HORDE_HOME`, and `HORDE_CONFIG` for tests.
+2. **One home variable, `HORDE_HOME`, defaulting to `%USERPROFILE%\.horde`** (engine-settings 2). The
+   Phase 3 plan's `HORDE_ROOT` is superseded; shadow logs live under `HORDE_HOME`, and PR #26 is being
+   corrected to match.
+3. **The per-repo project engine file (L2) is deferred until a repo needs one** (engine-settings 3).
+   When it comes, it may only choose among providers defined in the user file, and it may only lower
+   the metrics and admission levels, never raise them. Nothing in Half A reads or writes an L2 file.
+4. **Model aliases are pinned to a concrete id at spawn** (engine-settings 4).
+5. **The `engine` and resume-binding fields are added by editing `session-record.v1` in place**
+   (engine-settings 5). That is safe because no writer exists until step 3.8. Once a writer exists,
+   any further change needs a `session-record.v2`.
+6. **Resume uses the launched binding** (engine-settings 6). Drift from `/model` is shown in
+   `horde status` and never rebinds the session.
+7. **Model ids** as agent-engines 10 (engine-settings 7).
+8. **Selector ranks follow the design** (engine-settings 8): `parent` outranks `run` plus `role` in
+   the same layer.
+9. **The admission tuner may raise reserves on its own, but only proposes lowering them**
+   (engine-settings 9). A raise follows a reap that happened while the gate was open. It is a live
+   (L4) rule that expires after 7 days, capped at the conservative tier plus 1 GB.
+10. **The pane anchor is a small compiled executable**, following the precedent of `wf-cmdlog.exe`
+    (engine-settings 10).
+
+The decisions change the engine-settings design in five places, and the steps below use the
 changed form:
 
 1. The Z.ai provider is named `zai`, not `zhipu`.
@@ -65,28 +89,12 @@ changed form:
    agent-engines 9.
 3. A provider entry is a **provider profile**. It gains `vendor` and `auth` (`subscription` or
    `api-key`), so the subscription rule is data that the checker enforces.
-4. The design's founder decision 4 (pin or float) and decision 7 (the ids behind `sonnet`, `fable`
-   and `sol`) are answered by agent-engines 8 and 10.
+4. The config's layers are L0, L1, L3, L4 and L5. L2 is not built until a repo needs one
+   (engine-settings 3).
 5. The design's config keys grow beyond the binding: `metrics.*` (metrics step M12) and
    `admission.tier` (lifecycle 1). Each key lands in its own PR, but all of them go through the same
-   resolver.
-
-**Still open.** The engine-settings design has no "Decisions taken" section, so five of its founder
-questions have no answer yet. Until one arrives, each step follows the design's recommendation,
-written below as the working default. A step that depends on one of these questions says so.
-
-1. Should there be an environment layer for harness, provider or model? Working default: no. Only
-   paths come from the environment: `HORDE_HOME`, and `HORDE_CONFIG` for tests.
-2. Where is Horde's home folder when `HORDE_HOME` is unset? There is also a naming conflict: the
-   Phase 3 plan's decision 9 uses `HORDE_ROOT` for shadow logs, and this design uses `HORDE_HOME`.
-   Working default: one variable, `HORDE_HOME`. E6 cannot ship its default folder until this is
-   answered. Its tests always set the folder.
-3. Is the `engine` field an edit to `session-record.v1`, or a new `session-record.v2`? Working
-   default: edit v1 if the change lands before step 3.8 writes the first record, and publish v2
-   otherwise.
-4. When a session has changed its own model with `/model`, what does resume use? Working default:
-   the model Horde recorded at spawn, with the one it observed reported as drift.
-5. Should `parent` (one orc's goblins) outrank `run` plus `role`? Working default: yes.
+   resolver. The tuner's raise-only rule (engine-settings 9) is checked by the resolver: a live rule
+   written by the tuner that lowers a reserve is refused.
 
 ## When each step can start
 
@@ -178,18 +186,22 @@ Half A writes only config files, so it can ship before Horde spawns anything.
      resolved provider. An alias with no entry for that provider is an error, and the alias's name
      is never passed through to the provider.
 
-   Fixtures come first, one for each finding in the design's list, plus one each for the wire-format
-   and subscription rules. The secret-shaped-value fixture asserts that the value appears nowhere in
+   Fixtures come first, one for each finding in the design's list (except the L2 findings, which wait
+   with L2), plus one each for the wire-format and subscription rules. A file offered as L2 is refused
+   with the reason that the project layer is not built yet. The secret-shaped-value fixture asserts that the value appears nowhere in
    the output. Every finding is mutation-tested.
 5. **E4. `core/EngineResolve.ps1`.** A pure function. It takes the layers (already parsed) and a
    target, and returns one tristate answer per field, with its provenance. Tests cover:
    - the full precedence table;
    - that fields are resolved independently;
-   - one test per specificity comparison;
+   - one test per specificity comparison, including `{parent}` beating `{run, role}`;
    - a tie between rules that disagree is unknown and names both rule ids, while a tie between rules
      that agree resolves;
    - alias resolution, and the error for a missing alias;
-   - role aliases in selectors.
+   - role aliases in selectors;
+   - an alias resolves to its concrete id, and the answer records both (pinned at spawn);
+   - every plausible environment spelling (`HORDE_MODEL`, `HORDE_ENGINE`, `HORDE_PROVIDER`,
+     `HORDE_HARNESS`) moves nothing, with a control that the same change made in the user file does.
 
    The capability check runs against the harness, against the provider's `lacks`, and against the
    host. Host capabilities come in as data, a parameter shaped like `schema/host-capabilities.v1`, so
@@ -206,12 +218,13 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    - a subscription profile paired with another vendor's harness;
    - an explain whose provenance is asserted field by field.
 
-   The default home folder waits on open question 2.
+   `Get-HordeHome` returns `HORDE_HOME` when it is non-empty, else `%USERPROFILE%\.horde`, derived from
+   the environment (CONTRIBUTING 11). A test covers both branches.
 8. **E7. `horde config set | unset`.** It writes with a unique temporary name and an atomic replace,
    and it compares and swaps on the L4 `revision`. The tests come first:
    - a set that would introduce a tie is refused and leaves the file byte-identical;
    - three concurrent writers lose no rule;
-   - an L2 set of a provider is refused.
+   - `--scope project` is refused while L2 is deferred.
 
    The e2e scenario runs set, explain, unset, explain.
 
@@ -246,7 +259,13 @@ B. Provider profiles through the Claude Code harness (NOW for data and checks; S
     - **A provider that is not native must have its token set.** Claude Code uses the subscription
       login whenever `ANTHROPIC_BASE_URL` is set without `ANTHROPIC_AUTH_TOKEN`, so the founder's
       Claude Max credential would go to a third-party endpoint. The adapter refuses that combination.
-      It is the subscription rule enforced where the environment is built.
+      It is the subscription rule enforced where the environment is built. This step owns the
+      refusal and its test. The test runs a pure function that builds the environment plan for a
+      binding. With a `zai` binding whose token reference resolves to nothing, the function refuses:
+      the reason names the missing reference, and the plan sets no variables, `ANTHROPIC_BASE_URL`
+      included. A mutation that drops the check must turn the test red. The control: the same binding
+      with a fake token set gives a plan with both variables set, and the fake value appears in no
+      output. E10's scrub test later runs the same case end to end.
     - **Every model alias is pinned to the provider's model.** All four
       `ANTHROPIC_DEFAULT_*_MODEL` variables and `CLAUDE_CODE_SUBAGENT_MODEL` are set, so no subagent
       asks a third-party endpoint for a Claude model name.
@@ -254,8 +273,8 @@ B. Provider profiles through the Claude Code harness (NOW for data and checks; S
       `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`.** Claude Code does not retry a 400 on those fields.
 
     DeepSeek's recipe adds the `[1m]` model suffix and `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, because an
-    unrecognised model id is assumed to have a 200K context. Tests run on data only. Building the
-    environment waits for E10.
+    unrecognised model id is assumed to have a 200K context. Tests run on data and on that pure
+    function. Applying the plan to a real process waits for E10.
 11. **P3. Measure each provider once** (SPAWN). For each of zai, dashscope and deepseek, one session
     runs in the isolated terminal with the cheapest prompt and the founder's key, read by reference.
     Each measurement goes into `planning/ledger/agent-claude-code.md`: the endpoint answered, which
@@ -281,8 +300,8 @@ C. The session record's key stops assuming a UUID (PROJ)
     - the same id under two harnesses gives two records;
     - `core/Identity.ps1`'s refusal of a malformed id still fires.
 
-    This edits v1 in place only while no v1 record exists on disk (open question 3). It waits for
-    PROJ because the projection branch matches the UUID pattern.
+    This edits v1 in place, which is safe because no writer exists before step 3.8
+    (engine-settings 5). It waits for PROJ because the projection branch matches the UUID pattern.
 
 D. The `agents/<name>/` adapters for claude-code and codex
 
@@ -320,8 +339,8 @@ D. The `agents/<name>/` adapters for claude-code and codex
 
 E. Resume bindings as the single source of truth
 
-17. **R1. The binding in the session record** (PROJ, and open question 3). This is the design's E8,
-    extended to lifecycle 3's list. The record stores the following, each owned by `engine` in
+17. **R1. The binding in the session record** (PROJ). This is an in-place v1 edit (engine-settings
+    5), so it must merge before step 3.8. It is the design's E8, extended to lifecycle 3's list. The record stores the following, each owned by `engine` in
     `core/ownership.json`:
     - `engine`: `{ harness, provider, model, profile, requested, resolvedAt, provenance }`;
     - the existing `projectCwd`;
@@ -346,7 +365,8 @@ E. Resume bindings as the single source of truth
     - a request to change the harness is always refused.
 
     `horde status` shows the recorded model, the observed model, and what the config would resolve
-    now. This is the lifecycle closer's precondition: a goblin is auto-closed only when R2 answers
+    now. A `/model` change inside the session is shown there as drift and never rebinds the session
+    (engine-settings 6). Only an explicit `--model` or `--reresolve` writes a new binding. This is the lifecycle closer's precondition: a goblin is auto-closed only when R2 answers
     every field.
 
 F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
@@ -426,6 +446,9 @@ In order, one PR each:
 6. M4 and M6, once metrics M1 and M2 are in.
 
 ## What waits
+
+- **Deferred until a repo needs one**: L2, the per-repo engine file. It may only choose among
+  providers defined in the user file, and it may only lower the metrics and admission levels.
 
 - **PROJ**:
   - K1 (the key);
