@@ -171,6 +171,12 @@ function Invoke-HordeRead {
     # A reader that returns an answer AND writes anything else to the pipeline delivers an array
     # holding both. Wrapping that as known turned an absent or unknown answer into a known Object[]
     # (found in review, 2026-09-29). Which element the reader meant cannot be told, so it is unknown.
+    #
+    # WHAT THIS CATCHES, EXACTLY: stray output next to an ANSWER, and nothing else. Stray output next
+    # to a plain value cannot be told from a list: { "listing"; , @(1, 2) } reads as a known list
+    # holding "listing" and the inner list (pinned by the suite). A reader must not write to the
+    # pipeline except its result. The scan visits every element: measured 2026-09-29, 1316-1332 ms
+    # for a 50,000-element result, almost all of it the per-element Test-HordeAnswer call.
     if ($got -is [System.Collections.IEnumerable] -and $got -isnot [string]) {
         foreach ($item in $got) {
             if (Test-HordeAnswer $item) { return (New-HordeUnknown -Reason ($What + ": the reader emitted an answer plus other output")) }

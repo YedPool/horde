@@ -50,6 +50,11 @@ $noisyAbsent = Invoke-HordeRead -What "the pane list" -Read { "listing panes"; N
 Check ($noisyAbsent.state -eq "unknown") "a reader that emits an answer plus other output reads as unknown"
 $noisyUnknown = Invoke-HordeRead -What "the pane list" -Read { New-HordeUnknown -Reason "mux silent"; 0 }
 Check ($noisyUnknown.state -eq "unknown" -and $noisyUnknown.reason -like "*plus other output*") "and so does one whose stray output follows an unknown"
+# What the rule does NOT catch, pinned so nobody relies on the opposite: stray output next to a plain
+# value is indistinguishable from a list, and comes back known with the stray line inside it.
+$noisyList = Invoke-HordeRead -What "the pane list" -Read { "listing panes"; , @(1, 2) }
+$noisyListValue = Get-HordeValue $noisyList
+Check ($noisyList.state -eq "known" -and $noisyListValue.Count -eq 2 -and $noisyListValue[0] -eq "listing panes") "a reader's stray output next to a plain value is kept in the value, not caught"
 # Most cmdlet failures are non-terminating: they write an error and carry on. Under the default
 # Continue preference, a reader that failed that way still returned its fallback as known. Each read
 # runs in a scope set to Continue, since the suite's own Stop would make the error terminating and
