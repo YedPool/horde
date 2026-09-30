@@ -70,7 +70,8 @@ function Get-HordeWezfleetRoot {
 function Read-HordeWezfleetRoles {
     # Every role wezfleet holds - session records and pending spawn claims - read, never written.
     # Returns { sessions; claims; unreadable; complete }, where complete is an answer: known when
-    # every record could be read, unknown when any could not. wezfleet's own reader skips an
+    # the sessions directory was there and listed and every record could be read, unknown with every
+    # reason otherwise. wezfleet's own reader skips an
     # unreadable record silently, which can make it report "no master" when there is one.
     param([string]$Root = (Get-HordeWezfleetRoot), $Table = $null)
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
@@ -78,11 +79,27 @@ function Read-HordeWezfleetRoles {
     $claims = New-Object System.Collections.ArrayList
     $unreadable = New-Object System.Collections.ArrayList
 
+    # Problems that leave the read incomplete, beyond single unreadable records.
+    $gaps = New-Object System.Collections.ArrayList
+
+    # A MISSING SESSIONS DIRECTORY IS NOT AN EMPTY FLEET. wezfleet creates it with its first record, so
+    # its absence says the root is wrong (a mistyped WEZFLEET_ROOT), not that nothing runs - and it
+    # used to read as complete, with every count a known 0 (review, 2026-09-29).
+    # AN UNLISTABLE ONE IS NOT EMPTY EITHER. Listed without -ErrorAction Stop, a directory that
+    # cannot be read gives 0 files and a non-terminating error; measured with a junction whose
+    # target is gone. So the listing stops on error, inside try, and a failure is a gap.
     $sessDir = Join-Path $Root "registry\sessions"
-    if (Test-Path -LiteralPath $sessDir) {
+    $sessFiles = @()
+    if (-not (Test-Path -LiteralPath $sessDir -PathType Container)) {
+        [void]$gaps.Add("there is no sessions directory at " + $sessDir)
+    } else {
+        try { $sessFiles = @(Get-ChildItem -LiteralPath $sessDir -File -ErrorAction Stop | Where-Object { $_.Extension -eq ".json" }) }
+        catch { [void]$gaps.Add("the sessions directory could not be listed: " + $_.Exception.Message) }
+    }
+    if ($sessFiles.Count -gt 0) {
         # Only <id>.json whose claudeSessionId is that id is a record. A writer's temp file
         # (<id>.<pid>.<guid>.tmp) sits beside the records mid-write and is not one.
-        foreach ($f in @(Get-ChildItem -LiteralPath $sessDir -File | Where-Object { $_.Extension -eq ".json" })) {
+        foreach ($f in $sessFiles) {
             $rec = $null
             try { $rec = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
             if ($null -eq $rec) { [void]$unreadable.Add($f.FullName); continue }
@@ -92,9 +109,16 @@ function Read-HordeWezfleetRoles {
             [void]$sessions.Add([pscustomobject]@{ id = $id; retired = [bool]$rec.retired; role = $r.role; raw = $r.raw; field = $r.field })
         }
     }
+    # A missing claims directory IS legitimately empty: wezfleet creates it only when it first
+    # spawns with a claim (lib/Registry.ps1 Get-WfClaimDir -Create). One that cannot be listed is not.
     $claimDir = Join-Path $Root "registry\claims"
+    $claimFiles = @()
     if (Test-Path -LiteralPath $claimDir) {
-        foreach ($f in @(Get-ChildItem -LiteralPath $claimDir -File | Where-Object { $_.Extension -eq ".json" })) {
+        try { $claimFiles = @(Get-ChildItem -LiteralPath $claimDir -File -ErrorAction Stop | Where-Object { $_.Extension -eq ".json" }) }
+        catch { [void]$gaps.Add("the claims directory could not be listed: " + $_.Exception.Message) }
+    }
+    if ($claimFiles.Count -gt 0) {
+        foreach ($f in $claimFiles) {
             $c = $null
             try { $c = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
             if ($null -eq $c) { [void]$unreadable.Add($f.FullName); continue }
@@ -102,8 +126,9 @@ function Read-HordeWezfleetRoles {
             [void]$claims.Add([pscustomobject]@{ pane = [System.IO.Path]::GetFileNameWithoutExtension($f.Name); role = $r.role; raw = $r.raw; field = $r.field })
         }
     }
+    if ($unreadable.Count -gt 0) { [void]$gaps.Add("" + $unreadable.Count + " record(s) could not be read") }
     $complete = New-HordeKnown -Value $true
-    if ($unreadable.Count -gt 0) { $complete = New-HordeUnknown -Reason ("" + $unreadable.Count + " record(s) could not be read") }
+    if ($gaps.Count -gt 0) { $complete = New-HordeUnknown -Reason (@($gaps) -join "; ") }
     return [pscustomobject]@{ sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); complete = $complete }
 }
 

@@ -146,6 +146,39 @@ finally {
 }
 
 Write-Host ""
+Write-Host "--- a store that is not there is not an empty store ---" -ForegroundColor Cyan
+
+# A wrong WEZFLEET_ROOT used to read as a complete, empty fleet: no sessions, known, count known 0.
+$nowhere = Join-Path $env:TEMP ("horde-roles-nowhere-" + [guid]::NewGuid().ToString("N"))
+$readNowhere = Read-HordeWezfleetRoles -Root $nowhere
+Check ($readNowhere.complete.state -eq "unknown" -and $readNowhere.complete.reason -like "*sessions*") "a store with no sessions directory reads as unknown, not as an empty fleet"
+Check ((Get-HordeRoleCount -Read $readNowhere -Role "warchief").state -eq "unknown") "and a role count over it is unknown, not zero"
+
+# A sessions directory that exists but cannot be listed: a junction whose target has gone. Measured
+# 2026-09-29: Test-Path says it is a container, listing it throws "Could not find a part of the path",
+# and the same listing without -ErrorAction Stop quietly gives 0 files. (A deny ACE was tried first
+# and did NOT stop the listing in this environment, so it could not serve as the case.)
+$locked = Join-Path $env:TEMP ("horde-roles-locked-" + [guid]::NewGuid().ToString("N"))
+$lockedSess = Join-Path $locked "registry\sessions"
+$lockedTarget = Join-Path $locked "gone"
+New-Item -ItemType Directory -Path $lockedTarget -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $locked "registry") -Force | Out-Null
+try {
+    $null = & cmd /c mklink /J $lockedSess $lockedTarget
+    Remove-Item -LiteralPath $lockedTarget -Force
+    $listable = $true
+    try { $null = Get-ChildItem -LiteralPath $lockedSess -ErrorAction Stop } catch { $listable = $false }
+    Check ((Test-Path -LiteralPath $lockedSess -PathType Container) -and $listable -eq $false) "CONTROL: the sessions directory is there but really cannot be listed"
+    $readLocked = Read-HordeWezfleetRoles -Root $locked
+    Check ($readLocked.complete.state -eq "unknown") "a sessions directory that cannot be listed reads as unknown"
+}
+finally {
+    # rmdir removes the junction itself, never what it points at.
+    if (Test-Path -LiteralPath $lockedSess) { $null = & cmd /c rmdir $lockedSess }
+    if ((Split-Path -Leaf $locked) -match '^horde-roles-locked-[0-9a-f]{32}$') { Remove-Item -LiteralPath $locked -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
 Write-Host "--- reading never blocks the writer ---" -ForegroundColor Cyan
 
 # wezfleet swaps a record in with [System.IO.File]::Replace. While Horde holds the file open to read,
