@@ -11,6 +11,8 @@
     Target = "core\Projection.ps1"
     Suite  = "test\test-projection.ps1"
     Environment = @{ HORDE_SKIP_REALITY = "1" }
+    # With the reality check skipped the suite passes with exit 3 (test\test-projection.ps1).
+    PassCodes = @(3)
     Mutations = @(
         # The host: decision 2 and the instance rule.
         @{ Name = "no-instance-running-trusted"

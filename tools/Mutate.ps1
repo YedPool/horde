@@ -100,6 +100,11 @@ foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $s.ContainsKey($k))
 # finally below, so a run never depends on - or leaks into - the shell that started it (review of
 # PR #31, finding 5: test-projection's HORDE_SKIP_REALITY was set by hand and stayed set). Only
 # HORDE_ names: PATH or TEMP would change what every run means.
+# THE EXIT CODES THAT MEAN "THE SUITE PASSED". 0, unless the spec declares its own: test-projection
+# passes with 3 when it skipped its reality check, so that no gate expecting 0 reads a partial run as
+# whole, and only a spec that sets PassCodes = @(3) accepts it (second review of PR #31, finding 4).
+$passCodes = @(0)
+if ($s.ContainsKey("PassCodes")) { $passCodes = @($s.PassCodes | ForEach-Object { [int]$_ }) }
 $script:envSaved = @{}
 $specEnv = @{}
 if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
@@ -131,7 +136,7 @@ try {
     $original = [System.IO.File]::ReadAllText($target)
 
     $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-    if ($base.timedOut -or $base.code -ne 0) {
+    if ($base.timedOut -or $passCodes -notcontains $base.code) {
         $why = "exited " + $base.code
         if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
         Write-Host ("  the UNMUTATED suite does not pass in the copy (" + $why + "), so no mutation result would mean anything:") -ForegroundColor Red
@@ -171,7 +176,7 @@ try {
                 $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
                 $row.failures = @(Get-HordeFailLines -Out $run.out)
                 if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
-                elseif ($run.code -eq 0) { $row.outcome = "survived" }
+                elseif ($passCodes -contains $run.code) { $row.outcome = "survived" }
                 elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
                 else { $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch") }
             }
@@ -185,7 +190,7 @@ try {
     # afterwards, the environment changed under the run and its catches are not evidence.
     if (-not $script:baselineFailed -and $script:toRun.Count -gt 0) {
         $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-        if ($after.timedOut -or $after.code -ne 0) {
+        if ($after.timedOut -or $passCodes -notcontains $after.code) {
             Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
             foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
             $script:baselineFailed = $true

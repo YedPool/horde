@@ -496,3 +496,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 2: per-store declaration holds only while each store has one writer host; planning/execution-plan-phase-3.md step 3 and planning/execution-plan-hosts.md omitted -StoredHandles and named windows as a fixed namespace
 - disposition: test
 - where: test/test-projection.ps1 :: "two hosts declaring the same store are refused"
+
+### L-094 A run that skipped the reality check exits 3, and only a spec that declares 3 reads it as a pass
+- source: second review of horde PR #31, finding 4: with HORDE_SKIP_REALITY set, the suite exited 0 with only its banner changed, so a gate could pass on a partial run, and the banner check was a tautology
+- disposition: test
+- where: test/test-mutate.ps1 :: "a pass code a spec does not declare is not a pass"

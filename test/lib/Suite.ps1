@@ -71,8 +71,11 @@ function Register-HordeSuiteError {
 }
 
 function Complete-HordeSuite {
-    # End the suite: exit 1 if any check failed or any unexpected error was recorded, else exit 0.
-    param([string]$Success = "every check passed")
+    # End the suite: exit 1 if any check failed or any unexpected error was recorded, else exit
+    # -PassCode (0 unless given). A suite that skipped part of itself on purpose passes with a code of
+    # its own, so a gate that expects 0 fails loudly instead of reading a partial run as a whole one;
+    # tools\Mutate.ps1 accepts it only from a spec that declares it (PassCodes).
+    param([string]$Success = "every check passed", [ValidateRange(0, 255)][int]$PassCode = 0)
     Write-Host ""
     $n = $script:fails.Count + $script:suiteErrors.Count
     if ($n -gt 0) {
@@ -82,5 +85,5 @@ function Complete-HordeSuite {
         exit 1
     }
     Write-Host ("==== " + $Success + " ====") -ForegroundColor Green
-    exit 0
+    exit $PassCode
 }

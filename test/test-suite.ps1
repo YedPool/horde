@@ -96,6 +96,16 @@ $n = Invoke-Fixture "nonbool"
 Check ($n.code -eq 1 -and $n.out -like "*was not true or false*") "a condition that is a list is a failure, not a pass"
 
 Write-Host ""
+Write-Host "--- a partial pass is not a pass ---" -ForegroundColor Cyan
+# A suite that skipped part of itself on purpose (test-projection's HORDE_SKIP_REALITY) passes with a
+# code of its own, so a gate that expects 0 fails loudly rather than reading it as whole (second
+# review of PR #31, finding 4).
+$pc = Invoke-Fixture "passcode"
+Check ($pc.code -eq 3 -and $pc.out -like "*==== partial ====*") "a suite that passes with a pass code exits with that code, not 0"
+$pcf = Invoke-Fixture "passcode-fails"
+Check ($pcf.code -eq 1) "a suite that fails exits 1 whatever pass code it asked for"
+
+Write-Host ""
 Write-Host "--- controls ---" -ForegroundColor Cyan
 $c = Invoke-Fixture "caught"
 Check ($c.code -eq 0) "CONTROL: an error a test catches on purpose does not fail the suite"

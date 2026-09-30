@@ -863,10 +863,12 @@ if ($null -ne $rp) {
 
 }
 
-# A RUN THAT SKIPPED THE REALITY CHECK DOES NOT END ON THE USUAL GREEN LINE (review of PR #31, finding
-# 5): the banner says so, so a skipped run is never read as a whole one.
+# A RUN THAT SKIPPED THE REALITY CHECK IS NOT A PASS TO A GATE. It says so in its banner and exits 3,
+# not 0, so anything that expects 0 fails loudly; tools\Mutate.ps1 accepts 3 only from a spec that
+# declares it (PassCodes), and test/test-suite.ps1 pins the helper's pass code (second review of
+# PR #31, finding 4).
 $successBanner = "one read-only view of the Horde, every field an answer with its source, and nothing written"
-if ($env:HORDE_SKIP_REALITY -eq "1") { $successBanner = "FIXTURES ONLY - REALITY CHECK SKIPPED (HORDE_SKIP_REALITY=1): " + $successBanner }
-Check ($env:HORDE_SKIP_REALITY -ne "1" -or $successBanner -clike "FIXTURES ONLY - REALITY CHECK SKIPPED*") "a run that skipped the reality check says so in its closing banner"
+$passCode = 0
+if ($env:HORDE_SKIP_REALITY -eq "1") { $successBanner = "FIXTURES ONLY - REALITY CHECK SKIPPED (HORDE_SKIP_REALITY=1), EXIT 3: " + $successBanner; $passCode = 3 }
 
-Complete-HordeSuite -Success $successBanner
+Complete-HordeSuite -Success $successBanner -PassCode $passCode

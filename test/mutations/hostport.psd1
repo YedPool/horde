@@ -6,6 +6,8 @@
     Target = "core\HostPort.ps1"
     Suite  = "test\test-projection.ps1"
     Environment = @{ HORDE_SKIP_REALITY = "1" }
+    # With the reality check skipped the suite passes with exit 3 (test\test-projection.ps1).
+    PassCodes = @(3)
     Mutations = @(
         @{ Name = "sigil-accepted-as-handle"
            Find = 'if ($t -cmatch ''^[A-Za-z0-9._:-]{1,64}$'') { return $t }'
