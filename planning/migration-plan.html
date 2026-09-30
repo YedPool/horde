@@ -610,6 +610,7 @@
 </table>
 
 <h3><span class="phase">PHASE 5</span>Move the writers behind the contract</h3>
+<p>Goblin lifecycle, resource admission and live visibility cut across Phase 3's read half and this phase's writers: admission tiers, process ownership through a job per goblin, automatic close once the resume binding is proven, the transcript port and its one follower, <code>horde watch</code> and <code>horde why</code>. Order of work and each step's tests: <code>planning/execution-plan-lifecycle.md</code> (2026-09-30).</p>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
   <tr><td>5.1</td><td>Relaunch decisions move to the AgentPort as <code>resumeCommand</code>. The Lua stops reading <code>pane-sessions</code> at <code>process_handlers.lua:162</code> and runs the command in the plan. The Codex resume command is <strong>to be measured</strong>, not assumed.</td><td>Shadow diff clean on relaunch commands.</td><td class="c sz">M</td></tr>
