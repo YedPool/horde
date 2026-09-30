@@ -27,8 +27,14 @@
            Find = '"parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", '
            Replace = '"parent": { "type": "string", ' }
         @{ Name = "label-any-case"
-           Find = '"pattern": "^[A-Z]{1,2}[0-9]*$"'
-           Replace = '"pattern": "^[A-Za-z]{1,2}[0-9]*$"' }
+           Find = '"pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$"'
+           Replace = '"pattern": "^[A-Za-z]{1,2}([1-9][0-9]{0,3})?$"' }
+        @{ Name = "label-number-may-start-with-zero"
+           Find = '"pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$"'
+           Replace = '"pattern": "^[A-Z]{1,2}([0-9][0-9]{0,3})?$"' }
+        @{ Name = "label-number-any-length"
+           Find = '"pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$"'
+           Replace = '"pattern": "^[A-Z]{1,2}([1-9][0-9]*)?$"' }
         @{ Name = "origin-any-string"
            Find = '"origin": { "type": "string", "enum": ["fleet", "user"], '
            Replace = '"origin": { "type": "string", ' }
