@@ -215,6 +215,41 @@
   </p>
 </div>
 
+<div class="card horde">
+  <h4>D11. Battle-tested: the fleet runs on each piece before it counts</h4>
+  <p>
+    <strong>Instruction, 2026-09-29:</strong> as much real end-to-end, user-simulated testing as possible,
+    and the fleet moved onto the new system piece by piece so that it is actually battle-tested.
+  </p>
+  <p>
+    So every step that takes something over has a <strong>third gate</strong>, after its tests and its
+    ledger: the live fleet uses it for real work. Concretely, in the order the phases produce them -
+  </p>
+  <ul>
+    <li><strong>Phase 2</strong> - the Warchief's own status checks run <code>horde status</code> beside the
+        old <code>wezfleet status</code>, and every disagreement is logged. The read model is proved by the
+        session that depends on it most.</li>
+    <li><strong>Phase 3</strong> - each command that moves onto the projection is used by the Orcs for their
+        real work before its entry leaves the ratchet.</li>
+    <li><strong>Phase 4</strong> - restores shadow on real WezTerm starts, not only in a test instance, and
+        the default flips only after a run of clean comparisons on the real layout.</li>
+    <li><strong>Phase 7</strong> - a real Goblin is spawned into a VS Code terminal and does real work.</li>
+  </ul>
+  <p>
+    Alongside that, an <strong>end-to-end suite</strong> drives the real <code>horde</code> command line the
+    way a person or an orchestrating session would - spawn, report, message, restore, read status -
+    inside an isolated WezTerm, asserting on what a user would see and on the state left behind. It is
+    built in Phase 0, before there is much to drive, so every later step lands with a scenario rather
+    than acquiring one afterwards.
+  </p>
+  <p>
+    The reason this is a gate and not a preference: the systems being replaced were repeatedly green in
+    their suites and wrong in use. A mechanism once existed, worked and had no callers while three suites
+    agreed it was fine. Use by the real fleet is the one test that cannot be passed by testing the wrong
+    thing.
+  </p>
+</div>
+
 <h2>2. The Horde, as architecture</h2>
 
 <div class="card warn">
