@@ -47,7 +47,7 @@ if ($iso) {
             $text = ""
             if ($pane -match '^\d+$') { $text = "" + (Invoke-HordeWeztermCli -Rest @("get-text", "--pane-id", $pane)) }
             Check ($text -like "*$marker*") "the command ran and its output is on that pane's screen"
-            $inside = @(Get-HordeDescendantPids -RootPid $iso.pid)
+            $inside = @(Get-HordeDescendantPids -RootPid $iso.pid -RootCreated $iso.created)
             $pingInside = @($inside | Where-Object { (Get-HordeProcessInfo -Id $_.pid).name -eq "PING.EXE" })
             Check ($pingInside.Count -ge 1) "the long-lived child is running inside the instance's process tree"
         }

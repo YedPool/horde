@@ -156,7 +156,7 @@ sources:
 - disposition: comment
 - where: test/harness/Isolation.ps1 :: "WHAT IS NOT ISOLATED, said plainly"
 
-### L-028 The saved pin travels with the instance, not in one shared variable
+### L-028 Teardown restores the pin and store the instance recorded, not whatever is current at teardown
 - source: YedPool/wezfleet lib/Isolation.ps1:24,61, where a second harness in one process would overwrite the first one's saved socket
 - disposition: test
 - where: test/test-isolation.ps1 :: "teardown restores the pin and the store it was given, even when something else changed them in between"
