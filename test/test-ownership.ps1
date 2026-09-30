@@ -128,6 +128,11 @@ Check (Says (Mutated { param($d) $d.fields[0].read = @() }) "has no read rule") 
 Check (Says (Mutated { param($d) $d.fields[0].read[0].store = "Z9" }) "not in the store list") "a read from a store that does not exist is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0].field = "" }) "without naming what it reads") "a read that does not say what it reads is refused"
 Check (Says (Mutated { param($d) $d.fields += $d.fields[0] }) "listed twice") "a field listed twice is refused"
+# FIELD NAMES ARE MATCHED EXACTLY, like owners and stores, and two names differing only in case are
+# refused for what they are: one property to PowerShell, two to an exact comparison. The gate had
+# found them with a case-insensitive table and called them "listed twice" (second review, finding 9).
+$caseTwin = @(Mutated { param($d) $d.fields += [pscustomobject]@{ name = "SessionId"; owner = "agent"; read = $d.fields[0].read } })
+Check ((Says $caseTwin "differ only in case") -and -not (Says $caseTwin "listed twice")) "two field names differing only in case are refused for what they are"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName owners -NotePropertyValue "x" }) "unknown key") "a misspelled key is refused rather than ignored"
 Check (Says (Mutated { param($d) $d.stores | Add-Member -NotePropertyName W99 -NotePropertyValue ([pscustomobject]@{ what = "x" }) }) "no field reads it") "a store no field reads is refused"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName provisional -NotePropertyValue " " -Force }) "but not how or why") "provisional without a reason is refused"

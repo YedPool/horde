@@ -156,14 +156,21 @@ function Test-HordeOwnership {
             [void]$findings.Add("store '" + $sp.Name + "' has an empty guard")
         }
     }
-    $seen = @{}
+    # FIELD NAMES ARE MATCHED EXACTLY, as owners, stores and the required list are: a PowerShell
+    # @{} ignores case, so it called sessionId and SessionId "listed twice". Two names that differ
+    # only in case are still refused, under their own finding, because PowerShell reads them as one
+    # property of a record (second review, finding 9).
+    $seen = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+    $seenFolded = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $usedStores = @{}
     $fieldNames = New-Object System.Collections.ArrayList
     foreach ($f in @($Doc.fields)) {
         $n = "$($f.name)"
         if ($n.Trim() -eq "") { [void]$findings.Add("a field has no name"); continue }
         if ($seen.ContainsKey($n)) { [void]$findings.Add("field '" + $n + "' is listed twice") }
-        $seen[$n] = $true
+        elseif ($seenFolded.ContainsKey($n)) { [void]$findings.Add("fields '" + $seenFolded[$n] + "' and '" + $n + "' differ only in case") }
+        $seen[$n] = $n
+        if (-not $seenFolded.ContainsKey($n)) { $seenFolded[$n] = $n }
         [void]$fieldNames.Add($n)
         foreach ($k in @($f.PSObject.Properties | ForEach-Object { $_.Name })) {
             if ($script:HordeOwnershipFieldKeys -cnotcontains $k) { [void]$findings.Add("field '" + $n + "' has an unknown key '" + $k + "'") }
