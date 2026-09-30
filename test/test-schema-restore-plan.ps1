@@ -352,6 +352,28 @@ Check ($found.Count -eq 2) ("a plan with two problems has two findings (" + ($fo
 Check (@(Findings (Read-Fixture "valid\section-4-example.json")).Count -eq 0) "CONTROL: the plan it was made from has none"
 
 Write-Host ""
+Write-Host "--- a ratio is compared as the number it was read as ---" -ForegroundColor Cyan
+# 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a Decimal, which is strictly between 0 and 1,
+# and which is 1 as a Double. The gate converted the ratio to [double], so it refused this ratio as
+# "not strictly below 1" (review of PR #17). Measured 2026-09-30.
+function Read-JsonNumber { param([string]$Text) return ('{"n":' + $Text + '}' | ConvertFrom-Json).n }
+$nines = Read-JsonNumber "0.99999999999999999999"
+Check ($nines -is [decimal] -and [double]$nines -eq 1) "CONTROL: 5.1 reads 0.99999999999999999999 as a Decimal that is 1 as a Double"
+$rp = Read-Fixture "valid\section-4-example.json"
+$rp.layout.workspaces[0].windows[0].tabs[0].root.ratio = $nines
+$found = @(Findings $rp)
+Check ($found.Count -eq 0) ("a Decimal ratio strictly between 0 and 1 is accepted, however close to 1 (" + ($found -join "; ") + ")")
+$rp.layout.workspaces[0].windows[0].tabs[0].root.ratio = Read-JsonNumber "0.00000000000000000001"
+$found = @(Findings $rp)
+Check ($found.Count -eq 0) ("a Decimal ratio just above 0 is accepted (" + ($found -join "; ") + ")")
+$rp.layout.workspaces[0].windows[0].tabs[0].root.ratio = Read-JsonNumber "1.00000000000000000001"
+$found = @(Findings $rp)
+Check ($found.Count -eq 1 -and $found[0] -like '*.root.ratio is 1.00000000000000000001; a ratio lies strictly between 0 and 1') ("CONTROL: a Decimal ratio just above 1 is still refused (" + ($found -join "; ") + ")")
+$rp.layout.workspaces[0].windows[0].tabs[0].root.ratio = Read-JsonNumber "1e0"
+$found = @(Findings $rp)
+Check ((Read-JsonNumber "1e0") -is [double] -and $found.Count -eq 1 -and $found[0] -like '*.root.ratio is 1; a ratio lies strictly between 0 and 1') ("CONTROL: a Double ratio of exactly 1 is still refused (" + ($found -join "; ") + ")")
+
+Write-Host ""
 Write-Host "--- a plan built in PowerShell, from hashtables, is read like one parsed from JSON ---" -ForegroundColor Cyan
 # The engine will build plans in memory before it writes one. The schema reads an IDictionary (it did
 # already); the gate once read only PSObject.Properties, so on a hashtable every node had no slot and
