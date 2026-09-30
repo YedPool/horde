@@ -237,7 +237,8 @@ try {
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=True count=0") ("a plain switch is still on, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         # CALLED FROM INSIDE A COMMAND, horde is in-process, so its $args carry PowerShell's own tags
         # whatever started the outer horde. The process command-line reader this replaced read the
-        # OUTER horde's command line here, and bound the inner call wrongly (second review of PR #12).
+        # OUTER horde's command line here: measured 2026-09-29, the inner call exited 1, "could not
+        # match the command line (1 given, 2 delivered)" (second review of PR #12, finding 1).
         $r = Invoke-Horde -Root $tmp -Arguments @("nested-call", "hello") -AsTyped:$typed
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("horde called from inside a command binds its own colon value" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }

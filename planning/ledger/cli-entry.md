@@ -50,7 +50,7 @@ sources:
 - where: test/test-cli.ps1 :: "a run block that would silently accept any flag is refused"
 
 ### L-007 Forwarded arguments keep their switches only when forwarded from $args
-- source: measured 2026-09-29 on PowerShell 5.1: a ValueFromRemainingArguments param, or any hand-built array, delivers -Json as the literal string "-Json" bound to the first positional parameter
+- source: measured 2026-09-29 on PowerShell 5.1: a ValueFromRemainingArguments param, or any hand-built array, delivers -Json as the literal string "-Json" bound to the first positional parameter. $args is also the only thing horde reads its arguments from: the process command line is not read (L-019), and what $args cannot say is refused (L-020, L-021)
 - disposition: test
 - where: test/test-cli.ps1 :: "the dispatcher has no param block - the one that would strip switches from forwarded arguments"
 
