@@ -530,11 +530,16 @@ foreach ($f in $loaded) {
 }
 foreach ($x in $plainReads) { Write-Host ("  " + $x) -ForegroundColor Red }
 Check ($plainReads.Count -eq 0) "every foreign file is read through the shared reader"
-# D12: nothing outside hosts/ names a terminal.
+# D12: nothing outside hosts/ names a terminal. The names are each host's own, from
+# hosts/<name>/names.txt, so this suite spells none of them (test/test-host-names.ps1 is the
+# repository-wide ratchet; this check pins the projection's files to zero, with no allowance).
+$hostNames = @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory | ForEach-Object { Join-Path $_.FullName "names.txt" } | Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object { Get-Content -LiteralPath $_ } | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\|' } | ForEach-Object { ($_ -split '\|')[0].Trim().ToLowerInvariant() } | Where-Object { $_ -ne "" })
 $newCore = @("Projection.ps1", "HostPort.ps1", "Faults.ps1", "PaneSessions.ps1", "WezfleetState.ps1")
-$named = @($newCore | Where-Object { (Get-Content -LiteralPath (Join-Path $root ("core\" + $_)) -Raw) -match '(?i)wezterm' })
+$named = @($newCore | Where-Object { $txt = (Get-Content -LiteralPath (Join-Path $root ("core\" + $_)) -Raw).ToLowerInvariant(); @($hostNames | Where-Object { $txt.Contains($_) }).Count -gt 0 })
 foreach ($x in $named) { Write-Host ("  names a terminal: core/" + $x) -ForegroundColor Red }
-Check ($named.Count -eq 0 -and ("a WezTerm pane" -match '(?i)wezterm')) "the projection names no terminal"
+$caught = ($hostNames.Count -ge 1 -and ("x " + $hostNames[0].ToUpperInvariant() + " y").ToLowerInvariant().Contains($hostNames[0]))
+Check ($hostNames.Count -ge 1 -and $caught -and $named.Count -eq 0) "the projection names no terminal"
 $nonAscii = @($newCore | Where-Object { (Get-Content -LiteralPath (Join-Path $root ("core\" + $_)) -Raw -Encoding UTF8) -match '[^\x00-\x7F]' })
 Check ($nonAscii.Count -eq 0) ("every projection source file is ASCII (" + ($nonAscii -join ", ") + ")")
 
@@ -587,6 +592,15 @@ Write-Host "--- reality check: this machine's own stores, read only, no host att
 # faults - stray records, a running session with a tombstone - are REPORTED, not failed on (decision
 # 4): they are facts about this machine. The section fails only if the projection throws, reads
 # nothing, or produces a view that breaks its own schema.
+#
+# SKIPPED ONLY WHEN ASKED BY NAME, and said on every run - as test-roles' HORDE_SKIP_DRIFT. Measured
+# 2026-09-30: reading the real stores (326 sessions) took 36 s alone and 197 s beside a mutation run,
+# and validating the real view 99 s and 555 s, past tools\Mutate.ps1's 900 s limit per run. A mutant
+# of core/projection must be caught by the fixture sections, so mutation runs set HORDE_SKIP_REALITY=1
+# (test/mutations/projection.psd1); every other run reads the machine.
+if ($env:HORDE_SKIP_REALITY -eq "1") {
+    Write-Host "  [SKIP] the reality check did not run: HORDE_SKIP_REALITY=1 asked to skip it" -ForegroundColor Yellow
+} else {
 foreach ($fn in @($real.Keys)) { Set-Item -Path ("function:" + $fn) -Value $real[$fn] }
 $rp = $null; $rThrew = $null
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -612,6 +626,8 @@ if ($null -ne $rp) {
     $rrf = @(Test-HordeSessionViewRules -Document $rdoc)
     foreach ($x in @($rrf | Select-Object -First 10)) { Write-Host ("  " + $x) -ForegroundColor Red }
     Check ($rrf.Count -eq 0) "the real view keeps the rules the schema cannot state"
+}
+
 }
 
 Complete-HordeSuite -Success "one read-only view of the Horde, every field an answer with its source, and nothing written"
