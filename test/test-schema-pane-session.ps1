@@ -116,6 +116,11 @@ try {
     $utf8File = Join-Path $utf8Dir "utf8.v1.json"
     [System.IO.File]::WriteAllText($utf8File, ('{"description":"caf' + $eAcute + '"}'), (New-Object System.Text.UTF8Encoding($false)))
     Check ((Read-HordeSchemaFile -Path $utf8File).description -ceq ("caf" + $eAcute)) "a schema file is read as UTF-8, BOM or not"
+    # A SCHEMA FILE IS CHECKED WHEN IT IS READ (review of PR #27): Get-HordeSchema never checked one,
+    # so a bad file failed the first value checked against it, not the code that loaded it.
+    $badFile = Join-Path $utf8Dir "bad.v1.json"
+    [System.IO.File]::WriteAllText($badFile, '{ "properties": { "q": { "maximum": 3 } } }', (New-Object System.Text.UTF8Encoding($false)))
+    Check (Throws { Read-HordeSchemaFile -Path $badFile } "the schema uses 'maximum' at #/properties/q") "a schema file with a node this validator cannot honour is refused when it is read"
 } finally { Remove-Item -LiteralPath $utf8Dir -Recurse -Force }
 Check (-not (Test-Path -LiteralPath $utf8Dir)) "the UTF-8 test's temporary folder is gone"
 
@@ -348,6 +353,9 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unus
 $loopTwice = Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }'
 Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "a `$ref loop is refused on the first call"
 Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "and on the second call with the same schema object"
+# Assert-HordeSchema IS THE CHECK ON ITS OWN, for a caller that loads a schema without a value.
+Check (Throws { Assert-HordeSchema -Schema (Obj '{ "definitions": { "z": { "pattern": "(" } } }') } "pattern at #/definitions/z") "Assert-HordeSchema refuses a schema without any value to check"
+Check (-not (Throws { Assert-HordeSchema -Schema (Obj '{ "definitions": { "z": { "pattern": "^a$" } }, "type": "string" }') })) "CONTROL: and accepts a good one"
 # -Root WALKS NOTHING, AND MARKS NOTHING WALKED: a later top-level call on that root still checks it.
 $badRoot = Obj '{ "definitions": { "n": { "type": "integer" } }, "properties": { "q": { "maximum": 3 } } }'
 Check (-not (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "$ref": "#/definitions/n" }') -Root $badRoot })) "a call with -Root resolves against that root without walking it"

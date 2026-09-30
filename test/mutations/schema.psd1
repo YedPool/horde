@@ -172,8 +172,11 @@
            Find = '$nodeKey = $Schema'
            Replace = '$nodeKey = $Schema.PSObject.BaseObject' }
         @{ Name = "cycle-not-detected-after-first-call"
-           Find = 'if ($rootCache.walked) { return }'
-           Replace = 'if ($rootCache.walked) { return }; $rootCache.walked = $true' }
+           Find = 'if ($rootCache.walked) { return $rootCache.top }'
+           Replace = 'if ($rootCache.walked) { return $rootCache.top }; $rootCache.walked = $true' }
+        @{ Name = "schema-file-not-checked-on-read"
+           Find = '[void](Assert-HordeSchema -Schema $schemaRead)'
+           Replace = '' }
         @{ Name = "keyword-beside-ref-allowed"
            Find = 'if ($beside.Count -gt 0) { throw'
            Replace = 'if ($false) { throw' }
@@ -190,14 +193,14 @@
            Find = 'if ($kw[''$ref''] -isnot [string]) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "definitions-not-checked"
-           Find = 'Assert-HordeSchemaDefinitions -Root $Root'
+           Find = 'Assert-HordeSchemaDefinitions -Root $Schema'
            Replace = '' }
         @{ Name = "root-subtrees-not-checked"
-           Find = 'Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Find = 'Assert-HordeSchemaSubtrees -Kw $top.kw -Path "#" -Root $Schema'
            Replace = '' }
         @{ Name = "root-walked-under-caller-root"
-           Find = '        Assert-HordeSchemaWalkedOnce -Root $Root -Kw $kw'
-           Replace = '    }; if ($true) { Assert-HordeSchemaWalkedOnce -Root $Root -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true)' }
+           Find = '$node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false'
+           Replace = '[void](Assert-HordeSchema -Schema $Root -Path ''#''); $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false' }
         @{ Name = "definitions-any-value"
            Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
            Replace = 'if ($false) {' }

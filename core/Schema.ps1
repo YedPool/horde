@@ -233,7 +233,7 @@ function Get-HordeSchemaRootCache {
         if ($p.Name -cne "definitions") { continue }
         foreach ($d in (Get-HordeSchemaProps $p.Value)) { $defs[$d.Name] = $d.Value }
     }
-    $entry = [pscustomobject]@{ definitions = $defs; walked = $false }
+    $entry = [pscustomobject]@{ definitions = $defs; walked = $false; top = $null }
     $script:HordeSchemaRoots.Add($rootKey, $entry)
     return $entry
 }
@@ -356,19 +356,29 @@ function Get-HordeSchemaNode {
     return $entry
 }
 
-function Assert-HordeSchemaWalkedOnce {
-    # Every node of the schema whose top is Root, checked once for that schema object: its definitions
-    # and its root's own subtrees. Kw is the root's keywords, checked by the caller. Marked walked only
-    # after the whole walk has passed, so a schema that fails - a $ref loop, say - fails on every call.
-    param($Root, $Kw)
-    $rootCache = Get-HordeSchemaRootCache $Root
-    if ($rootCache.walked) { return }
-    Assert-HordeSchemaDefinitions -Root $Root
+function Assert-HordeSchema {
+    # THE STRUCTURAL CHECK OF A WHOLE SCHEMA, as a step of its own, done once per schema object (review
+    # of PR #27: it ran on every top-level Test-HordeSchema call, and Get-HordeSchema never ran it).
+    # The top node, every definition whether or not anything refers to it, and every node under the
+    # root's own properties and items are checked; the result is remembered only when all of that
+    # passed, so a schema that fails - a $ref loop, say - fails on every call. Returns the top node's
+    # cache entry, for Test-HordeSchema. Path names the top in a refusal; "$" unless a caller says.
+    param($Schema, [string]$Path = '$')
+    $rootCache = $null
+    if ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary]) {
+        $rootCache = Get-HordeSchemaRootCache $Schema
+        if ($rootCache.walked) { return $rootCache.top }
+    }
+    # A top that is not an object throws here, before anything is remembered about it.
+    $top = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $true
+    Assert-HordeSchemaDefinitions -Root $Schema
     # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
     # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
     # 2026-09-30, before the fix).
-    Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root
+    Assert-HordeSchemaSubtrees -Kw $top.kw -Path "#" -Root $Schema
+    $rootCache.top = $top
     $rootCache.walked = $true
+    return $top
 }
 
 function Assert-HordeSchemaDefinitions {
@@ -427,16 +437,17 @@ function Test-HordeSchema {
     param($Value, $Schema, [string]$Path = '$', $Root = $null, [string[]]$RefsHere = @())
     # ::new, not New-Object: 99 us against 323 us an ArrayList (measured 2026-09-30, 5.1), once per value.
     $findings = [System.Collections.ArrayList]::new()
-    $atTop = ($null -eq $Root)
-    $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $atTop
-    $kw = $node.kw
-    if ($atTop) {
+    # A top-level call checks the whole schema, once per schema object (Assert-HordeSchema). A caller
+    # passing -Root is inside a schema whose top it has checked already - core/Projection.ps1
+    # (feature/core-projection) checks one field's value that way, once per field per session - so
+    # below the top only the node itself is read.
+    if ($null -eq $Root) {
         $Root = $Schema
-        # The root node itself was checked just above. A caller passing -Root is inside a schema whose
-        # top it has checked already - core/Projection.ps1 (feature/core-projection) checks one field's
-        # value that way, once per field per session - so the walk runs for a top-level call only.
-        Assert-HordeSchemaWalkedOnce -Root $Root -Kw $kw
+        $node = Assert-HordeSchema -Schema $Schema -Path $Path
+    } else {
+        $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false
     }
+    $kw = $node.kw
     if ($kw.ContainsKey('$ref')) {
         $ref = $kw['$ref']
         if ($RefsHere -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
@@ -510,6 +521,11 @@ function Read-HordeSchemaFile {
     # ANSI code page, so a non-ASCII character came back as two (review of PR #15). ReadAllText with
     # UTF-8 still honours a BOM if there is one. Schemas are Horde's own files, which no other system
     # is writing, so the shared read of core/ReadShared.ps1 is not needed here.
+    # A SCHEMA IS CHECKED WHEN IT IS READ (review of PR #27), so a bad schema file fails the caller that
+    # loads it, not the first value checked against it. The check is remembered for this object, so the
+    # first Test-HordeSchema on it does not repeat it.
     param([Parameter(Mandatory = $true)][string]$Path)
-    return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+    $schemaRead = ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+    [void](Assert-HordeSchema -Schema $schemaRead)
+    return $schemaRead
 }
