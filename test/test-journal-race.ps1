@@ -24,7 +24,7 @@ trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "remote\Journal.ps1")
 
 $racers = 4
-$idCount = 150
+$idCount = 200
 $tickMs = 40
 $journalSrc = Join-Path $root "remote\Journal.ps1"
 $worker = Join-Path $root "test\fixtures\journal\race-worker.ps1"
@@ -68,7 +68,11 @@ function Invoke-Race {
             if (@($procs | Where-Object { $_.p.HasExited }).Count -gt 0) { [void]$problems.Add("a racer exited before it was ready"); break }
             Start-Sleep -Milliseconds 50
         }
-        [System.IO.File]::WriteAllText($go, ([datetime]::UtcNow.AddMilliseconds(500).Ticks).ToString())
+        # Written under another name and then renamed: a racer that saw the go file while it was
+        # still being written failed to read it ("being used by another process", measured
+        # 2026-09-30). A rename within one folder is atomic, so the file appears complete.
+        [System.IO.File]::WriteAllText(($go + ".tmp"), ([datetime]::UtcNow.AddMilliseconds(500).Ticks).ToString())
+        [System.IO.File]::Move(($go + ".tmp"), $go)
         foreach ($x in $procs) {
             if (-not $x.p.WaitForExit(180000)) { [void]$problems.Add("a racer ran past 180 s") ; continue }
             $x.p.WaitForExit()
@@ -138,11 +142,15 @@ $contended = @($metIdx.Keys)
 Write-Host ("  ids where a racer met another's attempt in flight: " + $contended.Count + " of " + $idCount) -ForegroundColor DarkGray
 $busyReasons = @($race.decisions | Where-Object { $_.decision -ceq "unknown" -and $_.reason -like "*being recorded*" }).Count
 Write-Host ("  of those answers, 'being recorded' (the record itself was mid-write, held by its writer): " + $busyReasons) -ForegroundColor DarkGray
-# Threshold: a tenth of the ids. Measured 2026-09-30, first run: 53 of 150 ids met an attempt in
-# flight, 52 answers found the record mid-write. A write-through of about 200 bytes takes a few
-# milliseconds, so 'being recorded' is possible only when two processes reach the same id within
-# that window - racers taking turns 40 ms apart would give none.
-Check ($busyReasons -ge [int]($idCount / 10)) "CONTROL: on at least a tenth of the ids a racer found the record still being written, so the racers met inside the create itself"
+# Thresholds, measured 2026-09-30. With an instant act, seven runs of 150 ids met an attempt in
+# flight on 53, 39, 52, 30, 29, 20 and 2 ids - too loose to hold a threshold. With the worker's
+# 20 ms act, four runs of 200 ids met in flight on 191, 200, 195 and 197, and found a record still
+# being written 11, 4, 21 and 14 times. So: at least half the ids met in flight, and at least one
+# record was found mid-write. A write-through of a few hundred bytes takes milliseconds, so even one
+# means two processes were inside the same create at once. The check-then-create mutant in
+# test/mutations/journal-race.psd1 is caught too, which needs the same overlap.
+Check ($contended.Count -ge [int]($idCount / 2)) "CONTROL: on at least half the ids a racer met another's attempt in flight"
+Check ($busyReasons -ge 1) "CONTROL: at least one racer found a record still being written, so racers met inside the create itself"
 
 Write-Host ""
 Write-Host "--- CONTROL: the same race against a journal that overwrites instead of creating new ---" -ForegroundColor Cyan
@@ -162,6 +170,7 @@ Move-Item -LiteralPath $brokenPath -Destination (Join-Path $brokenDir "Journal.p
 $bad = Invoke-Race -Name "broken" -Journal (Join-Path $brokenDir "Journal.ps1")
 Show-Race $bad "overwriting journal"
 Check (@($bad.problems).Count -eq 0) "the control's racers ran cleanly too"
+foreach ($pr in @($bad.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
 $badDoubled = @($bad.ids | Where-Object { $bad.perId[$_] -gt 1 })
 Write-Host ("  ids executed twice or more under the broken journal: " + $badDoubled.Count) -ForegroundColor DarkGray
 Check ($badDoubled.Count -gt 0) "CONTROL: the harness sees double executions when the journal allows them"

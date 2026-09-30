@@ -46,6 +46,9 @@ for ($i = 0; $i -lt $ids.Count; $i++) {
         $eff = Join-Path $EffectsDir ($id + "." + $Racer)
         $fs = New-Object System.IO.FileStream($eff, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         $fs.Dispose()
+        # An act takes time - a spawn takes seconds. 20 ms here, so a racer arriving while it runs
+        # finds the record with no outcome yet, as it would in use.
+        Start-Sleep -Milliseconds 20
         # A broken journal (the suite's control) can make completing fail - another racer holds the
         # outcome file. The act has already happened and been counted, so that is logged, not fatal.
         try { Complete-HordeJournalEntry -Root $Root -Id $id -State "done" -Result (New-HordeKnown -Value $Racer) | Out-Null }
