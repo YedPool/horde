@@ -1,0 +1,7 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "transcript_path": "C:\\fixture-projects\\C--work-alpha\\aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  "cwd": "C:\\work\\alpha",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

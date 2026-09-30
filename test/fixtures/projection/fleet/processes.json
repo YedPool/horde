@@ -1,0 +1,86 @@
+[
+  {
+    "pid": 1001,
+    "name": "claude.exe",
+    "created": "2026-06-01T09:00:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1002,
+    "name": "claude.exe",
+    "created": "2026-06-01T09:00:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1003,
+    "name": "claude.exe",
+    "created": "2026-06-01T10:10:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1006,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:00:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1007,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:00:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1010,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:04:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1011,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:00:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1012,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:14:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1013,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:19:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1099,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:30:00.0000000Z",
+    "commandLine": "claude"
+  },
+  {
+    "pid": 1100,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:40:00.0000000Z",
+    "commandLine": "claude --resume aaaaaaaa-0000-4000-8000-000000000032"
+  },
+  {
+    "pid": 1101,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:41:00.0000000Z",
+    "commandLine": "claude --resume aaaaaaaa-0000-4000-8000-000000000032"
+  },
+  {
+    "pid": 1102,
+    "name": "claude.exe",
+    "created": "2026-06-01T11:42:00.0000000Z",
+    "commandLine": "claude -r aaaaaaaa-0000-4000-8000-000000000033"
+  },
+  {
+    "pid": 4,
+    "name": "System",
+    "created": "2026-05-29T12:00:00.0000000Z",
+    "commandLine": null
+  }
+]

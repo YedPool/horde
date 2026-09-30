@@ -1,0 +1,14 @@
+{
+  "claudeSessionId": "aaaaaaaa-0000-4000-8000-000000000011",
+  "origin": "user",
+  "fleetSessionId": "",
+  "pane": "18",
+  "instance": "inst-1",
+  "cwd": "C:\\work\\theta",
+  "firstCwd": "C:\\work\\theta",
+  "owner": "",
+  "firstSeen": "2026-06-01T10:58:00.0000000Z",
+  "lastSeen": "2026-06-01T11:58:00.0000000Z",
+  "lastTool": "Bash",
+  "role": "session"
+}

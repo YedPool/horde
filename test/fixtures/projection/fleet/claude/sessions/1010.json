@@ -1,0 +1,20 @@
+{
+  "pid": 1010,
+  "sessionId": "aaaaaaaa-0000-4000-8000-000000000010",
+  "cwd": "C:\\work\\delta",
+  "startedAt": 1780311845000,
+  "procStart": "134247854400000000",
+  "version": "9.9.9",
+  "peerProtocol": 1,
+  "peerFeatures": [
+    "f-one"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "win32:tester",
+  "messagingSocketPath": "\\\\.\\pipe\\LOCAL\\test-1010",
+  "updatedAt": 1780315160000,
+  "status": "idle",
+  "statusUpdatedAt": 1780315160000,
+  "bridgeSessionId": null
+}

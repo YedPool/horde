@@ -1,0 +1,23 @@
+{
+  "pid": 1012,
+  "sessionId": "aaaaaaaa-0000-4000-8000-000000000012",
+  "cwd": "C:\\temp\\spike",
+  "startedAt": 1780312445000,
+  "procStart": "134247860400000000",
+  "version": "9.9.9",
+  "peerProtocol": 1,
+  "peerFeatures": [
+    "f-one"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "win32:tester",
+  "messagingSocketPath": "\\\\.\\pipe\\LOCAL\\test-1012",
+  "name": "fixture-12",
+  "nameSource": "user",
+  "nameSince": 1780312440000,
+  "updatedAt": 1780315160000,
+  "status": "idle",
+  "statusUpdatedAt": 1780315160000,
+  "bridgeSessionId": null
+}

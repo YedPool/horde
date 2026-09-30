@@ -1,0 +1,23 @@
+{
+  "pid": 1011,
+  "sessionId": "aaaaaaaa-0000-4000-8000-000000000011",
+  "cwd": "C:\\work\\theta",
+  "startedAt": 1780311605000,
+  "procStart": "134247852000000000",
+  "version": "9.9.9",
+  "peerProtocol": 1,
+  "peerFeatures": [
+    "f-one"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "win32:tester",
+  "messagingSocketPath": "\\\\.\\pipe\\LOCAL\\test-1011",
+  "name": "fixture-11",
+  "nameSource": "user",
+  "nameSince": 1780311600000,
+  "updatedAt": 1780315160000,
+  "status": "idle",
+  "statusUpdatedAt": 1780315160000,
+  "bridgeSessionId": null
+}

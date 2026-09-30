@@ -1,0 +1,14 @@
+{
+  "agent": "codex",
+  "sessionId": "codex-thread-1",
+  "status": "idle",
+  "statusUpdatedAt": 1780315140000,
+  "updatedAt": 1780315140000,
+  "lastEvent": "Stop",
+  "cwd": "C:\\work\\codex",
+  "transcriptPath": "C:\\work\\codex\\thread.jsonl",
+  "pane": "7",
+  "runDir": "",
+  "orchestratorPane": "",
+  "wezfleetSessionId": "cx"
+}

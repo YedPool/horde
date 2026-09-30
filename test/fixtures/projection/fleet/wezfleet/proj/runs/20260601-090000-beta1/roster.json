@@ -1,0 +1,14 @@
+{
+  "runId": "20260601-090000-beta1",
+  "sessions": [
+    {
+      "id": "beta",
+      "title": "beta",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 31,
+      "spawned": true,
+      "spawnedAt": "2026-06-01T09:00:00.0000000Z"
+    }
+  ]
+}

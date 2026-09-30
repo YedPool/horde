@@ -1,0 +1,14 @@
+{
+  "runId": "20260502-080000-gamma2",
+  "sessions": [
+    {
+      "id": "gamma",
+      "title": "gamma",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 34,
+      "spawned": true,
+      "spawnedAt": "2026-05-02T12:00:00.0000000Z"
+    }
+  ]
+}

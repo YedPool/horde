@@ -1,0 +1,61 @@
+{
+  "runId": "20260601-100000-alpha",
+  "sessions": [
+    {
+      "id": "alpha",
+      "title": "the alpha lane",
+      "cwd": "C:\\work\\gamma",
+      "dependsOn": [],
+      "pane": 12,
+      "spawned": true,
+      "spawnedAt": "2026-06-01T10:10:00.0000000Z",
+      "window": 1
+    },
+    {
+      "id": "kappa",
+      "title": "kappa",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 26,
+      "spawned": true,
+      "spawnedAt": "2026-06-01T10:20:00.0000000Z"
+    },
+    {
+      "id": "delta",
+      "title": "waits for alpha",
+      "cwd": "C:\\work",
+      "dependsOn": [
+        "alpha"
+      ],
+      "pane": -1,
+      "spawned": false,
+      "spawnedAt": null
+    },
+    {
+      "id": "eps",
+      "title": "eps",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 21,
+      "spawned": true,
+      "spawnedAt": "2026-06-01T10:20:00.0000000Z"
+    },
+    {
+      "id": "zeta",
+      "title": "zeta",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 22,
+      "spawned": true,
+      "spawnedAt": "2026-06-01T10:20:00.0000000Z"
+    },
+    {
+      "id": "eta",
+      "title": "eta",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "pane": 27,
+      "spawned": true
+    }
+  ]
+}

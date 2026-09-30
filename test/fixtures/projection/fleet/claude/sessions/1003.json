@@ -1,0 +1,23 @@
+{
+  "pid": 1003,
+  "sessionId": "aaaaaaaa-0000-4000-8000-000000000003",
+  "cwd": "C:\\work\\gamma",
+  "startedAt": 1780308605000,
+  "procStart": "134247822000000000",
+  "version": "9.9.9",
+  "peerProtocol": 1,
+  "peerFeatures": [
+    "f-one"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "win32:tester",
+  "messagingSocketPath": "\\\\.\\pipe\\LOCAL\\test-1003",
+  "name": "fixture-3",
+  "nameSource": "user",
+  "nameSince": 1780308600000,
+  "updatedAt": 1780315160000,
+  "status": "idle",
+  "statusUpdatedAt": 1780315160000,
+  "bridgeSessionId": null
+}

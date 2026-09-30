@@ -1,0 +1,20 @@
+{
+  "runId": "20260502-080000-gamma2",
+  "name": "gamma2",
+  "repoKey": "other",
+  "createdAt": "2026-06-01T07:00:00.0000000Z",
+  "closedAt": "2026-06-01T11:00:00.0000000Z",
+  "orchestratorPane": "11",
+  "sessions": [
+    {
+      "id": "gamma",
+      "title": "gamma",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "claude",
+      "args": []
+    }
+  ],
+  "windowId": 1
+}

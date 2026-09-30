@@ -1,0 +1,20 @@
+{
+  "runId": "20260601-090000-beta1",
+  "name": "beta1",
+  "repoKey": "proj",
+  "createdAt": "2026-06-01T07:00:00.0000000Z",
+  "closedAt": null,
+  "orchestratorPane": "11",
+  "sessions": [
+    {
+      "id": "beta",
+      "title": "beta",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "claude",
+      "args": []
+    }
+  ],
+  "windowId": 1
+}
