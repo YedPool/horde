@@ -274,3 +274,8 @@ sources:
 - source: review finding 2 of PR #18, 2026-09-30: with no control file the derivation fell back to projectCwd, whose remaining sources (the registry, and the hook's cwd) can hold the current directory (L-050). The pane-sessions file's transcript_path is already the first read. The derivation's fallback is now a search of ~/.claude/projects/*/<sessionId>.jsonl that takes the hit only when there is exactly one: measured 2026-09-30, 265 top-level transcripts, and one session id (cccccccc-9999-4999-8999-cccccccccccc, a fixture id written by wezfleet's apply tests) filed in 55 folders at once, so "the first hit" would be a guess.
 - disposition: test
 - where: test/test-ownership.ps1 :: "a stopped session's transcript is the one file named for its id, never projectCwd's folder"
+
+### L-053 The transcript folder key is measured only on short paths
+- source: review finding 3 of PR #18, 2026-09-30: every measurement behind L-049 is of keys up to 137 characters, the longest of 149 project folders on this machine on 2026-09-30. Whether Claude Code shortens a longer key and appends a hash is unverified - no folder long enough exists to show it. The rule is marked provisional; it fails safe because a derived path is used only after it is checked to exist, and a stopped session falls back to the search by id (L-052).
+- disposition: test
+- where: test/test-ownership.ps1 :: "the transcript folder key is provisional beyond the longest path measured"

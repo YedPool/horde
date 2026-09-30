@@ -127,6 +127,11 @@ Check ("$($cwdX2.when)" -like "*launch directory*" -and "$($cwdX2.when)" -like "
 # session id had a transcript in 55 folders (ledger L-052).
 $tpDerived = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').derived)"
 Check ($tpDerived -notlike "*from projectCwd*" -and $tpDerived -like "*exactly one*") "a stopped session's transcript is the one file named for its id, never projectCwd's folder"
+# THE FOLDER KEY IS MEASURED ONLY ON SHORT PATHS: the longest of 149 project folders is 137
+# characters. A tool may shorten a long key and add a hash; that is unverified, so the rule is
+# provisional and says why it still fails safe (ledger L-053).
+$tpProvisional = "$((Get-HordeOwnershipField -Doc $doc -Name 'transcriptPath').provisional)"
+Check ($tpProvisional -like "*137 characters*" -and $tpProvisional -like "*checked to exist*") "the transcript folder key is provisional beyond the longest path measured"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
 Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'resumeCommand').provisional)" -ne "") "a rule that depends on something unmeasured is marked provisional"
 $role = Get-HordeOwnershipField -Doc $doc -Name "role"
