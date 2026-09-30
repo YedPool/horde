@@ -20,9 +20,27 @@
 #     Complete-HordeSuite fails the suite for it. (Measured 2026-09-29: the trap sees errors raised
 #     inside functions too, and does not see errors a test catches on purpose.)
 #
+#   - AN ERROR THAT DOES NOT STOP ANYTHING STILL COUNTS. With the default preference, a cmdlet that
+#     cannot find a path writes an error and carries on, and a check built on its empty result
+#     passed. This file sets $ErrorActionPreference = "Stop" for the suite that dot-sources it, so
+#     such an error reaches the trap. A test that expects an error says so, with -ErrorAction or a
+#     try/catch.
+#
 # WHY THE TRAP IS A LINE IN EACH SUITE AND NOT IN HERE: a trap belongs to the script block that
 # declares it, so one declared in this dot-sourced file would not cover the suite's own statements.
+# And this file is loaded FIRST, before anything else a suite loads, so an error while loading the
+# code under test is recorded like any other.
+#
+# WHAT THE TRAP'S `continue` DOES TO CONTROL FLOW, measured by the review of this file: after an
+# unexpected error, execution resumes at the next statement of the SCRIPT, so the rest of a function
+# that raised it is abandoned, and so are the remaining passes of a top-level loop. The suite still
+# fails - the error is recorded - but code that must run anyway, such as stopping processes a test
+# started, has to sit in its own try/finally.
+#
+# [ERROR], NOT [FAIL]. An unexpected error is printed as [ERROR]. tools/Mutate.ps1 counts a mutant as
+# caught only when a CHECK failed ([FAIL]); a suite that merely crashed did not catch anything.
 
+$ErrorActionPreference = "Stop"
 $script:fails = New-Object System.Collections.ArrayList
 $script:suiteErrors = New-Object System.Collections.ArrayList
 
@@ -49,7 +67,7 @@ function Register-HordeSuiteError {
     $where = ""
     if ($ErrorRecord.InvocationInfo) { $where = " (line " + $ErrorRecord.InvocationInfo.ScriptLineNumber + ")" }
     [void]$script:suiteErrors.Add("$ErrorRecord" + $where)
-    Write-Host ("  [FAIL] an error no test expected" + $where + ": " + $ErrorRecord) -ForegroundColor Red
+    Write-Host ("  [ERROR] an error no test expected" + $where + ": " + $ErrorRecord) -ForegroundColor Red
 }
 
 function Complete-HordeSuite {

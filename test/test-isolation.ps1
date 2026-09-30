@@ -9,15 +9,13 @@
 # through reused parent pids. Kill safety is now proven only on processes this file launches, and the
 # pid-reuse case is proven on an injected process table, where nothing real can be harmed.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 # If the harness does not load, stop here with no [FAIL] line: every check below would otherwise fail
 # for that one reason, and a mutation run would read a harness that no longer loads as a catch.
 try { . (Join-Path $root "test\harness\Isolation.ps1") } catch { Write-Host ("  the harness did not load: " + $_.Exception.Message); exit 3 }
-
-. (Join-Path $root "test\lib\Suite.ps1")
-trap { Register-HordeSuiteError $_; continue }
 # EVERY PROCESS THIS SUITE STARTS IS HELD, AND ONLY THOSE MAY BE KILLED.
 #
 # The third review found that mutation testing ran deliberately broken kill code against real

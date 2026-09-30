@@ -9,13 +9,11 @@
 # A gate that rejected every ledger would also pass a "must fail" check. The complete fixture is the
 # control against that: it must produce zero findings.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
-. (Join-Path $root "tools\Ledger.ps1")
-
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "tools\Ledger.ps1")
 
 $fx = Join-Path $here "fixtures\ledger"
 
