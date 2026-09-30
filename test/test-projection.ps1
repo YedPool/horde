@@ -362,6 +362,10 @@ $j17 = ReadJson $f17; $j17.transcript_path = (Join-Path $tx "claude\projects\C--
 $ptx2 = Project $tx
 Check ((Src (Ans $ptx2 10 "transcriptPath")) -eq "X1") "CONTROL: a pane file naming a transcript that exists answers it"
 
+$nops = New-Fleet "no-pane-sessions"
+Remove-Item -LiteralPath (Join-Path $nops "claude\pane-sessions") -Recurse -Force
+$pnops = Project $nops
+Check ($pnops.complete["X1"].state -eq "unknown" -and $pnops.complete["X1"].reason -like "*no pane-sessions directory*" -and (St (Ans $pnops 10 "pane")) -eq "unknown") "a missing pane-sessions directory is unknown, not empty"
 $ref40 = @($p.inputs.paneRead.refused | Where-Object { $_.name -eq "40.json" })
 Check ($ref40.Count -eq 1 -and "$($ref40[0].reason)" -like "*pane-session.v1*" -and $p.complete["X1"].state -eq "known") "a pane-sessions file that breaks the schema is refused, not a gap"
 
