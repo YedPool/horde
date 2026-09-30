@@ -31,8 +31,8 @@
            Find = 'if ($verdict.same) { [void]$verified.Add($sid) }'
            Replace = 'if ($true) { [void]$verified.Add($sid) }' }
         @{ Name = "unreadable-file-skipped-silently"
-           Find = 'catch { [void]$Gaps.Add($File.Name + " could not be read: " + $_.Exception.Message); return $null }'
-           Replace = 'catch { return $null }' }
+           Find = '[void]$Gaps.Add($File.Name + " could not be read: " + $_.Exception.Message); return $null }'
+           Replace = 'return $null }' }
         @{ Name = "missing-directory-is-empty"
            Find = '[void]$Gaps.Add("there is no " + $Agent + " control directory at " + $Dir + "; that is unknown, not an empty fleet")'
            Replace = '$null = 0' }
@@ -147,5 +147,11 @@
         @{ Name = "ttl-parse-stricter-than-wezfleet"
            Find = '[System.Globalization.NumberStyles]::Integer'
            Replace = '[System.Globalization.NumberStyles]::None' }
+        @{ Name = "vanished-file-is-a-gap"
+           Find = 'if (-not (Test-Path -LiteralPath $File.FullName)) { [void]$Vanished.Add($File.Name); return $null }'
+           Replace = '' }
+        @{ Name = "vanished-pid-called-orphan"
+           Find = ' -or $vanishedPids.ContainsKey($pp)) { continue }'
+           Replace = ') { continue }' }
     )
 }

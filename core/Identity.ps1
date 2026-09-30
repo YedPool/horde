@@ -204,11 +204,18 @@ function Get-HordeControlFiles {
 }
 
 function Read-HordeControlJson {
-    # One control file, parsed, or $null with the reason added to Gaps.
-    param($File, $Gaps)
+    # One control file, parsed, or $null with the reason added to Gaps - or, for a file that was
+    # listed and is gone by the time it is opened, its name added to Vanished instead.
+    param($File, $Gaps, $Vanished)
     $obj = $null
     try { $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }
-    catch { [void]$Gaps.Add($File.Name + " could not be read: " + $_.Exception.Message); return $null }
+    catch {
+        # GONE IS NOT UNREADABLE. Claude removes a session's file when the session exits, so on a
+        # live machine a listed file can be gone a moment later: the session exited during the read,
+        # and the listing is still whole for every session that is running (review finding 5 of
+        # PR #19). A file that is still there and cannot be read is a gap.
+        if (-not (Test-Path -LiteralPath $File.FullName)) { [void]$Vanished.Add($File.Name); return $null }
+        [void]$Gaps.Add($File.Name + " could not be read: " + $_.Exception.Message); return $null }
     if ($null -eq $obj -or $obj -isnot [System.Management.Automation.PSCustomObject]) {
         [void]$Gaps.Add($File.Name + " is not a JSON object"); return $null
     }
@@ -239,6 +246,7 @@ function Read-HordeClaudeControlFiles {
     $entries = New-Object System.Collections.ArrayList
     $verified = New-Object System.Collections.ArrayList
     $verifiedPids = @{}
+    $vanished = New-Object System.Collections.ArrayList
     $uncheckablePids = @{}
     foreach ($f in (Get-HordeControlFiles -Dir $Dir -Agent "claude" -Gaps $gaps)) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
@@ -246,7 +254,7 @@ function Read-HordeClaudeControlFiles {
         # agreed on 2026-09-30, and wezfleet keyed by the pid field without ever looking at the name
         # (lib/Mail.ps1:144), so a copied or stale file would have been read as another process.
         if ($base -notmatch '^[0-9]{1,9}$') { [void]$gaps.Add($f.Name + " is not named by a pid, so it is not a control file this reader knows"); continue }
-        $j = Read-HordeControlJson -File $f -Gaps $gaps
+        $j = Read-HordeControlJson -File $f -Gaps $gaps -Vanished $vanished
         if ($null -eq $j) { continue }
         $pidField = Get-HordeField -Record $j -Name "pid"
         if ($pidField.state -ne "known" -or ($pidField.value -isnot [int] -and $pidField.value -isnot [long]) -or "$($pidField.value)" -ne $base) {
@@ -343,6 +351,14 @@ function Read-HordeClaudeControlFiles {
     # answer is unknown. And the names are provisional (see $script:HordeOrphanProvisional): a node
     # process no file verifies may be a claude with no file, so while one runs the answer is unknown,
     # never a known list that may be short.
+    # A file that vanished during the read belonged to a session that exited after the process table
+    # was read, so its pid, still in the table, is not an orphan.
+    $vanishedPids = @{}
+    foreach ($v in $vanished) {
+        [void]$findings.Add($v + ": exited during the read - listed, then removed before it could be opened, as Claude removes a session's file when it exits")
+        $vb = [System.IO.Path]::GetFileNameWithoutExtension($v)
+        if ($vb -match '^[0-9]{1,9}$') { $vanishedPids[[int]$vb] = $true }
+    }
     $orphans = $null
     if ($Processes.state -ne "known") { $orphans = New-HordeUnknown -Reason ("the process table could not be read (" + $Processes.reason + ")") }
     elseif ($gaps.Count -gt 0) { $orphans = New-HordeUnknown -Reason "the control listing is incomplete, so a process without a readable file may still have one" }
@@ -352,7 +368,7 @@ function Read-HordeClaudeControlFiles {
         $hosts = New-Object System.Collections.ArrayList
         foreach ($p in $Processes.value.Values) {
             $pp = [int]$p.pid
-            if ($verifiedPids.ContainsKey($pp)) { continue }
+            if ($verifiedPids.ContainsKey($pp) -or $vanishedPids.ContainsKey($pp)) { continue }
             if ($script:HordeClaudeProcessNames -icontains "$($p.name)") {
                 if ($uncheckablePids.ContainsKey($pp)) { [void]$unsure.Add($pp) } else { [void]$list.Add($pp) }
             } elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { [void]$hosts.Add($pp) }
@@ -383,12 +399,13 @@ function Read-HordeCodexControlFiles {
     $ttl = Get-HordeCodexTtlSeconds -Value $TtlSeconds
     $gaps = New-Object System.Collections.ArrayList
     $entries = New-Object System.Collections.ArrayList
+    $vanished = New-Object System.Collections.ArrayList
     foreach ($f in (Get-HordeControlFiles -Dir $Dir -Agent "codex" -Gaps $gaps)) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
         # The file is written in place, with no temp file (lib/CodexStatus.ps1:200), so a read can
         # catch it half-written. That is an unreadable file - the listing is incomplete - never an
         # absent session.
-        $j = Read-HordeControlJson -File $f -Gaps $gaps
+        $j = Read-HordeControlJson -File $f -Gaps $gaps -Vanished $vanished
         if ($null -eq $j) { continue }
         $sidField = Get-HordeField -Record $j -Name "sessionId"
         if ($sidField.state -ne "known" -or -not (Test-HordeSessionId $sidField.value) -or "$($sidField.value)" -cne $base) {
@@ -415,7 +432,8 @@ function Read-HordeCodexControlFiles {
         [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "codex writes no" -Provisional @{ transcriptPath = "taken from the codex control file; no derivation of a codex transcript path has been measured" } -ProcessCheck "unchecked"))
     }
     $orphans = New-HordeUnknown -Reason "codex writes no pid, so a codex process cannot be matched to a file"
-    return (New-HordeAgentRead -Agent "codex" -Entries $entries -Gaps $gaps -Verified @() -Orphans $orphans -Findings @())
+    $codexFindings = @($vanished | ForEach-Object { $_ + ": removed during the read - listed, then gone before it could be opened" })
+    return (New-HordeAgentRead -Agent "codex" -Entries $entries -Gaps $gaps -Verified @() -Orphans $orphans -Findings $codexFindings)
 }
 
 function Assert-HordeProcessTable {

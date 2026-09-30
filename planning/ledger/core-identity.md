@@ -253,3 +253,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 4 of PR #19, 2026-09-30, with the reviewer's probe: Get-HordeIdentity -TtlSeconds 0 threw from Limit-HordeAge and failed the whole read, claude included. The fallback now applies to a TTL passed in as well as to WEZFLEET_CODEX_STATUS_TTL.
 - disposition: test
 - where: test/test-identity.ps1 :: "a bad TTL passed in falls back to the default instead of failing the read"
+
+### L-049 A control file removed between the listing and the read is a session that exited, not an unreadable file
+- source: review finding 5 of PR #19, 2026-09-30: a file listed and then deleted before it was opened was reported as "could not be read", which made the whole listing incomplete. Claude removes a session's file when the session exits (the orphan in L-010 is a process whose file Claude had removed), so on a live machine this is the session exiting during the read. It is now a finding, the listing stays whole, and the file's pid - still in the process table read before the listing - is not called an orphan. Tested with an injected listing that deletes the file right after listing it.
+- disposition: test
+- where: test/test-identity.ps1 :: "a control file removed between listing and read is a finding, not a gap"

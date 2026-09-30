@@ -309,6 +309,27 @@ Check ($null -ne $kept94 -and $kept94.source -like "*613.json" -and @(Val $r16b.
 Check (@($r16b.findings | Where-Object { $_ -like ("*611.json*" + (Sid 94) + "*") }).Count -eq 1 -and @($r16b.findings | Where-Object { $_ -like ("*612.json*" + (Sid 94) + "*") }).Count -eq 1) "each leftover beside the live file is reported as a finding"
 Check (@($r16c.duplicates | Where-Object { $_.sessionId -eq (Sid 95) }).Count -eq 1 -and -not $r16c.records.ContainsKey((Sid 95)) -and (St $r16c.complete.claude) -eq "unknown") "a leftover that cannot be checked beside a live file is still a duplicate"
 
+# A FILE REMOVED BETWEEN THE LISTING AND THE READ. Claude removes a session's file when it exits, so
+# on a live machine a file can be listed and gone a moment later. That is the session exiting during
+# the read - a finding - not an unreadable file that makes the listing incomplete (review finding 5 of
+# PR #19). The listing is injected: the real one, with 702.json deleted right after it is taken.
+$d17 = NewDir "claude"
+PutJson (Join-Path $d17 "701.json") (ClaudeRec 701 (Sid 101) (Created 0))
+PutJson (Join-Path $d17 "702.json") (ClaudeRec 702 (Sid 102) (Created 0))
+$realListing = ${function:Get-HordeControlFiles}
+function Get-HordeControlFiles {
+    param([string]$Dir, [string]$Agent, $Gaps)
+    $listed = @(& $realListing -Dir $Dir -Agent $Agent -Gaps $Gaps)
+    foreach ($lf in $listed) { if ($lf.FullName -like "*horde-identity-*" -and $lf.Name -ceq "702.json") { Remove-Item -LiteralPath $lf.FullName -Force } }
+    return $listed
+}
+$r17 = $null
+try { $r17 = Get-HordeIdentity -ClaudeDir $d17 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(701, "claude.exe", (Created 0)), @(702, "claude.exe", (Created 0)))) -Now $now }
+finally { ${function:Get-HordeControlFiles} = $realListing }
+Check ($null -ne $r17 -and -not (Test-Path -LiteralPath (Join-Path $d17 "702.json")) -and $r17.records.ContainsKey((Sid 101))) "CONTROL: the injected listing named a file that was gone by the read"
+Check ((St $r17.complete.claude) -eq "known" -and @($r17.findings | Where-Object { $_ -like "702.json:*exited during the read*" }).Count -eq 1) "a control file removed between listing and read is a finding, not a gap"
+Check ((St $r17.orphanProcesses) -eq "known" -and @(Val $r17.orphanProcesses) -notcontains 702) "a process whose file vanished during the read is not called an orphan"
+
 Write-Host ""
 Write-Host "--- codex ---" -ForegroundColor Cyan
 function CodexRec {
