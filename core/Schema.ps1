@@ -43,10 +43,11 @@
 # overflows.
 # A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
 #
-# EVERY DEFINITION IS CHECKED ONCE, when Test-HordeSchema is called on the top of a schema, whether or
-# not anything refers to it: an unknown keyword, a node that is not an object, a pattern that does not
-# compile, or a $ref that does not resolve is refused there, not on the day a value first reaches it.
-# definitions and properties that are not objects are refused as well.
+# EVERY NODE OF A SCHEMA IS CHECKED ONCE, when Test-HordeSchema is called on the top of it: each
+# definition, whether or not anything refers to it, and every node under the root's own properties and
+# items, whether or not a value reaches it (issue #25). An unknown keyword, a node that is not an
+# object, a pattern that does not compile, or a $ref that does not resolve is refused there, not on the
+# day a value first reaches it. definitions and properties that are not objects are refused as well.
 #
 # HOW DEEP A VALUE CAN BE. Measured 2026-09-30 on Windows PowerShell 5.1.26100.9444, by bisection, on
 # this file as of this comment:
@@ -327,6 +328,14 @@ function Assert-HordeSchemaNode {
         }
         return
     }
+    Assert-HordeSchemaSubtrees -Kw $kw -Path $Path -Root $Root
+}
+
+function Assert-HordeSchemaSubtrees {
+    # The nodes under one node's properties and items, each checked by Assert-HordeSchemaNode. Kw is
+    # the node's keywords, already checked by Get-HordeSchemaNodeKeywords. Used for every definition's
+    # subtrees and, from Test-HordeSchema, for the root's own.
+    param($Kw, [string]$Path, $Root)
     if ($kw.ContainsKey("properties")) {
         foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { Assert-HordeSchemaNode -Schema $p.Value -Path ($Path + "/properties/" + $p.Name) -Root $Root }
     }
@@ -342,6 +351,13 @@ function Test-HordeSchema {
     if ($atTop) {
         $Root = $Schema
         Assert-HordeSchemaDefinitions -Root $Root
+        # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
+        # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
+        # 2026-09-30, before this line). The root node itself was checked just above, by
+        # Get-HordeSchemaNodeKeywords. A caller passing -Root is inside a schema whose top it has
+        # checked already - core/Projection.ps1 (feature/core-projection) checks one field's value that way,
+        # once per field per session - so this runs for a top-level call only.
+        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root
     }
     if ($kw.ContainsKey('$ref')) {
         $ref = $kw['$ref']

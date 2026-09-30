@@ -33,7 +33,7 @@ $oneKey = [pscustomobject]@{ a = 1 }
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = [pscustomobject]@{ type = "string" } }) } "additionalProperties at $ must be true or false") "additionalProperties given as a schema is refused"
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ additionalProperties = 0 }) } "additionalProperties at $ must be true or false") "additionalProperties 0 is refused, not read as false"
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema $false } "the schema at $ is not an object") "a boolean schema is refused"
-Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at $.a is not an object") "a boolean schema under properties is refused"
+Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at #/properties/a is not an object") "a boolean schema under properties is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema "integer" } "the schema at $ is not an object") "a schema that is a string is refused"
 # x- keys: the check must FAIL, not crash, when they stop being ignored - a crash is an [ERROR], which
 # tools/Mutate.ps1 rightly does not count as caught. So the call is caught here and its result judged.
@@ -280,13 +280,37 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": "n", "t
 Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = "x" }) -Schema (Obj '{ "type": "object", "properties": [ { "type": "integer" } ] }') } "properties at $ must be an object") "properties given as an array is refused, not read as no properties"
 $f = @(RefFindings 1 (Obj '{ "definitions": {}, "type": "integer" }'))
 Check ($f.Count -eq 0) ("CONTROL: an empty definitions object is accepted (" + ($f -join "; ") + ")")
-# EVERY SHIPPED SCHEMA PASSES THE DEFINITIONS CHECK: a throw here is the check refusing a schema Horde
-# ships. The value is null, so only the schema itself is under test.
+
+Write-Host ""
+Write-Host "--- the root's own subtrees are checked too, whether or not a value reaches them ---" -ForegroundColor Cyan
+# ISSUE #25: the reason for checking every definition applies to the root's own properties and items,
+# and {"properties": {"q": {"maximum": 3}}} accepted {} because no value reached q (measured 2026-09-30,
+# before the fix, with a dangling $ref and an items node the same).
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "maximum": 3 } } }') } "the schema uses 'maximum' at #/properties/q") "an unknown keyword under a property no value has is refused"
+Check (Throws { Test-HordeSchema -Value (Obj '[]') -Schema (Obj '{ "items": { "maximum": 3 } }') } "the schema uses 'maximum' at #/items") "an unknown keyword under the items of an empty array is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema (Obj '{ "properties": { "q": { "maximum": 3 } } }') } "the schema uses 'maximum' at #/properties/q") "and under a property of a schema whose value is not an object at all"
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "type": "array", "items": { "$ref": "#/definitions/gone" } } } }') } "names no definition") "a dangling `$ref deep under a property no value has is found"
+Check (Throws { Test-HordeSchema -Value (Obj '{}') -Schema (Obj '{ "properties": { "q": { "pattern": "(" } } }') } "pattern at #/properties/q is not a regular expression") "a pattern that does not compile, under a property no value has, is refused"
+# A RECURSIVE SCHEMA STILL ENDS: the walk resolves a $ref and never follows it, so a tree whose root
+# property refers back to a definition that refers to itself is walked once. A throw or a stack
+# overflow here fails the check rather than the suite.
+$f = @(RefFindings (Obj '{}') (Obj '{ "definitions": { "node": { "type": "object", "properties": { "kids": { "type": "array", "items": { "$ref": "#/definitions/node" } } } } }, "type": "object", "properties": { "tree": { "$ref": "#/definitions/node" }, "trees": { "type": "array", "items": { "$ref": "#/definitions/node" } } } }'))
+Check ($f.Count -eq 0) ("CONTROL: a root whose properties refer to a recursive definition is walked and accepted (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "q": 1 }') (Obj '{ "type": "object", "properties": { "q": { "type": "integer" }, "r": { "type": "array", "items": { "type": "string", "pattern": "^a$" } } } }'))
+Check ($f.Count -eq 0) ("CONTROL: a valid root with a property no value has is accepted (" + ($f -join "; ") + ")")
+# A CALLER PASSING -Root HAS CHECKED THAT ROOT ALREADY, and is not made to pay for the walk again:
+# core/Projection.ps1 on feature/core-projection checks one field's value this way, once per field per
+# session. So a -Root call walks nothing, and a bad node elsewhere under that root is not its concern.
+$checkedElsewhere = Obj '{ "properties": { "elsewhere": { "maximum": 3 } } }'
+Check (-not (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "type": "integer" }') -Root $checkedElsewhere })) "a call with -Root does not walk that root again"
+
+# EVERY SHIPPED SCHEMA PASSES THE CHECK OF ITS DEFINITIONS AND ITS ROOT'S SUBTREES: a throw here is the
+# check refusing a schema Horde ships. The value is null, so only the schema itself is under test.
 $shipped = @(Get-ChildItem -LiteralPath (Join-Path $root "schema") -Filter *.json -File)
 Check ($shipped.Count -ge 3) ("CONTROL: the shipped schemas are there (" + $shipped.Count + ")")
 foreach ($sf in $shipped) {
     $sName = $sf.BaseName
-    Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the definitions check")
+    Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the check of every node, its definitions and its root's subtrees")
 }
 Write-Host ""
 Write-Host "--- minimum, compared exactly whatever type holds the number ---" -ForegroundColor Cyan

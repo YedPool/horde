@@ -183,6 +183,12 @@
         @{ Name = "definitions-not-checked"
            Find = 'Assert-HordeSchemaDefinitions -Root $Root'
            Replace = '' }
+        @{ Name = "root-subtrees-not-checked"
+           Find = 'Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Replace = '' }
+        @{ Name = "root-walked-under-caller-root"
+           Find = '        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Replace = '    }; if ($true) { Assert-HordeSchemaSubtrees -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true) -Path "#" -Root $Root' }
         @{ Name = "definitions-any-value"
            Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
            Replace = 'if ($false) {' }
