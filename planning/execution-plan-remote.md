@@ -6,7 +6,8 @@ is never a remote shell, a transport port whose first real adapter is ssh, and a
 separate overlay repository (Tailscale or WireGuard) that supplies only an address and a health
 answer. Its companions are `planning/execution-plan-engines.md` and `planning/execution-plan-hosts.md`
 (PR #30) and `planning/execution-plan-lifecycle.md` (PR #29). This plan builds nothing those plans
-build; where it needs their work it names the step.
+build; where it needs their work it names the step. Step numbers are as of the engines plan at `9b9dba3` and the
+lifecycle plan at `9a88a11`; each is also named by title, so a reference survives a renumbering.
 
 Planning prose may name terminals, engines and transport programs. Code may not: CONTRIBUTING 14,
 extended to `agents/<name>/` by engines E1 and to `transports/<name>/` by step R5 below.
@@ -53,7 +54,7 @@ The first four tags are the engines plan's; PHASE5 is added here.
 - **PROJ**: waits until `feature/core-projection` merges with the HostPort contract (namespace-tagged
   pid and cwd, unique handles, mandatory `-Capabilities`).
 - **SPAWN**: waits for Horde's spawn and launch commands (migration step 3.8, engines E10, and the
-  lifecycle plan's anchor, its step 19).
+  lifecycle plan's anchor, its step 22).
 - **INSTALL**: a tool or Windows feature not yet on this machine. For R16 it is not enough to tell the
   founder first: it waits for his OK (decision 2).
 - **PHASE5**: waits for a writer the migration plan's Phase 5 moves behind the contract.
@@ -154,8 +155,8 @@ A. The protocol core (NOW; test-only, installs nothing)
    - If WSL localhost forwarding does not reach the sshd (unmeasured, design 12.3), the suite prints
      `[SKIP] <reason>`, never green.
    - `tools/HostNames.ps1` gains a third root: nothing outside `transports/<name>/` names `ssh`,
-     `ssh.exe`, `sshd` or an ssh option. Engines E1 and hosts step 5 also edit that file; the three
-     land one after another, in that order, never together. Fixture trees first, as E1's.
+     `ssh.exe`, `sshd` or an ssh option. Engines E1 (lifecycle step 5) and hosts step 5 also edit
+     that file; the three land one after another, in that order, never together. Fixture trees first, as E1's.
 6. **R6. `remote/Clock.ps1` and liveness answers.** Four-timestamp offset and round-trip per link;
    every remote `observedAt` stored with the node's stamp and the hub's receive time; freshness
    (`Limit-HordeAge`) judged on receive time; an offset above `HordeClockSkewSeconds` is a node fault.
@@ -164,9 +165,9 @@ A. The protocol core (NOW; test-only, installs nothing)
    time; a node without `bye` is never `known false`.
 7. **R7. Device id, `core/Device.ps1`.** `Get-HordeDeviceId` reads or creates
    `<HORDE_HOME>/node/node.json` with `CreateNew`: a random UUID, never from a host name or hardware;
-   `deviceName` a handle only. After engines E6. The lifecycle follower's `machineId` (its step 5
-   stream path `<machineId>.jsonl`) **is** this device id: lifecycle step 5 takes it from here, so R7
-   lands first. Tests first: two racing first calls give one id; a copied `node.json` on a second
+   `deviceName` a handle only. After engines E6. The lifecycle follower's `machineId` (the stream
+   path `<machineId>.jsonl` of its step 7) **is** this device id: lifecycle step 7 takes it from here,
+   so R7 lands first. Tests first: two racing first calls give one id; a copied `node.json` on a second
    machine is caught at enrolment (R17), not here, and the test says so.
 8. **R8. The overlay boundary, Horde's side.** `remote/Overlay.ps1` resolves
    `link.hub.address = overlay:<name>` by running `horde-overlay endpoint --name <name> --json` and
@@ -191,31 +192,33 @@ A. The protocol core (NOW; test-only, installs nothing)
 
 B. Identity and the session record (PROJ; must merge before migration step 3.8)
 
-10. **R10. The fleet record and the binding record: one ordered sequence of v1 edits.** Every edit
-    below is in place on v1, safe only while no writer exists (engine-settings decision 5). They land
-    as four PRs, **in this order**, and each is rebased on the one before:
-    1. **engines K1**, the key: `(harness, id)`, `sessionId` no longer a UUID.
-    2. **R10, the split** (this plan). `schema/session-record.v1` stays the fleet record, written only
-       by the hub's engine: role, parent, label, labelCycle, origin, runId, fleetSessionId, title,
-       dependsOn, retired, retiredAt, and a new required **`device`** (the device id, R7).
-       `projectCwd` leaves it. A new file, `schema/session-binding.v1`, is the binding record, written
-       only by the node engine that spawned the session, stored on that node; the hub keeps a
-       read-only mirror by cursor (R13). `core/ownership.json` gains the owner **`node`** ("the engine
-       on the device that runs the session"), and `projectCwd` moves to it.
-    3. **engines R1**, the binding fields: `engine { harness, provider, model, profile, requested,
-       resolvedAt, provenance }` and `resume { argv, envRefs }` land in `session-binding.v1`, owner
-       `node`, not in the fleet record. That changes engines R1's target file and owner, and nothing
-       else in it.
-    4. **The lifecycle plan's remaining binding rows** (its 3.4: `launch`, `binding`, `containment`,
-       `closeOn`, `park`, `closure`, `predecessor`, `successor`) join `session-binding.v1`, owner
-       `node`, before 3.8, so the lifecycle plan's step 21 needs no v2.
+10. **R10. The fleet record and the binding record: first of one ordered sequence of v1 edits.**
+    Four PRs edit `schema/session-record.v1` in place, across three plans. Each is safe only while no
+    writer exists (engine-settings decision 5), so **all four land as one ordered sequence before
+    Phase 3 step 3.8**, each rebased on the one before, and any later change is a v2:
+    1. **R10, the split** (this plan). First, because the other three add fields to the records it
+       creates. `schema/session-record.v1` stays the fleet record, written only by the hub's engine:
+       role, parent, label, labelCycle, origin, runId, fleetSessionId, title, dependsOn, retired,
+       retiredAt, and a new required **`device`** (the device id, R7). `projectCwd` leaves it. A new
+       file, `schema/session-binding.v1`, is the binding record, written only by the node engine that
+       spawned the session and stored on that node; the hub keeps a read-only mirror by cursor (R13).
+       `core/ownership.json` gains the owner **`node`** ("the engine on the device that runs the
+       session"), and `projectCwd` moves to it.
+    2. **engines K1** (PR #30, branch `docs/engines-hosts-plans`): the key becomes `(harness, id)`
+       and `sessionId` stops assuming a UUID, in both records.
+    3. **engines R1** (same PR): `engine { harness, provider, model, profile, requested, resolvedAt,
+       provenance }` and `resume { argv, envRefs }` land in `session-binding.v1`, owner `node`, not in
+       the fleet record. That changes engines R1's target file and owner, and nothing else in it.
+    4. **lifecycle step 24** (PR #29, branch `docs/lifecycle-plan`): the rows of its 3.4 (`launch`,
+       `binding`, `containment`, `closeOn`, `park`, `closure`, `predecessor`, `successor`) land in
+       `session-binding.v1`, owner `node`, not as `engine` rows of the fleet record.
 
     A local session is the same split with both writers on one machine. Tests first:
     `test/test-schema-session-record.ps1` computes the fleet record from `engine`-owned stored rows,
     and a new twin computes the binding record from `node`-owned rows; a row with both owners fails; a
     `node` row appearing in the fleet schema fails, and the reverse; `device` is required. Ledger
-    note above. **Coordination:** PRs #29 and #30 are updated to name this order before either of
-    their record edits merges.
+    note above. **Coordination:** PRs #29 and #30 are updated to name this order, and the `node`
+    owner, before any of their record edits merges.
 11. **R11. Device on every namespace tag.** On top of the HostPort's `space` (hosts decision 5), every
     pid, procStart and path that leaves a node carries `ns: { device, space }`. Rules, each a test
     with its mutation:
@@ -232,8 +235,8 @@ C. The node and the hub, read path (PROJ)
     `binding.get`, `observe.since`, `request.status`, and the per-user logon task. `sessions.list` is
     the node's own projection (step 2.2), built by its own host and agent adapters; `complete` is
     `known true` only when every store was readable. `observe.since` streams the node follower's file
-    (lifecycle steps 5 and 9) from a `(deviceId, seq)` cursor. `node serve` is a separate process
-    from `horde follow`, whose never-acts tripwire stays. After lifecycle step 9. Gate: T1, the full
+    (lifecycle steps 7 and 11) from a `(deviceId, seq)` cursor. `node serve` is a separate process
+    from `horde follow`, whose never-acts tripwire stays. After lifecycle step 11. Gate: T1, the full
     protocol hub daemon to node daemon over `local`, with a fake host and agent; e2e drives the real
     `horde` CLI.
 13. **R13. `horde hub serve`, mirrors, `horde nodes`.** Node registry, per-node outbox, mirror files
@@ -245,8 +248,8 @@ C. The node and the hub, read path (PROJ)
     capped at 64 KiB; transcripts, tool output and exploratory notes stay on the node, on disk, and
     are named in the handoff, never sent. There is no file-transfer verb and no `evidence.get` in v1.
     Tests first: a handoff over the cap is refused at the node, not truncated silently; R1's purity
-    guard covers the new verb. The metrics plan's purity measure (orc and warchief context tokens per
-    delivered result) reads remote handoffs the same as local ones.
+    guard covers the new verb. Lifecycle step 16's purity measure (orc and warchief context tokens
+    per delivered result) reads remote handoffs the same as local ones.
 15. **R15. `metrics.since`.** Content-free metrics events under the node's metrics gate, same cursor
     mechanics. Tokens are counted on the node from its own files (metrics decision 7, per machine);
     the salt never leaves the node, so fingerprints compare only within a device, written into the
@@ -278,21 +281,21 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
 E. Acting over the link
 
 18. **R18. Containment: the anchor holds the job, the node daemon never does** (SPAWN; after lifecycle
-    step 19). A kill-on-close job ends when its last handle closes, so a daemon holding goblins' job
+    step 22). A kill-on-close job ends when its last handle closes, so a daemon holding goblins' job
     handles would kill every goblin on each upgrade or restart, and remote makes those routine. The
-    handle is held only by the per-goblin anchor the lifecycle plan builds (its 2.2 and steps 18 and
-    19). The node daemon asks the host to start the anchor and never creates, opens-and-keeps or
+    handle is held only by the per-goblin anchor the lifecycle plan builds (its 2.2 and steps 21 and
+    22). The node daemon asks the host to start the anchor and never creates, opens-and-keeps or
     duplicates a job handle; it queries through `core/Contain.ps1`, which closes the handle in the same
-    call (the lifecycle plan's handle-lifetime test). Tests, in the isolated host instance only:
+    call (the job-handle lifetime test of lifecycle step 11). Tests, in the isolated host instance only:
     restarting `node serve` mid-goblin leaves the goblin and a grandchild alive, checked by pid and
     procStart; **control:** a test-only daemon variant that keeps a duplicated handle kills them on
     restart, so the test can see the failure; a static tripwire finds no job-handle call outside
     `platform/windows/` and the anchor. A goblin is never a child of an ssh session: the spawn path
     from R19 runs in `node serve`, in the user's session.
-19. **R19. Act verbs** (SPAWN; after step 3.8, R10, R18 and lifecycle steps 21 to 25).
+19. **R19. Act verbs** (SPAWN; after step 3.8, R10, R18 and lifecycle steps 24 to 28).
     `session.spawn`, `session.resume`, `session.close`, `session.park`, `session.route`,
     `worktree.create`, `worktree.remove`, each journaled (R3) and admitted by the node's own gate
-    (the lifecycle plan's step 29, on the node's own counters). R9's policy is enforced here, the
+    (lifecycle step 32, on the node's own counters). R9's policy is enforced here, the
     permission ceiling first. Labels are allocated only by the hub before the request leaves.
     `session.close` carries the pid and procStart the hub last saw, and the node refuses if its view
     differs. The node's audit log
@@ -300,7 +303,7 @@ E. Acting over the link
     over `local`, so there is one actuation path. Tests first: one refusal per policy rule, each
     mutated; a spawn above the ceiling is refused; a request cut by a partition resolves through
     `request.status`; T1 e2e over `local`, then T2 through the WSL sshd.
-20. **R20. Alerts over the link** (PROJ; after lifecycle step 11 and R13). `alert.raise` from the node,
+20. **R20. Alerts over the link** (PROJ; after lifecycle step 13 and R13). `alert.raise` from the node,
     a node outbox that drains in seq order on reconnect, alerts older than 24 h delivered marked
     stale. Tests first: a partition queues alerts and they drain in order; nothing is killed because
     of a partition.
@@ -333,8 +336,8 @@ R1.
 
 ## What waits
 
-- **PROJ**: R10 (in the order K1, R10, engines R1, lifecycle rows; all before step 3.8), R11, R12 to
-  R15, R20.
+- **PROJ**: R10 (first of R10, engines K1, engines R1, lifecycle step 24; all four before step 3.8),
+  R11, R12 to R15, R20.
 - **INSTALL, awaiting the founder's OK**: R16, then R17.
 - **SPAWN**: R18, R19; R22 also needs INSTALL.
 - **PHASE5**: R21.
