@@ -54,3 +54,8 @@ E. Phase 2: the read model
   the recursion depth limits (about 47 levels through ConvertFrom-Json, about 100 built in
   PowerShell) are not stated in the header; a `minimum` keyword would let the schema itself
   refuse a negative labelCycle.
+  Closed on branch fix/schema-followups: a non-string `$ref` is refused; every definition is
+  checked once, referenced or not; the measured limits (102-deep JSON, so a plan's layout root 46
+  containers deep; call depth overflow at 127 containers for a tree built in PowerShell) are in
+  the header; minimum is implemented and session-record.v1 states labelCycle >= 0; and
+  core/RestorePlan.ps1 no longer refuses a Decimal ratio just below 1.
