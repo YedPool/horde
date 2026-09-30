@@ -78,6 +78,8 @@ Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NoteProperty
 Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue " " -Force }) "an empty condition") "a read with an empty condition is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue $false -Force }) "an empty condition") "a read whose condition is not text is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @($d.fields[0].read[0]) }) "twice") "a read of one store and field twice in one rule is refused"
+Check (Says (Mutated { param($d) $d.fields[0].owner = "Agent" }) "not one of the listed owners") "an owner named in the wrong case is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read[0].store = "x2" }) "not in the store list") "a store named in the wrong case is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
     $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }

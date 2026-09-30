@@ -116,12 +116,12 @@ function Test-HordeOwnership {
         $seen[$n] = $true
         [void]$fieldNames.Add($n)
         foreach ($k in @($f.PSObject.Properties | ForEach-Object { $_.Name })) {
-            if ($script:HordeOwnershipFieldKeys -notcontains $k) { [void]$findings.Add("field '" + $n + "' has an unknown key '" + $k + "'") }
+            if ($script:HordeOwnershipFieldKeys -cnotcontains $k) { [void]$findings.Add("field '" + $n + "' has an unknown key '" + $k + "'") }
         }
         # EXACTLY ONE OWNER: a single string naming a listed owner. An array is two owners.
         if ($f.owner -is [array]) { [void]$findings.Add("field '" + $n + "' names more than one owner") }
         elseif ("$($f.owner)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' has no owner") }
-        elseif ($owners -notcontains "$($f.owner)") { [void]$findings.Add("field '" + $n + "' names owner '" + $f.owner + "', which is not one of the listed owners") }
+        elseif ($owners -cnotcontains "$($f.owner)") { [void]$findings.Add("field '" + $n + "' names owner '" + $f.owner + "', which is not one of the listed owners") }
         # A READ RULE: at least one store to read from, each one real, each naming a field.
         $read = @($f.read | Where-Object { $null -ne $_ })
         if ($read.Count -eq 0) { [void]$findings.Add("field '" + $n + "' has no read rule") }
@@ -132,7 +132,7 @@ function Test-HordeOwnership {
         $readPairs = New-Object System.Collections.ArrayList
         foreach ($r in $read) {
             $s = "$($r.store)"
-            if ($stores -notcontains $s) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "', which is not in the store list") }
+            if ($stores -cnotcontains $s) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "', which is not in the store list") }
             else { $usedStores[$s] = $true }
             if ("$($r.field)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' without naming what it reads") }
             foreach ($k in @($r.PSObject.Properties | ForEach-Object { $_.Name })) {
