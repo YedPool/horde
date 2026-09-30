@@ -260,6 +260,13 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unus
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "type": "object", "properties": { "a": { "type": "array", "items": { "$ref": "#/definitions/gone" } } } } }, "type": "integer" }') } "names no definition") "a dangling `$ref deep inside an unreferenced definition is found"
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unused": { "properties": { "a": { "type": "decimal" } } } }, "type": "integer" }') } "does not know") "an unknown type name inside an unreferenced definition is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }') } "circular") "a `$ref loop among definitions nothing refers to is refused"
+# A PATTERN IS COMPILED WITH ITS NODE, not when a string first meets it (issue #25). The walk above
+# claimed to refuse whatever Test-HordeSchema would, but "(" in a definition passed, and so did "(" at
+# the top when the value was not a string (both measured 2026-09-30, before the fix).
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "z": { "pattern": "(" } }, "type": "integer" }') } "pattern at #/definitions/z is not a regular expression") "a pattern that does not compile, in a definition nothing refers to, is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "pattern": "(" }') } "pattern at $ is not a regular expression") "a pattern that does not compile is refused though the value is not a string"
+$f = @(RefFindings 1 (Obj '{ "definitions": { "z": { "pattern": "^[a-z]+$" } }, "type": "integer" }'))
+Check ($f.Count -eq 0) ("CONTROL: a pattern that compiles, in a definition, is accepted (" + ($f -join "; ") + ")")
 # A CALLER THAT PASSES -Root CHECKS A PART OF A SCHEMA whose top is not re-checked (core/Projection.ps1
 # checks one field's value schema this way), so the loop guard that follows a $ref chain must hold on
 # its own. Measured by mutation: with the definitions check above, the old loop check alone was no

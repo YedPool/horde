@@ -44,9 +44,9 @@
 # A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
 #
 # EVERY DEFINITION IS CHECKED ONCE, when Test-HordeSchema is called on the top of a schema, whether or
-# not anything refers to it: an unknown keyword, a node that is not an object, or a $ref that does
-# not resolve is refused there, not on the day a value first reaches it. definitions and properties
-# that are not objects are refused as well.
+# not anything refers to it: an unknown keyword, a node that is not an object, a pattern that does not
+# compile, or a $ref that does not resolve is refused there, not on the day a value first reaches it.
+# definitions and properties that are not objects are refused as well.
 #
 # HOW DEEP A VALUE CAN BE. Measured 2026-09-30 on Windows PowerShell 5.1.26100.9444, by bisection, on
 # this file as of this comment:
@@ -261,6 +261,15 @@ function Get-HordeSchemaNodeKeywords {
     if ($kw.ContainsKey("type") -and $script:HordeSchemaTypes -cnotcontains "$($kw['type'])") {
         throw ("the schema names a type this validator does not know: '" + $kw["type"] + "'")
     }
+    # A PATTERN IS COMPILED HERE, exactly as Test-HordeSchema will match it, so one that does not compile
+    # is refused with its node and not on the day a string first reaches it (issue #25: "(" in a
+    # definition passed the definitions walk, and "(" anywhere passed a value that was not a string;
+    # measured 2026-09-30). The static [regex] methods share a cache of recent patterns (15 by default,
+    # Regex.CacheSize), so the match below usually reuses what this compiles.
+    if ($kw.ContainsKey("pattern")) {
+        try { [void][regex]::Match("", (ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript) }
+        catch { throw ("pattern at " + $Path + " is not a regular expression this validator can compile: " + $_.Exception.Message) }
+    }
     # properties AND definitions ARE OBJECTS. Read as one, an array or a string has .NET properties
     # (Length, Rank) instead of keys, so "properties": ["a"] checked nothing and passed every value.
     if ($kw.ContainsKey("properties") -and -not (Test-HordeSchemaType -Value $kw["properties"] -Type "object")) {
@@ -296,9 +305,11 @@ function Assert-HordeSchemaDefinitions {
 
 function Assert-HordeSchemaNode {
     # A schema node and every node inside it, checked with no value: whatever Test-HordeSchema would
-    # refuse on reaching the node is refused here. A $ref is resolved, never followed into its
-    # definition, which is checked on its own; so a recursive definition is walked once, and the walk
-    # ends. Path is a JSON pointer into the schema, "#/definitions/node/properties/children/items".
+    # refuse on reaching the node is refused here, because both refuse through
+    # Get-HordeSchemaNodeKeywords. (A pattern that did not compile was the exception until issue #25:
+    # only the match compiled it.) A $ref is resolved, never followed into its definition, which is
+    # checked on its own; so a recursive definition is walked once, and the walk ends. Path is a JSON
+    # pointer into the schema, "#/definitions/node/properties/children/items".
     param($Schema, [string]$Path, $Root)
     $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $false
     if ($kw.ContainsKey('$ref')) {

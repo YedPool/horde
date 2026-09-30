@@ -51,6 +51,12 @@
         @{ Name = "pattern-not-checked"
            Find = 'if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "pattern-not-compiled-with-its-node"
+           Find = 'if ($kw.ContainsKey("pattern")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pattern-compile-error-swallowed"
+           Find = 'catch { throw ("pattern at " + $Path'
+           Replace = 'catch { [void]("pattern at " + $Path' }
         @{ Name = "pattern-dollar-kept"
            Find = 'elseif ($c -ceq ''$'') { [void]$sb.Append(''\z''); continue }'
            Replace = '' }
