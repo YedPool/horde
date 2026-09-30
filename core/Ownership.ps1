@@ -9,12 +9,25 @@
 #     so every reader in Horde resolves a disagreement the same way.
 # A field of the record that Horde does not carry is listed under `dropped`, with the reason.
 #
-# Test-HordeOwnership is the gate. Each of these is a finding: a key repeated inside one object; a
-# field with no owner, two owners or an owner that is not listed; no read rule; a read of a store
-# that does not exist, of nothing named, twice, or under an empty condition; an unknown key in a
-# field, a read, a store or a dropped entry; an empty store guard; a derived or provisional with no
-# text; a dropped field with no reason; a store nothing reads; and a required field that is neither
-# kept nor dropped, or a kept or dropped field that is not required.
+# Test-HordeOwnership is the gate. Each of these is a finding, and this list is every one it makes:
+#   the text   - a key repeated inside one object, compared ignoring case; text that is not JSON
+#                PowerShell can read.
+#   top level  - a key other than about, owners, stores, storeIdGaps, required, fields and dropped;
+#                no owners, stores or fields.
+#   owners     - a description that is empty or not text.
+#   stores     - an unknown key; system, what or path missing, empty or not text; a guard that is
+#                empty or not text; an id that is also listed in storeIdGaps; a store no field reads.
+#   fields     - no name; a name listed twice; two names that differ only in case; an unknown key;
+#                no owner, an owner given as a list, more than one owner, or an owner not listed;
+#                a derived or provisional that is empty or not text.
+#   reads      - no read rule; a null read entry; a store not in the store list; a field read that
+#                is empty or not text; an unknown key; a when that is empty or not text; one store
+#                and field read twice in one rule, field names compared ignoring case.
+#   dropped    - no name; an unknown key; dropped twice; no reason, or a reason that is not text;
+#                both kept and dropped.
+#   required   - no required list; an empty one; a name listed twice; a required field that is
+#                neither kept nor dropped; a kept or dropped field that is not required.
+# Names - owners, stores, fields - are otherwise matched exactly, case included.
 
 Set-StrictMode -Off
 
