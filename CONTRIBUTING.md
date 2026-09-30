@@ -197,6 +197,12 @@ adapter and not an engine change. Host-specific test tooling lives with its host
 `test/test-host-names.ps1` enforces it. Each host lists what identifies it in
 `hosts/<name>/names.txt`, and every file elsewhere that still names it in
 `hosts/<name>/allowlist.txt`, with a reason and its exact number of mentions. The list may only
-shrink: a new mention fails, and so does an entry that allows more than its file needs. The `.md`
+shrink: a new mention fails, and so does an entry that allows more than its file needs. When the
+checkout has `origin/main`, the suite also compares each host's lists with it, and fails on an entry
+`origin/main` does not have, a count above its count, or a name or host folder it has and this
+checkout does not; with no git or no `origin/main` it prints `[SKIP]` and the reason. A host that is
+new on the branch is reported, not compared: its own pull request is where its lists are agreed.
+Because the comparison is with `origin/main`, a branch that must add an entry fails this suite until
+the entry is on `main` - that failure is the reviewer's cue to agree with the entry. The `.md`
 and `.html` files under `planning/` are not scanned, because plans and ledgers record the system
 being replaced and cannot be accurate without naming it; any other file under `planning/` fails.

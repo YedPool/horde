@@ -22,8 +22,14 @@
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
 # names the host. Mentions, not lines: a second mention added to a line that already had one is a new
 # mention (review of PR 21). An allowlisted count must be EXACT: more mentions than listed is a new
-# mention; fewer is an entry that allows more than is needed, and it must be lowered. That second
-# half is what makes the list shrink-only.
+# mention; fewer is an entry that allows more than is needed, and it must be lowered.
+#
+# SHRINK-ONLY NEEDS AN OLD LIST TO COMPARE WITH. An exact count keeps a file in step with its own
+# entry, but both are edited in the same tree, so the review of PR 21 raised a count together with
+# the mention, added a file with its own entry, and deleted a name, each with 0 findings. There is no
+# CI, so Test-HordeHostShrink compares each host's lists with origin/main: no new entry, no higher
+# count, no name or host folder removed. With no git, no .git or no origin/main it returns a reason
+# instead, which the suite prints as [SKIP]; a host new on the branch is reported, not compared.
 #
 # SWAPPING ONE MENTION FOR ANOTHER IS STILL INVISIBLE. The count is a number per file, so deleting a
 # mention and adding a different one in the same file - a comment's citation traded for a call to the
@@ -73,15 +79,108 @@ function Read-HordeHostTable {
     # CR each line keeps after the split on LF. A separate CR strip would be dead code that no test
     # could fail on, so there is none.
     param([string]$Path)
+    return , (Split-HordeHostTable -Text ([System.IO.File]::ReadAllText($Path)))
+}
+
+function Split-HordeHostTable {
+    # Read-HordeHostTable's parser, on text already in hand - the working tree's file, or the same
+    # file as origin/main holds it. One parser for both, so the two are never read differently.
+    param([string]$Text)
     $rows = New-Object System.Collections.ArrayList
     $n = 0
-    foreach ($raw in ([System.IO.File]::ReadAllText($Path) -split "`n")) {
+    foreach ($raw in ($Text -split "`n")) {
         $n++
         $t = $raw.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
         [void]$rows.Add([pscustomobject]@{ line = $n; cells = @($t -split "\|" | ForEach-Object { $_.Trim() }) })
     }
     return , $rows
+}
+
+function Get-HordeHostNameSet {
+    # The names a names.txt declares, lower-cased (a name is matched ignoring case), from its well-
+    # formed lines. A malformed line is Test-HordeHostNames's to report, not this one's.
+    param([string]$Text)
+    $set = @{}
+    foreach ($r in (Split-HordeHostTable -Text $Text)) { if ($r.cells.Count -eq 2) { $set[$r.cells[0].ToLowerInvariant()] = $r.cells[0] } }
+    return $set
+}
+
+function Get-HordeAllowMap {
+    # path (forward slashes, lower-cased) -> { path; count } from an allowlist's well-formed lines.
+    param([string]$Text)
+    $map = @{}
+    foreach ($r in (Split-HordeHostTable -Text $Text)) {
+        if ($r.cells.Count -ne 3) { continue }
+        $c = 0
+        if (-not [int]::TryParse($r.cells[1], [ref]$c)) { continue }
+        $p = ($r.cells[0] -replace '\\', '/').TrimStart('/')
+        $map[$p.ToLowerInvariant()] = [pscustomobject]@{ path = $p; count = $c }
+    }
+    return $map
+}
+
+function Test-HordeHostShrink {
+    # Have any host's lists grown since origin/main? Returns { skip; findings; newHosts }.
+    #
+    # WHY. The exact count in allowlist.txt stops a file from naming its host more often than its entry
+    # says, but the entry is edited in the same working tree: the review of PR 21 raised a count with
+    # the mention it allowed, added a new file with its own entry, and deleted a name from names.txt,
+    # and each gave 0 findings. There is no CI to hold the old list, so origin/main is the old list:
+    #   - no allowlist path that origin/main does not list may appear;
+    #   - no count may be higher than origin/main's;
+    #   - no name origin/main's names.txt declares may be missing, and no host folder may vanish.
+    # A host whose names.txt is not on origin/main at all is NEW: it is listed in newHosts and not
+    # compared, because its first pull request is where its lists are agreed.
+    #
+    # skip is non-empty, and says why, when there is nothing to compare with - no git, no .git at the
+    # root (tools/Mutate.ps1's copies), or no such ref. The caller must print it: an unmeasured
+    # comparison is never a pass.
+    param([string]$RepoRoot, [string]$Ref = "origin/main")
+    $out = [pscustomobject]@{ skip = ""; findings = (New-Object System.Collections.ArrayList); newHosts = (New-Object System.Collections.ArrayList) }
+    function Add-Finding { param([string]$HostName, [string]$Where, [string]$Problem)
+        [void]$out.findings.Add([pscustomobject]@{ host = $HostName; path = $Where; problem = $Problem }) }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $out.skip = "git is not on PATH"; return $out }
+    if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot ".git"))) { $out.skip = "no .git at " + $RepoRoot + " - not a git checkout"; return $out }
+    # --quiet: a missing ref exits 1 and prints nothing, so no stderr needs redirecting (and under
+    # PowerShell 5.1 a native command's stderr must not be, CONTRIBUTING rule 12).
+    $null = & git -C $RepoRoot rev-parse --verify --quiet ($Ref + "^{commit}")
+    if ($LASTEXITCODE -ne 0) { $out.skip = $Ref + " does not exist in this checkout - run git fetch origin main to compare"; return $out }
+    $onRef = @{}
+    foreach ($p in @(& git -C $RepoRoot ls-tree -r --name-only $Ref -- hosts)) { $onRef[$p] = $true }
+    if ($LASTEXITCODE -ne 0) { $out.skip = "git ls-tree " + $Ref + " failed with exit code " + $LASTEXITCODE; return $out }
+
+    $hostsDir = Join-Path $RepoRoot "hosts"
+    $here = @{}
+    if (Test-Path -LiteralPath $hostsDir -PathType Container) { foreach ($h in @(Get-ChildItem -LiteralPath $hostsDir -Directory)) { $here[$h.Name] = $h.FullName } }
+    # A HOST FOLDER THAT IS GONE takes its whole check with it, so it is the largest removal of all.
+    foreach ($p in @($onRef.Keys)) {
+        if ($p -match '^hosts/([^/]+)/names\.txt$' -and -not $here.ContainsKey($Matches[1])) {
+            Add-Finding $Matches[1] ("hosts/" + $Matches[1]) ("is on " + $Ref + " and gone here - deleting a host folder switches its check off")
+        }
+    }
+    foreach ($hn in @($here.Keys | Sort-Object)) {
+        $own = "hosts/" + $hn
+        if (-not $onRef.ContainsKey($own + "/names.txt")) { [void]$out.newHosts.Add($hn); continue }
+        $oldNames = Get-HordeHostNameSet -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/names.txt"))) -join "`n")
+        $newNames = @{}
+        $np = Join-Path $here[$hn] "names.txt"
+        if (Test-Path -LiteralPath $np -PathType Leaf) { $newNames = Get-HordeHostNameSet -Text ([System.IO.File]::ReadAllText($np)) }
+        foreach ($k in @($oldNames.Keys | Sort-Object)) {
+            if (-not $newNames.ContainsKey($k)) { Add-Finding $hn ($own + "/names.txt") ("the name '" + $oldNames[$k] + "' is declared on " + $Ref + " and missing here - a name may not be removed") }
+        }
+        $oldAllow = @{}
+        if ($onRef.ContainsKey($own + "/allowlist.txt")) { $oldAllow = Get-HordeAllowMap -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/allowlist.txt"))) -join "`n") }
+        $newAllow = @{}
+        $ap = Join-Path $here[$hn] "allowlist.txt"
+        if (Test-Path -LiteralPath $ap -PathType Leaf) { $newAllow = Get-HordeAllowMap -Text ([System.IO.File]::ReadAllText($ap)) }
+        foreach ($k in @($newAllow.Keys | Sort-Object)) {
+            $e = $newAllow[$k]
+            if (-not $oldAllow.ContainsKey($k)) { Add-Finding $hn $e.path ("is in " + $own + "/allowlist.txt but not on " + $Ref + " - an entry may not be added") }
+            elseif ($e.count -gt $oldAllow[$k].count) { Add-Finding $hn $e.path ("is allowed " + $e.count + " mention(s) here and " + $oldAllow[$k].count + " on " + $Ref + " - a count may not rise") }
+        }
+    }
+    return $out
 }
 
 function Get-HordeDistinctWordCount {

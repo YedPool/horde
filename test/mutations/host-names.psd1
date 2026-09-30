@@ -96,6 +96,31 @@
         @{ Name = "backslash-path-not-normalised"
            Find = '$p = ($r.cells[0] -replace ''\\'', ''/'').TrimStart(''/'')'
            Replace = '$p = $r.cells[0].TrimStart(''/'')' }
+        # --- shrink-only, against origin/main
+        @{ Name = "shrink-new-entry-accepted"
+           Find = 'if (-not $oldAllow.ContainsKey($k)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "shrink-raised-count-accepted"
+           Find = 'elseif ($e.count -gt $oldAllow[$k].count) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "shrink-removed-name-accepted"
+           Find = 'if (-not $newNames.ContainsKey($k)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "shrink-removed-host-accepted"
+           Find = 'if ($p -match ''^hosts/([^/]+)/names\.txt$'' -and -not $here.ContainsKey($Matches[1])) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "shrink-every-host-new"
+           Find = 'if (-not $onRef.ContainsKey($own + "/names.txt")) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "shrink-no-host-new"
+           Find = 'if (-not $onRef.ContainsKey($own + "/names.txt")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "shrink-missing-git-not-skipped"
+           Find = '{ $out.skip = "no .git at " + $RepoRoot + " - not a git checkout"; return $out }'
+           Replace = '{ }' }
+        @{ Name = "shrink-missing-ref-not-skipped"
+           Find = 'if ($LASTEXITCODE -ne 0) { $out.skip = $Ref + " does not exist'
+           Replace = 'if ($false) { $out.skip = $Ref + " does not exist' }
         # --- a host must declare what identifies it
         @{ Name = "host-without-names-passes"
            Find = 'Add-Finding $hn $own "declares no names.txt, so nothing can check that it stays in its folder"; continue'

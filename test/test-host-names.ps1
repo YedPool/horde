@@ -160,6 +160,76 @@ try {
     Passes "moved-mention" { Write-FakeFile "docs/rules.md" "Nothing here.`nRun tests in a separate Zorbterm, never the zorb-sock you work in.`n" } "the same mentions on fewer lines are the same count"
     Passes "crlf" { Write-FakeFile "hosts/zorbterm/allowlist.txt" "# exceptions`r`ndocs/rules.md | 2 | the rules describe how tests isolate the invented terminal`r`n" } "an allowlist with CRLF line endings is read the same"
     Passes "backslash" { Write-FakeFile "hosts/zorbterm/allowlist.txt" "docs\rules.md | 2 | the rules describe how tests isolate the invented terminal`n" } "an allowlist path written with backslashes names the same file"
+    Write-Host ""
+    Write-Host "--- the lists can only shrink: compared with origin/main when the checkout has it ---" -ForegroundColor Cyan
+
+    # The exact count alone does not make the list shrink-only. The review of PR 21 added a mention
+    # and raised its count in the same edit, added a new file with its own entry, and deleted a name
+    # from names.txt - each gave 0 findings, because the scan compares a file with its own list. With
+    # no CI, the suite compares the lists with origin/main instead. Each case below is a throwaway
+    # git repository whose origin/main is its first commit; the change is made after it.
+    function Invoke-FakeGit {
+        param([string[]]$GitArgs)
+        $null = & git -C $script:repo -c core.autocrlf=false -c init.defaultBranch=main -c user.name=horde-test -c user.email=horde-test@example.invalid -c commit.gpgsign=false @GitArgs
+        if ($LASTEXITCODE -ne 0) { throw ("git " + ($GitArgs -join " ") + " exited " + $LASTEXITCODE) }
+    }
+    function Shrink {
+        param([string]$Name, [scriptblock]$Change)
+        $null = New-FakeRepo $Name
+        Invoke-FakeGit @("init", "-q")
+        Invoke-FakeGit @("add", "-A")
+        Invoke-FakeGit @("commit", "-q", "--no-verify", "-m", "baseline")
+        Invoke-FakeGit @("update-ref", "refs/remotes/origin/main", "HEAD")
+        & $Change
+        return (Test-HordeHostShrink -RepoRoot $script:repo)
+    }
+    function ShrinkRefuses {
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $r = Shrink $Name $Change
+        $f = @($r.findings)
+        $ok = ($r.skip -eq "" -and (Says $f $Text) -and $f.Count -eq 1)
+        Check $ok $What
+        if (-not $ok) { Write-Host ("         skip: " + $r.skip) -ForegroundColor Red; Show $f }
+    }
+    function ShrinkPasses {
+        param([string]$Name, [scriptblock]$Change, [string]$What)
+        $r = Shrink $Name $Change
+        $f = @($r.findings)
+        $ok = ($r.skip -eq "" -and $f.Count -eq 0 -and @($r.newHosts).Count -eq 0)
+        Check $ok $What
+        if (-not $ok) { Write-Host ("         skip: " + $r.skip + "; new hosts: " + (@($r.newHosts) -join ", ")) -ForegroundColor Red; Show $f }
+    }
+    $allow = "hosts/zorbterm/allowlist.txt"
+    ShrinkPasses "sh-same" { } "CONTROL: lists unchanged since origin/main pass"
+    ShrinkPasses "sh-lowered" {
+        Write-FakeFile "docs/rules.md" "Run tests in a separate Zorbterm.`n"
+        Write-FakeFile $allow "docs/rules.md | 1 | the rules describe how tests isolate the invented terminal`n"
+    } "a count lowered below origin/main's passes"
+    ShrinkPasses "sh-removed" {
+        Write-FakeFile "docs/rules.md" "Nothing here.`n"
+        Write-FakeFile $allow "# nothing left to allow`n"
+    } "an entry removed since origin/main passes"
+    ShrinkPasses "sh-name-added" { Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbterm/names.txt") -Value "zorbctl | the invented terminal's command line tool, added after origin/main" } "a name added since origin/main passes - more names only check more"
+    ShrinkRefuses "sh-raised" {
+        Write-FakeFile "docs/rules.md" "Run tests in a separate Zorbterm.`nNever aim at the zorb-sock you work in.`nzorbterm cli spawn`n"
+        Write-FakeFile $allow "docs/rules.md | 3 | the rules describe how tests isolate the invented terminal`n"
+    } "may not rise" "a count raised together with the mention it allows is refused"
+    ShrinkRefuses "sh-new-entry" {
+        Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
+        Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
+    } "not on origin/main" "a new allowlist entry is refused, reason and all"
+    ShrinkRefuses "sh-name-removed" { Write-FakeFile "hosts/zorbterm/names.txt" "zorbterm | the invented terminal this suite polices in place of a real one`n" } "zorb-sock" "a name deleted from names.txt since origin/main is refused, and named"
+    ShrinkRefuses "sh-host-removed" {
+        Write-FakeFile "hosts/other/names.txt" "otherterm | a second invented terminal, which this branch then deletes`n"
+        Invoke-FakeGit @("add", "-A"); Invoke-FakeGit @("commit", "-q", "--no-verify", "-m", "other"); Invoke-FakeGit @("update-ref", "refs/remotes/origin/main", "HEAD")
+        Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo "hosts/other")
+    } "deleting a host folder" "a host folder on origin/main that is gone here is refused - deleting it would switch its check off"
+    $nh = Shrink "sh-new-host" { Write-FakeFile "hosts/other/names.txt" "otherterm | a second invented terminal, new since origin/main`n" }
+    Check ($nh.skip -eq "" -and @($nh.findings).Count -eq 0 -and (@($nh.newHosts) -join ",") -eq "other") "a host new since origin/main is reported as new, not compared - its pull request sets its baseline"
+    $ng = Shrink "sh-no-git" { Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo ".git") }
+    Check ($ng.skip -like "*no .git*" -and @($ng.findings).Count -eq 0) "with no .git the comparison is skipped, and says why"
+    $nr = Shrink "sh-no-ref" { Invoke-FakeGit @("update-ref", "-d", "refs/remotes/origin/main") }
+    Check ($nr.skip -like "*origin/main does not exist*" -and @($nr.findings).Count -eq 0) "with no origin/main the comparison is skipped, and says why"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }
@@ -167,28 +237,50 @@ try {
 Write-Host ""
 Write-Host "--- this repository ---" -ForegroundColor Cyan
 
-# CONTROL: each real host's names are armed. Its own names.txt is copied into a throwaway repository
-# with one file that uses the host's first name; the scan must refuse that file. Without this, a
-# names.txt that matched nothing would make the real run below pass by seeing nothing.
+# CONTROL: each real host's names are armed - EVERY one of them. Its own names.txt is copied into a
+# throwaway repository with one file that uses one declared name; the scan must refuse that file, once
+# per name. Without this, a name that matched nothing would make the real run below pass by seeing
+# nothing. (The first version planted only the first name.)
 $realHosts = @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory -ErrorAction SilentlyContinue)
 Check ($realHosts.Count -ge 1) ("CONTROL: this repository has at least one host to check (" + $realHosts.Count + ")")
 foreach ($h in $realHosts) {
     $np = Join-Path $h.FullName "names.txt"
-    $first = (Read-HordeHostTable -Path $np)[0]
-    $script:repo = Join-Path $env:TEMP ("horde-hostnames-arm-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
-    try {
-        Write-FakeFile ("hosts/" + $h.Name + "/names.txt") ([System.IO.File]::ReadAllText($np))
-        Write-FakeFile "core/planted.ps1" ("# " + $first.cells[0] + "`n")
-        $armed = @(Test-HordeHostNames -RepoRoot $script:repo)
-        Check ((Says $armed "is not in hosts/") -and $armed.Count -eq 1) ("CONTROL: host '" + $h.Name + "' - its first declared name, planted in core/, is caught")
-        if ($armed.Count -ne 1) { Show $armed }
-    } finally {
-        Remove-Item -Recurse -Force -LiteralPath $script:repo -ErrorAction SilentlyContinue
+    # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so
+    # @() made a one-element array holding the whole list: the first run of this loop reported one
+    # name for a host that declares three, and planted all three on one line.
+    $declared = Read-HordeHostTable -Path $np
+    Check ($declared.Count -ge 1) ("CONTROL: host '" + $h.Name + "' declares at least one name (" + $declared.Count + ")")
+    foreach ($row in $declared) {
+        $script:repo = Join-Path $env:TEMP ("horde-hostnames-arm-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        try {
+            Write-FakeFile ("hosts/" + $h.Name + "/names.txt") ([System.IO.File]::ReadAllText($np))
+            Write-FakeFile "core/planted.ps1" ("# " + $row.cells[0] + "`n")
+            $armed = @(Test-HordeHostNames -RepoRoot $script:repo)
+            Check ((Says $armed "is not in hosts/") -and $armed.Count -eq 1) ("CONTROL: host '" + $h.Name + "' - its declared name '" + $row.cells[0] + "', planted in core/, is caught")
+            if ($armed.Count -ne 1) { Show $armed }
+        } finally {
+            Remove-Item -Recurse -Force -LiteralPath $script:repo -ErrorAction SilentlyContinue
+        }
     }
 }
 
 $real = @(Test-HordeHostNames -RepoRoot $root)
 Check ($real.Count -eq 0) "no file outside a host's folder names that host, beyond what its allowlist lists exactly"
 Show $real
+
+# NEVER A SILENT PASS. When this checkout cannot be compared with origin/main, or a host is new on
+# this branch, the suite says so on a [SKIP] line: that part was not measured, and must not read as
+# passed. tools/Mutate.ps1 runs suites in a copy with no .git, so there it is always skipped; the
+# throwaway repositories above are what prove the comparison itself.
+$shrink = Test-HordeHostShrink -RepoRoot $root
+if ($shrink.skip) {
+    Write-Host ("  [SKIP] the lists were not compared with origin/main: " + $shrink.skip) -ForegroundColor Yellow
+} else {
+    foreach ($n in @($shrink.newHosts)) {
+        Write-Host ("  [SKIP] host '" + $n + "' is not on origin/main, so its lists are not compared - its pull request sets their baseline") -ForegroundColor Yellow
+    }
+    Check (@($shrink.findings).Count -eq 0) "no host's lists grew since origin/main: no new entry, no raised count, no name removed"
+    Show $shrink.findings
+}
 
 Complete-HordeSuite -Success "nothing outside hosts/<name>/ names a host it may not"
