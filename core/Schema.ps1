@@ -253,8 +253,9 @@ function Get-HordeSchemaNodeKeywords {
     # One schema node's keywords, after refusing everything about the node itself that this validator
     # cannot honour. Nothing here looks at a value, so the same checks serve Test-HordeSchema, which
     # then applies the keywords to one, and Assert-HordeSchemaNode, which checks definitions that no
-    # value may ever reach.
-    param($Schema, [string]$Path, [bool]$AtTop)
+    # value may ever reach. Compiled, when given, receives the node's pattern compiled as a Regex, so
+    # the caller keeps the object this check built instead of compiling the pattern again.
+    param($Schema, [string]$Path, [bool]$AtTop, [hashtable]$Compiled = $null)
     # A schema node that is not an object is refused. Draft-07 allows true and false as schemas, and
     # read as an object they have no keywords, so the first version accepted everything for both
     # (review of PR #15). This covers a definition a $ref reaches, too.
@@ -305,11 +306,13 @@ function Get-HordeSchemaNodeKeywords {
     # A PATTERN IS COMPILED HERE, exactly as Test-HordeSchema will match it, so one that does not compile
     # is refused with its node and not on the day a string first reaches it (issue #25: "(" in a
     # definition passed the definitions walk, and "(" anywhere passed a value that was not a string;
-    # measured 2026-09-30). The static [regex] methods share a cache of recent patterns (15 by default,
-    # Regex.CacheSize), so the match below usually reuses what this compiles.
+    # measured 2026-09-30). The Regex built here is the one every value is matched with (review of PR
+    # #27: the pattern had been compiled again for each value it met, and once more by the walk).
     if ($kw.ContainsKey("pattern")) {
-        try { [void][regex]::Match("", (ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript) }
+        $rx = $null
+        try { $rx = [regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript) }
         catch { throw ("pattern at " + $Path + " is not a regular expression this validator can compile: " + $_.Exception.Message) }
+        if ($null -ne $Compiled) { $Compiled["regex"] = $rx }
     }
     # properties AND definitions ARE OBJECTS. Read as one, an array or a string has .NET properties
     # (Length, Rank) instead of keys, so "properties": ["a"] checked nothing and passed every value.
@@ -339,17 +342,16 @@ function Get-HordeSchemaNode {
     $nodeKey = $Schema
     $entry = $null
     if (-not $AtTop -and $null -ne $nodeKey -and $script:HordeSchemaNodes.TryGetValue($nodeKey, [ref]$entry)) { return $entry }
-    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $AtTop
+    $compiled = @{}
+    $kw = Get-HordeSchemaNodeKeywords -Schema $Schema -Path $Path -AtTop $AtTop -Compiled $compiled
     # KEYS ARE COMPARED EXACTLY (review of PR #15): the schema's property names go into an ordinal
     # dictionary, as the value's keys do in Test-HordeSchema.
     $props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
     if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
-    # A PATTERN IS CONVERTED ONCE PER NODE: ConvertTo-HordeSchemaPattern walks the pattern a character at
-    # a time, 374 us for the timestamp pattern (measured 2026-09-30, 5.1), and session-view.v1 puts a
-    # pattern on most of its 6265 strings.
-    $re = $null
-    if ($kw.ContainsKey("pattern")) { $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])" }
-    $entry = [pscustomobject]@{ kw = $kw; props = $props; re = $re }
+    # A PATTERN IS CONVERTED AND COMPILED ONCE PER NODE, and the Regex kept: ConvertTo-HordeSchemaPattern
+    # walks the pattern a character at a time, 374 us for the timestamp pattern (measured 2026-09-30,
+    # 5.1), and session-view.v1 puts a pattern on most of its 6265 strings.
+    $entry = [pscustomobject]@{ kw = $kw; props = $props; regex = $compiled["regex"] }
     if (-not $AtTop) { $script:HordeSchemaNodes.Add($nodeKey, $entry) }
     return $entry
 }
@@ -466,7 +468,7 @@ function Test-HordeSchema {
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
-        if (-not [regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
+        if (-not $node.regex.IsMatch($Value)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
     }
     if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {
         # NaN is at or above nothing, so it is refused, by name: "below" would not be true of it either.

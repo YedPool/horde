@@ -49,11 +49,8 @@
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
            Replace = 'if ($false) { [void]$findings.Add($Path + " is ''' }
         @{ Name = "pattern-not-checked"
-           Find = 'if (-not [regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
+           Find = 'if (-not $node.regex.IsMatch($Value)) {'
            Replace = 'if ($false) {' }
-        @{ Name = "pattern-not-compiled-with-its-node"
-           Find = '[void][regex]::Match("", (ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '$null' }
         @{ Name = "pattern-compile-error-swallowed"
            Find = 'catch { throw ("pattern at " + $Path'
            Replace = 'catch { [void]("pattern at " + $Path' }
@@ -67,11 +64,11 @@
            Find = 'elseif ($c -ceq ''['') { $inClass = $true }'
            Replace = '' }
         @{ Name = "pattern-dotnet-dialect"
-           Find = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::None)' }
+           Find = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::None)' }
         @{ Name = "pattern-ignores-case"
-           Find = '[regex]::IsMatch($Value, $node.re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $node.re, ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
+           Find = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
         @{ Name = "required-not-checked"
            Find = 'if ($null -ne $r -and -not $have.ContainsKey("$r")) {'
            Replace = 'if ($false) {' }
@@ -151,8 +148,8 @@
            Find = 'if ($Value -is [System.Collections.IDictionary]) { foreach ($e in $Value.GetEnumerator())'
            Replace = 'if ($false) { foreach ($e in $Value.GetEnumerator())' }
         @{ Name = "node-pattern-not-carried"
-           Find = '$entry = [pscustomobject]@{ kw = $kw; props = $props; re = $re }'
-           Replace = '$entry = [pscustomobject]@{ kw = $kw; props = $props; re = '''' }' }
+           Find = '$entry = [pscustomobject]@{ kw = $kw; props = $props; regex = $compiled["regex"] }'
+           Replace = '$entry = [pscustomobject]@{ kw = $kw; props = $props; regex = [regex]::new('''') }' }
         @{ Name = "schema-read-as-ansi"
            Find = '[System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)'
            Replace = '(Get-Content -LiteralPath $Path -Raw)' }
