@@ -59,6 +59,15 @@
         @{ Name = "unrecognised-status-trusted"
            Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") {'
            Replace = 'elseif ($false) {' }
+        @{ Name = "stale-wait-carried"
+           Find = '"liveStatus", "waitingFor")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }'
+           Replace = '"liveStatus")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }' }
+        @{ Name = "wait-guessed-while-waiting"
+           Find = 'elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
+        @{ Name = "missing-wait-is-unknown"
+           Find = '$k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for"'
+           Replace = '$k["waitingFor"] = New-HordeUnknown -Reason "no waitingFor key"' }
         @{ Name = "status-time-dropped"
            Find = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }'
            Replace = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" }' }

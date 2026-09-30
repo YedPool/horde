@@ -278,3 +278,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: the identity mutation run of 2026-09-30 after review finding 6 of PR #19: the mutant microseconds-by-float, which divides the tick count as a double, survived. Before, only the reality check caught it ("every live pid on this machine matches its procStart", 7 of 10 real files), and that check now reports instead of failing; the fixture times happen to survive the double. The procStart 134350994473105437, read from a live control file on 2026-09-30, lands in another microsecond than its own truncated start time when divided as a double (84 of 100 nearby values do), so it is pinned in a fixture. Seen failing under that mutant.
 - disposition: test
 - where: test/test-identity.ps1 :: "a real 18-digit procStart matches its own microsecond-truncated start time"
+
+### L-054 What a waiting session waits for is carried, and only while its process runs
+- source: core-ownership L-055: waitingFor was in 1 of 10 control files on 2026-09-30, the one whose status was waiting, and absent from the 9 idle ones; the Claude Code 2.1.285 writer sets it with status and leaves it out when nothing is awaited. It is live state, so a stale file's wait is unknown like its status; a running session with no key waits for nothing (absent) unless its status is waiting or missing, when the wait is unknown rather than guessed.
+- disposition: test
+- where: test/test-identity.ps1 :: "a waiting session that names nothing is unknown, not absent"

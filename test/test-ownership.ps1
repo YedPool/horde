@@ -77,14 +77,17 @@ Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dro
 # nine of them, bridgeSessionId missing from one, formerNames in one - and eight had no row at all
 # (ledger L-048). A key is kept when some field reads it from X2, and dropped when a dropped entry
 # names it; a key the agent writes is the agent's, so a kept one is owned by the agent.
+# waitingFor is the 21st: Claude Code writes it only while a session waits on the user, so the
+# census, which found every session idle, never saw it. On 2026-09-30 it was in 1 of 10 files, the
+# one whose status was waiting, as "permission prompt" (ledger L-055).
 $controlKeys = @("pid", "sessionId", "cwd", "startedAt", "procStart", "version", "peerProtocol", "peerFeatures", "kind",
                  "entrypoint", "pidDomain", "messagingSocketPath", "name", "nameSource", "nameSince", "updatedAt", "status",
-                 "statusUpdatedAt", "bridgeSessionId", "formerNames")
+                 "statusUpdatedAt", "bridgeSessionId", "formerNames", "waitingFor")
 $x2Reads = @($doc.fields | ForEach-Object { $ownField = $_; @($ownField.read) | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { [pscustomobject]@{ key = "$($_.field)"; owner = "$($ownField.owner)"; name = "$($ownField.name)" } } })
 $droppedNames = @($doc.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
 $unaccounted = @($controlKeys | Where-Object { @($x2Reads | ForEach-Object { $_.key }) -cnotcontains $_ -and $droppedNames -cnotcontains $_ })
 foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
-Check ($controlKeys.Count -eq 20 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
+Check ($controlKeys.Count -eq 21 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
 Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
 # Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
 # of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact

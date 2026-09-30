@@ -249,7 +249,13 @@ PutJson (Join-Path $d12 "301.json") (ClaudeRec 301 (Sid 61) $c12 -Set @{ status 
 PutJson (Join-Path $d12 "302.json") (ClaudeRec 302 (Sid 62) $c12 -Set @{ status = "busy"; statusUpdatedAt = (EpochMs $stamp); bridgeSessionId = $null; kind = "odd-kind"; entrypoint = "sdk-cli" })
 PutJson (Join-Path $d12 "303.json") (ClaudeRec 303 (Sid 63) $c12 -Drop @("bridgeSessionId", "status"))
 PutJson (Join-Path $d12 "304.json") (ClaudeRec 304 (Sid 64) $c12 -Set @{ formerNames = @(@{ name = "old-name"; until = (EpochMs $c12); sessionId = (Sid 64) }, @{ name = "older"; until = (EpochMs $c12); sessionId = (Sid 99) }) })
-$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12))
+# L-054: waitingFor is written beside status only while the session waits on the user - "permission
+# prompt" in the one waiting file of 10 on 2026-09-30, and absent from the 9 idle ones. 305 waits and
+# says for what; 306 waits and says nothing; 307 waited, but its process is gone.
+PutJson (Join-Path $d12 "305.json") (ClaudeRec 305 (Sid 65) $c12 -Set @{ status = "waiting"; waitingFor = "permission prompt" })
+PutJson (Join-Path $d12 "306.json") (ClaudeRec 306 (Sid 66) $c12 -Set @{ status = "waiting" })
+PutJson (Join-Path $d12 "307.json") (ClaudeRec 307 (Sid 67) $c12 -Set @{ status = "waiting"; waitingFor = "dialog open" })
+$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12), @(305, "claude.exe", $c12), @(306, "claude.exe", $c12))
 $r12 = Get-HordeIdentity -ClaudeDir $d12 -ProjectsDir $pDir -CodexDir $empty -Processes $tab12 -Now $now
 $a = $r12.records[(Sid 61)]; $b = $r12.records[(Sid 62)]; $c = $r12.records[(Sid 63)]; $e = $r12.records[(Sid 64)]
 Check ((St $a.fields.liveStatus) -eq "unknown" -and $a.fields.liveStatus.reason -like "*'thinking'*") "an unrecognised claude status reads as unknown"
@@ -263,6 +269,13 @@ Check ($fn.Count -eq 2 -and "$($fn[0].name)" -eq "old-name" -and "$($fn[1].sessi
 Check ("$($e.provisional['formerNames'])" -like "*/clear*") "a rule that rests on the unmeasured clear behaviour is marked provisional"
 Check (-not $r12.records.ContainsKey((Sid 99)) -and @($r12.findings | Where-Object { $_ -like ("*" + (Sid 99) + "*") }).Count -eq 1) "a former name naming another session is reported, not merged"
 Check ((St $a.fields.resumeCommand) -eq "unknown" -and $a.fields.resumeCommand.reason -like "*AgentPort*") "the resume command is left to the agent port"
+# Read by index, so a record with no waitingFor at all fails these checks instead of stopping the suite.
+$w5 = $r12.records[(Sid 65)].fields["waitingFor"]; $w6 = $r12.records[(Sid 66)].fields["waitingFor"]; $w7 = $r12.records[(Sid 67)].fields["waitingFor"]
+$wb = $b.fields["waitingFor"]; $w1 = $r1.fields["waitingFor"]
+Check ($null -ne $w5 -and (Val $w5) -ceq "permission prompt") "a waiting session says what it waits for"
+Check ($null -ne $wb -and $null -ne $w1 -and (St $wb) -eq "absent" -and (St $w1) -eq "absent") "a session that is not waiting waits for nothing"
+Check ($null -ne $w6 -and (St $w6) -eq "unknown") "a waiting session that names nothing is unknown, not absent"
+Check ($null -ne $w7 -and (St $w7) -eq "unknown" -and $w7.reason -like "*not running*") "a stale control file says nothing about a wait"
 
 Write-Host ""
 Write-Host "--- a claude listing is complete or it says why not ---" -ForegroundColor Cyan
@@ -410,13 +423,14 @@ Write-Host "--- keys and names ---" -ForegroundColor Cyan
 Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Code\Dist Folders\Dist_12_23_25_ai-latency.v2") -ceq "C--Code-Dist-Folders-Dist-12-23-25-ai-latency-v2") "a cwd with spaces and underscores maps to dashes"
 Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Users\x\Code") -ceq "C--Users-x-Code") "CONTROL: a plain cwd maps as wezfleet's colon-and-slash rule would"
 Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b") -and -not (Test-HordeSessionId -Id "") -and -not (Test-HordeSessionId -Id ("x" * 129))) "a session id is validated before it becomes a key"
-# L-026: every key a fixture control file carries - the census's 19 plus formerNames - has a row.
-$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames")
+# L-026: every key a fixture control file carries - the census's 19 plus formerNames, and waitingFor,
+# which only a waiting session writes (L-054) - has a row.
+$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor")
 $x2Reads = @($ownership.fields | ForEach-Object { @($_.read) } | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { "$($_.field)" })
 $droppedN = @($ownership.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
 $noRow = @($keys | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
 foreach ($n in $noRow) { Write-Host ("  control file key with no row: " + $n) -ForegroundColor Red }
-Check ($keys.Count -eq 20 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
+Check ($keys.Count -eq 21 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
 
 Write-Host ""
 Write-Host "--- self identity ---" -ForegroundColor Cyan

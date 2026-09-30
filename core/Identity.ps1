@@ -45,7 +45,7 @@
 # The fields core/ownership.json gives to the agent, sessionId aside (it is the record's key). Every
 # record carries exactly these, as answers; test/test-identity.ps1 checks the list against the table.
 $script:HordeIdentityFields = @("agent", "pid", "procStart", "cwd", "transcriptPath", "resumeCommand", "name", "nameSource",
-    "nameSince", "formerNames", "liveStatus", "startedAt", "messagingAddress", "bridgeSessionId", "agentVersion",
+    "nameSince", "formerNames", "liveStatus", "waitingFor", "startedAt", "messagingAddress", "bridgeSessionId", "agentVersion",
     "peerProtocol", "peerFeatures", "sessionKind", "entrypoint", "pidDomain")
 # How long a codex status reading is believed: wezfleet's default, lib/CodexStatus.ps1:68.
 $script:HordeCodexTtlDefault = 900
@@ -307,8 +307,19 @@ function Read-HordeClaudeControlFiles {
             if ($st.state -ne "known") { $k["liveStatus"] = $st }
             elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["liveStatus"] = New-HordeUnknown -Reason ("the control file's status '" + $st.value + "' is not one Horde knows") }
             else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }
+            # WHAT A WAITING SESSION WAITS FOR. Claude Code writes waitingFor beside status only while
+            # the session waits on the user and drops the key otherwise: on 2026-09-30 it was in 1 of
+            # 10 control files, the one whose status was waiting, as "permission prompt", and in none
+            # of the 9 idle ones (core-ownership L-055). So a missing key is the agent saying it waits
+            # for nothing - unless its status says waiting, or says nothing, and then it is unknown.
+            $wf = $j.PSObject.Properties["waitingFor"]
+            if ($null -ne $wf -and $wf.Value -is [string] -and $wf.Value -ne "") { $k["waitingFor"] = New-HordeKnown -Value $wf.Value }
+            elseif ($null -ne $wf) { $k["waitingFor"] = New-HordeUnknown -Reason "the control file's waitingFor is not text" }
+            elseif ($st.state -ne "known") { $k["waitingFor"] = New-HordeUnknown -Reason "the control file has no status, so whether the session waits is unknown" }
+            elseif ("$($st.value)" -ceq "waiting") { $k["waitingFor"] = New-HordeUnknown -Reason "the status is waiting but the control file does not say for what" }
+            else { $k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for" }
         } else {
-            foreach ($n in @("pid", "procStart", "messagingAddress", "liveStatus")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }
+            foreach ($n in @("pid", "procStart", "messagingAddress", "liveStatus", "waitingFor")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }
         }
         $k["cwd"] = Get-HordeField -Record $j -Name "cwd"
         $k["name"] = Get-HordeField -Record $j -Name "name"

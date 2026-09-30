@@ -33,7 +33,7 @@
                 "workState", "report", "lastActivity", "startedAt", "retired", "messagingAddress", "lastSeen", "runId",
                 "labelCycle", "nameSource", "remoteControl", "retiredAt", "lastTool", "title", "dependsOn", "spawnedAt",
                 "procStart", "bridgeSessionId", "formerNames", "agentVersion", "peerProtocol", "peerFeatures", "sessionKind",
-                "entrypoint", "pidDomain", "nameSince", "statusUpdatedAt" ],
+                "entrypoint", "pidDomain", "nameSince", "statusUpdatedAt", "waitingFor" ],
   "fields": [
     { "name": "sessionId", "owner": "agent",
       "read": [ { "store": "X2", "field": "sessionId" }, { "store": "W1", "field": "file name" },
@@ -141,7 +141,10 @@
     { "name": "pidDomain", "owner": "agent",
       "read": [ { "store": "X2", "field": "pidDomain" } ] },
     { "name": "nameSince", "owner": "agent",
-      "read": [ { "store": "X2", "field": "nameSince" } ] }
+      "read": [ { "store": "X2", "field": "nameSince" } ] },
+    { "name": "waitingFor", "owner": "agent",
+      "provisional": "only permission prompt has been seen on disk (1 of 10 control files on 2026-09-30, the one whose status was waiting); dialog open, input needed, sandbox request and goal proposal are the other literals in the Claude Code 2.1.285 binary, unmeasured on disk. The text is carried as written and never matched on",
+      "read": [ { "store": "X2", "field": "waitingFor", "when": "the session's process is running. Claude Code writes the key beside status only while the session waits on the user, and leaves it out otherwise (absent from the 9 idle control files of 10 on 2026-09-30), so a running session's file without it waits for nothing - unless its status says it is waiting, which leaves the wait unknown. Codex's control file (W8) has no such key: its hook writes idle, busy, ended or unknown" } ] }
   ],
   "dropped": [
     { "name": "remoteControl", "reason": "wezfleet's registry has the field and Set-WfSessionFields accepts it, but no shipped caller passes it, so it is always empty; whether a session is bridged for remote control is the agent's own bridgeSessionId, read from its control file" },
