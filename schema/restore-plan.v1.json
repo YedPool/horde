@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/restore-plan.v1",
+  "title": "restore-plan v1",
+  "description": "What a host is handed to bring a fleet back (planning/migration-plan.html section 4). Sessions are authoritative and the layout is advisory (D3): the sessions list alone is enough to restore every session with its identity, directory and conversation, and the layout only arranges them. Every leaf of the layout is a slot, every slot names one session, and nothing in the plan is keyed by a pane number - the pane a slot lands in is recorded afterwards, as a realisation, never as identity. What this schema cannot say is checked by core/RestorePlan.ps1: every node is exactly a leaf or a container, every session's slot appears in the layout exactly once (sessions are never dropped), slots are unique, session ids and resume (kind, id) pairs are unique ignoring case, a claude-resume id is the session's own and its argv resumes that id, argv is not empty, a parent names another session in the plan and parents never form a cycle, the plan has at least one session, every workspace has a window and every window a tab, a ratio lies strictly between 0 and 1, and a container has at least two children.",
+  "type": "object",
+  "required": ["schemaVersion", "planId", "sessions", "layout"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1], "description": "Always 1 for this schema." },
+    "planId": { "type": "string", "description": "Names this plan, e.g. 20260929-214500-horde. Not an identity of anything the plan restores." },
+    "sessions": {
+      "type": "array",
+      "description": "Every session the plan restores. Authoritative: a host that can arrange nothing still restores each one.",
+      "items": {
+        "type": "object",
+        "required": ["slot", "sessionId", "agent", "role", "label", "cwd", "resume"],
+        "properties": {
+          "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The name the layout uses for this session, unique in the plan. Never a pane number: lower-case letters, digits and hyphens, starting with a letter, so it is never a bare number and no two slots differ only in case." },
+          "sessionId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id: the session's stable identity, unique in the plan ignoring the case of its hex digits (a UUID in capitals is the same id). Same shape as schema/session-record.v1's sessionId." },
+          "agent": { "type": "string", "description": "Which agent runs the session, e.g. claude or codex." },
+          "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "description": "The native roles of core/roles.json; test/test-schema-restore-plan.ps1 fails if the two differ." },
+          "label": { "type": "string", "description": "The session's fleet label, e.g. D or D1." },
+          "parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The sessionId of the session that spawned this one. When present it names another session in this plan, ignoring case." },
+          "cwd": { "type": "string", "pattern": "\\S", "description": "The directory the session runs in; never empty, since an empty directory would start the session wherever the host happens to be." },
+          "resume": {
+            "type": "object",
+            "description": "How to bring the conversation back, produced by the AgentPort. A host runs argv as it is given and never turns kind into flags itself. No two sessions share a kind and id (ignoring case), so no conversation is resumed twice.",
+            "required": ["kind", "id", "argv"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["claude-resume", "codex-resume"], "description": "Which AgentPort produced argv. claude-resume: id is the session's own sessionId (ignoring case) and argv holds --resume followed by that id, as measured on 12 live Claude processes on 2026-09-30 (claude --resume <uuid>). codex-resume: its command is UNMEASURED (planning/migration-plan.html step 5.1); the fixtures carry a placeholder argv that says so, and nothing about its argv is checked until it is measured." },
+              "id": { "type": "string", "pattern": "\\S", "description": "The conversation the command resumes." },
+              "argv": { "type": "array", "items": { "type": "string", "pattern": "\\S" }, "description": "The exact command a host runs, program first, one argument per element, never joined into a line to be re-split. At least one element, each with a non-space character." }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "layout": {
+      "type": "object",
+      "description": "How the sessions are arranged: advisory. A host applies what it can after the engine has degraded the layout to its capabilities (section 4, Degradation rules).",
+      "required": ["advisory", "workspaces"],
+      "properties": {
+        "advisory": { "type": "boolean", "enum": [true], "description": "Always true: the layout never decides which sessions exist." },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["windows"],
+            "properties": {
+              "name": { "type": "string", "description": "Absent in a plan for a host with no workspaces: the engine has moved the name into the titles as a prefix." },
+              "windows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["tabs"],
+                  "properties": {
+                    "tabs": {
+                      "type": "array",
+                      "description": "One tab per window in a plan for a host with no tabs. VS Code and Cursor are one window (one folder), and each tab is a terminal group in it.",
+                      "items": {
+                        "type": "object",
+                        "required": ["title", "root"],
+                        "properties": {
+                          "title": { "type": "string" },
+                          "root": { "$ref": "#/definitions/node" }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "node": {
+      "type": "object",
+      "description": "Either a leaf { slot } or a container { split, ratio?, children }. JSON Schema's subset here cannot say 'exactly one of the two', so core/RestorePlan.ps1 does.",
+      "properties": {
+        "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Leaf: the slot of a session in this plan, in the same shape as the session's." },
+        "split": { "type": "string", "enum": ["right", "down"], "description": "Container: children side by side (right) or stacked (down), in order." },
+        "ratio": { "type": "number", "description": "Container: the share of the first child, strictly between 0 and 1. Only on a container with exactly two children. Absent for a host with no sizes: dropped, never approximated." },
+        "children": { "type": "array", "items": { "$ref": "#/definitions/node" }, "description": "Container: at least two nodes." }
+      },
+      "additionalProperties": false
+    }
+  }
+}
