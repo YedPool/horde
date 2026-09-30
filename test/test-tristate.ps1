@@ -145,6 +145,12 @@ Check ((Test-HordeAnswer $forgedList) -eq $false) "an answer whose state is a li
 Check ((ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "known" })).state -eq "unknown") "a stored known with no value is unknown"
 Check ((ConvertFrom-HordeAnswerRecord -Record $null).state -eq "unknown") "no report is unknown, not absent"
 
+# ConvertTo-Json's default depth is 2, counted from the record: anything deeper in the value is
+# written as its type name. The documented rule is to pass -Depth; this pins why.
+$deepRecord = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value @{ pane = @{ id = @{ n = 3 } } })
+Check (($deepRecord | ConvertTo-Json -Compress) -like "*System.Collections.Hashtable*") "CONTROL: a stored answer written at the default JSON depth loses a deep value"
+Check (($deepRecord | ConvertTo-Json -Compress -Depth 10) -like '*"n":3*') "a stored answer written with enough depth keeps a deep value"
+
 # The round trip through JSON, which is where shape is usually lost.
 $now = [datetime]::UtcNow
 foreach ($orig in @((New-HordeKnown -Value @() -ObservedAt $now), (New-HordeKnown -Value 0 -ObservedAt $now), (New-HordeAbsent -ObservedAt $now), $u)) {

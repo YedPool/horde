@@ -242,6 +242,11 @@ function ConvertTo-HordeAnswerText {
 function ConvertTo-HordeAnswerRecord {
     # The stored form: { state; value; reason; observedAt }. The state is always written, never
     # implied by an empty value.
+    #
+    # SERIALISE WITH -Depth. ConvertTo-Json's default depth is 2, counted from this record, so any
+    # part of the value more than two levels down is written as its type name - measured 2026-09-29:
+    # a value @{ pane = @{ id = @{ n = 3 } } } stored as "id":"System.Collections.Hashtable", with no
+    # error. Pass a -Depth deeper than the deepest value you store (the suite uses 5 and 10).
     param($Answer)
     Assert-HordeAnswer $Answer
     $at = $null
