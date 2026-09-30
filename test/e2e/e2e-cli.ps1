@@ -4,7 +4,9 @@
 # hosts/wezterm/test/Isolation.ps1 for why it is an INSTANCE and never a window), two panes are spawned in
 # it, one running `horde --help` and one running `horde version` through `powershell -File`, exactly
 # as a script or a person would, and what a user would see on each pane's screen is read back and
-# checked. No agent session is started, so it costs nothing to run.
+# checked. A third pane types plain `horde`, found on PATH through the horde.cmd that `horde install`
+# wrote into a throwaway bin folder, as the fleet will. No agent session is started, so it costs
+# nothing to run.
 #
 # THE USER'S TERMINAL IS NEVER TOUCHED. Nothing destructive, and nothing that spawns, runs until
 # Assert-HordeIsolated has measured that this process is pinned to the new instance and can see only
@@ -47,6 +49,14 @@ $version = "$(Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1
 $horde = Join-Path $root "horde.ps1"
 Check ($version -match '^\d+\.\d+\.\d+$') ("CONTROL: the VERSION file holds a version (" + $version + ")")
 $liveBefore = @(Invoke-HordeHarness { Get-HordeWeztermGuiPids })
+
+# `horde install` into a throwaway bin folder - never the real one. -AllowWorktree because this suite
+# runs from worktrees as well as clones; install's refusal of a worktree is test\test-install.ps1's
+# subject, and here the shim only has to reach the checkout under test.
+$shimBin = Join-Path $env:TEMP ("horde-e2e-bin-" + [guid]::NewGuid().ToString("N"))
+$shimPath = Join-Path $shimBin "horde.cmd"
+$installed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $horde install -BinDir $shimBin -AllowWorktree)
+Check ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $shimPath -PathType Leaf)) ("horde install wrote horde.cmd into a throwaway bin folder (" + ($installed -join " | ") + ")")
 $origSocket = $env:WEZTERM_UNIX_SOCKET
 $origRoot = $env:HORDE_ROOT
 
@@ -58,6 +68,16 @@ function Get-HordePaneCommand {
     param([string[]]$HordeArgs, [string]$Marker)
     $line = "& powershell -NoProfile -ExecutionPolicy Bypass -File '" + ($horde -replace "'", "''") + "' " + ($HordeArgs -join " ") +
         "; '" + $Marker + "=' + `$LASTEXITCODE"
+    return @("spawn", "--", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $line)
+}
+
+# The pane puts the throwaway bin folder first on its own PATH and types `horde`, as a fleet session
+# will once bin holds the shim. It prints whether `horde` resolved to that shim, then horde's exit
+# code for a command that succeeds and for one that does not exist, which must come back as 2.
+function Get-HordeShimPaneCommand {
+    param([string]$Marker)
+    $line = "`$env:Path = '" + ($shimBin -replace "'", "''") + ";' + `$env:Path; '" + $Marker + "-SRC=' + ((Get-Command horde).Source -eq '" + ($shimPath -replace "'", "''") + "'); " +
+        "horde version; '" + $Marker + "-VERSION=' + `$LASTEXITCODE; horde no-such-command; '" + $Marker + "-UNKNOWN=' + `$LASTEXITCODE"
     return @("spawn", "--", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", $line)
 }
 
@@ -84,6 +104,10 @@ if ($iso) {
             $spawned = Invoke-HordeHarness { Invoke-HordeWeztermCli -Rest (Get-HordePaneCommand -HordeArgs @("version") -Marker $verMark) }
             $verPane = "$(@($spawned) -join '')".Trim()
             Check ($verPane -match '^\d+$' -and $verPane -ne $helpPane) ("a second pane running horde version was spawned (got '" + $verPane + "')")
+            $shimMark = "HORDE-SHIM-" + $tag
+            $spawned = Invoke-HordeHarness { Invoke-HordeWeztermCli -Rest (Get-HordeShimPaneCommand -Marker $shimMark) }
+            $shimPane = "$(@($spawned) -join '')".Trim()
+            Check ($shimPane -match '^\d+$' -and $shimPane -ne $helpPane -and $shimPane -ne $verPane) ("a third pane typing horde through the installed shim was spawned (got '" + $shimPane + "')")
 
             if ($helpPane -match '^\d+$') {
                 $text = Wait-HordePaneText -Pane $helpPane -Until ($helpMark + "=")
@@ -97,6 +121,15 @@ if ($iso) {
                 $lines = @($text -split "`r?`n")
                 Check (@($lines | Where-Object { $_.Trim() -eq ("horde " + $version) }).Count -eq 1) ("the version pane shows the version from the VERSION file: horde " + $version)
                 Check (@($lines | Where-Object { $_.Trim() -eq ($verMark + "=0") }).Count -eq 1) ("horde version exited 0 in the pane (screen: " + ($text.Trim() -replace "\s*`n\s*", " | ") + ")")
+            }
+            if ($shimPane -match '^\d+$') {
+                $text = Wait-HordePaneText -Pane $shimPane -Until ($shimMark + "-UNKNOWN=")
+                $lines = @($text -split "`r?`n")
+                $screen = " (screen: " + ($text.Trim() -replace "\s*`n\s*", " | ") + ")"
+                Check (@($lines | Where-Object { $_.Trim() -eq ($shimMark + "-SRC=True") }).Count -eq 1) ("typed horde resolved to the installed shim" + $screen)
+                Check (@($lines | Where-Object { $_.Trim() -eq ("horde " + $version) }).Count -eq 1) ("horde version through the shim shows the version from the VERSION file" + $screen)
+                Check (@($lines | Where-Object { $_.Trim() -eq ($shimMark + "-VERSION=0") }).Count -eq 1) ("horde version through the shim exited 0" + $screen)
+                Check (@($lines | Where-Object { $_.Trim() -eq ($shimMark + "-UNKNOWN=2") }).Count -eq 1) ("an unknown command through the shim exited 2, so the code crossed the shim" + $screen)
             }
         }
     }
@@ -115,8 +148,10 @@ Write-Host ""
 Write-Host "=== and the user's terminal was never touched ===" -ForegroundColor Cyan
 Check ("$env:WEZTERM_UNIX_SOCKET" -eq "$origSocket") "the pin is back on the terminal this process started in"
 Check ("$env:HORDE_ROOT" -eq "$origRoot") "Horde's store is back to what it was"
+if ((Split-Path -Leaf $shimBin) -match '^horde-e2e-bin-[0-9a-f]{32}$') { Remove-Item -LiteralPath $shimBin -Recurse -Force -ErrorAction SilentlyContinue }
+Check (-not (Test-Path -LiteralPath $shimBin)) "the throwaway bin folder is removed"
 $liveAfter = @(Invoke-HordeHarness { Get-HordeWeztermGuiPids })
 Check (@($liveBefore | Where-Object { $liveAfter -notcontains $_ }).Count -eq 0) "every WezTerm that was running before is still running"
 Check (@($liveAfter | Where-Object { $liveBefore -notcontains $_ }).Count -eq 0) "and no extra WezTerm was left behind"
 
-Complete-HordeSuite -Success "horde's help and version reach a user in a real terminal, and the terminal leaves nothing behind"
+Complete-HordeSuite -Success "horde's help and version reach a user in a real terminal, directly and through the installed shim, and the terminal leaves nothing behind"
