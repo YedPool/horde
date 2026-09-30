@@ -37,6 +37,7 @@ sources:
 - source: YedPool/wezfleet f37dee4 "came up with NO ROLE AT ALL"; 17c5d42 and planning/BUG-2026-09-15-registry-record-wipe.md:3-4 (A, an orchestrator, lost its role)
 - disposition: test
 - where: test/test-roles.ps1 :: "a record with no role reads as unknown"
+- expected live behaviour: measured read-only on the live wezfleet store, 2026-09-29: 31 records, 16 live, 13 with no role key, 9 of them live. So every exact role count there is unknown (warchief: at least 1, 9 unsure; orc: at least 6, the same 9). Callers use the floor, `atLeast`, and the `unsure` list; the exact `answer` becomes known only as roles are filled in. Encoded as test/test-roles.ps1 :: "an unknown role still leaves a known floor, and names the unsure session"
 
 ### L-004 Absent and empty are different facts; wezfleet collapses them, as it once collapsed unowned and not-returned
 - source: YedPool/wezfleet lib/Registry.ps1:497 and :499-502; commit 5c25640; claims write an empty role at lib/Registry.ps1:1261

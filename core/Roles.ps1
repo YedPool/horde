@@ -204,16 +204,32 @@ function Assert-HordeRoleRead {
     }
 }
 
+function New-HordeRoleCount {
+    # The shape both counts return: { atLeast; unsure; answer }.
+    #   atLeast  a FLOOR: how many were seen to hold the role, over whatever could be read. Always a
+    #            true lower bound, never a count - 0 means none were SEEN, not that there are none.
+    #   unsure   the ids (sessions) or panes (claims) whose role is unknown, any of which may hold it.
+    #   answer   the exact count as a Horde answer: known only when the read was whole and nothing is
+    #            unsure, unknown with the reason otherwise.
+    # WHY A FLOOR AS WELL AS THE ANSWER: on the live store 13 of 31 records have no role, 9 of them
+    # among the 16 live ones, so the exact count will almost always be unknown there. Measured read-
+    # only on 2026-09-29: warchief atLeast 1, 9 unsure, answer unknown; orc atLeast 6, the same 9
+    # (review, 2026-09-29; ledger L-003). A floor still answers the question that matters most - one
+    # master record means a master exists, whatever the roleless sessions turn out to be.
+    param([int]$AtLeast, [string[]]$Unsure, $Answer)
+    return [pscustomobject]@{ PSTypeName = "Horde.RoleCount"; atLeast = $AtLeast; unsure = @($Unsure); answer = $Answer }
+}
+
 function Get-HordeRoleCount {
-    # How many live (not retired) sessions hold a role, as an answer. Unknown when any session record
-    # could not be read - a count taken over a store with a hole in it is not a count. Claims are not
-    # consulted, readable or not.
+    # How many live (not retired) sessions hold a role, as { atLeast; unsure; answer } (see
+    # New-HordeRoleCount). The answer is unknown when any session record could not be read - a count
+    # taken over a store with a hole in it is not a count. Claims are not consulted, readable or not.
     #
-    # Unknown too when any LIVE session's role is unknown, naming those sessions. Such a session may
-    # hold the very role being counted: every roleless record that mattered in wezfleet was a lost
-    # master or orchestrator (ledger L-003). One master plus one live roleless session used to count
-    # as "warchief known 1" (review, 2026-09-29). A retired session's role does not matter to a live
-    # count, so it is not consulted.
+    # Unknown too when any LIVE session's role is unknown, and those sessions are listed in unsure.
+    # Such a session may hold the very role being counted: every roleless record that mattered in
+    # wezfleet was a lost master or orchestrator (ledger L-003). One master plus one live roleless
+    # session used to count as "warchief known 1" (review, 2026-09-29). A retired session's role does
+    # not matter to a live count, so it is not consulted.
     #
     # SESSIONS ONLY. Pending spawn claims - spawned, no record yet - are counted by
     # Get-HordeRoleClaimCount and deliberately not added in here; see there for why.
@@ -223,13 +239,13 @@ function Get-HordeRoleCount {
     # never matches anything and used to answer a known 0 while a master was running.
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
-    if ($Read.sessionsComplete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count: " + $Read.sessionsComplete.reason)) }
-    $unsure = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -ne "known" } | ForEach-Object { $_.id })
-    if ($unsure.Count -gt 0) {
-        return (New-HordeUnknown -Reason ("cannot count: the role of " + $unsure.Count + " live session(s) is unknown (" + ($unsure -join ", ") + ")"))
-    }
-    $n = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count
-    return (New-HordeKnown -Value $n)
+    $live = @($Read.sessions | Where-Object { -not $_.retired })
+    $floor = @($live | Where-Object { $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count
+    $unsure = @($live | Where-Object { $_.role.state -ne "known" } | ForEach-Object { $_.id })
+    if ($Read.sessionsComplete.state -ne "known") { $answer = New-HordeUnknown -Reason ("cannot count: " + $Read.sessionsComplete.reason) }
+    elseif ($unsure.Count -gt 0) { $answer = New-HordeUnknown -Reason ("cannot count: the role of " + $unsure.Count + " live session(s) is unknown (" + ($unsure -join ", ") + ")") }
+    else { $answer = New-HordeKnown -Value $floor }
+    return (New-HordeRoleCount -AtLeast $floor -Unsure $unsure -Answer $answer)
 }
 
 # wezfleet's backstop for a spawn claim: older than this, it no longer applies
@@ -257,7 +273,8 @@ function Test-HordeClaimPending {
 }
 
 function Get-HordeRoleClaimCount {
-    # How many PENDING spawn claims name a role: sessions spawned and not yet visible, because a
+    # How many PENDING spawn claims name a role, as { atLeast; unsure; answer } (see
+    # New-HordeRoleCount): sessions spawned and not yet visible, because a
     # claim is consumed only by the session's first tool call. wezfleet's `master ensure` counts a
     # pending master claim AS a master (lib/Master.ps1:118-137): a master idle for three days once
     # had no record, and a second one was nearly spawned.
@@ -273,11 +290,11 @@ function Get-HordeRoleClaimCount {
     Assert-HordeRoleRead $Read
     if ($null -eq $Table) { $Table = Get-HordeRoleTable }
     if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
-    if ($Read.claimsComplete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count claims: " + $Read.claimsComplete.reason)) }
     $pending = @($Read.claims | Where-Object { Test-HordeClaimPending -Claim $_ -Now $Now })
+    $floor = @($pending | Where-Object { $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count
     $unsure = @($pending | Where-Object { $_.role.state -ne "known" -and $_.field -ne "empty" } | ForEach-Object { $_.pane })
-    if ($unsure.Count -gt 0) {
-        return (New-HordeUnknown -Reason ("cannot count claims: the role of " + $unsure.Count + " pending claim(s) is unknown (pane " + ($unsure -join ", ") + ")"))
-    }
-    return (New-HordeKnown -Value @($pending | Where-Object { $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count)
+    if ($Read.claimsComplete.state -ne "known") { $answer = New-HordeUnknown -Reason ("cannot count claims: " + $Read.claimsComplete.reason) }
+    elseif ($unsure.Count -gt 0) { $answer = New-HordeUnknown -Reason ("cannot count claims: the role of " + $unsure.Count + " pending claim(s) is unknown (pane " + ($unsure -join ", ") + ")") }
+    else { $answer = New-HordeKnown -Value $floor }
+    return (New-HordeRoleCount -AtLeast $floor -Unsure $unsure -Answer $answer)
 }

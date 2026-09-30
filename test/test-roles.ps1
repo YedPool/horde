@@ -158,27 +158,33 @@ try {
     # n1 is live and has no role: it may well be the warchief (every roleless record that mattered in
     # wezfleet was a lost master or orchestrator), so no role count over this store is known.
     $wcHole = Get-HordeRoleCount -Read $read -Role "warchief"
-    Check ($wcHole.state -eq "unknown" -and $wcHole.reason -like "*n1*") "a live session whose role is unknown makes the role count unknown, naming it"
-    Check ((Get-HordeRoleCount -Read $read -Role "goblin").state -eq "unknown") "and that holds for every role, not only warchief"
+    Check ($wcHole.answer.state -eq "unknown" -and $wcHole.answer.reason -like "*n1*") "a live session whose role is unknown makes the role count unknown, naming it"
+    Check ((Get-HordeRoleCount -Read $read -Role "goblin").answer.state -eq "unknown") "and that holds for every role, not only warchief"
+    # The exact count is unknown, but a floor is not: m1 is a master whatever n1 turns out to be. On
+    # the live store 9 of the 16 live records have no role, so the exact count will almost always be
+    # unknown there, and the floor is what a caller can use (ledger L-003).
+    Check ($wcHole.atLeast -eq 1 -and @($wcHole.unsure).Count -eq 1 -and @($wcHole.unsure)[0] -eq "n1") "an unknown role still leaves a known floor, and names the unsure session"
 
     # CONTROL: the same store without the live roleless record. n2 - retired and roleless - stays, so
     # the control also shows a retired session's unknown role does not matter to a live count.
     Remove-Item -LiteralPath (Join-Path $sess "n1.json") -Force
     $readClean = Read-HordeWezfleetRoles
     $wc = Get-HordeRoleCount -Read $readClean -Role "warchief"
-    Check ($wc.state -eq "known" -and $wc.value -eq 1) "CONTROL: with every record readable, the warchief count is known"
+    Check ($wc.answer.state -eq "known" -and $wc.answer.value -eq 1) "CONTROL: with every record readable, the warchief count is known"
+    Check ($wc.atLeast -eq 1 -and @($wc.unsure).Count -eq 0) "and when the count is known, the floor is the count and nothing is unsure"
     $oc = Get-HordeRoleCount -Read $readClean -Role "orc"
-    Check ($oc.state -eq "known" -and $oc.value -eq 1) "a retired orc is not counted among the live ones"
+    Check ($oc.answer.state -eq "known" -and $oc.answer.value -eq 1) "a retired orc is not counted among the live ones"
     # A spawned master that has not yet run a tool has a claim and no record. wezfleet counts it as a
     # master (lib/Master.ps1:130-137); Horde reports it as its own number beside the session count.
     $pendingW = Get-HordeRoleClaimCount -Read $readClean -Role "warchief"
-    Check ($pendingW.state -eq "known" -and $pendingW.value -eq 1) "a pending master claim is counted as a pending warchief, separately from sessions"
+    Check ($pendingW.answer.state -eq "known" -and $pendingW.answer.value -eq 1) "a pending master claim is counted as a pending warchief, separately from sessions"
     $pendingO = Get-HordeRoleClaimCount -Read $readClean -Role "orc"
-    Check ($pendingO.state -eq "known" -and $pendingO.value -eq 0) "a claim past wezfleet's seven-day backstop is not pending"
+    Check ($pendingO.answer.state -eq "known" -and $pendingO.answer.value -eq 0) "a claim past wezfleet's seven-day backstop is not pending"
     Set-Content -LiteralPath (Join-Path $claimsDir "11.json") -Value ('{"role":"lane","spawnedAt":"' + (Get-Date).ToUniversalTime().ToString("o") + '"}')
     $readOddClaim = Read-HordeWezfleetRoles
     $pendingOdd = Get-HordeRoleClaimCount -Read $readOddClaim -Role "warchief"
-    Check ($pendingOdd.state -eq "unknown" -and $pendingOdd.reason -like "*11*") "a pending claim whose role is unknown makes the pending count unknown"
+    Check ($pendingOdd.answer.state -eq "unknown" -and $pendingOdd.answer.reason -like "*11*") "a pending claim whose role is unknown makes the pending count unknown"
+    Check ($pendingOdd.atLeast -eq 1 -and @($pendingOdd.unsure) -contains "11") "and still counts the pending master it is sure of, naming the unsure claim"
     Remove-Item -LiteralPath (Join-Path $claimsDir "11.json") -Force
 
     # Counting "master" - wezfleet's word - matched nothing and answered a known 0 while a master ran.
@@ -193,9 +199,11 @@ try {
     # One record that cannot be parsed: the counts become unknown instead of silently shrinking.
     Set-Content -LiteralPath (Join-Path $sess "broken.json") -Value "{ not json"
     $read2 = Read-HordeWezfleetRoles
-    Check ((Get-HordeRoleCount -Read $read2 -Role "warchief").state -eq "unknown") "an unreadable record makes the role count unknown"
+    $wcUnreadable = Get-HordeRoleCount -Read $read2 -Role "warchief"
+    Check ($wcUnreadable.answer.state -eq "unknown") "an unreadable record makes the role count unknown"
+    Check ($wcUnreadable.atLeast -eq 1) "but the floor still counts the records that could be read"
     $pendingBadRecord = Get-HordeRoleClaimCount -Read $read2 -Role "warchief"
-    Check ($pendingBadRecord.state -eq "known" -and $pendingBadRecord.value -eq 1) "but not the pending count, which reads only claims"
+    Check ($pendingBadRecord.answer.state -eq "known" -and $pendingBadRecord.answer.value -eq 1) "but not the pending count, which reads only claims"
     Remove-Item -LiteralPath (Join-Path $sess "broken.json") -Force
     # One corrupt claim made every session count unknown too, and wezfleet never deletes a claim it
     # cannot read (lib/Registry.ps1 Read-WfPaneClaim returns $null on a parse error), so the counts
@@ -203,8 +211,8 @@ try {
     Set-Content -LiteralPath (Join-Path $claimsDir "broken.json") -Value "{ not json"
     $readBadClaim = Read-HordeWezfleetRoles
     $wcBadClaim = Get-HordeRoleCount -Read $readBadClaim -Role "warchief"
-    Check ($wcBadClaim.state -eq "known" -and $wcBadClaim.value -eq 1) "an unreadable claim does not make the session count unknown"
-    Check ((Get-HordeRoleClaimCount -Read $readBadClaim -Role "warchief").state -eq "unknown") "but it does make the pending count unknown"
+    Check ($wcBadClaim.answer.state -eq "known" -and $wcBadClaim.answer.value -eq 1) "an unreadable claim does not make the session count unknown"
+    Check ((Get-HordeRoleClaimCount -Read $readBadClaim -Role "warchief").answer.state -eq "unknown") "but it does make the pending count unknown"
     Check ($readBadClaim.complete.state -eq "unknown" -and $readBadClaim.sessionsComplete.state -eq "known" -and $readBadClaim.claimsComplete.state -eq "unknown") "the read says which half is incomplete"
     Remove-Item -LiteralPath (Join-Path $claimsDir "broken.json") -Force
 }
@@ -226,10 +234,10 @@ try {
     Put (Join-Path $orphanSess "abc-copy.json") @{ claudeSessionId = "abc"; role = "master" }
     $readOrphan = Read-HordeWezfleetRoles -Root $orphanStore
     $wcOrphan = Get-HordeRoleCount -Read $readOrphan -Role "warchief"
-    Check ($wcOrphan.state -eq "unknown" -and $wcOrphan.reason -like "*abc-copy.json*") "a misnamed record whose session has no record of its own makes the count unknown, naming the file"
+    Check ($wcOrphan.answer.state -eq "unknown" -and $wcOrphan.answer.reason -like "*abc-copy.json*") "a misnamed record whose session has no record of its own makes the count unknown, naming the file"
     Put (Join-Path $orphanSess "abc.json") @{ claudeSessionId = "abc"; role = "master" }
     $wcCopy = Get-HordeRoleCount -Read (Read-HordeWezfleetRoles -Root $orphanStore) -Role "warchief"
-    Check ($wcCopy.state -eq "known" -and $wcCopy.value -eq 1) "CONTROL: once the session has its own record, the misnamed copy hides nothing"
+    Check ($wcCopy.answer.state -eq "known" -and $wcCopy.answer.value -eq 1) "CONTROL: once the session has its own record, the misnamed copy hides nothing"
 }
 finally {
     if ((Split-Path -Leaf $orphanStore) -match '^horde-roles-orphan-[0-9a-f]{32}$') { Remove-Item -LiteralPath $orphanStore -Recurse -Force -ErrorAction SilentlyContinue }
@@ -242,7 +250,7 @@ Write-Host "--- a store that is not there is not an empty store ---" -Foreground
 $nowhere = Join-Path $env:TEMP ("horde-roles-nowhere-" + [guid]::NewGuid().ToString("N"))
 $readNowhere = Read-HordeWezfleetRoles -Root $nowhere
 Check ($readNowhere.complete.state -eq "unknown" -and $readNowhere.complete.reason -like "*sessions*") "a store with no sessions directory reads as unknown, not as an empty fleet"
-Check ((Get-HordeRoleCount -Read $readNowhere -Role "warchief").state -eq "unknown") "and a role count over it is unknown, not zero"
+Check ((Get-HordeRoleCount -Read $readNowhere -Role "warchief").answer.state -eq "unknown") "and a role count over it is unknown, not zero"
 
 # A sessions directory that exists but cannot be listed: a junction whose target has gone. Measured
 # 2026-09-29: Test-Path says it is a container, listing it throws "Could not find a part of the path",
