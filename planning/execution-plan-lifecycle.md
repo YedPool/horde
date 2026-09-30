@@ -816,6 +816,7 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
    liveness, census, lesson L-019.
 7. **`core/Transcript.ps1` and `schema/observe-event.v1`** [H5]. The port of 4.1, the event of 4.2,
    the stream writer (one file per writer, cap, `truncated` marker, `seq` from the writer's counter).
+   The `<machineId>` in the stream's file name comes from remote step R7's `Get-HordeDeviceId`.
    Tests first: "a shorter file is truncated, never restarted"; "a partial last line is carried";
    "seq is strictly increasing within a file". Ledger: none replaced.
 8. **`agents/claude-code/Transcript.ps1`** [H3], with its `measurements/`, fixtures and
