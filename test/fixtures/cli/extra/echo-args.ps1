@@ -5,6 +5,6 @@ $HordeCommand = @{
     summary = "reports how its arguments were bound"
     run     = {
         [CmdletBinding()] param([Parameter(Position = 0)][string]$Target = "", [Alias("AsJson")][switch]$Json, [int]$Count = 0, [string]$Verb = "")
-        Write-Output ("target=[" + $Target + "] json=" + $Json + " count=" + $Count)
+        Write-Output ("target=[" + $Target + "] json=" + $Json + " count=" + $Count + " verb=[" + $Verb + "]")
     }
 }

@@ -213,7 +213,7 @@ try {
     foreach ($typed in @($false, $true)) {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "abc", "-Json", "-Count", "5") -AsTyped:$typed
-        Check ($r.out.Trim() -eq "target=[abc] json=True count=5") ("a switch, a named value and a positional all reach the command, " + $how + " (got: " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.out.Trim() -eq "target=[abc] json=True count=5 verb=[]") ("a switch, a named value and a positional all reach the command, " + $how + " (got: " + $r.out.Trim() + $r.err.Trim() + ")")
         # A COLON BINDS A VALUE TO ITS PARAMETER. $args holds -Json:$false as two items - "-Json:" and
         # $false typed, "-Json" and "$false" from a script - and splatting them on turned -Json on and
         # sent the value to the first positional parameter: json=True target=[False], exit 0 (review
@@ -222,26 +222,26 @@ try {
         # rather than guessed at (cli\Arguments.ps1 says why).
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$false') -AsTyped:$typed
         if ($typed) {
-            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0 verb=[]") ("a switch turned off with a colon stays off" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         } else {
             Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*arrived as text*" -and $r.err -like "*usage: horde echo-args*") ("a colon value that arrived as text is refused, never guessed at" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$true', "abc") -AsTyped:$typed
         if ($typed) {
-            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0 verb=[]") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         } else {
             Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*arrived as text*") ("a colon value that arrived as text is refused, never guessed at, with a word after it" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5") -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=5") ("a value given with a colon reaches its parameter, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=5 verb=[]") ("a value given with a colon reaches its parameter, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json") -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=True count=0") ("a plain switch is still on, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=True count=0 verb=[]") ("a plain switch is still on, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         # CALLED FROM INSIDE A COMMAND, horde is in-process, so its $args carry PowerShell's own tags
         # whatever started the outer horde. The process command-line reader this replaced read the
         # OUTER horde's command line here: measured 2026-09-29, the inner call exited 1, "could not
         # match the command line (1 given, 2 delivered)" (second review of PR #12, finding 1).
         $r = Invoke-Horde -Root $tmp -Arguments @("nested-call", "hello") -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("horde called from inside a command binds its own colon value" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0 verb=[]") ("horde called from inside a command binds its own colon value" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }
     # A QUOTE DOUBLED INSIDE A QUOTED ARGUMENT, from a script. powershell.exe ends the quote at the
     # doubled quote and .NET's [Environment]::GetCommandLineArgs does not: measured 2026-09-29, the
@@ -250,7 +250,7 @@ try {
     # command line" (second review of PR #12, finding 2). Now what binds is what PowerShell delivered.
     # Typed at a prompt this line is PowerShell's own syntax, with nothing to compare, so it is not run.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5", 'x"" -Json')
-    Check ($r.code -eq 0 -and $r.out.Trim() -eq 'target=[x"] json=True count=5') ("a doubled quote is split as PowerShell splits it, never refused as unmatched (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq 'target=[x"] json=True count=5 verb=[]') ("a doubled quote is split as PowerShell splits it, never refused as unmatched (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # "--" MEANS "END OF PARAMETERS" ONLY TO A PARSER THAT SEES IT. Typed, PowerShell consumes it and
     # passes what follows as plain words - measured 2026-09-29, "-- -Json" arrived as the untagged
     # word "-Json". From a script it arrives as the word "--", and "-Json" after it is still tagged as
@@ -267,7 +267,7 @@ try {
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "abc")
     Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*'--' is not supported*") ("a double dash from a script is refused, not bound as a value" + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "-Json") -AsTyped
-    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[-Json] json=False count=0") ("typed, a double dash is PowerShell's and what follows it is a word (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[-Json] json=False count=0 verb=[]") ("typed, a double dash is PowerShell's and what follows it is a word (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # Typed, a colon value a switch cannot take is PowerShell's to refuse.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped
     Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + ")")
@@ -293,18 +293,20 @@ try {
     Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch named by its alias and followed by a truth word is refused (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # CONTROLS: the refusal is about switches and truth words only.
     # -Verb is echo-args' own [string] parameter and a prefix of the common switch -Verbose. PowerShell
-    # binds an exact name before any prefix, so "false" is -Verb's value, not a switch's.
+    # binds an exact name before any prefix, so "false" is -Verb's value, not a switch's. echo-args
+    # prints verb=, so this also says WHERE the word went: printing only target, json and count, the
+    # line read the same whether "false" bound to -Verb or was dropped (third review of PR #12).
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Verb", "false")
-    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a parameter's exact name decides, though it is a prefix of a switch: -Verb false binds (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0 verb=[false]") ("a parameter's exact name decides, though it is a prefix of a switch: -Verb false binds (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     foreach ($typed in @($false, $true)) {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "abc") -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a genuine positional after a switch still binds, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0 verb=[]") ("a genuine positional after a switch still binds, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Target", "false")
-    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=False count=0") ("the word false after a parameter that is not a switch is its value (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=False count=0 verb=[]") ("the word false after a parameter that is not a switch is its value (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "false", "-Json")
-    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=True count=0") ("the word false before a switch is a positional, as the refusal says to reorder it (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[false] json=True count=0 verb=[]") ("the word false before a switch is a positional, as the refusal says to reorder it (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # Asking a command for help is not an error: `horde echo-args -?` exited 1 with PowerShell's
     # '"helpTarget" is null' (review of PR #12, finding 6). -?, -h and --help after a command name
     # print its usage and summary and exit 0, as they print horde's help before one.
