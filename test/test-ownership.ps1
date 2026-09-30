@@ -117,6 +117,10 @@ function MutatedText { param([string]$Find, [string]$Replace)
 Check (Says (Mutated { param($d) $d.fields[0].owner = @("agent", "engine") }) "more than one owner") "a field with two owners is refused"
 Check (Says (Mutated { param($d) $d.fields[0].owner = "" }) "has no owner") "a field with no owner is refused"
 Check (Says (Mutated { param($d) $d.fields[0].owner = "someone" }) "not one of the listed owners") "a field owned by something that is not an owner is refused"
+# AN OWNER SAYS WHAT IT IS. An empty description passed, so an owner could be listed that nothing
+# explains (second review, finding 5).
+Check (Says (Mutated { param($d) $d.owners.agent = " " }) "owner 'agent' has no description") "an owner with an empty description is refused"
+Check (Says (Mutated { param($d) $d.owners.agent = $true }) "owner 'agent' has no description") "an owner whose description is not text is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read = @() }) "has no read rule") "a field with no read rule is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0].store = "Z9" }) "not in the store list") "a read from a store that does not exist is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0].field = "" }) "without naming what it reads") "a read that does not say what it reads is refused"

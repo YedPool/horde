@@ -111,6 +111,11 @@ function Test-HordeOwnership {
         return @($findings)
     }
     $owners = @($Doc.owners.PSObject.Properties | ForEach-Object { $_.Name })
+    # An owner is described in text; an empty description listed an owner nothing explains
+    # (second review, finding 5).
+    foreach ($op in @($Doc.owners.PSObject.Properties)) {
+        if ($op.Value -isnot [string] -or "$($op.Value)".Trim() -eq "") { [void]$findings.Add("owner '" + $op.Name + "' has no description") }
+    }
     $stores = @($Doc.stores.PSObject.Properties | ForEach-Object { $_.Name })
     # A STORE'S GUARD applies to EVERY read of that store, before the read's own when. It exists
     # because a condition repeated per read was forgotten per read: the pane-sessions file was
