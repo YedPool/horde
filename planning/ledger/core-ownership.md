@@ -219,3 +219,28 @@ sources:
 - source: YedPool/wezfleet lib/Common.ps1:628 "if ($RecordInstance -and $Instance.id -and ""$RecordInstance"" -ne ""$($Instance.id)"") { return $false }" - one function, Test-WfWrittenInInstance, decides it for the pane index at lib/Registry.ps1:394 and the act-on finder at :659, and a record with an empty instance passes on lastSeen alone. The table had defined it twice: for pane, the record's instance had to be this one; for cwd, only lastSeen counted. Review finding 2, second review, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the registry's cwd and pane use one definition of written in this instance"
+
+### L-042 A claude process gives its pid only when its --resume id is the session's
+- source: YedPool/wezfleet lib/Common.ps1:666-667, Get-WfClaudeProcesses takes a process's session id only from "--resume" or "-r" followed by a session id on its command line, and :692-694 "a session started WITHOUT --resume carries no id on its command line". A claude process with no resume id says nothing about which session it is, so the process table names a pid only by that match. Review finding 7, second review, 2026-09-29.
+- disposition: comment
+- where: core/ownership.json :: "its --resume id matches"
+
+### L-043 A pane-sessions file's transcript path is taken only when that transcript exists
+- source: YedPool/wezfleet lib/Protocol.ps1:422 "if ($sameCwd -and $data.transcript_path -and -not (Test-Path ""$($data.transcript_path)"")) {" returns nothing, with :417-419 "a record whose transcript is gone cannot describe a session that is running now, and it is useless for `claude --resume` either". Review finding 7, second review, 2026-09-29.
+- disposition: comment
+- where: core/ownership.json :: "the transcript it names exists"
+
+### L-044 A layout save's argv is compared against, never used as the resume command
+- source: horde planning/migration-plan.html:112 "Session state is authoritative; layout is advisory"; the installed wezterm-resurrect and its main branch take the session id in opposite orders (plugin/resurrect/process_handlers.lua:282-299 on main, L-005), so which saved argv is right is itself unsettled. Review finding 7, second review, 2026-09-29.
+- disposition: comment
+- where: core/ownership.json :: "never trusted as the answer"
+
+### L-045 The registry's instance is what the hook read from the socket at the last tool call
+- source: YedPool/wezfleet hooks/wf-registry-refresh.ps1:126 "$instance = Get-WfInstanceIdFromSocket ""$env:WEZTERM_UNIX_SOCKET""", written on each tool call (and on the 60-second heartbeat, :123), and lib/Registry.ps1:329 "instance = if ($Pane -ne """") { ""$Instance"" }" - the instance moves with the pane, so it is as old as the record's last write. Review finding 7, second review, 2026-09-29.
+- disposition: comment
+- where: core/ownership.json :: "as the hook took it from the socket at the session's last tool call"
+
+### L-046 With no socket, the process table names the instance only when one terminal is running
+- source: YedPool/wezfleet lib/Common.ps1:586-590 "elseif ($GuiProcesses.Count -eq 1)" takes the one wezterm-gui as the instance, and :591 "elseif ($GuiProcesses.Count -gt 1) { $out.ambiguous = $true }". Review finding 7, second review, 2026-09-29.
+- disposition: comment
+- where: core/ownership.json :: "exactly one terminal process is running"
