@@ -28,7 +28,8 @@ founder.
 | agent-engines research | Its "Decisions taken": every role resolves a named profile of harness + provider profile + model; GLM, Qwen models and DeepSeek run through the Claude Code harness on Anthropic-format endpoints first; Gemini CLI gets `agents/gemini-cli/`; the session-record key stops assuming a UUID; subscription credentials only on their own vendor's CLI; keys read from named environment variables, never stored |
 | hosts research | Its "Decisions taken": Windows agents only for now; capability flags per host in `hosts/<name>/capabilities.json` with `state` yes, no, declined or unverified (unverified treated as no); mandatory `-Capabilities` on the host port; pid and cwd tagged with a namespace (`space`) |
 
-`<HordeHome>` below is `%USERPROFILE%\.horde` unless `HORDE_HOME` is set (engine-settings decision 2).
+`<HordeHome>` below is `%USERPROFILE%\.horde` unless `HORDE_HOME` is set (engine-settings decision 2),
+read through the one `Get-HordeHome` that Phase 3 plan step 1 adds when it renames `HORDE_ROOT`.
 
 ## How every step is done
 
@@ -46,11 +47,13 @@ marker, because memory is the constraint this whole plan is about.
 
 | this plan's steps | need first | why |
 |---|---|---|
-| 4, 5 | nothing; they must land **before Phase 3's commands** (the Phase 3 census PR, step 3.3, onward) | they are the guards every later command is checked against: read commands reach no spawn or kill verb, and core names no engine. Landing them after the commands would mean retro-fitting the commands to pass |
+| 4, 5 | nothing; they must land **before Phase 3's commands**: before `horde census`, the first command (Phase 3 plan steps 6 to 8, migration step 3.3), merges | they are the guards every later command is checked against: read commands reach no spawn or kill verb, and core names no engine. Landing them after the commands would mean retro-fitting the commands to pass |
 | 17 (tiers), 24 and 25 (binding, resume) | **engine-settings Half A**: `schema/engine-config.v1`, the layered resolver, `Test-HordeEngineConfig`, `horde config explain/set/validate` | the tier and the binding's `engine` field are resolved and checked by that machinery; this plan adds keys to it and builds none of it |
 | 22, 27 (anchor, spawn) | **engine-settings Half B**: the launch stub `horde launch --job <id>` | the anchor runs the stub to resolve the binding, references and scrub |
+| 22, 33 (host flags) | **Phase 3 plan step 2**: `hosts/<name>/capabilities.json` and `schema/host-capabilities.v1.json`, and step 3's WezTerm declaration | the flags of 2.5 are added to that one file and schema, not to a second format |
+| 14, 33 | **Phase 3 plan step 1**, `Get-HordeHome` | every store path here is under `<HordeHome>` |
 | 24 | **migration step 3.8**, the record writer | the binding lives in the engine's session record, which has one writer |
-| 3 (W5's adoption line) | **Phase 3 step 4**, `adoption/capabilities.txt` | the line W5 adds goes in that file |
+| 3 (W5's adoption line) | **Phase 3 plan step 5** (migration step 3.2), `adoption/capabilities.txt` | the line W5 adds goes in that file |
 | 15, 16, 20 | **metrics Stage A**: the event writer, the consent sentinel, the span model | detectors, the backlog and the tuner write metrics events |
 
 ## Measurements this plan rests on
@@ -354,18 +357,25 @@ process should be a few MB: a target, measured in step 22, not a claim.
 
 ## 2.5 Host capability flags
 
-Added to the closed vocabulary of `schema/host-capabilities.v1` (hosts research 5.1), each `{ state,
-evidence, minVersion?, space? }`, measured in the host's isolated instance by its conformance suite:
+Each host already declares itself in one file, `hosts/<name>/capabilities.json`, validated by
+`schema/host-capabilities.v1.json` (Phase 3 plan step 2): its name, its capability table in the
+HostPort vocabulary, and its session markers. The flags below are added to that same capability table
+and to that schema's vocabulary; there is no second declaration format. They take the same states,
+`yes`, `no`, `declined` or `unverified`, and core relies on one only when it is `yes`. Phase 3's
+WezTerm read adapter (Phase 3 plan step 3) declares `spawn` and `kill` `declined`; step 22 of this plan,
+in Phase 5, is where the WezTerm declaration first moves any acting verb to `yes`, each measured in the
+isolated instance and each checked by `test/lib/HostReadConformance.ps1`'s rule that a capability not
+`yes` is never called. Until then every flag below is `unverified`.
 
 | flag | meaning | why the anchor needs it |
 |---|---|---|
 | `spawn.program` | the host runs the given argv as the pane's only program, with no shell around it | O3: no bare shell after exit |
 | `spawn.exitCloses` | the pane closes when that program exits (and whether only on a clean exit) | the close path never needs a pane-id kill (design A3.1 step 4) |
 | `spawn.parent` | `host` or `caller`: whose child the pane's program is | `host` means only self-assignment can contain it; `caller` would allow assign-before-resume |
-| `spawn.env` (existing) | the host can pass environment | the spawn token reaches the anchor; with `no`, the token goes in the argv |
-| `pid` with `space` (existing) | the anchor's pid and its namespace | containment is resolved in that space: a `win32` pid uses a job; a `wsl:` or `posix` pid uses the POSIX mechanism below |
+| `spawn.env` | the host can pass environment | the spawn token reaches the anchor; with `no`, the token goes in the argv |
+| `pid` with `space` (the rows' existing namespace tag) | the anchor's pid and its namespace | containment is resolved in that space: a `windows` pid uses a job; a `wsl:` or `posix` pid uses the POSIX mechanism below |
 | `contain.inherited` | the host's own pane processes already sit in a job or control group, and whether it allows breakaway | nesting is required; recorded so a change in the host is noticed (J-1, J-2) |
-| `pane.bareShell` | the host adapter can say whether a pane it spawned now holds only its own shell, from the pane's program pid and the shell images it knows | O3 detection without title reads (step 33) |
+| `pane.bareShell` | the host adapter can say whether a pane it spawned now holds only its own shell, from the pane's program pid and the shell images it knows | O3 detection without title reads (step 33); declared in the same `capabilities.json`, `unverified` until then |
 
 The containment mechanism itself is the operating system's, not the terminal's. It is a small port,
 `core/Contain.ps1`, with adapters `platform/windows/` (job objects, above) and later
@@ -404,9 +414,10 @@ control-file location, asked through the AgentPort (`Get-AgentProcessClaims`: wh
 harness's, and which of those have a live control file). O3 needs to know which images are a pane's
 shell: that is each host's, in `hosts/<name>/`, answered by the `pane.bareShell` capability.
 
-**O3 is deferred.** Phase 3 keeps bare-shell detection on wezfleet, because it reads host tab titles
-and was dropped from the projection (the Phase 3 plan's `census-bare-shell` line, L-058). Horde does
-not re-introduce title reads for it. Until step 33, bare shells are reported by wezfleet census; after
+**O3 is deferred.** wezfleet detects bare shells by reading host tab titles, and the Phase 3 plan keeps
+that feature on wezfleet until a host adapter provides it (its decision 5, the `census-bare-shell`
+capability, and its G-01 allowance). Horde does not re-introduce title reads for it; the host adapter
+that eventually provides it answers `pane.bareShell` instead. Until step 33, bare shells are reported by wezfleet census; after
 the anchor ships (step 27) new goblins cannot leave one.
 
 ---
@@ -490,7 +501,7 @@ and does nothing. `--dry-run` shows what `resume` would do, with the gate's answ
   list from the ownership table, so each row and its schema property land in one PR (step 24). The
   session-id pattern stops assuming a UUID in the same edit (agent-engines decision 6).
 - `schema/observe-event.v1`: the metrics envelope (metrics design 4.2) with the `obs.*` kinds.
-- `schema/host-capabilities.v1`: the flags of 2.5.
+- `schema/host-capabilities.v1.json` (created by Phase 3 plan step 2): the flags of 2.5 join its vocabulary, and `hosts/wezterm/capabilities.json` declares them.
 
 ---
 
@@ -643,7 +654,7 @@ the warchief's terminal, not for an orc's prompt.
 ## Wake messages
 
 On a transition to `stalled`, `looping`, `reported`, `dead`, `park-expired`, `closed` or `reaped`,
-the alerter wakes the owning orc. Delivery does **not** go through Phase 3's target resolution, whose
+the alerter wakes the owning orc. Delivery does **not** go through Phase 3's target naming (migration step 3.6, Phase 3 plan steps 15 to 18), whose
 first form refuses any session without a verified host handle, and does **not** use wezfleet's `tell`,
 which types into a pane. It addresses the orc by session id, taken from the goblin's `parent` in the
 engine's record, and uses two channels:
@@ -696,13 +707,13 @@ shadow log with its commit.
 | W4 | `Test-WfPaneMatchesRoster` answers "cannot prove" for a roster pane of -1, and closeOnDone does not fire on it | "a roster pane of -1 cannot prove identity"; "closeOnDone does not fire without proven identity" | design A5.5: after an interrupted launch the check passed for any pane |
 | W5 | **a separate verb, `wezfleet orphans`**, read-only: process trees whose root is dead, a claude with no control file, with memory and age. **census is not changed**, so the census shadow's output and its comparisons are untouched | "orphans lists a tree whose root is dead"; "orphans lists a claude with no control file"; "census output is unchanged by the orphans verb"; a read-only tripwire over the new code | 2.8 GB was invisible to every command (M-08); this is O6's report until Horde's ships |
 
-W5 adds one line to `adoption/capabilities.txt` (created by Phase 3 step 4), in that file's format:
+W5 adds one line to `adoption/capabilities.txt` (created by Phase 3 plan step 5, migration step 3.2), in that file's format:
 
 ```
 orphans            | wezfleet orphans                | horde orphans       | processes no live session owns, with their memory
 ```
 
-If W5 merges before Phase 3 step 4, the step 4 PR seeds the line; otherwise W5's companion Horde PR adds
+If W5 merges before Phase 3 plan step 5, the step 5 PR seeds the line; otherwise W5's companion Horde PR adds
 it. `horde orphans` (step 14) is its Horde form and is adopted through that ledger like any other
 capability.
 
@@ -726,8 +737,9 @@ near the top.
 
 ## B. Guards, before Phase 3's commands
 
-These two land before the first Phase 3 command PR (census, step 3.3) merges, because every later
-command, in this plan and in Phase 3, is checked against them.
+These two land before the first Phase 3 command PR merges (`horde census`, Phase 3 plan step 6,
+migration step 3.3), because every later command, in this plan and in Phase 3, is checked against
+them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not block it.
 
 4. **`effects` declarations** [H13]. Every command declares `read`, `write`, `spawn` or `kill`; a suite
    parses each `read` command's call graph from its entry point and fails on any spawn or kill verb,
