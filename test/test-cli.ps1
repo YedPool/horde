@@ -190,7 +190,25 @@ try {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "abc", "-Json", "-Count", "5") -AsTyped:$typed
         Check ($r.out.Trim() -eq "target=[abc] json=True count=5") ("a switch, a named value and a positional all reach the command, " + $how + " (got: " + $r.out.Trim() + $r.err.Trim() + ")")
+        # A COLON BINDS A VALUE TO ITS PARAMETER. $args holds -Json:$false as two items - "-Json:" and
+        # $false typed, "-Json" and "$false" from a script - and splatting them on turned -Json on and
+        # sent the value to the first positional parameter: json=True target=[False], exit 0 (review
+        # of PR #12, finding 1).
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$false') -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$true', "abc") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=5") ("a value given with a colon reaches its parameter, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=True count=0") ("a plain switch is still on, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped:$typed
+        Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + ")")
     }
+    # Typed at a prompt, "-Json:" with nothing after it is a PowerShell parse error before horde runs.
+    # From a script it reached horde as nothing at all, or as a bare -Json, depending on position.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:")
+    Check ($r.code -eq 2 -and $r.err -like "*-Json:*") ("a colon with no value after it is refused, from a script (got " + $r.code + ": " + $r.out.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("boom")
     Check ($r.code -eq 1 -and $r.err -like "*boom failed on purpose*") "a command that fails exits 1 and says why"
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue

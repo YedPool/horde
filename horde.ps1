@@ -1,17 +1,19 @@
 # horde - the one entry point. Every command is a file under cli\commands; this file only finds
 # the one asked for and runs it. It names no command, so it never needs editing to add one.
 #
-# NO PARAM BLOCK, AND THAT IS LOAD-BEARING. Arguments are forwarded to the command as @args.
+# NO PARAM BLOCK, AND THAT IS LOAD-BEARING. Arguments are forwarded to the command from $args.
 # Measured 2026-09-29 on PowerShell 5.1: an array taken from $args keeps "-Json" as a switch when
 # splatted on, but a param with ValueFromRemainingArguments, or any hand-built array, turns it into
 # the literal string "-Json" bound to the first positional parameter - silently. test\test-cli.ps1
-# fails if this file grows a param block.
+# fails if this file grows a param block. A value joined to its parameter with a colon (-Json:$false)
+# arrives in $args as two items and is rejoined by cli\Arguments.ps1, which says how.
 #
 # Exit codes: 0 ran, 1 the command failed, 2 the command line was wrong (unknown command or
 # arguments the command does not accept).
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")
+. (Join-Path $PSScriptRoot "cli\Arguments.ps1")
 
 $name = ""
 if ($args.Count -gt 0) { $name = "$($args[0])" }
@@ -32,15 +34,27 @@ if (-not $lookup.command) {
     exit 2
 }
 
+$raw = Get-HordeFileModeArguments -ScriptPath $PSCommandPath
+$rawRest = $null
+if ($raw.found) { $rawRest = @($raw.args | Select-Object -Skip 1) }
+$bound = Resolve-HordeArguments -Items $rest -Raw $rawRest
+if ($bound.problem) {
+    [Console]::Error.WriteLine("horde " + $name + ": " + $bound.problem)
+    [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)
+    exit 2
+}
+$named = $bound.named
+$positional = $bound.positional
+
 try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $command = Import-HordeCommand -Path $lookup.command.path
-    & $command.run @rest
+    & $command.run @named @positional
 }
 catch [System.Management.Automation.ParameterBindingException] {
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
-    [Console]::Error.WriteLine("usage: horde " + $command.usage)
+    [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)
     exit 2
 }
 catch {
