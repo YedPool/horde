@@ -183,7 +183,11 @@ function Limit-HordeAge {
     param($Answer, $TtlSeconds, [datetime]$Now = (Get-Date))
     Assert-HordeAnswer $Answer
     $ttl = 0.0
-    if (-not [double]::TryParse("$TtlSeconds", [ref]$ttl) -or $ttl -le 0) { throw ("a TTL must be a positive number of seconds, not '" + $TtlSeconds + "'") }
+    # Invariant culture, no thousands separators: in the current culture "1,5" parsed as 15 here and
+    # would be 1.5 in a comma-decimal one. NaN and Infinity parse as doubles but are refused: NaN
+    # compares false with everything, so a NaN TTL kept a 400-day-old answer known (review, 2026-09-29).
+    $parsedTtl = [double]::TryParse("$TtlSeconds", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ttl)
+    if (-not $parsedTtl -or [double]::IsNaN($ttl) -or [double]::IsInfinity($ttl) -or $ttl -le 0) { throw ("a TTL must be a positive number of seconds, not '" + $TtlSeconds + "'") }
     if ($Answer.state -eq "unknown") { return $Answer }
     if ($null -eq $Answer.observedAt) { return (New-HordeUnknown -Reason "the answer has no observation time, so its age cannot be checked") }
     # Both sides in UTC. A stored answer reads back with a UTC observedAt (RoundtripKind) and -Now

@@ -134,6 +134,13 @@ Check ((Limit-HordeAge -Answer $idle -TtlSeconds 60 -Now $t.AddSeconds(61)).stat
 Check ((Limit-HordeAge -Answer $busy -TtlSeconds 60 -Now $t.AddSeconds(59)).state -eq "known") "CONTROL: a reading inside its TTL stays known"
 Check ((Limit-HordeAge -Answer (New-HordeKnown -Value 1) -TtlSeconds 60 -Now $t).state -eq "unknown") "a reading with no observation time cannot be aged, so it is unknown"
 Check ((Throws { Limit-HordeAge -Answer $busy -TtlSeconds 0 } "positive") -and (Throws { Limit-HordeAge -Answer $busy -TtlSeconds "6o" } "positive")) "a non-positive TTL is refused"
+# NaN compares false with everything, so a NaN TTL was accepted and nothing ever went stale: a
+# 400-day-old answer stayed known. Infinity says the same thing out loud.
+$ancient = New-HordeKnown -Value "idle" -ObservedAt $t.AddDays(-400)
+Check ((Throws { Limit-HordeAge -Answer $ancient -TtlSeconds "NaN" -Now $t } "positive") -and (Throws { Limit-HordeAge -Answer $ancient -TtlSeconds "Infinity" -Now $t } "positive") -and (Throws { Limit-HordeAge -Answer $ancient -TtlSeconds ([double]::NaN) -Now $t } "positive")) "a TTL that is not a finite number is refused"
+# Parsed in the current culture, "1,5" was fifteen seconds here and 1.5 in a comma-decimal culture.
+Check (Throws { Limit-HordeAge -Answer $busy -TtlSeconds "1,5" -Now $t } "positive") "a TTL written with a comma is refused, whatever the culture"
+Check ((Limit-HordeAge -Answer $busy -TtlSeconds "60.5" -Now $t.AddSeconds(60)).state -eq "known") "CONTROL: a TTL with a decimal point is honoured"
 # Real answers are stored and read back, which makes observedAt a UTC time, while the default -Now
 # is local. Compared as they stood, a UTC- zone saw every stored answer as observed in the future,
 # so none ever expired (measured at UTC-4, 2026-09-29: 120s old read as known with a 60s TTL).
