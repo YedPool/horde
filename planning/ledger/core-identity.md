@@ -273,3 +273,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 9 of PR #19, 2026-09-30: schema/session-record.v1 (PR #16, merged) takes only a UUID as sessionId - "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" - while Test-HordeSessionId accepts any 1-128 characters of [A-Za-z0-9._-], wezfleet's rule for codex file names and mail directories (L-036). A record identity keys may therefore be one the engine's store would refuse. Not settled here: step 2.2, where identity feeds the store, decides which rule wins; recorded where the rule lives so that step finds it.
 - disposition: comment
 - where: core/Identity.ps1 :: "which rule wins is for step 2.2"
+
+### L-053 A real-sized procStart is pinned in the fixtures, because the reality check no longer fails on it
+- source: the identity mutation run of 2026-09-30 after review finding 6 of PR #19: the mutant microseconds-by-float, which divides the tick count as a double, survived. Before, only the reality check caught it ("every live pid on this machine matches its procStart", 7 of 10 real files), and that check now reports instead of failing; the fixture times happen to survive the double. The procStart 134350994473105437, read from a live control file on 2026-09-30, lands in another microsecond than its own truncated start time when divided as a double (84 of 100 nearby values do), so it is pinned in a fixture. Seen failing under that mutant.
+- disposition: test
+- where: test/test-identity.ps1 :: "a real 18-digit procStart matches its own microsecond-truncated start time"

@@ -186,6 +186,17 @@ PutJson (Join-Path $d8 "211.json") (ClaudeRec 211 (Sid 31) (Created 0))
 PutJson (Join-Path $d8 "212.json") (ClaudeRec 212 (Sid 32) (Created 0))
 $r8 = Get-HordeIdentity -ClaudeDir $d8 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(211, "claude.exe", (Micro (Created 0))), @(212, "claude.exe", (Micro (Created 0)).AddTicks(10)))) -Now $now
 Check ((St $r8.records[(Sid 31)].fields.liveStatus) -eq "known") "procStart matches the start time at microsecond precision"
+# A REAL-SIZED TICK COUNT. The fixture times above happen to survive a conversion through a double;
+# a procStart read from a live control file on 2026-09-30 does not - dividing it by 10 as a double
+# puts it in another microsecond than its own CIM reading. The reality check used to be the only
+# thing that caught that, and a pid reuse on the machine now only reports (review finding 6 of PR
+# #19), so the value is pinned here.
+$realTicks = [long]134350994473105437
+$realStart = [DateTime]::FromFileTimeUtc($realTicks)
+$d8b = NewDir "claude"
+PutJson (Join-Path $d8b "213.json") (ClaudeRec 213 (Sid 33) $realStart -Set @{ procStart = ("" + $realTicks) })
+$r8b = Get-HordeIdentity -ClaudeDir $d8b -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(, @(213, "claude.exe", (Micro $realStart)))) -Now $now
+Check ((St $r8b.records[(Sid 33)].fields.liveStatus) -eq "known") "a real 18-digit procStart matches its own microsecond-truncated start time"
 Check ((St $r8.records[(Sid 32)].fields.liveStatus) -eq "unknown" -and $r8.records[(Sid 32)].fields.liveStatus.reason -like "*reused*") "a start time one microsecond away is another process"
 $d9 = NewDir "claude"
 PutJson (Join-Path $d9 "221.json") (ClaudeRec 221 (Sid 41) (Created 0) -Set @{ procStart = "yesterday" })
