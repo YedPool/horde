@@ -37,4 +37,4 @@ test/test-schema-restore-plan.ps1 | 13 | the restore plan's per-host degraded fi
 test/fixtures/restore-plan/valid/host-wezterm.json | 2 | WezTerm's degraded restore-plan fixture, named for its host in path and planId like host-vscode.json and host-console.json beside it
 
 # --- the CLI's end-to-end gate, which runs in the one isolated terminal that exists.
-test/e2e/e2e-cli.ps1 | 16 | horde's own CLI scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance; it leaves this list when spawn and read-text reach it through a host-neutral port
+test/e2e/e2e-cli.ps1 | 17 | horde's own CLI scenario, not host tooling, driven through the WezTerm harness because WezTerm is the only host with an isolated instance; it leaves this list when spawn and read-text reach it through a host-neutral port

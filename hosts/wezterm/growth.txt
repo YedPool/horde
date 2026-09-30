@@ -1,0 +1,4 @@
+# Each line records one reviewed increase in hosts/wezterm/allowlist.txt (CONTRIBUTING 14):
+#   <path> | <origin/main's count> -> <new count> | <YYYY-MM-DD> | <why the list must grow>
+# Append-only: lines already on origin/main stay first, unchanged and in order.
+test/e2e/e2e-cli.ps1 | 16 -> 17 | 2026-09-30 | a third pane is spawned through the same isolated-instance call, to run the shim that horde install writes
