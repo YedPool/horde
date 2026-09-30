@@ -107,6 +107,20 @@ $windowW3 = @((Get-HordeOwnershipField -Doc $doc -Name "window").read | Where-Ob
 Check ("$($windowW3.when)" -like "*run-level*") "the run's window is marked as the run's, a fallback for the session"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
+# THE PROJECT DIRECTORY IS THE LAUNCH DIRECTORY, and while the session runs its own control file
+# holds it. The pane-sessions file's cwd is what the hook saw at that moment - the CURRENT
+# directory - and was read second: census of 2026-09-30, 163 pane-sessions files, 1 (23.json,
+# written at a compaction) whose cwd was not the folder its own transcript_path names, and 265
+# transcripts, 210 with a cwd, 21 that changed directory, every one under the folder of its FIRST
+# cwd (ledger L-050). So the control file is read first, and the hook's cwd only when the folder
+# of the transcript it names in the same file says it is the launch directory.
+$projectCwd = Get-HordeOwnershipField -Doc $doc -Name "projectCwd"
+$pcFirst = @($projectCwd.read)[0]
+Check ("$($pcFirst.store)" -ceq "X2" -and "$($pcFirst.field)" -ceq "cwd" -and "$($pcFirst.when)" -like "*running*") "the project directory is read first from the running session's control file"
+$pcX1 = @($projectCwd.read | Where-Object { "$($_.store)" -ceq "X1" })
+Check (@($pcX1 | Where-Object { "$($_.when)" -notlike "*transcript_path*" }).Count -eq 0) "the hook's cwd is never the project directory unless its transcript folder agrees"
+$cwdX2 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "X2" })[0]
+Check ("$($cwdX2.when)" -like "*launch directory*" -and "$($cwdX2.when)" -like "*not the current directory*") "the control file's cwd is labelled as the launch directory"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
 Check ("$((Get-HordeOwnershipField -Doc $doc -Name 'resumeCommand').provisional)" -ne "") "a rule that depends on something unmeasured is marked provisional"
 $role = Get-HordeOwnershipField -Doc $doc -Name "role"
