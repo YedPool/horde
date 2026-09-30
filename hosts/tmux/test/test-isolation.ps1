@@ -246,6 +246,10 @@ try {
     # THE CLEANUP SCRIPT: rmdir, never a recursive delete, and the socket only if it is a socket.
     Check ($script:HordeTmuxCleanup -match 'rmdir -- "\$sub"' -and $script:HordeTmuxCleanup -match 'rmdir -- "\$dir"' -and $script:HordeTmuxCleanup -notmatch 'rm -[a-zA-Z]*r') "directories are removed with rmdir, which refuses a folder holding anything, and never rm -r"
     Check ($script:HordeTmuxCleanup -match '\[ -S "\$sock" \] && rm -f -- "\$sock"') "the socket file is removed only if it is a socket"
+    # Only a CRLF checkout can fail this - the gate runs the suites from one (core.autocrlf=true).
+    $crlfIn = [System.IO.File]::ReadAllText($harnessPath).Contains("`r`n")
+    Write-Host ("  this checkout's harness has " + $(if ($crlfIn) { "CRLF" } else { "LF" }) + " line endings") -ForegroundColor DarkGray
+    Check (-not ($script:HordeTmuxSweep + $script:HordeTmuxServerAlive + $script:HordeTmuxCleanup).Contains("`r")) "the shell scripts handed to sh carry no carriage return, whatever the checkout's line endings"
     Check ($script:HordeTmuxSweep -match 'grep -qaF -e "TMUX=\$sock,"' -and $script:HordeTmuxSweep -match 'kill -9 "\$p"') "a process is killed only if its own environment carries TMUX=<our socket>,"
 
     # THE SERVER WILL NOT DIE: its socket keeps answering after kill-server. The process check is made

@@ -337,6 +337,10 @@ function Send-HordeTmuxText {
 # pane's child, so only what ran inside OUR server has it. $1 is the socket path, $2 "kill" or "list".
 # Each is checked and killed in the same step; the script's own pid is skipped. The socket path is an
 # argument, never spliced into the script text.
+#
+# EVERY SCRIPT BELOW HAS ITS CARRIAGE RETURNS STRIPPED. A checkout with core.autocrlf on gives this
+# file CRLF line endings, a here-string keeps them, and sh reads "sock=$1<CR>" as a different value
+# (CONTRIBUTING 12's autocrlf trap, crossing into Linux).
 $script:HordeTmuxSweep = @'
 sock=$1; me=$$
 for f in /proc/[0-9]*/environ; do
@@ -348,7 +352,7 @@ for f in /proc/[0-9]*/environ; do
   fi
 done
 exit 0
-'@
+'@ -replace "`r", ""
 
 # Is the recorded server process still alive? Its argv is the first client's, which holds our unique
 # socket name (measured: "tmux -L horde-iso-<guid> -f /dev/null new-session ..."), so a reused pid
@@ -357,7 +361,7 @@ exit 0
 $script:HordeTmuxServerAlive = @'
 c=$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)
 case "$c" in *"-L $2 "*) echo alive ;; *) echo gone ;; esac
-'@
+'@ -replace "`r", ""
 
 # Remove our socket file and our two directories, and nothing else. The socket goes only if it is a
 # socket (-S) at exactly our path; the directories go by rmdir, which refuses a directory that holds
@@ -370,7 +374,7 @@ sock=$1; sub=$2; dir=$3
 [ -e "$sock" ] && echo "socket-left"
 [ -e "$dir" ] && echo "dir-left"
 exit 0
-'@
+'@ -replace "`r", ""
 
 function Stop-HordeIsolatedTmux {
     # TEAR THE SERVER DOWN AND PROVE IT WENT: the server, everything that ran in it, its socket and its
