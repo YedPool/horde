@@ -84,7 +84,7 @@ foreach ($f in @("redirect-top", "redirect-value", "redirect-run")) {
     Check (HasFinding ($f + ".ps1") "redirection") ("a redirection in a declaration is refused: " + $f)
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
     try { [void](Import-HordeCommand -Path (Join-Path $root ("test\fixtures\cli\bad\" + $f + ".ps1"))) } catch { }
-    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it: " + $f)
+    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it" + ": " + $f)
 }
 Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 
@@ -97,7 +97,7 @@ Check (HasFinding "dynamicparam.ps1" "dynamicparam") "a command file with a dyna
 foreach ($f in @("using-module", "requires-module", "dynamicparam")) {
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
     try { [void](Import-HordeCommand -Path (Join-Path $root ("test\fixtures\cli\bad\" + $f + ".ps1"))) } catch { }
-    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it: " + $f)
+    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it" + ": " + $f)
 }
 Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 
@@ -108,9 +108,8 @@ $real = Get-HordeCommands
 Check (@($real.findings).Count -eq 0) ("every shipped command file is well-formed" + $(if (@($real.findings).Count) { ": " + ($real.findings -join "; ") } else { "" }))
 Check (@($real.commands | Where-Object { $_.name -eq "version" }).Count -eq 1) "CONTROL: the registry really finds the shipped commands"
 $helpText = @(Format-HordeHelp)
-foreach ($c in $real.commands) {
-    Check (@($helpText | Where-Object { $_ -eq ("    horde " + $c.usage) }).Count -eq 1) ("help lists '" + $c.name + "' exactly once")
-}
+$notOnce = @($real.commands | Where-Object { $u = "    horde " + $_.usage; @($helpText | Where-Object { $_ -eq $u }).Count -ne 1 } | ForEach-Object { $_.name })
+Check ($notOnce.Count -eq 0) ("help lists every command exactly once" + $(if ($notOnce.Count) { ": not " + ($notOnce -join ", ") } else { "" }))
 
 # The dispatcher names no command, so it never needs editing to add one - apart from "help", which
 # is where a bare `horde` goes.
@@ -196,7 +195,7 @@ try {
         # sent the value to the first positional parameter: json=True target=[False], exit 0 (review
         # of PR #12, finding 1).
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$false') -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$true', "abc") -AsTyped:$typed
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5") -AsTyped:$typed
@@ -213,7 +212,7 @@ try {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         foreach ($ask in @("-?", "-h", "--help")) {
             $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", $ask) -AsTyped:$typed
-            Check ($r.code -eq 0 -and $r.out -like 'usage: horde echo-args `[<target>`]*reports how its arguments were bound*'  -and $r.err.Trim() -eq "") ("asking a command for help prints its usage and exits 0: " + $ask + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+            Check ($r.code -eq 0 -and $r.out -like 'usage: horde echo-args `[<target>`]*reports how its arguments were bound*' -and $r.err.Trim() -eq "") ("asking a command for help prints its usage and exits 0: " + $ask + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         }
     }
     # Typed at a prompt, "-Json:" with nothing after it is a PowerShell parse error before horde runs.
@@ -229,8 +228,21 @@ try {
     # `exit 7` made horde exit 7, and a bare `exit` made it exit 0 (review of PR #12, finding 6).
     foreach ($f in @("exit-seven", "exit-bare")) {
         $r = Invoke-Horde -Root $tmp -Arguments @($f)
-        Check ($r.code -eq 1 -and $r.out -like ($f + " started*") -and $r.err -like ("horde " + $f + ": *exit*")) ("a command that calls exit makes horde exit 1 and say so: " + $f + " (got " + $r.code + ": " + $r.err.Trim() + ")")
+        Check ($r.code -eq 1 -and $r.out -like ($f + " started*") -and $r.err -like ("horde " + $f + ": *exit*")) ("a command that calls exit makes horde exit 1 and says so" + ": " + $f + " (got " + $r.code + ": " + $r.err.Trim() + ")")
     }
+    # HELP DESCRIBES THE COMMANDS AS THEY ARE, NOT AS THEY WERE (YedPool/wezfleet 80aa026: a help text
+    # that described the old kill and the old tell). The summary is read here from the file's text,
+    # not through the registry, then changed on disk; help must follow the file.
+    $echoFile = Join-Path $standInCommands "echo-args.ps1"
+    $oldSummary = [regex]::Match((Get-Content -LiteralPath $echoFile -Raw), 'summary\s*=\s*"([^"]+)"').Groups[1].Value
+    $h = Invoke-Horde -Root $tmp -Arguments @("help")
+    Check ($oldSummary -ne "" -and $h.out -like ("*" + $oldSummary + "*")) "CONTROL: help shows the summary the file declares"
+    $newSummary = "a summary changed on disk after the first help - " + [guid]::NewGuid().ToString("N")
+    Set-Content -LiteralPath $echoFile -Value ((Get-Content -LiteralPath $echoFile -Raw).Replace($oldSummary, $newSummary)) -NoNewline
+    $h = Invoke-Horde -Root $tmp -Arguments @("help")
+    Check ($h.out -like ("*" + $newSummary + "*") -and $h.out -notlike ("*" + $oldSummary + "*")) "help shows a command's summary as its file says it now, not as it was"
+    Set-Content -LiteralPath $echoFile -Value ((Get-Content -LiteralPath $echoFile -Raw).Replace($newSummary, $oldSummary)) -NoNewline
+
     # A program a command runs and leaves failed: horde used to exit 0 (review of PR #12, finding 6).
     $r = Invoke-Horde -Root $tmp -Arguments @("native-fail")
     Check ($r.code -eq 1 -and $r.out -like "native-fail started*" -and $r.err -like "horde native-fail: *exit code 3*") ("a program a command leaves failed makes horde exit 1 and say so (got " + $r.code + ": " + $r.err.Trim() + ")")
@@ -246,7 +258,7 @@ try {
         Write-Host "  [SKIP] git is not on PATH, so a handled program failure cannot be tested here" -ForegroundColor Yellow
     }
     $r = Invoke-Horde -Root $tmp -Arguments @("inner-bind")
-    Check ($r.code -eq 1 -and $r.err -like "horde inner-bind: *NoSuchParameterForHordeTests*" -and $r.err -notlike "*usage:*") ("a binding error inside a command's body exits 1 without the usage (got " + $r.code + ": " + $r.err.Trim() + ")")
+    Check ($r.code -eq 1 -and $r.err -like "horde inner-bind: *NoSuchParameterForHordeTests*" -and $r.err -notlike "*usage:*") ("a binding error inside a command's body exits 1 without the usage" + " (got " + $r.code + ": " + $r.err.Trim() + ")")
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
     $r = Invoke-Horde -Root $tmp -Arguments @("side-effect")
     Check ($r.code -eq 1 -and $r.err.StartsWith("horde side-effect: ") -and $r.err -like "*top-level statements*") ("a broken command file is reported under its command's name and exits 1 (got " + $r.code + ": " + $r.err.Trim() + ")")

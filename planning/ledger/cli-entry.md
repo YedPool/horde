@@ -14,7 +14,7 @@ sources:
   help text that described commands as they used to be.
 - pull requests: none. `gh api repos/YedPool/wezfleet/commits/a6d6ff1/pulls` returns no pull request;
   the command-table work was committed to main directly.
-- docs: planning/wezfleet-v2-architecture.md:799, "the class of silent wiring bug that cost four
+- docs: planning/wezfleet-v2-architecture.md:800, "the class of silent wiring bug that cost four
   separate incidents in one week".
 - tests: test_debug/test-cli-surface.ps1, sections "dispatch", "controls" and "every command is
   declared exactly once".
@@ -27,7 +27,7 @@ sources:
 ### L-002 Help is generated from the declarations, never written beside them
 - source: YedPool/wezfleet a6d6ff1, measured before the fix: 27 commands dispatched while the help advertised 16
 - disposition: test
-- where: test/test-cli.ps1 :: "and its usage is read from the file without running it"
+- where: test/test-cli.ps1 :: "help lists every command exactly once"
 
 ### L-003 A command that cannot be listed must be said out loud, not silently left out of help
 - source: YedPool/wezfleet a6d6ff1, "ELEVEN commands were reachable and INVISIBLE, including census, tree and master"
@@ -62,7 +62,7 @@ sources:
 ### L-009 Help describes the commands as they are, not as they were
 - source: YedPool/wezfleet 80aa026 (2026-09-03) "The help text described the old kill and the old tell"
 - disposition: test
-- where: test/test-cli.ps1 :: "every shipped command file is well-formed"
+- where: test/test-cli.ps1 :: "help shows a command's summary as its file says it now, not as it was"
 
 ### L-010 help and its aliases are the entry point, not commands to look up
 - source: YedPool/wezfleet test_debug/test-cli-surface.ps1:217 "help and its aliases are the CLI entry point, not commands people look up"
@@ -83,3 +83,28 @@ sources:
 - source: YedPool/wezfleet lib/Commands.ps1 tell summary, which states exits 0 to 4 so a caller can act on them
 - disposition: test
 - where: test/test-cli.ps1 :: "a command that fails exits 1 and says why"
+
+### L-014 A value joined to its parameter with a colon is one argument, typed or from a script
+- source: review of YedPool/horde PR #12, finding 1, measured 2026-09-29 on PowerShell 5.1: `horde echo-args -Json:$false` gave json=True target=[False], because $args holds the pair as two items ("-Json:" and $false typed; "-Json" and "$false" from -File, with the colon gone). This is the second half of L-007: forwarding from $args keeps a switch a switch, but not its colon value
+- disposition: test
+- where: test/test-cli.ps1 :: "a switch turned off with a colon stays off"
+
+### L-015 help and dispatch find commands through one listing
+- source: review of YedPool/horde PR #12, finding 4: `Get-ChildItem -Filter *.ps1` listed zeta.ps1x through its 8.3 short name, and nul.ps1 was listed while `horde nul` said unknown command, because dispatch built a path of its own
+- disposition: test
+- where: test/test-cli.ps1 :: "dispatch finds every command that help lists"
+
+### L-016 Loading a declaration must run none of it, not only listing it
+- source: review of YedPool/horde PR #12, findings 2 and 3: a redirection's target (`@{...} 2> $(...)`), `using module` and `#requires -Modules` all ran code when a file that passed validation was loaded
+- disposition: test
+- where: test/test-cli.ps1 :: "and loading it runs none of it"
+
+### L-017 horde exits 0, 1 or 2, whatever the command does
+- source: review of YedPool/horde PR #12, finding 6: a command's `exit 7` made horde exit 7, a bare `exit` made it exit 0, and a program left failed inside a command left horde exiting 0
+- disposition: test
+- where: test/test-cli.ps1 :: "a command that calls exit makes horde exit 1 and says so"
+
+### L-018 A binding error inside a command's body is the command failing, not the command line
+- source: review of YedPool/horde PR #12, finding 5: `Get-ChildItem -NoSuchParam` inside a run block was reported as exit 2 with the usage
+- disposition: test
+- where: test/test-cli.ps1 :: "a binding error inside a command's body exits 1 without the usage"
