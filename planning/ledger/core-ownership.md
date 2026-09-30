@@ -184,3 +184,8 @@ sources:
 - source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) lists formerNames entries of name, until and a sessionId different from the file's own; nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
 - disposition: comment
 - where: core/ownership.json :: "whether that is an earlier id of this same conversation"
+
+### L-035 A run's window is the run's, not the session's
+- source: YedPool/wezfleet lib/Protocol.ps1:513-516 "The window this run owns. -1 means not pinned yet" read from run.json windowId; and :524-527, a session that moved windows became unreachable through its spawn-time record. Review finding 9, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the run's window is marked as the run's, a fallback for the session"

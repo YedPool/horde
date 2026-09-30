@@ -58,7 +58,7 @@
                 { "store": "X1", "field": "file name" },
                 { "store": "W5", "field": "session.pane" }, { "store": "W4", "field": "pane" } ] },
     { "name": "window", "owner": "host", "derived": "from the live pane list",
-      "read": [ { "store": "X4", "field": "window_id" }, { "store": "W4", "field": "window" }, { "store": "W3", "field": "windowId" } ] },
+      "read": [ { "store": "X4", "field": "window_id" }, { "store": "W4", "field": "window" }, { "store": "W3", "field": "windowId", "when": "run-level; fallback only: the window the run owns, which a session that moved windows is no longer in" } ] },
     { "name": "hostInstance", "owner": "host", "derived": "from the terminal's socket, or the process's terminal ancestor",
       "read": [ { "store": "W1", "field": "instance" }, { "store": "X5", "field": "instance" } ] },
     { "name": "role", "owner": "engine",

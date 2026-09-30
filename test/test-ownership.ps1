@@ -63,6 +63,8 @@ foreach ($x in $notRequired) { Write-Host ("  not in the required list: " + $x) 
 Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dropped"
 $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
+$windowW3 = @((Get-HordeOwnershipField -Doc $doc -Name "window").read | Where-Object { "$($_.store)" -ceq "W3" })[0]
+Check ("$($windowW3.when)" -like "*run-level*") "the run's window is marked as the run's, a fallback for the session"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
