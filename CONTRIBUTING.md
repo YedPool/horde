@@ -202,7 +202,16 @@ checkout has `origin/main`, the suite also compares each host's lists with it, a
 `origin/main` does not have, a count above its count, or a name or host folder it has and this
 checkout does not; with no git or no `origin/main` it prints `[SKIP]` and the reason. A host that is
 new on the branch is reported, not compared: its own pull request is where its lists are agreed.
-Because the comparison is with `origin/main`, a branch that must add an entry fails this suite until
-the entry is on `main` - that failure is the reviewer's cue to agree with the entry. The `.md`
+
+A branch that genuinely needs a new entry or a higher count records it in
+`hosts/<name>/growth.txt`, one line per increase: `path | old -> new | YYYY-MM-DD | reason`, with
+`old` being `origin/main`'s count (0 for a new path) and a reason of at least four distinct words.
+The increase passes only when a line added since `origin/main` matches that path and exactly those
+two counts; that line is what the reviewer agrees to. Refusing every increase outright was a
+deadlock - the entry could never pass until it was already on `main`. A line already on `main`
+permits nothing again, so a mention removed later cannot come back unreviewed, and `growth.txt` is
+append-only: its lines on `origin/main` must still open the file, unchanged and in order. A line that
+matches no current difference is history, not a failure. There is no growth record for `names.txt`:
+a declared name is never removed. The `.md`
 and `.html` files under `planning/` are not scanned, because plans and ledgers record the system
 being replaced and cannot be accurate without naming it; any other file under `planning/` fails.

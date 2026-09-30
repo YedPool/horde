@@ -3,8 +3,10 @@
 # tools/HostNames.ps1 fails test/test-host-names.ps1 on a file not listed here, on a listed file that
 # names the terminal more times than listed, and on an entry that allows more than its file needs -
 # and, when the checkout has origin/main, on an entry origin/main lacks or a count above its count -
-# so this list can only shrink. When a mention goes, lower the count or delete the line; when one
-# must be added, the entry and its reason are the thing a reviewer has to agree with.
+# so this list only grows through a reviewed record. When a mention goes, lower the count or delete
+# the line. When one must be added, add or raise the entry here AND append a line to growth.txt in
+# this folder - path | old -> new | YYYY-MM-DD | reason - with old being origin/main's count (0 for a
+# new path); that line and its reason are the thing a reviewer has to agree with.
 #
 # The .md and .html files under planning/ are not scanned, by rule (see tools/HostNames.ps1): plans
 # and ledgers are records of the WezTerm-based system being replaced and cannot be accurate without
