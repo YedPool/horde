@@ -32,6 +32,10 @@
         @{ Name = "switch-word-case-sensitive"
            Find = '-imatch ''\A\$?(true|false)\z'''
            Replace = '-cmatch ''\A\$?(true|false)\z''' }
+        # A switch followed by a [bool].
+        @{ Name = "switch-bool-accepted"
+           Find = 'if ($next -is [bool] -and'
+           Replace = 'if ($false -and' }
         @{ Name = "common-switches-forgotten"
            Find = '$switches = @("Verbose", "Debug", "WhatIf", "Confirm")'
            Replace = '$switches = @()' }

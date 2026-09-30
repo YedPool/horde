@@ -159,6 +159,11 @@ sources:
 - disposition: test
 - where: test/test-cli.ps1 :: "a help word that is a parameter's value is bound, not taken as a request for help"
 
+### L-030 A switch followed by a truth value, not a word, is refused
+- source: third review of YedPool/horde PR #12, finding 3, measured 2026-09-30 on PowerShell 5.1: typed, or in-process, `horde echo-args -Json $false` arrives as the tagged "-Json" and a [bool], and bound json=True target=[False] with exit 0 - the switch on, when the caller meant it off. A switch immediately followed by an item that is a [bool] now exits 2 and says to join the value with a colon. A [bool] cannot arrive from -File, where every argument is text; the word forms are L-020 and L-026
+- disposition: test
+- where: test/test-cli.ps1 :: "a switch followed by a truth value is refused, never turned on"
+
 ### L-027 Every user-facing command is driven end to end, in a terminal that is not the user's
 - source: CONTRIBUTING.md section 2 "Test end to end, the way a user would", which the migration plan's step 0.9 makes the CLI's gate; and section 3, YedPool/wezfleet tasks/lessons.md 2026-08-16, for why the terminal is a separate WezTerm instance and never a window. test/e2e/e2e-cli.ps1 spawns `powershell -File horde.ps1 --help` and `... version` in panes of an isolated instance and reads their screens; run 2026-09-30: 20 PASS, exit 0
 - disposition: test

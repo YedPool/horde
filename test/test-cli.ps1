@@ -317,6 +317,20 @@ try {
     # refused the same way; a colon value typed keeps its own handling above.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "false") -AsTyped
     Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch followed by a truth word is refused typed at a prompt too (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # A SWITCH FOLLOWED BY A TRUTH VALUE, not a word: typed or in-process, `-Json $false` arrives as
+    # the tagged switch and a [bool], and bound json=True target=[False] with exit 0 - the switch ON,
+    # when the caller almost certainly meant it off (third review of PR #12, finding 3). Refused.
+    foreach ($tv in @('$false', '$true')) {
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", $tv) -AsTyped
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the value*" -and $r.err -like "*usage: horde echo-args*") ("a switch followed by a truth value is refused, never turned on" + ": -Json " + $tv + ", typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    foreach ($code in @('& $horde echo-args -Json $false', '$v = $true; & $horde echo-args abc -Json $v')) {
+        $r = Invoke-HordeInProcess -Root $tmp -Code $code
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the value*") ("a switch followed by a truth value is refused, never turned on" + ", in-process: " + $code + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    # CONTROL: a truth value before the switch is a positional, as the refusal says to reorder it.
+    $r = Invoke-HordeInProcess -Root $tmp -Code '& $horde echo-args $false -Json'
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[False] json=True count=0 verb=[]") ("a truth value before a switch is a positional, in-process (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # A switch named by its alias is a switch: [Alias("AsJson")] on echo-args' -Json, read from the AST.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-AsJson", "false")
     Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch named by its alias and followed by a truth word is refused (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")

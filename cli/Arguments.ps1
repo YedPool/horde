@@ -27,6 +27,12 @@
 # omit the switch, give it bare, or put the word before it. Typed, "-Json false" arrives the same way
 # and is refused the same way; typed "-Json:false" keeps the colon and is PowerShell's to refuse.
 #
+# A SWITCH FOLLOWED BY A TRUTH VALUE IS REFUSED. Typed or in-process, `-Json $false` arrives as the
+# tagged switch and a [bool] - not a word - and PowerShell binds it as the switch ON and $false an
+# argument: json=True target=[False], exit 0 (third review of PR #12, finding 3). A [bool] cannot
+# arrive from a script, where every argument is text, so this is a typed or in-process caller asking
+# for the opposite of what it gets; it exits 2 and is told to join the value with a colon.
+#
 # WHAT IS STILL NOT CAUGHT, measured 2026-09-29, from a script: "-Json:" with nothing after it
 # arrives as nothing, or swallows the next word ("-Json: -Count 5" delivers -Json, then the words
 # "-Count" and "5"). It leaves no trace in $args.
@@ -100,6 +106,13 @@ function Resolve-HordeArguments {
         }
         if ($pname -and $j + 1 -lt $items.Count) {
             $next = $items[$j + 1]
+            # A [bool] can only come from PowerShell's own parsing - typed, or in-process - where
+            # `-Json $false` means the switch ON and $false an argument: it bound json=True
+            # target=[False], exit 0 (third review of PR #12, finding 3). No caller writes that
+            # meaning it, so it is refused; -Json:$false is how a switch is given a value.
+            if ($next -is [bool] -and (Get-HordeParameterKind -Name $pname -Parameters $Parameters) -eq "switch") {
+                return (& $fail (Get-HordeSwitchBoolProblem -Switch "$item" -Value $next))
+            }
             # No separate "is it untagged" test: a tagged item's text starts with "-", so it never
             # matches the pattern, and a check that cannot change the outcome is one no test can hold.
             if ($next -is [string] -and $next -imatch '\A\$?(true|false)\z' -and
@@ -180,6 +193,16 @@ function Get-HordeSwitchWordProblem {
         "(powershell -File), PowerShell passes " + $Switch + ":" + $Word + " as " + $Switch + " and a separate word, so horde " +
         "cannot tell whether '" + $Word + "' was the switch's value or an argument. Omit the switch to keep it off, give it " +
         "bare to turn it on, or reorder the arguments so the word comes before the switch if it is an argument")
+}
+
+function Get-HordeSwitchBoolProblem {
+    # The message for a switch followed by the value $true or $false as a separate argument.
+    param([string]$Switch, [bool]$Value)
+    $v = "`$" + "$Value".ToLower()
+    return ("the switch " + $Switch + " is followed by the value " + $v + " as a separate argument: PowerShell turns " +
+        "the switch on and passes " + $v + " on as an argument, so it never reaches the switch. Join it with a colon (" +
+        $Switch + ":" + $v + ") to set the switch, omit the switch to keep it off, or reorder the arguments so the value " +
+        "comes before the switch if it is an argument")
 }
 
 function Get-HordeTextBoolProblem {
