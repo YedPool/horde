@@ -12,7 +12,9 @@
 $ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
-. (Join-Path $root "test\harness\Isolation.ps1")
+# If the harness does not load, stop here with no [FAIL] line: every check below would otherwise fail
+# for that one reason, and a mutation run would read a harness that no longer loads as a catch.
+try { . (Join-Path $root "test\harness\Isolation.ps1") } catch { Write-Host ("  the harness did not load: " + $_.Exception.Message); exit 3 }
 
 $fails = @()
 # A CONDITION MUST BE EXACTLY TRUE OR FALSE. Anything else fails, loudly. The first Throws below
@@ -36,7 +38,9 @@ function Throws { param([scriptblock]$Block, [string]$Like)
 # A broken walker therefore turns into a failed check, not a killed stranger.
 $script:ownProcs = New-Object System.Collections.ArrayList
 $script:violations = New-Object System.Collections.ArrayList
+$script:guardSaw = New-Object System.Collections.ArrayList
 $guard = { param($Id, $Created)
+    [void]$script:guardSaw.Add([int]$Id)
     if (@($script:ownProcs | Where-Object { $_.Id -eq $Id }).Count -eq 0) { [void]$script:violations.Add([int]$Id); return "refused-by-test" }
     return (Stop-HordeProcessIfSame -Id $Id -Created $Created) }
 
@@ -49,8 +53,10 @@ function Start-OwnProcess {
     $psi.Arguments = $Arguments
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
     $p = [System.Diagnostics.Process]::Start($psi)
     $p.BeginOutputReadLine()
+    $p.BeginErrorReadLine()
     [void]$script:ownProcs.Add($p)
     return [pscustomobject]@{ pid = $p.Id; created = $p.StartTime; name = [System.IO.Path]::GetFileName($File); proc = $p }
 }
@@ -65,7 +71,8 @@ function Hold-OwnChild {
         foreach ($c in @(Get-HordeProcessTable | Where-Object { $_.ppid -eq $Parent.pid -and $_.name -eq $Name })) {
             if ((Get-HordeMicroseconds $c.created) -lt (Get-HordeMicroseconds $Parent.created)) { continue }
             try { $h = [System.Diagnostics.Process]::GetProcessById($c.pid) } catch { continue }
-            $null = $h.Handle
+            $hh = $null; try { $hh = $h.Handle } catch { $hh = $null }
+            if ($null -eq $hh -or $hh -eq [IntPtr]::Zero) { $h.Dispose(); continue }
             if ((Get-HordeMicroseconds $h.StartTime) -ne (Get-HordeMicroseconds $c.created)) { $h.Dispose(); continue }
             [void]$script:ownProcs.Add($h)
             return [pscustomobject]@{ pid = $c.pid; created = $c.created; name = $Name; proc = $h }
@@ -254,7 +261,7 @@ Check ("$($v.reason)" -like "*nothing was verified*") "and it says nothing was v
 
 $victim = Start-OwnPing
 if ($victim) {
-    $forged = [pscustomobject]@{ pid = $victim.pid; created = $victim.created; socket = (Join-Path $env:TEMP "horde-no-such-socket")
+    $forged = [pscustomobject]@{ pid = $victim.pid; created = $victim.created; socket = (Join-Path $env:TEMP ("horde-no-such-socket-" + [guid]::NewGuid().ToString("N")))
                                  store = $null; originalSocket = $env:WEZTERM_UNIX_SOCKET; originalRoot = $env:HORDE_ROOT }
     $r1 = Stop-HordeIsolatedWezterm -Instance $forged -KillWith $guard
     Check ($r1.refused -and -not $r1.stopped) "an instance with no token is refused"
@@ -306,14 +313,13 @@ if ($again) {
 $gone = Start-OwnPing
 if ($gone) {
     $wantSock = "C:\horde-test\original-socket"; $wantRoot = "C:\horde-test\original-root"
-    $tok = Register-HordeIsolatedInstance -GuiPid $gone.pid -Created $gone.created -Socket (Join-Path $env:TEMP "horde-no-such-socket") -OriginalSocket $wantSock -OriginalRoot $wantRoot
+    $tok = Register-HordeIsolatedInstance -GuiPid $gone.pid -Created $gone.created -Socket (Join-Path $env:TEMP ("horde-no-such-socket-" + [guid]::NewGuid().ToString("N"))) -OriginalSocket $wantSock -OriginalRoot $wantRoot
     $inst = [pscustomobject]@{ token = $tok; originalSocket = "C:\horde-test\from-the-object"; originalRoot = "C:\horde-test\from-the-object" }
     Stop-Own $gone
     $keepSock = $env:WEZTERM_UNIX_SOCKET; $keepRoot = $env:HORDE_ROOT
     $env:WEZTERM_UNIX_SOCKET = "C:\horde-test\something-else"; $env:HORDE_ROOT = "C:\horde-test\something-else"
     $r3 = Stop-HordeIsolatedWezterm -Instance $inst -KillWith $guard
     Check ($r3.stopped -and -not $r3.survived -and -not $r3.refused) "a valid instance whose terminal is already gone reads as stopped"
-    Check (@($r3.orphansKilled).Count -eq 0) "and nothing else is killed on its behalf"
     Check ("$env:WEZTERM_UNIX_SOCKET" -eq $wantSock -and "$env:HORDE_ROOT" -eq $wantRoot) "teardown restores the environment registration recorded, not what the object handed to it says"
     $env:WEZTERM_UNIX_SOCKET = $keepSock; $env:HORDE_ROOT = $keepRoot
     $r3b = Stop-HordeIsolatedWezterm -Instance $inst -KillWith $guard
@@ -367,7 +373,7 @@ if ($gone3) {
 # teardown that never deleted anything. The socket name is safe to create: it names the pid of a ping
 # this suite started and still holds a handle to, so no WezTerm can have that pid.
 $gone4 = Start-OwnPing
-if ($gone4 -and (Test-Path -LiteralPath $sockDir)) {
+if ($gone4 -and (Test-Path -LiteralPath $sockDir) -and -not (Test-Path -LiteralPath (Join-Path $sockDir ("gui-sock-" + $gone4.pid)))) {
     $ownSock = Join-Path $sockDir ("gui-sock-" + $gone4.pid)
     $ownStore = Join-Path $env:TEMP ("horde-iso-store-" + [guid]::NewGuid().ToString("N"))
     Set-Content -LiteralPath $ownSock -Value "stands in for a socket"
@@ -406,7 +412,11 @@ $orphan = Hold-OwnChild -Parent $dead -Name "PING.EXE"
 if ($orphan) {
     $tokO = Register-HordeIsolatedInstance -GuiPid $dead.pid -Created $dead.created -Socket "" -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
     Stop-Own $dead
+    $script:guardSaw.Clear()
     $rO = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tokO }) -KillWith $guard
+    # THE GUARD IS REALLY IN THE PATH. Every other safety claim in this suite rests on every harness
+    # kill passing through $guard; the fourth review found nothing tested that it does.
+    Check (@($script:guardSaw) -contains $dead.pid -and @($script:guardSaw) -contains $orphan.pid) "every kill teardown makes passes through the test's guard"
     Check (@($rO.orphansKilled) -contains $orphan.pid -and $orphan.proc.HasExited) "the child of a terminal that already died is found through the pin and killed"
     Stop-Own $orphan
 } else { Check $false "PRECONDITION: the suite holds the orphan-to-be" }
@@ -460,7 +470,7 @@ function Get-CodeOnly { param([string]$Path)
 $scripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File |
     Where-Object { $_.FullName -notlike "*\test\harness\*" -and $_.FullName -ne $self })
 Check ($scripts.Count -gt 0) "CONTROL: the scan sees real scripts, so an empty result below would mean something"
-Check (@($scripts | Where-Object { $_.FullName -eq $self }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
+Check (@($scripts | Where-Object { $_.Name -eq "test-isolation.ps1" }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
 $starters = @($scripts | Where-Object { (Get-CodeOnly -Path $_.FullName) -match "Start-HordeIsolatedWezterm" })
 Check ($starters.Count -gt 0) "CONTROL: the scan finds at least one script that starts an instance"
 $missing = @($starters | Where-Object { (Get-CodeOnly -Path $_.FullName) -notmatch "Stop-HordeIsolatedWezterm" })

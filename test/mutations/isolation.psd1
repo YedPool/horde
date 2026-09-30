@@ -65,6 +65,12 @@
         @{ Name = "launch-tree-ignores-start-time"
            Find = 'if ($null -eq $lc -or (Get-HordeMicroseconds $lc) -ne [long]$LauncherUs) { return }'
            Replace = 'if ($null -eq $lc) { return }' }
+        @{ Name = "kill-ignores-the-guard"
+           Find = 'if ($KillWith) { return (& $KillWith $Id $Created) }'
+           Replace = '' }
+        @{ Name = "orphan-kill-drops-the-guard"
+           Find = '$r = Invoke-HordeKill -Id $d.pid -Created $d.created -KillWith $KillWith'
+           Replace = '$r = Invoke-HordeKill -Id $d.pid -Created $d.created' }
         @{ Name = "no-second-walk-after-the-kill"
            Find = 'foreach ($pass in 1..2) {'
            Replace = 'foreach ($pass in 1..1) {'
