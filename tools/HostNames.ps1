@@ -40,6 +40,20 @@
 #     dot-sourced. Any other file under planning/ is a finding of its own, and is scanned as well.
 #   - .git/: not the repository's content.
 # Other hosts' folders ARE scanned: hosts/vscode naming another terminal would be the same leak.
+#
+# EVERY SCANNED BYTE IS PRINTABLE ASCII (tab, LF, CR, 0x20-0x7E), host folders included: CONTRIBUTING
+# rule 13 already requires it, and it is what lets a byte-for-byte substring search stand for "names
+# the host". Without it the review of PR 21 hid a name behind a look-alike Cyrillic letter and behind
+# UTF-16 with no byte order mark (a NUL after every letter); both read as nothing. Both are refused now.
+#
+# WHAT THE SCAN STILL CANNOT SEE, so that nobody reads a pass as more than it is:
+#   - A NAME BUILT AT RUN TIME: two string halves joined, or an environment variable's name assembled
+#     from pieces. The scan matches text, not what the code computes.
+#   - A NAME SPLIT ACROSS LINES: half at the end of one line of a here-string, half on the next.
+#   - PATHS LONGER THAN 260 CHARACTERS: untested. The review's attempt to plant one failed in its own
+#     setup ("Illegal characters in path"), so whether Get-ChildItem under PowerShell 5.1 lists such a
+#     file is not known.
+#   - SUBSTITUTION inside an allowlisted file (see WHAT COUNTS above).
 
 $script:HordeHostNamesProseFolder = "planning"
 $script:HordeHostNamesProseTypes = @(".md", ".html")
@@ -86,6 +100,17 @@ function Test-HordePlanningProse {
     return ($script:HordeHostNamesProseTypes -contains ([System.IO.Path]::GetExtension($Rel).ToLowerInvariant()))
 }
 
+function Get-HordeFirstNonAsciiByte {
+    # The offset of the file's first byte that is not printable ASCII - tab, LF, CR and 0x20-0x7E are
+    # allowed - or -1 if there is none. The bytes are decoded as ISO-8859-1, which maps each byte to
+    # the character with the same number, so a regex can look at bytes without a loop over them.
+    param([string]$Full)
+    $bytes = [System.IO.File]::ReadAllBytes($Full)
+    $m = [regex]::Match([System.Text.Encoding]::GetEncoding(28591).GetString($bytes), '[^\t\n\r\x20-\x7E]')
+    if ($m.Success) { return $m.Index }
+    return -1
+}
+
 function Get-HordeRepoFiles {
     # Every file under the root except .git/ and the given folders, as forward-slash paths relative
     # to the root. The filesystem, not `git ls-files`: tools/Mutate.ps1 runs suites in a copy with no
@@ -110,8 +135,8 @@ function Get-HordeNameMentionCount {
     # its path names the host. Occurrences, not lines - the review of PR 21 appended a second mention
     # to a line that already had one, and a count of lines did not move. Occurrences of one name do
     # not overlap ("aa" is in "aaa" once), and a name inside another name is counted for each.
-    # Every file is read as text: the repository holds no binary files, and a binary one would be
-    # read as text too - a false mention can only make the check stricter.
+    # Every file is read as text. Any file that is not printable ASCII is refused on its own by
+    # Test-HordeHostNames, so the text read here is the bytes on disk, one character each.
     param([string]$Full, [string]$Rel, [string[]]$Names)
     $count = 0
     foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }
@@ -143,6 +168,14 @@ function Test-HordeHostNames {
     foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip @())) {
         if (Test-HordeUnderFolder -Rel $f.rel -Folders @($script:HordeHostNamesProseFolder)) {
             Add-Finding "(repository)" $f.rel "is under planning/, where only .md and .html are allowed and skipped - move it out of planning/"
+        }
+        # EVERY BYTE PRINTABLE ASCII, host folders included (CONTRIBUTING rule 13 has no exemption).
+        # The name scan reads bytes as text, so a name written with a look-alike letter, or in UTF-16
+        # without a byte order mark (a NUL after every letter), was invisible to it - the review of
+        # PR 21 measured both. Refusing every other byte closes both holes, and a BOM with them.
+        $bad = Get-HordeFirstNonAsciiByte -Full $f.full
+        if ($bad -ge 0) {
+            Add-Finding "(repository)" $f.rel ("has a byte that is not printable ASCII at offset " + $bad + " - source files are ASCII (CONTRIBUTING rule 13), and a name hidden in such bytes is invisible to this scan")
         }
     }
 

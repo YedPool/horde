@@ -48,6 +48,19 @@
         @{ Name = "git-file-scanned"
            Find = 'if ($rel -eq ".git" -or '
            Replace = 'if (' }
+        # --- every scanned byte printable ASCII
+        @{ Name = "non-ascii-not-refused"
+           Find = 'if ($bad -ge 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nul-byte-allowed"
+           Find = "'[^\t\n\r\x20-\x7E]'"
+           Replace = "'[^\x00\t\n\r\x20-\x7E]'" }
+        @{ Name = "high-bytes-allowed"
+           Find = "'[^\t\n\r\x20-\x7E]'"
+           Replace = "'[^\t\n\r\x20-\xFF]'" }
+        @{ Name = "whitespace-refused"
+           Find = "'[^\t\n\r\x20-\x7E]'"
+           Replace = "'[^\x20-\x7E]'" }
         # --- a new mention
         @{ Name = "unlisted-file-accepted"
            Find = 'if (-not $a) { Add-Finding $hn $f.rel ('

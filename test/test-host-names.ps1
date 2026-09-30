@@ -134,6 +134,23 @@ try {
         if (-not $ok) { Show $f }
     }
     RefusesPlanningData
+
+    Write-Host ""
+    Write-Host "--- every scanned byte is printable ASCII, so no name hides behind an encoding ---" -ForegroundColor Cyan
+
+    # The review of PR 21 wrote the host's name with a Cyrillic letter, and as UTF-16 with no byte
+    # order mark; the scan read both as text and found nothing. CONTRIBUTING rule 13 already says
+    # source files are ASCII, so a byte outside printable ASCII (tab, CR and LF allowed) is refused.
+    function Write-FakeBytes { param([string]$Rel, [byte[]]$Bytes)
+        $p = Join-Path $script:repo $Rel
+        New-Item -ItemType Directory -Force (Split-Path -Parent $p) | Out-Null
+        [System.IO.File]::WriteAllBytes($p, $Bytes) }
+    Refuses "lookalike" { Write-FakeBytes "core/h.ps1" ([System.Text.Encoding]::UTF8.GetBytes("# z" + [char]0x043E + "rbterm cli spawn`n")) } "not printable ASCII" "a name spelled with a look-alike letter is refused as non-ASCII"
+    Refuses "utf16-no-bom" { Write-FakeBytes "core/u.ps1" ([System.Text.Encoding]::Unicode.GetBytes("zorbterm cli spawn`n")) } "not printable ASCII" "a file in UTF-16 with no byte order mark is refused - its NUL bytes are not printable ASCII"
+    Refuses "utf8-bom" { Write-FakeBytes "core/b.ps1" ([byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes("# sessions`n"))) } "not printable ASCII" "a byte order mark is refused"
+    Refuses "own-folder-non-ascii" { Write-FakeBytes "hosts/zorbterm/adapter.ps1" ([System.Text.Encoding]::UTF8.GetBytes("# caf" + [char]0x00E9 + "`n")) } "not printable ASCII" "the host's own folder is held to ASCII too - rule 13 has no exemption"
+    Passes "ascii-whitespace" { Write-FakeFile "core/ws.ps1" "`tif (`$x) {`r`n`t`t`$y`r`n}`r`n" } "CONTROL: tabs, CR and LF are printable enough, and pass"
+    Passes "planning-prose-non-ascii" { Write-FakeBytes "planning/notes.md" ([System.Text.Encoding]::UTF8.GetBytes("caf" + [char]0x00E9 + "`n")) } "prose under planning/ is not scanned, so a non-ASCII letter there is not this suite's to refuse"
     Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
     # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already
