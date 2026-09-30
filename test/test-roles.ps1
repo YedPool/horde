@@ -15,6 +15,13 @@ function Check { param($Cond, [string]$What)
     if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
     if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
     else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
+# A section's checks run inside try/finally so its throwaway store is always removed. An error that
+# stops a statement inside try jumps straight to finally and skips every check after it - found
+# 2026-09-29 when a call to a not-yet-written function skipped the rest of the store section and
+# the suite still exited 0. So each such section also catches, and a section that stopped early fails.
+function SectionStopped { param([string]$Section, $Err)
+    Write-Host "  [FAIL] the '$Section' section stopped early: $Err" -ForegroundColor Red
+    $script:fails += ("the '" + $Section + "' section stopped early: " + $Err) }
 function RoleOf { param($R) if ($R.role.state -eq "known") { return "$($R.role.value)" } return "unknown" }
 
 $table = Get-HordeRoleTable
@@ -144,6 +151,7 @@ try {
     Check ((Get-HordeRoleCount -Read $read2 -Role "warchief").state -eq "unknown") "an unreadable record makes the role count unknown"
     Remove-Item -LiteralPath (Join-Path $sess "broken.json") -Force
 }
+catch { SectionStopped "reading a wezfleet store" $_ }
 finally {
     $env:WEZFLEET_ROOT = $keepRoot
     if ((Split-Path -Leaf $store) -match '^horde-roles-store-[0-9a-f]{32}$') { Remove-Item -LiteralPath $store -Recurse -Force -ErrorAction SilentlyContinue }
@@ -176,6 +184,7 @@ try {
     $readLocked = Read-HordeWezfleetRoles -Root $locked
     Check ($readLocked.complete.state -eq "unknown") "a sessions directory that cannot be listed reads as unknown"
 }
+catch { SectionStopped "a sessions directory that cannot be listed" $_ }
 finally {
     # rmdir removes the junction itself, never what it points at.
     if (Test-Path -LiteralPath $lockedSess) { $null = & cmd /c rmdir $lockedSess }
@@ -204,6 +213,7 @@ try {
     $plain.Dispose()
     Check $blocked "CONTROL: with the ordinary read share the same write fails"
 }
+catch { SectionStopped "reading never blocks the writer" $_ }
 finally {
     if ((Split-Path -Leaf $w) -match '^horde-share-[0-9a-f]{32}$') { Remove-Item -LiteralPath $w -Recurse -Force -ErrorAction SilentlyContinue }
 }
