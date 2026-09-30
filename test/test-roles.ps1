@@ -77,6 +77,7 @@ Put (Join-Path $sess "o1.json") @{ claudeSessionId = "o1"; role = "orchestrator"
 Put (Join-Path $sess "o2.json") @{ claudeSessionId = "o2"; role = "orchestrator"; label = "B"; retired = $true }
 Put (Join-Path $sess "s1.json") @{ claudeSessionId = "s1"; role = "session"; label = "A7" }
 Put (Join-Path $sess "n1.json") @{ claudeSessionId = "n1"; label = "C" }
+Put (Join-Path $sess "n2.json") @{ claudeSessionId = "n2"; label = "D"; retired = $true }
 Put (Join-Path $sess "wrong-name.json") @{ claudeSessionId = "someone-else"; role = "master" }
 Set-Content -LiteralPath (Join-Path $sess "m1.12345.abcd1234.tmp") -Value '{"claudeSessionId":"m1","role":"master"}'
 Put (Join-Path $claimsDir "7.json") @{ role = "master"; claimedAt = "2026-09-29T00:00:00Z" }
@@ -111,17 +112,27 @@ try {
     Remove-Item -LiteralPath (Join-Path $sess "m1.json.lock") -Force
 
     $byId = @{}; foreach ($s in $read.sessions) { $byId[$s.id] = $s }
-    Check ($byId.Count -eq 5) ("five records are read (" + (@($byId.Keys | Sort-Object) -join ", ") + ")")
+    Check ($byId.Count -eq 6) ("six records are read (" + (@($byId.Keys | Sort-Object) -join ", ") + ")")
     Check (-not $byId.ContainsKey("m1.12345.abcd1234") -and -not $byId.ContainsKey("wrong-name")) "a temp file beside the records is not read as a record"
     Check ((RoleOf $byId["o2"]) -eq "orc" -and $byId["o2"].retired) "a retired record still reads its role"
     Check ($byId["n1"].role.state -eq "unknown" -and $byId["n1"].field -eq "missing") "and a record with no role reads as unknown, not goblin"
     $c7 = @($read.claims | Where-Object { $_.pane -eq "7" })[0]
     $c8 = @($read.claims | Where-Object { $_.pane -eq "8" })[0]
     Check ((RoleOf $c7) -eq "warchief" -and $c8.field -eq "empty") "a claim role is read through the same alias table"
-    $wc = Get-HordeRoleCount -Read $read -Role "warchief"
+    # n1 is live and has no role: it may well be the warchief (every roleless record that mattered in
+    # wezfleet was a lost master or orchestrator), so no role count over this store is known.
+    $wcHole = Get-HordeRoleCount -Read $read -Role "warchief"
+    Check ($wcHole.state -eq "unknown" -and $wcHole.reason -like "*n1*") "a live session whose role is unknown makes the role count unknown, naming it"
+    Check ((Get-HordeRoleCount -Read $read -Role "goblin").state -eq "unknown") "and that holds for every role, not only warchief"
+
+    # CONTROL: the same store without the live roleless record. n2 - retired and roleless - stays, so
+    # the control also shows a retired session's unknown role does not matter to a live count.
+    Remove-Item -LiteralPath (Join-Path $sess "n1.json") -Force
+    $readClean = Read-HordeWezfleetRoles
+    $wc = Get-HordeRoleCount -Read $readClean -Role "warchief"
     Check ($wc.state -eq "known" -and $wc.value -eq 1) "CONTROL: with every record readable, the warchief count is known"
-    $oc = Get-HordeRoleCount -Read $read -Role "orc"
-    Check ($oc.value -eq 1) "a retired orc is not counted among the live ones"
+    $oc = Get-HordeRoleCount -Read $readClean -Role "orc"
+    Check ($oc.state -eq "known" -and $oc.value -eq 1) "a retired orc is not counted among the live ones"
 
     # One record that cannot be parsed: the counts become unknown instead of silently shrinking.
     Set-Content -LiteralPath (Join-Path $sess "broken.json") -Value "{ not json"

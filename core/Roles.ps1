@@ -110,8 +110,18 @@ function Read-HordeWezfleetRoles {
 function Get-HordeRoleCount {
     # How many live (not retired) sessions hold a role, as an answer. Unknown when any record could
     # not be read - a count taken over a store with a hole in it is not a count.
+    #
+    # Unknown too when any LIVE session's role is unknown, naming those sessions. Such a session may
+    # hold the very role being counted: every roleless record that mattered in wezfleet was a lost
+    # master or orchestrator (ledger L-003). One master plus one live roleless session used to count
+    # as "warchief known 1" (review, 2026-09-29). A retired session's role does not matter to a live
+    # count, so it is not consulted.
     param($Read, [Parameter(Mandatory = $true)][string]$Role)
     if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count: " + $Read.complete.reason)) }
+    $unsure = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -ne "known" } | ForEach-Object { $_.id })
+    if ($unsure.Count -gt 0) {
+        return (New-HordeUnknown -Reason ("cannot count: the role of " + $unsure.Count + " live session(s) is unknown (" + ($unsure -join ", ") + ")"))
+    }
     $n = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -eq "known" -and $_.role.value -eq $Role }).Count
     return (New-HordeKnown -Value $n)
 }
