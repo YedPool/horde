@@ -54,6 +54,11 @@ sources:
 - disposition: test
 - where: test/test-cli.ps1 :: "the dispatcher has no param block - the one that would strip switches from forwarded arguments"
 
+### L-031 A switch-shaped value forwarded from a wrapper's own $args stays a switch
+- source: third review of YedPool/horde PR #12, finding 5, measured 2026-09-30 on PowerShell 5.1: `function F { & horde.ps1 echo-args $args[0] }; F -Json`, meaning "-Json" as the target, bound json=True target=[] with exit 0, because the item keeps the parameter tag L-007 depends on. horde receives what a caller giving the switch would, so it cannot be told apart and is not fixed; a wrapper that means a value passes `"$($args[0])"`, which bound target=[-Json]
+- disposition: comment
+- where: cli/Arguments.ps1 :: "NOR A WRAPPER THAT FORWARDS ONE ITEM OF ITS OWN $args"
+
 ### L-008 The surface check fails in both directions, and has a control
 - source: YedPool/wezfleet a6d6ff1, "a parser that matched nothing would leave both lists empty and both checks green"
 - disposition: test

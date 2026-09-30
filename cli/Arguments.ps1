@@ -46,6 +46,12 @@
 # - "-Json:2", "-Json:y", "-Json:$x" - arrives exactly as the switch and an argument would, and binds
 # that way (measured 2026-09-30: json=True target=[2], [y] and [$x], exit 0).
 #
+# NOR A WRAPPER THAT FORWARDS ONE ITEM OF ITS OWN $args: the item keeps its tag. `function F { &
+# horde.ps1 echo-args $args[0] }; F -Json`, meaning "-Json" as the target, bound json=True target=[],
+# exit 0 (measured 2026-09-30, third review of PR #12, finding 5). horde receives exactly what a
+# caller giving the switch would give it, so nothing here can tell the two apart. A wrapper that
+# means a value passes it as text: `"$($args[0])"` bound target=[-Json].
+#
 # "--" IS REFUSED WHEREVER IT ARRIVES. Typed, PowerShell consumes it before horde runs and what
 # follows is plain words, so horde never sees it. From a script it arrives as an argument, and a
 # -Name after it is still tagged as a parameter, so its meaning cannot be given; it exits 2 instead.
