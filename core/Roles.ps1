@@ -73,7 +73,7 @@ function Get-HordeWezfleetRoot {
 
 function Read-HordeWezfleetRoles {
     # Every role wezfleet holds - session records and pending spawn claims - read, never written.
-    # Returns { sessions; claims; unreadable; complete }, where complete is an answer: known when
+    # Returns { sessions; claims; unreadable; mismatched; complete }, where complete is an answer: known when
     # the sessions directory was there and listed and every record could be read, unknown with every
     # reason otherwise. wezfleet's own reader skips an
     # unreadable record silently, which can make it report "no master" when there is one.
@@ -82,6 +82,7 @@ function Read-HordeWezfleetRoles {
     $sessions = New-Object System.Collections.ArrayList
     $claims = New-Object System.Collections.ArrayList
     $unreadable = New-Object System.Collections.ArrayList
+    $mismatched = New-Object System.Collections.ArrayList
 
     # Problems that leave the read incomplete, beyond single unreadable records.
     $gaps = New-Object System.Collections.ArrayList
@@ -108,7 +109,10 @@ function Read-HordeWezfleetRoles {
             try { $rec = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json } catch { [void]$unreadable.Add($f.FullName); continue }
             if ($null -eq $rec) { [void]$unreadable.Add($f.FullName); continue }
             $id = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
-            if ("$($rec.claudeSessionId)" -ne $id) { continue }
+            # Skipped as wezfleet skips it (lib/Registry.ps1:122, "corrupt, not authoritative"), so
+            # counts agree with it - but listed, because a silently dropped record is how a session,
+            # a master included, goes missing without anyone being told.
+            if ("$($rec.claudeSessionId)" -ne $id) { [void]$mismatched.Add($f.FullName); continue }
             $r = Read-HordeRecordRole -Record $rec -Table $Table
             [void]$sessions.Add([pscustomobject]@{ id = $id; retired = [bool]$rec.retired; role = $r.role; raw = $r.raw; field = $r.field })
         }
@@ -136,7 +140,7 @@ function Read-HordeWezfleetRoles {
     if ($unreadable.Count -gt 0) { [void]$gaps.Add("" + $unreadable.Count + " record(s) could not be read") }
     $complete = New-HordeKnown -Value $true
     if ($gaps.Count -gt 0) { $complete = New-HordeUnknown -Reason (@($gaps) -join "; ") }
-    return [pscustomobject]@{ sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); complete = $complete }
+    return [pscustomobject]@{ sessions = @($sessions); claims = @($claims); unreadable = @($unreadable); mismatched = @($mismatched); complete = $complete }
 }
 
 function Get-HordeRoleCount {
