@@ -432,3 +432,10 @@ adapters' own PRs.
 - source: host research 2026-09-30 C8: each host names its own variable, and a child started from a pane inside WSL does not see it unless the adapter exports it (measured); core/Identity.ps1 still never falls back to it (planning/ledger/core-identity.md)
 - disposition: comment
 - where: core/HostPort.ps1 :: "A PANE'S OWN-ID VARIABLE IS A CAPABILITY"
+
+## From the review of PR #31
+
+### L-082 A skip proves "none" only over a whole store; a skip that rests on something unknown is unknown
+- source: review of horde PR #31, finding 1, with probes: sessions whose run could not be chosen read title, dependsOn and spawnedAt absent; with no host, a session with no record read its fleet id absent (decision 2 leaking); an incomplete registry proved sessions had no record; a codex file that failed to re-read counted as no file
+- disposition: test
+- where: test/test-projection.ps1 :: "an incomplete registry never proves a session has no record"

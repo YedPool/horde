@@ -111,6 +111,15 @@ function New-HordeCandidate {
     return [pscustomobject]@{ store = $Store; field = $Field; answer = $Answer; skip = $Skip }
 }
 
+function New-HordeUnsure {
+    # A read that cannot tell: the store may hold this session's value, but something it depends on
+    # is unknown - a run no one can choose, a handle the host cannot verify, a store with a hole in
+    # it. It is an unknown candidate, never a skip: a skip says the store was read whole and holds
+    # nothing for the session, and only that lets the walk end absent (review of PR #31, finding 1).
+    param([string]$Store, [string]$Field, [string]$Reason)
+    return (New-HordeCandidate -Store $Store -Field $Field -Answer (New-HordeUnknown -Reason $Reason))
+}
+
 function Resolve-HordeCandidates {
     # The first candidate that answers - known or absent - wins, with its store as provenance. An
     # unknown candidate adds its reason and the walk goes on, as the table's order says; if none
@@ -463,16 +472,35 @@ function Get-HordeRegistryCandidate {
     # -Agentish reads a missing field as unknown instead.
     param($S, [string]$Field, [switch]$Agentish)
     if ($S.w1Unreadable) { return (New-HordeCandidate -Store "W1" -Field $Field -Answer (New-HordeUnknown -Reason "the session's registry record could not be read")) }
-    if ($null -eq $S.w1) { return (New-HordeCandidate -Store "W1" -Field $Field -Skip "no registry record names this session") }
+    if ($null -eq $S.w1) { return (Get-HordeNoRecordCandidate -S $S -Store "W1" -Field $Field) }
     if ($Agentish) { return (New-HordeCandidate -Store "W1" -Field $Field -Answer (Get-HordeAgentField -Record $S.w1 -Name $Field)) }
     return (New-HordeCandidate -Store "W1" -Field $Field -Answer (Get-HordeStoredField -Record $S.w1 -Name $Field -What "the registry record"))
+}
+
+function Get-HordeNoRecordCandidate {
+    # No registry record names the session: a skip only when the registry was read whole; otherwise
+    # the missing record may be this session's (a corrupt file, an unlistable directory).
+    param($S, [string]$Store, [string]$Field)
+    if ($S.regComplete.state -eq "known") { return (New-HordeCandidate -Store $Store -Field $Field -Skip "no registry record names this session") }
+    return (New-HordeUnsure -Store $Store -Field $Field -Reason ("the registry is incomplete (" + $S.regComplete.reason + "), so this session's record may be the one missing"))
+}
+
+function Get-HordeNoRunCandidate {
+    # The session is in no known run: a skip only when that is proven (no fleet id, or no roster
+    # lists it); unknown when the run could not be chosen or the fleet id is itself unknown.
+    param($S, [string]$Store, [string]$Field)
+    if ($S.runState.state -eq "unknown") { return (New-HordeUnsure -Store $Store -Field $Field -Reason ("the session's run is not known: " + $S.runState.reason)) }
+    return (New-HordeCandidate -Store $Store -Field $Field -Skip "the session is in no run")
 }
 
 function Get-HordeIdentityCandidate {
     # An agent field from the session's own control file: X2 for claude, W8 for codex.
     param($S, [string]$Field, [string]$StoreField = $Field)
     if ($S.dupe) { return (New-HordeCandidate -Store "X2" -Field $StoreField -Answer (New-HordeUnknown -Reason "more than one control file names this session, and none is chosen (core/identity)")) }
-    if ($null -eq $S.rec) { return (New-HordeCandidate -Store "X2" -Field $StoreField -Skip "no agent control file names this session") }
+    if ($null -eq $S.rec) {
+        if ($S.idComplete.state -ne "known") { return (New-HordeUnsure -Store "X2" -Field $StoreField -Reason ("no readable control file names this session, and " + $S.idComplete.reason)) }
+        return (New-HordeCandidate -Store "X2" -Field $StoreField -Skip "no agent control file names this session")
+    }
     $store = "X2"
     if ($S.rec.fields.agent.state -eq "known" -and "$($S.rec.fields.agent.value)" -ceq "codex") { $store = "W8" }
     return (New-HordeCandidate -Store $store -Field $StoreField -Answer $S.rec.fields[$Field])
@@ -500,7 +528,10 @@ function Get-HordeLastReportField {
     # The newest report's session.<Name>, from the run folder's log, as a W5 candidate.
     param($S, [string]$Name, [string]$Field)
     $ev = Get-HordeReportEvents $S
-    if ($null -eq $ev) { return (New-HordeCandidate -Store "W5" -Field $Field -Skip "the session is in no known run") }
+    if ($null -eq $ev) {
+        if ($null -eq $S.run) { return (Get-HordeNoRunCandidate -S $S -Store "W5" -Field $Field) }
+        return (New-HordeCandidate -Store "W5" -Field $Field -Skip "the session's run folder holds no reports")
+    }
     if ($ev.complete.state -ne "known") { return (New-HordeCandidate -Store "W5" -Field $Field -Answer $ev.complete) }
     $list = @($ev.events)
     for ($i = $list.Count - 1; $i -ge 0; $i--) {
@@ -516,7 +547,7 @@ function Get-HordeRosterCandidate {
     # A field of the session's roster entry (W4), or of its run manifest entry (W3 with -Manifest).
     param($S, [string]$Name, [string]$Field, [switch]$Manifest, [switch]$MissingIsUnknown)
     $store = "W4"; if ($Manifest) { $store = "W3" }
-    if ($null -eq $S.run) { return (New-HordeCandidate -Store $store -Field $Field -Skip "the session is in no known run") }
+    if ($null -eq $S.run) { return (Get-HordeNoRunCandidate -S $S -Store $store -Field $Field) }
     $entry = $null
     if ($Manifest) {
         if ($null -eq $S.run.manifest) { return (New-HordeCandidate -Store $store -Field $Field -Answer (New-HordeUnknown -Reason "the run manifest could not be read")) }
@@ -544,7 +575,9 @@ function Get-HordeClaimCandidate {
     # several and never the only one; a claim also needs the session's live handle and no record.
     param($S, $C, [string]$Name, [string]$Field)
     if ($S.w1Unreadable -or $null -ne $S.w1) { return (New-HordeCandidate -Store "W2" -Field $Field -Skip "the session has a registry record, so its claim was consumed") }
-    if ($S.pane.answer.state -ne "known") { return (New-HordeCandidate -Store "W2" -Field $Field -Skip "the session's handle is not known, so no claim can be matched to it") }
+    if ($S.regComplete.state -ne "known") { return (New-HordeUnsure -Store "W2" -Field $Field -Reason ("the registry is incomplete (" + $S.regComplete.reason + "), so whether this session's claim was consumed is unknown")) }
+    if ($S.pane.answer.state -eq "unknown") { return (New-HordeUnsure -Store "W2" -Field $Field -Reason ("the session's handle is unknown, so its claim cannot be matched: " + $S.pane.answer.reason)) }
+    if ($S.pane.answer.state -ne "known") { return (New-HordeCandidate -Store "W2" -Field $Field -Skip "the session is in no live handle, so no claim is its") }
     $h = "$($S.pane.answer.value)"
     if (-not $C.wf.claims.claims.ContainsKey($h)) {
         if ($C.wf.claims.complete.state -ne "known") { return (New-HordeCandidate -Store "W2" -Field $Field -Answer (New-HordeUnknown -Reason ("the claims are incomplete (" + $C.wf.claims.complete.reason + ")"))) }
@@ -581,7 +614,11 @@ function New-HordeSessionState {
     elseif ($null -ne $rec -and $rec.fields.liveStatus.state -eq "known" -and @("idle", "busy") -ccontains "$($rec.fields.liveStatus.value)") { $alive = $true }
     $retired = $false
     if ($null -ne $w1) { $rt = Get-HordeField -Record $w1 -Name "retired"; $retired = ($rt.state -eq "known" -and [bool]$rt.value) }
+    $idWhy = @(@("claude", "codex") | Where-Object { $C.identity.complete[$_].state -ne "known" } | ForEach-Object { "the " + $_ + " listing is incomplete (" + $C.identity.complete[$_].reason + ")" })
+    $idComplete = New-HordeKnown -Value $true
+    if ($idWhy.Count -gt 0) { $idComplete = New-HordeUnknown -Reason ($idWhy -join "; ") }
     return [pscustomobject]@{
+        regComplete = $C.wf.registry.complete; idComplete = $idComplete; runState = (New-HordeAbsent -Note "no fleet id")
         id = $Id; rec = $rec; dupe = (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0)
         w1 = $w1; w1Unreadable = $C.wf.registry.unreadable.Contains($Id); w1Retired = $retired; x1 = $x1; alive = $alive
         pane = $null; fleetId = ""; run = $null; rosterEntry = $null; runFolder = $null; runAmbiguous = @(); cwdForClaim = ""; fields = [ordered]@{}
@@ -591,10 +628,15 @@ function New-HordeSessionState {
 function Set-HordeRunLink {
     # Which run folder the session's reports live in, for a fleet id: the run Resolve-HordeRun picks,
     # its roster entry, and its sessions\<fleet id> folder.
-    param($S, $C, [string]$FleetId)
-    $S.fleetId = $FleetId; $S.run = $null; $S.rosterEntry = $null; $S.runFolder = $null
-    if ($FleetId -eq "") { return }
+    # -Fleet is the fleet id as an answer; runState keeps whether "no run" is proven or unknown.
+    param($S, $C, $Fleet)
+    $S.fleetId = ""; $S.run = $null; $S.rosterEntry = $null; $S.runFolder = $null
+    if ($Fleet.state -eq "unknown") { $S.runState = New-HordeUnknown -Reason ("the session's fleet id is unknown: " + $Fleet.reason); return }
+    if ($Fleet.state -eq "absent") { $S.runState = New-HordeAbsent -Note "the session has no fleet id"; return }
+    $FleetId = "$($Fleet.value)"
+    $S.fleetId = $FleetId
     $r = Resolve-HordeRun -Runs $C.wf.runs -FleetId $FleetId
+    $S.runState = $r.answer
     if ($r.answer.state -ne "known") { return }
     $S.run = $r.answer.value
     foreach ($e in @($S.run.entries)) { if ($e.id -ceq $FleetId) { $S.rosterEntry = $e.entry; break } }
@@ -604,10 +646,21 @@ function Set-HordeRunLink {
 function Get-HordePreliminaryFleetId {
     # The fleet id used to find a stored handle in a report or roster, before the claim can be read
     # (the claim needs the handle): the registry's, else the one run whose report names the session.
+    # Returns an answer. With no registry record and no report naming the session, the claim - read
+    # only once the handle is known - may still name a fleet id, so "none" is proven only when there
+    # is no claim to read.
     param($S, $C)
-    if ($null -ne $S.w1) { $f = Get-HordeStoredField -Record $S.w1 -Name "fleetSessionId"; if ($f.state -eq "known") { return "$($f.value)" } }
-    if ($C.links.ContainsKey($S.id)) { $l = @($C.links[$S.id]); if ($l.Count -eq 1) { return $l[0].fleetId } }
-    return ""
+    if ($S.w1Unreadable) { return (New-HordeUnknown -Reason "the session's registry record could not be read") }
+    if ($null -ne $S.w1) { return (Get-HordeStoredField -Record $S.w1 -Name "fleetSessionId" -What "the registry record") }
+    if ($S.regComplete.state -ne "known") { return (New-HordeUnknown -Reason ("the registry is incomplete (" + $S.regComplete.reason + ")")) }
+    if ($C.links.ContainsKey($S.id)) {
+        $l = @($C.links[$S.id] | ForEach-Object { $_.fleetId } | Sort-Object -Unique)
+        if ($l.Count -eq 1) { return (New-HordeKnown -Value $l[0]) }
+        return (New-HordeUnknown -Reason ("reports in several runs name this session under different fleet ids: " + ($l -join ", ")))
+    }
+    if ($C.wf.runs.reportsComplete.state -ne "known") { return (New-HordeUnknown -Reason ("the reports are incomplete (" + $C.wf.runs.reportsComplete.reason + ")")) }
+    if ($C.wf.claims.complete.state -ne "known" -or $C.wf.claims.claims.Count -gt 0) { return (New-HordeUnknown -Reason "a spawn claim may name the fleet id, and a claim is matched only by the handle this answer is part of") }
+    return (New-HordeAbsent -Note "no store links this session to a fleet id")
 }
 
 function Get-HordePaneAnswer {
@@ -617,7 +670,7 @@ function Get-HordePaneAnswer {
     param($S, $C)
     $cands = New-Object System.Collections.ArrayList
     if ($S.w1Unreadable) { [void]$cands.Add((New-HordeCandidate -Store "W1" -Field "pane" -Answer (New-HordeUnknown -Reason "the session's registry record could not be read"))) }
-    elseif ($null -eq $S.w1) { [void]$cands.Add((New-HordeCandidate -Store "W1" -Field "pane" -Skip "no registry record names this session")) }
+    elseif ($null -eq $S.w1) { [void]$cands.Add((Get-HordeNoRecordCandidate -S $S -Store "W1" -Field "pane")) }
     elseif ($S.w1Retired) { [void]$cands.Add((New-HordeCandidate -Store "W1" -Field "pane" -Skip "the registry record is retired, and a retired record holds no handle")) }
     else {
         $ri = Get-HordeField -Record $S.w1 -Name "instance"
@@ -630,9 +683,10 @@ function Get-HordePaneAnswer {
     if ($C.paneVerdicts.state.state -ne "known") { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Answer $C.paneVerdicts.state)) }
     elseif ($null -ne $S.x1) { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Answer (New-HordeKnown -Value $S.x1.handle))) }
     else { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Skip "no pane-sessions file passes the guard for this session")) }
-    Set-HordeRunLink -S $S -C $C -FleetId (Get-HordePreliminaryFleetId -S $S -C $C)
+    Set-HordeRunLink -S $S -C $C -Fleet (Get-HordePreliminaryFleetId -S $S -C $C)
     $ev = Get-HordeReportEvents $S
-    if ($null -eq $ev) { [void]$cands.Add((New-HordeCandidate -Store "W5" -Field "session.pane" -Skip "the session is in no known run")) }
+    if ($null -eq $ev -and $null -eq $S.run) { [void]$cands.Add((Get-HordeNoRunCandidate -S $S -Store "W5" -Field "session.pane")) }
+    elseif ($null -eq $ev) { [void]$cands.Add((New-HordeCandidate -Store "W5" -Field "session.pane" -Skip "the session's run folder holds no reports")) }
     elseif ($ev.complete.state -ne "known") { [void]$cands.Add((New-HordeCandidate -Store "W5" -Field "session.pane" -Answer $ev.complete)) }
     else {
         $last = $null
@@ -640,7 +694,8 @@ function Get-HordePaneAnswer {
         if ($null -eq $last) { [void]$cands.Add((New-HordeCandidate -Store "W5" -Field "session.pane" -Skip "no report carries a handle")) }
         else { [void]$cands.Add((Get-HordeStoredHandleCandidate -Context $C.host -Store "W5" -Field "session.pane" -Handle $last.session.pane -RecordInstance "" -Written (Get-HordeField -Record $last -Name "ts").value -What "the last report")) }
     }
-    if ($null -eq $S.rosterEntry) { [void]$cands.Add((New-HordeCandidate -Store "W4" -Field "pane" -Skip "the session is in no known run")) }
+    if ($null -eq $S.run) { [void]$cands.Add((Get-HordeNoRunCandidate -S $S -Store "W4" -Field "pane")) }
+    elseif ($null -eq $S.rosterEntry) { [void]$cands.Add((New-HordeCandidate -Store "W4" -Field "pane" -Skip "the run lists no entry for the session")) }
     else {
         $rp = Get-HordeField -Record $S.rosterEntry -Name "pane"
         $rs = Get-HordeField -Record $S.rosterEntry -Name "spawnedAt"
@@ -803,7 +858,7 @@ function Complete-HordeSession {
     # never goblin (core/roles).
     $roleCand = $null
     if ($S.w1Unreadable) { $roleCand = New-HordeCandidate -Store "W1" -Field "role" -Answer (New-HordeUnknown -Reason "the session's registry record could not be read") }
-    elseif ($null -eq $S.w1) { $roleCand = New-HordeCandidate -Store "W1" -Field "role" -Skip "no registry record names this session" }
+    elseif ($null -eq $S.w1) { $roleCand = Get-HordeNoRecordCandidate -S $S -Store "W1" -Field "role" }
     else { $roleCand = New-HordeCandidate -Store "W1" -Field "role" -Answer (Read-HordeRecordRole -Record $S.w1 -Table $C.roleTable).role }
     $claimRole = Get-HordeClaimCandidate $S $C "role" "role"
     if ($claimRole.skip -eq "" -and $claimRole.answer.state -eq "known") { $claimRole = New-HordeCandidate -Store "W2" -Field "role" -Answer (Resolve-HordeRole -Raw $claimRole.answer.value -Table $C.roleTable).role }
@@ -830,16 +885,24 @@ function Complete-HordeSession {
     [void]$fl.Add((Get-HordeRegistryCandidate $S "fleetSessionId"))
     [void]$fl.Add((Get-HordeClaimCandidate $S $C "fleetSessionId" "fleetSessionId"))
     foreach ($pair in @(@("W4", "sessions[].id"), @("W3", "sessions[].id"))) {
-        if (-not $C.links.ContainsKey($id)) { [void]$fl.Add((New-HordeCandidate -Store $pair[0] -Field $pair[1] -Skip "no report names this session")); continue }
+        if (-not $C.links.ContainsKey($id)) {
+            if ($C.wf.runs.reportsComplete.state -ne "known") { [void]$fl.Add((New-HordeUnsure -Store $pair[0] -Field $pair[1] -Reason ("the reports are incomplete (" + $C.wf.runs.reportsComplete.reason + "), so one may name this session"))); continue }
+            [void]$fl.Add((New-HordeCandidate -Store $pair[0] -Field $pair[1] -Skip "no report names this session")); continue
+        }
         $useManifest = ($pair[0] -eq "W3")
         $fids = @($C.links[$id] | Where-Object { -not $useManifest -or $null -ne $_.run.manifest } | ForEach-Object { $_.fleetId } | Sort-Object -Unique)
         if ($fids.Count -eq 1) { [void]$fl.Add((New-HordeCandidate -Store $pair[0] -Field $pair[1] -Answer (New-HordeKnown -Value $fids[0]))) }
         elseif ($fids.Count -gt 1) { [void]$fl.Add((New-HordeCandidate -Store $pair[0] -Field $pair[1] -Answer (New-HordeUnknown -Reason ("reports in several runs name this session under different fleet ids: " + ($fids -join ", "))))) }
         else { [void]$fl.Add((New-HordeCandidate -Store $pair[0] -Field $pair[1] -Skip "no readable run links this session")) }
     }
-    $codexExtra = $null
-    if ($null -ne $S.rec -and $S.rec.fields.agent.state -eq "known" -and "$($S.rec.fields.agent.value)" -ceq "codex") { $codexExtra = Read-HordeControlExtras -Record $S.rec }
-    if ($null -ne $codexExtra) { [void]$fl.Add((New-HordeCandidate -Store "W8" -Field "wezfleetSessionId" -Answer (Get-HordeStoredField -Record $codexExtra -Name "wezfleetSessionId" -What "the codex file"))) }
+    $isCodexRec = ($null -ne $S.rec -and $S.rec.fields.agent.state -eq "known" -and "$($S.rec.fields.agent.value)" -ceq "codex")
+    if ($isCodexRec) {
+        # A file identity read a moment ago and cannot read again is not a missing file.
+        $codexExtra = Read-HordeControlExtras -Record $S.rec
+        if ($null -eq $codexExtra) { [void]$fl.Add((New-HordeUnsure -Store "W8" -Field "wezfleetSessionId" -Reason "the codex control file could not be read again")) }
+        else { [void]$fl.Add((New-HordeCandidate -Store "W8" -Field "wezfleetSessionId" -Answer (Get-HordeStoredField -Record $codexExtra -Name "wezfleetSessionId" -What "the codex file"))) }
+    }
+    elseif ($null -eq $S.rec -and $C.identity.complete["codex"].state -ne "known") { [void]$fl.Add((New-HordeUnsure -Store "W8" -Field "wezfleetSessionId" -Reason ("the codex listing is incomplete (" + $C.identity.complete["codex"].reason + ")"))) }
     else { [void]$fl.Add((New-HordeCandidate -Store "W8" -Field "wezfleetSessionId" -Skip "no codex control file names this session")) }
     Set-HordeField $S $C "fleetSessionId" (Resolve-HordeField $fl -WhenNone (New-HordeAbsent -Note "no store links this session to a fleet id"))
 
@@ -847,13 +910,13 @@ function Complete-HordeSession {
     $fa = $S.fields["fleetSessionId"].answer
     if ($fa.state -eq "known") {
         $rr = Resolve-HordeRun -Runs $C.wf.runs -FleetId "$($fa.value)"
-        Set-HordeRunLink -S $S -C $C -FleetId "$($fa.value)"
+        Set-HordeRunLink -S $S -C $C -Fleet $fa
         $S.runAmbiguous = @($rr.ambiguous)
         if ($rr.answer.state -eq "known") { Set-HordeField $S $C "runId" (New-HordeResolved -Answer (New-HordeKnown -Value $rr.answer.value.runId) -Store "W4" -Field "runId") }
         elseif ($rr.answer.state -eq "absent") { Set-HordeField $S $C "runId" (New-HordeResolved -Answer $rr.answer -Store "W4" -Field "runId") }
         else { Set-HordeField $S $C "runId" (New-HordeResolved -Answer $rr.answer) }
     } else {
-        Set-HordeRunLink -S $S -C $C -FleetId ""
+        Set-HordeRunLink -S $S -C $C -Fleet $fa
         $ra = New-HordeAbsent -Note "the session has no fleet id, so it is in no run"
         if ($fa.state -eq "unknown") { $ra = New-HordeUnknown -Reason ("the session's fleet id is unknown: " + $fa.reason) }
         Set-HordeField $S $C "runId" (New-HordeResolved -Answer $ra)

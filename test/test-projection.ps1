@@ -337,6 +337,34 @@ $shDoc = (ConvertTo-HordeSessionViewDocument $psh) | ConvertTo-Json -Depth 40 | 
 Check (@(Test-HordeSchema -Value $shDoc -Schema $viewSchema).Count -eq 0) "and the view that carries it still validates"
 
 Write-Host ""
+Write-Host "--- a store that cannot tell is not a store that holds none ---" -ForegroundColor Cyan
+# A candidate that is skipped proves "none" only when its store was read whole and holds nothing for
+# the session. When the skip rests on something unknown - a run no one can choose, a handle the host
+# cannot verify, a registry with a hole in it - the answer is unknown (review of PR #31, finding 1).
+$amb = Project (New-Fleet "ambiguous-run")
+$ambBad = @(15, 16 | ForEach-Object { $n = $_; @("title", "dependsOn", "spawnedAt") | Where-Object { (St (Ans $amb $n $_)) -ne "unknown" } | ForEach-Object { "" + $n + " " + $_ + "=" + (St (Ans $amb $n $_)) } })
+foreach ($x in $ambBad) { Write-Host ("  not unknown: " + $x) -ForegroundColor Red }
+Check ($ambBad.Count -eq 0) "a session whose run cannot be chosen has an unknown title, never absent"
+$nh = New-Fleet "nohost-fleet"
+$nhc = Join-Path $nh "wezfleet\registry\claims\17.json"; $nhj = ReadJson $nhc; $nhj.fleetSessionId = "fleet-x"; PutJson $nhc $nhj
+Check ((Val (Ans (Project $nh) 10 "fleetSessionId")) -eq "fleet-x") "CONTROL: with the host attached, the claim gives the fleet id"
+$pnh = Project $nh -HostPort (New-HordeUnavailableHostPort -Reason "switched off")
+$nhBad = @("fleetSessionId", "runId", "spawnedAt" | Where-Object { (St (Ans $pnh 10 $_)) -ne "unknown" } | ForEach-Object { $_ + "=" + (St (Ans $pnh 10 $_)) })
+foreach ($x in $nhBad) { Write-Host ("  not unknown: " + $x) -ForegroundColor Red }
+Check ($nhBad.Count -eq 0) "with no host, a claim that cannot be matched leaves the fleet id unknown, never absent"
+$noreg = New-Fleet "noreg"
+Rename-Item -LiteralPath (Join-Path $noreg "wezfleet\registry\sessions") -NewName "sessions-hidden"
+$pnr = Project $noreg
+$nrBad = @(1, 2 | ForEach-Object { $n = $_; @("fleetSessionId", "parent", "label", "origin") | Where-Object { (St (Ans $pnr $n $_)) -ne "unknown" } | ForEach-Object { "" + $n + " " + $_ + "=" + (St (Ans $pnr $n $_)) } })
+foreach ($x in $nrBad) { Write-Host ("  not unknown: " + $x) -ForegroundColor Red }
+Check ($pnr.complete["W1"].state -eq "unknown" -and $nrBad.Count -eq 0) "an incomplete registry never proves a session has no record"
+$realExtras = ${function:Read-HordeControlExtras}
+function Read-HordeControlExtras { param($Record) if ("$($Record.fields.agent.value)" -ceq "codex") { return $null }; return (& $realExtras -Record $Record) }
+$pcx = $null
+try { $pcx = Project $base } finally { ${function:Read-HordeControlExtras} = $realExtras }
+Check ((St (Ans $pcx "codex-thread-1" "fleetSessionId")) -eq "unknown" -and (Why (Ans $pcx "codex-thread-1" "fleetSessionId")) -like "*could not be read again*") "a codex file that cannot be read again is not a codex file that is missing"
+
+Write-Host ""
 Write-Host "--- runs, reports and work ---" -ForegroundColor Cyan
 Check ((St (Ans $p 15 "runId")) -eq "unknown" -and (Why (Ans $p 15 "runId")) -like "*2 open runs*") "two open runs make the run unknown"
 Check ((St (Ans $p 16 "runId")) -eq "unknown" -and (Why (Ans $p 16 "runId")) -like "*only by closed runs*") "two closed runs are not chosen between"

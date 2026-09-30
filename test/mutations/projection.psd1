@@ -96,6 +96,16 @@
         @{ Name = "torn-event-log-read-shorter"
            Find = 'if ($ev.complete.state -ne "known") { return (New-HordeResolved -Answer $ev.complete) }'
            Replace = '' }
+        # A skip proves none only over a whole store (review of PR #31, finding 1).
+        @{ Name = "incomplete-registry-proves-no-record"
+           Find = 'if ($S.regComplete.state -eq "known") { return (New-HordeCandidate -Store $Store -Field $Field -Skip "no registry record names this session") }'
+           Replace = 'return (New-HordeCandidate -Store $Store -Field $Field -Skip "no registry record names this session")' }
+        @{ Name = "unknown-run-proves-no-run"
+           Find = 'if ($S.runState.state -eq "unknown") { return (New-HordeUnsure'
+           Replace = 'if ($false) { return (New-HordeUnsure' }
+        @{ Name = "cannot-tell-read-as-none"
+           Find = 'return (New-HordeCandidate -Store $Store -Field $Field -Answer (New-HordeUnknown -Reason $Reason))'
+           Replace = 'return (New-HordeCandidate -Store $Store -Field $Field -Skip $Reason)' }
         # The engine's fields.
         @{ Name = "claim-read-beside-a-record"
            Find = 'if ($S.w1Unreadable -or $null -ne $S.w1) { return (New-HordeCandidate -Store "W2"'
