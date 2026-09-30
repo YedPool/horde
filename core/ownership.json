@@ -41,7 +41,7 @@
     { "name": "pid", "owner": "agent",
       "read": [ { "store": "X2", "field": "pid" }, { "store": "X5", "field": "pid", "when": "its --resume id matches" } ] },
     { "name": "cwd", "owner": "agent",
-      "read": [ { "store": "X2", "field": "cwd" }, { "store": "W1", "field": "cwd", "when": "fresh" }, { "store": "W8", "field": "cwd" },
+      "read": [ { "store": "X2", "field": "cwd" }, { "store": "W1", "field": "cwd", "when": "not retired, and written in this terminal instance: the record's lastSeen, the time the hook last saw a tool call, is not before the instance started. No age limit, as census reads it" }, { "store": "W8", "field": "cwd" },
                 { "store": "W5", "field": "session.cwd" }, { "store": "W4", "field": "cwd" } ] },
     { "name": "projectCwd", "owner": "engine",
       "read": [ { "store": "W1", "field": "firstCwd" }, { "store": "X1", "field": "cwd" }, { "store": "W1", "field": "cwd", "when": "a record older than firstCwd" } ] },

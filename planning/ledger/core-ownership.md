@@ -189,3 +189,8 @@ sources:
 - source: YedPool/wezfleet lib/Protocol.ps1:513-516 "The window this run owns. -1 means not pinned yet" read from run.json windowId; and :524-527, a session that moved windows became unreachable through its spawn-time record. Review finding 9, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the run's window is marked as the run's, a fallback for the session"
+
+### L-036 Fresh, for a registry record, means written in this terminal instance
+- source: YedPool/wezfleet lib/Common.ps1:625-640 (Test-WfWrittenInInstance: the record's instance must match and its lastSeen must not predate the instance start; ambiguous says no); census reads cwd from a record chosen that way, with no age, at lib/Registry.ps1:833 and :859. The first draft said only "fresh". Review finding 10, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the registry's cwd says what fresh means and what it is measured against"
