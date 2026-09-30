@@ -111,6 +111,8 @@ A. The capability files (PROJ)
      evidence, minVersion?, maxVersion?, space? }`.
    - `name` covers the 15 terminal-port names, plus the layout rows of migration-plan section 4:
      `windows`, `tabs`, `splits`, `sizes`, `workspaces`, `capture`, `applyBeforePaint` and `decorate`.
+     It also covers the anchor's four flags, `spawn.program`, `spawn.exitCloses`, `spawn.parent` and
+     `contain.inherited`, which the lifecycle plan defines (its section 2.5; group F below).
    - `state` is `yes`, `no`, `declined` or `unverified`, and `evidence` is required and must not be
      empty.
    - `space` is `windows`, `wsl:<distro>`, `posix` or `synthetic`, and qualifies `pid` and `cwd`.
@@ -299,46 +301,63 @@ E. Ghostty (deferred, UNIX)
 
     Re-check the deferral when a Windows build ships, or when AppleScript 1.4 changes its API.
 
-F. Job objects and orphans, per host
+F. Job objects and orphans, per host: the anchor
 
-Lifecycle decision 2 applies to every host. The mechanism belongs to the launch stub, not to the host,
-so that it is identical wherever a Windows agent runs. The host sections below say only what differs.
+Lifecycle decision 2 applies to every host. Descendants are contained by the **anchor**, a small
+compiled executable (engine-settings decision 10, following `wf-cmdlog.exe`). **The lifecycle plan
+owns the anchor.** It is built once, in `planning/execution-plan-lifecycle.md` (PR #29, branch
+`docs/lifecycle-plan`): section 2.2 designs it, its job-object measurements J-1 to J-3 are recorded
+there, and its step 18 (`core/Contain.ps1` and `platform/windows/`) and step 19 ("The anchor") build
+it. Those numbers are as of the lifecycle plan at `c911bd5`, which is being revised; the owner is named
+by title as well so the reference survives a renumbering. This plan builds no job-object code. Steps
+17 to 19 below are what each host must offer the anchor, and how each host proves it.
 
-17. **The job object, in the launch stub** (SPAWN, with engines step 21, E10). Before it starts the
-    harness, the stub:
-    - creates a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`;
-    - assigns itself to it;
-    - holds the only handle;
-    - never sets `JOB_OBJECT_LIMIT_BREAKAWAY_OK`.
+17. **What the anchor does, and what the host must offer it** (SPAWN; after lifecycle step 19).
+    The anchor is the pane's only program: the argv a host runs is the anchor's, never a shell and
+    never the harness directly. Before it creates any process, it:
+    - creates a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway flag, so
+      `JOB_OBJECT_LIMIT_BREAKAWAY_OK` is never set;
+    - keeps the job handle non-inheritable, so no child can hold the job open;
+    - assigns itself to the job.
 
-    Every descendant is then born inside the job. When the stub ends for any reason, the job closes,
-    and the node dev servers, background shells and test runners go with it. The stub is the pane's
-    program, with no `-NoExit` shell (lifecycle H15), so the pane closes when the agent exits. The
-    Win32 code is shared with `horde job run` (lifecycle H11) in one core file that names no host.
+    Only then does it start the harness. Per the lifecycle plan, it first runs Horde's launch stub
+    (engines step 21, E10) as a child, and the stub hands it the final argv and environment. Every
+    descendant is born inside the job. When the harness exits, the anchor exits. Its handle was the
+    only one, so the job closes, and every node dev server, background shell and test runner left in
+    it goes with it. The pane's program has then exited, so the pane closes (lifecycle H15; no
+    `-NoExit` shell).
 
-    Two points need care:
-    - **Services.** A service a goblin declares must be able to outlive the goblin. It is started
-      through `horde job run` in its own job, which Horde owns, with an expiry. It is never allowed to
-      break away.
-    - **Nested jobs.** Nested jobs exist since Windows 8, but whether a host already puts its panes in
-      a job of its own is measured per host (below). The design does not assume it.
-18. **Per host.**
+    The host's side is four flags that the lifecycle plan (section 2.5) adds to
+    `schema/host-capabilities.v1` (step 1 of this plan): `spawn.program`, `spawn.exitCloses`,
+    `spawn.parent` and `contain.inherited`. Each host's adapter declares them in its
+    `capabilities.json`, with evidence from its isolated instance.
 
-    | host | what differs | to measure |
+    Services a goblin declares, meant to outlive it, go through `horde job run -Service -Until` in a
+    job of their own that Horde owns, with an expiry (lifecycle step 20). They never break away.
+18. **Per host.** The anchor and its job are the same everywhere a Windows agent runs. Only what the
+    host offers differs:
+
+    | host | what differs | to measure in this host's isolated instance |
     |---|---|---|
-    | WezTerm | Pane processes are ordinary Windows children of the mux. | Whether WezTerm assigns pane processes to a job of its own; if it does, that the stub's nested job still kills on close. |
-    | psmux | Panes are ConPTY children of a server per session. Its `kill-pane` kills the tree by parent pid and creation time, so a reused pid is never killed (docs). The per-session servers and any `__warm__` server are psmux's own processes: `horde status` reports them as host processes, never as orphans. Tests use `PSMUX_NO_WARM=1`. | That the stub's job survives psmux's ConPTY spawn, so a job created inside the pane still holds every descendant. |
-    | tmux (WSL) | Linux processes cannot be in a Windows job. A Windows agent started through interop is still a Windows process, and its stub creates the job as on any other host. Core's process table is `windows`, so pids in `wsl:<distro>` are unknown to it. An orphan inside WSL is reported unknown, with that reason, and never reclaimed. For a future Linux Horde, the equivalent is a process group (`setsid`, then kill the group) or a cgroup (`systemd-run --scope`), measured then. | Whether the Windows process tree of an agent started through interop has an ancestry that core's walk can follow. |
-    | Ghostty | Deferred. On macOS and Linux: a process group or cgroup, as for tmux. | When UNIX arrives. |
+    | WezTerm | Pane processes are children of the terminal GUI process (lifecycle J-1), so `spawn.parent` is `host` and only the anchor assigning itself can contain them. | `spawn.program`, `spawn.exitCloses` and `contain.inherited` (whether WezTerm puts its panes in a job of its own), in lifecycle step 19, which records them in `hosts/wezterm/capabilities.json`. |
+    | psmux | Panes are ConPTY children of a server per session. Its `kill-pane` kills the tree by parent pid and creation time, so a reused pid is never killed (docs). The per-session servers and any `__warm__` server are psmux's own processes: `horde status` reports them as host processes, never as orphans. Tests use `PSMUX_NO_WARM=1`. | That the anchor's self-assignment holds under psmux's ConPTY spawn (`contain.inherited`, nesting), and that `spawn.program` with `-- <argv>` runs the anchor with no shell around it. |
+    | tmux (WSL) | Linux processes cannot be in a Windows job. Under hosts decision 1 the pane runs the Windows anchor through interop, and the anchor contains the Windows harness as on any other host. Core's process table is `windows`, so pids in `wsl:<distro>` are unknown to it. An orphan inside WSL is reported unknown, with that reason, and never reclaimed. A future Linux Horde uses the lifecycle plan's `platform/posix/` adapter: a cgroup v2, else the anchor as a subreaper plus its process group. | Whether an anchor started through interop is really the harness's Windows ancestor, so core's ancestry walk can follow it; and `spawn.exitCloses` when the Windows program exits. |
+    | Ghostty | Deferred (UNIX). The lifecycle plan's `platform/posix/` adapter. | When UNIX arrives. |
 
-19. **The kill-on-close e2e, per Windows host** (SPAWN, after 17). This runs in each isolated harness
+19. **The anchor's e2e, per host** (SPAWN; after lifecycle step 19 and this host's adapter). The anchor's
+    own tests, in lifecycle steps 18 and 19, prove the job mechanism. This step proves that each host
+    runs the anchor correctly, so the job suite is not written twice. It runs in each isolated harness
     only.
-    - **Scenario.** A goblin stub starts a child, which starts a long-running grandchild. The test kills
-      the stub through the victim guard. Both descendants must be gone within a bounded time, checked
-      by pid and creation time, never by pid alone.
-    - **Control.** The same scenario without the job object must leave the grandchild alive. That
-      proves the test can see a survivor.
-    - **Mutations.** Setting `BREAKAWAY_OK`, or dropping `KILL_ON_JOB_CLOSE`, must turn the test red.
+    - **Scenario.** The host spawns the anchor. The harness is replaced by a test program that starts
+      a child, which starts a long-running grandchild. The test closes the pane through the victim
+      guard. The anchor and both descendants must be gone within a bounded time, checked by pid and
+      creation time, never by pid alone. The pane must be gone from the host's list.
+    - **Exit path.** The test program exits by itself. The pane closes, and no bare shell is left
+      behind (`spawn.program`, `spawn.exitCloses`).
+    - **Control.** The same scenario with a shell as the pane's program, in place of the anchor, must
+      leave the grandchild alive. That proves the test can see a survivor.
+    - **Declared flags.** Each of the host's four anchor flags is checked against what the scenario
+      observed. A `yes` that the scenario contradicts fails.
 20. **Orphans that escaped: report, then reclaim** (lifecycle H1 and H18). Core's
     `core/ProcessTree.ps1` finds dead-root trees in the `windows` namespace. It records each goblin's
     descendants, with their creation times, at every follower sample. That record is what later proves
@@ -363,7 +382,9 @@ In order:
   (the tmux adapter), 14 and 15 (the psmux adapter and differential e2e), and step 10 once 8 is in.
 - **INSTALL**: steps 11 to 13 (psmux install, measurement and harness). They start when the psmux
   goblin starts, after tmux step 8.
-- **SPAWN**: steps 17 to 19 (the job object and its e2e), and a real agent in step 9.
+- **SPAWN, and the lifecycle plan's anchor**: steps 17 to 19, the anchor on each host and its e2e.
+  The anchor itself is built in the lifecycle plan (steps 18 and 19 there), never here. Step 9 also
+  needs SPAWN before it can start a real agent.
 - **UNIX**: step 16 (Ghostty).
 - **Lifecycle**: step 20 reports once lifecycle H1 (`core/ProcessTree.ps1`) is in, and reclaims
   with lifecycle H18 in Phase 5.

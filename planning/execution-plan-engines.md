@@ -380,13 +380,15 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     resolves the secret itself, so the job file never holds it (test: no fake secret on disk, with a
     control). It scrubs every owned variable of every adapter. For example, a goblin spawned on
     another provider from an orc holding a provider token must inherit none of the orc's variables.
-    The stub also creates the goblin's job object (hosts plan, group F), refuses a spawn whose
-    capabilities fail, and writes the metrics consent record. e2e in the isolated terminal.
+    The stub runs as a child of the anchor, which owns the goblin's job object (lifecycle plan section
+    2.2 and step 19; hosts plan, group F), and it hands the anchor the final argv and environment over
+    a pipe. It refuses a spawn whose capabilities fail, and writes the metrics consent record. e2e in
+    the isolated terminal.
 22. **E11. Resume, restore and drift**: step 19. **Switch and adoption**: the fleet runs a real wave
     with goblins on one model and orcs on another, set only through `horde config`, and the PR records
     who used it and what broke.
-23. **E4-host. The capability check reads the real host files** (PROJ, after hosts plan steps 1 and 2). E4's
-    injected host capabilities are replaced by `hosts/<name>/capabilities.json`. `validate` then says,
+23. **E4-host. The capability check reads the real host files** (PROJ, after hosts plan steps 1 and
+    2). E4's injected host capabilities are replaced by `hosts/<name>/capabilities.json`. `validate` then says,
     per host, whether a warchief whose harness cannot inject messages is valid there. It is valid
     where the host can type text (`text.send: yes`), and invalid elsewhere.
 
