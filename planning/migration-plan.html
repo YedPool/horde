@@ -599,6 +599,8 @@
   <tr><td>3.8</td><td><strong>The engine's record writer</strong> (decided 2026-09-30). The first Horde command that sets an engine-owned field - role, parent or label - owns the one writer of <code>schema/session-record.v1</code>. Until then Horde writes no session record at all. It writes a whole new record and replaces the old one, never edits in place; it keeps the writer's rules the schema cannot state (a label implies a labelCycle; labelCycle is never negative); and the file name is the session id.</td><td>A write test in an isolated store; wezfleet's registry is never written by Horde.</td><td class="c sz">M</td></tr>
 </table>
 
+<p>Sessions on other machines - a central listener on the hub, nodes that dial it over ssh, an allowlisted protocol that is never a remote shell, the transport port with <code>local</code> as its degenerate case, and the boundary with the separate overlay repository: <code>planning/execution-plan-remote.md</code> (2026-09-30). Its step R10 splits the stored session record into a fleet record (hub) and a binding record (node) as an in-place v1 edit, so it must merge before step 3.8 above.</p>
+
 <h3><span class="phase">PHASE 4</span>The restore engine and the layout port, WezTerm first</h3>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
