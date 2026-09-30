@@ -50,6 +50,26 @@
         @{ Name = "kill-ignores-creation-time"
            Find = 'if ((Get-HordeMicroseconds $p.StartTime) -ne (Get-HordeMicroseconds $Created)) { return "not-same" }'
            Replace = '' }
+        @{ Name = "teardown-forgets-the-pin"
+           Find = '$pinned = [bool]$known.pin'
+           Replace = '$pinned = $false' }
+        @{ Name = "teardown-leaves-orphans"
+           Find = '$r = Invoke-HordeKill -Id $d.pid -Created $d.created -KillWith $KillWith'
+           Replace = '$r = "gone"' }
+        @{ Name = "adopts-a-gui-with-another-parent"
+           Find = 'if ([int]$Gui.ppid -ne $LauncherPid) { return $false }'
+           Replace = '' }
+        @{ Name = "adopts-a-gui-older-than-the-launcher"
+           Find = 'return ((Get-HordeMicroseconds $Gui.created) -ge [long]$LauncherUs)'
+           Replace = 'return $true' }
+        @{ Name = "launch-tree-ignores-start-time"
+           Find = 'if ($null -eq $lc -or (Get-HordeMicroseconds $lc) -ne [long]$LauncherUs) { return }'
+           Replace = 'if ($null -eq $lc) { return }' }
+        @{ Name = "no-second-walk-after-the-kill"
+           Find = 'foreach ($pass in 1..2) {'
+           Replace = 'foreach ($pass in 1..1) {'
+           Expect = "survives"
+           Reason = "Proving it needs a process that appears between the first walk and the kill, which the fast suite cannot stage deterministically; the rule is carried by its comment in Stop-HordeIsolatedWezterm." }
         @{ Name = "socket-deleted-though-gui-survived"
            Find = 'if ($sockOk -and -not $survived) {'
            Replace = 'if ($sockOk) {'
