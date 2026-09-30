@@ -57,8 +57,11 @@
            Find = 'if ($dupGaps.ContainsKey($rd.agent)) {'
            Replace = 'if ($false) {' }
         @{ Name = "unrecognised-status-trusted"
-           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") {'
-           Replace = 'elseif ($false) {' }
+           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["liveStatus"]'
+           Replace = 'elseif ($false) { $k["liveStatus"]' }
+        @{ Name = "unrecognised-status-means-not-waiting"
+           Find = 'elseif ($script:HordeClaudeStatuses -cnotcontains "$($st.value)") { $k["waitingFor"]'
+           Replace = 'elseif ($false) { $k["waitingFor"]' }
         @{ Name = "stale-wait-carried"
            Find = '"liveStatus", "waitingFor")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }'
            Replace = '"liveStatus")) { $k[$n] = New-HordeUnknown -Reason $verdict.reason }' }
