@@ -1,7 +1,9 @@
 # Mutations of the tmux isolation harness. Run: powershell -File tools\Mutate.ps1 -Spec hosts\tmux\test\mutations\isolation.psd1
 # Each breaks one rule the harness depends on; hosts\tmux\test\test-isolation.ps1 must fail for every one of them.
 # The suite starts no tmux server, so no mutant here can reach a real one: teardown's decisions run
-# against the suite's fake transport, and the two real WSL calls it makes are read-only.
+# against the suite's fake transport, and the two real WSL calls it makes are read-only. What only a
+# real server can show - that containment and the crash exit really hold - is mutated against the
+# e2e in isolation-e2e.psd1.
 @{
     Target = "hosts\tmux\test\Isolation.ps1"
     Suite  = "hosts\tmux\test\test-isolation.ps1"
@@ -71,9 +73,12 @@
         @{ Name = "gone-without-measuring"
            Find = 'if (Test-HordeTmuxNoServer $ls) { $gone = $true; break }'
            Replace = '$gone = $true; break' }
-        @{ Name = "server-process-not-checked"
-           Find = '$alive = ("$($pr.out)".Trim() -ne "gone")'
-           Replace = '$alive = $false' }
+        @{ Name = "verdict-ignores-the-namespace"
+           Find = '$survived = (-not $gone) -or ($inNs.Count -gt 0)'
+           Replace = '$survived = (-not $gone)' }
+        @{ Name = "namespace-never-scanned"
+           Find = 'if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }'
+           Replace = '' }
         @{ Name = "sweep-never-kills"
            Find = '$script:HordeTmuxSweep, "sh", $e.socket, "kill")'
            Replace = '$script:HordeTmuxSweep, "sh", $e.socket, "list")' }
@@ -95,6 +100,23 @@
         @{ Name = "registry-reset-on-reload"
            Find = 'if ($null -eq $script:HordeTmuxStarted) { $script:HordeTmuxStarted = @{} }'
            Replace = '$script:HordeTmuxStarted = @{}' }
+
+        # --- containment: the server is pid 1's child in a pid namespace of its own
+        @{ Name = "owner-without-pid-namespace"
+           Find = '@("unshare", "--pid", "--fork", "--kill-child", "--mount-proc",'
+           Replace = '@("unshare", "--fork", "--kill-child", "--mount-proc",' }
+        @{ Name = "owner-not-killed-with-unshare"
+           Find = '@("unshare", "--pid", "--fork", "--kill-child", "--mount-proc",'
+           Replace = '@("unshare", "--pid", "--fork", "--mount-proc",' }
+        @{ Name = "start-skips-containment-check"
+           Find = 'if ($bad) { throw $bad }'
+           Replace = '' }
+        @{ Name = "assert-skips-containment-check"
+           Find = '$bad = Test-HordeTmuxContained -Entry $e -Lines (Get-HordeTmuxNsProcs -Entry $e)'
+           Replace = '$bad = $null' }
+        @{ Name = "preflight-skips-unshare"
+           Find = "command -v unshare >/dev/null 2>&1 || { echo `"unshare (util-linux) is not installed in the distro`" >&2; exit 3; }; command"
+           Replace = 'command' }
 
         # --- start fails loudly and leaves nothing
         @{ Name = "start-adopts-existing-dir"

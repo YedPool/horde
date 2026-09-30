@@ -61,6 +61,19 @@ function Stop-UserServer { param($U)
     if ($U.madeDir) { [void](Invoke-HordeWsl -Distro $script:distroUsed -Argv @("sh", "-c", 'rmdir -- "$1"/tmux-* "$1" 2>/dev/null; exit 0', "sh", $U.dir)) }
 }
 function Get-Entry { param($Inst) return $script:HordeTmuxStarted["$($Inst.token)"] }
+$script:escapeFind = 'for n in "$@"; do for f in /proc/[0-9]*/cmdline; do c=$(tr "\0" " " < "$f" 2>/dev/null); [ "$c" = "sleep $n " ] && { p=${f#/proc/}; echo "${p%/cmdline} sleep $n"; }; done; done; exit 0'
+function Get-EscapeSleeps { param($Secs)
+    # The processes whose whole command line is exactly "sleep <n>" for this run's unique durations.
+    $r = Invoke-HordeWsl -Distro $script:distroUsed -Argv (@("sh", "-c", $script:escapeFind, "sh") + @($Secs | ForEach-Object { "$_" }))
+    return @(Get-HordeTmuxLines $r.out) }
+function Stop-EscapeSleeps { param($Secs)
+    # Test cleanup, reached with anything to do only when the check above has already failed: this
+    # test's own escaped children, re-checked by their unique command line in the step that kills them,
+    # so a failed run does not leave them for the next run to trip over.
+    foreach ($l in @(Get-EscapeSleeps $Secs)) {
+        $parts = @($l -split ' ')
+        [void](Invoke-HordeWsl -Distro $script:distroUsed -Argv @("sh", "-c", 'c=$(tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null); [ "$c" = "sleep $2 " ] && kill -9 "$1"; exit 0', "sh", $parts[0], $parts[2]))
+    } }
 
 Write-Host ""
 Write-Host "=== scenario 1: start, prove isolation, spawn, read, send, tear down ===" -ForegroundColor Cyan
@@ -73,15 +86,17 @@ if ($iso) {
     [void]$runGuids.Add($e1.guid)
     Write-Host ("  distro " + $iso.distro + ", tmux " + $e1.version + ", server pid " + $e1.serverPid + ", socket " + $iso.socket) -ForegroundColor DarkGray
     $marker = "HORDE-E2E-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
-    $orphanPid = ""
+    $escapeSecs = $null
     $v1 = $null
     try {
         $count = $null
         try { $count = Assert-HordeTmuxIsolated -Instance $iso } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
         Check ($count -eq 1) "it is isolated, measured: our socket, our pid and start time, exactly one session and one pane"
         Check ($iso.socket -ceq ("/tmp/horde-iso-" + $e1.guid + "/tmux-" + $e1.uid + "/horde-iso-" + $e1.guid)) "its socket is <private TMUX_TMPDIR>/tmux-<uid>/horde-iso-<guid>, as the harness built it"
-        $cmd = Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", 'tr "\0" " " < /proc/$1/cmdline', "sh", $e1.serverPid)
-        Check ("$($cmd.out)" -match ('-L ' + $e1.name + ' -f /dev/null ')) ("the server process runs with -L <our name> -f /dev/null: '" + "$($cmd.out)".Trim() + "'")
+        $nsNow = @(Get-HordeTmuxNsProcs -Entry $e1)
+        Check (@($nsNow | Where-Object { $_ -match ('^\d+ tmux -L ' + $e1.name + ' -f /dev/null -D\s*$') }).Count -eq 1) ("the server runs with -L <our name> -f /dev/null, inside our own pid namespace " + $e1.nsInode)
+        $root = Invoke-HordeWsl -Distro $distroUsed -Argv @("readlink", "/proc/self/ns/pid")
+        Check ("$($root.out)".Trim() -match '^pid:\[\d+\]$' -and "$($root.out)".Trim() -ne $e1.nsInode) ("CONTROL: that namespace is not the distro's own (" + "$($root.out)".Trim() + ")")
 
         if ($count -eq 1) {
             # A pane that prints a marker, then ignores SIGHUP and stays: tmux's kill-server sends SIGHUP,
@@ -91,9 +106,8 @@ if ($iso) {
             Start-Sleep -Milliseconds 700
             $text = Get-HordeTmuxPaneText -Instance $iso -Pane $pane
             Check ("$text" -like "*$marker*") "the command ran and its output is on that pane's screen"
-            $pids = Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", $script:HordeTmuxSweep, "sh", $iso.socket, "list")
-            $orphanPid = @(Get-HordeTmuxLines $pids.out | Where-Object { $_ })
-            Check ($orphanPid.Count -ge 2) ("the processes inside it carry TMUX=<our socket>, and the sweep sees them: " + ($orphanPid -join ", "))
+            $inside = @(Get-HordeTmuxNsProcs -Entry $e1 | Where-Object { $_ -match '^\d+ sh -c echo HORDE-E2E-|^\d+ sleep 300\s*$' })
+            Check ($inside.Count -ge 1) ("the pane's process runs inside our namespace: " + ($inside -join "; "))
 
             $shell = New-HordeTmuxPane -Instance $iso -Command @("sh")
             # Text that starts with "-" and holds a quote and a dollar: typed literally, not parsed.
@@ -101,6 +115,17 @@ if ($iso) {
             Start-Sleep -Milliseconds 700
             $typed = Get-HordeTmuxPaneText -Instance $iso -Pane $shell
             Check ("$typed" -match '(?m)^-typed 42\s*$') "text sent to a pane is typed literally and the shell ran it (-typed 42 on screen)"
+
+            # THE REVIEW OF PR 35's ESCAPE: children that carry no mark of the server. One drops its
+            # whole environment (env -i), so no TMUX=<socket> is left to find it by; one also leaves
+            # the session (setsid). Both ignore SIGHUP. Each sleeps a duration unique to this run, so
+            # it can be found by its exact command line, and expires on its own if all else fails.
+            $escapeSecs = @((200 + (Get-Random -Maximum 50)), (260 + (Get-Random -Maximum 50)))
+            [void](New-HordeTmuxPane -Instance $iso -Command @("env", "-i", "sh", "-c", ("trap '' HUP; exec sleep " + $escapeSecs[0])))
+            [void](New-HordeTmuxPane -Instance $iso -Command @("sh", "-c", ("setsid env -i sh -c 'trap """" HUP; exec sleep " + $escapeSecs[1] + "' & sleep 1")))
+            Start-Sleep -Milliseconds 1500
+            $seen = @(Get-EscapeSleeps $escapeSecs)
+            Check ($seen.Count -eq 2) ("PRECONDITION: both markless HUP-ignoring children are running (" + ($seen -join "; ") + ")")
         }
     } finally {
         # Teardown runs whatever happened above. A teardown that only runs on success is the leak (L-019).
@@ -109,11 +134,17 @@ if ($iso) {
     Check (-not $v1.refused) "teardown accepted the server Start registered"
     Check (-not $v1.survived) "the server is gone: its socket says no server, and its process has exited"
     Check (@($v1.orphansSurvived).Count -eq 0) "nothing that ran inside it is still running"
-    Check (@($v1.orphansKilled).Count -ge 1) ("the HUP-ignoring child outlived kill-server and teardown killed it: " + (@($v1.orphansKilled) -join ", "))
     Check ($v1.stopped) "so the teardown's own verdict is stopped"
+    if ($escapeSecs) {
+        $left = @(Get-EscapeSleeps $escapeSecs)
+        Check ($left.Count -eq 0) ("a child that dropped its environment, or left the session, did not outlive teardown (" + ($left -join "; ") + ")")
+        Check (-not ($v1.stopped -and $left.Count -gt 0)) "and teardown never reports stopped while such a child is still running"
+        Stop-EscapeSleeps $escapeSecs
+    }
     Check ($v1.socketRemoved -and $v1.dirRemoved) "its socket file and its private directory are removed"
-    $after = Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", 'test -e "$1"; a=$?; test -e "/proc/$2"; b=$?; echo "$a $b"', "sh", $e1.dir, $e1.serverPid)
-    Check ("$($after.out)".Trim() -eq "1 1") ("measured afterwards in WSL: the directory does not exist and the server pid is gone ('" + "$($after.out)".Trim() + "')")
+    $after = Invoke-HordeWsl -Distro $distroUsed -Argv @("test", "-e", $e1.dir)
+    $nsAfter = @(Get-HordeTmuxNsProcs -Entry $e1)
+    Check ($after.code -eq 1 -and $nsAfter.Count -eq 0) ("measured afterwards in WSL: the directory does not exist and no process is left in the namespace (" + ($nsAfter -join "; ") + ")")
 }
 
 Write-Host ""

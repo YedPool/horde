@@ -47,21 +47,29 @@
 # WHAT IS NOT ISOLATED, said plainly (L-027): processes started inside the server run as the distro's
 # user, with that user's files. None of the scenarios here starts an agent.
 #
-# NOTHING IS KILLED BY A NUMBER ALONE (the first host's kill-safety history, L-020 and its
-# review). The server is killed only by `kill-server` through its own socket, after the server that
-# answers on that socket has proved it is the one Start recorded: same socket path, same pid, same
-# start time. What outlived it is found by the one mark only our panes carry - TMUX=<our socket path>,
-# in the process environment, which tmux sets for every pane's child - and each is re-checked for that
-# mark in the same shell that kills it. Said plainly: between that check and the kill there is a gap
-# of one command, not a held handle; Linux hands pids out in order and reuses one only after the pid
-# space wraps, so a stranger taking that pid inside the gap is unlikely, not impossible. MEASURED: a pane child that ignores SIGHUP survived
-# `kill-server` (`sh -c 'trap "" HUP; exec sleep 300'`), and tmux 3.4 left its socket file behind.
-# Directories are removed with `rmdir`, which refuses a directory that is not empty, never `rm -r`.
+# CONTAINED, NOT REAPED. The server runs as a child of pid 1 of a pid namespace of its own
+# (`unshare --pid --fork --kill-child --mount-proc`), and so does everything started in it. A process
+# cannot leave a pid namespace - not by dropping its environment, not by setsid, not by double-forking -
+# and when pid 1 of a namespace exits, the kernel kills every process left in it. The review of PR 35
+# measured the escape this closes: a pane child started as `env -i sh -c 'trap "" HUP; exec sleep 304'`
+# carries no TMUX variable, ignores the SIGHUP kill-server sends, and survived a teardown that reported
+# "stopped". MEASURED 2026-09-30 (util-linux 2.39.3): with the server contained, that child and a
+# setsid'd one were both gone when pid 1 exited, whether kill-server or a closed stdin ended it.
+#
+# The server is killed only by `kill-server` through its own socket, after the server that answers on
+# that socket has proved it is the one Start recorded: same socket path, same pid, same start time.
+# Teardown then requires the namespace to be EMPTY - no process whose /proc/<pid>/ns/pid is ours -
+# before it says "stopped". tmux 3.4 leaves its socket file behind (measured); it is removed only if it
+# is a socket at our exact path. Directories are removed with `rmdir`, which refuses a directory that
+# is not empty, never `rm -r`.
 
 if ($null -eq $script:HordeTmuxStarted) { $script:HordeTmuxStarted = @{} }
 # The transport is replaceable so the fast suite can prove what the harness WOULD send without a WSL
 # in the loop. $null means the real one. A test that sets it puts it back.
 if (-not (Test-Path variable:script:HordeTmuxTransport)) { $script:HordeTmuxTransport = $null }
+# And the owner - the one long-lived wsl.exe that holds the namespace - is replaceable for the same
+# reason. $null means the real one.
+if (-not (Test-Path variable:script:HordeTmuxOwnerLauncher)) { $script:HordeTmuxOwnerLauncher = $null }
 
 $script:HordeTmuxSession = "horde-iso"
 $script:HordeTmuxNamePattern = '^horde-iso-[0-9a-f]{32}$'
@@ -116,19 +124,11 @@ function Get-HordeWslFailure {
     return ""
 }
 
-function Invoke-HordeWsl {
-    # THE ONE PLACE wsl.exe IS RUN. Returns { code; out; err; timedOut; startError }.
-    #
-    # Through the process API, not `&`: both streams are read as bytes (trap 2 above), no `2>&1` is
-    # needed (CONTRIBUTING 12), stdin is closed so nothing can wait on the console, and a call that
-    # hangs is stopped through the handle this function has held since it started the process.
-    #
-    # The child's environment, not this process's, is scrubbed: TMUX, TMUX_PANE and WSLENV are removed
+function New-HordeWslStartInfo {
+    # How wsl.exe is started, for a short call and for the owner alike: --exec, each argument quoted,
+    # all three streams redirected, and TMUX, TMUX_PANE and WSLENV removed from the CHILD's environment
     # so nothing inherited from an outer terminal crosses into Linux.
-    #
-    # -Distro "" runs in WSL's default distro; only Start uses that, to learn the default's name.
-    param([string]$Distro, [string[]]$Argv, [int]$TimeoutSeconds = 30)
-    if ($script:HordeTmuxTransport) { return (& $script:HordeTmuxTransport $Distro $Argv $TimeoutSeconds) }
+    param([string]$Distro, [string[]]$Argv)
     $all = @()
     if ($Distro) { $all += @("-d", $Distro) }
     $all += "--exec"
@@ -142,6 +142,23 @@ function Invoke-HordeWsl {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     foreach ($v in @("TMUX", "TMUX_PANE", "WSLENV")) { if ($psi.EnvironmentVariables.ContainsKey($v)) { $psi.EnvironmentVariables.Remove($v) } }
+    return $psi
+}
+
+function Invoke-HordeWsl {
+    # THE ONE PLACE wsl.exe IS RUN. Returns { code; out; err; timedOut; startError }.
+    #
+    # Through the process API, not `&`: both streams are read as bytes (trap 2 above), no `2>&1` is
+    # needed (CONTRIBUTING 12), stdin is closed so nothing can wait on the console, and a call that
+    # hangs is stopped through the handle this function has held since it started the process.
+    #
+    # The child's environment, not this process's, is scrubbed: TMUX, TMUX_PANE and WSLENV are removed
+    # so nothing inherited from an outer terminal crosses into Linux.
+    #
+    # -Distro "" runs in WSL's default distro; only Start uses that, to learn the default's name.
+    param([string]$Distro, [string[]]$Argv, [int]$TimeoutSeconds = 30)
+    if ($script:HordeTmuxTransport) { return (& $script:HordeTmuxTransport $Distro $Argv $TimeoutSeconds) }
+    $psi = New-HordeWslStartInfo -Distro $Distro -Argv $Argv
     $p = $null
     try { $p = [System.Diagnostics.Process]::Start($psi) } catch {
         return [pscustomobject]@{ code = $null; out = ""; err = ""; timedOut = $false; startError = "$($_.Exception.Message)" }
@@ -234,13 +251,112 @@ function Test-HordeTmuxIsolation {
 
 function Get-HordeTmuxLines { param([string]$Text) return @(("$Text" -split "`r?`n") | Where-Object { $_.Trim() }) }
 
+# PID 1 OF THE NAMESPACE. Arguments: $1 the session name, then the tmux argv prefix Get-HordeTmuxArgv
+# builds (so the server is named in exactly the same one place as every other call). It prints its
+# namespace ("pid:[<inode>]"), starts the server in the foreground (-D) as its child, waits until the
+# server answers, makes the one session FROM INSIDE - no command from outside ever creates a server,
+# because a client that finds no server starts an unconfined one - prints "ready", and then waits on the
+# server. When the server exits, pid 1 exits, and the kernel kills everything left in the namespace.
+$script:HordeTmuxOwner = @'
+sess=$1; shift
+readlink /proc/self/ns/pid
+"$@" -D </dev/null >/dev/null 2>&1 &
+srv=$!
+i=0
+until "$@" list-sessions >/dev/null 2>&1; do
+  i=$((i+1)); [ "$i" -gt 100 ] && { echo "server-did-not-start"; exit 1; }
+  sleep 0.1
+done
+"$@" new-session -d -s "$sess" -x 160 -y 48 -c /tmp -- sh </dev/null >/dev/null 2>&1 || { echo "new-session-failed"; exit 1; }
+echo ready
+wait "$srv"
+'@ -replace "`r", ""
+
+# Every process whose pid namespace is $1 ("pid:[<inode>]"), one per line: "<pid> <command line>".
+# Read from OUTSIDE the namespace, so the pids are the distro's. Newlines in a command line are
+# flattened so one process is one line.
+$script:HordeTmuxNsScan = @'
+for f in /proc/[0-9]*/ns/pid; do
+  [ "$(readlink "$f" 2>/dev/null)" = "$1" ] || continue
+  p=${f#/proc/}; p=${p%/ns/pid}
+  printf '%s %s\n' "$p" "$(tr '\0\n' '  ' < "/proc/$p/cmdline" 2>/dev/null)"
+done
+exit 0
+'@ -replace "`r", ""
+
+function Get-HordeTmuxOwnerArgv {
+    # The owner's Linux argv: pid 1 of a fresh pid namespace, running $script:HordeTmuxOwner.
+    #   --pid --fork   the command runs as pid 1 of a new pid namespace (--fork is required for that);
+    #   --kill-child   if unshare itself dies, pid 1 is killed, and with it the namespace;
+    #   --mount-proc   a /proc of the namespace's own, so what runs inside sees only the namespace.
+    param($Entry)
+    return @("unshare", "--pid", "--fork", "--kill-child", "--mount-proc", "sh", "-c", $script:HordeTmuxOwner, "sh", $script:HordeTmuxSession) +
+           (Get-HordeTmuxArgv -Entry $Entry -Command @())
+}
+
+function Start-HordeWslOwner {
+    # Start the owner and hold it: one wsl.exe for the life of the instance, through the process API,
+    # so this process keeps its handle and its stdin. Reads its lines until "ready", a failure word, or
+    # the timeout. Returns { proc; nsInode; ready; failure }.
+    param([string]$Distro, [string[]]$Argv, [int]$TimeoutSeconds = 30)
+    if ($script:HordeTmuxOwnerLauncher) { return (& $script:HordeTmuxOwnerLauncher $Distro $Argv $TimeoutSeconds) }
+    $out = [pscustomobject]@{ proc = $null; nsInode = ""; ready = $false; failure = "" }
+    try { $out.proc = [System.Diagnostics.Process]::Start((New-HordeWslStartInfo -Distro $Distro -Argv $Argv)) } catch { $out.failure = "wsl.exe could not be started: " + $_.Exception.Message; return $out }
+    # stderr is drained so a chatty child can never block on a full pipe.
+    [void]$out.proc.StandardError.ReadToEndAsync()
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while (-not $out.ready -and -not $out.failure) {
+        $left = [int]($deadline - (Get-Date)).TotalMilliseconds
+        if ($left -le 0) { $out.failure = "the owner did not report ready in " + $TimeoutSeconds + "s"; break }
+        $t = $out.proc.StandardOutput.ReadLineAsync()
+        if (-not $t.Wait($left)) { $out.failure = "the owner did not report ready in " + $TimeoutSeconds + "s"; break }
+        $line = $t.Result
+        if ($null -eq $line) { $out.failure = "the owner exited before it was ready"; break }
+        $line = $line.Trim()
+        if ($line -match '^pid:\[\d+\]$') { $out.nsInode = $line }
+        elseif ($line -eq "ready") { $out.ready = $true }
+        else { $out.failure = "the owner said: " + $line }
+    }
+    return $out
+}
+
+function Test-HordeTmuxContained {
+    # Is our server inside our namespace? Lines are Get-HordeTmuxNsProcs's "<pid> <command line>".
+    # Returns $null, or the reason it is not. The server is the one process running
+    # "tmux -L <our name> -f /dev/null -D".
+    param($Entry, [string[]]$Lines)
+    $l = @($Lines | Where-Object { "$_".Trim() })
+    if ($l.Count -eq 0) { return "no process is in our namespace '" + $Entry.nsInode + "' - that is unknown, not contained" }
+    $want = "tmux -L " + $Entry.name + " -f /dev/null -D"
+    if (@($l | Where-Object { $_ -match ('^\d+ ' + [regex]::Escape($want) + '\s*$') }).Count -ne 1) {
+        return "our server ('" + $want + "') is not running inside our namespace '" + $Entry.nsInode + "'"
+    }
+    return $null
+}
+
+function Get-HordeTmuxNsProcs {
+    # The processes in an entry's namespace, as "<pid> <command line>" lines. Throws on a WSL failure.
+    param($Entry, [int]$TimeoutSeconds = 30)
+    if ("$($Entry.nsInode)" -notmatch '^pid:\[\d+\]$') { throw ("no namespace recorded for " + $Entry.name) }
+    $r = Invoke-HordeWsl -Distro $Entry.distro -Argv @("sh", "-c", $script:HordeTmuxNsScan, "sh", $Entry.nsInode) -TimeoutSeconds $TimeoutSeconds
+    $why = Get-HordeWslFailure $r
+    if ($why) { throw $why }
+    return @(Get-HordeTmuxLines $r.out)
+}
+
+# THE PREFLIGHT, which starts nothing. unshare is checked first and by name: without it there is no
+# containment, and a harness that ran uncontained would be the escape the review of PR 35 measured.
+# Prints "<distro>|<uid>|tmux <version>".
+$script:HordeTmuxPreflight = 'command -v unshare >/dev/null 2>&1 || { echo "unshare (util-linux) is not installed in the distro" >&2; exit 3; }; command -v tmux >/dev/null 2>&1 || { echo "tmux is not installed in the distro" >&2; exit 4; }; printf "%s|%s|" "$WSL_DISTRO_NAME" "$(id -u)"; tmux -V'
+
 function Start-HordeIsolatedTmux {
     # Start a tmux server that is ours alone and register it. Returns the instance. THROWS, loudly and
-    # with the reason, when WSL, the distro or tmux is missing: an absent host is a failure, never a skip.
+    # with the reason, when WSL, the distro, tmux or unshare is missing: an absent host is a failure,
+    # never a skip.
     param([string]$Distro = "", [int]$TimeoutSeconds = 30)
-    # PREFLIGHT, no server started: which distro, is tmux there, and which user (the socket lives in
-    # tmux-<uid>, so the expected path needs it).
-    $who = Invoke-HordeWsl -Distro $Distro -Argv @("sh", "-c", 'printf "%s|%s|" "$WSL_DISTRO_NAME" "$(id -u)"; tmux -V') -TimeoutSeconds $TimeoutSeconds
+    # PREFLIGHT, no server started: which distro, is unshare there (containment needs it), is tmux there,
+    # and which user (the socket lives in tmux-<uid>, so the expected path needs it).
+    $who = Invoke-HordeWsl -Distro $Distro -Argv @("sh", "-c", $script:HordeTmuxPreflight) -TimeoutSeconds $TimeoutSeconds
     $why = Get-HordeWslFailure $who
     if ($why) { throw ("tmux host unavailable: " + $why) }
     if ($who.code -ne 0 -or "$($who.out)".Trim() -notmatch '^([A-Za-z0-9._-]+)\|(\d+)\|tmux (\S+)$') {
@@ -251,7 +367,7 @@ function Start-HordeIsolatedTmux {
 
     $g = [guid]::NewGuid().ToString("N")
     $e = [pscustomobject]@{ distro = $resolved; uid = $uid; version = $version; guid = $g; name = ("horde-iso-" + $g); dir = ("/tmp/horde-iso-" + $g)
-                            socket = ("/tmp/horde-iso-" + $g + "/tmux-" + $uid + "/horde-iso-" + $g); serverPid = ""; startTime = "" }
+                            socket = ("/tmp/horde-iso-" + $g + "/tmux-" + $uid + "/horde-iso-" + $g); serverPid = ""; startTime = ""; nsInode = ""; owner = $null }
     # CREATED ONLY IF NEW: plain mkdir fails on an existing path, so a folder we did not make is never
     # adopted (the first host's store lesson). Mode 700, as tmux wants its socket directory.
     $mk = Invoke-HordeWsl -Distro $resolved -Argv @("mkdir", "-m", "700", "--", $e.dir) -TimeoutSeconds $TimeoutSeconds
@@ -264,14 +380,19 @@ function Start-HordeIsolatedTmux {
     # FROM HERE ON, ANY FAILURE UNDOES EVERYTHING (the first host's Start lesson): teardown is
     # safe on a half-started instance, because it kills only by our socket and removes only our paths.
     try {
-        $new = Invoke-HordeTmux -Instance $inst -Command @("new-session", "-d", "-s", $script:HordeTmuxSession, "-x", "160", "-y", "48", "-c", "/tmp", "--", "sh")
-        if ($new.code -ne 0) { throw ("new-session failed: " + $new.err) }
+        $own = Start-HordeWslOwner -Distro $resolved -Argv (Get-HordeTmuxOwnerArgv -Entry $e) -TimeoutSeconds $TimeoutSeconds
+        $e.owner = $own
+        if ($own.nsInode) { $e.nsInode = $own.nsInode }
+        if (-not $own.ready -or -not $e.nsInode) { throw ("the contained server did not start: " + $own.failure) }
         $id = Invoke-HordeTmux -Instance $inst -Command @("display-message", "-p", "#{socket_path}|#{pid}|#{start_time}")
         $parts = @("$($id.out)".Trim() -split '\|')
         if ($id.code -ne 0 -or $parts.Count -ne 3 -or $parts[0] -cne $e.socket -or $parts[1] -notmatch '^\d+$' -or $parts[2] -notmatch '^\d+$') {
             throw ("the new server did not identify itself on our socket: '" + "$($id.out)".Trim() + "' " + $id.err)
         }
+        # #{pid} is the server's pid INSIDE the namespace, which is what it reports each time it is asked.
         $e.serverPid = $parts[1]; $e.startTime = $parts[2]
+        $bad = Test-HordeTmuxContained -Entry $e -Lines (Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds)
+        if ($bad) { throw $bad }
         return $inst
     } catch {
         $msg = "$($_.Exception.Message)"
@@ -282,14 +403,17 @@ function Start-HordeIsolatedTmux {
 
 function Assert-HordeTmuxIsolated {
     # THE CONTROL (L-009). Nothing destructive runs until this has passed. Isolation is MEASURED: the
-    # server answering on our socket must be the one Start recorded, and it must hold exactly one
-    # session and one pane. Throws on any doubt; returns the pane count when satisfied.
+    # server answering on our socket must be the one Start recorded, it must be running inside our own
+    # pid namespace, and it must hold exactly one session and one pane. Throws on any doubt; returns the
+    # pane count when satisfied.
     param($Instance)
     $e = Get-HordeTmuxEntry $Instance
     if (-not $e) { throw "not isolated: not a tmux server this process started" }
     $id = Invoke-HordeTmux -Instance $Instance -Command @("display-message", "-p", "#{socket_path}|#{pid}|#{start_time}")
     if ($id.code -ne 0) { throw ("not isolated: the server did not answer: " + $id.err) }
     $bad = Test-HordeTmuxIdentity -Entry $e -Line $id.out
+    if ($bad) { throw ("not isolated: " + $bad) }
+    $bad = Test-HordeTmuxContained -Entry $e -Lines (Get-HordeTmuxNsProcs -Entry $e)
     if ($bad) { throw ("not isolated: " + $bad) }
     $s = Invoke-HordeTmux -Instance $Instance -Command @("list-sessions", "-F", "#{session_id}|#{session_name}")
     $p = Invoke-HordeTmux -Instance $Instance -Command @("list-panes", "-a", "-F", "#{pane_id}")
@@ -354,15 +478,6 @@ done
 exit 0
 '@ -replace "`r", ""
 
-# Is the recorded server process still alive? Its argv is the first client's, which holds our unique
-# socket name (measured: "tmux -L horde-iso-<guid> -f /dev/null new-session ..."), so a reused pid
-# cannot pass. Prints "alive" or "gone". A shell `case`, not grep: a grep given the name as its
-# pattern would carry that name in its own argv.
-$script:HordeTmuxServerAlive = @'
-c=$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)
-case "$c" in *"-L $2 "*) echo alive ;; *) echo gone ;; esac
-'@ -replace "`r", ""
-
 # Remove our socket file and our two directories, and nothing else. The socket goes only if it is a
 # socket (-S) at exactly our path; the directories go by rmdir, which refuses a directory that holds
 # anything - a stranger's socket included. Prints what is left.
@@ -375,6 +490,19 @@ sock=$1; sub=$2; dir=$3
 [ -e "$dir" ] && echo "dir-left"
 exit 0
 '@ -replace "`r", ""
+
+function Stop-HordeTmuxOwner {
+    # Let the owner go and wait for its wsl.exe to exit, up to Seconds. Returns $true when it has exited
+    # or there is none. Its handle is released either way; the process itself is never killed from here,
+    # because the verdict is measured in the namespace, not inferred from wsl.exe.
+    param($Entry, [int]$Seconds = 10)
+    $o = $Entry.owner
+    if (-not $o -or -not $o.proc) { return $true }
+    $done = $o.proc.WaitForExit($Seconds * 1000)
+    $o.proc.Dispose()
+    $Entry.owner = $null
+    return $done
+}
 
 function Stop-HordeIsolatedTmux {
     # TEAR THE SERVER DOWN AND PROVE IT WENT: the server, everything that ran in it, its socket and its
@@ -406,11 +534,14 @@ function Stop-HordeIsolatedTmux {
             } elseif (-not (Test-HordeTmuxNoServer $id)) {
                 return (& $verdict $false $false @() @() $false $false $true ("the server on our socket did not answer and did not say it was gone (exit " + $id.code + ": " + "$($id.err)".Trim() + ") - refusing to act on it"))
             }
-        } else {
-            # Start failed before the server identified itself. Anything on our socket can only be the
-            # server our own new-session made, because the directory is new and ours, so it is killed.
+        } elseif ($e.nsInode) {
+            # Start failed after the owner came up but before the server identified itself. Anything on
+            # our socket can only be the server our own owner made, because the directory is new and
+            # ours, so it is killed.
             [void](Invoke-HordeTmux -Instance $Instance -Command @("kill-server") -TimeoutSeconds $TimeoutSeconds)
         }
+        # THE OWNER: when the server exits, pid 1 exits and the owner's wsl.exe with it.
+        $ownerGone = Stop-HordeTmuxOwner -Entry $e -Seconds 10
         # GONE MEANS THE SOCKET SAYS SO, measured, not "kill-server exited 0".
         $gone = $false
         $deadline = (Get-Date).AddSeconds(10)
@@ -419,14 +550,12 @@ function Stop-HordeIsolatedTmux {
             if (Test-HordeTmuxNoServer $ls) { $gone = $true; break }
             Start-Sleep -Milliseconds 200
         } while ((Get-Date) -lt $deadline)
-        $alive = $false
-        if ($e.serverPid) {
-            $pr = Invoke-HordeWsl -Distro $e.distro -Argv @("sh", "-c", $script:HordeTmuxServerAlive, "sh", $e.serverPid, $e.name) -TimeoutSeconds $TimeoutSeconds
-            $why = Get-HordeWslFailure $pr
-            if ($why) { throw $why }
-            $alive = ("$($pr.out)".Trim() -ne "gone")
-        }
-        $survived = (-not $gone) -or $alive
+        # EMPTY MEANS NO PROCESS IS LEFT IN OUR NAMESPACE, measured from outside it. Read at once: once
+        # empty, the kernel may give the same inode to a later namespace (measured: two runs in a row
+        # were both pid:[4026532227]), which would read as not empty - the safe error.
+        $inNs = @()
+        if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }
+        $survived = (-not $gone) -or ($inNs.Count -gt 0)
 
         # WHAT RAN INSIDE IT, killed, then looked for again: whatever is still there would not die.
         $killed = @(); $still = @()
@@ -438,7 +567,7 @@ function Stop-HordeIsolatedTmux {
         $l = Invoke-HordeWsl -Distro $e.distro -Argv @("sh", "-c", $script:HordeTmuxSweep, "sh", $e.socket, "list") -TimeoutSeconds $TimeoutSeconds
         $why = Get-HordeWslFailure $l
         if ($why) { throw $why }
-        $still = @(Get-HordeTmuxLines $l.out | ForEach-Object { $_.Trim() })
+        $still = @(Get-HordeTmuxLines $l.out | ForEach-Object { $_.Trim() }) + @($inNs)
 
         # OUR SOCKET AND DIRECTORY, only once the server is gone - a survivor keeps its socket, so it
         # can still be reached and cleaned up by hand (the first host's L-023 rule).
@@ -464,7 +593,7 @@ function Stop-HordeIsolatedTmux {
                     ", processes that would not die: " + ($still -join ", ") + ". Kill them by hand.") -ForegroundColor Red
     }
     $reason = ""
-    if ($survived) { $reason = "the server still answers, or its process is still alive" }
+    if ($survived) { $reason = "the server still answers, or its namespace still holds processes" }
     elseif ($still.Count -gt 0) { $reason = "processes that ran inside it would not die" }
     return (& $verdict (-not $survived -and $still.Count -eq 0) $survived $killed $still $sockOk $dirOk $false $reason)
 }

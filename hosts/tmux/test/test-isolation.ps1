@@ -29,7 +29,7 @@ function Reply { param($Code = 0, [string]$Out = "", [string]$Err = "")
     return [pscustomobject]@{ code = $Code; out = $Out; err = $Err; timedOut = $false; startError = "" } }
 
 # THE FAKE WSL. Records every call as { distro; argv }, and answers from $script:answer, a scriptblock
-# that gets the call's kind ("tmux", "sweep", "alive", "cleanup", "mkdir", "preflight") and the argv.
+# that gets the call's kind ("tmux", "sweep", "nsscan", "cleanup", "mkdir", "preflight") and the argv.
 $script:calls = New-Object System.Collections.ArrayList
 $script:answer = $null
 $fake = { param($D, $Argv, $T)
@@ -39,13 +39,19 @@ $fake = { param($D, $Argv, $T)
     if ($a[0] -eq "env") { $kind = "tmux" }
     elseif ($a[0] -eq "mkdir") { $kind = "mkdir" }
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxSweep) { $kind = "sweep" }
-    elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxServerAlive) { $kind = "alive" }
+    elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxNsScan) { $kind = "nsscan" }
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxCleanup) { $kind = "cleanup" }
     elseif ($a[0] -eq "sh") { $kind = "preflight" }
     return (& $script:answer $kind $a) }
 # The tmux words after "-f /dev/null". Returned with a leading comma: a one-word command ("kill-server")
 # would otherwise arrive as a bare string, and [0] of a string is its first letter (CONTRIBUTING 12) -
 # the first run of this suite measured exactly that, as a kill-server the fake never recognised.
+# THE FAKE OWNER. Records its argv like any call (kind "owner") and answers from $script:ownerAnswer:
+# { proc = $null; nsInode; ready; failure }. No process is started.
+$script:ownerAnswer = $null
+$fakeOwner = { param($D, $Argv, $T)
+    [void]$script:calls.Add([pscustomobject]@{ distro = $D; argv = @($Argv) })
+    return $script:ownerAnswer }
 function Get-TmuxCommand { param($Argv) $i = [array]::IndexOf($Argv, "/dev/null"); if ($i -lt 0) { return , @() }; return , @($Argv[($i + 1)..($Argv.Count - 1)]) }
 function Get-Calls { param([string]$Verb) return @($script:calls | Where-Object { $_.argv[0] -eq "env" -and (Get-TmuxCommand $_.argv)[0] -eq $Verb }) }
 
@@ -54,6 +60,7 @@ function Get-Calls { param([string]$Verb) return @($script:calls | Where-Object 
 $script:dead = $false
 $script:hLine = ""
 $script:hSock = ""
+$script:hName = ""
 $script:healthy = { param($kind, $a)
     if ($kind -eq "tmux") {
         $verb = (Get-TmuxCommand $a)[0]
@@ -62,20 +69,23 @@ $script:healthy = { param($kind, $a)
         if ($verb -eq "display-message") { return (Reply 0 ($script:hLine + "`n")) }
         return (Reply 0 "`$0|horde-iso`n")
     }
-    if ($kind -eq "alive") { return (Reply 0 "gone`n") }
+    # The namespace: pid 1 and the server while it runs, nothing once it has gone.
+    if ($kind -eq "nsscan") { if ($script:dead) { return (Reply 0 "") }; return (Reply 0 ("401 sh -c sess=`$1`n403 tmux -L " + $script:hName + " -f /dev/null -D`n")) }
     return (Reply 0 "") }
 function Set-Healthy { param($Entry, [string]$ServerPid = "")
     # Arms $script:healthy for Entry. -ServerPid makes the server on our socket claim another pid.
     $script:dead = $false
     $sp = $ServerPid; if (-not $sp) { $sp = $Entry.serverPid }
     $script:hSock = $Entry.socket
+    $script:hName = $Entry.name
     $script:hLine = $Entry.socket + "|" + $sp + "|" + $Entry.startTime
 }
 function New-Entry {
     # A registry entry shaped exactly as Start makes one, registered under a fresh token.
     $g = [guid]::NewGuid().ToString("N")
     $e = [pscustomobject]@{ distro = "fake-distro"; uid = "0"; version = "3.4"; guid = $g; name = ("horde-iso-" + $g); dir = ("/tmp/horde-iso-" + $g)
-                            socket = ("/tmp/horde-iso-" + $g + "/tmux-0/horde-iso-" + $g); serverPid = "4242"; startTime = "1790000000" }
+                            socket = ("/tmp/horde-iso-" + $g + "/tmux-0/horde-iso-" + $g); serverPid = "4242"; startTime = "1790000000"
+                            nsInode = "pid:[4026530001]"; owner = $null }
     $tok = "horde-tmux-iso:" + $g
     $script:HordeTmuxStarted[$tok] = $e
     return [pscustomobject]@{ entry = $e; inst = [pscustomobject]@{ token = $tok } }
@@ -90,6 +100,14 @@ $pre = Invoke-HordeWsl -Distro $Distro -Argv @("tmux", "-V")
 $preWhy = Get-HordeWslFailure $pre
 if ($preWhy) { Write-Host ("         " + $preWhy) -ForegroundColor Red }
 Check ($preWhy -eq "" -and $pre.code -eq 0 -and "$($pre.out)" -match '^tmux \d') ("WSL answers, the distro '" + $Distro + "' exists (empty = default) and tmux is installed in it: '" + "$($pre.out)".Trim() + "'")
+
+# THE HARNESS'S OWN PREFLIGHT, run for real (it starts nothing): it must pass here, and it must fail
+# by name when unshare cannot be found - measured by hiding every binary behind an empty PATH, with
+# the shell itself named by its full path.
+$hp = Invoke-HordeWsl -Distro $Distro -Argv @("sh", "-c", $script:HordeTmuxPreflight)
+Check ($hp.code -eq 0 -and "$($hp.out)".Trim() -match '^[A-Za-z0-9._-]+\|\d+\|tmux \S+$') ("the harness's preflight passes here, unshare and tmux both found: '" + "$($hp.out)".Trim() + "'")
+$np = Invoke-HordeWsl -Distro $Distro -Argv @("env", "PATH=/horde-no-such-dir", "/bin/sh", "-c", $script:HordeTmuxPreflight)
+Check ($np.code -eq 3 -and "$($np.err)" -match 'unshare \(util-linux\) is not installed') ("with unshare not on PATH, the preflight fails by name, exit 3: '" + "$($np.err)".Trim() + "'")
 
 Write-Host ""
 Write-Host "--- the WSL boundary: arguments, bytes and exit codes ---" -ForegroundColor Cyan
@@ -194,6 +212,11 @@ Check ((Test-HordeTmuxIsolation -Sessions @() -Panes @()) -like "*unknown, not e
 Check ((Test-HordeTmuxIsolation -Sessions @("`$0|horde-iso", "`$1|work") -Panes @("%0", "%1")) -like "*2 sessions*") "two sessions are refused"
 Check ((Test-HordeTmuxIsolation -Sessions @("`$0|horde-iso") -Panes @("%0", "%1")) -like "*2 panes*") "two panes are refused"
 Check ((Test-HordeTmuxIsolation -Sessions @("`$0|work") -Panes @("%0")) -like "*not the harness*") "one session that is not the harness's is refused"
+$ce = [pscustomobject]@{ name = "horde-iso-abc"; nsInode = "pid:[4026530009]" }
+Check ($null -eq (Test-HordeTmuxContained -Entry $ce -Lines @("1 sh -c sess=`$1", "3 tmux -L horde-iso-abc -f /dev/null -D ", "9 sh"))) "CONTROL: our server in our namespace is contained"
+Check ((Test-HordeTmuxContained -Entry $ce -Lines @()) -like "*unknown, not contained*") "an empty namespace is unknown, never contained"
+Check ((Test-HordeTmuxContained -Entry $ce -Lines @("1 sh", "3 tmux -L horde-iso-abc -f /dev/null new-session -d")) -like "*not running inside*") "a server started some other way than pid 1's -D is not ours"
+Check ((Test-HordeTmuxContained -Entry $ce -Lines @("1 sh", "3 tmux -L horde-iso-abcd -f /dev/null -D")) -like "*not running inside*") "a server with a longer name that starts with ours is not ours"
 Check ((Test-HordeTmuxPaneId "%12") -and -not (Test-HordeTmuxPaneId "12") -and -not (Test-HordeTmuxPaneId "%1;kill-server")) "only %<number> is a pane id"
 
 Write-Host ""
@@ -265,16 +288,27 @@ try {
     Check ($vd.survived -and -not $vd.stopped) "a server that still answers after kill-server is reported as survived, not stopped"
     Check (@($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxCleanup }).Count -eq 0 -and -not $vd.socketRemoved) "and its socket is left in place, not deleted under a live server"
 
-    # THE SERVER'S PROCESS OUTLIVES ITS SOCKET: the socket says no server, but the recorded pid still
-    # runs our tmux. Survived.
+    # THE NAMESPACE IS NOT EMPTY: the socket says no server, but a process is still in our namespace -
+    # the review of PR 35's escape, a child with no mark of the server. Not stopped.
     $f = New-Entry
     $script:calls.Clear()
     Set-Healthy -Entry $f.entry
-    $script:answer = { param($k, $a) if ($k -eq "alive") { return (Reply 0 "alive") }; return (& $script:healthy $k $a) }
+    $script:answer = { param($k, $a) if ($k -eq "nsscan") { return (Reply 0 "977 sleep 304`n") }; return (& $script:healthy $k $a) }
     $vf = Stop-HordeIsolatedTmux -Instance $f.inst
-    Check ($vf.survived -and -not $vf.stopped) "a server process still alive after its socket went quiet is reported as survived"
-    $al = @($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxServerAlive })
-    Check ($al.Count -eq 1 -and $al[0].argv[4] -eq "4242" -and $al[0].argv[5] -ceq $f.entry.name) "the liveness check looks for the recorded pid running our socket name"
+    Check ($vf.survived -and -not $vf.stopped) "a process still in our namespace after the server went is reported, and the teardown is not stopped"
+    Check (@($vf.orphansSurvived) -contains "977 sleep 304") "and it is named"
+    $al = @($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxNsScan })
+    Check ($al.Count -eq 1 -and $al[0].argv[4] -ceq "pid:[4026530001]") "the emptiness check reads the namespace Start recorded"
+
+    # ASSERT MEASURES CONTAINMENT: a healthy server of ours passes; the same server answering from
+    # outside our namespace does not.
+    $as = New-Entry
+    Set-Healthy -Entry $as.entry; $script:answer = $script:healthy
+    $ac = $null; try { $ac = Assert-HordeTmuxIsolated -Instance $as.inst } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
+    Check ($ac -eq 1) "CONTROL: Assert passes a server of ours that is inside our namespace"
+    $script:answer = { param($k, $a) if ($k -eq "nsscan") { return (Reply 0 "401 sh -c sess=`$1`n") }; return (& $script:healthy $k $a) }
+    Check (Throws { Assert-HordeTmuxIsolated -Instance $as.inst } "not running inside our namespace") "Assert refuses a server that is not inside our namespace"
+    $script:HordeTmuxStarted.Remove($as.inst.token)
 
     # SOMETHING THAT RAN INSIDE WOULD NOT DIE: reported by pid.
     $h2 = New-Entry
@@ -287,7 +321,7 @@ try {
     # THE SERVER IS ALREADY GONE: no kill-server needed; still swept and cleaned.
     $j = New-Entry
     $script:calls.Clear()
-    $script:answer = { param($k, $a) if ($k -eq "tmux") { return (Reply 1 "" "no server running on /tmp/horde-iso-x") }; if ($k -eq "alive") { return (Reply 0 "gone") }; return (Reply 0 "") }
+    $script:answer = { param($k, $a) if ($k -eq "tmux") { return (Reply 1 "" "no server running on /tmp/horde-iso-x") }; return (Reply 0 "") }
     $vj = Stop-HordeIsolatedTmux -Instance $j.inst
     Check ($vj.stopped -and $vj.socketRemoved -and (Get-Calls "kill-server").Count -eq 0) "a server that is already gone reads as stopped, and nothing is sent kill-server"
 
@@ -323,19 +357,45 @@ try {
     Check ($mk.Count -eq 1 -and ($mk[0].argv -join " ") -match '^mkdir -m 700 -- /tmp/horde-iso-[0-9a-f]{32}$') "the directory is made by plain mkdir (no -p), mode 700, at /tmp/horde-iso-<guid>"
     Check ($script:HordeTmuxStarted.Count -eq $before) "and none of those failures left anything registered"
 
+    $script:answer = { param($k, $a) if ($k -eq "preflight") { return (Reply 3 "" "unshare (util-linux) is not installed in the distro") }; return (Reply 0) }
+    Check (Throws { Start-HordeIsolatedTmux -Distro "fake-distro" } "unshare (util-linux) is not installed") "unshare missing from the distro throws - containment is not optional"
+
+    $script:HordeTmuxOwnerLauncher = $fakeOwner
     $script:calls.Clear()
+    $script:ownerAnswer = [pscustomobject]@{ proc = $null; nsInode = "pid:[4026530002]"; ready = $false; failure = "the owner said: new-session-failed" }
     $script:answer = { param($k, $a)
         if ($k -eq "preflight") { return (Reply 0 "fake-distro|0|tmux 3.4") }
         if ($k -eq "mkdir") { return (Reply 0) }
-        if ($k -eq "tmux") { if ((Get-TmuxCommand $a)[0] -eq "new-session") { return (Reply 1 "" "boom") }; return (Reply 1 "" "no server running on x") }
-        if ($k -eq "alive") { return (Reply 0 "gone") }
+        if ($k -eq "tmux") { return (Reply 1 "" "no server running on x") }
         return (Reply 0 "") }
-    Check (Throws { Start-HordeIsolatedTmux -Distro "fake-distro" } "could not start") "a server that fails to start throws"
+    Check (Throws { Start-HordeIsolatedTmux -Distro "fake-distro" } "new-session-failed") "a contained server that fails to start throws, with the owner's words"
     $cl2 = @($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxCleanup })
     Check ($cl2.Count -eq 1 -and $cl2[0].argv[6] -match '^/tmp/horde-iso-[0-9a-f]{32}$') "and its half-made directory is cleaned up by the teardown"
     Check ($script:HordeTmuxStarted.Count -eq $before) "and its token is gone"
+    $ow = @($script:calls | Where-Object { $_.argv[0] -eq "unshare" })
+    Check ($ow.Count -eq 1) "the owner was started exactly once"
+    Check ($ow.Count -eq 1 -and ($ow[0].argv[0..8] -join " ") -ceq ("unshare --pid --fork --kill-child --mount-proc sh -c " + $script:HordeTmuxOwner + " sh")) "as pid 1 of a new pid namespace, killed with unshare, with its own /proc"
+    Check ($ow.Count -eq 1 -and $ow[0].argv[9] -ceq "horde-iso" -and ($ow[0].argv[10..($ow[0].argv.Count - 1)] -join " ") -match '^env -C /tmp/horde-iso-([0-9a-f]{32}) -u TMUX -u TMUX_PANE TMUX_TMPDIR=/tmp/horde-iso-\1 tmux -L horde-iso-\1 -f /dev/null$') "and it names the server through the same argv as every other call"
+    Check ((Get-Calls "new-session").Count -eq 0) "no new-session is ever sent from outside - a client that finds no server would start an unconfined one"
+
+    # THE SERVER ANSWERS BUT IS NOT IN OUR NAMESPACE: refused, and our socket's server is killed.
+    $script:calls.Clear()
+    $script:ownerAnswer = [pscustomobject]@{ proc = $null; nsInode = "pid:[4026530003]"; ready = $true; failure = "" }
+    $script:answer = { param($k, $a)
+        if ($k -eq "preflight") { return (Reply 0 "fake-distro|0|tmux 3.4") }
+        if ($k -eq "mkdir") { return (Reply 0) }
+        if ($k -eq "nsscan") { return (Reply 0 "401 sh -c sess=`$1`n") }
+        if ($k -eq "tmux") {
+            $d0 = @($script:HordeTmuxStarted.Values | Where-Object { $_.nsInode -eq "pid:[4026530003]" }) | Select-Object -First 1
+            if ((Get-TmuxCommand $a)[0] -eq "display-message" -and $d0) { return (Reply 0 ($d0.socket + "|3|1790000000")) }
+            return (Reply 1 "" "no server running on x") }
+        return (Reply 0 "") }
+    Check (Throws { Start-HordeIsolatedTmux -Distro "fake-distro" } "not running inside our namespace") "a server that is not inside our namespace is never handed to a test"
+    Check ($script:HordeTmuxStarted.Count -eq $before) "and it is torn down"
+    $script:HordeTmuxOwnerLauncher = $null
 } finally {
     $script:HordeTmuxTransport = $null
+    $script:HordeTmuxOwnerLauncher = $null
 }
 
 Write-Host ""
@@ -357,6 +417,7 @@ Check ($code -notmatch '&\s*wsl') "and never through PowerShell's & (which mis-q
 Check ($code -match '\$all \+= "--exec"' -and $code -notmatch '"--",\s*"tmux"') "every call uses --exec, never wsl's -- form, which hands the arguments to a shell to rewrite"
 Check (([regex]::Matches($code, '"tmux", "-L"')).Count -eq 1) "tmux's argv is built in exactly one place, Get-HordeTmuxArgv"
 Check ($code -notmatch 'pkill|killall|kill-server -a|rm -rf|rm -r ') "no pkill, killall, kill-server -a or recursive delete anywhere in the harness"
+Check ($script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null' -and $script:HordeTmuxOwner -match '(?m)^wait "\$srv"$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" new-session ') "pid 1 runs the server in the foreground as its child, makes the session from inside, and waits on the server"
 
 # The first host's 2026-09-29 lesson (L-018): a script that starts an isolated terminal must tear it
 # down by the real name. Guarded for this host's starter too.
