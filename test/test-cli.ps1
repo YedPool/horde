@@ -9,18 +9,14 @@
 # The dispatcher is run as a real separate process, both the way a script runs it (-File) and the way
 # a person types it at a prompt, because the two bind arguments differently.
 
-$ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
+# The suite helper first, so an error while loading the registry is recorded like any other. It sets
+# $ErrorActionPreference to Stop: every test below that expects an error says so with -ErrorAction or
+# a try/catch (CONTRIBUTING 9).
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "cli\Commands.ps1")
-
-$fails = @()
-# A condition must be exactly true or false; anything else fails loudly. A helper that returned an
-# array alongside $false once made a "must throw" check pass when nothing threw (see test-isolation.ps1).
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
 function Invoke-Horde {
     # Run horde as its own process. Returns { code; out; err } with the two streams kept apart.
@@ -357,11 +353,4 @@ finally {
 }
 Check (-not (Test-Path -LiteralPath $tmp)) "the stand-in root was removed"
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== every command is declared once, and every argument reaches it ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "every command is declared once, and every argument reaches it"
