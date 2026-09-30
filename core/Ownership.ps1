@@ -12,8 +12,9 @@
 # Test-HordeOwnership is the gate. Each of these is a finding, and this list is every one it makes:
 #   the text   - a key repeated inside one object, compared ignoring case; text that is not JSON
 #                PowerShell can read.
-#   top level  - a key other than about, owners, stores, storeIdGaps, required, fields and dropped;
-#                no owners, stores or fields.
+#   top level  - a key other than about, owners, stores, storeIdGaps, surveyedVersions, required,
+#                fields and dropped; no owners, stores or fields.
+#   surveyed   - a surveyed version for a store not in the store list; one that is not a version.
 #   owners     - a description that is empty or not text.
 #   stores     - an unknown key; system, what or path missing, empty or not text; a guard that is
 #                empty or not text; an id that is also listed in storeIdGaps; a store no field reads.
@@ -24,7 +25,9 @@
 #                is empty or not text; an unknown key; a when that is empty or not text; one store
 #                and field read twice in one rule, field names compared ignoring case.
 #   dropped    - no name; an unknown key; dropped twice; no reason, or a reason that is not text;
-#                both kept and dropped.
+#                both kept and dropped; a store not in the store list; a store without a key, or a
+#                key without a store; a key that is not text; a store key some field also reads; a
+#                provisional that is empty or not text.
 #   required   - no required list; an empty one; a name listed twice; a required field that is
 #                neither kept nor dropped; a kept or dropped field that is not required.
 # Names - owners, stores, fields - are otherwise matched exactly, case included.
@@ -32,14 +35,55 @@
 Set-StrictMode -Off
 
 $script:HordeOwnershipFieldKeys = @("name", "owner", "read", "derived", "provisional")
-$script:HordeOwnershipDroppedKeys = @("name", "reason")
+# A dropped entry may name the store key it drops (store and field), when that key is not the
+# record field's own name - the control file's agent is not Horde's agent - and say it is provisional.
+$script:HordeOwnershipDroppedKeys = @("name", "reason", "store", "field", "provisional")
 $script:HordeOwnershipReadKeys = @("store", "field", "when")
 $script:HordeOwnershipStoreKeys = @("system", "what", "path", "guard")
-$script:HordeOwnershipTopKeys = @("about", "owners", "stores", "storeIdGaps", "required", "fields", "dropped")
+$script:HordeOwnershipTopKeys = @("about", "owners", "stores", "storeIdGaps", "surveyedVersions", "required", "fields", "dropped")
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
     return ((Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json)
+}
+
+function Get-HordeOwnershipStoreKeys {
+    # Every key of one store the table has decided about: read by some field, or dropped by an entry
+    # naming the store. A key of that store in neither list is one nobody has looked at. The test
+    # suites take the list from here, so the table's own gate and the live check count alike.
+    #
+    # Every property is read through PSObject.Properties: a caller under Set-StrictMode -Version
+    # Latest (test/test-identity.ps1) runs this in its own strict mode, where reading a dropped
+    # entry's missing store throws (seen: "The property 'store' cannot be found on this object").
+    param($Doc, [Parameter(Mandatory = $true)][string]$Store)
+    $keys = New-Object System.Collections.ArrayList
+    foreach ($f in @($Doc.fields)) {
+        $rp = $f.PSObject.Properties["read"]
+        if ($null -eq $rp) { continue }
+        foreach ($r in @($rp.Value)) {
+            if ($null -eq $r) { continue }
+            $sp = $r.PSObject.Properties["store"]; $fp = $r.PSObject.Properties["field"]
+            if ($null -ne $sp -and $null -ne $fp -and "$($sp.Value)" -ceq $Store) { [void]$keys.Add("$($fp.Value)") }
+        }
+    }
+    foreach ($x in @($Doc.dropped | Where-Object { $null -ne $_ })) {
+        $sp = $x.PSObject.Properties["store"]; $fp = $x.PSObject.Properties["field"]
+        if ($null -ne $sp -and $null -ne $fp -and "$($sp.Value)" -ceq $Store) { [void]$keys.Add("$($fp.Value)") }
+    }
+    return @($keys | Sort-Object -Unique -CaseSensitive)
+}
+
+function Get-HordeOwnershipSurveyedVersion {
+    # The newest agent version whose keys the table was checked against, for one store, as a
+    # [version]; $null when the table records none or it is not a version.
+    param($Doc, [Parameter(Mandatory = $true)][string]$Store)
+    $sv = $Doc.PSObject.Properties["surveyedVersions"]
+    if ($null -eq $sv -or $null -eq $sv.Value) { return $null }
+    $p = $sv.Value.PSObject.Properties[$Store]
+    if ($null -eq $p) { return $null }
+    $v = $null
+    if ("$($p.Value)" -match '^[0-9]+(\.[0-9]+){1,3}$' -and [version]::TryParse("$($p.Value)", [ref]$v)) { return $v }
+    return $null
 }
 
 function Get-HordeOwnershipField {
@@ -146,6 +190,16 @@ function Test-HordeOwnership {
             if ($stores -contains $gapId) { [void]$findings.Add("store id '" + $gapId + "' is both a store and a gap in the numbering") }
         }
     }
+    # A SURVEYED VERSION says which agent version a store's keys were last checked against; the live
+    # check fails on a file written by a newer one (core-ownership L-056). It names a real store and
+    # is a dotted version, or it would compare against nothing.
+    $svProp = $Doc.PSObject.Properties["surveyedVersions"]
+    if ($null -ne $svProp) {
+        foreach ($vp in @($svProp.Value.PSObject.Properties)) {
+            if ($stores -cnotcontains $vp.Name) { [void]$findings.Add("the table records a surveyed version for store '" + $vp.Name + "', which is not in the store list") }
+            if ($vp.Value -isnot [string] -or "$($vp.Value)" -notmatch '^[0-9]+(\.[0-9]+){1,3}$') { [void]$findings.Add("the surveyed version for store '" + $vp.Name + "' is not a version: '" + $vp.Value + "'") }
+        }
+    }
     # A STORE'S GUARD applies to EVERY read of that store, before the read's own when. It exists
     # because a condition repeated per read was forgotten per read: the pane-sessions file was
     # guarded where it gave sessionId and pane and read bare for three other fields (review
@@ -176,6 +230,7 @@ function Test-HordeOwnership {
     $seen = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
     $seenFolded = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $usedStores = @{}
+    $allReads = @{}
     $fieldNames = New-Object System.Collections.ArrayList
     foreach ($f in @($Doc.fields)) {
         $n = "$($f.name)"
@@ -229,6 +284,7 @@ function Test-HordeOwnership {
             $pair = $s + "|" + "$($r.field)".ToLowerInvariant()
             if ($readPairs -ccontains $pair) { [void]$findings.Add("field '" + $n + "' reads '" + $r.field + "' from store '" + $s + "' twice (field names compared ignoring case)") }
             [void]$readPairs.Add($pair)
+            $allReads[$s + "|" + "$($r.field)"] = $true
         }
         # A reason is text. false and 0 stringify to "False" and "0", which passed as reasons.
         foreach ($k in @("derived", "provisional")) {
@@ -259,6 +315,16 @@ function Test-HordeOwnership {
         [void]$droppedNames.Add($dn)
         if ($x.reason -isnot [string] -or "$($x.reason)".Trim() -eq "") { [void]$findings.Add("field '" + $dn + "' is dropped without a reason") }
         if ($fieldNames -ccontains $dn) { [void]$findings.Add("field '" + $dn + "' is both kept and dropped") }
+        $dsP = $x.PSObject.Properties["store"]; $dfP = $x.PSObject.Properties["field"]
+        if ($null -ne $dsP -and $null -eq $dfP) { [void]$findings.Add("dropped field '" + $dn + "' names a store without a key") }
+        elseif ($null -eq $dsP -and $null -ne $dfP) { [void]$findings.Add("dropped field '" + $dn + "' names a key without a store") }
+        elseif ($null -ne $dsP) {
+            if ($stores -cnotcontains "$($dsP.Value)") { [void]$findings.Add("dropped field '" + $dn + "' is from store '" + $dsP.Value + "', which is not in the store list") }
+            if ($dfP.Value -isnot [string] -or "$($dfP.Value)".Trim() -eq "") { [void]$findings.Add("dropped field '" + $dn + "' names no key of its store, as text") }
+            elseif ($allReads.ContainsKey("$($dsP.Value)" + "|" + "$($dfP.Value)")) { [void]$findings.Add("store key '" + $dfP.Value + "' of store '" + $dsP.Value + "' is both read and dropped") }
+        }
+        $dpP = $x.PSObject.Properties["provisional"]
+        if ($null -ne $dpP -and ($dpP.Value -isnot [string] -or "$($dpP.Value)".Trim() -eq "")) { [void]$findings.Add("dropped field '" + $dn + "' says it is provisional but not why") }
     }
     if ($null -eq $Doc.PSObject.Properties["required"]) {
         [void]$findings.Add("the table needs a required list naming every field of the session record")

@@ -79,16 +79,24 @@ Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dro
 # names it; a key the agent writes is the agent's, so a kept one is owned by the agent.
 # waitingFor is the 21st: Claude Code writes it only while a session waits on the user, so the
 # census, which found every session idle, never saw it. On 2026-09-30 it was in 1 of 10 files, the
-# one whose status was waiting, as "permission prompt" (ledger L-055).
+# one whose status was waiting, as "permission prompt" (ledger L-055). The last 11 are the keys the
+# Claude Code 2.1.285 control-file reader accepts that no file on this machine has carried (ledger
+# L-056): each is dropped, provisionally, so a live file that shows one is already decided.
 $controlKeys = @("pid", "sessionId", "cwd", "startedAt", "procStart", "version", "peerProtocol", "peerFeatures", "kind",
                  "entrypoint", "pidDomain", "messagingSocketPath", "name", "nameSource", "nameSince", "updatedAt", "status",
-                 "statusUpdatedAt", "bridgeSessionId", "formerNames", "waitingFor")
+                 "statusUpdatedAt", "bridgeSessionId", "formerNames", "waitingFor",
+                 "jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux")
 $x2Reads = @($doc.fields | ForEach-Object { $ownField = $_; @($ownField.read) | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { [pscustomobject]@{ key = "$($_.field)"; owner = "$($ownField.owner)"; name = "$($ownField.name)" } } })
-$droppedNames = @($doc.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
-$unaccounted = @($controlKeys | Where-Object { @($x2Reads | ForEach-Object { $_.key }) -cnotcontains $_ -and $droppedNames -cnotcontains $_ })
+# The keys the table accounts for come from one helper, the same one the identity suite's live
+# check uses, so the two cannot count differently.
+$x2Known = @(Get-HordeOwnershipStoreKeys -Doc $doc -Store "X2")
+$unaccounted = @($controlKeys | Where-Object { $x2Known -cnotcontains $_ })
 foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
-Check ($controlKeys.Count -eq 21 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
+Check ($controlKeys.Count -eq 32 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
 Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
+# The version the keys were surveyed against, so a live file written by a newer Claude Code fails
+# the identity suite until someone looks at what that version writes (ledger L-056).
+Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.285") "the table records the claude version its control-file keys were surveyed against"
 # Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
 # of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
 # the engine must still hold after the session exits and Claude removes its control file - a
@@ -208,6 +216,15 @@ Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName der
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName derived -NotePropertyValue 0 -Force }) "but not how or why") "derived given as a number is refused"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName provisional -NotePropertyValue $false -Force }) "but not how or why") "provisional given as false is refused"
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName gaurd -NotePropertyValue "x" -Force }) "store 'X1' has an unknown key 'gaurd'") "a misspelled key in a store is refused, so a guard cannot vanish"
+# A DROPPED STORE KEY (ledger L-056) names a real store and a key, as text, never one some field
+# also reads; and a surveyed version is a version, of a real store.
+function DroppedX2 { param($d) return @($d.dropped | Where-Object { "$($_.name)" -ceq "statusUpdatedAt" })[0] }
+Check (Says (Mutated { param($d) (DroppedX2 $d) | Add-Member -NotePropertyName store -NotePropertyValue "Z9" -Force }) "is from store 'Z9', which is not in the store list") "a dropped key from a store that does not exist is refused"
+Check (Says (Mutated { param($d) $d.dropped[0] | Add-Member -NotePropertyName store -NotePropertyValue "X2" -Force }) "names a store without a key") "a dropped key with a store and no key is refused"
+Check (Says (Mutated { param($d) (DroppedX2 $d) | Add-Member -NotePropertyName field -NotePropertyValue "status" -Force }) "is both read and dropped") "a store key both read and dropped is refused"
+Check (Says (Mutated { param($d) (DroppedX2 $d) | Add-Member -NotePropertyName provisional -NotePropertyValue " " -Force }) "says it is provisional but not why") "a dropped key provisional without a reason is refused"
+Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName surveyedVersions -NotePropertyValue ([pscustomobject]@{ X2 = "latest" }) -Force }) "is not a version") "a surveyed version that is not a version is refused"
+Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName surveyedVersions -NotePropertyValue ([pscustomobject]@{ Z9 = "1.0.0" }) -Force }) "surveyed version for store 'Z9'") "a surveyed version for a store that does not exist is refused"
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue " " -Force }) "store 'X1' has an empty guard") "a store guard that says nothing is refused"
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue $true -Force }) "store 'X1' has an empty guard") "a store guard that is not text is refused"
 # A STORE SAYS WHICH SYSTEM KEEPS IT, WHAT IT IS AND WHERE IT LIVES. {} passed as a store, so a

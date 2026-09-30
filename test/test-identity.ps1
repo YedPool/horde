@@ -442,12 +442,13 @@ Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Users\x\Code") -ceq "C--Users-x
 Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b") -and -not (Test-HordeSessionId -Id "") -and -not (Test-HordeSessionId -Id ("x" * 129))) "a session id is validated before it becomes a key"
 # L-026: every key a fixture control file carries - the census's 19 plus formerNames, and waitingFor,
 # which only a waiting session writes (core-identity L-054) - has a row.
-$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor")
-$x2Reads = @($ownership.fields | ForEach-Object { @($_.read) } | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { "$($_.field)" })
-$droppedN = @($ownership.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
-$noRow = @($keys | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
+# The 11 more are the keys the Claude Code 2.1.285 reader accepts that no file here has carried,
+# dropped provisionally in the table (core-ownership L-056).
+$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames", "waitingFor") + @("jobId", "parkedJobId", "spare", "logPath", "hostSessionId", "agent", "state", "detail", "tempo", "needs", "tmux")
+$x2Known = @(Get-HordeOwnershipStoreKeys -Doc $ownership -Store "X2")
+$noRow = @($keys | Where-Object { $x2Known -cnotcontains $_ })
 foreach ($n in $noRow) { Write-Host ("  control file key with no row: " + $n) -ForegroundColor Red }
-Check ($keys.Count -eq 21 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
+Check ($keys.Count -eq 32 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
 
 Write-Host ""
 Write-Host "--- self identity ---" -ForegroundColor Cyan
@@ -546,23 +547,33 @@ if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
         Check ($verified.Count -ge 1) ("CONTROL: at least one real control file names its running process (" + $verified.Count + ")")
     }
     $realKeys = @()
+    $realVersions = @()
     $keyFiles = 0
-    foreach ($f in $realFiles) { try { $realKeys += @(((Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }); $keyFiles++ } catch { Write-Host ("  keys not read from " + $f.Name + ": " + $_.Exception.Message) -ForegroundColor Yellow } }
+    foreach ($f in $realFiles) {
+        try {
+            $o = (Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json
+            $realKeys += @($o.PSObject.Properties | ForEach-Object { $_.Name })
+            $vp = $o.PSObject.Properties["version"]
+            if ($null -ne $vp) { $realVersions += "$($vp.Value)" }
+            $keyFiles++
+        } catch { Write-Host ("  keys not read from " + $f.Name + ": " + $_.Exception.Message) -ForegroundColor Yellow }
+    }
     # The key check below passes vacuously on no keys, and the read above swallows each file's error,
     # so it must be shown to have read something whenever there were files to read (review finding 6
     # of PR #19).
     Check ($realFiles.Count -eq 0 -or ($keyFiles -ge 1 -and @($realKeys).Count -ge 1)) ("CONTROL: the keys of the real control files were read (" + $keyFiles + " of " + $realFiles.Count + " files, " + @($realKeys | Sort-Object -Unique).Count + " distinct keys)")
-    # A KEY ON THIS MACHINE WITH NO ROW IS DRIFT TO REPORT, NOT A FAILURE. Which keys a control file
-    # holds depends on what its session is doing when the suite runs, not on Horde's code: on
-    # 2026-09-30 main went red with no change because 1 of 10 sessions sat at a permission prompt and
-    # its file carried waitingFor (core-identity L-056). The Claude Code 2.1.285 reader accepts 11
-    # more keys no file here has carried - jobId, parkedJobId, spare, logPath, hostSessionId, agent,
-    # state, detail, tempo, needs and tmux - and each would do the same on the right day. A key with
-    # no row is not lost silently: nothing reads it, and this line names it. The fixture checks above
-    # hold every key known to the table strictly, and the CONTROL above proves the keys were read.
-    $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
-    foreach ($nr in $realNoRow) { Write-Host ("  REPORT: a key in this machine's control files has no row in the ownership table: " + $nr + " (give it a row in core/ownership.json, kept or dropped)") -ForegroundColor Yellow }
-    if ($realNoRow.Count -eq 0) { Write-Host ("  every key in this machine's control files has a row in the ownership table (" + @($realKeys | Sort-Object -Unique).Count + " distinct keys)") -ForegroundColor DarkGray }
+    # DRIFT FAILS, AND WAITING DOES NOT (core-identity L-056). The table keeps or drops every key the
+    # Claude Code version it was surveyed against can write - the 21 seen on disk and the 11 more its
+    # 2.1.285 reader accepts - so a session that happens to be waiting, or in any state that version
+    # knows, cannot turn this red. What does: a key in neither list, which a newer or unsurveyed
+    # writer added, and a file written by a Claude Code newer than the survey, which must be looked
+    # at before its keys are trusted to be the known ones. A yellow line in a green run reached no
+    # one (review of PR #24), so both fail.
+    $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Known -cnotcontains $_ })
+    Check ($realNoRow.Count -eq 0) ("every key in this machine's control files is kept or dropped in the ownership table (" + ($realNoRow -join ", ") + ")")
+    $surveyed = Get-HordeOwnershipSurveyedVersion -Doc $ownership -Store "X2"
+    $newer = @($realVersions | Sort-Object -Unique | Where-Object { $pv = $null; (-not [version]::TryParse("$_", [ref]$pv)) -or $null -eq $surveyed -or $pv -gt $surveyed })
+    Check ($null -ne $surveyed -and ($realFiles.Count -eq 0 -or $realVersions.Count -ge 1) -and $newer.Count -eq 0) ("no control file on this machine was written by a Claude Code newer than the table's survey (surveyed " + $surveyed + "; newer: " + ($newer -join ", ") + ")")
 }
 
 Complete-HordeSuite -Success "every agent's control files read into one record shape, and nothing written"
