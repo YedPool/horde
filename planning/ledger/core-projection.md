@@ -1,0 +1,380 @@
+# Knowledge ledger: core/projection
+
+module: core/projection
+replaces: YedPool/wezfleet lib/Registry.ps1 (Get-WfFleetCensus, Get-WfPaneIndex, Get-WfPaneIdentity, Find-WfLivePaneForSession, Get-WfLivePaneForFleetSession, Get-WfSession, Get-WfIdentityHealth, Get-WfUnclaimedUserSessions, and the read side of Read-WfAllSessionRecords and Read-WfPaneSessionFile), lib/Protocol.ps1 (Get-WfRunSnapshot, Get-WfSessionState, Get-WfLiveFleetSessions, Get-WfClaudeSessionInfo), lib/Hierarchy.ps1 (Get-WfHierarchy, Get-WfHierarchyFindings), lib/Common.ps1 (Get-WfLivePanes, Get-WfCurrentInstance, Test-WfWrittenInInstance, Format-WfRecordPane, Resolve-WfRunForSession, Get-WfDuplicateSessions), lib/Hosts.ps1 (Get-WfFleetSessions), lib/Activity.ps1 (Get-WfSessionActivity), commands/sessions.ps1, commands/census.ps1, commands/tree.ps1, and the read side of commands/status.ps1
+sources:
+- comments: searched
+- history: searched
+- pull requests: searched
+- docs: searched
+- tests: searched
+
+Harvested 2026-09-30 from YedPool/wezfleet main acda968 and YedPool/horde main c5cb727. Of the 17
+wezfleet pull requests, #1, #2, #4 and #5 touched lib/Protocol.ps1 and #1 and #6 lib/Common.ps1; none
+touched Registry.ps1, Hierarchy.ps1, Hosts.ps1 or the four commands, and every incident commit cited
+below was pushed directly (checked with `gh pr list --json files`). The places wezfleet's readers
+differ from core/ownership.json on purpose are recorded as P-01 to P-27 in planning/parity-2.3.md, for
+step 2.3's parity run. Citations checked against the source on 2026-09-30, by reading the lines: Hosts.ps1:59-61,
+census.ps1:10-11 and :17, Registry.ps1:122-123, :393, :395, :578-583, :667-673, :854-861, :868-876,
+Common.ps1:546-548, :349, Activity.ps1:282, Protocol.ps1:11, :438-441, MailPump.ps1:58-62,
+sessions.ps1:41-46, status.ps1:8.
+
+### L-001 The projection writes nothing, and the proof is that the module holds no file-writing call
+- source: horde planning/migration-plan.html step 2.2 "A test asserting the module contains no file-writing call at all"; D2
+- disposition: test
+- where: test/test-projection.ps1 :: "the projection module contains no file-writing call"
+
+### L-002 A read leaves every store byte-identical, including no lock or temp file
+- source: horde planning/ledger/core-roles.md L-008, L-009; YedPool/wezfleet lib/Registry.ps1:147-158 (a held lock makes the hook skip its write)
+- disposition: test
+- where: test/test-projection.ps1 :: "projecting leaves no new or changed file in any store"
+
+### L-003 Every foreign file is read with read, write and delete sharing
+- source: horde core/ReadShared.ps1:4-8 (measured 2026-09-29: an ordinary read share makes File.Replace fail); YedPool/wezfleet lib/Registry.ps1:121 reads with Get-Content
+- disposition: test
+- where: test/test-projection.ps1 :: "a wezfleet write succeeds while the projection reads"
+
+### L-004 An unreadable pane list is unknown, never zero panes
+- source: YedPool/wezfleet lib/Hosts.ps1:59-61 "$null is a real answer meaning UNKNOWN"; lib/Common.ps1:497-503 then collapses it to an empty map
+- disposition: test
+- where: test/test-projection.ps1 :: "an unreadable handle list leaves every pane unknown"
+
+### L-005 Zero live handles is a known empty list, distinct from unknown
+- source: YedPool/wezfleet commands/sessions.ps1:41 and lib/Protocol.ps1:170 treat a count of 0 as unknown
+- disposition: test
+- where: test/test-projection.ps1 :: "an empty handle list is known and empty"
+
+### L-006 A census never prints no live panes for an unreadable mux
+- source: YedPool/wezfleet commands/census.ps1:10-11; horde planning/ledger/core-tristate.md L-037 "the census.ps1 defect should be written into that ledger as a parity case"
+- disposition: test
+- where: test/test-projection.ps1 :: "parity exception unreadable mux is not an empty census"
+
+### L-007 Three pane states: a handle, known to be in none, and unknown
+- source: YedPool/wezfleet lib/Hosts.ps1:178-182; commit 27cfafe; test_debug/test-fleet-sessions.ps1 "every pane reads '?' rather than '-'"
+- disposition: test
+- where: test/test-projection.ps1 :: "a paneless session reads absent, not unknown"
+
+### L-008 A session with no pane is still a member of the fleet
+- source: YedPool/wezfleet 27cfafe; test_debug/test-fleet-sessions.ps1 "the paneless session appears at all - census cannot show this one"
+- disposition: test
+- where: test/test-projection.ps1 :: "a session outside every host is still listed"
+
+### L-009 Rows are keyed by session; the pane is an attribute, never the key
+- source: horde planning/migration-plan.html D3; YedPool/wezfleet lib/Protocol.ps1:555-569 derived the session from the pane
+- disposition: test
+- where: test/test-projection.ps1 :: "no session is inferred from a pane number"
+
+### L-010 The caller's own session id never identifies a pane
+- source: YedPool/wezfleet lib/Protocol.ps1:438-441, reached from commands/sessions.ps1:45 (a live pane with no file takes CLAUDE_CODE_SESSION_ID); core/ownership.json sessionId row "never identifies another pane"
+- disposition: test
+- where: test/test-projection.ps1 :: "the environment never names another session"
+
+### L-011 A pane number is evidence only inside the instance that issued it, and only if written after it started
+- source: YedPool/wezfleet 0e1c75a; lib/Common.ps1:611-641; test_debug/test-instance.ps1:95-101, :117-123; horde planning/ledger/core-tristate.md L-023
+- disposition: test
+- where: test/test-projection.ps1 :: "a record from another instance names no pane"
+
+### L-012 An ambiguous instance trusts no pane record
+- source: YedPool/wezfleet lib/Common.ps1:546-548, :625; test_debug/test-instance.ps1:101 "an AMBIGUOUS instance trusts nothing"
+- disposition: test
+- where: test/test-projection.ps1 :: "an ambiguous host instance trusts no record"
+
+### L-013 An instance id passed in must reach the rule, not be defaulted away
+- source: YedPool/wezfleet 17c5d42; planning/BUG-2026-09-15-registry-record-wipe.md:112-120 ([string]$Socket=$null became "")
+- disposition: test
+- where: test/test-projection.ps1 :: "an injected instance is the one judged"
+
+### L-014 A retired record holds no pane
+- source: YedPool/wezfleet 562f0e8; lib/Registry.ps1:388-393; test_debug/test-pane-resolution.ps1:89 "a RETIRED session stops claiming its pane"
+- disposition: test
+- where: test/test-projection.ps1 :: "a retired record answers no pane"
+
+### L-015 Several sessions answering one handle is a fault, never a silent newest-wins
+- source: YedPool/wezfleet lib/Registry.ps1:395; horde planning/ledger/core-ownership.md L-011 (handed to the projection); live 2026-09-30: pane 27 claimed by 3 non-retired records
+- disposition: test
+- where: test/test-projection.ps1 :: "a handle claimed twice is reported as a fault"
+
+### L-016 One session in two live pane-sessions files is a fault, and neither file answers
+- source: YedPool/wezfleet lib/Registry.ps1:667-673 (the finder takes exactly one match); commands/sessions.ps1:46 keeps the last; core/ownership.json X1 guard; cef5ba3
+- disposition: test
+- where: test/test-projection.ps1 :: "a session in two handles is reported"
+
+### L-017 A pane-sessions file contradicting a live session in that pane is a hijack
+- source: YedPool/wezfleet f09f4e1; test_debug/diag-pane-session-hijack.ps1; horde planning/ledger/core-identity.md L-038, L-039; planning/ledger/core-ownership.md L-009
+- disposition: test
+- where: test/test-projection.ps1 :: "a hijacked pane file does not answer"
+
+### L-018 Pane-sessions files are refused while more than one terminal instance runs
+- source: YedPool/wezfleet lib/Registry.ps1:223-247; 88aab20; test_debug/test-instance.ps1:165-166
+- disposition: test
+- where: test/test-projection.ps1 :: "two host instances refuse every pane file"
+
+### L-019 A pane-sessions file whose transcript is gone does not answer for the transcript
+- source: YedPool/wezfleet lib/Protocol.ps1:402-424 (diag-pane-session-staleness.ps1: 141 of 150 share one cwd); horde planning/ledger/core-ownership.md L-043; core/ownership.json transcriptPath X1 "when the transcript it names exists"
+- disposition: test
+- where: test/test-projection.ps1 :: "a pane file naming a missing transcript does not answer the transcript"
+
+### L-020 The cwd guard barely discriminates, so it is never the only guard
+- source: YedPool/wezfleet lib/Registry.ps1:578-583 "94% of the time"; d8449ea (35 rejections were pane reuse); horde planning/ledger/core-ownership.md L-018
+- disposition: comment
+- where: core/Projection.ps1 :: "the cwd guard barely discriminates"
+
+### L-021 The pane is read in the ownership table's order, and every answer says where it came from
+- source: core/ownership.json pane row; YedPool/wezfleet census source column (lib/Registry.ps1:822-823 "a census that cannot say how confident it is")
+- disposition: test
+- where: test/test-projection.ps1 :: "every answer names the store it came from"
+
+### L-022 Registry pane freshness is by instance, not the 900 second age
+- source: YedPool/wezfleet lib/Registry.ps1:774-779, :537, :553 against :394; horde planning/ledger/core-ownership.md L-025
+- disposition: test
+- where: test/test-projection.ps1 :: "a quiet session keeps its registry pane"
+
+### L-023 The run snapshot's pane order differs, and is a documented parity exception
+- source: YedPool/wezfleet lib/Protocol.ps1:522-537; 4947d8c; horde planning/ledger/core-ownership.md L-026; planning/parity-2.3.md P-17
+- disposition: test
+- where: test/test-projection.ps1 :: "parity exception snapshot pane order"
+
+### L-024 A transcript is found from the launch directory, not the current one
+- source: YedPool/wezfleet lib/Registry.ps1:861, :872 use rec.cwd while :486 and :796-799 use firstCwd; measured 2026-09-30: 23 of 31 found by census's rule, 26 by firstCwd
+- disposition: test
+- where: test/test-projection.ps1 :: "parity exception census transcript from current cwd"
+
+### L-025 A missing measurement is unknown, never zero or idle
+- source: YedPool/wezfleet b2e59c6 "-1 means UNKNOWN, never idle"; lib/Registry.ps1:868-876; test_debug/test-registry.ps1:115
+- disposition: test
+- where: test/test-projection.ps1 :: "no transcript leaves last activity unknown"
+
+### L-026 Last activity is the newest of all involuntary sources
+- source: YedPool/wezfleet lib/Activity.ps1:245-272 (cmdlog, loose cmdlog, transcript); PR #1; core/ownership.json lastActivity row
+- disposition: test
+- where: test/test-projection.ps1 :: "last activity takes the newest source"
+
+### L-027 A timestamp from the future is not read as fresh
+- source: YedPool/wezfleet lib/Activity.ps1:282 clamps to 0; horde core/Tristate.ps1:37 (5 s skew)
+- disposition: test
+- where: test/test-projection.ps1 :: "a future activity time is not fresh"
+
+### L-028 The report is what the session chose to say; activity is what it did
+- source: YedPool/wezfleet cf5c370 (12 of about 28 fields voluntary); test_debug/audit-state-sources.ps1:23-51
+- disposition: comment
+- where: core/Projection.ps1 :: "voluntary facts are provenance W5"
+
+### L-029 Work state reads the event log, and a terminal event is trusted outright
+- source: YedPool/wezfleet lib/Protocol.ps1:11, :187-188; horde planning/ledger/core-ownership.md L-015
+- disposition: test
+- where: test/test-projection.ps1 :: "a done event is trusted outright"
+
+### L-030 Unknown liveness never fabricates an orphan
+- source: YedPool/wezfleet lib/Protocol.ps1:169-172; test_debug/test-wezfleet.ps1:328 "unknown liveness does not fabricate orphans"; horde planning/ledger/core-tristate.md L-029 (handed here)
+- disposition: test
+- where: test/test-projection.ps1 :: "unknown liveness is never orphaned"
+
+### L-031 Orphaned needs both the pane gone and the activity stopped
+- source: YedPool/wezfleet lib/Protocol.ps1:139-142, :180-185; test_debug/test-wezfleet.ps1:310, :1030
+- disposition: test
+- where: test/test-projection.ps1 :: "a gone pane with fresh activity is not orphaned"
+
+### L-032 A pending roster entry is pending, not starting
+- source: YedPool/wezfleet lib/Protocol.ps1:590-599; test_debug/test-wezfleet.ps1:896; horde planning/ledger/core-ownership.md L-016
+- disposition: test
+- where: test/test-projection.ps1 :: "an unspawned roster entry reads pending"
+
+### L-033 Run membership is ambiguous when two open runs spawned the id, and is reported
+- source: YedPool/wezfleet lib/Common.ps1:331-347; test_debug/test-run-resolution.ps1:55-90; horde planning/ledger/core-ownership.md L-030; live 2026-09-30: 5 fleet ids spawned in more than one open run
+- disposition: test
+- where: test/test-projection.ps1 :: "two open runs make the run unknown"
+
+### L-034 Several closed runs listing one id are ambiguous too
+- source: YedPool/wezfleet lib/Common.ps1:349 returns hits[0]; core/ownership.json runId row is silent on it; planning/parity-2.3.md P-22
+- disposition: test
+- where: test/test-projection.ps1 :: "two closed runs are not chosen between"
+
+### L-035 Exactly one warchief; two is a finding naming both, never chosen by time
+- source: YedPool/wezfleet lib/Hierarchy.ps1:21-24, :77-87; 4eba288; test_debug/test-hierarchy.ps1:66-71; horde planning/ledger/core-roles.md L-017, planning/ledger/core-ownership.md L-021 (handed here)
+- disposition: test
+- where: test/test-projection.ps1 :: "two warchiefs are reported and both named"
+
+### L-036 No warchief is a finding, not a silent normal
+- source: YedPool/wezfleet lib/Hierarchy.ps1:79-82; test_debug/test-hierarchy.ps1:45
+- disposition: test
+- where: test/test-projection.ps1 :: "no warchief is reported as a fault"
+
+### L-037 The warchief count is unknown when the registry cannot be read or a live role is unknown
+- source: horde planning/migration-plan.html section 2 "the Warchief count is unknown, not zero"; planning/ledger/core-roles.md L-011, core/Roles.ps1 Get-HordeRoleCount; live 2026-09-30: floor 1, 9 unsure
+- disposition: test
+- where: test/test-projection.ps1 :: "an unreadable registry leaves the warchief count unknown"
+
+### L-038 An orc whose parent is not the warchief is a fault, judged only when the warchief is known
+- source: YedPool/wezfleet lib/Hierarchy.ps1:89-98 (untested there: 0 hits in test_debug)
+- disposition: test
+- where: test/test-projection.ps1 :: "an orc under another parent is reported"
+
+### L-039 A parent with no record and a retired parent are two faults
+- source: YedPool/wezfleet lib/Hierarchy.ps1:42-58, :100-107 (retired records are dropped before the lookup; untested there); planning/parity-2.3.md P-25
+- disposition: test
+- where: test/test-projection.ps1 :: "a retired parent is not a missing parent"
+
+### L-040 Faults report and repair nothing, and are never stored
+- source: YedPool/wezfleet lib/Hierarchy.ps1:21-24; commands/tree.ps1:50-53; test_debug/test-hierarchy.ps1:68; horde planning/ledger/core-roles.md L-019. core/Faults.ps1 is loaded by the projection, so the syntax-tree scan covers it, stopping and starting processes included
+- disposition: test
+- where: test/test-projection.ps1 :: "the projection module contains no file-writing call"
+
+### L-041 A running session with a retired record is a fault
+- source: live 2026-09-30: d16b54b2 control file idle, registry retired 2026-09-23T03:22Z, lastSeen 2026-09-30T01:44Z; YedPool/wezfleet lib/Registry.ps1:393 skips it silently; planning/parity-2.3.md P-26
+- disposition: test
+- where: test/test-projection.ps1 :: "a live session with a tombstone is reported"
+
+### L-042 One conversation in two processes is reported, never acted on, and the blind spot is stated
+- source: YedPool/wezfleet lib/Common.ps1:684-708; 0e1c75a; test_debug/test-instance.ps1:193-196; horde planning/ledger/core-identity.md L-020
+- disposition: test
+- where: test/test-projection.ps1 :: "one conversation in two processes is a fault"
+
+### L-043 A registry hook that writes nothing is a fault, judged from the sessions that run
+- source: YedPool/wezfleet lib/Registry.ps1:952-964, :987-1010; e929318 (one record while 19 panes were live); 0e1c75a. The draft dropped this as hook health; the lead asked for the ten existing rules, so it is kept in its read-only form - running claude sessions exist and none has a registry record
+- disposition: test
+- where: test/test-projection.ps1 :: "running sessions with no registry record at all mean the hook is silent"
+
+### L-044 Owner is derived from the parent's label, and the stored name is display only
+- source: core/ownership.json owner row; YedPool/wezfleet 1e8837a; commands/census.ps1:17 prints (unowned); live 2026-09-30: 7 of 16 non-retired records have an empty owner where founder is derived
+- disposition: test
+- where: test/test-projection.ps1 :: "parity exception owner derived from parent"
+
+### L-045 A founder session nobody owns is found from origin and parent, not from an empty name
+- source: YedPool/wezfleet lib/Registry.ps1:1190-1201; commands/census.ps1:31-37; test_debug/test-registry.ps1:169, :172
+- disposition: test
+- where: test/test-projection.ps1 :: "a user session with no parent is owned by the founder"
+
+### L-046 Origin has two values; anything else is absent or unknown, never the word unknown
+- source: YedPool/wezfleet lib/Registry.ps1:858; test_debug/test-registry.ps1:156-164; planning/parity-2.3.md P-12
+- disposition: test
+- where: test/test-projection.ps1 :: "a missing origin is not the string unknown"
+
+### L-047 A corrupt record costs one session and makes the listing incomplete
+- source: YedPool/wezfleet lib/Registry.ps1:121-123; test_debug/test-registry.ps1:213 "one corrupt file costs ONE row"; horde planning/ledger/core-roles.md L-011
+- disposition: test
+- where: test/test-projection.ps1 :: "a corrupt record makes the registry incomplete"
+
+### L-048 A record whose file name and content disagree is not a record
+- source: YedPool/wezfleet lib/Registry.ps1:122-123; test_debug/test-registry.ps1:217; horde planning/ledger/core-roles.md L-010
+- disposition: test
+- where: test/test-projection.ps1 :: "a misnamed record is refused and reported"
+
+### L-049 Host title and roster title are different facts
+- source: YedPool/wezfleet lib/Registry.ps1:854 against core/ownership.json title row (W4, W3); planning/parity-2.3.md P-15
+- disposition: test
+- where: test/test-projection.ps1 :: "the host title is not the session title"
+
+### L-050 Nothing outside hosts names a terminal; the handle list arrives through a port
+- source: horde planning/migration-plan.html D12; YedPool/wezfleet lib/Hosts.ps1:21-32 and lib/Common.ps1:487-492
+- disposition: test
+- where: test/test-projection.ps1 :: "the projection names no terminal"
+
+### L-051 Every source is a parameter, so tests never read the box
+- source: YedPool/wezfleet lib/Protocol.ps1:369-380 (four assertions changed answer with the process list); lib/Hosts.ps1:175-176; horde planning/ledger/core-identity.md L-041
+- disposition: test
+- where: test/test-projection.ps1 :: "the suite reads no real store before the reality check"
+
+### L-052 The product must call the resolver, proven through the command and not only the function
+- source: YedPool/wezfleet 4947d8c (a mutation of the wiring left test-registry green); tasks/lessons.md 2026-09-09 "a mechanism with no callers". Step 2.2 is a library with no command (the lead's decision 5), so the proof belongs to step 2.3 and is carried there
+- disposition: comment
+- where: planning/parity-2.3.md :: "horde status calls the projection"
+
+### L-053 Parity is measured against the shipped functions over one fixture, never a reconstruction
+- source: YedPool/wezfleet tasks/lessons.md:571-574 "VERIFY AGAINST THE SHIPPED COMMAND"; horde tasks/lessons.md "Every number in a commit, PR or report comes from command output". Step 2.3 runs the comparison; the method is carried there
+- disposition: comment
+- where: planning/parity-2.3.md :: "parity runs wezfleet functions on the fixture"
+
+### L-054 wezfleet status writes before it reads, so parity uses the snapshot function
+- source: YedPool/wezfleet commands/status.ps1:8, :15; commands/pump.ps1:4-5
+- disposition: comment
+- where: core/Projection.ps1 :: "wezfleet status spawns before it reads"
+
+### L-055 Identity accepts ids the stored record refuses; the projection decides: keyed, and flagged
+- source: horde planning/ledger/core-identity.md L-052; core/Identity.ps1:68-79 "which rule wins is for step 2.2"
+- disposition: test
+- where: test/test-projection.ps1 :: "a non-uuid session id is keyed and flagged"
+
+### L-056 A layout save is compared against, never used as the answer
+- source: core/ownership.json resumeCommand row (R1 shadow only); horde planning/ledger/core-ownership.md L-044; resurrect state workspace/default.json process.argv read 2026-09-30 as claude --resume and the id
+- disposition: test
+- where: test/test-projection.ps1 :: "a layout save never answers resumeCommand"
+
+### L-057 resurrect keeps per-instance saves the ownership table does not list
+- source: resurrect state/instances (15 entries, .json and .meta, 2026-09-30) and state/current_state; plugin/resurrect/instance_manager.lua:4-5; core/ownership.json R1 path lists only workspace, window, tab
+- disposition: dropped
+- reason: Layout is advisory (D3) and read only for the resume shadow, through a layout port the projection is handed; which save a restore uses belongs to the LayoutPort and restore planner ledgers (steps 4.x).
+
+### L-058 Title drift and bare shells are presentation over the host's titles
+- source: YedPool/wezfleet commands/census.ps1:38-63, :78-97; 50a6944; d811106
+- disposition: dropped
+- reason: Title repair and bare-shell detection read and write host tab titles; they belong to the first host adapter's decoration code (step 7.2), not the read model.
+
+### L-059 Unsent text in an input box is read from the screen
+- source: YedPool/wezfleet commands/census.ps1:110-123; 6fe4e02; planning/BUG-2026-09-15-unsent-input-box.md
+- disposition: dropped
+- reason: Screen text is the TerminalPort getText verb used for delivery safety; Horde delivers over the session socket, so this belongs to a host adapter's ledger if it is ever needed.
+
+### L-060 Disk space is reported by census and startup
+- source: YedPool/wezfleet commands/census.ps1:64-76; 71afcb0
+- disposition: dropped
+- reason: Machine health is not a session fact; it belongs to the horde startup or doctor command ledger.
+
+### L-061 The machine-wide live fleet count bounds launches
+- source: YedPool/wezfleet lib/Protocol.ps1:445-495; test_debug/test-wezfleet.ps1:731-752
+- disposition: dropped
+- reason: The launch cap is spawner policy owned by the Phase 5 spawn module; it can be computed from the projection there, and its unknown-as-minus-one rule is carried by L-004.
+
+### L-062 The roster may still group sessions; only identity and pane moved off it
+- source: YedPool/wezfleet test_debug/test-ssot.ps1:43-44; 562f0e8 "GROUPING is the roster's proper job"
+- disposition: comment
+- where: core/Projection.ps1 :: "the roster groups sessions into runs"
+
+### L-063 Every claimant of one handle is unknown, and each reason names them all
+- source: the lead's decision 1, 2026-09-30; YedPool/wezfleet lib/Registry.ps1:395 (newest lastSeen wins); planning/parity-2.3.md P-14
+- disposition: test
+- where: test/test-projection.ps1 :: "every claimant of one handle has an unknown pane naming every claimant"
+
+### L-064 With no host instance running a stored handle cannot be verified
+- source: the lead's decision 2, 2026-09-30; YedPool/wezfleet lib/Common.ps1:624, :626 (no wezterm-gui running trusts every record); planning/parity-2.3.md P-27
+- disposition: test
+- where: test/test-projection.ps1 :: "with no host instance running every pane is unknown"
+
+### L-065 The view lists every live handle, including the ones no session answers
+- source: the lead's decision 3, 2026-09-30; YedPool/wezfleet census rows are pane-first (lib/Registry.ps1:808-881); planning/parity-2.3.md P-08
+- disposition: test
+- where: test/test-projection.ps1 :: "a handle no session answers is still listed"
+
+### L-066 Stray records in the real store are reported, never written, and never fail the check
+- source: the lead's decision 4, 2026-09-30; live registry 2026-09-30: 11111111-2222-4333-8444-555555555555 (cwd C:/w), f47a6158 (the f09f4e1 spike), d16b54b2 (running, retired)
+- disposition: test
+- where: test/test-projection.ps1 :: "the reality check projects this machine's stores without throwing"
+
+### L-067 Every answer is typed and validated against one schema
+- source: horde planning/execution-plan-phases-0-2.md step 14; schema/session-record.v1 description "the review's findings about value types and answer consistency ... apply to that view"
+- disposition: test
+- where: test/test-projection.ps1 :: "every answer validates against schema/session-view.v1"
+
+### L-068 What the validator cannot express is checked in code, not dropped from the schema
+- source: horde core/Schema.ps1:1-23 (the subset: no oneOf, anyOf, if/then or dependencies); schema/session-view.v1 description "WHAT THIS SCHEMA CANNOT SAY"
+- disposition: test
+- where: test/test-projection.ps1 :: "the view keeps the rules the schema cannot state"
+
+### L-069 A provisional rule is marked on every answer it produced
+- source: core/ownership.json provisional marks (pane, transcriptPath, resumeCommand, formerNames, entrypoint); horde planning/execution-plan-phases-0-2.md step 14 "the provisional mark wherever the ownership table has one"
+- disposition: test
+- where: test/test-projection.ps1 :: "the view carries a provisional mark exactly where the table has one"
+
+### L-070 An event log with a line that does not parse is unknown, never a shorter log
+- source: YedPool/wezfleet lib/Common.ps1:194-205 Read-WfJsonLines skips a line it cannot parse, so a torn "done" line reads as a session still running; core/ownership.json report row "the log is the truth"
+- disposition: test
+- where: test/test-projection.ps1 :: "an event log with a torn line is unknown, never shorter"
+
+### L-071 A pane-sessions file that breaks its schema is refused and named, not a gap
+- source: YedPool/wezfleet lib/Registry.ps1:244 refuses a malformed session_id; horde schema/pane-session.v1 (163 real files, 2026-09-29)
+- disposition: test
+- where: test/test-projection.ps1 :: "a pane-sessions file that breaks the schema is refused, not a gap"
+
+### L-072 A role that is not there is unknown, never goblin, in the view as in the counts
+- source: horde planning/ledger/core-roles.md L-021; core/Roles.ps1 header "A ROLE THAT IS NOT THERE IS UNKNOWN, NEVER GOBLIN"; live 2026-09-30: 13 of 31 records have no role
+- disposition: test
+- where: test/test-projection.ps1 :: "a live record with no role is unknown, never goblin, and makes the count unknown"
