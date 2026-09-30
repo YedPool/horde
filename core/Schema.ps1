@@ -150,5 +150,14 @@ function Get-HordeSchema {
     param([Parameter(Mandatory = $true)][string]$Name)
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\.v[0-9]+\z') { throw ("not a schema name: '" + $Name + "'") }
     $path = Join-Path (Split-Path -Parent $PSScriptRoot) ("schema\" + $Name + ".json")
-    return ((Get-Content -LiteralPath $path -Raw) | ConvertFrom-Json)
+    return (Read-HordeSchemaFile -Path $path)
+}
+
+function Read-HordeSchemaFile {
+    # A schema file is UTF-8. Get-Content -Raw on Windows PowerShell 5.1 reads a file with no BOM in the
+    # ANSI code page, so a non-ASCII character came back as two (review of PR #15). ReadAllText with
+    # UTF-8 still honours a BOM if there is one. Schemas are Horde's own files, which no other system
+    # is writing, so the shared read of core/ReadShared.ps1 is not needed here.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
 }

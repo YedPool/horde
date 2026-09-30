@@ -87,6 +87,17 @@ Check (Has (Safely { Test-HordeSchema -Value ([pscustomobject]@{ a = "x" }) -Sch
 Check (Has (Safely { Test-HordeSchema -Value ([pscustomobject]@{ b = 1 }) -Schema $hashSchema }) "$ has no 'a'") "a hashtable schema checks required"
 Check (@(Safely { Test-HordeSchema -Value @{ a = 1 } -Schema $hashSchema }).Count -eq 0) "CONTROL: a hashtable value that fits a hashtable schema is valid"
 Check (Throws { Get-HordeSchema -Name "..\core\Schema" } "not a schema name") "a schema name cannot reach a file outside the schema folder"
+# A schema file is UTF-8. Get-Content -Raw on Windows PowerShell 5.1 reads a file with no BOM in the
+# ANSI code page, so a non-ASCII character in a schema came back as two (review of PR #15).
+$utf8Dir = Join-Path $env:TEMP ("horde-schema-test-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $utf8Dir | Out-Null
+try {
+    $eAcute = [string][char]0xE9
+    $utf8File = Join-Path $utf8Dir "utf8.v1.json"
+    [System.IO.File]::WriteAllText($utf8File, ('{"description":"caf' + $eAcute + '"}'), (New-Object System.Text.UTF8Encoding($false)))
+    Check ((Read-HordeSchemaFile -Path $utf8File).description -ceq ("caf" + $eAcute)) "a schema file is read as UTF-8, BOM or not"
+} finally { Remove-Item -LiteralPath $utf8Dir -Recurse -Force }
+Check (-not (Test-Path -LiteralPath $utf8Dir)) "the UTF-8 test's temporary folder is gone"
 
 Write-Host ""
 Write-Host "--- keys are compared exactly, as the readers compare them ---" -ForegroundColor Cyan

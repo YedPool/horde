@@ -114,6 +114,9 @@
         @{ Name = "hashtable-value-read-as-object"
            Find = 'if ($Value -is [System.Collections.IDictionary]) { return'
            Replace = 'if ($false) { return' }
+        @{ Name = "schema-read-as-ansi"
+           Find = '[System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)'
+           Replace = '(Get-Content -LiteralPath $Path -Raw)' }
         @{ Name = "schema-name-unchecked"
            Find = 'if ($Name -cnotmatch ''\A[a-z][a-z0-9-]*\.v[0-9]+\z'') { throw'
            Replace = 'if ($false) { throw' }
