@@ -83,12 +83,12 @@ function Resolve-HordeArguments {
             # with no item after it cannot arrive this way; refused all the same, never guessed.
             if ($j + 1 -ge $items.Count) { return (& $fail ("parameter " + $item + " needs a value after the colon")) }
             if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
-            $item = $items[$j + 1]
-            if ($item -is [string] -and ($item -ieq '$true' -or $item -ieq '$false')) {
+            $value = $items[$j + 1]
+            if ($value -is [string] -and ($value -ieq '$true' -or $value -ieq '$false')) {
                 # Typed as the quoted text '$false': still a word, not a truth value.
-                return (& $fail (Get-HordeTextBoolProblem -Text $item))
+                return (& $fail (Get-HordeTextBoolProblem -Text $value))
             }
-            $named[$pname] = $item
+            $named[$pname] = $value
             $j++
             continue
         }
@@ -97,7 +97,9 @@ function Resolve-HordeArguments {
         }
         if ($pname -and $j + 1 -lt $items.Count) {
             $next = $items[$j + 1]
-            if ($next -is [string] -and $null -eq (Get-HordeParameterName -Item $next) -and $next -imatch '\A\$?(true|false)\z' -and
+            # No separate "is it untagged" test: a tagged item's text starts with "-", so it never
+            # matches the pattern, and a check that cannot change the outcome is one no test can hold.
+            if ($next -is [string] -and $next -imatch '\A\$?(true|false)\z' -and
                 (Test-HordeSwitchParameter -Name $pname -Parameters $Parameters)) {
                 return (& $fail (Get-HordeSwitchWordProblem -Switch "$item" -Word $next))
             }
