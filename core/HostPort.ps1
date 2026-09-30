@@ -50,6 +50,12 @@
 #     the first host. Another host's handle 17 is not that pane 17, so a port declares, with
 #     -StoredHandles, the stores whose handles it wrote; a handle from any other store is unknown to
 #     it (review of PR #31, finding 2). A record that names its instance is also checked against it.
+#     ONE WRITER PER STORE. The rule holds only while each store has exactly one writer host, so a
+#     second host declaring a store another host already declared is refused (second review of
+#     PR #31, finding 2). A record that carries no host belongs to the legacy writer alone - the one
+#     host that declares its store. An adapter takes its list from its own capabilities.json
+#     (hosts/<name>/capabilities.json, key storedHandles), never from code; a new host that writes
+#     handles into Horde's own stores tags each with its host and instance instead.
 #   PID AND CWD CARRY A NAMESPACE. A row that gives a pid or cwd names its space: windows,
 #     wsl:<distro>, posix or synthetic. A multiplexer running inside a Linux subsystem returns that
 #     system's pids and paths. Core's process table is the windows one (CIM), so a pid or cwd from
@@ -74,6 +80,8 @@ $script:HordeHostCapabilityStates = @("yes", "no", "declined", "unverified")
 # The stores that hold bare handle text (core/ownership.json): registry, claims, roster, reports and
 # pane-sessions files.
 $script:HordeHandleStores = @("W1", "W2", "W4", "W5", "X1")
+# Which host declared each store's handles, for this process: the single-writer rule.
+if ($null -eq (Get-Variable -Name HordeStoreWriters -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeStoreWriters = @{} }
 
 function ConvertTo-HordeHostCapabilities {
     # A declaration as a full table: every name, each yes, no, declined or unverified. A name that is
@@ -125,6 +133,12 @@ function New-HordeHostPort {
     )
     $table = ConvertTo-HordeHostCapabilities $Capabilities
     $stores = ConvertTo-HordeHandleStores $StoredHandles
+    foreach ($st in $stores) {
+        if ($script:HordeStoreWriters.ContainsKey($st) -and $script:HordeStoreWriters[$st] -cne $Name) {
+            throw ("store " + $st + "'s handles are already declared by host '" + $script:HordeStoreWriters[$st] + "'; a store has one writer host, and records that carry no host belong to it alone")
+        }
+    }
+    foreach ($st in $stores) { $script:HordeStoreWriters[$st] = $Name }
     return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = $Name; available = $true; reason = ""; capabilities = $table; storedHandles = $stores; handles = $Handles; instance = $Instance }
 }
 

@@ -347,6 +347,16 @@ Check (@($ppx.sessions).Count -eq 34 -and (Val (Ans $ppx 1 "pid")) -eq 1001) "th
 Check (Throws { New-HordePlatform -Name "x" -ProcessSpace "mars" -ProcessTable { $null } } "namespace") "a platform's namespace is one core knows"
 
 Write-Host ""
+Write-Host "--- one writer host per store ---" -ForegroundColor Cyan
+# A store's handles are trusted from the host that declares it wrote them, which holds only while each
+# store has exactly one writer host (second review of PR #31, finding 2). A second host declaring a
+# store another host already declared is refused; the same host declaring it again is not.
+$wb = { , @() }; $wi = { $null }
+$firstOk = $true; try { $null = New-HordeHostPort -Name "fake" -StoredHandles @("W4") -Capabilities @{ "list" = "yes" } -Handles $wb -Instance $wi } catch { $firstOk = $false }
+Check ($firstOk -and -not (Throws { New-HordeHostPort -Name "fake" -StoredHandles @("W4") -Capabilities @{ "list" = "yes" } -Handles $wb -Instance $wi } "one writer")) "CONTROL: a host may declare the stores it wrote, and declare them again"
+Check (Throws { New-HordeHostPort -Name "writer-host-b" -StoredHandles @("W4") -Capabilities @{ "list" = "yes" } -Handles $wb -Instance $wi } "one writer") "two hosts declaring the same store are refused"
+
+Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan
 $two = Fault $p "session-in-two-handles"
 Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (Ans $p 13 "pane")) -eq "unknown") "a session in two handles is reported"

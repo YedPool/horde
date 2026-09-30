@@ -491,3 +491,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 1: with the runs directory a dangling junction, session 3 read runId, title, dependsOn, workState and report absent, because the run resolver checked only rostersComplete; pane-sessions files held by two sessions or naming a session twice were passed over as "no file"; and a claude process with no readable command line counted as not resuming the session
 - disposition: test
 - where: test/test-projection.ps1 :: "a runs directory that cannot be listed never proves a session is in no run"
+
+### L-093 Each store has exactly one writer host, and a record with no host belongs to it alone
+- source: second review of horde PR #31, finding 2: per-store declaration holds only while each store has one writer host; planning/execution-plan-phase-3.md step 3 and planning/execution-plan-hosts.md omitted -StoredHandles and named windows as a fixed namespace
+- disposition: test
+- where: test/test-projection.ps1 :: "two hosts declaring the same store are refused"

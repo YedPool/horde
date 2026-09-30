@@ -46,5 +46,8 @@
         @{ Name = "non-boolean-ambiguity-read-as-false"
            Find = 'if ($amb.value -isnot [bool]) { return'
            Replace = 'if ($amb.value -isnot [bool]) { $amb = New-HordeKnown -Value $false }; if ($false) { return' }
+        @{ Name = "two-writers-of-one-store-accepted"
+           Find = 'if ($script:HordeStoreWriters.ContainsKey($st) -and $script:HordeStoreWriters[$st] -cne $Name) {'
+           Replace = 'if ($false) {' }
     )
 }
