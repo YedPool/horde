@@ -148,18 +148,26 @@ function Test-HordeOwnership {
         elseif ("$($f.owner)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' has no owner") }
         elseif ($owners -cnotcontains "$($f.owner)") { [void]$findings.Add("field '" + $n + "' names owner '" + $f.owner + "', which is not one of the listed owners") }
         # A READ RULE: at least one store to read from, each one real, each naming a field.
-        $read = @($f.read | Where-Object { $null -ne $_ })
-        if ($read.Count -eq 0) { [void]$findings.Add("field '" + $n + "' has no read rule") }
+        # A null entry is a finding, not skipped: filtering it out let `[ {...}, null ]` pass as a
+        # one-read rule, hiding whatever the null replaced (second review, finding 5). @($null)
+        # is a one-element array, so an absent read is tested before it is wrapped.
+        $read = @()
+        if ($null -ne $f.read) { $read = @($f.read) }
+        $realReads = 0
+        foreach ($r in $read) { if ($null -ne $r) { $realReads++ } }
+        if ($realReads -eq 0) { [void]$findings.Add("field '" + $n + "' has no read rule") }
         # Inside a read entry only store, field and when mean anything, so any other key is a
         # misspelling of one of them - a "wehn" would silently drop a guard. A when that is present
         # must say something, and one rule reading the same store and field twice is two orders
         # for one source (review finding 3, 2026-09-29).
         $readPairs = New-Object System.Collections.ArrayList
         foreach ($r in $read) {
+            if ($null -eq $r) { [void]$findings.Add("field '" + $n + "' has an empty read entry"); continue }
             $s = "$($r.store)"
             if ($stores -cnotcontains $s) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "', which is not in the store list") }
             else { $usedStores[$s] = $true }
-            if ("$($r.field)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' without naming what it reads") }
+            # The field read is text: 5 and true stringify to "5" and "True" and passed as names.
+            if ($r.field -isnot [string] -or "$($r.field)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' without naming what it reads, as text") }
             foreach ($k in @($r.PSObject.Properties | ForEach-Object { $_.Name })) {
                 if ($script:HordeOwnershipReadKeys -cnotcontains $k) { [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' with an unknown key '" + $k + "'") }
             }
@@ -167,8 +175,10 @@ function Test-HordeOwnership {
             if ($null -ne $w -and ($w.Value -isnot [string] -or "$($w.Value)".Trim() -eq "")) {
                 [void]$findings.Add("field '" + $n + "' reads from store '" + $s + "' under an empty condition")
             }
-            $pair = $s + "|" + "$($r.field)"
-            if ($readPairs -ccontains $pair) { [void]$findings.Add("field '" + $n + "' reads '" + $r.field + "' from store '" + $s + "' twice") }
+            # The field name is compared ignoring case: PowerShell reads sessionId and SessionId as
+            # one property, so two reads differing only in case are one read listed twice.
+            $pair = $s + "|" + "$($r.field)".ToLowerInvariant()
+            if ($readPairs -ccontains $pair) { [void]$findings.Add("field '" + $n + "' reads '" + $r.field + "' from store '" + $s + "' twice (field names compared ignoring case)") }
             [void]$readPairs.Add($pair)
         }
         # A reason is text. false and 0 stringify to "False" and "0", which passed as reasons.

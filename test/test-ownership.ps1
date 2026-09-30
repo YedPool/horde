@@ -131,6 +131,14 @@ Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NoteProperty
 Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue " " -Force }) "an empty condition") "a read with an empty condition is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NotePropertyName when -NotePropertyValue $false -Force }) "an empty condition") "a read whose condition is not text is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @($d.fields[0].read[0]) }) "twice") "a read of one store and field twice in one rule is refused"
+# A READ ENTRY IS AN OBJECT NAMING ITS FIELD AS TEXT. 5 and true stringify to "5" and "True" and
+# passed as field names; a null entry was filtered out before any check saw it; and one store read
+# as sessionId and SessionId passed as two reads, though PowerShell reads both as one property
+# (second review, finding 5).
+Check (Says (Mutated { param($d) $d.fields[0].read[0].field = 5 }) "without naming what it reads") "a read whose field is a number is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read[0].field = $true }) "without naming what it reads") "a read whose field is true or false is refused"
+Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @($null) }) "an empty read entry") "a null inside a read rule is refused, not dropped"
+Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @([pscustomobject]@{ store = "X2"; field = "SessionId" }) }) "twice") "a store read twice under names differing only in case is refused"
 Check (Says (Mutated { param($d) $d.fields[0].owner = "Agent" }) "not one of the listed owners") "an owner named in the wrong case is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0].store = "x2" }) "not in the store list") "a store named in the wrong case is refused"
 $oneOwnerList = @(Mutated { param($d) $d.fields[0].owner = @("agent") })
