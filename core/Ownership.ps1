@@ -122,6 +122,14 @@ function Test-HordeOwnership {
         foreach ($k in @($sp.Value.PSObject.Properties | ForEach-Object { $_.Name })) {
             if ($script:HordeOwnershipStoreKeys -cnotcontains $k) { [void]$findings.Add("store '" + $sp.Name + "' has an unknown key '" + $k + "'") }
         }
+        # A store names its system, what it is and where it lives, as text. {} passed as a store,
+        # so a field could read from a store nobody could find (second review, finding 5).
+        $described = $true
+        foreach ($k in @("system", "what", "path")) {
+            $sv = $sp.Value.PSObject.Properties[$k]
+            if ($null -eq $sv -or $sv.Value -isnot [string] -or "$($sv.Value)".Trim() -eq "") { $described = $false }
+        }
+        if (-not $described) { [void]$findings.Add("store '" + $sp.Name + "' needs system, what and path, each as text") }
         $g = $sp.Value.PSObject.Properties["guard"]
         if ($null -ne $g -and ($g.Value -isnot [string] -or "$($g.Value)".Trim() -eq "")) {
             [void]$findings.Add("store '" + $sp.Name + "' has an empty guard")

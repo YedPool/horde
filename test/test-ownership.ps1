@@ -149,6 +149,10 @@ Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName pro
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName gaurd -NotePropertyValue "x" -Force }) "store 'X1' has an unknown key 'gaurd'") "a misspelled key in a store is refused, so a guard cannot vanish"
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue " " -Force }) "store 'X1' has an empty guard") "a store guard that says nothing is refused"
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue $true -Force }) "store 'X1' has an empty guard") "a store guard that is not text is refused"
+# A STORE SAYS WHICH SYSTEM KEEPS IT, WHAT IT IS AND WHERE IT LIVES. {} passed as a store, so a
+# field could read from a store no reader could find (second review, finding 5).
+Check (Says (Mutated { param($d) $d.stores.X4 = [pscustomobject]@{} }) "store 'X4' needs system, what and path") "a store that says nothing about itself is refused"
+Check (Says (Mutated { param($d) $d.stores.X4.path = 7 }) "store 'X4' needs system, what and path") "a store whose path is not text is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
     $d | Add-Member -NotePropertyName dropped -NotePropertyValue (@($d.dropped | Where-Object { $null -ne $_ }) + @([pscustomobject]@{ name = "origin"; reason = $reason })) -Force }
