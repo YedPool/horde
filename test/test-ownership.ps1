@@ -41,8 +41,11 @@ Check ($null -ne $pane -and $w1 -ge 0 -and $w1 -lt $w5 -and $w5 -lt $w4) "pane, 
 # lastSeen (lib/Registry.ps1:537, :779) and the instance rule with no age (census through
 # Get-WfPaneIndex, :393-394, and the act-on finder, :658-659). Horde shadows census, so it reads by
 # census's rule and a comparison against it is predictable.
+# The 900 is matched on its own: "900 seconds old" appeared nowhere, so the check could not fail,
+# while "the 900-second limit" was in the rule (second review, finding 9). The rule names the limit
+# it does not adopt without its number; the number is in ledger L-025.
 $paneW1 = @($pane.read | Where-Object { "$($_.store)" -ceq "W1" })[0]
-Check ("$($paneW1.when)" -like "*written in this terminal instance*" -and "$($paneW1.when)" -like "*no age limit*" -and "$($paneW1.when)" -notlike "*900 seconds old*") "the registry's pane is read by census's rule, with no age limit"
+Check ("$($paneW1.when)" -like "*written in this terminal instance*" -and "$($paneW1.when)" -like "*no age limit*" -and "$($paneW1.when)" -notlike "*900*") "the registry's pane is read by census's rule, with no age limit"
 Check ("$($pane.provisional)" -like "*no single wezfleet function*") "the order of the pane-sessions file before the status snapshot is marked as a new decision"
 # X1 IS GUARDED ON THE STORE, so no read of it can be bare. It was guarded for sessionId and pane
 # and read bare for projectCwd, transcriptPath and name (review finding 6). The guard says AT MOST
