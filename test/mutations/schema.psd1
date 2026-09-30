@@ -43,7 +43,7 @@
            Find = '[Math]::Abs([double]$Value) -lt 1e19'
            Replace = '[Math]::Abs([double]$Value) -le [double][decimal]::MaxValue' }
         @{ Name = "enum-accepts-non-string-values"
-           Find = 'if ($e -isnot [string] -and -not $isWhole) { throw'
+           Find = 'if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "enum-not-checked"
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''

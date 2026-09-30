@@ -57,6 +57,9 @@ Check (@(Test-HordeSchema -Value ([decimal]1.0) -Schema $one).Count -eq 0) "and 
 Check (Has (Test-HordeSchema -Value "1" -Schema $one) "$ is '1', not one of: 1") "but not the string of its digits"
 Check (Has (Test-HordeSchema -Value 2 -Schema $one) "$ is '2', not one of: 1") "and not another number"
 $yes = [pscustomobject]@{ enum = @($true) }
+# First that the schema is accepted at all: a refused boolean enum would throw, and a throw inside
+# the checks below reads as a crashed suite rather than a failed check.
+Check (-not (Throws { Test-HordeSchema -Value $true -Schema $yes })) "a boolean enum is a schema the validator accepts"
 Check (@(Test-HordeSchema -Value $true -Schema $yes).Count -eq 0) "a boolean enum accepts that boolean"
 Check (Has (Test-HordeSchema -Value $false -Schema $yes) "$ is 'False', not one of: True") "but not the other one"
 Check (Has (Test-HordeSchema -Value "true" -Schema $yes) "$ is 'true', not one of: True") "and not the word true"
