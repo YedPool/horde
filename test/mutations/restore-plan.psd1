@@ -1,0 +1,81 @@
+# Mutations of the restore-plan gate. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\restore-plan.psd1
+# Each breaks one rule core\RestorePlan.ps1 adds to the schema; test\test-schema-restore-plan.ps1
+# must fail for every one of them.
+@{
+    Target = "core\RestorePlan.ps1"
+    Suite  = "test\test-schema-restore-plan.ps1"
+    Mutations = @(
+        @{ Name = "schema-not-run"
+           Find = '$bySchema = @(Test-HordeSchema -Value $Plan -Schema $Schema)'
+           Replace = '$bySchema = @()' }
+        @{ Name = "schema-findings-dropped"
+           Find = 'if ($bySchema.Count -gt 0) { return $bySchema }'
+           Replace = 'if ($false) { return $bySchema }' }
+        @{ Name = "both-leaf-and-container-allowed"
+           Find = 'if ($null -ne $slot -and $isContainer) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "both-also-walked-as-leaf"
+           Find = '-Slot "$($slot.Value)" -Path $Path; return'
+           Replace = '-Slot "$($slot.Value)" -Path $Path' }
+        @{ Name = "both-not-placed"
+           Find = 'Add-HordePlanPlacement -Placements $Placements -Slot "$($slot.Value)" -Path $Path; return'
+           Replace = 'return' }
+        @{ Name = "neither-allowed"
+           Find = 'if ($null -eq $slot -and -not $isContainer) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "split-optional"
+           Find = 'if ($null -eq $split) { [void]$Findings.Add('
+           Replace = 'if ($false) { [void]$Findings.Add(' }
+        @{ Name = "ratio-not-checked"
+           Find = 'if ($null -ne $ratio) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "ratio-zero-allowed"
+           Find = 'if (-not ($r -gt 0 -and $r -lt 1)) {'
+           Replace = 'if (-not ($r -ge 0 -and $r -lt 1)) {' }
+        @{ Name = "ratio-one-allowed"
+           Find = 'if (-not ($r -gt 0 -and $r -lt 1)) {'
+           Replace = 'if (-not ($r -gt 0 -and $r -le 1)) {' }
+        @{ Name = "no-children-allowed"
+           Find = 'if ($null -eq $children) { [void]$Findings.Add($Path + " is a container with no children"); return }'
+           Replace = 'if ($null -eq $children) { return }' }
+        @{ Name = "one-child-allowed"
+           Find = 'if ($kids.Count -lt 2) {'
+           Replace = 'if ($kids.Count -lt 1) {' }
+        @{ Name = "children-not-walked"
+           Find = 'Test-HordePlanNode -Node $kids[$i] -Path ($Path + ".children[" + $i + "]") -Placements $Placements -Findings $Findings'
+           Replace = '' }
+        @{ Name = "duplicate-slot-allowed"
+           Find = 'if ($slotAt.ContainsKey($slot)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "duplicate-id-allowed"
+           Find = 'if ($idAt.ContainsKey($id)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "parent-self-allowed"
+           Find = 'if ("$parent" -ceq "$($sessions[$i].sessionId)") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "parent-unknown-allowed"
+           Find = 'elseif (-not $idAt.ContainsKey("$parent")) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "parent-never-read"
+           Find = '$parent = Get-HordePlanProp $sessions[$i] "parent"'
+           Replace = '$parent = $null' }
+        @{ Name = "session-slots-ignore-case"
+           Find = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::Ordinal)'
+           Replace = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "placements-ignore-case"
+           Find = 'System.Collections.ArrayList]'' ([System.StringComparer]::Ordinal)'
+           Replace = 'System.Collections.ArrayList]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "unknown-slot-allowed"
+           Find = 'if (-not $slotAt.ContainsKey($slot)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "slot-placed-twice-allowed"
+           Find = '} elseif ($placements[$slot].Count -gt 1) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "dropped-session-allowed"
+           Find = 'if (-not $placements.ContainsKey($slot)) { [void]$findings.Add('
+           Replace = 'if ($false) { [void]$findings.Add(' }
+        @{ Name = "tabs-after-the-first-skipped"
+           Find = 'for ($t = 0; $t -lt $tabs.Count; $t++) {'
+           Replace = 'for ($t = 0; $t -lt 1; $t++) {' }
+    )
+}
