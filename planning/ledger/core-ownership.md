@@ -209,3 +209,8 @@ sources:
 - source: review finding 14, 2026-09-29: the store list jumps from W6 to W8 with no reason given. YedPool/wezfleet lib/Allocator.ps1:14 "THE COUNTER IS THE REGISTRY ITSELF" and :169 (registry\labels holds only reservation markers), and the store root's other entries were opened read-only on 2026-09-29: index.json lists runs, delivery.jsonl and raw-send-text.jsonl are append-only logs of sends (the second carries session_id, cwd and pane per send, as an audit record that no identity reader in lib, commands or hooks opens), mail and locks hold messages and lock files.
 - disposition: comment
 - where: core/ownership.json :: "No store is numbered W7"
+
+### L-040 The fleet id a spawn claim carries is read, because it decides origin
+- source: YedPool/wezfleet lib/Registry.ps1:1260 (a claim is written with "fleetSessionId = ""$FleetSessionId""") and hooks/wf-registry-refresh.ps1:153 "if (-not $fleetId) { $fleetId = ""$($claim.fleetSessionId)"" }" - the hook takes the fleet id from the claim when WEZFLEET_SESSION_ID is missing, which :142-143 measured at 65 of 263 hook runs; lib/Registry.ps1:322 then sets origin to fleet only when a fleet id is present. The second review of this table found fleetSessionId did not read the claim. Review finding 1, second review, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the fleet id a spawn claim carries is read right after the registry"

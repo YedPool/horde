@@ -54,6 +54,11 @@ $w2Guard = "$($doc.stores.W2.guard)"
 $ownerStores = @((Get-HordeOwnershipField -Doc $doc -Name "owner").read | ForEach-Object { "$($_.store)" })
 Check ($w2Guard -like "*10080 minutes*" -and $w2Guard -like "*cwd*" -and $w2Guard -like "*no registry record*") "every read of a spawn claim carries the claim reader's full guard"
 Check ($ownerStores -ccontains "W2") "owner, which a spawn claim carries, reads the claim"
+# THE CLAIM'S FLEET ID, right after the registry. The hook takes it from the claim when the
+# environment has none (hooks/wf-registry-refresh.ps1:153), and it decides the record's origin
+# (lib/Registry.ps1:322), so a table that skipped it would call a fleet session the user's.
+$fleetStores = @((Get-HordeOwnershipField -Doc $doc -Name "fleetSessionId").read | ForEach-Object { "$($_.store)" })
+Check ($fleetStores.Count -ge 2 -and $fleetStores[0] -ceq "W1" -and $fleetStores[1] -ceq "W2") "the fleet id a spawn claim carries is read right after the registry"
 # THE FIELDS THE FIRST DRAFT MISSED (review finding 8), each found in a real store: every one must
 # be named in the required list, so the gate holds it to kept-or-dropped.
 $missedOnce = @("lastSeen", "runId", "labelCycle", "nameSource", "remoteControl", "retiredAt", "lastTool",
