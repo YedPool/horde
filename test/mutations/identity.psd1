@@ -68,6 +68,9 @@
         @{ Name = "missing-wait-is-unknown"
            Find = '$k["waitingFor"] = New-HordeAbsent -Note "the control file names nothing the session waits for"'
            Replace = '$k["waitingFor"] = New-HordeUnknown -Reason "no waitingFor key"' }
+        @{ Name = "waiting-status-unrecognised"
+           Find = '$script:HordeClaudeStatuses = @("idle", "busy", "waiting")'
+           Replace = '$script:HordeClaudeStatuses = @("idle", "busy")' }
         @{ Name = "status-time-dropped"
            Find = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt (ConvertFrom-HordeEpochMs (Get-HordeField -Record $j -Name "statusUpdatedAt").value) }'
            Replace = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" }' }

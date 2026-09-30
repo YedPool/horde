@@ -283,3 +283,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: core-ownership L-055: waitingFor was in 1 of 10 control files on 2026-09-30, the one whose status was waiting, and absent from the 9 idle ones; the Claude Code 2.1.285 writer sets it with status and leaves it out when nothing is awaited. It is live state, so a stale file's wait is unknown like its status; a running session with no key waits for nothing (absent) unless its status is waiting or missing, when the wait is unknown rather than guessed.
 - disposition: test
 - where: test/test-identity.ps1 :: "a waiting session that names nothing is unknown, not absent"
+
+### L-055 waiting is a Claude status, measured on disk
+- source: read-only census of ~/.claude/sessions at 2026-09-30T09:17Z: 1 of 10 control files had status waiting (the other 9 idle), beside waitingFor "permission prompt" (core-ownership L-055). Horde believed only idle and busy, so that session's live status read unknown while its file said plainly what it was doing. In the Claude Code 2.1.285 binary the writer sets status and waitingFor together, and its own reader maps waiting to a blocked tempo. It also can write shell to its terminal-tab status, which no control file has shown, so shell is not believed.
+- disposition: test
+- where: test/test-identity.ps1 :: "a claude session waiting on the user reads its status as known"

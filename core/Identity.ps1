@@ -49,8 +49,11 @@ $script:HordeIdentityFields = @("agent", "pid", "procStart", "cwd", "transcriptP
     "peerProtocol", "peerFeatures", "sessionKind", "entrypoint", "pidDomain")
 # How long a codex status reading is believed: wezfleet's default, lib/CodexStatus.ps1:68.
 $script:HordeCodexTtlDefault = 900
-# The statuses each agent is seen to write. Anything else is not guessed at.
-$script:HordeClaudeStatuses = @("idle", "busy")
+# The statuses each agent is seen to write. Anything else is not guessed at. waiting is Claude's
+# status while it waits on the user: 1 of 10 control files on 2026-09-30, beside waitingFor
+# (core-identity L-055). The 2.1.285 binary can also write shell to its terminal-tab status; no
+# control file has shown it, so it stays unknown.
+$script:HordeClaudeStatuses = @("idle", "busy", "waiting")
 $script:HordeCodexStatuses = @("idle", "busy", "ended")
 # The process names an orphan is looked for under, and the names of a host Claude Code can run
 # inside. PROVISIONAL: claude.exe is the only name seen (11 claude.exe processes on 2026-09-30, all
