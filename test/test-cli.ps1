@@ -88,6 +88,19 @@ foreach ($f in @("redirect-top", "redirect-value", "redirect-run")) {
 }
 Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 
+# `using module` and `#requires -Modules` import a module - running its code - when the file loads,
+# and a dynamicparam block is a script body the one-statement check did not look at (review of PR #12,
+# finding 3). using-module.ps1 imports test\fixtures\cli\modules\marker.psm1, which writes the marker.
+Check (HasFinding "using-module.ps1" "using") "a command file with a using statement is refused"
+Check (HasFinding "requires-module.ps1" "#requires") "a command file with a #requires line is refused"
+Check (HasFinding "dynamicparam.ps1" "dynamicparam") "a command file with a dynamicparam block is refused"
+foreach ($f in @("using-module", "requires-module", "dynamicparam")) {
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+    try { [void](Import-HordeCommand -Path (Join-Path $root ("test\fixtures\cli\bad\" + $f + ".ps1"))) } catch { }
+    Check (-not (Test-Path -LiteralPath $marker)) ("and loading it runs none of it: " + $f)
+}
+Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "--- the real commands, and the help generated from them ---" -ForegroundColor Cyan
 

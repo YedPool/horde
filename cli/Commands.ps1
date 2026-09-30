@@ -93,8 +93,18 @@ function Read-HordeCommandAst {
         return [pscustomobject]@{ info = $null; findings = @($findings) }
     }
     # Traps is $null when there are none, and @($null).Count is 1 - so it is tested for null first.
-    if ($ast.ParamBlock -or $ast.BeginBlock -or $ast.ProcessBlock -or ($null -ne $ast.EndBlock.Traps -and $ast.EndBlock.Traps.Count -gt 0)) {
-        [void]$findings.Add("has a param, begin or process block; a command file only declares `$HordeCommand")
+    if ($ast.ParamBlock -or $ast.BeginBlock -or $ast.ProcessBlock -or $ast.DynamicParamBlock -or ($null -ne $ast.EndBlock.Traps -and $ast.EndBlock.Traps.Count -gt 0)) {
+        [void]$findings.Add("has a param, begin, process or dynamicparam block; a command file only declares `$HordeCommand")
+    }
+    # `using module` and `#requires -Modules` import a module - running its code - when the file
+    # loads, before any statement in it. Measured 2026-09-29: a fixture with `using module` wrote
+    # the marker when dot-sourced. Any using statement and any #requires line is refused: a
+    # declaration needs neither (review of PR #12, finding 3).
+    if (@($ast.UsingStatements).Count -gt 0) {
+        [void]$findings.Add("has a using statement, which would import code when the file loads")
+    }
+    if ($null -ne $ast.ScriptRequirements) {
+        [void]$findings.Add("has a #requires line, which can import code before the file loads")
     }
     $stmts = @($ast.EndBlock.Statements)
     if ($stmts.Count -ne 1) {
