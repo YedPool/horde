@@ -119,6 +119,43 @@ Check (Says $te "no entries") "a zero-byte ledger is refused as having no entrie
 Check (-not (Says $te "unnumbered")) "and not by accident - no phantom entry is invented from nothing"
 
 Write-Host ""
+Write-Host "--- a host's own test folder holds tests too (D12) ---" -ForegroundColor Cyan
+
+# D12: host-specific test tooling lives with its host, under hosts/<name>/test/. A lesson about a host
+# is enforced by a suite there, so the gate accepts that folder - and still refuses any other host
+# file, which here quotes the same test name so that its location is the only thing wrong with it.
+$ht = @(Findings "host-test.md")
+Check ($ht.Count -eq 0) "a test disposition naming a suite under hosts/<name>/test/ is accepted"
+if ($ht.Count -gt 0) { $ht | ForEach-Object { Write-Host ("         unexpected: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } }
+Refuses "host-not-test.md"       "test script under test/"         "a host file outside the host's test folder is refused as a test"
+$he = @(Findings "host-e2e.md")
+Check ($he.Count -eq 0) "an end-to-end suite under hosts/<name>/test/e2e/ is accepted"
+if ($he.Count -gt 0) { $he | ForEach-Object { Write-Host ("         unexpected: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } }
+
+# ONLY A SUITE COUNTS, by name and place: test-*.ps1 or e2e-*.ps1, directly in test/ or a host's
+# test/, or in their e2e/ folder. A review of PR 21 pointed the gate at the host's harness - a file
+# suites dot-source, which asserts nothing of its own - and it was accepted. Each fixture below quotes
+# the same test name, so where the file sits, or what it is called, is the only thing wrong with it.
+Refuses "host-harness.md"        "test script under test/"         "a harness in a host's test folder is refused - it is not a suite"
+Refuses "test-helper.md"         "test script under test/"         "a helper in test/ not named test-* or e2e-* is refused"
+Refuses "test-lib.md"            "test script under test/"         "a file in test/lib/ is refused, even when named like a suite"
+Refuses "test-fixture.md"        "test script under test/"         "a file in test/fixtures/ is refused, even when named like a suite"
+Refuses "host-test-subfolder.md" "test script under test/"         "a file one folder below a test folder is refused, even when that folder is named test-*"
+
+# THE PATH AS IT IS ON DISK. Windows resolves a path in any case, with a trailing dot, or through
+# "..", to the same file, so the same review got a host's harness, written as
+# HOSTS/<Host>/TEST/isolation.PS1 or with a trailing dot, past a rule that compared ignoring case. The
+# gate now wants the path written exactly as the file is.
+Refuses "host-test-case.md"      "exactly as it is on disk"        "a path written in another case than the file's is refused"
+Refuses "host-test-hostcase.md"  "exactly as it is on disk"        "a host folder written in another case than on disk is refused"
+Refuses "host-test-dot.md"       "exactly as it is on disk"        "a path with a trailing dot is refused"
+Refuses "host-test-dotdot.md"    "exactly as it is on disk"        "a path that climbs through .. is refused, even when it lands on a suite"
+Refuses "host-test-upper.md"     "test script under test/"         "a file named Test-*.ps1 on disk is refused - suites are test-*, compared case-sensitively"
+$hb = @(Findings "host-test-backslash.md")
+Check ($hb.Count -eq 0) "a path written with backslashes is the same path, and is accepted"
+if ($hb.Count -gt 0) { $hb | ForEach-Object { Write-Host ("         unexpected: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } }
+
+Write-Host ""
 Write-Host "--- mutation: remove one disposition from the passing ledger ---" -ForegroundColor Cyan
 
 # The fixtures above were written to fail. This one starts from the ledger that PASSES and removes a

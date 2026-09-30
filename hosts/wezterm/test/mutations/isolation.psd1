@@ -1,9 +1,9 @@
-# Mutations of the isolation harness. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\isolation.psd1
-# Each breaks one rule the harness depends on; test\test-isolation.ps1 must fail for every one of
+# Mutations of the isolation harness. Run: powershell -File tools\Mutate.ps1 -Spec hosts\wezterm\test\mutations\isolation.psd1
+# Each breaks one rule the harness depends on; hosts\wezterm\test\test-isolation.ps1 must fail for every one of
 # them except those declared Expect = "survives", which name a gap the fast suite cannot reach.
 @{
-    Target = "test\harness\Isolation.ps1"
-    Suite  = "test\test-isolation.ps1"
+    Target = "hosts\wezterm\test\Isolation.ps1"
+    Suite  = "hosts\wezterm\test\test-isolation.ps1"
     Mutations = @(
         @{ Name = "walker-attributes-despite-stranger"
            Find = '} elseif ($owner -or -not $RootPinned) {'

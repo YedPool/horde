@@ -225,7 +225,7 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - where: test/test-identity.ps1 :: "the suite reads no real control directory or process table"
 
 ### L-042 Process start times are compared to the microsecond, by integer division
-- source: horde test/harness/Isolation.ps1:173-183 "Measured 2026-09-29: with / the CIM and .NET readings of the same process disagreed for 304 of 365 processes"; CIM reports creation time to the microsecond while procStart is written in 100-nanosecond ticks, so they are compared after [Math]::DivRem by 10. The reality check matched 10 of 10 live control files against the CIM table on 2026-09-30.
+- source: horde hosts/wezterm/test/Isolation.ps1:173-183 "Measured 2026-09-29: with / the CIM and .NET readings of the same process disagreed for 304 of 365 processes"; CIM reports creation time to the microsecond while procStart is written in 100-nanosecond ticks, so they are compared after [Math]::DivRem by 10. The reality check matched 10 of 10 live control files against the CIM table on 2026-09-30.
 - disposition: test
 - where: test/test-identity.ps1 :: "procStart matches the start time at microsecond precision"
 

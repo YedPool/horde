@@ -1,7 +1,7 @@
 # DOES THE ISOLATION HARNESS REFUSE TO TOUCH A TERMINAL - OR ANY PROCESS - IT DID NOT START?
 #
 # The fast half of the harness's tests: nothing here launches a terminal. The end-to-end half, which
-# does, is test/e2e/e2e-isolation.ps1.
+# does, is hosts/wezterm/test/e2e/e2e-isolation.ps1.
 #
 # THIS SUITE NEVER KILLS A PROCESS IT DID NOT START ITSELF. An independent review of its first version
 # found that it did: it handed a stray pid to the teardown, which force-killed that pid and everything
@@ -10,12 +10,15 @@
 # pid-reuse case is proven on an injected process table, where nothing real can be harmed.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent $here
+# This file lives in hosts/wezterm/test/ (D12: host-specific test tooling lives with its host), so
+# the repository root is three levels up, and the harness is beside it.
+$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
+$harnessPath = Join-Path $here "Isolation.ps1"
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 # If the harness does not load, stop here with no [FAIL] line: every check below would otherwise fail
 # for that one reason, and a mutation run would read a harness that no longer loads as a catch.
-try { . (Join-Path $root "test\harness\Isolation.ps1") } catch { Write-Host ("  the harness did not load: " + $_.Exception.Message); exit 3 }
+try { . $harnessPath } catch { Write-Host ("  the harness did not load: " + $_.Exception.Message); exit 3 }
 # EVERY PROCESS THIS SUITE STARTS IS HELD, AND ONLY THOSE MAY BE KILLED.
 #
 # The third review found that mutation testing ran deliberately broken kill code against real
@@ -290,7 +293,7 @@ $again = Start-OwnPing
 if ($again) {
     $tokA = Register-HordeIsolatedInstance -GuiPid $again.pid -Created $again.created -Socket "" -OriginalSocket "$env:WEZTERM_UNIX_SOCKET" -OriginalRoot "$env:HORDE_ROOT"
     Stop-Own $again
-    . (Join-Path $root "test\harness\Isolation.ps1")
+    . $harnessPath
     $rA = Stop-HordeIsolatedWezterm -Instance ([pscustomobject]@{ token = $tokA }) -KillWith $guard
     Check (-not $rA.refused -and $rA.stopped) "loading the harness a second time does not forget an instance it already started"
 }
@@ -439,7 +442,7 @@ Write-Host "--- the CLI can never start a server by accident ---" -ForegroundCol
 # Every wezterm CLI call in the harness goes through one function that adds --no-auto-start. Without
 # that flag, a call aimed at a socket that is not answering may start a mux that loads the user's
 # config - the thing --skip-config exists to prevent.
-$harnessCode = ((Get-Content -LiteralPath (Join-Path $root "test\harness\Isolation.ps1")) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n"
+$harnessCode = ((Get-Content -LiteralPath $harnessPath) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n"
 Check ($harnessCode -match '\$script:HordeIsoCli = @\("cli", "--no-auto-start"\)') "every CLI call in the harness passes --no-auto-start"
 $rawCli = @(([regex]::Matches($harnessCode, '& wezterm @\(')) | ForEach-Object { $_.Value })
 Check ($rawCli.Count -eq 1) "and the one place that calls wezterm directly is the function that adds it"
@@ -457,7 +460,7 @@ $self = $PSCommandPath
 function Get-CodeOnly { param([string]$Path)
     return ((Get-Content -LiteralPath $Path) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n" }
 $scripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File |
-    Where-Object { $_.FullName -notlike "*\test\harness\*" -and $_.FullName -ne $self })
+    Where-Object { $_.FullName -ne $harnessPath -and $_.FullName -ne $self })
 Check ($scripts.Count -gt 0) "CONTROL: the scan sees real scripts, so an empty result below would mean something"
 Check (@($scripts | Where-Object { $_.Name -eq "test-isolation.ps1" }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
 $starters = @($scripts | Where-Object { (Get-CodeOnly -Path $_.FullName) -match "Start-HordeIsolatedWezterm" })

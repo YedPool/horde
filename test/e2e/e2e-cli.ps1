@@ -1,7 +1,7 @@
 # END TO END: the horde command line, driven the way a user drives it, in a terminal that is ours.
 #
 # Migration-plan step 0.9's gate for the CLI. A real isolated WezTerm is started (see
-# test/harness/Isolation.ps1 for why it is an INSTANCE and never a window), two panes are spawned in
+# hosts/wezterm/test/Isolation.ps1 for why it is an INSTANCE and never a window), two panes are spawned in
 # it, one running `horde --help` and one running `horde version` through `powershell -File`, exactly
 # as a script or a person would, and what a user would see on each pane's screen is read back and
 # checked. No agent session is started, so it costs nothing to run.
@@ -15,7 +15,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-. (Join-Path $root "test\harness\Isolation.ps1")
+. (Join-Path $root "hosts\wezterm\test\Isolation.ps1")
 
 # THE HARNESS RUNS UNDER "Continue", NOT THE SUITE'S "Stop". It calls wezterm with `2>$null`, and
 # measured 2026-09-29 on PowerShell 5.1: under Stop, a native command whose stderr is redirected to

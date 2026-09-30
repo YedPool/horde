@@ -136,10 +136,11 @@ resolution returns. Ambient behaviour is a thing to test, not a thing to depend 
 something else (`YedPool/wezfleet`, `tasks/lessons.md`, 2026-08-17).
 
 A test of code that kills or deletes never lets that code choose the victim: it passes a guard that
-acts only on what the test created and still holds (see `test/test-isolation.ps1`).
+acts only on what the test created and still holds (see `hosts/wezterm/test/test-isolation.ps1`).
 
-Every suite is built on `test/lib/Suite.ps1`: dot-source it, put its one `trap` line at the suite's
-top level, and end with `Complete-HordeSuite`. It makes a check's condition be exactly true or
+Every suite is built on `test/lib/Suite.ps1`, whether it lives in `test/` or, for a suite about one
+host, in that host's `hosts/<name>/test/` (D12): dot-source it, put its one `trap` line at the
+suite's top level, and end with `Complete-HordeSuite`. It makes a check's condition be exactly true or
 false, and it fails the suite when a check's own expression raises an error - which otherwise makes
 the check vanish while the suite exits 0.
 
@@ -185,3 +186,32 @@ review finding of its own.
 
 No emoji and no non-ASCII characters in code, scripts or generated artefacts. Where a glyph is
 wanted, write it as an escape sequence so the source stays ASCII.
+
+## 14. A terminal is named only in its own host folder
+
+Nothing outside `hosts/<name>/` names a terminal (migration-plan decision D12): the engine, the
+schemas and the read model speak of sessions, slots and capabilities, so that the next host is a new
+adapter and not an engine change. Host-specific test tooling lives with its host too, in
+`hosts/<name>/test/`.
+
+`test/test-host-names.ps1` enforces it. Each host lists what identifies it in
+`hosts/<name>/names.txt`, and every file elsewhere that still names it in
+`hosts/<name>/allowlist.txt`, with a reason and its exact number of mentions. The list may only
+shrink: a new mention fails, and so does an entry that allows more than its file needs. When the
+checkout has `origin/main`, the suite also compares each host's lists with it, and fails on an entry
+`origin/main` does not have, a count above its count, or a name or host folder it has and this
+checkout does not; with no git or no `origin/main` it prints `[SKIP]` and the reason. A host that is
+new on the branch is reported, not compared: its own pull request is where its lists are agreed.
+
+A branch that genuinely needs a new entry or a higher count records it in
+`hosts/<name>/growth.txt`, one line per increase: `path | old -> new | YYYY-MM-DD | reason`, with
+`old` being `origin/main`'s count (0 for a new path) and a reason of at least four distinct words.
+The increase passes only when a line added since `origin/main` matches that path and exactly those
+two counts; that line is what the reviewer agrees to. Refusing every increase outright was a
+deadlock - the entry could never pass until it was already on `main`. A line already on `main`
+permits nothing again, so a mention removed later cannot come back unreviewed, and `growth.txt` is
+append-only: its lines on `origin/main` must still open the file, unchanged and in order. A line that
+matches no current difference is history, not a failure. There is no growth record for `names.txt`:
+a declared name is never removed. The `.md`
+and `.html` files under `planning/` are not scanned, because plans and ledgers record the system
+being replaced and cannot be accurate without naming it; any other file under `planning/` fails.

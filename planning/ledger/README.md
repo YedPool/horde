@@ -55,7 +55,7 @@ and check - and exactly one `disposition`:
 
 | disposition | means | also needs |
 |---|---|---|
-| `test` | the lesson is enforced by a test in Horde | `where: <test file> :: "<assertion text>"` - a `.ps1` file under `test/`, inside the repository, containing that text **as a quoted string** of at least three words |
+| `test` | the lesson is enforced by a test in Horde | `where: <test file> :: "<assertion text>"` - a `.ps1` file under `test/` or under a host's own `hosts/<name>/test/`, inside the repository, containing that text **as a quoted string** of at least three words |
 | `comment` | the lesson is carried as an explanatory comment | `where: <file> :: "<phrase>"` - a file inside the repository, not a ledger, containing that phrase of at least three words |
 | `dropped` | the lesson does not apply to Horde | `reason: <why>` - at least a sentence |
 
@@ -69,8 +69,9 @@ where the next reader can disagree with it.
 - **Every entry has exactly one disposition.** "Nobody looked" becomes an empty field instead of an
   absence.
 - **A `test` disposition names a real test and quotes one of its assertions.** The file must be a
-  `.ps1` under `test/`, inside the repository, and must contain the quoted text *as a quoted string*
-  of at least three words on a line of code, never a comment, reached through no link. Each part
+  `.ps1` under `test/` or `hosts/<name>/test/` (D12: a host's tests live with the host), inside the
+  repository, and must contain the quoted text *as a quoted string* of at least three words on a
+  line of code, never a comment, reached through no link. Each part
   closes a way an independent review found to pass the gate
   without reading anything: naming a directory, naming the ledger itself, climbing out with `..`,
   or quoting a single letter that appears in every file.
