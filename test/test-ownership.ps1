@@ -164,6 +164,11 @@ Check (Says (Mutated { param($d) $d.fields = @() }) "is missing") "an empty tabl
 Check (Says (Mutated { param($d) $d.fields = @($d.fields | Where-Object { $_.name -cne "pane" }) }) "'pane' is missing") "a deleted field is refused"
 Check (Says (Mutated { param($d) $d.fields += [pscustomobject]@{ name = "extra"; owner = "engine"; read = @([pscustomobject]@{ store = "W1"; field = "extra" }) } }) "not in the required list") "a field the required list does not name is refused"
 Check (Says (Mutated { param($d) $d.PSObject.Properties.Remove("required") }) "needs a required list") "a table with no required list is refused"
+# THE TOP LEVEL HAS A FIXED SET OF KEYS. A misspelled "requird" beside a real "required" would be
+# ignored, and a misspelled "dropped" would hide every dropped field's reason. And an id is either
+# a store or a gap in the numbering, never both (second review, finding 6).
+Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName droped -NotePropertyValue @() }) "unknown top-level key 'droped'") "a misspelled top-level key is refused"
+Check (Says (Mutated { param($d) $d.storeIdGaps | Add-Member -NotePropertyName W1 -NotePropertyValue "a gap that is also a store" }) "'W1' is both a store and a gap") "a store id also listed as a gap is refused"
 Check (Says (Mutated { param($d) & $aDroppedField $d "" }) "dropped without a reason") "a dropped field with no reason is refused"
 Check (Says (Mutated { param($d) & $aDroppedField $d $false }) "dropped without a reason") "a dropped field whose reason is not text is refused"
 Check (Says (Mutated { param($d) $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "pane"; reason = "a reason of several words" }) -Force }) "both kept and dropped") "a field both kept and dropped is refused"

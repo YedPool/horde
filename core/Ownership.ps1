@@ -22,6 +22,7 @@ $script:HordeOwnershipFieldKeys = @("name", "owner", "read", "derived", "provisi
 $script:HordeOwnershipDroppedKeys = @("name", "reason")
 $script:HordeOwnershipReadKeys = @("store", "field", "when")
 $script:HordeOwnershipStoreKeys = @("system", "what", "path", "guard")
+$script:HordeOwnershipTopKeys = @("about", "owners", "stores", "storeIdGaps", "required", "fields", "dropped")
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
@@ -106,6 +107,14 @@ function Test-HordeOwnership {
             }
         }
     }
+    # THE TOP LEVEL HAS A FIXED SET OF KEYS, like every other object in the table: a misspelled
+    # "requird" or "droped" would be ignored, and everything it held with it (second review,
+    # finding 6).
+    if ($null -ne $Doc) {
+        foreach ($k in @($Doc.PSObject.Properties | ForEach-Object { $_.Name })) {
+            if ($script:HordeOwnershipTopKeys -cnotcontains $k) { [void]$findings.Add("the table has an unknown top-level key '" + $k + "'") }
+        }
+    }
     if ($null -eq $Doc -or $null -eq $Doc.fields -or $null -eq $Doc.stores -or $null -eq $Doc.owners) {
         [void]$findings.Add("the document needs owners, stores and fields")
         return @($findings)
@@ -117,6 +126,13 @@ function Test-HordeOwnership {
         if ($op.Value -isnot [string] -or "$($op.Value)".Trim() -eq "") { [void]$findings.Add("owner '" + $op.Name + "' has no description") }
     }
     $stores = @($Doc.stores.PSObject.Properties | ForEach-Object { $_.Name })
+    # AN ID IS A STORE OR A GAP IN THE NUMBERING, NEVER BOTH. A gap that names a real store says
+    # the store does not exist while fields read it.
+    if ($null -ne $Doc.storeIdGaps) {
+        foreach ($gapId in @($Doc.storeIdGaps.PSObject.Properties | ForEach-Object { $_.Name })) {
+            if ($stores -contains $gapId) { [void]$findings.Add("store id '" + $gapId + "' is both a store and a gap in the numbering") }
+        }
+    }
     # A STORE'S GUARD applies to EVERY read of that store, before the read's own when. It exists
     # because a condition repeated per read was forgotten per read: the pane-sessions file was
     # guarded where it gave sessionId and pane and read bare for three other fields (review
