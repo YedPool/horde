@@ -108,6 +108,14 @@ function Invoke-HordeRead {
     try { $got = & $Read }
     catch { return (New-HordeUnknown -Reason ("could not read " + $What) -ErrorRecord $_) }
     if (Test-HordeAnswer $got) { return $got }
+    # A reader that returns an answer AND writes anything else to the pipeline delivers an array
+    # holding both. Wrapping that as known turned an absent or unknown answer into a known Object[]
+    # (found in review, 2026-09-29). Which element the reader meant cannot be told, so it is unknown.
+    if ($got -is [System.Collections.IEnumerable] -and $got -isnot [string]) {
+        foreach ($item in $got) {
+            if (Test-HordeAnswer $item) { return (New-HordeUnknown -Reason ($What + ": the reader emitted an answer plus other output")) }
+        }
+    }
     if ($null -eq $got) { return (New-HordeUnknown -Reason ($What + " returned nothing, which says neither none nor what it found")) }
     return (New-HordeKnown -Value $got)
 }

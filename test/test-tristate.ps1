@@ -32,6 +32,12 @@ $silent = Invoke-HordeRead -What "the pane list" -Read { $null }
 Check ($silent.state -eq "unknown") "a reader that returns nothing has not said none, so it reads as unknown"
 $none = Invoke-HordeRead -What "the pane list" -Read { New-HordeAbsent -Note "no panes" }
 Check ($none.state -eq "absent") "a reader that says none, in so many words, reads as absent"
+# A stray line of pipeline output next to an answer turns the reader's result into an array, which
+# used to be wrapped as KNOWN - so an absent or unknown answer came back as a known Object[].
+$noisyAbsent = Invoke-HordeRead -What "the pane list" -Read { "listing panes"; New-HordeAbsent -Note "no panes" }
+Check ($noisyAbsent.state -eq "unknown") "a reader that emits an answer plus other output reads as unknown"
+$noisyUnknown = Invoke-HordeRead -What "the pane list" -Read { New-HordeUnknown -Reason "mux silent"; 0 }
+Check ($noisyUnknown.state -eq "unknown" -and $noisyUnknown.reason -like "*plus other output*") "and so does one whose stray output follows an unknown"
 
 Write-Host ""
 Write-Host "--- absent and unknown stay apart ---" -ForegroundColor Cyan
