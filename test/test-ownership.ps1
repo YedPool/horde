@@ -80,6 +80,11 @@ Check (Says (Mutated { param($d) $d.fields[0].read[0] | Add-Member -NoteProperty
 Check (Says (Mutated { param($d) $d.fields[0].read = @($d.fields[0].read) + @($d.fields[0].read[0]) }) "twice") "a read of one store and field twice in one rule is refused"
 Check (Says (Mutated { param($d) $d.fields[0].owner = "Agent" }) "not one of the listed owners") "an owner named in the wrong case is refused"
 Check (Says (Mutated { param($d) $d.fields[0].read[0].store = "x2" }) "not in the store list") "a store named in the wrong case is refused"
+$oneOwnerList = @(Mutated { param($d) $d.fields[0].owner = @("agent") })
+Check ((Says $oneOwnerList "as a list") -and -not (Says $oneOwnerList "more than one owner")) "an owner given as a one-item list is refused for what it is"
+Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName derived -NotePropertyValue $false -Force }) "but not how or why") "derived given as false is refused"
+Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName derived -NotePropertyValue 0 -Force }) "but not how or why") "derived given as a number is refused"
+Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName provisional -NotePropertyValue $false -Force }) "but not how or why") "provisional given as false is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
     $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }

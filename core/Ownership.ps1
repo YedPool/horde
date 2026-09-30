@@ -118,8 +118,12 @@ function Test-HordeOwnership {
         foreach ($k in @($f.PSObject.Properties | ForEach-Object { $_.Name })) {
             if ($script:HordeOwnershipFieldKeys -cnotcontains $k) { [void]$findings.Add("field '" + $n + "' has an unknown key '" + $k + "'") }
         }
-        # EXACTLY ONE OWNER: a single string naming a listed owner. An array is two owners.
-        if ($f.owner -is [array]) { [void]$findings.Add("field '" + $n + "' names more than one owner") }
+        # EXACTLY ONE OWNER: a single string naming a listed owner. A list of two or more is two
+        # owners; a list of one is still a list, and saying "more than one owner" about it sent a
+        # reader looking for an owner that is not there (review finding 13).
+        if ($f.owner -is [array] -and @($f.owner).Count -gt 1) { [void]$findings.Add("field '" + $n + "' names more than one owner") }
+        elseif ($f.owner -is [array] -and @($f.owner).Count -eq 1) { [void]$findings.Add("field '" + $n + "' gives its owner as a list; an owner is one name, not a list") }
+        elseif ($f.owner -is [array]) { [void]$findings.Add("field '" + $n + "' has no owner") }
         elseif ("$($f.owner)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' has no owner") }
         elseif ($owners -cnotcontains "$($f.owner)") { [void]$findings.Add("field '" + $n + "' names owner '" + $f.owner + "', which is not one of the listed owners") }
         # A READ RULE: at least one store to read from, each one real, each naming a field.
@@ -146,9 +150,10 @@ function Test-HordeOwnership {
             if ($readPairs -ccontains $pair) { [void]$findings.Add("field '" + $n + "' reads '" + $r.field + "' from store '" + $s + "' twice") }
             [void]$readPairs.Add($pair)
         }
+        # A reason is text. false and 0 stringify to "False" and "0", which passed as reasons.
         foreach ($k in @("derived", "provisional")) {
             $p = $f.PSObject.Properties[$k]
-            if ($null -ne $p -and "$($p.Value)".Trim() -eq "") { [void]$findings.Add("field '" + $n + "' says it is " + $k + " but not how or why") }
+            if ($null -ne $p -and ($p.Value -isnot [string] -or "$($p.Value)".Trim() -eq "")) { [void]$findings.Add("field '" + $n + "' says it is " + $k + " but not how or why") }
         }
     }
     foreach ($s in $stores) {
