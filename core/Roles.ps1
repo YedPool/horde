@@ -281,7 +281,8 @@ function Get-HordeRoleClaimCount {
     #
     # THE CHOICE: this number is kept apart from Get-HordeRoleCount, not added into it. "Running" and
     # "spawned but not yet seen" are different facts, and a sum would hide which one a caller saw.
-    # A caller asking wezfleet's question - is there a master at all? - adds the two. (Ledger L-023.)
+    # A caller asking wezfleet's question - is there a master at all? - calls Get-HordeRoleHeld, the
+    # one place that adds the two. (Ledger L-023.)
     #
     # Unknown when the claims could not all be read, or when a pending claim's role is unknown (it may
     # be the role asked about). A claim whose role is empty names no role and is not counted, as in
@@ -297,4 +298,26 @@ function Get-HordeRoleClaimCount {
     elseif ($unsure.Count -gt 0) { $answer = New-HordeUnknown -Reason ("cannot count claims: the role of " + $unsure.Count + " pending claim(s) is unknown (pane " + ($unsure -join ", ") + ")") }
     else { $answer = New-HordeKnown -Value $floor }
     return (New-HordeRoleCount -AtLeast $floor -Unsure $unsure -Answer $answer)
+}
+
+function Get-HordeRoleHeld {
+    # Is this role held at all - by a running session OR a pending spawn claim? wezfleet's own
+    # question: `master ensure` counts a pending master claim as a master (lib/Master.ps1:118-137).
+    # The two counts are kept apart on purpose (see Get-HordeRoleClaimCount), which left every caller
+    # to remember to add the claims; this is the one place that does, so a later module cannot forget
+    # them (review, 2026-09-29; ledger L-023).
+    #
+    # Returns an answer: known $true when either floor is above zero - one master seen is a master,
+    # whatever else is unsure; known $false only when both exact counts are known zeros; unknown
+    # otherwise, with both counts' reasons.
+    param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null, [datetime]$Now = (Get-Date))
+    Assert-HordeRoleRead $Read
+    $running = Get-HordeRoleCount -Read $Read -Role $Role -Table $Table
+    $pending = Get-HordeRoleClaimCount -Read $Read -Role $Role -Table $Table -Now $Now
+    if ($running.atLeast -gt 0 -or $pending.atLeast -gt 0) { return (New-HordeKnown -Value $true) }
+    if ($running.answer.state -eq "known" -and $pending.answer.state -eq "known") { return (New-HordeKnown -Value $false) }
+    $why = @()
+    if ($running.answer.state -ne "known") { $why += ("running: " + $running.answer.reason) }
+    if ($pending.answer.state -ne "known") { $why += ("pending: " + $pending.answer.reason) }
+    return (New-HordeUnknown -Reason ("cannot tell whether " + $Role + " is held - " + ($why -join "; ")))
 }

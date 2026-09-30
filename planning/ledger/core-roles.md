@@ -135,6 +135,6 @@ sources:
 - where: test/test-roles.ps1 :: "a wezfleet write succeeds while horde holds the file open for reading"
 
 ### L-023 A pending master claim is a master that is not visible yet; Horde counts it, as its own number
-- source: YedPool/wezfleet lib/Master.ps1:118-137 ("a PENDING claim naming a master counts as one"; a master idle three days came up with no role, 2026-09-14); pending means lib/Registry.ps1:1294-1307 with the 10080-minute backstop at :1235; horde PR #10 review, 2026-09-29, finding 4
+- source: YedPool/wezfleet lib/Master.ps1:118-137 ("a PENDING claim naming a master counts as one"; a master idle three days came up with no role, 2026-09-14); pending means lib/Registry.ps1:1294-1307 with the 10080-minute backstop at :1235; horde PR #10 review, 2026-09-29, finding 4; second review, 2026-09-29, finding 7: counted apart, the claims could be forgotten by any later caller, so Get-HordeRoleHeld is the one function that asks "held, running or pending"
 - disposition: test
-- where: test/test-roles.ps1 :: "a pending master claim is counted as a pending warchief, separately from sessions"
+- where: test/test-roles.ps1 :: "a pending master claim alone means the warchief role is held"

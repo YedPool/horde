@@ -222,6 +222,36 @@ finally {
 }
 
 Write-Host ""
+Write-Host "--- is a role held, running or pending ---" -ForegroundColor Cyan
+
+# Sessions and pending claims are counted apart (ledger L-023), so a caller asking wezfleet's question -
+# is there a master at all? - had to remember to add the claims. One function answers it, so a later
+# module cannot forget them.
+$heldStore = Join-Path $env:TEMP ("horde-roles-held-" + [guid]::NewGuid().ToString("N"))
+$heldSess = Join-Path $heldStore "registry\sessions"
+$heldClaims = Join-Path $heldStore "registry\claims"
+foreach ($d in @($heldSess, $heldClaims)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+try {
+    Put (Join-Path $heldSess "s9.json") @{ claudeSessionId = "s9"; role = "session" }
+    $heldNone = Get-HordeRoleHeld -Read (Read-HordeWezfleetRoles -Root $heldStore) -Role "warchief"
+    $heldNoneValue = $null; if ($heldNone.state -eq "known") { $heldNoneValue = Get-HordeValue $heldNone }
+    Check ($heldNone.state -eq "known" -and $heldNoneValue -is [bool] -and $heldNoneValue -eq $false) "CONTROL: with no master running or pending and every role known, the warchief role is not held"
+    Put (Join-Path $heldClaims "5.json") @{ role = "master"; spawnedAt = (Get-Date).ToUniversalTime().AddMinutes(-2).ToString("o") }
+    $heldPending = Get-HordeRoleHeld -Read (Read-HordeWezfleetRoles -Root $heldStore) -Role "warchief"
+    Check ($heldPending.state -eq "known" -and (Get-HordeValue $heldPending) -eq $true) "a pending master claim alone means the warchief role is held"
+    Remove-Item -LiteralPath (Join-Path $heldClaims "5.json") -Force
+    Put (Join-Path $heldSess "n9.json") @{ claudeSessionId = "n9" }
+    $heldUnsure = Get-HordeRoleHeld -Read (Read-HordeWezfleetRoles -Root $heldStore) -Role "warchief"
+    Check ($heldUnsure.state -eq "unknown" -and $heldUnsure.reason -like "*n9*") "whether a role is held is unknown while a live session's role is unknown, naming it"
+    Put (Join-Path $heldSess "m9.json") @{ claudeSessionId = "m9"; role = "master" }
+    $heldRunning = Get-HordeRoleHeld -Read (Read-HordeWezfleetRoles -Root $heldStore) -Role "warchief"
+    Check ($heldRunning.state -eq "known" -and (Get-HordeValue $heldRunning) -eq $true) "a running master means the role is held, whatever the roleless sessions are"
+}
+finally {
+    if ((Split-Path -Leaf $heldStore) -match '^horde-roles-held-[0-9a-f]{32}$') { Remove-Item -LiteralPath $heldStore -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
 Write-Host "--- a claim ages in UTC ---" -ForegroundColor Cyan
 
 # wezfleet stores spawnedAt in UTC; -Now defaults to local time. Compared as they stood, the age is off
