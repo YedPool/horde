@@ -58,6 +58,10 @@ Check ($x1Guard -like "*finder that picks a pane to act on*" -and $x1Guard -like
 $w2Guard = "$($doc.stores.W2.guard)"
 $ownerStores = @((Get-HordeOwnershipField -Doc $doc -Name "owner").read | ForEach-Object { "$($_.store)" })
 Check ($w2Guard -like "*10080 minutes*" -and $w2Guard -like "*cwd*" -and $w2Guard -like "*no registry record*") "every read of a spawn claim carries the claim reader's full guard"
+# "MATCHES" MEANS WHAT READ-WFPANECLAIM COMPARES: both directories reduced to Claude's path key and
+# compared ignoring case (lib/Registry.ps1:1305, ConvertTo-WfClaudePathKey and -ine). An exact
+# string match would refuse claims wezfleet accepts.
+Check ($w2Guard -like "*by Claude path key, ignoring case*") "a spawn claim's cwd is matched the way the claim reader matches it"
 Check ($ownerStores -ccontains "W2") "owner, which a spawn claim carries, reads the claim"
 # THE CLAIM'S FLEET ID, right after the registry. The hook takes it from the claim when the
 # environment has none (hooks/wf-registry-refresh.ps1:153), and it decides the record's origin

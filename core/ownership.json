@@ -10,7 +10,7 @@
   "stores": {
     "W1": { "system": "wezfleet", "what": "registry record", "path": "<wezfleet root>\\registry\\sessions\\<claudeSessionId>.json" },
     "W2": { "system": "wezfleet", "what": "spawn claim", "path": "<wezfleet root>\\registry\\claims\\<pane>.json",
-            "guard": "the claim for the session's pane, read only while that session has no registry record (the hook consumes a claim on first sight and deletes it), whose spawnedAt is at most 10080 minutes old, and whose cwd matches the session's cwd when both are recorded" },
+            "guard": "the claim for the session's pane, read only while that session has no registry record (the hook consumes a claim on first sight and deletes it), whose spawnedAt is at most 10080 minutes old, and whose cwd matches the session's cwd by Claude path key, ignoring case, when both are recorded" },
     "W3": { "system": "wezfleet", "what": "run manifest", "path": "<wezfleet root>\\<repoKey>\\runs\\<runId>\\run.json" },
     "W4": { "system": "wezfleet", "what": "roster", "path": "<run dir>\\roster.json" },
     "W5": { "system": "wezfleet", "what": "event log and status snapshot", "path": "<run dir>\\sessions\\<fleetId>\\events.jsonl and status.json" },
