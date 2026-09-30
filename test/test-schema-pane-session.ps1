@@ -17,7 +17,8 @@ $schema = Get-HordeSchema -Name "pane-session.v1"
 $fx = Join-Path $root "test\fixtures\pane-session"
 function Read-Fixture { param([string]$Rel) $t = Read-HordeSharedText -Path (Join-Path $fx $Rel); $v = $t | ConvertFrom-Json; return ,$v }
 function Findings { param($Value) return @(Test-HordeSchema -Value $Value -Schema $schema) }
-# Does any finding match Like? Findings are asserted by their TEXT, so a check cannot pass on some other finding.
+# Does any finding match Like? Findings are asserted by their TEXT, so a check cannot pass on some other
+# finding. Like is a wildcard pattern: write a literal [ or ] as `[ and `].
 function Has { param($Found, [string]$Like) return (@(@($Found) | Where-Object { $_ -clike $Like }).Count -gt 0) }
 
 Write-Host ""
@@ -33,7 +34,11 @@ Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ addi
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema $false } "the schema at $ is not an object") "a boolean schema is refused"
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at $.a is not an object") "a boolean schema under properties is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema "integer" } "the schema at $ is not an object") "a schema that is a string is refused"
-Check (@(Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ "x-note" = "anything" })).Count -eq 0) "x- keys are documentation and are ignored"
+# x- keys: the check must FAIL, not crash, when they stop being ignored - a crash is an [ERROR], which
+# tools/Mutate.ps1 rightly does not count as caught. So the call is caught here and its result judged.
+$xFound = $null; $xThrew = $false
+try { $xFound = @(Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "integer"; "x-note" = "anything" })) } catch { $xThrew = $true }
+Check ((-not $xThrew) -and $xFound.Count -eq 0) "x- keys are documentation and are ignored"
 Check (Has (Test-HordeSchema -Value "a" -Schema ([pscustomobject]@{ enum = @("A") })) "$ is 'a', not one of: A") "enum compares strings case-sensitively"
 Check (@(Test-HordeSchema -Value "b" -Schema ([pscustomobject]@{ enum = @("a", "b") })).Count -eq 0) "CONTROL: a string the enum names is accepted"
 Check (Has (Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @("1") })) "$ is '1', not one of: 1") "a number is not the string of its digits"
@@ -44,8 +49,42 @@ Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @
 Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1) }) } "enum at $ may hold only strings") "a number in an enum is refused"
 Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings") "an object in an enum is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @(1) }) } "enum at $ may hold only strings") "a bad enum is refused even when the value fails its type first"
-Check (@(Test-HordeSchema -Value ([pscustomobject]@{ a = 1; b = 2 }) -Schema ([pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }; additionalProperties = $false })).Count -eq 1) "additionalProperties false refuses a key the schema does not name"
-Check (@(Test-HordeSchema -Value @(1, "x") -Schema ([pscustomobject]@{ type = "array"; items = [pscustomobject]@{ type = "integer" } })).Count -eq 1) "items checks every element of an array"
+$twoKeys = [pscustomobject]@{ a = 1; b = 2 }
+$aOnly = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }
+Check (Has (Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly; additionalProperties = $false })) "$ has 'b', which the schema does not allow") "additionalProperties false refuses a key the schema does not name"
+Check (@(Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly })).Count -eq 0) "with additionalProperties absent, a key the schema does not name is allowed"
+Check (@(Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly; additionalProperties = $true })).Count -eq 0) "additionalProperties true allows a key the schema does not name"
+Check (Has (Test-HordeSchema -Value @(1, "x") -Schema ([pscustomobject]@{ type = "array"; items = [pscustomobject]@{ type = "integer" } })) '$`[1`] should be integer') "items checks every element of an array"
+Check (Has (Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ b = [pscustomobject]@{ type = "string" } } })) '$.b should be string') "properties checks the value under each name"
+
+Write-Host ""
+Write-Host "--- every type refuses what is not it ---" -ForegroundColor Cyan
+# One wrong value and one right value per type, each finding asserted by its text.
+$typeCases = @(
+    @{ Type = "string";  Good = "a";   Bad = 1 },
+    @{ Type = "boolean"; Good = $true; Bad = "true" },
+    @{ Type = "number";  Good = 1.5;   Bad = "1" },
+    @{ Type = "integer"; Good = 7;     Bad = "7" },
+    @{ Type = "null";    Good = $null; Bad = 0 },
+    @{ Type = "array";   Good = @(1);  Bad = "abc" },
+    @{ Type = "object";  Good = @{};   Bad = @(1) }
+)
+foreach ($c in $typeCases) {
+    $ts = [pscustomobject]@{ type = $c.Type }
+    Check (Has (Test-HordeSchema -Value $c.Bad -Schema $ts) ('$ should be ' + $c.Type)) ($c.Type + ": a wrong value is refused")
+    Check (@(Test-HordeSchema -Value $c.Good -Schema $ts).Count -eq 0) ($c.Type + ": CONTROL - a right value is accepted")
+}
+Check (Has (Test-HordeSchema -Value @{ a = 1 } -Schema ([pscustomobject]@{ type = "array" })) '$ should be array') "array: a hashtable is not an array"
+
+Write-Host ""
+Write-Host "--- a schema built as a hashtable means the same ---" -ForegroundColor Cyan
+# Read wrongly, a hashtable schema throws (its .NET properties look like unknown keywords); Safely turns
+# that into a finding so the check FAILS rather than crashing, and a mutation of it counts as caught.
+function Safely { param([scriptblock]$Block) try { return @(& $Block) } catch { return @("THREW: " + $_.Exception.Message) } }
+$hashSchema = @{ type = "object"; required = @("a"); properties = @{ a = @{ type = "integer" } } }
+Check (Has (Safely { Test-HordeSchema -Value ([pscustomobject]@{ a = "x" }) -Schema $hashSchema }) '$.a should be integer') "a hashtable schema checks its properties"
+Check (Has (Safely { Test-HordeSchema -Value ([pscustomobject]@{ b = 1 }) -Schema $hashSchema }) "$ has no 'a'") "a hashtable schema checks required"
+Check (@(Safely { Test-HordeSchema -Value @{ a = 1 } -Schema $hashSchema }).Count -eq 0) "CONTROL: a hashtable value that fits a hashtable schema is valid"
 Check (Throws { Get-HordeSchema -Name "..\core\Schema" } "not a schema name") "a schema name cannot reach a file outside the schema folder"
 
 Write-Host ""
