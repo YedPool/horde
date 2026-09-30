@@ -99,7 +99,8 @@ Put (Join-Path $sess "o2.json") @{ claudeSessionId = "o2"; role = "orchestrator"
 Put (Join-Path $sess "s1.json") @{ claudeSessionId = "s1"; role = "session"; label = "A7" }
 Put (Join-Path $sess "n1.json") @{ claudeSessionId = "n1"; label = "C" }
 Put (Join-Path $sess "n2.json") @{ claudeSessionId = "n2"; label = "D"; retired = $true }
-Put (Join-Path $sess "wrong-name.json") @{ claudeSessionId = "someone-else"; role = "master" }
+# A stale copy of m1 under another name: m1 has its own record, so skipping the copy hides nothing.
+Put (Join-Path $sess "wrong-name.json") @{ claudeSessionId = "m1"; role = "master" }
 Set-Content -LiteralPath (Join-Path $sess "m1.12345.abcd1234.tmp") -Value '{"claudeSessionId":"m1","role":"master"}'
 Put (Join-Path $claimsDir "7.json") @{ role = "master"; claimedAt = "2026-09-29T00:00:00Z" }
 Put (Join-Path $claimsDir "8.json") @{ role = "" }
@@ -210,6 +211,28 @@ try {
 finally {
     $env:WEZFLEET_ROOT = $keepRoot
     if ((Split-Path -Leaf $store) -match '^horde-roles-store-[0-9a-f]{32}$') { Remove-Item -LiteralPath $store -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
+Write-Host "--- a misnamed record may be the only copy of a session ---" -ForegroundColor Cyan
+
+# wezfleet skips a record whose id does not match its file name. When the session it names has no
+# record of its own, the skipped file may be the only trace of it: a store holding just abc-copy.json
+# (id abc, role master) counted warchief as a known 0 (review, 2026-09-29).
+$orphanStore = Join-Path $env:TEMP ("horde-roles-orphan-" + [guid]::NewGuid().ToString("N"))
+$orphanSess = Join-Path $orphanStore "registry\sessions"
+New-Item -ItemType Directory -Path $orphanSess -Force | Out-Null
+try {
+    Put (Join-Path $orphanSess "abc-copy.json") @{ claudeSessionId = "abc"; role = "master" }
+    $readOrphan = Read-HordeWezfleetRoles -Root $orphanStore
+    $wcOrphan = Get-HordeRoleCount -Read $readOrphan -Role "warchief"
+    Check ($wcOrphan.state -eq "unknown" -and $wcOrphan.reason -like "*abc-copy.json*") "a misnamed record whose session has no record of its own makes the count unknown, naming the file"
+    Put (Join-Path $orphanSess "abc.json") @{ claudeSessionId = "abc"; role = "master" }
+    $wcCopy = Get-HordeRoleCount -Read (Read-HordeWezfleetRoles -Root $orphanStore) -Role "warchief"
+    Check ($wcCopy.state -eq "known" -and $wcCopy.value -eq 1) "CONTROL: once the session has its own record, the misnamed copy hides nothing"
+}
+finally {
+    if ((Split-Path -Leaf $orphanStore) -match '^horde-roles-orphan-[0-9a-f]{32}$') { Remove-Item -LiteralPath $orphanStore -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ""

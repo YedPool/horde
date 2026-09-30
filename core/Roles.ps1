@@ -116,6 +116,8 @@ function Read-HordeWezfleetRoles {
         try { $sessFiles = @(Get-ChildItem -LiteralPath $sessDir -File -ErrorAction Stop | Where-Object { $_.Extension -eq ".json" }) }
         catch { [void]$sessionGaps.Add("the sessions directory could not be listed: " + $_.Exception.Message) }
     }
+    # Misnamed records, with the session id each one holds, checked once every file name is known.
+    $misnamed = New-Object System.Collections.ArrayList
     if ($sessFiles.Count -gt 0) {
         # Only <id>.json whose claudeSessionId is that id is a record. A writer's temp file
         # (<id>.<pid>.<guid>.tmp) sits beside the records mid-write and is not one.
@@ -131,7 +133,11 @@ function Read-HordeWezfleetRoles {
             $idField = Get-HordeField -Record $rec -Name "claudeSessionId"
             $storedId = ""
             if ($idField.state -eq "known") { $storedId = "$($idField.value)" }
-            if ($storedId -ne $id) { [void]$mismatched.Add($f.FullName); continue }
+            if ($storedId -ne $id) {
+                [void]$mismatched.Add($f.FullName)
+                [void]$misnamed.Add([pscustomobject]@{ path = $f.FullName; name = $f.Name; storedId = $storedId })
+                continue
+            }
             $r = Read-HordeRecordRole -Record $rec -Table $Table
             # RETIRED IS READ AS WEZFLEET READS IT: by truthiness, so a record with no retired field is
             # LIVE. Every wezfleet test is `if ($r.retired)` or `-not $_.retired` (lib/Hierarchy.ps1:42,
@@ -140,6 +146,19 @@ function Read-HordeWezfleetRoles {
             $retField = Get-HordeField -Record $rec -Name "retired"
             $isRetired = ($retField.state -eq "known" -and [bool]$retField.value)
             [void]$sessions.Add([pscustomobject]@{ id = $id; retired = $isRetired; role = $r.role; raw = $r.raw; field = $r.field })
+        }
+    }
+    # A MISNAMED RECORD MAY BE THE ONLY COPY OF ITS SESSION. Skipped because its id disagrees with its
+    # file name, it hides nothing when the session it names has a record of its own. When it does not
+    # - or it names no session at all - it may be the only trace of that session, a master included:
+    # a store holding just abc-copy.json (id abc, role master) counted warchief as a known 0 (review,
+    # 2026-09-29). So that is a gap. File names are compared ignoring case, as the file system and
+    # wezfleet's -ne comparison both do.
+    $fileIds = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($f in $sessFiles) { [void]$fileIds.Add([System.IO.Path]::GetFileNameWithoutExtension($f.Name)) }
+    foreach ($m in $misnamed) {
+        if ($m.storedId -eq "" -or -not $fileIds.Contains($m.storedId)) {
+            [void]$sessionGaps.Add($m.name + " holds session '" + $m.storedId + "', which has no record of its own, so it may be the only copy of that session")
         }
     }
     # A missing claims directory IS legitimately empty: wezfleet creates it only when it first
