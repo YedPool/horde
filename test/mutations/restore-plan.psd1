@@ -20,6 +20,15 @@
         @{ Name = "dictionary-values-not-read"
            Find = 'foreach ($k in $Object.Keys) { if ("$k" -ceq $Name) { return $Object[$k] } }'
            Replace = '' }
+        @{ Name = "split-not-a-container-key"
+           Find = '$isContainer = ($hasSplit -or $hasRatio -or $hasChildren)'
+           Replace = '$isContainer = ($hasRatio -or $hasChildren)' }
+        @{ Name = "ratio-not-a-container-key"
+           Find = '$isContainer = ($hasSplit -or $hasRatio -or $hasChildren)'
+           Replace = '$isContainer = ($hasSplit -or $hasChildren)' }
+        @{ Name = "children-not-a-container-key"
+           Find = '$isContainer = ($hasSplit -or $hasRatio -or $hasChildren)'
+           Replace = '$isContainer = ($hasSplit -or $hasRatio)' }
         @{ Name = "both-leaf-and-container-allowed"
            Find = 'if ($hasSlot -and $isContainer) {'
            Replace = 'if ($false) {' }

@@ -145,6 +145,11 @@ $expect = [ordered]@{
     "ratio-text"                 = @{ like = '*.root.ratio should be number'; n = 1; schema = $true }
     "tab-no-root"                = @{ like = '*.tabs`[0`] has no ''root'''; n = 1; schema = $true }
     "leaf-and-container"         = @{ like = '*.tabs`[0`].root is both a leaf and a container*'; n = 2; schema = $false }
+    # Any one container key beside a slot makes a node both; one fixture per key, so each term of
+    # the condition is pinned on its own (review of PR #17).
+    "slot-and-split"             = @{ like = '*.root.children`[0`] is both a leaf and a container*'; n = 1; schema = $false }
+    "slot-and-ratio"             = @{ like = '*.root.children`[0`] is both a leaf and a container*'; n = 1; schema = $false }
+    "slot-and-children"          = @{ like = '*.root.children`[0`] is both a leaf and a container*'; n = 1; schema = $false }
     "neither-leaf-nor-container" = @{ like = '*.root.children`[2`] is neither a leaf nor a container*'; n = 1; schema = $false }
     "container-no-split"         = @{ like = '*.tabs`[0`].root is a container with no split'; n = 1; schema = $false }
     "container-no-children"      = @{ like = '*.tabs`[1`].root is a container with no children'; n = 1; schema = $false }
