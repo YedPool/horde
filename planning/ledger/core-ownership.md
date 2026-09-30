@@ -194,3 +194,13 @@ sources:
 - source: YedPool/wezfleet lib/Common.ps1:625-640 (Test-WfWrittenInInstance: the record's instance must match and its lastSeen must not predate the instance start; ambiguous says no); census reads cwd from a record chosen that way, with no age, at lib/Registry.ps1:833 and :859. The first draft said only "fresh". Review finding 10, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the registry's cwd says what fresh means and what it is measured against"
+
+### L-037 The socket names the terminal instance exactly; an ambiguous instance trusts nothing
+- source: YedPool/wezfleet lib/Common.ps1:544 "From a pane, the socket answers it exactly." and :547 "an ambiguous instance trusts NO pane record, because the alternative is the exact wrong-pane answer this exists to remove"; :567 reads WEZTERM_UNIX_SOCKET, :591 marks several wezterm-gui processes with no socket ambiguous, :625 Test-WfWrittenInInstance returns false for it; hooks/wf-registry-refresh.ps1:126 records the instance from the socket. Review finding 11, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "an ambiguous terminal instance trusts no pane record"
+
+### L-038 The terminal instance is read from the socket before any stored copy
+- source: YedPool/wezfleet lib/Common.ps1:567 "if ($null -eq $Socket) { $Socket = ""$env:WEZTERM_UNIX_SOCKET"" }" ahead of the one-process fallback at :586-590. The first draft claimed derivation from the socket but did not read it. Review finding 11, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the terminal instance is read from the socket first, which names it exactly"

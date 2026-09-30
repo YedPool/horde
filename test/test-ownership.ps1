@@ -65,7 +65,10 @@ $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
 $cwdW1 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "W1" })[0]
 Check ("$($cwdW1.when)" -like "*lastSeen*" -and "$($cwdW1.when)" -like "*instance started*") "the registry's cwd says what fresh means and what it is measured against"
-$windowW3 =@((Get-HordeOwnershipField -Doc $doc -Name "window").read | Where-Object { "$($_.store)" -ceq "W3" })[0]
+$hostInstance = Get-HordeOwnershipField -Doc $doc -Name "hostInstance"
+Check ("$($hostInstance.read[0].store)" -ceq "X6" -and "$($hostInstance.read[0].field)" -ceq "WEZTERM_UNIX_SOCKET") "the terminal instance is read from the socket first, which names it exactly"
+Check ("$($hostInstance.derived)" -like "*ambiguous*trusts no pane record*") "an ambiguous terminal instance trusts no pane record"
+$windowW3 = @((Get-HordeOwnershipField -Doc $doc -Name "window").read | Where-Object { "$($_.store)" -ceq "W3" })[0]
 Check ("$($windowW3.when)" -like "*run-level*") "the run's window is marked as the run's, a fallback for the session"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
