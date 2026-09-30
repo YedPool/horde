@@ -9,11 +9,11 @@
 #               that is not strictly between 0 and 1 (0 and 1 would give one child the whole space), or
 #               on a container that does not have exactly two children.
 #   sessions  - a slot or a sessionId used by two sessions; a parent that names the session itself,
-#               or no session in the plan.
+#               or no session in the plan; parents that go round in a cycle; no session at all.
 #   resume    - two sessions with one resume kind and id; an empty argv; for claude-resume, a resume
 #               id that is not the session's own sessionId, or an argv without --resume followed by it.
 #   placement - a layout slot that names no session; a session whose slot is not in the layout; a slot
-#               placed more than once.
+#               placed more than once; a workspace with no windows, or a window with no tabs.
 #
 # UNIQUE ON WHAT IS RESTORED. A slot and a sessionId are names; what a host acts on is the resume
 # block. Two sessions with distinct sessionIds but one resume kind and id would start one
@@ -142,6 +142,35 @@ function Test-HordePlanResume {
     }
 }
 
+function Add-HordePlanParentCycles {
+    # Parents that go round in a circle: a fleet with no root, which the hierarchy (warchief, orcs,
+    # goblins) cannot be. Reported once per cycle, at its lowest-numbered session, so a cycle of two
+    # is one finding, not two. A parent naming itself is reported by the caller and not walked here;
+    # a parent naming no session ends the walk, since that is reported too.
+    param($Sessions, $IdAt, $Findings)
+    Set-StrictMode -Version Latest
+    for ($i = 0; $i -lt $Sessions.Count; $i++) {
+        $chain = New-Object System.Collections.Generic.List[int]
+        $chain.Add($i); $cur = $i
+        while ($true) {
+            $parent = Get-HordePlanProp $Sessions[$cur] "parent"
+            if ($null -eq $parent -or -not $IdAt.ContainsKey("$parent")) { break }
+            $next = $IdAt["$parent"]
+            if ($next -eq $cur) { break }
+            if ($next -eq $i) {
+                $lowest = $true; foreach ($c in $chain) { if ($c -lt $i) { $lowest = $false } }
+                if ($lowest) {
+                    $names = @($chain | ForEach-Object { '$.sessions[' + $_ + ']' }) + ('$.sessions[' + $i + ']')
+                    [void]$Findings.Add('$.sessions[' + $i + '].parent: the parents go round in a cycle (' + ($names -join " -> ") + '); a fleet has a root')
+                }
+                break
+            }
+            if ($chain.Contains($next)) { break }
+            $chain.Add($next); $cur = $next
+        }
+    }
+}
+
 function Add-HordePlanPlacement {
     param($Placements, [string]$Slot, [string]$Path)
     if (-not $Placements.ContainsKey($Slot)) { $Placements[$Slot] = New-Object System.Collections.ArrayList }
@@ -178,13 +207,21 @@ function Test-HordeRestorePlan {
         if ("$parent" -ieq "$(Get-HordePlanProp $sessions[$i] "sessionId")") { [void]$findings.Add('$.sessions[' + $i + "].parent names the session itself") }
         elseif (-not $idAt.ContainsKey("$parent")) { [void]$findings.Add('$.sessions[' + $i + "].parent '" + $parent + "' names no session in the plan") }
     }
+    Add-HordePlanParentCycles -Sessions $sessions -IdAt $idAt -Findings $findings
+    # A plan that restores nothing is a caller that lost the fleet, not a fleet at rest: there is no
+    # plan to hand a host (review of PR #17).
+    if ($sessions.Count -eq 0) { [void]$findings.Add('$.sessions is empty; a plan restores at least one session') }
 
     $placements = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.ArrayList]' ([System.StringComparer]::Ordinal)
     $ws = @(Get-HordePlanProp (Get-HordePlanProp $Plan "layout") "workspaces")
     for ($w = 0; $w -lt $ws.Count; $w++) {
         $wins = @(Get-HordePlanProp $ws[$w] "windows")
+        # An empty workspace or window arranges nothing a host could show; a host asked to open one
+        # would open an empty frame the user has to close (review of PR #17).
+        if ($wins.Count -eq 0) { [void]$findings.Add('$.layout.workspaces[' + $w + '] has no windows; a workspace holds at least one') }
         for ($n = 0; $n -lt $wins.Count; $n++) {
             $tabs = @(Get-HordePlanProp $wins[$n] "tabs")
+            if ($tabs.Count -eq 0) { [void]$findings.Add('$.layout.workspaces[' + $w + '].windows[' + $n + '] has no tabs; a window holds at least one') }
             for ($t = 0; $t -lt $tabs.Count; $t++) {
                 $at = '$.layout.workspaces[' + $w + '].windows[' + $n + '].tabs[' + $t + '].root'
                 Test-HordePlanNode -Node (Get-HordePlanProp $tabs[$t] "root") -Path $at -Placements $placements -Findings $findings

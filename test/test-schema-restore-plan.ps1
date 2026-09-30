@@ -155,6 +155,13 @@ $expect = [ordered]@{
     "container-no-children"      = @{ like = '*.tabs`[1`].root is a container with no children'; n = 1; schema = $false }
     "one-child"                  = @{ like = '*.root.children`[1`] is a container with 1 child*at least 2'; n = 1; schema = $false }
     "ratio-zero"                 = @{ like = '*.root.ratio is 0; a ratio lies strictly between 0 and 1'; n = 1; schema = $false }
+    # Shapes that are well-typed and mean nothing (review of PR #17): a fleet whose parents go round
+    # in a circle has no root; an empty workspace or window arranges nothing a host could show; a plan
+    # with no session restores nothing, and a caller that produced one has lost the fleet.
+    "parent-cycle"               = @{ like = '$.sessions`[0`].parent: the parents go round in a cycle ($.sessions`[0`] -> $.sessions`[1`] -> $.sessions`[0`])*'; n = 1; schema = $false }
+    "workspace-no-windows"       = @{ like = '$.layout.workspaces`[1`] has no windows*'; n = 1; schema = $false }
+    "window-no-tabs"             = @{ like = '$.layout.workspaces`[0`].windows`[1`] has no tabs*'; n = 1; schema = $false }
+    "empty-plan"                 = @{ like = '$.sessions is empty; a plan restores at least one session'; n = 1; schema = $false }
     "ratio-three-children"       = @{ like = '*.tabs`[0`].root.ratio is set on a container with 3 children; a ratio is the first child''s share of exactly 2'; n = 1; schema = $false }
     "ratio-one"                  = @{ like = '*.root.ratio is 1; a ratio lies strictly between 0 and 1'; n = 1; schema = $false }
     "dropped-session"            = @{ like = '$.sessions`[1`] (slot ''s2'') is not in the layout*never drop*'; n = 1; schema = $false }
@@ -223,6 +230,20 @@ $rc.sessions[0].resume.argv = @("claude", "--resume", $rc.sessions[0].resume.id)
 $found = @(Findings $rc)
 Check ($rc.sessions[0].resume.id -cne $rc.sessions[0].sessionId) "CONTROL: the resume id and the sessionId differ in case"
 Check ($found.Count -eq 0) ("a claude resume id in capitals is the session's own id (" + ($found -join "; ") + ")")
+
+Write-Host ""
+Write-Host "--- a cycle of parents is found however long, and reported once ---" -ForegroundColor Cyan
+# Three sessions, each the parent of the next and the last the parent of the first; a fourth hangs off
+# the cycle, and is not itself in it.
+$cy = Read-Fixture "invalid\ratio-three-children.json"
+$cy.layout.workspaces[0].windows[0].tabs[0].root.PSObject.Properties.Remove("ratio")
+$cy.sessions[0] | Add-Member -NotePropertyName parent -NotePropertyValue $cy.sessions[2].sessionId
+$cy.sessions[2].parent = $cy.sessions[1].sessionId
+$found = @(Findings $cy)
+Check ($found.Count -eq 1 -and $found[0] -like '$.sessions`[0`].parent: the parents go round in a cycle ($.sessions`[0`] -> $.sessions`[2`] -> $.sessions`[1`] -> $.sessions`[0`])*') ("a cycle of three is one finding, naming its three sessions (" + ($found -join "; ") + ")")
+$cy.sessions[2].parent = $cy.sessions[0].sessionId
+$found = @(Findings $cy)
+Check ($found.Count -eq 1 -and $found[0] -like '*($.sessions`[0`] -> $.sessions`[2`] -> $.sessions`[0`])*') ("a session whose parent is in a cycle it is not part of is not reported with it (" + ($found -join "; ") + ")")
 
 Write-Host ""
 Write-Host "--- the gate reports every problem, not the first ---" -ForegroundColor Cyan

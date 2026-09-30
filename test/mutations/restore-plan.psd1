@@ -113,6 +113,24 @@
         @{ Name = "parent-never-read"
            Find = '$parent = Get-HordePlanProp $sessions[$i] "parent"'
            Replace = '$parent = $null' }
+        @{ Name = "parent-cycles-not-checked"
+           Find = 'Add-HordePlanParentCycles -Sessions $sessions -IdAt $idAt -Findings $findings'
+           Replace = '' }
+        @{ Name = "parent-cycle-reported-per-member"
+           Find = 'if ($lowest) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "parent-cycle-walk-stops-at-two"
+           Find = '$chain.Add($next); $cur = $next'
+           Replace = 'break' }
+        @{ Name = "empty-plan-allowed"
+           Find = 'if ($sessions.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "workspace-without-windows-allowed"
+           Find = 'if ($wins.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "window-without-tabs-allowed"
+           Find = 'if ($tabs.Count -eq 0) {'
+           Replace = 'if ($false) {' }
         @{ Name = "session-slots-ignore-case"
            Find = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::Ordinal)'
            Replace = '$slotAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)'
