@@ -32,34 +32,62 @@ Check ($ok.Count -eq 0) "a ledger with every entry sourced and disposed produces
 if ($ok.Count -gt 0) { $ok | ForEach-Object { Write-Host ("         unexpected: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } }
 
 Write-Host ""
-Write-Host "--- every rule refuses, and names the right reason ---" -ForegroundColor Cyan
+Write-Host "--- every rule refuses, for its own reason, and ONLY for that reason ---" -ForegroundColor Cyan
 
-$f = Findings "undisposed.md"
-Check (Says $f "no disposition") "an entry nobody dealt with is refused as having no disposition"
+# EXACTLY ONE FINDING, not merely the right one among several. A review found that the first version
+# only asserted the expected finding was PRESENT, so a fixture failing for three reasons at once would
+# still pass - which is the "fails for any reason" weakness this suite claims to avoid.
+function Refuses { param([string]$Name, [string]$Text, [string]$What)
+    # WRAPPED AT THE CALL SITE. PowerShell 5.1 unrolls a one-element array returned from a function into
+    # a bare object, and [pscustomobject].Count is $null in 5.1 - so without @() here, "exactly one
+    # finding" could never be true. This made every refusal fail on its first run.
+    $f = @(Findings $Name)
+    Check ((Says $f $Text) -and $f.Count -eq 1) $What
+    if (-not ((Says $f $Text) -and $f.Count -eq 1)) { $f | ForEach-Object { Write-Host ("         got: " + $_.entry + " - " + $_.problem) -ForegroundColor Red } } }
 
-$f = Findings "unsourced.md"
-Check (Says $f "no source") "an entry with no source is refused"
+Refuses "undisposed.md"          "no disposition"                  "an entry nobody dealt with is refused as having no disposition"
+Refuses "unsourced.md"           "no source"                       "an entry with no source is refused"
+Refuses "fake-test-file.md"      "does not exist"                  "a test disposition naming a test file that does not exist is refused"
+Refuses "fake-assertion.md"      "does not contain the assertion"  "a test disposition naming an assertion the test does not contain is refused"
+Refuses "dropped-no-reason.md"   "reason of at least a sentence"   "dropped with a bare n/a is refused"
+Refuses "duplicate-id.md"        "duplicate entry id"              "two entries with one id are refused"
+Refuses "two-dispositions.md"    "more than one disposition"       "an entry with two dispositions is refused"
+Refuses "sources-incomplete.md"  "'pull requests' is not marked searched" "a ledger that skipped the pull requests is refused, and says which source"
+Refuses "empty.md"               "no entries"                      "a ledger with a header and no entries is refused rather than passing vacuously"
 
-$f = Findings "fake-test-file.md"
-Check (Says $f "does not exist") "a test disposition naming a test file that does not exist is refused"
+Write-Host ""
+Write-Host "--- the ways a review found to pass the gate without reading anything ---" -ForegroundColor Cyan
 
-$f = Findings "fake-assertion.md"
-Check (Says $f "does not contain the assertion") "a test disposition naming an assertion the test does not contain is refused - the check that makes the gate real"
+# Each of these produced ZERO findings against the first version of the gate. They are the reason
+# this suite exists in its current form.
+Refuses "dir-as-test.md"         "is not a file"                   "a directory named as the test is refused, not silently passed"
+Refuses "short-assertion.md"     "at least three words"            "a one-letter assertion is refused - it would match almost any file"
+Refuses "self-reference.md"      "test script under test/"         "a ledger naming ITSELF as the test is refused"
+Refuses "unquoted.md"            "as a quoted string"              "text that appears in the test but not as a quoted string is refused"
+Refuses "outside-repo.md"        "outside the repository"          "a path that climbs out of the repository is refused"
+Refuses "comment-dot.md"         "comment disposition needs where" "a comment carried in '.' is refused"
+Refuses "comment-no-phrase.md"   "comment disposition needs where" "a comment with no quoted phrase is refused - the gate must be able to find the lesson"
+Refuses "comment-phrase-absent.md" "does not contain the phrase"   "a comment whose phrase is not in the named file is refused"
+Refuses "comment-missing-file.md" "does not exist"                 "a comment naming a file that does not exist is refused"
 
-$f = Findings "dropped-no-reason.md"
-Check (Says $f "reason of at least a sentence") "dropped with a bare n/a is refused"
+Write-Host ""
+Write-Host "--- refusals that had no fixture before the review ---" -ForegroundColor Cyan
 
-$f = Findings "duplicate-id.md"
-Check (Says $f "duplicate entry id") "two entries with one id are refused"
+Refuses "no-module.md"           "no module: line"                 "a ledger with no module line is refused"
+Refuses "no-replaces.md"         "no replaces: line"               "a ledger that does not say what it replaces is refused"
+Refuses "unknown-disposition.md" "unknown disposition"             "an unknown disposition is refused"
+Refuses "bad-heading.md"         "must begin with L-"              "an entry heading without an L-number is refused"
+Refuses "malformed-test-where.md" "test disposition needs where"   "a test disposition without the file :: quote form is refused"
+Refuses "weak-reason.md"         "reason of at least a sentence"   "a reason made of one word repeated is refused"
+Refuses "header-in-body.md"      "is not marked searched"          "sources claimed inside an entry, not the header, do not count"
 
-$f = Findings "two-dispositions.md"
-Check (Says $f "more than one disposition") "an entry with two dispositions is refused"
-
-$f = Findings "sources-incomplete.md"
-Check (Says $f "'pull requests' is not marked searched") "a ledger that skipped the pull requests is refused, and says which source"
-
-$f = Findings "empty.md"
-Check (Says $f "no entries") "a ledger with no entries is refused rather than passing vacuously"
+# THE TRULY EMPTY FILE fails for several reasons at once, correctly, so it is the one fixture not held
+# to exactly one finding. What matters is that it fails, says why, and does not fail by accident: the
+# first version produced findings about an "unnumbered" entry here, because Get-Content -Raw returns
+# $null for an empty file and the parser then split $null.
+$te = @(Findings "truly-empty.md")
+Check (Says $te "no entries") "a zero-byte ledger is refused as having no entries"
+Check (-not (Says $te "unnumbered")) "and not by accident - no phantom entry is invented from nothing"
 
 Write-Host ""
 Write-Host "--- mutation: remove one disposition from the passing ledger ---" -ForegroundColor Cyan
@@ -110,6 +138,9 @@ if ($real.Count -eq 0) {
         foreach ($x in $r) { Write-Host ("         " + $x.entry + " - " + $x.problem) -ForegroundColor Red }
     }
 }
+# PRECONDITION FIRST. Without it the next check passes when the README is simply missing - a review
+# found exactly that: a check that could not fail.
+Check (Test-Path -LiteralPath (Join-Path $root "planning\ledger\README.md")) "PRECONDITION: the format README exists, so the next check means something"
 Check (@(Get-HordeLedgerFiles -Dir (Join-Path $root "planning\ledger") | Where-Object { $_.Name -eq "README.md" }).Count -eq 0) "the format README is not mistaken for a ledger"
 
 Write-Host ""

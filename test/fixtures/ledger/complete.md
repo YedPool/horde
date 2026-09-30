@@ -15,7 +15,7 @@ sources:
 ### L-002 A comment-carried lesson
 - source: YedPool/wezfleet tasks/lessons.md
 - disposition: comment
-- where: docs/carried.ps1
+- where: docs/carried.ps1 :: "an unreadable source reads as unknown in this file too"
 
 ### L-003 Typing into panes needs a second Enter sometimes
 - source: YedPool/wezfleet planning/wezfleet-ssot-multi-backend-2026-09-29.md

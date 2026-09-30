@@ -15,4 +15,4 @@ sources:
 ### L-001 Same id again
 - source: somewhere
 - disposition: comment
-- where: docs/carried.ps1
+- where: docs/carried.ps1 :: "an unreadable source reads as unknown in this file too"
