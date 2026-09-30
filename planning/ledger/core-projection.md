@@ -454,3 +454,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 4: a malformed instance id was dropped silently and a non-boolean ambiguous flag read as false; host research 2026-09-30 C2 (a composed <distro>.<socket>.<server pid> id can pass 64 characters)
 - disposition: test
 - where: test/test-projection.ps1 :: "a malformed instance id makes the instance unknown, never nameless"
+
+### L-086 A skipped reality check is set by the spec that needs it, and never ends on the usual banner
+- source: review of horde PR #31, finding 5: HORDE_SKIP_REALITY was set by hand in the shell running tools/Mutate.ps1, and a normal run with it set printed the same green banner as a whole run
+- disposition: test
+- where: test/test-mutate.ps1 :: "a spec's environment reaches every run of its suite"

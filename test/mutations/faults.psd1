@@ -1,12 +1,13 @@
 # Mutations of core/Faults.ps1, the cardinality checks the projection reports.
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\faults.psd1
-# with HORDE_SKIP_REALITY=1 set, one spec at a time. The suite's reality check reads this machine's
-# real stores and took past tools\Mutate.ps1's 900 s limit per run beside another run (2026-09-30);
-# a mutant must be caught by the fixture sections, and the skip is printed on every run.
+# One spec at a time. The spec sets HORDE_SKIP_REALITY=1 for its own runs (Environment below): the
+# suite's reality check reads this machine's real stores and took past tools\Mutate.ps1's 900 s limit
+# per run beside another run (2026-09-30), and a mutant must be caught by the fixture sections.
 # Each breaks one check; test\test-projection.ps1 must fail for every one of them.
 @{
     Target = "core\Faults.ps1"
     Suite  = "test\test-projection.ps1"
+    Environment = @{ HORDE_SKIP_REALITY = "1" }
     Mutations = @(
         @{ Name = "no-warchief-never-reported"
            Find = 'elseif ($held.value -eq $false) {'

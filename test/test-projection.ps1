@@ -744,4 +744,10 @@ if ($null -ne $rp) {
 
 }
 
-Complete-HordeSuite -Success "one read-only view of the Horde, every field an answer with its source, and nothing written"
+# A RUN THAT SKIPPED THE REALITY CHECK DOES NOT END ON THE USUAL GREEN LINE (review of PR #31, finding
+# 5): the banner says so, so a skipped run is never read as a whole one.
+$successBanner = "one read-only view of the Horde, every field an answer with its source, and nothing written"
+if ($env:HORDE_SKIP_REALITY -eq "1") { $successBanner = "FIXTURES ONLY - REALITY CHECK SKIPPED (HORDE_SKIP_REALITY=1): " + $successBanner }
+Check ($env:HORDE_SKIP_REALITY -ne "1" -or $successBanner -clike "FIXTURES ONLY - REALITY CHECK SKIPPED*") "a run that skipped the reality check says so in its closing banner"
+
+Complete-HordeSuite -Success $successBanner

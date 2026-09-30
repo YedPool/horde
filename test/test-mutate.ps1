@@ -58,6 +58,16 @@ $hc = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $run
 $hcCode = $LASTEXITCODE
 Check ($hcCode -ne 0 -and @($hc | Where-Object { $_ -match '\[BAD\] throws-under-the-helper: the suite broke' }).Count -eq 1) "a mutant that crashes a suite built on the shared helper is not counted as caught"
 
+# A SPEC'S ENVIRONMENT IS ITS OWN. A suite that needs a variable for mutation runs (test-projection's
+# HORDE_SKIP_REALITY) gets it from the spec, set for that run and cleared after, never from whatever
+# shell started the tool (review of PR #31, finding 5).
+$envRun = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-environment.psd1" | ForEach-Object { "$_" })
+$envCode = $LASTEXITCODE
+Check ($envCode -eq 0 -and @($envRun | Where-Object { $_ -match '\[OK\] tested-rule: caught' }).Count -eq 1) "a spec's environment reaches every run of its suite"
+Check ("$env:HORDE_MUTATE_FIXTURE_ENV" -eq "") "CONTROL: the variable was not set by the shell that ran the tool"
+$envBad = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-environment-bad.psd1" | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -ne 0 -and @($envBad | Where-Object { $_ -match 'only HORDE_' }).Count -ge 1) "a spec may set only HORDE_ variables"
+
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
 $left = @(Get-OwnLeftovers)
 Check ($left.Count -eq 0) "and no throwaway copy is left behind"

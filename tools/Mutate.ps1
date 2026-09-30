@@ -95,9 +95,25 @@ if (-not [System.IO.Path]::IsPathRooted($specPath)) { $specPath = Join-Path $rep
 $s = Import-PowerShellDataFile -LiteralPath $specPath
 foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $s.ContainsKey($k)) { throw ("spec has no " + $k) } }
 
+# A SPEC MAY SET ITS SUITE'S ENVIRONMENT, for its runs only: Environment = @{ HORDE_X = "1" }. Each
+# variable is set before the first run (so the suites inherit it) and put back as it was in the
+# finally below, so a run never depends on - or leaks into - the shell that started it (review of
+# PR #31, finding 5: test-projection's HORDE_SKIP_REALITY was set by hand and stayed set). Only
+# HORDE_ names: PATH or TEMP would change what every run means.
+$script:envSaved = @{}
+$specEnv = @{}
+if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
+foreach ($name in @($specEnv.Keys)) {
+    if ("$name" -cnotmatch '^HORDE_[A-Z0-9_]+$') { Write-Host ("  spec Environment may set only HORDE_ variables, not '" + $name + "'") -ForegroundColor Red; exit 2 }
+}
+
 $tagPart = ""
 if ($RunTag) { $tagPart = $RunTag + "-" }
 $work = Join-Path $env:TEMP ("horde-mutate-" + $tagPart + [guid]::NewGuid().ToString("N"))
+foreach ($name in @($specEnv.Keys)) {
+    $script:envSaved[$name] = [System.Environment]::GetEnvironmentVariable($name, "Process")
+    [System.Environment]::SetEnvironmentVariable($name, "$($specEnv[$name])", "Process")
+}
 New-Item -ItemType Directory -Path $work | Out-Null
 $results = New-Object System.Collections.ArrayList
 try {
@@ -177,6 +193,7 @@ try {
     }
 }
 finally {
+    foreach ($name in @($script:envSaved.Keys)) { [System.Environment]::SetEnvironmentVariable($name, $script:envSaved[$name], "Process") }
     # Only the folder this run created: a fresh guid name, with this run's tag if it has one, directly in TEMP.
     if ((Split-Path -Leaf $work) -match '^horde-mutate-([a-z0-9]{1,16}-)?[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
