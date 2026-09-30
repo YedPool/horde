@@ -378,3 +378,8 @@ sessions.ps1:41-46, status.ps1:8.
 - source: horde planning/ledger/core-roles.md L-021; core/Roles.ps1 header "A ROLE THAT IS NOT THERE IS UNKNOWN, NEVER GOBLIN"; live 2026-09-30: 13 of 31 records have no role
 - disposition: test
 - where: test/test-projection.ps1 :: "a live record with no role is unknown, never goblin, and makes the count unknown"
+
+### L-073 waitingFor is in the view because the table requires it, read from the control file alone
+- source: horde PR #24 (b4898cc) adds waitingFor to core/ownership.json required, read only from X2 while the process runs, and waiting as a Claude status; planning/ledger/core-ownership.md L-055 (1 of 10 control files on 2026-09-30, "permission prompt"). The view carries every required field, so it is not optional here; a session no control file names waits on nothing, as with liveStatus
+- disposition: test
+- where: test/test-projection.ps1 :: "a waiting session says what it waits for, from its own control file"

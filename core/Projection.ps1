@@ -896,6 +896,9 @@ function Complete-HordeSession {
     if ($saR.answer.state -eq "known" -and $saR.store -eq "W1") { $t = ConvertFrom-HordeIsoTime $saR.answer.value; if ($null -eq $t) { $saR.answer = New-HordeUnknown -Reason "the registry's firstSeen is not a placeable time"; $saR.store = "" } else { $saR.answer = New-HordeKnown -Value $t } }
     Set-HordeField $S $C "startedAt" $saR
     Set-HordeField $S $C "liveStatus" (Resolve-HordeField @((Get-HordeIdentityCandidate $S "liveStatus" "status")) -WhenNone $notRunning)
+    # waitingFor: what a waiting session waits on, as its own control file says - a live fact like
+    # liveStatus, so a session no control file names waits on nothing (core-ownership L-055).
+    Set-HordeField $S $C "waitingFor" (Resolve-HordeField @((Get-HordeIdentityCandidate $S "waitingFor")) -WhenNone $notRunning)
     Set-HordeField $S $C "messagingAddress" (Resolve-HordeField @((Get-HordeIdentityCandidate $S "messagingAddress" "messagingSocketPath")) -WhenNone $notRunning)
     $x1Title = New-HordeCandidate -Store "X1" -Field "session_title" -Skip "no guarded pane-sessions file gives a title"
     if ($null -ne $S.x1 -and $null -ne $S.x1.sessionTitle) { $x1Title = New-HordeCandidate -Store "X1" -Field "session_title" -Answer (New-HordeKnown -Value $S.x1.sessionTitle) }

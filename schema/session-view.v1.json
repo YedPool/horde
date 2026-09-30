@@ -974,6 +974,7 @@
           "enum": [
             "idle",
             "busy",
+            "waiting",
             "ended"
           ]
         },
@@ -2105,6 +2106,48 @@
         }
       }
     },
+    "answer-waitingFor": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
     "session": {
       "type": "object",
       "required": [
@@ -2164,7 +2207,19 @@
             "entrypoint",
             "pidDomain",
             "nameSince",
-            "statusUpdatedAt"
+            "statusUpdatedAt",
+            "waitingFor",
+            "jobId",
+            "parkedJobId",
+            "spare",
+            "logPath",
+            "hostSessionId",
+            "agentTemplate",
+            "reportedState",
+            "reportedDetail",
+            "tempo",
+            "needs",
+            "tmux"
           ],
           "additionalProperties": false,
           "properties": {
@@ -2301,6 +2356,42 @@
               "$ref": "#/definitions/answer-nameSince"
             },
             "statusUpdatedAt": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "waitingFor": {
+              "$ref": "#/definitions/answer-waitingFor"
+            },
+            "jobId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "parkedJobId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "spare": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "logPath": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "hostSessionId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "agentTemplate": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "reportedState": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "reportedDetail": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "tempo": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "needs": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "tmux": {
               "$ref": "#/definitions/answer-dropped"
             }
           }

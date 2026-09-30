@@ -172,6 +172,13 @@ Check ((Val (Ans $p 1 "name")) -eq "fixture-1" -and (Src (Ans $p 1 "name")) -eq 
 Check ((Val (Ans $p 3 "fleetSessionId")) -eq "alpha" -and (Src (Ans $p 3 "fleetSessionId")) -eq "W1" -and (Val (Ans $p 34 "fleetSessionId")) -eq "kappa" -and (Src (Ans $p 34 "fleetSessionId")) -eq "W4" -and (Val (Ans $p "codex-thread-1" "fleetSessionId")) -eq "cx" -and (Src (Ans $p "codex-thread-1" "fleetSessionId")) -eq "W8") "a fleet id comes from the registry, then a roster a report links, then a codex file"
 Check ((St (Ans $p 1 "fleetSessionId")) -eq "absent" -and (St (Ans $p 1 "runId")) -eq "absent") "an empty fleet id is absent, and so is the run"
 Check ((Val (Ans $p 1 "liveStatus")) -eq "idle" -and (Val (Ans $p "codex-thread-1" "liveStatus")) -eq "idle" -and (Src (Ans $p "codex-thread-1" "liveStatus")) -eq "W8" -and (St (Ans $p 4 "liveStatus")) -eq "absent") "live status comes from the agent's own file, and a session with none is not running"
+# waitingFor (PR #24): in the view because the table requires it; read from the control file only.
+$waits = New-Fleet "waiting"
+$w2 = ReadJson (Join-Path $waits "claude\sessions\1002.json"); $w2.status = "waiting"; $w2 | Add-Member -NotePropertyName waitingFor -NotePropertyValue "permission prompt" -Force; PutJson (Join-Path $waits "claude\sessions\1002.json") $w2
+$pw2 = Project $waits
+$wf2 = Ans $pw2 2 "waitingFor"
+Check ((Val $wf2) -eq "permission prompt" -and (Src $wf2) -eq "X2" -and "$($wf2.provisional)" -ne "" -and (Val (Ans $pw2 2 "liveStatus")) -eq "waiting") "a waiting session says what it waits for, from its own control file"
+Check ((St (Ans $p 1 "waitingFor")) -eq "absent" -and (Src (Ans $p 1 "waitingFor")) -eq "X2" -and (St (Ans $p 4 "waitingFor")) -eq "absent") "an idle session, or one not running, waits for nothing"
 Check ((Val (Ans $p 3 "runId")) -eq "20260601-100000-alpha" -and (Val (Ans $p 3 "title")) -eq "the alpha lane" -and (Src (Ans $p 3 "title")) -eq "W4" -and (Val (Ans $p 3 "spawnedAt")) -like "2026-06-01T10:10:00*") "the run, title and spawn time come from the roster"
 Check (@(Val (Ans $p 17 "dependsOn")) -contains "alpha" -and (St (Ans $p 17 "spawnedAt")) -eq "absent" -and (Val (Ans $p 10 "spawnedAt")) -like "2026-06-01T11:05:00*" -and (Src (Ans $p 10 "spawnedAt")) -eq "W2") "a null spawn time is absent, and a claim gives one when there is no roster"
 Check ((Src (Ans $p 1 "startedAt")) -eq "X2" -and (Src (Ans $p 33 "startedAt")) -eq "X5" -and (Src (Ans $p 4 "startedAt")) -eq "W1") "a start time comes from the control file, then the process, then firstSeen"
