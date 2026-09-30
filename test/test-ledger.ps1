@@ -81,6 +81,39 @@ Refuses "malformed-test-where.md" "test disposition needs where"   "a test dispo
 Refuses "weak-reason.md"         "reason of at least a sentence"   "a reason made of one word repeated is refused"
 Refuses "header-in-body.md"      "is not marked searched"          "sources claimed inside an entry, not the header, do not count"
 
+Write-Host ""
+Write-Host "--- found by the re-review of the fixes ---" -ForegroundColor Cyan
+
+# THE ROT CASE THE GATE EXISTS FOR: a test was deleted, and a comment in the test file still quotes
+# its name. The quoted-string rule alone accepted it.
+Refuses "quoted-in-comment.md"   "only in a comment"               "a test name that survives only in a comment is refused - the assertion was deleted"
+# A ledger carrying its own lesson, outside planning/ledger where the path rule alone would catch it.
+Refuses "comment-self.md"        "the ledger itself"               "a ledger naming itself as the carrier of its comment is refused, wherever it lives"
+# THE MESSAGE NAMES WHAT THE LEDGER WROTE. PowerShell variable names ignore case, so a local $rel
+# silently overwrote the $Rel parameter and every message showed a computed path instead - for "." it
+# printed nothing at all after the colon.
+Check (Says (Findings "outside-repo.md") "../outside.ps1") "a refusal quotes the path the ledger actually wrote, not a rewritten one"
+
+# A JUNCTION UNDER test/ POINTING OUTSIDE THE REPOSITORY. The containment check was lexical -
+# GetFullPath never follows links - so a link inside test/ reached anything. Git cannot commit a
+# junction, but it can commit a symlink, which is real on checkouts that allow them. Built here at
+# run time, in a throwaway copy, because a junction cannot live in the fixtures.
+$jr = Join-Path $env:TEMP ("horde-ledger-jn-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$outside = $jr + "-outside"
+New-Item -ItemType Directory -Force (Join-Path $jr "test") | Out-Null
+New-Item -ItemType Directory -Force $outside | Out-Null
+Set-Content -LiteralPath (Join-Path $outside "test-evil.ps1") -Value 'Check ($true) "a lesson enforced from outside"' -Encoding ascii
+& cmd.exe /c mklink /J (Join-Path $jr "test\jn") $outside | Out-Null
+$isLink = [bool]((Get-Item -LiteralPath (Join-Path $jr "test\jn") -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)
+Check $isLink "PRECONDITION: the junction really was created, so the next check means something"
+$jl = (Get-Content -LiteralPath (Join-Path $fx "complete.md") -Raw) -replace "`r", ""
+$jl = ($jl -split "### ")[0] + "### L-001 Reaches outside through a junction`n- source: s`n- disposition: test`n- where: test/jn/test-evil.ps1 :: `"a lesson enforced from outside`"`n"
+[System.IO.File]::WriteAllText((Join-Path $jr "junction.md"), $jl)
+$jf = @(Test-HordeLedger -Path (Join-Path $jr "junction.md") -RepoRoot $jr)
+Check ((Says $jf "link") -and $jf.Count -eq 1) "a path through a junction or symlink is refused, even inside test/"
+& cmd.exe /c rmdir (Join-Path $jr "test\jn") | Out-Null
+Remove-Item -Recurse -Force $jr, $outside -ErrorAction SilentlyContinue
+
 # THE TRULY EMPTY FILE fails for several reasons at once, correctly, so it is the one fixture not held
 # to exactly one finding. What matters is that it fails, says why, and does not fail by accident: the
 # first version produced findings about an "unnumbered" entry here, because Get-Content -Raw returns

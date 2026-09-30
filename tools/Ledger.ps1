@@ -38,17 +38,32 @@ function Resolve-HordeLedgerTarget {
     $sep = [System.IO.Path]::DirectorySeparatorChar
     $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
     $full = [System.IO.Path]::GetFullPath((Join-Path $rootFull $Rel))
-    $rel = ($full.Substring([Math]::Min($full.Length, $rootFull.Length)).TrimStart('\', '/')) -replace '\\', '/'
+    # $relOut, NOT $rel. PowerShell variable names ignore case, so a local called $rel silently
+    # OVERWROTE the $Rel parameter - and every message below then quoted a computed path instead of
+    # what the ledger wrote; for "." it printed nothing at all. Found by the re-review.
+    $relOut = ($full.Substring([Math]::Min($full.Length, $rootFull.Length)).TrimStart('\', '/')) -replace '\\', '/'
     if (-not $full.StartsWith($rootFull + $sep, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return [pscustomobject]@{ full = $full; rel = $rel; problem = "points outside the repository: $Rel" }
+        return [pscustomobject]@{ full = $full; rel = $relOut; problem = "points outside the repository: $Rel" }
+    }
+    # NO LINKS ON THE WAY IN. The check above is lexical - GetFullPath never follows a link - so a
+    # junction or symlink under test/ could reach anything on the machine while looking inside the
+    # repository. Every component that exists is checked; git can commit a symlink, and a checkout
+    # that allows them makes it real.
+    $cur = $full
+    while ($cur.Length -gt $rootFull.Length) {
+        $item = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            return [pscustomobject]@{ full = $full; rel = $relOut; problem = "passes through a link (junction or symlink), which may lead outside the repository: $Rel" }
+        }
+        $cur = Split-Path -Parent $cur
     }
     if (Test-Path -LiteralPath $full -PathType Container) {
-        return [pscustomobject]@{ full = $full; rel = $rel; problem = "names a directory, which is not a file: $Rel" }
+        return [pscustomobject]@{ full = $full; rel = $relOut; problem = "names a directory, which is not a file: $Rel" }
     }
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-        return [pscustomobject]@{ full = $full; rel = $rel; problem = "names a file that does not exist: $Rel" }
+        return [pscustomobject]@{ full = $full; rel = $relOut; problem = "names a file that does not exist: $Rel" }
     }
-    return [pscustomobject]@{ full = $full; rel = $rel; problem = "" }
+    return [pscustomobject]@{ full = $full; rel = $relOut; problem = "" }
 }
 
 function Get-HordeWordCount {
@@ -149,10 +164,15 @@ function Test-HordeLedger {
                 if ((Get-HordeWordCount -Text $assertion) -lt 3) { Add-Finding -Entry $id -Problem "the assertion must be at least three words, or it matches almost anything"; break }
                 $body = $null
                 try { $body = Read-HordeTargetText -Full $t.full } catch { Add-Finding -Entry $id -Problem "cannot read $($t.rel): $($_.Exception.Message)"; break }
-                # AS A QUOTED STRING, quotes included - the form a test's name takes. Text that only
-                # occurs somewhere in the file, in a comment say, is not an assertion.
-                if ($body.Contains('"' + $assertion + '"')) { break }
-                if ($body.Contains($assertion)) { Add-Finding -Entry $id -Problem "the text is in $($t.rel) but not as a quoted string, so it is not an assertion's name" }
+                # AS A QUOTED STRING, ON A LINE OF CODE - the form a test's name takes. Two looser
+                # versions were each broken in review: plain text matched a comment, and a quoted
+                # string still matched a COMMENT that quotes a test that has since been deleted -
+                # which is exactly the rot this gate exists to catch.
+                $quoted = '"' + $assertion + '"'
+                $code = (($body -split "`n") | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n"
+                if ($code.Contains($quoted)) { break }
+                if ($body.Contains($quoted)) { Add-Finding -Entry $id -Problem "the quoted text appears only in a comment in $($t.rel) - the assertion it names may have been deleted" }
+                elseif ($body.Contains($assertion)) { Add-Finding -Entry $id -Problem "the text is in $($t.rel) but not as a quoted string, so it is not an assertion's name" }
                 else { Add-Finding -Entry $id -Problem "test file exists but does not contain the assertion `"$assertion`"" }
             }
             "comment" {
@@ -165,6 +185,11 @@ function Test-HordeLedger {
                 $wantFile = $Matches["file"].Trim(); $phrase = $Matches["text"]
                 $t = Resolve-HordeLedgerTarget -RepoRoot $RepoRoot -Rel $wantFile
                 if ($t.problem) { Add-Finding -Entry $id -Problem $t.problem; break }
+                # THE LEDGER ITSELF, compared by full path, so it holds wherever the ledger lives - the
+                # planning/ledger/ rule below only covers ledgers kept in the usual place.
+                if ([string]::Equals($t.full, [System.IO.Path]::GetFullPath($Path), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    Add-Finding -Entry $id -Problem "names the ledger itself as the place the lesson is carried"; break
+                }
                 if ($t.rel -match '^planning/ledger/') { Add-Finding -Entry $id -Problem "a lesson cannot be carried in a ledger, which is where it is being claimed"; break }
                 if ((Get-HordeWordCount -Text $phrase) -lt 3) { Add-Finding -Entry $id -Problem "the phrase must be at least three words, or it matches almost anything"; break }
                 $body = $null
