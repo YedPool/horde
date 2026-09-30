@@ -51,12 +51,20 @@ function Invoke-HordeSuite {
     try {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
+        $deadline = (Get-Date).AddSeconds($Seconds)
         if (-not $p.WaitForExit($Seconds * 1000)) {
             try { $p.Kill() } catch { }
             [void]$p.WaitForExit(10000)
             return [pscustomobject]@{ code = -1; out = ""; timedOut = $true }
         }
         $p.WaitForExit()
+        # THE TIME LIMIT COVERS READING THE OUTPUT TOO. A grandchild the suite did not stop can hold
+        # the output pipes open after the suite itself has exited; waiting on the reads without a
+        # limit would hang this tool whatever -TimeoutSeconds says (fourth review).
+        $left = [int][Math]::Max(1000, ($deadline - (Get-Date)).TotalMilliseconds)
+        if (-not ([System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), $left))) {
+            return [pscustomobject]@{ code = $p.ExitCode; out = ""; timedOut = $true }
+        }
         return [pscustomobject]@{ code = $p.ExitCode; out = ($outTask.Result + "`n" + $errTask.Result); timedOut = $false }
     } finally { $p.Dispose() }
 }
@@ -87,8 +95,14 @@ try {
     foreach ($item in @(Get-ChildItem -LiteralPath $repo -Force | Where-Object { $_.Name -ne ".git" })) {
         Copy-Item -LiteralPath $item.FullName -Destination $work -Recurse -Force
     }
-    $target = Join-Path $work $s.Target
-    $suite = Join-Path $work $s.Suite
+    # The target and suite must be inside the throwaway copy: a Target with ".." would otherwise
+    # rewrite, and then restore, a real file outside it.
+    $workFull = [System.IO.Path]::GetFullPath($work).TrimEnd('\') + '\'
+    $target = [System.IO.Path]::GetFullPath((Join-Path $work $s.Target))
+    $suite = [System.IO.Path]::GetFullPath((Join-Path $work $s.Suite))
+    foreach ($p in @($target, $suite)) {
+        if (-not $p.StartsWith($workFull, [System.StringComparison]::OrdinalIgnoreCase)) { throw ("spec path escapes the copy: " + $p) }
+    }
     $original = [System.IO.File]::ReadAllText($target)
 
     $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
@@ -114,6 +128,21 @@ try {
             if ($count -ne 1) { $row.outcome = ("did not apply: the find string occurs " + $count + " times, not once") }
             else {
                 [System.IO.File]::WriteAllText($target, $original.Replace($m.Find, $m.Replace))
+                # A MUTANT THAT DOES NOT PARSE CATCHES NOTHING. A suite that keeps going after its
+                # errors fails every later check when the target will not load, which the fourth review
+                # measured reading as "caught". So a PowerShell target is parsed first.
+                $parseErrors = @()
+                if ($target -match '\.ps1$') {
+                    $tk = $null; $pe = $null
+                    [void][System.Management.Automation.Language.Parser]::ParseFile($target, [ref]$tk, [ref]$pe)
+                    $parseErrors = @($pe)
+                }
+                if ($parseErrors.Count -gt 0) {
+                    $row.outcome = ("the mutant does not parse (" + $parseErrors[0].Message + ") - not a catch")
+                    [System.IO.File]::WriteAllText($target, $original)
+                    [void]$results.Add([pscustomobject]$row)
+                    continue
+                }
                 $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
                 $row.failures = @(Get-HordeFailLines -Out $run.out)
                 if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
@@ -124,6 +153,18 @@ try {
         }
         [System.IO.File]::WriteAllText($target, $original)
         [void]$results.Add([pscustomobject]$row)
+    }
+
+    # AND THE BASELINE AGAIN AT THE END. A check that fails for a reason of its own - a race, the
+    # machine - during a mutant's run reads as a catch. If the unmutated suite no longer passes
+    # afterwards, the environment changed under the run and its catches are not evidence.
+    if (-not $script:baselineFailed -and $script:toRun.Count -gt 0) {
+        $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
+        if ($after.timedOut -or $after.code -ne 0) {
+            Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
+            foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+            $script:baselineFailed = $true
+        }
     }
 }
 finally {
