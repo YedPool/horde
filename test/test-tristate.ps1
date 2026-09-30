@@ -4,24 +4,18 @@
 # behind sessions called dead that were alive, a kill reported done that killed nothing, and six
 # panes reported closed that were open. planning/ledger/core-tristate.md cites each one.
 
-$ErrorActionPreference = "Continue"
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+# The shared helper first, so an error while loading the module is recorded like any other. It sets
+# $ErrorActionPreference = "Stop" for the suite; the checks that are about a reader's non-terminating
+# errors set Continue in their own scope, because that is the preference such a reader runs under.
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
 # The whole suite runs under the strictest mode, so the module is proved to work for a caller that
 # uses it. The module once switched strict mode off at file scope, which - dot-sourced - switched it
 # off for the caller too.
 Set-StrictMode -Version Latest
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent $here
 . (Join-Path $root "core\Tristate.ps1")
-
-$fails = @()
-# A condition must be exactly true or false; anything else fails loudly. A helper that returned an
-# array alongside $false once made a "must throw" check pass when nothing threw (see test-isolation.ps1).
-function Check { param($Cond, [string]$What)
-    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
-    if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
-function Throws { param([scriptblock]$Block, [string]$Like = "")
-    try { $null = & $Block; return $false } catch { return ("$($_.Exception.Message)" -like "*$Like*") } }
 
 Write-Host ""
 Write-Host "--- loading the module ---" -ForegroundColor Cyan
@@ -56,14 +50,17 @@ $noisyAbsent = Invoke-HordeRead -What "the pane list" -Read { "listing panes"; N
 Check ($noisyAbsent.state -eq "unknown") "a reader that emits an answer plus other output reads as unknown"
 $noisyUnknown = Invoke-HordeRead -What "the pane list" -Read { New-HordeUnknown -Reason "mux silent"; 0 }
 Check ($noisyUnknown.state -eq "unknown" -and $noisyUnknown.reason -like "*plus other output*") "and so does one whose stray output follows an unknown"
-# Most cmdlet failures are non-terminating: they write an error and carry on. Under this suite's
-# Continue preference, a reader that failed that way still returned its fallback as known.
-$softFail = Invoke-HordeRead -What "the pane list" -Read { Write-Error "boom"; 0 }
+# Most cmdlet failures are non-terminating: they write an error and carry on. Under the default
+# Continue preference, a reader that failed that way still returned its fallback as known. Each read
+# runs in a scope set to Continue, since the suite's own Stop would make the error terminating and
+# prove nothing about a caller running with the default.
+$softFail = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "the pane list" -Read { Write-Error "boom"; 0 } }
 Check ($softFail.state -eq "unknown" -and $softFail.reason -like "*boom*") "a reader that writes a non-terminating error reads as unknown"
 $noSuchDir = Join-Path $env:TEMP ("horde-no-such-dir-" + [guid]::NewGuid().ToString("N"))
-$missingPath = Invoke-HordeRead -What "the registry" -Read { , @(Get-ChildItem -LiteralPath $noSuchDir) }
+$missingPath = & { $ErrorActionPreference = "Continue"; Invoke-HordeRead -What "the registry" -Read { , @(Get-ChildItem -LiteralPath $noSuchDir) } }
 Check ($missingPath.state -eq "unknown") "a cmdlet error inside a reader is not swallowed into a known empty list"
-Check ($ErrorActionPreference -eq "Continue") "the caller's error preference is untouched by a read"
+$prefAfterRead = & { $ErrorActionPreference = "Continue"; $null = Invoke-HordeRead -What "the pane list" -Read { Write-Error "boom"; 0 }; $ErrorActionPreference }
+Check ($prefAfterRead -eq "Continue") "the caller's error preference is untouched by a read"
 # What a NATURAL reader delivers, measured, because the module's comment once claimed otherwise: a
 # reader ending in a bare @() delivers nothing (so unknown), and one ending in @(5) delivers the bare
 # 5. A reader that means "an empty list" must return ,@() - or say absent in so many words.
@@ -230,11 +227,4 @@ Check ((Resolve-HordeAnswer -Answer (New-HordeKnown -Value 7) -OnUnknown Refuse)
 # object, and every object is true to `if`.
 Check ([bool](New-HordeUnknown -Reason "x") -eq $true) "an unknown answer is still true to an if, so an answer is never tested with a bare if"
 
-Write-Host ""
-if ($fails.Count) {
-    Write-Host "==== $($fails.Count) FAILURE(S) ====" -ForegroundColor Red
-    $fails | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
-}
-Write-Host "==== unknown is never read as none ====" -ForegroundColor Green
-exit 0
+Complete-HordeSuite -Success "unknown is never read as none"
