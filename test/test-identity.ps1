@@ -1,0 +1,427 @@
+# DOES CORE/IDENTITY READ EVERY AGENT'S CONTROL FILES INTO ONE RECORD SHAPE, CORRECTLY, AND WITHOUT
+# EVER WRITING ANYTHING?
+#
+# Every lesson here is cited in planning/ledger/core-identity.md. The fixture sections read only
+# throwaway directories built in TEMP and process tables built in memory; the functions that would
+# read the real machine are replaced by trip wires until the last section, which is a read-only
+# reality check over this machine's own ~/.claude/sessions (skipped when there is none).
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+# The shared helper first, so an error while loading the module is recorded like any other.
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+# Strictest mode throughout, so the module is proved to work for a caller that uses it.
+Set-StrictMode -Version Latest
+. (Join-Path $root "core\Identity.ps1")
+. (Join-Path $root "core\Ownership.ps1")
+Set-StrictMode -Version Latest
+
+# TRIP WIRES (ledger L-041). Until the reality check, nothing in this suite may read the real control
+# directories or the real process table. The functions that would are replaced here, after loading,
+# so a reader that ignored an injected source - or a default that leaked - trips one and is counted.
+# The real ones are kept and put back for the reality check.
+$script:trips = New-Object System.Collections.ArrayList
+$realProcessTable = ${function:Get-HordeProcessTable}
+$realClaudeDir = ${function:Get-HordeClaudeSessionsDir}
+$realProjectsDir = ${function:Get-HordeClaudeProjectsDir}
+$realCodexDir = ${function:Get-HordeCodexSessionsDir}
+function Get-HordeProcessTable { [void]$script:trips.Add("process table"); throw "TRIP: the real process table was read" }
+function Get-HordeClaudeSessionsDir { [void]$script:trips.Add("claude sessions"); throw "TRIP: the real claude sessions directory was named" }
+function Get-HordeClaudeProjectsDir { [void]$script:trips.Add("claude projects"); throw "TRIP: the real claude projects directory was named" }
+function Get-HordeCodexSessionsDir { [void]$script:trips.Add("codex sessions"); throw "TRIP: the real codex sessions directory was named" }
+
+$ownership = Get-HordeOwnership -Path (Join-Path $root "core\ownership.json")
+$agentOwned = @($ownership.fields | Where-Object { "$($_.owner)" -ceq "agent" -and "$($_.name)" -cne "sessionId" } | ForEach-Object { "$($_.name)" })
+
+function St { param($Answer) return "$($Answer.state)" }
+function Val { param($Answer) if ($Answer.state -eq "known") { return $Answer.value } return $null }
+function Encoding { return (New-Object System.Text.UTF8Encoding($false)) }
+function PutJson { param([string]$Path, $Obj) [System.IO.File]::WriteAllText($Path, ($Obj | ConvertTo-Json -Depth 6), (Encoding)) }
+function PutText { param([string]$Path, [string]$Text) [System.IO.File]::WriteAllText($Path, $Text, (Encoding)) }
+function EpochMs { param([datetime]$Time) return ([DateTimeOffset]$Time.ToUniversalTime()).ToUnixTimeMilliseconds() }
+function Sid { param([int]$N) return ("aaaaaaaa-0000-4000-8000-" + $N.ToString("000000000000")) }
+
+# One process creation time with sub-microsecond ticks, as .NET reports it; CIM reports the same
+# time truncated to the microsecond.
+$t0 = New-Object DateTime 2026, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+$t0 = $t0.AddTicks(1234567)
+function Created { param([int]$Seconds) return $t0.AddSeconds($Seconds) }
+function Micro { param([datetime]$Time) $rem = [long]0; $us = [Math]::DivRem($Time.Ticks, [long]10, [ref]$rem); return (New-Object DateTime ($us * 10), ([DateTimeKind]::Utc)) }
+
+function ClaudeRec {
+    # A control file with the 19 keys every census file had. Values are invented; the shape is the
+    # census's (2026-09-30): procStart a decimal string of file-time ticks, times in epoch ms.
+    param([int]$ProcId, [string]$SessionId, [datetime]$Created, [hashtable]$Set = @{}, [string[]]$Drop = @())
+    $ms = EpochMs $Created.AddSeconds(90)
+    $o = [ordered]@{
+        pid = $ProcId; sessionId = $SessionId; cwd = "C:\work\proj"; startedAt = (EpochMs $Created.AddSeconds(5))
+        procStart = "" + $Created.ToFileTimeUtc(); version = "9.9.9"; peerProtocol = 1; peerFeatures = @("f-one", "f-two")
+        kind = "interactive"; entrypoint = "cli"; pidDomain = "win32:tester"; messagingSocketPath = ("\\.\pipe\LOCAL\test-" + $ProcId)
+        name = ("fixture-" + $ProcId); nameSource = "user"; nameSince = $ms; updatedAt = $ms; status = "idle"; statusUpdatedAt = $ms
+        bridgeSessionId = ("bridge-" + $ProcId)
+    }
+    foreach ($k in $Set.Keys) { $o[$k] = $Set[$k] }
+    foreach ($k in $Drop) { $o.Remove($k) }
+    return $o
+}
+function Table {
+    # An injected process table: rows of @(pid, name, created). Always known; an unreadable table is
+    # built with New-HordeUnknown where a test needs one.
+    param([object[]]$Rows)
+    $t = @{}
+    foreach ($r in $Rows) { $t[[int]$r[0]] = [pscustomobject]@{ pid = [int]$r[0]; name = "$($r[1])"; created = $r[2] } }
+    return (New-HordeKnown -Value $t)
+}
+
+$work = Join-Path $env:TEMP ("horde-identity-" + [guid]::NewGuid().ToString("N"))
+$script:dirCount = 0
+function NewDir {
+    # A fresh, empty directory inside this run's throwaway folder.
+    param([string]$Name)
+    $script:dirCount++
+    $d = Join-Path $work ($Name + "-" + $script:dirCount)
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+    return $d
+}
+$now = New-Object DateTime 2026, 6, 1, 12, 0, 0, ([DateTimeKind]::Utc)
+$empty = $null
+
+try {
+New-Item -ItemType Directory -Path $work -Force | Out-Null
+$empty = NewDir "empty"
+
+Write-Host ""
+Write-Host "--- loading the module ---" -ForegroundColor Cyan
+$strictKept = & { Set-StrictMode -Version Latest; . (Join-Path $root "core\Identity.ps1"); try { $null = $hordeNeverAssignedVariable; $false } catch { $true } }
+Check ($strictKept -eq $true) "dot-sourcing core/identity leaves the caller's strict mode on"
+
+Write-Host ""
+Write-Host "--- one healthy claude directory ---" -ForegroundColor Cyan
+# 101 is running and is the process its file describes; 102's process is gone; 103's pid now
+# belongs to a later process; 105 is a claude process with no file; 106 is not claude at all.
+$cDir = NewDir "claude"
+$pDir = NewDir "projects"
+PutJson (Join-Path $cDir "101.json") (ClaudeRec 101 (Sid 1) (Created 0))
+PutJson (Join-Path $cDir "102.json") (ClaudeRec 102 (Sid 2) (Created 10))
+PutJson (Join-Path $cDir "103.json") (ClaudeRec 103 (Sid 3) (Created 20))
+# The key file beside each control file (census: <pid>.<64 hex>.key). Held with no sharing at all for
+# the whole read, so any attempt to open it - even to read - fails the read.
+$keyPath = Join-Path $cDir ("101." + ("0123456789abcdef" * 4) + ".key")
+PutText $keyPath "not-a-real-key"
+New-Item -ItemType Directory -Path (Join-Path $pDir "C--work-proj") -Force | Out-Null
+PutText (Join-Path $pDir ("C--work-proj\" + (Sid 1) + ".jsonl")) "{}"
+$procs = Table @(
+    @(101, "claude.exe", (Micro (Created 0))),
+    @(103, "claude.exe", (Micro (Created 500))),
+    @(105, "claude.exe", (Created 30)),
+    @(106, "notepad.exe", (Created 40)))
+
+$keyHold = [System.IO.File]::Open($keyPath, "Open", "Read", "None")
+$id = $null
+try { $id = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $empty -Processes $procs -Now $now }
+finally { $keyHold.Dispose() }
+Check ($null -ne $id -and (St $id.complete.claude) -eq "known") "a key file beside a control file is never opened"
+
+$r1 = $id.records[(Sid 1)]
+$r2 = $id.records[(Sid 2)]
+$r3 = $id.records[(Sid 3)]
+Check ($id.records.Count -eq 3 -and $null -ne $r1 -and $null -ne $r2 -and $null -ne $r3) ("CONTROL: the three control files were read (" + $id.records.Count + " records)")
+Check ($r1.sessionId -ceq (Sid 1) -and (Val $r1.fields.pid) -eq 101 -and (Val $r1.fields.procStart) -eq (Created 0).ToFileTimeUtc()) "records are keyed by session id, with pid and procStart as the process check"
+Check ((Val $r1.fields.liveStatus) -eq "idle" -and (Val $r1.fields.agent) -eq "claude") "CONTROL: a verified session reads its status as known"
+$fieldKeys = @($r1.fields.Keys)
+$terminal = @($fieldKeys | Where-Object { @("pane", "window", "hostInstance") -contains $_ })
+$notAgent = @($fieldKeys | Where-Object { $agentOwned -cnotcontains $_ })
+foreach ($n in @($terminal) + @($notAgent)) { Write-Host ("  not an agent field: " + $n) -ForegroundColor Red }
+Check ($terminal.Count -eq 0 -and $notAgent.Count -eq 0) "a record built from control files carries no terminal field"
+$missing = @($agentOwned | Where-Object { $fieldKeys -cnotcontains $_ })
+Check ($missing.Count -eq 0 -and $fieldKeys.Count -eq $agentOwned.Count) ("a record carries exactly the agent-owned fields of the ownership table (missing: " + ($missing -join ", ") + ")")
+$allAnswers = @($fieldKeys | Where-Object { -not (Test-HordeAnswer $r1.fields[$_]) })
+Check ($allAnswers.Count -eq 0) ("every field of a record is a horde answer (" + ($allAnswers -join ", ") + ")")
+
+Check ((St $r2.fields.liveStatus) -eq "unknown" -and $r2.fields.liveStatus.reason -like "*not running*") "a control file whose process is gone reads its status as unknown"
+Check ((St $r2.fields.pid) -eq "unknown" -and (Val $r2.fields.cwd) -eq "C:\work\proj" -and (Val $r2.fields.name) -eq "fixture-102") "and its identity fields stay known as written"
+$live3 = @("liveStatus", "pid", "procStart", "messagingAddress" | Where-Object { (St $r3.fields[$_]) -ne "unknown" -or $r3.fields[$_].reason -notlike "*reused*" })
+foreach ($n in $live3) { Write-Host ("  still believed after the pid was reused: " + $n) -ForegroundColor Red }
+Check ($live3.Count -eq 0) "a reused pid makes every live field unknown"
+Check ((Val $r3.fields.sessionKind) -eq "interactive") "CONTROL: a reused pid leaves the identity fields known"
+
+Check ((Val $id.orphanProcesses) -contains 105 -and @(Val $id.orphanProcesses).Count -eq 1) "a claude process with no control file yields no record"
+$liveSet = @(Val $id.verifiedLive)
+Check ((St $id.verifiedLive) -eq "known" -and $liveSet.Count -eq 1 -and $liveSet -contains (Sid 1)) "the live set lists only sessions whose process is verified"
+
+# L-033: the three states bridgeSessionId has on disk.
+Check ((Val $r1.fields.bridgeSessionId) -eq "bridge-101") "CONTROL: a written bridge id is known"
+Check ((Val $r1.fields.messagingAddress) -eq "\\.\pipe\LOCAL\test-101") "the messaging address is carried as the agent wrote it"
+
+# L-034: the transcript lives under the control file's cwd, and must exist.
+$expectT = Join-Path $pDir ("C--work-proj\" + (Sid 1) + ".jsonl")
+Check ((Val $r1.fields.transcriptPath) -eq $expectT) "the claude transcript path is derived from the control file cwd"
+Check ((St $r2.fields.transcriptPath) -eq "unknown" -and $r2.fields.transcriptPath.reason -like "*does not exist*") "a derived transcript that is not there is unknown"
+
+Write-Host ""
+Write-Host "--- the process check ---" -ForegroundColor Cyan
+# L-007: procStart is a decimal string on disk; compared as a number, "0" + ticks is the same time.
+$d7 = NewDir "claude"
+$c7 = Created 100
+PutJson (Join-Path $d7 "201.json") (ClaudeRec 201 (Sid 21) $c7 -Set @{ procStart = ("00" + $c7.ToFileTimeUtc()) })
+PutJson (Join-Path $d7 "202.json") (ClaudeRec 202 (Sid 22) $c7 -Set @{ procStart = [long]$c7.ToFileTimeUtc() })
+$r7 = Get-HordeIdentity -ClaudeDir $d7 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(201, "claude.exe", $c7), @(202, "claude.exe", $c7))) -Now $now
+Check ((Val $r7.records[(Sid 21)].fields.liveStatus) -eq "idle" -and (Val $r7.records[(Sid 22)].fields.liveStatus) -eq "idle") "procStart is compared as integer ticks, never as text"
+# Microsecond precision: CIM reports creation to the microsecond, .NET to 100 ns. The same process
+# read both ways must match; one microsecond apart is another process.
+$d8 = NewDir "claude"
+PutJson (Join-Path $d8 "211.json") (ClaudeRec 211 (Sid 31) (Created 0))
+PutJson (Join-Path $d8 "212.json") (ClaudeRec 212 (Sid 32) (Created 0))
+$r8 = Get-HordeIdentity -ClaudeDir $d8 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(211, "claude.exe", (Micro (Created 0))), @(212, "claude.exe", (Micro (Created 0)).AddTicks(10)))) -Now $now
+Check ((St $r8.records[(Sid 31)].fields.liveStatus) -eq "known") "procStart matches the start time at microsecond precision"
+Check ((St $r8.records[(Sid 32)].fields.liveStatus) -eq "unknown" -and $r8.records[(Sid 32)].fields.liveStatus.reason -like "*reused*") "a start time one microsecond away is another process"
+$d9 = NewDir "claude"
+PutJson (Join-Path $d9 "221.json") (ClaudeRec 221 (Sid 41) (Created 0) -Set @{ procStart = "yesterday" })
+$r9 = Get-HordeIdentity -ClaudeDir $d9 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(, @(221, "claude.exe", (Created 0)))) -Now $now
+Check ((St $r9.records[(Sid 41)].fields.liveStatus) -eq "unknown" -and $r9.records[(Sid 41)].fields.liveStatus.reason -like "*procStart*") "a procStart that is not an integer leaves liveness unknown"
+
+# L-031: startedAt is the session start inside the process, seconds after the process began. It is
+# never the process check - here startedAt equals the table's time and procStart does not.
+$d10 = NewDir "claude"
+$c10 = Created 0
+PutJson (Join-Path $d10 "231.json") (ClaudeRec 231 (Sid 51) $c10 -Set @{ startedAt = (EpochMs $c10.AddSeconds(60)) })
+PutJson (Join-Path $d10 "232.json") (ClaudeRec 232 (Sid 52) $c10 -Set @{ startedAt = (EpochMs $c10) })
+$r10 = Get-HordeIdentity -ClaudeDir $d10 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(231, "claude.exe", $c10), @(232, "claude.exe", $c10.AddSeconds(60)))) -Now $now
+Check ((St $r10.records[(Sid 51)].fields.liveStatus) -eq "known" -and (St $r10.records[(Sid 52)].fields.liveStatus) -eq "unknown") "startedAt is never used as the process start"
+Check ((Val $r10.records[(Sid 51)].fields.startedAt) -eq $c10.AddSeconds(60).AddTicks(-($c10.AddSeconds(60).Ticks % 10000))) "CONTROL: startedAt is still carried, as the session's own start"
+
+# L-009: a process table that could not be read.
+$r11 = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $empty -Processes (New-HordeUnknown -Reason "the fixture's table is unreadable") -Now $now
+$s11 = $r11.records[(Sid 1)].fields.liveStatus
+Check ((St $s11) -eq "unknown" -and $s11.reason -like "*unreadable*" -and (St $r11.verifiedLive) -eq "unknown" -and (St $r11.orphanProcesses) -eq "unknown") "an unreadable process table leaves liveness unknown"
+Check (Throws { Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $empty -Processes @{ 101 = "x" } -Now $now } "process table") "a process table that is not an answer is refused"
+
+Write-Host ""
+Write-Host "--- what the agent wrote, as it wrote it ---" -ForegroundColor Cyan
+$d12 = NewDir "claude"
+$c12 = Created 0
+$stamp = $c12.AddMinutes(7)
+PutJson (Join-Path $d12 "301.json") (ClaudeRec 301 (Sid 61) $c12 -Set @{ status = "thinking" })
+PutJson (Join-Path $d12 "302.json") (ClaudeRec 302 (Sid 62) $c12 -Set @{ status = "busy"; statusUpdatedAt = (EpochMs $stamp); bridgeSessionId = $null; kind = "odd-kind"; entrypoint = "sdk-cli" })
+PutJson (Join-Path $d12 "303.json") (ClaudeRec 303 (Sid 63) $c12 -Drop @("bridgeSessionId", "status"))
+PutJson (Join-Path $d12 "304.json") (ClaudeRec 304 (Sid 64) $c12 -Set @{ formerNames = @(@{ name = "old-name"; until = (EpochMs $c12); sessionId = (Sid 64) }, @{ name = "older"; until = (EpochMs $c12); sessionId = (Sid 99) }) })
+$tab12 = Table @(@(301, "claude.exe", $c12), @(302, "claude.exe", $c12), @(303, "claude.exe", $c12), @(304, "claude.exe", $c12))
+$r12 = Get-HordeIdentity -ClaudeDir $d12 -ProjectsDir $pDir -CodexDir $empty -Processes $tab12 -Now $now
+$a = $r12.records[(Sid 61)]; $b = $r12.records[(Sid 62)]; $c = $r12.records[(Sid 63)]; $e = $r12.records[(Sid 64)]
+Check ((St $a.fields.liveStatus) -eq "unknown" -and $a.fields.liveStatus.reason -like "*'thinking'*") "an unrecognised claude status reads as unknown"
+Check ((St $c.fields.liveStatus) -eq "unknown") "a control file with no status reads its status as unknown"
+Check ((Val $b.fields.liveStatus) -eq "busy" -and $b.fields.liveStatus.observedAt -eq $stamp.AddTicks(-($stamp.Ticks % 10000))) "live status is observed at the agent's own status time"
+Check ((St $b.fields.bridgeSessionId) -eq "absent" -and (St $c.fields.bridgeSessionId) -eq "unknown") "a null bridge id is absent and a missing one unknown"
+Check ((Val $b.fields.sessionKind) -ceq "odd-kind" -and (Val $b.fields.entrypoint) -ceq "sdk-cli") "kind and entrypoint are carried as the agent wrote them"
+Check ((Val $b.fields.agentVersion) -eq "9.9.9" -and (Val $b.fields.pidDomain) -eq "win32:tester" -and @(Val $b.fields.peerFeatures).Count -eq 2 -and (Val $b.fields.peerProtocol) -eq 1) "the control file's own facts are carried under their horde names"
+$fn = @(Val $e.fields.formerNames)
+Check ($fn.Count -eq 2 -and "$($fn[0].name)" -eq "old-name" -and "$($fn[1].sessionId)" -eq (Sid 99) -and "$($e.provisional['formerNames'])" -ne "") "former names are carried as written and marked provisional"
+Check ("$($e.provisional['formerNames'])" -like "*/clear*") "a rule that rests on the unmeasured clear behaviour is marked provisional"
+Check (-not $r12.records.ContainsKey((Sid 99)) -and @($r12.findings | Where-Object { $_ -like ("*" + (Sid 99) + "*") }).Count -eq 1) "a former name naming another session is reported, not merged"
+Check ((St $a.fields.resumeCommand) -eq "unknown" -and $a.fields.resumeCommand.reason -like "*AgentPort*") "the resume command is left to the agent port"
+
+Write-Host ""
+Write-Host "--- a claude listing is complete or it says why not ---" -ForegroundColor Cyan
+$gone = Join-Path $work "never-created"
+$r13 = Get-HordeIdentity -ClaudeDir $gone -ProjectsDir $pDir -CodexDir $gone -Processes $procs -Now $now
+Check ((St $r13.complete.claude) -eq "unknown" -and (St $r13.complete.codex) -eq "unknown" -and $r13.complete.claude.reason -like "*no claude control directory*") "a missing control directory reads as unknown, not empty"
+Check ((St $r13.orphanProcesses) -eq "unknown" -and (St $r13.verifiedLive) -eq "unknown") "with no listing, no process is called an orphan and no session live"
+$r13b = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $empty -Processes (Table @()) -Now $now
+Check ((St $r13b.complete.claude) -eq "known" -and $r13b.records.Count -eq 0) "CONTROL: an empty directory that exists is a complete, empty listing"
+
+$d14 = NewDir "claude"
+PutJson (Join-Path $d14 "401.json") (ClaudeRec 401 (Sid 71) (Created 0))
+PutText (Join-Path $d14 "402.json") '{"pid":402,"sessionId":"aaaa'
+$r14 = Get-HordeIdentity -ClaudeDir $d14 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(401, "claude.exe", (Created 0)), @(402, "claude.exe", (Created 0)))) -Now $now
+Check ((St $r14.complete.claude) -eq "unknown" -and $r14.complete.claude.reason -like "*402.json*" -and $r14.records.Count -eq 1) "an unparseable control file makes the listing incomplete"
+Check ((St $r14.orphanProcesses) -eq "unknown") "an incomplete listing calls no process an orphan"
+
+$d15 = NewDir "claude"
+PutJson (Join-Path $d15 "501.json") (ClaudeRec 502 (Sid 81) (Created 0))
+PutJson (Join-Path $d15 "503.json") (ClaudeRec 503 "../../escape" (Created 0))
+PutJson (Join-Path $d15 "504.json") (ClaudeRec 504 (Sid 84) (Created 0) -Drop @("sessionId"))
+PutJson (Join-Path $d15 "notes.json") (ClaudeRec 505 (Sid 85) (Created 0))
+$r15 = Get-HordeIdentity -ClaudeDir $d15 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @()) -Now $now
+Check (-not $r15.records.ContainsKey((Sid 81)) -and $r15.complete.claude.reason -like "*501.json*") "a control file whose name disagrees with its pid is refused"
+Check ($r15.records.Count -eq 0 -and $r15.complete.claude.reason -like "*503.json*") "a malformed session id is refused as a key"
+Check ($r15.complete.claude.reason -like "*504.json*" -and $r15.complete.claude.reason -like "*notes.json*") "a control file with no session id, or not named by a pid, is refused"
+
+# L-020: two files naming one session. Neither is chosen; both are reported, and the listing is not
+# complete, because it omits that session.
+$d16 = NewDir "claude"
+PutJson (Join-Path $d16 "601.json") (ClaudeRec 601 (Sid 91) (Created 0))
+PutJson (Join-Path $d16 "602.json") (ClaudeRec 602 (Sid 91) (Created 5))
+PutJson (Join-Path $d16 "603.json") (ClaudeRec 603 (Sid 93) (Created 5))
+$r16 = Get-HordeIdentity -ClaudeDir $d16 -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(601, "claude.exe", (Created 0)), @(602, "claude.exe", (Created 5)), @(603, "claude.exe", (Created 5)))) -Now $now
+$dup = @($r16.duplicates | Where-Object { $_.sessionId -eq (Sid 91) })
+Check ($dup.Count -eq 1 -and @($dup[0].sources).Count -eq 2 -and -not $r16.records.ContainsKey((Sid 91))) "two live control files naming one session are reported as a duplicate"
+Check ((St $r16.complete.claude) -eq "unknown" -and $r16.complete.claude.reason -like ("*" + (Sid 91) + "*") -and $r16.records.ContainsKey((Sid 93))) "a duplicated session leaves the listing incomplete, never silently shorter"
+Check (@(Val $r16.verifiedLive) -notcontains (Sid 91)) "a duplicated session is not in the live set"
+
+Write-Host ""
+Write-Host "--- codex ---" -ForegroundColor Cyan
+function CodexRec {
+    # The shape lib/CodexStatus.ps1 writes (census: no file on disk to copy, so from the writer).
+    param([string]$SessionId, [string]$Status, [datetime]$At, [hashtable]$Set = @{}, [string[]]$Drop = @())
+    $ms = EpochMs $At
+    $o = [ordered]@{ agent = "codex"; sessionId = $SessionId; status = $Status; statusUpdatedAt = $ms; updatedAt = $ms; lastEvent = "Stop"
+                     cwd = "C:\work\codex"; transcriptPath = "C:\work\codex-transcript.jsonl"; pane = "7"; runDir = "C:\work\run"
+                     orchestratorPane = "3"; wezfleetSessionId = "fleet-1" }
+    foreach ($k in $Set.Keys) { $o[$k] = $Set[$k] }
+    foreach ($k in $Drop) { $o.Remove($k) }
+    return $o
+}
+$x = NewDir "codex"
+PutJson (Join-Path $x "c-idle.json") (CodexRec "c-idle" "idle" $now.AddSeconds(-60))
+PutJson (Join-Path $x "c-stale.json") (CodexRec "c-stale" "idle" $now.AddSeconds(-2000))
+PutJson (Join-Path $x "c-ended.json") (CodexRec "c-ended" "ended" $now.AddDays(-30))
+PutJson (Join-Path $x "c-says-unknown.json") (CodexRec "c-says-unknown" "unknown" $now.AddSeconds(-10))
+PutJson (Join-Path $x "c-no-time.json") (CodexRec "c-no-time" "busy" $now -Drop @("statusUpdatedAt"))
+$rx = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x -Processes (Table @()) -TtlSeconds 900 -Now $now
+$ci = $rx.records["c-idle"]
+Check ((St $rx.complete.codex) -eq "known" -and $rx.records.Count -eq 5) ("CONTROL: the codex directory was read (" + $rx.records.Count + " records)")
+Check ((Val $ci.fields.liveStatus) -eq "idle" -and (Val $ci.fields.agent) -eq "codex") "CONTROL: a fresh codex idle reading is known"
+Check ((St $rx.records["c-stale"].fields.liveStatus) -eq "unknown" -and $rx.records["c-stale"].fields.liveStatus.reason -like "*stale*") "a stale codex idle reading is unknown"
+Check ((Val $rx.records["c-ended"].fields.liveStatus) -eq "ended") "a codex ended reading never expires"
+Check ((St $rx.records["c-says-unknown"].fields.liveStatus) -eq "unknown" -and (St $rx.records["c-no-time"].fields.liveStatus) -eq "unknown") "a codex status of unknown, or with no time, reads as unknown"
+Check ((St $ci.fields.pid) -eq "unknown" -and $ci.fields.pid.reason -like "*codex writes no*" -and (St $ci.fields.messagingAddress) -eq "unknown") "a codex record has an unknown pid, never an invented one"
+Check (@($ci.fields.Keys | Where-Object { @("pane", "runDir", "orchestratorPane", "wezfleetSessionId", "fleetSessionId") -contains $_ }).Count -eq 0 -and @($ci.fields.Keys).Count -eq $agentOwned.Count) "a codex pane in the control file is not carried into the record"
+Check ((Val $ci.fields.cwd) -eq "C:\work\codex" -and (Val $ci.fields.transcriptPath) -eq "C:\work\codex-transcript.jsonl" -and "$($ci.provisional['transcriptPath'])" -ne "") "a codex transcript is taken from its file and marked provisional"
+Check (@(Val $rx.verifiedLive).Count -eq 0) "a codex session, which writes no pid, is never in the verified live set"
+
+$x2 = NewDir "codex"
+PutJson (Join-Path $x2 "c-ok.json") (CodexRec "c-ok" "busy" $now)
+PutText (Join-Path $x2 "c-half.json") '{"agent":"codex","sessionId":"c-ha'
+$rx2 = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x2 -Processes (Table @()) -TtlSeconds 900 -Now $now
+Check ((St $rx2.complete.codex) -eq "unknown" -and $rx2.complete.codex.reason -like "*c-half.json*" -and $rx2.records.Count -eq 1) "a half-written codex file reads as unknown, not absent"
+$x3 = NewDir "codex"
+PutJson (Join-Path $x3 "c-name.json") (CodexRec "c-other" "busy" $now)
+PutJson (Join-Path $x3 "c-agent.json") (CodexRec "c-agent" "busy" $now -Set @{ agent = "claude" })
+$rx3 = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x3 -Processes (Table @()) -TtlSeconds 900 -Now $now
+Check ($rx3.records.Count -eq 0 -and $rx3.complete.codex.reason -like "*c-name.json*" -and $rx3.complete.codex.reason -like "*c-agent.json*") "a codex file whose name or agent disagrees with its content is refused"
+
+# L-014: wezfleet ignores a TTL override that is not a positive integer (lib/CodexStatus.ps1:79-83).
+Check ((Get-HordeCodexTtlSeconds -Value "") -eq 900 -and (Get-HordeCodexTtlSeconds -Value "0") -eq 900 -and (Get-HordeCodexTtlSeconds -Value "-5") -eq 900 -and (Get-HordeCodexTtlSeconds -Value "ten") -eq 900 -and (Get-HordeCodexTtlSeconds -Value "1.5") -eq 900) "a bad codex TTL override falls back to the default"
+Check ((Get-HordeCodexTtlSeconds -Value "30") -eq 30) "CONTROL: a good codex TTL override is honoured"
+$rx4 = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x -Processes (Table @()) -TtlSeconds 30 -Now $now
+Check ((St $rx4.records["c-idle"].fields.liveStatus) -eq "unknown") "the TTL passed in is the one applied"
+
+# A session id is unique across agents too: the same id under both is a duplicate, not two sessions.
+$x5 = NewDir "codex"
+PutJson (Join-Path $x5 ((Sid 1) + ".json")) (CodexRec (Sid 1) "busy" $now)
+$rx5 = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $x5 -Processes $procs -TtlSeconds 900 -Now $now
+Check (@($rx5.duplicates | Where-Object { $_.sessionId -eq (Sid 1) }).Count -eq 1 -and -not $rx5.records.ContainsKey((Sid 1)) -and (St $rx5.complete.claude) -eq "unknown" -and (St $rx5.complete.codex) -eq "unknown") "one session id under two agents is a duplicate"
+
+Write-Host ""
+Write-Host "--- keys and names ---" -ForegroundColor Cyan
+Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Code\Dist Folders\Dist_12_23_25_ai-latency.v2") -ceq "C--Code-Dist-Folders-Dist-12-23-25-ai-latency-v2") "a cwd with spaces and underscores maps to dashes"
+Check ((ConvertTo-HordeClaudeProjectKey -Cwd "C:\Users\x\Code") -ceq "C--Users-x-Code") "CONTROL: a plain cwd maps as wezfleet's colon-and-slash rule would"
+Check ((Test-HordeSessionId -Id (Sid 1)) -and -not (Test-HordeSessionId -Id "a/b") -and -not (Test-HordeSessionId -Id "") -and -not (Test-HordeSessionId -Id ("x" * 129))) "a session id is validated before it becomes a key"
+# L-026: every key a fixture control file carries - the census's 19 plus formerNames - has a row.
+$keys = @((ClaudeRec 1 (Sid 1) (Created 0)).Keys) + @("formerNames")
+$x2Reads = @($ownership.fields | ForEach-Object { @($_.read) } | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { "$($_.field)" })
+$droppedN = @($ownership.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
+$noRow = @($keys | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
+foreach ($n in $noRow) { Write-Host ("  control file key with no row: " + $n) -ForegroundColor Red }
+Check ($keys.Count -eq 20 -and $noRow.Count -eq 0) "every control file key is kept or dropped"
+
+Write-Host ""
+Write-Host "--- self identity ---" -ForegroundColor Cyan
+$self = Get-HordeSelfSessionId -Environment @{ CLAUDE_CODE_SESSION_ID = (Sid 1); WEZFLEET_SESSION_ID = "fleet-9"; WEZTERM_PANE = "4" }
+Check ((Val $self) -eq (Sid 1)) "self identity takes the agent's own session variable first"
+$fleetOnly = Get-HordeSelfSessionId -Environment @{ WEZFLEET_SESSION_ID = "fleet-9" }
+Check ((St $fleetOnly) -eq "unknown") "a fleet id is never returned as a session id"
+$paneOnly = Get-HordeSelfSessionId -Environment @{ WEZTERM_PANE = "4" }
+Check ((St $paneOnly) -eq "unknown" -and $paneOnly.reason -like "*CLAUDE_CODE_SESSION_ID*") "self identity reads no pane record at all"
+Check ((St (Get-HordeSelfSessionId -Environment @{ CLAUDE_CODE_SESSION_ID = "../x" })) -eq "unknown") "a malformed self id is unknown, not trusted"
+
+# L-023: the variable is inherited, so it must not change what the readers say about anyone else.
+$keepA = $env:CLAUDE_CODE_SESSION_ID; $keepB = $env:WEZFLEET_SESSION_ID
+try {
+    $env:CLAUDE_CODE_SESSION_ID = (Sid 777); $env:WEZFLEET_SESSION_ID = (Sid 778)
+    $withEnv = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $empty -Processes $procs -Now $now
+} finally { $env:CLAUDE_CODE_SESSION_ID = $keepA; $env:WEZFLEET_SESSION_ID = $keepB }
+$sameKeys = ((@($withEnv.records.Keys | Sort-Object) -join ",") -eq (@($id.records.Keys | Sort-Object) -join ","))
+Check ($sameKeys -and -not $withEnv.records.ContainsKey((Sid 777)) -and -not $withEnv.records.ContainsKey((Sid 778))) "another session's identity never reads the environment"
+
+Write-Host ""
+Write-Host "--- reading never writes, and never blocks the writer ---" -ForegroundColor Cyan
+function Get-TreeFingerprint { param([string]$Dir)
+    return @(Get-ChildItem -LiteralPath $Dir -Recurse -Force | Sort-Object FullName | ForEach-Object {
+        if ($_.PSIsContainer) { "D " + $_.FullName.Substring($Dir.Length) }
+        else { "F " + $_.FullName.Substring($Dir.Length) + " " + $_.Length + " " + $_.LastWriteTimeUtc.Ticks + " " + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    }) -join "`n" }
+$before = Get-TreeFingerprint -Dir $work
+# Every file held open against writing and deleting for the whole read: a reader that opened any of
+# them for writing would fail, and one that wrote a new file would show in the fingerprint.
+$holds = @(Get-ChildItem -LiteralPath $work -Recurse -File | ForEach-Object { [System.IO.File]::Open($_.FullName, "Open", "Read", "Read") })
+$nw = $null; $nwThrew = $null
+try { $nw = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $x -Processes $procs -TtlSeconds 900 -Now $now } catch { $nwThrew = $_.Exception.Message }
+finally { $holds | ForEach-Object { $_.Dispose() } }
+$after = Get-TreeFingerprint -Dir $work
+Check ($null -eq $nwThrew -and $null -ne $nw -and (St $nw.complete.claude) -eq "known" -and (St $nw.complete.codex) -eq "known") "identity opens no control file for writing"
+Check ($before -eq $after) "reading leaves no new file in any control directory"
+PutText (Join-Path $cDir "101.json.lock") "x"
+Check ((Get-TreeFingerprint -Dir $work) -ne $before) "CONTROL: a reader that leaves a lock file behind is caught by the same comparison"
+Remove-Item -LiteralPath (Join-Path $cDir "101.json.lock") -Force
+
+# L-019: a writer holding its file open for writing does not stop the read, because every control
+# file goes through the shared reader; the ordinary read share would fail against the same hold.
+$wHolds = @(Get-ChildItem -LiteralPath $cDir -File -Filter "*.json" | ForEach-Object { [System.IO.File]::Open($_.FullName, "Open", "ReadWrite", ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)) })
+$plainFailed = $false
+$wr = $null
+try {
+    try { $null = [System.IO.File]::ReadAllText((Join-Path $cDir "101.json")) } catch { $plainFailed = $true }
+    $wr = Get-HordeIdentity -ClaudeDir $cDir -ProjectsDir $pDir -CodexDir $empty -Processes $procs -Now $now
+} finally { $wHolds | ForEach-Object { $_.Dispose() } }
+Check ($plainFailed) "CONTROL: an ordinary read fails while the writer holds its file"
+Check ((St $wr.complete.claude) -eq "known" -and $wr.records.Count -eq 3) "every control file is read through the shared reader"
+
+foreach ($n in $script:trips) { Write-Host ("  tripped: " + $n) -ForegroundColor Red }
+Check ($script:trips.Count -eq 0) "the suite reads no real control directory or process table"
+
+} finally {
+    if ((Split-Path -Leaf $work) -match '^horde-identity-[0-9a-f]{32}$' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
+Write-Host "--- reality check: this machine's own control files, read only ---" -ForegroundColor Cyan
+# The real functions go back in, and only here. This section opens every <pid>.json in the real
+# directory through the shared reader, never a key file, and asks the process table read-only.
+${function:Get-HordeProcessTable} = $realProcessTable
+${function:Get-HordeClaudeSessionsDir} = $realClaudeDir
+${function:Get-HordeClaudeProjectsDir} = $realProjectsDir
+${function:Get-HordeCodexSessionsDir} = $realCodexDir
+$realDir = Get-HordeClaudeSessionsDir
+if (-not (Test-Path -LiteralPath $realDir -PathType Container)) {
+    Write-Host ("  [SKIP] no claude control directory on this machine, so there is nothing real to check") -ForegroundColor Yellow
+} else {
+    $realFiles = @(Get-ChildItem -LiteralPath $realDir -File | Where-Object { $_.Extension -eq ".json" })
+    $realTable = Get-HordeProcessTable
+    Check ((St $realTable) -eq "known") ("the real process table is read (" + $(if ((St $realTable) -eq "known") { "" + @((Val $realTable).Keys).Count + " processes" } else { $realTable.reason }) + ")")
+    # A session can exit between the listing and the read, and its file goes with it. That is the
+    # machine changing, not a reader failure, so one more read is taken before calling it a failure.
+    $real = Read-HordeClaudeControlFiles -Dir $realDir -Processes $realTable -ProjectsDir (Get-HordeClaudeProjectsDir)
+    if ((St $real.complete) -ne "known") {
+        Write-Host ("  first read incomplete (" + $real.complete.reason + "); reading once more") -ForegroundColor Yellow
+        $real = Read-HordeClaudeControlFiles -Dir $realDir -Processes $realTable -ProjectsDir (Get-HordeClaudeProjectsDir)
+    }
+    $recs = @($real.entries)
+    $verified = @($real.verified)
+    $reused = @($recs | Where-Object { (St $_.fields.liveStatus) -eq "unknown" -and $_.fields.liveStatus.reason -like "*reused*" })
+    $stale = @($recs | Where-Object { (St $_.fields.liveStatus) -eq "unknown" -and $_.fields.liveStatus.reason -like "*not running*" })
+    $orph = @(); if ((St $real.orphans) -eq "known") { $orph = @(Val $real.orphans) }
+    Write-Host ("  " + $realFiles.Count + " control files, " + $recs.Count + " records, " + $verified.Count + " verified live, " + $stale.Count + " stale, " + $reused.Count + " pid reused, " + $orph.Count + " claude processes with no file") -ForegroundColor DarkGray
+    Check ((St $real.complete) -eq "known" -and $recs.Count -eq $realFiles.Count) ("every real control file is read without error (" + $recs.Count + " of " + $realFiles.Count + $(if ((St $real.complete) -ne "known") { "; " + $real.complete.reason } else { "" }) + ")")
+    Check ($reused.Count -eq 0) ("every live pid on this machine matches its procStart (" + (@($reused | ForEach-Object { $_.source }) -join ", ") + ")")
+    if ($realFiles.Count -gt 0) {
+        Check ($verified.Count -ge 1) ("CONTROL: at least one real control file names its running process (" + $verified.Count + ")")
+    }
+    $realKeys = @()
+    foreach ($f in $realFiles) { try { $realKeys += @(((Read-HordeSharedText -Path $f.FullName) | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }) } catch { } }
+    $realNoRow = @($realKeys | Sort-Object -Unique | Where-Object { $x2Reads -cnotcontains $_ -and $droppedN -cnotcontains $_ })
+    Check ($realNoRow.Count -eq 0) ("every key in this machine's control files has a row in the ownership table (" + ($realNoRow -join ", ") + ")")
+}
+
+Complete-HordeSuite -Success "every agent's control files read into one record shape, and nothing written"
