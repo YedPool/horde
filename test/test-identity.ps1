@@ -276,6 +276,9 @@ Check ((St $a.fields.resumeCommand) -eq "unknown" -and $a.fields.resumeCommand.r
 $w5 = $r12.records[(Sid 65)].fields["waitingFor"]; $w6 = $r12.records[(Sid 66)].fields["waitingFor"]; $w7 = $r12.records[(Sid 67)].fields["waitingFor"]
 $wb = $b.fields["waitingFor"]; $w1 = $r1.fields["waitingFor"]
 Check ($null -ne $w5 -and (Val $w5) -ceq "permission prompt") "a waiting session says what it waits for"
+# Review of PR #24: the wait is observed when the status beside it was written, like the status.
+$ls5 = $r12.records[(Sid 65)].fields["liveStatus"]
+Check ($null -ne $w5 -and $null -ne $w5.observedAt -and $null -ne $ls5 -and $w5.observedAt -eq $ls5.observedAt) "a wait is observed at the agent's own status time"
 # L-055: waiting is a status Claude Code writes (1 of 10 control files on 2026-09-30), not a guess.
 Check ((Val $r12.records[(Sid 65)].fields["liveStatus"]) -ceq "waiting") "a claude session waiting on the user reads its status as known"
 Check ($null -ne $wb -and $null -ne $w1 -and (St $wb) -eq "absent" -and (St $w1) -eq "absent") "a session that is not waiting waits for nothing"
