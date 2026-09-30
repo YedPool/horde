@@ -225,6 +225,13 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": 
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/n", "type": "string" }') } "beside") "a `$ref with a validation keyword beside it is refused: draft-07 would ignore that keyword"
 Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = 1 }) -Schema (Obj '{ "type": "object", "properties": { "a": { "definitions": { "n": {} } } } }') } "top of a schema") "definitions anywhere but the top of a schema is refused: #/definitions/ would never find them"
 Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "$ref": "#/definitions/a" }') } "circular") "a `$ref chain that loops without reaching a value is refused, not followed forever"
+# A $ref THAT IS NOT A STRING IS REFUSED. The first version read it as "$($kw['$ref'])", so an array
+# holding one pointer became that pointer's text and was followed (review of PR #17): a schema no
+# draft-07 validator accepts was given a meaning here.
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": ["#/definitions/n"] }') } "is not a string") "a `$ref given as an array is refused, not stringified and followed"
+Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = 1 }) -Schema (Obj '{ "definitions": { "n": {} }, "type": "object", "properties": { "a": { "$ref": 7 } } }') } "is not a string") "a `$ref given as a number is refused"
+$f = @(RefFindings (Obj '{ "a": 3 }') $intRef)
+Check ($f.Count -eq 0) ("CONTROL: a `$ref given as a string is still followed (" + ($f -join "; ") + ")")
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan

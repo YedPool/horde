@@ -168,6 +168,9 @@
         @{ Name = "ref-chain-forgotten"
            Find = '-RefsHere (@($RefsHere) + $ref))'
            Replace = '-RefsHere @())' }
+        @{ Name = "ref-non-string-stringified"
+           Find = 'if ($kw[''$ref''] -isnot [string]) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "ref-not-followed"
            Find = 'return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))'
            Replace = 'return @()' }

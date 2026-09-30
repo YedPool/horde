@@ -17,6 +17,7 @@
 # anywhere but the top, where "#/definitions/" would never find them; and a chain of $refs that
 # comes back to itself without reaching a value, which would otherwise recurse until the call stack
 # overflows.
+# A $ref that is not a string - an array holding a pointer, say - is refused too, never converted.
 #
 # Keys starting "x-", and $schema, $id, title and description, are documentation and are ignored.
 #
@@ -143,7 +144,11 @@ function Test-HordeSchema {
     if ($kw.ContainsKey('$ref')) {
         $beside = @($kw.Keys | Where-Object { $_ -cne '$ref' -and $script:HordeSchemaInertKeywords -cnotcontains $_ })
         if ($beside.Count -gt 0) { throw ("the schema has " + ($beside -join ", ") + " beside a `$ref at " + $Path + ", which draft-07 ignores") }
-        $ref = "$($kw['$ref'])"
+        # A $ref IS A STRING OR IT IS REFUSED. Read as "$($kw['$ref'])", an array holding one pointer
+        # became that pointer's text and was followed (review of PR #17): a schema no draft-07 validator
+        # accepts was given a meaning. Nothing is converted, so nothing is guessed.
+        if ($kw['$ref'] -isnot [string]) { throw ("the schema's `$ref at " + $Path + " is not a string") }
+        $ref = $kw['$ref']
         if ($RefsHere -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
         $target = Resolve-HordeSchemaRef -Ref $ref -Root $Root
         return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))
