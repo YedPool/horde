@@ -61,8 +61,9 @@
   <h1><span class="brand">Horde</span> - Strangler Migration Plan</h1>
   <div class="sub">
     From wezfleet (PowerShell) and wezurrect (Lua) to one session-state engine with pluggable layout hosts.
-    Written 2026-09-29 against measured state of both repositories. Refines section 4 of
-    <code>wezfleet-v3-rewrite-proposal.html</code>: same destination, different route.
+    Written 2026-09-29 against measured state of both repositories. Supersedes the order of work in
+    <code>YedPool/wezfleet</code>'s <code>planning/wezfleet-v3-rewrite-proposal.html</code>: same destination,
+    different route. This is the plan's only copy; the one in wezfleet points here.
   </div>
 </header>
 
@@ -78,13 +79,22 @@
 <h2>1. The decisions this plan rests on</h2>
 
 <div class="card">
-  <h4>D1. Strangle in place, not in a new repository</h4>
+  <h4>D1. A new repository, Horde, built as a strangler of the other two</h4>
   <p>
-    The earlier proposal said a new repo. For a strangler that is the wrong call: during the migration
-    there are already two codebases in two languages, and a third repository adds a synchronisation
-    problem exactly when you can least afford one. New modules live in new top-level directories inside
-    the existing repo, <code>lib/</code> shrinks as they replace it, and at the end the repo <em>is</em> the
-    clean architecture. If publishing wants fresh history, extract it then, from a finished system.
+    <strong>Decided 2026-09-29.</strong> Horde is its own private repository. The old wezfleet and
+    wezterm-resurrect repositories stay intact and keep running the fleet throughout.
+  </p>
+  <p>
+    An earlier draft of this plan argued the opposite - migrate inside wezfleet - on the grounds that a
+    third repository adds a synchronisation problem while two already exist. That cost is real, and this
+    is how it is paid: <strong>Horde never writes to the old systems' state until a step's switch.</strong>
+    Its first module only reads their stores. So there is no two-way synchronisation to keep correct;
+    there is one-way reading, which cannot corrupt anything, and a sequence of deliberate, shadowed
+    handovers. What the new repository buys in return is a clean start - structure, history and
+    naming - without carrying the shape of the search that produced the old ones.
+  </p>
+  <p>
+    File references in this plan are to <code>YedPool/wezfleet</code> unless another repository is named.
   </p>
 </div>
 
@@ -149,8 +159,8 @@
     <strong>The repository already has one, and the plan extends it rather than inventing a second.</strong>
     <code>test_debug/test-ssot.ps1</code> names every file still reading the roster and fails on a new one
     <em>or</em> on a declared one that has since been cleaned up - so the list cannot silently go stale in
-    either direction. The ownership, reader and delete ratchets below are built the same way, in the same
-    place.
+    either direction. Horde's ratchets - the adoption ledger in phase 3 and the ownership table in
+    phase 0 - are built the same way, and live in Horde.
   </p>
 </div>
 
@@ -165,7 +175,7 @@
 <div class="card horde">
   <h4>D9. No module is replaced until its knowledge ledger is complete</h4>
   <p>
-    The founder's instruction: every piece rebuilt with the correct structure <em>and</em> the utmost
+    The instruction: every piece rebuilt with the correct structure <em>and</em> the utmost
     attention to detail, which means actually reading the old code, pull requests and documentation that
     hold hard-earned knowledge. Measured, that knowledge is large and scattered:
   </p>
@@ -199,12 +209,11 @@
 <div class="card">
   <h4>D10. Branches, worktrees, atomic commits, tightly scoped pull requests</h4>
   <p>
-    Every step is done on its own branch in its own worktree under
-    <code>C:\Users\yedid\bin\wezfleet-worktrees\</code>, created from a freshly updated <code>main</code>:
+    Every step is done on its own branch in its own worktree, in the one folder beside the repository,
+    created from a freshly updated <code>main</code>. From the repository root:
   </p>
-  <pre><code>  git -C C:\Users\yedid\bin\wezfleet fetch origin main
-  git -C C:\Users\yedid\bin\wezfleet worktree add -b &lt;branch&gt; ^
-      C:\Users\yedid\bin\wezfleet-worktrees\&lt;name&gt; origin/main</code></pre>
+  <pre><code>  git fetch origin main
+  git worktree add -b &lt;branch&gt; ../horde-worktrees/&lt;name&gt; origin/main</code></pre>
   <p>
     One logical change per commit, independently revertible. One concern per pull request, merged as a
     regular merge commit, never squashed. Worktrees are what make this safe here rather than merely tidy:
@@ -307,11 +316,12 @@
         not atomic (<code>lib/Registry.ps1:130</code>).</li>
   </ul>
   <p>
-    So the rename follows three rules. <strong>Readers first:</strong> every reader accepts both vocabularies
-    through one alias table before any record changes, and the nine literal comparisons go through it.
-    <strong>No bulk rewrite:</strong> records pick up the new value through the normal atomic, merging writer
-    as they are next touched. <strong>Old values stay readable</strong> for as long as any record could hold
-    one, because records outlive the sessions that wrote them.
+    <strong>A separate repository removes that risk entirely rather than managing it</strong> (step 0.8).
+    Horde speaks the new vocabulary natively and maps wezfleet's old values through one alias table
+    <em>as it reads them</em>. wezfleet's records are never rewritten, its nine literal comparisons are
+    never touched, and its writer is never exercised by the rename at all. Old values stay readable for
+    as long as any record could hold one, because records outlive the sessions that wrote them. A test
+    proves Horde opens no wezfleet file for writing.
   </p>
 </div>
 
@@ -332,13 +342,13 @@
 
 <h3>How the vocabulary migrates</h3>
 <ul>
-  <li><strong>Not in a rename commit.</strong> A big-bang rename across 125 files is the least revertible
-      change available. Instead, new modules speak Horde from their first line; old modules keep their words
-      until they are replaced. A short glossary maps both during the overlap.</li>
-  <li><strong><code>horde</code> arrives as the entry point in Phase 0</strong>, with <code>wezfleet</code>
-      kept as an alias until the last old command is gone. New commands are documented under
-      <code>horde</code> only. <strong>Thrall is a role, not a command:</strong> it names whichever session
-      currently holds <code>role: warchief</code>, so it appears in records, logs and prose, never as a binary.</li>
+  <li><strong>No rename of the old system at all.</strong> wezfleet keeps its words for as long as it runs.
+      Horde speaks the new vocabulary from its first line, and one glossary maps old to new for anyone
+      reading both during the overlap.</li>
+  <li><strong><code>horde</code> is Horde's own command</strong>, separate from <code>wezfleet</code>, which
+      keeps working unchanged until the fleet has moved off it. <strong>Thrall is a role, not a command:</strong>
+      it names whichever session currently holds <code>role: warchief</code>, so it appears in records, logs
+      and prose, never as a binary.</li>
   <li><strong>Existing letter labels (A, B, D...) survive</strong> as labels. Role and label are different
       facts: role is what a session is, label is what humans call it.</li>
   <li><strong><code>horde.yaml</code> carries a real cost here.</strong> Windows PowerShell 5.1 has no
@@ -503,23 +513,25 @@
   <span class="sz">M</span> about a day, <span class="sz">L</span> several.
 </p>
 
-<h3><span class="phase">PHASE 0</span>Ground rules - no behaviour changes</h3>
+<h3><span class="phase">PHASE 0</span>Ground rules - Horde exists, nothing changes for the fleet yet</h3>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
-  <tr><td>0.1</td><td>Merge the open PRs #10, #11, #12, so the migration starts from a known baseline. <strong>Done 2026-09-29</strong> as merge commits <code>7748839</code>, <code>8e2ccd0</code>, <code>5f708e5</code>.</td><td>Suite green on <code>main</code>.</td><td class="c sz">S</td></tr>
-  <tr><td>0.2</td><td>LICENSE (MIT, Yedidya Pool). A separate PR from the next step, because a licence is not a workflow.</td><td>File exists; README names it.</td><td class="c sz">S</td></tr>
-  <tr><td>0.3</td><td><code>CONTRIBUTING.md</code> and <code>CLAUDE.md</code>: the working rules, with the exact worktree command (D10). Harvested from, and consistent with, the README's Tests and Safety sections and the isolation lessons - the suite has taken down every WezTerm window twice, so the rule about <code>-WithPanes</code> and isolated muxes is carried verbatim, not paraphrased.</td><td>No rule contradicts README or <code>tasks/lessons.md</code>; each cites its source.</td><td class="c sz">S</td></tr>
-  <tr><td>0.4</td><td><strong>The ownership table</strong> as data: every stored field and its single writer. Violations recorded in an allowlist that may only shrink, <strong>implemented as an extension of <code>test-ssot.ps1</code></strong>, not a second mechanism.</td><td>Fails on a new second writer or on a cleaned-up entry still listed. Expected to record at least: pane stored three times, session list in two files.</td><td class="c sz">M</td></tr>
-  <tr><td>0.5</td><td><strong>The knowledge ledger</strong> (D9): the format, the five sources, and a gate test that fails on any entry without a disposition.</td><td>Gate fails on a fixture ledger with an undisposed entry; passes on a complete one.</td><td class="c sz">S</td></tr>
-  <tr><td>0.6</td><td><code>core/tristate</code>: known, absent, unknown, stated once - with a ledger, since three-valued answers already exist in at least four places here and the new module must not silently disagree with any of them.</td><td>Ledger complete; unit suite.</td><td class="c sz">S</td></tr>
-  <tr><td>0.7</td><td><strong>Role aliases, readers first:</strong> one table mapping <code>master</code>/<code>warchief</code>, <code>orchestrator</code>/<code>orc</code>, <code>session</code>/<code>goblin</code>, and the nine literal role comparisons routed through it. No record is rewritten.</td><td>Every existing role test passes unchanged, plus both vocabularies accepted everywhere.</td><td class="c sz">S</td></tr>
-  <tr><td>0.8</td><td><code>horde</code> entry point, <code>wezfleet</code> kept as an alias. Glossary of old and new words.</td><td>Both names dispatch identically.</td><td class="c sz">S</td></tr>
+  <tr><td>0.1</td><td>Baseline the old system: wezfleet PRs #10, #11, #12 merged. <strong>Done 2026-09-29</strong> as merge commits <code>7748839</code>, <code>8e2ccd0</code>, <code>5f708e5</code> in <code>YedPool/wezfleet</code>.</td><td>wezfleet suite green on its <code>main</code>: 1,417 assertions, 0 failures.</td><td class="c sz">S</td></tr>
+  <tr><td>0.2</td><td>Private repository, MIT in the root commit. <strong>Done 2026-09-29</strong>, <code>7c65aee</code>.</td><td>Licence present from the first commit.</td><td class="c sz">S</td></tr>
+  <tr><td>0.3</td><td><code>CONTRIBUTING.md</code> and <code>CLAUDE.md</code>, harvested from the old systems with every citation naming its repository. <strong>Horde PR #1.</strong></td><td>Every citation resolves; nothing personal in the rules themselves.</td><td class="c sz">S</td></tr>
+  <tr><td>0.4</td><td><strong>The knowledge ledger</strong> (D9): the format, the five sources, and a gate test that fails on any entry without a disposition. First, because every later step needs one.</td><td>Gate fails on a fixture ledger with an undisposed entry; passes on a complete one.</td><td class="c sz">S</td></tr>
+  <tr><td>0.5</td><td><strong>The end-to-end harness</strong> (D11): an isolated WezTerm - its own mux, pinned by <code>WEZTERM_UNIX_SOCKET</code>, started with <code>--skip-config</code> - that asserts it cannot see the user's panes before anything runs. Ported from <code>lib/Isolation.ps1</code> with its ledger.</td><td>Its own control: pointed at the live mux, it refuses to run.</td><td class="c sz">M</td></tr>
+  <tr><td>0.6</td><td><strong>Ownership and source precedence</strong>, as data: for every field of Horde's session record, its single future owner, and - until that field's switch - which old store it is read from when the old stores disagree. The old system's duplication is recorded here as reading rules, not repaired.</td><td>Every field has exactly one owner and one precedence rule. Expected to cover at least: pane, stored three times in wezfleet and derivable from a fourth.</td><td class="c sz">M</td></tr>
+  <tr><td>0.7</td><td><code>core/tristate</code>: known, absent, unknown, stated once - with a ledger, since three-valued answers exist in at least four places in wezfleet and Horde must not silently disagree with any of them.</td><td>Ledger complete; unit suite.</td><td class="c sz">S</td></tr>
+  <tr><td>0.8</td><td><strong>Role vocabulary, on read.</strong> Horde speaks <code>warchief</code>, <code>orc</code>, <code>goblin</code> natively and maps wezfleet's <code>master</code>, <code>orchestrator</code>, <code>session</code> through one alias table as it reads. <strong>wezfleet's records are never rewritten</strong> - so the write path that lost <code>role</code> twice is never exercised by the rename at all.</td><td>Both vocabularies read correctly; a test proves Horde opens no wezfleet file for writing.</td><td class="c sz">S</td></tr>
+  <tr><td>0.9</td><td>The <code>horde</code> entry point, with help generated from a command table - the pattern wezfleet already proved, where help cannot drift from the commands. Its first scenario: the end-to-end harness runs <code>horde --help</code> and <code>horde version</code>.</td><td>First end-to-end scenario green in the isolated terminal.</td><td class="c sz">S</td></tr>
 </table>
 
 <div class="note">
-  <strong>One gate applies to every replacing step in phases 2 to 6, beyond what its row lists:</strong> the
-  module's knowledge ledger is complete, and the pull request links it. A step that replaces code without a
-  ledger is not ready, however green its tests.
+  <strong>Two gates apply to every step that takes something over, in phases 2 to 7, beyond what its row
+  lists:</strong> its knowledge ledger is complete and linked from the pull request (D9), and <strong>the
+  live fleet has used it for real work</strong> - shadowed, then switched, then recorded as adopted (D11).
+  A step that is green but unused is not done.
 </div>
 
 <h3><span class="phase">PHASE 1</span>The contract - the seam between engine and hosts</h3>
@@ -538,12 +550,12 @@
   <tr><td>2.3</td><td><code>horde status --json</code>.</td><td>Parity: agrees with today's <code>sessions</code> and <code>census</code> on the same fixtures.</td><td class="c sz">S</td></tr>
 </table>
 
-<h3><span class="phase">PHASE 3</span>Strangle the readers</h3>
+<h3><span class="phase">PHASE 3</span>The fleet moves onto Horde's commands, one at a time</h3>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
-  <tr><td>3.1</td><td>Convert <code>sessions</code> - already identity-first, the smallest move.</td><td>Output unchanged on fixtures.</td><td class="c sz">S</td></tr>
-  <tr><td>3.2</td><td><strong>The ratchet:</strong> a test forbidding any command from deriving the Horde itself, with every not-yet-converted command on an allowlist.</td><td>Allowlist can only shrink.</td><td class="c sz">S</td></tr>
-  <tr><td>3.3-3.7</td><td>Convert, one per PR: <code>census</code>, <code>status</code>, <code>tree</code>, <code>tell</code> target resolution, the Warchief's own status loop.</td><td>Each removes one allowlist entry.</td><td class="c sz">M each</td></tr>
+  <tr><td>3.1</td><td><code>horde sessions</code> over the projection - the smallest move, since wezfleet's version is already identity-first. The fleet runs both and compares.</td><td>Shadow: no unexplained difference over a working day of real use.</td><td class="c sz">S</td></tr>
+  <tr><td>3.2</td><td><strong>The adoption ledger</strong>: one record of which fleet role uses which command from which system, so "moved" is a fact someone can look up rather than a belief. Built the same way as wezfleet's <code>test-ssot.ps1</code> - a list that can only shrink on the old side.</td><td>A test fails if an entry claims adoption with no recorded use.</td><td class="c sz">S</td></tr>
+  <tr><td>3.3-3.7</td><td>One per PR, each shadowed then switched: <code>horde census</code>, <code>horde status</code>, <code>horde tree</code>, message target resolution, and the Warchief's own status loop - last, because it is the one the whole fleet depends on.</td><td>Each: shadow clean, switch made, adoption recorded.</td><td class="c sz">M each</td></tr>
 </table>
 
 <h3><span class="phase">PHASE 4</span>The restore engine and the layout port, WezTerm first</h3>
@@ -567,13 +579,13 @@
   <tr><td>5.5</td><td>wezurrect's instance bookkeeping - its largest file, 964 lines - moves to the engine. The picker is fed from <code>horde instances --json</code>.</td><td>Picker shows the same list, shadowed first.</td><td class="c sz">L</td></tr>
 </table>
 
-<h3><span class="phase">PHASE 6</span>Delete and consolidate</h3>
+<h3><span class="phase">PHASE 6</span>Retire, and bring the Lua home</h3>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
-  <tr><td>6.1</td><td>Delete the typed-delivery subsystem: <code>Delivery.ps1</code>, <code>Mail.ps1</code>, <code>MailPump.ps1</code>, the mail hook. Platform messaging replaced it.</td><td>A zero-caller proof, by the shipped import test.</td><td class="c sz">M</td></tr>
-  <tr><td>6.2</td><td>Delete the Lua that moved. wezurrect becomes a thin adapter.</td><td>Its spec suite shrinks with it; the contract fixtures still pass.</td><td class="c sz">M</td></tr>
-  <tr><td>6.3</td><td>Bring the thin adapter into this repository as <code>hosts/wezterm/plugin/</code>, so one contract has one home and one conformance suite.</td><td>WezTerm loads the plugin from its new path.</td><td class="c sz">S</td></tr>
-  <tr><td>6.4</td><td>Split what is left of <code>lib/Common.ps1</code>. Retire the <code>wezfleet</code> alias.</td><td>Ownership allowlist empty.</td><td class="c sz">M</td></tr>
+  <tr><td>6.1</td><td>The typed-delivery subsystem - <code>Delivery.ps1</code>, <code>Mail.ps1</code>, <code>MailPump.ps1</code>, the mail hook - is <strong>never ported</strong>. Platform cross-session messaging replaced it. Its ledger records every lesson it holds and why each one no longer applies.</td><td>Ledger complete, every entry disposed as dropped-with-reason or carried.</td><td class="c sz">M</td></tr>
+  <tr><td>6.2</td><td>Delete from wezterm-resurrect the Lua whose logic now lives in Horde. What remains is the thin adapter.</td><td>Its spec suite shrinks with it; the contract fixtures still pass on both sides.</td><td class="c sz">M</td></tr>
+  <tr><td>6.3</td><td>Bring the thin adapter into Horde as <code>hosts/wezterm/plugin/</code>, so one contract has one home and one conformance suite. <strong>With Malthe Larsen's MIT notice alongside it</strong> - wezterm-resurrect is a fork of his <code>resurrect.wezterm</code>, and the licence requires the notice to travel with any substantial portion of the code.</td><td>WezTerm loads the plugin from its new path; <code>hosts/wezterm/plugin/LICENSE</code> carries his copyright line verbatim.</td><td class="c sz">S</td></tr>
+  <tr><td>6.4</td><td>Archive wezfleet read-only once the adoption ledger shows nothing in the fleet still uses it. <strong>Archived, not deleted</strong>: its history is where most of the knowledge came from, and the ledgers cite it.</td><td>Adoption ledger empty on the old side for a full working week.</td><td class="c sz">S</td></tr>
 </table>
 
 <h3><span class="phase">PHASE 7</span>The second host - the step that proves the seam</h3>
@@ -620,17 +632,31 @@
   <tr><td>Hand-built test harnesses give wrong answers.</td><td>Eight did today. Rule 2 of <code>CONTRIBUTING.md</code>: verify against the shipped command.</td></tr>
 </table>
 
-<h2>9. Decisions this needs from you</h2>
-<ol>
-  <li>Should the migration happen inside the existing wezfleet repository (recommended), rather than in a new Horde repository created now?</li>
-  <li>Should the Horde manifest be <code>horde.json</code> for now (recommended), since <code>horde.yaml</code> adds a module dependency to Windows PowerShell 5.1?</li>
-  <li>Should wezurrect's thin adapter move into this repository at step 6.3 (recommended), or remain its own repository as a plugin?</li>
-  <li>Which licence for wezfleet - MIT unless you prefer otherwise - and what name belongs on the copyright line?</li>
-  <li>Should the first imagery work be role icons in the WezTerm tab bar (recommended, cheapest and always visible), or per-window background images?</li>
-</ol>
+<h2>9. Decisions taken, 2026-09-29</h2>
+<table>
+  <tr><th style="width:34%">Question</th><th>Decision</th></tr>
+  <tr><td>Where does the work happen?</td><td><strong>A new private repository, Horde</strong>, built as a strangler that reads the old systems before it replaces them (D1). This reversed the plan's first recommendation, which was to migrate inside wezfleet; see D1 for how the cost it warned about is paid.</td></tr>
+  <tr><td>Manifest format?</td><td><code>horde.json</code>. YAML would add a module dependency to Windows PowerShell 5.1; the format is revisited with the engine's language (D8).</td></tr>
+  <tr><td>Where does wezterm-resurrect's thin adapter end up?</td><td>In Horde, at step 6.3, <strong>with Malthe Larsen's MIT notice</strong> carried alongside it.</td></tr>
+  <tr><td>Licence?</td><td>MIT, copyright Yedidya Pool, in Horde's root commit. wezfleet received the same licence separately.</td></tr>
+  <tr><td>First imagery?</td><td>Role icons and colour in the WezTerm tab bar - always visible, reflecting live state, no runtime cost.</td></tr>
+  <tr><td>How is "done" judged?</td><td>By the live fleet using a piece for real work, not by a green suite alone; and every user-facing command has an end-to-end scenario (D11).</td></tr>
+  <tr><td>How is work structured?</td><td>Branches in worktrees beside the repository, atomic commits, one concern per pull request, merge commits never squash (D10); a knowledge ledger before any module is replaced (D9).</td></tr>
+</table>
+
+<h3>Added risk from moving to a separate repository</h3>
+<p>
+  Horde reads files that wezfleet is writing at the same moment. wezfleet's record writer has already
+  been measured losing and even deleting a record under concurrent writes (<code>lib/Registry.ps1:130</code>,
+  2026-09-15), and was fixed with unique temporary names and atomic replacement. A reader can still
+  arrive in the gap: a file absent for a moment, or unparseable. <strong>Horde reads such a file as
+  unknown, never as absent</strong> - so a record caught mid-write produces a "cannot tell" for one
+  read, not a session declared gone. That is exactly the case <code>core/tristate</code> exists for, and
+  it has an end-to-end scenario: read continuously while a writer loops.
+</p>
 
 <footer>
-  Horde strangler migration plan. Planning only: no code, no repository and no configuration was changed
+  Horde migration plan. Planning only: no code and no configuration was changed
   to produce it. Companion documents in this folder: the public readiness review and the v3 rewrite
   proposal, whose section 4 this plan replaces.
 </footer>
