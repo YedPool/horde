@@ -479,3 +479,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 9: conversation-in-two-processes reads only claude processes' command lines (YedPool/wezfleet lib/Common.ps1:684-708 has the same blind spot), yet answered a known false with a codex session present
 - disposition: test
 - where: test/test-projection.ps1 :: "a session of an agent whose processes are not read leaves the duplicate check unknown"
+
+### L-091 The projection's engine names are counted exactly until engines A4 moves them out
+- source: review of horde PR #31, finding 10: agent names in core/Projection.ps1 and core/Faults.ps1, the --resume pattern, and the agent enum in schema/session-view.v1; planning/execution-plan-engines.md step 13 (A4) and step 2 (E1, the agents ratchet, not built yet)
+- disposition: test
+- where: test/test-projection.ps1 :: "every engine name in the projection's files is listed, with its exact count"
