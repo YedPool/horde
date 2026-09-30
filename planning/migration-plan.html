@@ -259,6 +259,34 @@
   </p>
 </div>
 
+<div class="card horde">
+  <h4>D12. The set of hosts is open: WezTerm and VS Code are the first two, not the only two</h4>
+  <p>
+    <strong>Instruction, 2026-09-29:</strong> keep in mind that Horde may expand beyond WezTerm -
+    tmux, Ghostty, psmux, VS Code and others.
+  </p>
+  <p>
+    The ports in section 2 already make a host an adapter. This decision makes three consequences of
+    that explicit, so the first host cannot quietly become an assumption:
+  </p>
+  <ul>
+    <li><strong>Nothing outside <code>hosts/&lt;name&gt;/</code> names a terminal.</strong> The engine, the
+        schemas and the read model speak of sessions, slots and capabilities. A WezTerm pane id is a
+        host handle, stored in a realisation, never a key.</li>
+    <li><strong>Host-specific test tooling lives with its host.</strong> The isolated-instance harness is
+        WezTerm tooling; it moves under a WezTerm path once its pull request lands, and the next host
+        brings its own isolation (for tmux, a private server socket with <code>-L</code>).</li>
+    <li><strong>A new host is a new column in the capability table, not a change to the engine.</strong>
+        Candidates, each to be measured before it is claimed: tmux (splits, capture, runtime text
+        through its own CLI), psmux (tmux's model on Windows), Ghostty (a terminal whose scripting
+        surface must be verified before anything is promised for it).</li>
+  </ul>
+  <p>
+    The test of the decision is Phase 7: if adding the second host needs an engine change, the seam
+    was drawn in the wrong place, and that is fixed before a third host is attempted.
+  </p>
+</div>
+
 <h2>2. The Horde, as architecture</h2>
 
 <div class="card warn">
