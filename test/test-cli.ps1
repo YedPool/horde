@@ -188,6 +188,10 @@ try {
     Write-Host ""
     Write-Host "--- help and dispatch find the same files ---" -ForegroundColor Cyan
     Check ([System.IO.File]::Exists($nulPath)) "CONTROL: a command file named nul.ps1 really exists"
+    # An extension in capitals: Windows finds omega.PS1 as a .ps1 file, and a registry that compared
+    # extensions without case would list it. It is named as a broken file instead, so that "X.PS1"
+    # never silently becomes a command on one filesystem and not another.
+    [System.IO.File]::WriteAllText((Join-Path $standInCommands "omega.PS1"), ([System.IO.File]::ReadAllText((Join-Path $standInCommands "zeta.ps1x")) -replace "zeta", "omega"))
     $listed = Get-HordeCommands -Dir $standInCommands
     $listedNames = @($listed.commands | ForEach-Object { $_.name })
     if (@(Get-ChildItem -LiteralPath $standInCommands -Filter *.ps1 -File | Where-Object { $_.Name -eq "zeta.ps1x" }).Count -eq 1) {
@@ -198,6 +202,7 @@ try {
     }
     Check ($listedNames -notcontains "nul") "a command file with a reserved device name is not listed"
     Check (@($listed.findings | Where-Object { $_ -like "nul.ps1:*reserved*" }).Count -eq 1) "and it is named as a broken command file instead"
+    Check ($listedNames -notcontains "omega" -and @($listed.findings | Where-Object { $_ -clike "omega.PS1:*in lowercase*" }).Count -eq 1) "a command file whose extension is in capitals is named as broken, not listed"
     $h = Invoke-Horde -Root $tmp -Arguments @("help")
     Check ($h.code -eq 0 -and $h.out -like "*    horde echo-args*") "CONTROL: help in the stand-in root lists its commands"
     $r = Invoke-Horde -Root $tmp -Arguments @("nul")
@@ -251,6 +256,14 @@ try {
     # word "-Json". From a script it arrives as the word "--", and "-Json" after it is still tagged as
     # a parameter: echo-args bound target=[--] json=True, exit 0. horde cannot honour it there, so it
     # refuses it rather than treat it as a value.
+    # THE WORD "$false" IS REFUSED WHEREVER IT ARRIVES, not only after a switch - where the switch-word
+    # refusal would say so first. After a [string] parameter from a script, and typed in quotes after
+    # a colon, it is still text, and bound target=[$false] with exit 0 when these refusals were removed
+    # (mutation-checked 2026-09-30).
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Target:$false')
+    Check ($r.code -eq 2 -and $r.err -like "*arrived as text*" -and $r.err -notlike "*is followed by the word*") ("the word `$false after a parameter that is not a switch is refused as text, from a script (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Target:'`$false'") -AsTyped
+    Check ($r.code -eq 2 -and $r.err -like "*arrived as text*") ("the quoted text '`$false' joined by a colon is refused as text, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "abc")
     Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*'--' is not supported*") ("a double dash from a script is refused, not bound as a value" + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "-Json") -AsTyped
@@ -269,13 +282,20 @@ try {
         @("-J", "false"), @("abc", "-Json", "true"), @("-Verbose", "false"))
     foreach ($w in $switchWords) {
         $r = Invoke-Horde -Root $tmp -Arguments (@("echo-args") + $w)
-        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the word*omit the switch*" -and $r.err -like "*usage: horde echo-args*") ("a switch followed by a truth word from a script is refused, never bound as two arguments: " + ($w -join " ") + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the word*omit the switch*" -and $r.err -like "*usage: horde echo-args*") ("a switch followed by a truth word from a script is refused, never bound as two arguments" + ": " + ($w -join " ") + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }
     # Typed, where PowerShell parsed the line, the same two items stand apart the same way, and are
     # refused the same way; a colon value typed keeps its own handling above.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "false") -AsTyped
     Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch followed by a truth word is refused typed at a prompt too (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # A switch named by its alias is a switch: [Alias("AsJson")] on echo-args' -Json, read from the AST.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-AsJson", "false")
+    Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch named by its alias and followed by a truth word is refused (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # CONTROLS: the refusal is about switches and truth words only.
+    # -Verb is echo-args' own [string] parameter and a prefix of the common switch -Verbose. PowerShell
+    # binds an exact name before any prefix, so "false" is -Verb's value, not a switch's.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Verb", "false")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a parameter's exact name decides, though it is a prefix of a switch: -Verb false binds (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     foreach ($typed in @($false, $true)) {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "abc") -AsTyped:$typed
