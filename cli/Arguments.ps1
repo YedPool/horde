@@ -56,9 +56,16 @@
 # refusing lines .NET and powershell.exe split differently (`"x"" -Json"`: two items to PowerShell,
 # one to .NET). It reconstructed information -File mode had already discarded, so it was removed.
 #
-# The parameter tag is a note property PowerShell puts on each item it parsed as a parameter. Only
-# the items of $args carry it: copied into a .NET list the tag is lost, and splatting then passes
-# "-Json" as a plain string (measured). So items are only ever moved with PowerShell's own arrays.
+# The parameter tag is a note property PowerShell puts on each item it parsed as a parameter; it
+# lives on PowerShell's wrapper around the string, not on the string. Measured 2026-09-30 on
+# PowerShell 5.1 by copying $args holding -Json and splatting the copy (third review of PR #12,
+# finding 6): the tag SURVIVED an index slice, +=, an [object[]] or [List[object]] cast,
+# [ArrayList]$args, ArrayList.AddRange, Select-Object and ForEach-Object { $_ }. It was LOST - "-Json"
+# bound as a plain string to the first positional parameter - by ArrayList.Add($item) in a loop (a
+# .NET method's argument is unwrapped), a [string[]] cast, and anything that makes a new string:
+# "$_", "$item", [string]. The note here once said any copy into a .NET list loses it: ArrayList.Add
+# does, the ArrayList cast and AddRange do not. Items are moved only in ways measured to keep it, and
+# Resolve-HordeArguments makes a new string on purpose where it must drop a tag.
 
 function Get-HordeParameterName {
     # The parameter name PowerShell tagged an argument with, or $null if it is not a parameter.
