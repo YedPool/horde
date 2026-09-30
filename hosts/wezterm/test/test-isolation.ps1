@@ -462,7 +462,9 @@ function Get-CodeOnly { param([string]$Path)
 $scripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File |
     Where-Object { $_.FullName -ne $harnessPath -and $_.FullName -ne $self })
 Check ($scripts.Count -gt 0) "CONTROL: the scan sees real scripts, so an empty result below would mean something"
-Check (@($scripts | Where-Object { $_.Name -eq "test-isolation.ps1" }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
+# BY FULL PATH, NOT BY NAME: a second host brought its own test-isolation.ps1, which is a different
+# file and belongs in the scan. Matching the name alone failed this control the day it arrived.
+Check (@($scripts | Where-Object { $_.FullName -eq $self }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
 $starters = @($scripts | Where-Object { (Get-CodeOnly -Path $_.FullName) -match "Start-HordeIsolatedWezterm" })
 Check ($starters.Count -gt 0) "CONTROL: the scan finds at least one script that starts an instance"
 $missing = @($starters | Where-Object { (Get-CodeOnly -Path $_.FullName) -notmatch "Stop-HordeIsolatedWezterm" })
