@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "transport": "local",
+  "maxFrameBytes": 1048576,
+  "capabilities": {
+    "auth.peer": {
+      "support": "yes",
+      "evidence": "The pipe's ACL allows only the owning user's SID and denies NETWORK, protected from inheritance, read back from the live pipe by transports/local/test/test-local.ps1; a pipe whose ACL denies the caller is refused. The client refuses a pipe whose owner is not its own user. Measured 2026-09-30, Windows PowerShell 5.1.26100.9444."
+    },
+    "encrypt": {
+      "support": "no",
+      "evidence": "A named pipe on one machine: the bytes never leave it, and nothing encrypts them."
+    },
+    "dial.out": {
+      "support": "yes",
+      "evidence": "A node-role Open round-trips frames in test/test-transport-conformance.ps1."
+    },
+    "dial.in": {
+      "support": "yes",
+      "evidence": "A hub-role Open round-trips frames in test/test-transport-conformance.ps1: on one machine the hub dials the node's pipe."
+    },
+    "keepalive": {
+      "support": "yes",
+      "evidence": "A read is always pending; when the far end closes, it completes with 0 bytes and health reads closed with no frame sent (test/test-transport-conformance.ps1)."
+    },
+    "survives.peer.restart": {
+      "support": "no",
+      "evidence": "A restarted node is a new pipe instance: the old link reads closed and a new link must be opened (test/test-transport-conformance.ps1)."
+    }
+  }
+}
