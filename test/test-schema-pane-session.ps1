@@ -311,9 +311,20 @@ $nines = Read-JsonNumber "0.99999999999999999999"
 $justOver = Read-JsonNumber "1.00000000000000000001"
 Check ($nines -is [decimal] -and [double]$nines -eq 1 -and $justOver -is [decimal] -and [double]$justOver -eq 1) "CONTROL: 5.1 reads both as Decimal, and each is 1 as a Double"
 Check (Has (Test-HordeSchema -Value $nines -Schema ([pscustomobject]@{ minimum = 1 })) '$ is 0.99999999999999999999, below the minimum 1') "a Decimal a hair below a whole-number minimum is refused"
-Check (Has (Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $justOver })) '$ is 1, below the minimum 1.00000000000000000001') "a Double below a Decimal minimum that rounds to it is refused"
-Check (@(Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $nines })).Count -eq 0) "CONTROL: a Double above a Decimal minimum that rounds to it is accepted"
-Check (Has (Test-HordeSchema -Value (Read-JsonNumber "0.1") -Schema ([pscustomobject]@{ minimum = 0.1 })) '$ is 0.1, below the minimum 0.1') "the Decimal 0.1 is below the Double 0.1, which is slightly more than one tenth"
+# 1 - 2^-53, the largest Double below 1: it prints as 1 and [decimal] rounds it to 1 (15 significant
+# digits), so only an exact comparison refuses it.
+$f = @(RefFindings ([double]0.99999999999999989) ([pscustomobject]@{ minimum = 1 }))
+Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 1') ("a Double a hair below a whole-number minimum is refused (" + ($f -join "; ") + ")")
+Check (@(Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = 1 })).Count -eq 0) "CONTROL: a Double equal to a whole-number minimum is accepted"
+# A WHOLE-NUMBER MINIMUM MEANS ONE NUMBER HOWEVER THE JSON WROTE IT: 1, 1.0 (Decimal) and 1e0 (Double).
+foreach ($t in @("1", "1.0", "1e0")) {
+    $mt = [pscustomobject]@{ minimum = (Read-JsonNumber $t) }
+    $f = @(RefFindings $nines $mt)
+    Check ($f.Count -eq 1 -and $f[0] -clike '$ is 0.99999999999999999999, below the minimum *') ("minimum written " + $t + " refuses 0.99999999999999999999 (" + ($f -join "; ") + ")")
+    $f = @(RefFindings 1 $mt)
+    Check ($f.Count -eq 0) ("CONTROL: minimum written " + $t + " accepts 1 (" + ($f -join "; ") + ")")
+}
+
 # BEYOND DECIMAL'S RANGE IS A RESULT, NEVER A CRASH (the enum's lesson, second review of PR #16).
 $f = @(RefFindings (Read-JsonNumber "1e30") $min0)
 Check ($f.Count -eq 0) ("1e30 is above the minimum 0, and nothing throws (" + ($f -join "; ") + ")")
@@ -323,6 +334,29 @@ $f = @(RefFindings ([double]::NegativeInfinity) $min0)
 Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 0') ("negative infinity is below the minimum 0 (" + ($f -join "; ") + ")")
 $f = @(RefFindings ([double]::NaN) $min0)
 Check ($f.Count -eq 1 -and $f[0] -ceq '$ is NaN, which is not at or above the minimum 0') ("NaN is refused: it is at or above nothing (" + ($f -join "; ") + ")")
+
+Write-Host ""
+Write-Host "--- a minimum means the same number however the JSON wrote it (issue #25) ---" -ForegroundColor Cyan
+# 5.1's ConvertFrom-Json reads 0.1 as a Decimal and 1e-1 as a Double, slightly more than one tenth.
+# Compared exactly, {"minimum": 1e-1} refused the value 0.1 that {"minimum": 0.1} accepted (measured
+# 2026-09-30, before the fix). So a minimum must be a whole number of magnitude at most 2^53 - 1, which every
+# type the parser gives holds exactly; a fraction is refused, never normalised (see core/Schema.ps1).
+Check ((Read-JsonNumber "0.1") -is [decimal] -and (Read-JsonNumber "1e-1") -is [double]) "CONTROL: 5.1 parses 0.1 as Decimal and 1e-1 as Double"
+foreach ($t in @("0.1", "1e-1", "-0.5", "1.00000000000000000001")) {
+    Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + " is refused: a fraction's meaning depends on how it was written")
+}
+# FROM 2^53 UP A WHOLE NUMBER DEPENDS ON ITS TEXT TOO: 9007199254740995.0 is a Decimal of that value,
+# 9.007199254740995e15 the Double 9007199254740996, and 9.007199254740993e15 the Double 2^53. At
+# 2^53 - 1 the two readings agree.
+$safe = [long]9007199254740991
+Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9.007199254740993e15") ([long]9007199254740992)) -eq 0) "CONTROL: 5.1 reads 9.007199254740993e15 as 2^53, one less than it says"
+Check ((Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740991.0") (Read-JsonNumber "9.007199254740991e15")) -eq 0 -and (Compare-HordeSchemaNumber (Read-JsonNumber "9007199254740995.0") (Read-JsonNumber "9.007199254740995e15")) -ne 0) "CONTROL: 2^53 - 1 read as Decimal and as Double is one number; 2^53 + 3 is two"
+foreach ($t in @("9007199254740995.0", "9.007199254740995e15", "9.007199254740993e15", "9007199254740992", "-9007199254740995.0", "-9007199254740992", "1e30")) {
+    Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = (Read-JsonNumber $t) }) } "minimum at $ must be a whole number") ("a minimum written " + $t + ", beyond 2^53 - 1, is refused")
+}
+foreach ($m in @($safe, (-$safe), (Read-JsonNumber "9.007199254740991e15"), 0)) {
+    Check (-not (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = $m }) })) ("CONTROL: a whole-number minimum of " + $m + ", within 2^53 - 1, is accepted")
+}
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan

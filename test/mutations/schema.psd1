@@ -216,6 +216,24 @@
         @{ Name = "minimum-nan-allowed-in-schema"
            Find = ' -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m)))'
            Replace = '' }
+        @{ Name = "minimum-fraction-allowed"
+           Find = '$sameHoweverWritten = ((Test-HordeSchemaType -Value $m -Type "integer") -and'
+           Replace = '$sameHoweverWritten = ($true -and' }
+        @{ Name = "minimum-upper-bound-removed"
+           Find = ' -and (Compare-HordeSchemaNumber $m $bound) -le 0'
+           Replace = '' }
+        @{ Name = "minimum-lower-bound-removed"
+           Find = ' -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0'
+           Replace = '' }
+        @{ Name = "minimum-bound-2-to-the-53"
+           Find = '$bound = [long]9007199254740991'
+           Replace = '$bound = [long]9007199254740992' }
+        @{ Name = "minimum-bound-exclusive"
+           Find = '(Compare-HordeSchemaNumber $m $bound) -le 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0'
+           Replace = '(Compare-HordeSchemaNumber $m $bound) -lt 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -gt 0' }
+        @{ Name = "minimum-whole-number-rule-not-enforced"
+           Find = 'if (-not $sameHoweverWritten) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "minimum-nan-value-accepted"
            Find = '[void]$findings.Add($Path + " is NaN'
            Replace = '[void]($Path + " is NaN' }

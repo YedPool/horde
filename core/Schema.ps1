@@ -13,6 +13,25 @@
 # Compare-HordeSchemaNumber), because 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a
 # Decimal that is 1 as a Double. It exists so schema/session-record.v1 can say labelCycle >= 0.
 #
+# THE MINIMUM ITSELF IS A WHOLE NUMBER FROM -(2^53 - 1) TO 2^53 - 1, and anything else is refused
+# (issue #25). 5.1's ConvertFrom-Json reads 0.1 as a Decimal and 1e-1 as a Double, which is slightly
+# more than one tenth, so compared exactly, {"minimum": 1e-1} refused the value 0.1 that
+# {"minimum": 0.1} accepted (measured 2026-09-30). Whole numbers do the same from 2^53 up:
+# 9007199254740995.0 is a Decimal of that number, 9.007199254740995e15 the Double 9007199254740996,
+# and 9.007199254740993e15 the Double 2^53. Within the bound - JavaScript's "safe integers" - Int32,
+# Int64, Decimal and Double each hold every whole number exactly and no other whole number rounds to
+# it, so 1, 1.0 and 1e0 are one minimum.
+# Normalising both sides instead - reading a Double as the shortest decimal that parses back to it -
+# was rejected: it would change how every Double VALUE compares, not just the minimum; .NET
+# Framework's "R" format is not guaranteed to give that shortest text, so it would have to be searched
+# for; and it still could not recover a text with more digits than a Double keeps, so it would narrow
+# the gap, not close it. Refusing costs nothing today: the one minimum in Horde's schemas is 0.
+# WHAT THIS DOES NOT CLOSE: a text with more significant digits than a Double keeps is rounded by the
+# parser before this file sees it, and nothing here can tell. For a VALUE: 9.9999999999999999999e-1
+# parses as the Double 1 and passes minimum 1, while 0.99999999999999999999 parses as a Decimal and is
+# refused (measured 2026-09-30). For a minimum, the same holds of a fraction written with an exponent
+# and so many digits that the Double it becomes is whole.
+#
 # $ref IS LOCAL ONLY, "#/definitions/<name>", resolved against the top of the schema being checked.
 # It exists so a recursive shape - the layout tree of schema/restore-plan.v1 - can be described. A
 # $ref to another document, to any other part of this one, or to a definition that is not there is
@@ -231,6 +250,11 @@ function Get-HordeSchemaNodeKeywords {
         $m = $kw["minimum"]
         $finite = ((Test-HordeSchemaIsNumber $m) -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m))))
         if (-not $finite) { throw ("minimum at " + $Path + " must be a number; '" + $m + "' is not one") }
+        # AND A WHOLE NUMBER OF MAGNITUDE AT MOST 2^53 - 1, so it means one number however the JSON wrote
+        # it (issue #25; the reasons are in the header).
+        $bound = [long]9007199254740991
+        $sameHoweverWritten = ((Test-HordeSchemaType -Value $m -Type "integer") -and (Compare-HordeSchemaNumber $m $bound) -le 0 -and (Compare-HordeSchemaNumber $m (-$bound)) -ge 0)
+        if (-not $sameHoweverWritten) { throw ("minimum at " + $Path + " must be a whole number from -(2^53 - 1) to 2^53 - 1, which means the same however JSON writes it; '" + $m + "' is not one") }
     }
     # A TYPE NAME IS CHECKED HERE as well as when a value meets it, so a definition nothing refers to
     # cannot carry one this validator does not know.
