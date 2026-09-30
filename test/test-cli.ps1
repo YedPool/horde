@@ -15,7 +15,10 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "cli\Commands.ps1")
 
 $fails = @()
+# A condition must be exactly true or false; anything else fails loudly. A helper that returned an
+# array alongside $false once made a "must throw" check pass when nothing threw (see test-isolation.ps1).
 function Check { param($Cond, [string]$What)
+    if ($Cond -isnot [bool]) { Write-Host "  [FAIL] $What (the check's condition was not true or false)" -ForegroundColor Red; $script:fails += $What; return }
     if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
     else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
@@ -53,16 +56,17 @@ Check (@($good.commands).Count -eq 1 -and @($good.findings).Count -eq 0) "a well
 Check ($good.commands[0].usage -eq "alpha [-Loud]") "and its usage is read from the file without running it"
 
 $bad = Get-HordeCommands -Dir (Join-Path $root "test\fixtures\cli\bad")
-function Finding { param([string]$File) return @($bad.findings | Where-Object { $_ -like ($File + ":*") }) }
+function HasFinding { param([string]$File, [string]$Like)
+    return (@($bad.findings | Where-Object { $_ -like ($File + ":*") -and $_ -like ("*" + $Like + "*") }).Count -gt 0) }
 Check (@($bad.commands).Count -eq 0) "no malformed command file is listed as a command"
-Check ((Finding "side-effect.ps1") -like "*top-level statements*") "a command file that does work at load time is refused"
-Check ((Finding "computed.ps1") -like "*not a constant string*") "a declaration that must be computed to be read is refused"
-Check ((Finding "misnamed.ps1") -like "*the file name is the command name*") "a command whose declared name is not its file name is refused"
-Check ((Finding "ungrouped.ps1") -like "*which help does not list*") "a command in a group help does not list is refused, so help cannot drop it"
-Check ((Finding "plain-run.ps1") -like "*CmdletBinding*") "a run block that would silently accept any flag is refused"
-Check ((Finding "no-summary.ps1") -like "*has no summary*") "a command with no summary is refused"
-Check ((Finding "no-summary.ps1") -like "*unknown key*") "and so is a key the registry does not know"
-Check ((Finding "wrong-usage.ps1") -like "*usage does not start with its own name*") "a usage line for a different command is refused"
+Check (HasFinding "side-effect.ps1" "top-level statements") "a command file that does work at load time is refused"
+Check (HasFinding "computed.ps1" "not a constant string") "a declaration that must be computed to be read is refused"
+Check (HasFinding "misnamed.ps1" "the file name is the command name") "a command whose declared name is not its file name is refused"
+Check (HasFinding "ungrouped.ps1" "which help does not list") "a command in a group help does not list is refused, so help cannot drop it"
+Check (HasFinding "plain-run.ps1" "CmdletBinding") "a run block that would silently accept any flag is refused"
+Check (HasFinding "no-summary.ps1" "has no summary") "a command with no summary is refused"
+Check (HasFinding "no-summary.ps1" "unknown key") "and so is a key the registry does not know"
+Check (HasFinding "wrong-usage.ps1" "usage does not start with its own name") "a usage line for a different command is refused"
 Check (-not (Test-Path -LiteralPath $marker)) "listing the commands ran none of their code"
 Check ((@(Format-HordeHelp -Dir (Join-Path $root "test\fixtures\cli\bad")) -join "`n") -like "*broken command files*") "help names broken command files instead of silently leaving them out"
 $refused = $false
