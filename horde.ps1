@@ -10,9 +10,11 @@
 #
 # EXIT CODES ARE 0, 1 OR 2, AND NOTHING ELSE, so a caller can act on them:
 #   0  the command ran and returned
-#   1  the command failed: it threw, its file is broken, or it called `exit` - with any code, 0
+#   1  the command failed: it threw, its file is broken, it called `exit` - with any code, 0
 #      included, because a command reports failure by throwing and success by returning, and an
-#      `exit` skips horde's own reporting
+#      `exit` skips horde's own reporting - or it returned with $LASTEXITCODE not 0, meaning the
+#      last program it ran failed and it did not say it had handled that. A command that handles a
+#      program's failure itself sets $global:LASTEXITCODE = 0 (see cli\commands\version.ps1).
 #   2  the command line was wrong: an unknown command, or arguments the command does not accept
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +58,7 @@ try {
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $command = Import-HordeCommand -Path $lookup.command.path
     $state = @{ completed = $false }
+    $global:LASTEXITCODE = 0
     & $runner -Run $command.run -Named $named -Positional $positional -State $state
 }
 catch [System.Management.Automation.ParameterBindingException] {
@@ -72,6 +75,13 @@ catch {
 }
 if (-not $state.completed) {
     [Console]::Error.WriteLine("horde " + $name + ": the command called exit (code " + $LASTEXITCODE + "); a command returns, or throws to fail")
+    exit 1
+}
+# A program the command ran and left failed. Only the LAST program's code survives in $LASTEXITCODE,
+# so this catches a command that ends on an unchecked failure, not one that ignored a failure earlier
+# and ran something that succeeded after it; checking each program remains the command's job.
+if ($LASTEXITCODE -ne 0) {
+    [Console]::Error.WriteLine("horde " + $name + ": a program it ran failed with exit code " + $LASTEXITCODE + ", and the command did not handle it")
     exit 1
 }
 exit 0

@@ -13,6 +13,9 @@ $HordeCommand = @{
         if ((Test-Path -LiteralPath (Join-Path $root ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)) {
             $out = & git -C $root rev-parse --short HEAD
             if ($LASTEXITCODE -eq 0 -and "$out" -match '^[0-9a-f]{7,40}$') { $commit = "$out" }
+            # A failed rev-parse is handled - the commit is unknown - so it is not left for horde to
+            # report as this command failing.
+            $global:LASTEXITCODE = 0
         }
         if ($Json) {
             [pscustomobject]@{ version = $version; commit = $commit } | ConvertTo-Json -Compress

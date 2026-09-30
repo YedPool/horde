@@ -153,6 +153,7 @@ Copy-Item -LiteralPath (Join-Path $root "horde.ps1") -Destination $tmp
 Copy-Item -LiteralPath (Join-Path $root "VERSION") -Destination $tmp
 Copy-Item -Path (Join-Path $root "cli\*.ps1") -Destination (Join-Path $tmp "cli")
 Copy-Item -LiteralPath (Join-Path $root "cli\commands\help.ps1") -Destination (Join-Path $tmp "cli\commands")
+Copy-Item -LiteralPath (Join-Path $root "cli\commands\version.ps1") -Destination (Join-Path $tmp "cli\commands")
 Copy-Item -Path (Join-Path $root "test\fixtures\cli\extra\*.ps1") -Destination (Join-Path $tmp "cli\commands")
 Copy-Item -LiteralPath (Join-Path $root "test\fixtures\cli\bad\side-effect.ps1") -Destination (Join-Path $tmp "cli\commands")
 # Two files that look like commands and are not. zeta.ps1x is matched by `Get-ChildItem -Filter *.ps1`
@@ -219,6 +220,20 @@ try {
     foreach ($f in @("exit-seven", "exit-bare")) {
         $r = Invoke-Horde -Root $tmp -Arguments @($f)
         Check ($r.code -eq 1 -and $r.out -like ($f + " started*") -and $r.err -like ("horde " + $f + ": *exit*")) ("a command that calls exit makes horde exit 1 and say so: " + $f + " (got " + $r.code + ": " + $r.err.Trim() + ")")
+    }
+    # A program a command runs and leaves failed: horde used to exit 0 (review of PR #12, finding 6).
+    $r = Invoke-Horde -Root $tmp -Arguments @("native-fail")
+    Check ($r.code -eq 1 -and $r.out -like "native-fail started*" -and $r.err -like "horde native-fail: *exit code 3*") ("a program a command leaves failed makes horde exit 1 and say so (got " + $r.code + ": " + $r.err.Trim() + ")")
+    # And one it handles is not a failure: version, in a folder whose .git points nowhere, runs git,
+    # sees it fail, and says the commit is unknown. git exits 128 there without searching the parent
+    # folders (measured).
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        Set-Content -LiteralPath (Join-Path $tmp ".git") -Value "gitdir: does-not-exist"
+        $r = Invoke-Horde -Root $tmp -Arguments @("version")
+        Check ($r.code -eq 0 -and $r.out -like "*commit unknown*") ("a program failure the command handles is not a failure: version with a broken .git (got " + $r.code + ": " + $r.out.Trim() + ")")
+        Remove-Item -LiteralPath (Join-Path $tmp ".git") -Force
+    } else {
+        Write-Host "  [SKIP] git is not on PATH, so a handled program failure cannot be tested here" -ForegroundColor Yellow
     }
     $r = Invoke-Horde -Root $tmp -Arguments @("inner-bind")
     Check ($r.code -eq 1 -and $r.err -like "horde inner-bind: *NoSuchParameterForHordeTests*" -and $r.err -notlike "*usage:*") ("a binding error inside a command's body exits 1 without the usage (got " + $r.code + ": " + $r.err.Trim() + ")")
