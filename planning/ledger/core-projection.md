@@ -481,9 +481,9 @@ adapters' own PRs.
 - where: test/test-projection.ps1 :: "a session of an agent whose processes are not read leaves the duplicate check unknown"
 
 ### L-091 The projection's engine names are counted exactly until engines A4 moves them out
-- source: review of horde PR #31, finding 10: agent names in core/Projection.ps1 and core/Faults.ps1, the --resume pattern, and the agent enum in schema/session-view.v1; planning/execution-plan-engines.md step 13 (A4) and step 2 (E1, the agents ratchet, not built yet)
-- disposition: test
-- where: test/test-projection.ps1 :: "every engine name in the projection's files is listed, with its exact count"
+- source: review of horde PR #31, finding 10: agent names in core/Projection.ps1 and core/Faults.ps1, the --resume pattern, and the agent enum in schema/session-view.v1; planning/execution-plan-engines.md step 13 (A4) and step 2 (E1); second review, finding 7
+- disposition: dropped
+- reason: A list kept here would be a second engine-name allowlist beside engines E1 (PR #34), which is the single one, kept per engine in agents/<name>/allowlist.txt; whichever of PR #31 or PR #34 merges second adds this module's files to it with growth.txt lines, so the counts are carried there and not in this module.
 
 ## From the second review of PR #31
 

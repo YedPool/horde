@@ -761,25 +761,6 @@ $named = @($newCore | Where-Object { $txt = (Get-Content -LiteralPath (Join-Path
 foreach ($x in $named) { Write-Host ("  names a terminal: core/" + $x) -ForegroundColor Red }
 $caught = ($hostNames.Count -ge 1 -and ("x " + $hostNames[0].ToUpperInvariant() + " y").ToLowerInvariant().Contains($hostNames[0]))
 Check ($hostNames.Count -ge 1 -and $caught -and $named.Count -eq 0) "the projection names no terminal"
-# pattern, the agent enum - where engines A4 will move them into agents/<name>/ (review of PR #31,
-# finding 10). Until then every file's mentions are listed with an exact count in
-# planning/engine-mentions.md, and this suite reads both the names and the counts from it, so it
-# spells no engine itself. A new mention fails; so does an entry that allows more than its file has.
-$emPath = Join-Path $root "planning\engine-mentions.md"
-$emText = ""; if (Test-Path -LiteralPath $emPath) { $emText = (Get-Content -LiteralPath $emPath -Raw) -replace "`r", "" }
-$emNames = @(); $mNames = [regex]::Match($emText, '(?m)^names: *(.+)$'); if ($mNames.Success) { $emNames = @($mNames.Groups[1].Value -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ -ne "" }) }
-$emAllowed = @{}
-foreach ($m in [regex]::Matches($emText, '(?m)^([A-Za-z0-9_./-]+) \| ([0-9]+) \| \S')) { $emAllowed[$m.Groups[1].Value] = [int]$m.Groups[2].Value }
-$emScanned = @("core/Projection.ps1", "core/Faults.ps1", "core/WezfleetState.ps1", "core/PaneSessions.ps1", "core/HostPort.ps1", "core/Platform.ps1", "schema/session-view.v1.json")
-$emBad = @()
-foreach ($f in $emScanned) {
-    $txt = (Get-Content -LiteralPath (Join-Path $root ($f -replace '/', '\')) -Raw).ToLowerInvariant()
-    $n = 0; foreach ($nm in $emNames) { $n += [regex]::Matches($txt, [regex]::Escape($nm)).Count }
-    $want = 0; if ($emAllowed.ContainsKey($f)) { $want = $emAllowed[$f] }
-    if ($n -ne $want) { $emBad += ($f + " has " + $n + " mention(s), the list allows " + $want) }
-}
-foreach ($x in $emBad) { Write-Host ("  " + $x) -ForegroundColor Red }
-Check ($emNames.Count -ge 2 -and $emAllowed.Count -ge 1 -and $emBad.Count -eq 0) "every engine name in the projection's files is listed, with its exact count"
 $nonAscii = @($newCore | Where-Object { (Get-Content -LiteralPath (Join-Path $root ("core\" + $_)) -Raw -Encoding UTF8) -match '[^\x00-\x7F]' })
 Check ($nonAscii.Count -eq 0) ("every projection source file is ASCII (" + ($nonAscii -join ", ") + ")")
 
