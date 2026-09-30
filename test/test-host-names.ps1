@@ -124,7 +124,11 @@ try {
     Passes "planning" { Write-FakeFile "planning/ledger/old-fleet.md" "The Zorbterm fleet and its zorb-sock.`n" } "planning/ is not scanned: plans and ledgers describe the old system by rule"
     Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
-    Passes "twice-on-a-line" { Write-FakeFile "docs/rules.md" "A Zorbterm, and its zorb-sock, and zorbterm again.`nNever aim at the zorb-sock you work in.`n" } "a line naming the host several times counts once"
+    # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already
+    # named the host, and a count of lines did not move. Each occurrence of each name counts.
+    Refuses "same-line" { Write-FakeFile "docs/rules.md" "Run tests in a separate Zorbterm, never the zorbterm you work in.`nNever aim at the zorb-sock you work in.`n" } "3 mention(s); the allowlist allows 2 - a new mention" "a second mention on a line that already names the host is a new mention"
+    Passes "two-names-one-line" { Write-FakeFile "docs/rules.md" "Run tests in a separate Zorbterm and its own zorb-sock.`nNothing else here.`n" } "two names on one line count as two mentions, not one line"
+    Passes "moved-mention" { Write-FakeFile "docs/rules.md" "Nothing here.`nRun tests in a separate Zorbterm, never the zorb-sock you work in.`n" } "the same mentions on fewer lines are the same count"
     Passes "crlf" { Write-FakeFile "hosts/zorbterm/allowlist.txt" "# exceptions`r`ndocs/rules.md | 2 | the rules describe how tests isolate the invented terminal`r`n" } "an allowlist with CRLF line endings is read the same"
     Passes "backslash" { Write-FakeFile "hosts/zorbterm/allowlist.txt" "docs\rules.md | 2 | the rules describe how tests isolate the invented terminal`n" } "an allowlist path written with backslashes names the same file"
 } finally {

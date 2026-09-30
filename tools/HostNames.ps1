@@ -8,20 +8,27 @@
 # that a second host is a new adapter and not an engine change. The first host was the only host for
 # the whole life of the systems Horde replaces, and its name is in comments, fixtures and data today.
 # A rule with no check would erode one reasonable-looking mention at a time. So each existing mention
-# is listed, with its reason and its exact number of lines, and the list may only get shorter.
+# is listed, with its reason and its exact number of mentions, and the list may only get shorter.
 #
 # THE DATA IS THE HOST'S. Each host declares what identifies it in hosts/<name>/names.txt, and its
 # exceptions in hosts/<name>/allowlist.txt. This file and its suite name no terminal at all, so the
 # ratchet does not have to except itself, and a new host brings its own names without touching it.
 #
 #   names.txt, one per line:      <name> | <why it identifies this host>
-#   allowlist.txt, one per line:  <path> | <lines> | <why this file may name the host>
+#   allowlist.txt, one per line:  <path> | <mentions> | <why this file may name the host>
 #   Blank lines and lines beginning with # are ignored in both.
 #
-# WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of its
-# lines containing any of the host's names, plus one if its path does. An allowlisted count must be
-# EXACT: more lines than listed is a new mention; fewer is an entry that allows more than is needed,
-# and it must be lowered. That second half is what makes the list shrink-only.
+# WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
+# MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
+# names the host. Mentions, not lines: a second mention added to a line that already had one is a new
+# mention (review of PR 21). An allowlisted count must be EXACT: more mentions than listed is a new
+# mention; fewer is an entry that allows more than is needed, and it must be lowered. That second
+# half is what makes the list shrink-only.
+#
+# SWAPPING ONE MENTION FOR ANOTHER IS STILL INVISIBLE. The count is a number per file, so deleting a
+# mention and adding a different one in the same file - a comment's citation traded for a call to the
+# terminal - leaves it unchanged. The ratchet catches growth, not substitution; a reviewer reading the
+# diff of an allowlisted file is what catches that.
 #
 # WHAT IS NOT SCANNED, by rule:
 #   - hosts/<name>/ itself: the one place the host's name belongs.
@@ -86,17 +93,22 @@ function Get-HordeRepoFiles {
     return , $out
 }
 
-function Get-HordeNameLineCount {
-    # How many lines of the file name any of the names, plus one if its path does. A line naming two
-    # of them counts once. Every file is read as text: the repository holds no binary files, and a
-    # binary one would be read as text too - a false mention can only make the check stricter.
+function Get-HordeNameMentionCount {
+    # How many times the file names the host: every occurrence of every name in its text, plus one if
+    # its path names the host. Occurrences, not lines - the review of PR 21 appended a second mention
+    # to a line that already had one, and a count of lines did not move. Occurrences of one name do
+    # not overlap ("aa" is in "aaa" once), and a name inside another name is counted for each.
+    # Every file is read as text: the repository holds no binary files, and a binary one would be
+    # read as text too - a false mention can only make the check stricter.
     param([string]$Full, [string]$Rel, [string[]]$Names)
     $count = 0
     foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }
     $text = [System.IO.File]::ReadAllText($Full)
-    foreach ($ln in ($text -split "`n")) {
-        foreach ($nm in $Names) {
-            if ($ln.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count++; break }
+    foreach ($nm in $Names) {
+        $at = $text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)
+        while ($at -ge 0) {
+            $count++
+            $at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)
         }
     }
     return $count
@@ -142,29 +154,29 @@ function Test-HordeHostNames {
         if (Test-Path -LiteralPath $allowPath -PathType Leaf) {
             foreach ($r in (Read-HordeHostTable -Path $allowPath)) {
                 $where = $own + "/allowlist.txt:" + $r.line
-                if ($r.cells.Count -ne 3) { Add-Finding $hn $where "an allowlist line is <path> | <lines> | <why this file may name the host>"; continue }
+                if ($r.cells.Count -ne 3) { Add-Finding $hn $where "an allowlist line is <path> | <mentions> | <why this file may name the host>"; continue }
                 $p = ($r.cells[0] -replace '\\', '/').TrimStart('/')
-                $lines = 0
-                if (-not [int]::TryParse($r.cells[1], [ref]$lines) -or $lines -lt 1) { Add-Finding $hn $where ("the line count for " + $p + " must be a whole number of at least 1"); continue }
+                $allowCount = 0
+                if (-not [int]::TryParse($r.cells[1], [ref]$allowCount) -or $allowCount -lt 1) { Add-Finding $hn $where ("the mention count for " + $p + " must be a whole number of at least 1"); continue }
                 if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { Add-Finding $hn $where ($p + " needs a reason of at least a sentence"); continue }
                 $key = $p.ToLowerInvariant()
                 if ($allowed.ContainsKey($key)) { Add-Finding $hn $where ($p + " is listed twice"); continue }
                 # AN ENTRY FOR A PATH THE SCAN NEVER READS allows nothing, and would sit there forever.
                 if (Test-HordeUnderFolder -Rel $p -Folders $skip) { Add-Finding $hn $where ($p + " is excluded from the scan by rule, so the entry is not needed"); continue }
-                $allowed[$key] = [pscustomobject]@{ path = $p; lines = $lines }
+                $allowed[$key] = [pscustomobject]@{ path = $p; count = $allowCount }
             }
         }
 
         $seen = @{}
         foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip $skip)) {
-            $c = Get-HordeNameLineCount -Full $f.full -Rel $f.rel -Names $names
+            $c = Get-HordeNameMentionCount -Full $f.full -Rel $f.rel -Names $names
             $key = $f.rel.ToLowerInvariant()
             $a = $allowed[$key]
             if ($a) { $seen[$key] = $c }
             if ($c -eq 0) { continue }
-            if (-not $a) { Add-Finding $hn $f.rel ("names the host on " + $c + " line(s) and is not in " + $own + "/allowlist.txt"); continue }
-            if ($c -gt $a.lines) { Add-Finding $hn $f.rel ("names the host on " + $c + " line(s); the allowlist allows " + $a.lines + " - a new mention") }
-            elseif ($c -lt $a.lines) { Add-Finding $hn $f.rel ("names the host on only " + $c + " line(s); the allowlist allows " + $a.lines + " - lower it to " + $c) }
+            if (-not $a) { Add-Finding $hn $f.rel ("has " + $c + " mention(s) of the host and is not in " + $own + "/allowlist.txt"); continue }
+            if ($c -gt $a.count) { Add-Finding $hn $f.rel ("has " + $c + " mention(s); the allowlist allows " + $a.count + " - a new mention") }
+            elseif ($c -lt $a.count) { Add-Finding $hn $f.rel ("has only " + $c + " mention(s); the allowlist allows " + $a.count + " - lower it to " + $c) }
         }
         # LISTED, BUT NAMING THE HOST NOWHERE, OR NOT THERE AT ALL: the entry allows what nothing needs.
         foreach ($k in @($allowed.Keys)) {

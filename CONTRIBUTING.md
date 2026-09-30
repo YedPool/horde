@@ -196,7 +196,7 @@ adapter and not an engine change. Host-specific test tooling lives with its host
 
 `test/test-host-names.ps1` enforces it. Each host lists what identifies it in
 `hosts/<name>/names.txt`, and every file elsewhere that still names it in
-`hosts/<name>/allowlist.txt`, with a reason and its exact number of lines. The list may only
+`hosts/<name>/allowlist.txt`, with a reason and its exact number of mentions. The list may only
 shrink: a new mention fails, and so does an entry that allows more than its file needs. `planning/`
 is not scanned, because plans and ledgers record the system being replaced and cannot be accurate
 without naming it.

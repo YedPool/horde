@@ -5,15 +5,18 @@
     Suite  = "test\test-host-names.ps1"
     Mutations = @(
         # --- what counts as a mention
-        @{ Name = "lines-matched-with-case"
-           Find = 'if ($ln.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count++; break }'
-           Replace = 'if ($ln.IndexOf($nm, [System.StringComparison]::Ordinal) -ge 0) { $count++; break }' }
+        @{ Name = "mentions-matched-with-case"
+           Find = '$at = $text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = $text.IndexOf($nm, [System.StringComparison]::Ordinal)' }
         @{ Name = "path-not-checked"
            Find = 'foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }'
            Replace = '' }
-        @{ Name = "line-counted-once-per-name"
-           Find = '{ $count++; break }'
-           Replace = '{ $count++ }' }
+        @{ Name = "one-mention-per-name"
+           Find = '$at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = -1' }
+        @{ Name = "lines-counted-not-mentions"
+           Find = '$at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = $text.IndexOf("`n", $at); if ($at -ge 0) { $at = $text.IndexOf($nm, $at, [System.StringComparison]::OrdinalIgnoreCase) }' }
         @{ Name = "comment-lines-read-as-data"
            Find = 'if ($t -eq "" -or $t.StartsWith("#")) { continue }'
            Replace = 'if ($t -eq "") { continue }' }
@@ -57,7 +60,7 @@
            Find = 'if ($allowed.ContainsKey($key)) {'
            Replace = 'if ($false) {' }
         @{ Name = "zero-count-accepted"
-           Find = '-or $lines -lt 1)'
+           Find = '-or $allowCount -lt 1)'
            Replace = ')' }
         @{ Name = "entry-reason-unchecked"
            Find = 'if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) {'
