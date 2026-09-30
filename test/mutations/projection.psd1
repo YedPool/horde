@@ -29,8 +29,8 @@
            Find = 'if (-not $Context.live.ContainsKey($h)) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "host-port-ignored"
-           Find = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort)'
-           Replace = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port (New-HordeUnavailableHostPort -Reason "mutant"))' }
+           Find = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort -Platform $Platform)'
+           Replace = '$C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port (New-HordeUnavailableHostPort -Reason "mutant") -Platform $Platform)' }
         @{ Name = "any-host-trusts-stored-handles"
            Find = 'if (@($Context.wrote) -cnotcontains $Store) {'
            Replace = 'if ($false) {' }
@@ -46,7 +46,7 @@
            Find = 'if ($g.Count -gt 1) {'
            Replace = 'if ($false) {' }
         @{ Name = "hijack-ignored"
-           Find = 'if ($holder.ContainsKey($f.handle) -and $holder[$f.handle] -ine $f.sessionId) {'
+           Find = 'if ($holder.ContainsKey($f.handle) -and @($holder[$f.handle])[0] -ine $f.sessionId) {'
            Replace = 'if ($false) {' }
         @{ Name = "pane-files-read-under-two-instances"
            Find = 'if ($Context.instance.value.running -gt 1) {'
@@ -76,8 +76,8 @@
            Find = 'if ($openSpawned.Count -gt 1) {'
            Replace = 'if ($openSpawned.Count -gt 1) { return [pscustomobject]@{ answer = (New-HordeKnown -Value $openSpawned[0].run); ambiguous = @() } }; if ($false) {' }
         @{ Name = "closed-runs-first-wins"
-           Find = 'if ($hits.Count -gt 1) {'
-           Replace = 'if ($hits.Count -gt 1) { return [pscustomobject]@{ answer = (New-HordeKnown -Value $hits[0].run); ambiguous = @() } }; if ($false) {' }
+           Find = 'if ($hits.Count -gt 1) { $ids = @($hits | ForEach-Object { $_.run.runId });'
+           Replace = 'if ($hits.Count -gt 1) { return [pscustomobject]@{ answer = (New-HordeKnown -Value $hits[0].run); ambiguous = @() } }; if ($false) { $ids = @($hits | ForEach-Object { $_.run.runId });' }
         @{ Name = "roster-listing-twice-takes-first"
            Find = 'if ($e.Count -gt 1) { return'
            Replace = 'if ($false) { return' }
