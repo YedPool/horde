@@ -483,6 +483,7 @@
   argv above is a placeholder and says so. No two sessions share a <code>kind</code> and <code>id</code>, so
   no conversation is resumed twice.
 </p>
+<p>Which harness, provider and model each session runs on - engine settings, the <code>agents/&lt;name&gt;/</code> adapters, provider profiles, the session key and resume bindings: <code>planning/execution-plan-engines.md</code> (2026-09-30).</p>
 
 <h3>Host capabilities</h3>
 <table>
@@ -630,6 +631,7 @@
 </table>
 
 <h3><span class="phase">PHASE 7</span>The second host - the step that proves the seam</h3>
+<p>The terminal hosts after WezTerm - tmux over WSL first, psmux second, Ghostty deferred - with their capability files, isolation harnesses and job-object handling: <code>planning/execution-plan-hosts.md</code> (2026-09-30). tmux becomes the TerminalPort proof; VS Code below stays the LayoutPort proof.</p>
 <table>
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
   <tr><td>7.1</td><td>VS Code and Cursor layout adapter: apply by writing <code>.vscode/tasks.json</code>, one task per slot. Spike first to verify grouping and icons.</td><td>The generated conformance suite, passing or declining honestly per verb.</td><td class="c sz">M</td></tr>
