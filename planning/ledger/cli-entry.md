@@ -128,3 +128,8 @@ sources:
 - source: second review of YedPool/horde PR #12, finding 3: a body `cmd /c exit 3; break` made horde exit 0, because break travels up the call stack to the nearest loop and skipped horde's completion and $LASTEXITCODE checks. Measured 2026-09-29 on PowerShell 5.1: a do-while in cli/Runner.ps1 takes an unlabelled break or continue, but a labelled break whose label matches nothing passes it and ended horde with exit 0, so horde.ps1 also checks in a finally block
 - disposition: test
 - where: test/test-cli.ps1 :: "a command that leaves its body with break or continue makes horde exit 1"
+
+### L-023 A command body cannot see or change horde's own variables by name
+- source: second review of YedPool/horde PR #12, finding 5: a body that set $state.completed = $true and called `exit 0` made horde exit 0, because it runs in a scope below horde's and the runner's. Measured 2026-09-29 on PowerShell 5.1: before, the body saw 14 of their variables; made private, it sees none by name, though Get-Variable -Scope 1 or 2 still reaches them, so this guards against accidents and not against a body that means to
+- disposition: test
+- where: test/test-cli.ps1 :: "a command body cannot see horde's own variables"

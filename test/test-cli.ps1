@@ -283,6 +283,15 @@ try {
     }
     $r = Invoke-Horde -Root $tmp -Arguments @("flow", "return")
     Check ($r.code -eq 0 -and $r.out -like "flow started*flow returned*") ("CONTROL: the same command, returning, exits 0 (got " + $r.code + ": " + $r.err.Trim() + ")")
+    # A command body runs in a scope below horde's and the runner's, so it could read and change their
+    # variables: a body that set $state.completed = $true and then called `exit 0` made horde exit 0
+    # (second review of PR #12, finding 5). They are private now; the body sees none of them.
+    foreach ($typed in @($false, $true)) {
+        $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
+        $r = Invoke-Horde -Root $tmp -Arguments @("peek") -AsTyped:$typed
+        Check ($r.out.Trim() -eq "seen=[]") ("a command body cannot see horde's own variables" + ", " + $how + " (got " + $r.out.Trim() + ")")
+        Check ($r.code -eq 1 -and $r.err -like "horde peek: the command did not return*") ("and cannot fake having returned" + ", " + $how + " (got " + $r.code + ": " + $r.err.Trim() + ")")
+    }
     # HELP DESCRIBES THE COMMANDS AS THEY ARE, NOT AS THEY WERE (YedPool/wezfleet 80aa026: a help text
     # that described the old kill and the old tell). The summary is read here from the file's text,
     # not through the registry, then changed on disk; help must follow the file.

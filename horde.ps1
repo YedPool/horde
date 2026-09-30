@@ -24,13 +24,19 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")
 . (Join-Path $PSScriptRoot "cli\Arguments.ps1")
 
-$name = ""
+# HORDE'S OWN VARIABLES ARE PRIVATE. A command body runs in a scope below this script's, and saw
+# every variable here: a body that set $state.completed = $true and called `exit 0` made horde exit 0
+# (second review of PR #12, finding 5). $private: hides them from the body's ordinary lookups - and from
+# the Where-Object blocks below, which is why none of those names one. It does not hide them from a
+# body that asks for this scope by number (Get-Variable -Scope 2), measured 2026-09-29: this keeps a
+# body from colliding with horde by accident, and is not a wall against one that means to.
+$private:name = ""
 if ($args.Count -gt 0) { $name = "$($args[0])" }
-$rest = @($args | Select-Object -Skip 1)
+$private:rest = @($args | Select-Object -Skip 1)
 
 if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }
 
-$lookup = Find-HordeCommand -Name $name
+$private:lookup = Find-HordeCommand -Name $name
 if (-not $lookup.command) {
     # A file of that name that is broken is not an unknown command: the command line was right and
     # the installation is wrong, so it is exit 1, under the command's own name.
@@ -52,26 +58,26 @@ if (@($rest | Where-Object { @("-?", "-h", "--help") -contains "$_" }).Count -gt
     exit 0
 }
 
-$bound = Resolve-HordeArguments -Items $rest
+$private:bound = Resolve-HordeArguments -Items $rest
 if ($bound.problem) {
     [Console]::Error.WriteLine("horde " + $name + ": " + $bound.problem)
     [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)
     exit 2
 }
-$named = $bound.named
-$positional = $bound.positional
-$runner = Join-Path $PSScriptRoot "cli\Runner.ps1"
+$private:named = $bound.named
+$private:positional = $bound.positional
+$private:runner = Join-Path $PSScriptRoot "cli\Runner.ps1"
 
-$state = @{ completed = $false }
+$private:state = @{ completed = $false }
 # Whether control came back to this script by any ordinary route: the runner returned, or a catch
 # block took an exception. A labelled `break` or `continue` whose label matches no loop is neither -
 # it is not an exception a catch can take, and it passes the runner's loop - and measured 2026-09-29
 # it ended horde with exit 0. Only the finally block below sees it go by.
-$settled = $false
+$private:settled = $false
 try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
-    $command = Import-HordeCommand -Path $lookup.command.path
+    $private:command = Import-HordeCommand -Path $lookup.command.path
     $global:LASTEXITCODE = 0
     & $runner -Run $command.run -Named $named -Positional $positional -State $state
     $settled = $true
@@ -79,7 +85,7 @@ try {
 catch [System.Management.Automation.ParameterBindingException] {
     $settled = $true
     # Only the run block's own binding is a command-line error; cli\Runner.ps1 says how that is told.
-    $isOwn = $null -ne $_.Exception.CommandInvocation -and "$($_.Exception.CommandInvocation.ScriptName)" -ieq $runner
+    $private:isOwn = $null -ne $_.Exception.CommandInvocation -and "$($_.Exception.CommandInvocation.ScriptName)" -ieq $runner
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
     if (-not $isOwn) { exit 1 }
     [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)

@@ -21,4 +21,9 @@
 # A LABELLED break whose label matches nothing passes this loop too - measured 2026-09-29 - and
 # horde.ps1 catches that in its finally block.
 param($Run, $Named, $Positional, $State)
+# The body runs in a scope below this one and could read and change these four - $State.completed
+# included (second review of PR #12, finding 5). A parameter cannot be declared $private:, so each is
+# made private once bound; measured 2026-09-29, the body then sees none of them by name. As in
+# horde.ps1, Get-Variable -Scope 1 still reaches them: this stops accidents, not intent.
+foreach ($private:hordeParam in @("Run", "Named", "Positional", "State")) { (Get-Variable -Name $hordeParam -Scope Local).Options = "Private" }
 do { & $Run @Named @Positional; $State.completed = $true } while ($false)
