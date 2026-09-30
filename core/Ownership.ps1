@@ -2,14 +2,19 @@
 #
 # Step 0.6. The systems Horde replaces keep the same fact in several places - a session's pane is
 # stored three times in wezfleet and derivable from a fourth source - and different callers trust
-# different copies (planning/ledger/core-ownership.md, D1 to D24). Horde does not repair that. It
-# writes down, as data in core\ownership.json, for every field:
+# different copies (planning/ledger/core-ownership.md, entries L-001 onward). Horde does not repair
+# that. It writes down, as data in core\ownership.json, for every field:
 #   - its ONE future owner, so there is never a second writer to disagree with, and
 #   - until that field is switched over, the ORDER the old stores are read in when they disagree,
 #     so every reader in Horde resolves a disagreement the same way.
+# A field of the record that Horde does not carry is listed under `dropped`, with the reason.
 #
-# Test-HordeOwnership is the gate: a field with no owner, two owners, no read rule, or a store that
-# does not exist is a finding.
+# Test-HordeOwnership is the gate. Each of these is a finding: a key repeated inside one object; a
+# field with no owner, two owners or an owner that is not listed; no read rule; a read of a store
+# that does not exist, of nothing named, twice, or under an empty condition; an unknown key in a
+# field, a read, a store or a dropped entry; an empty store guard; a derived or provisional with no
+# text; a dropped field with no reason; a store nothing reads; and a required field that is neither
+# kept nor dropped, or a kept or dropped field that is not required.
 
 Set-StrictMode -Off
 
