@@ -41,7 +41,12 @@ $ErrorActionPreference = "Stop"
 # body from colliding with horde by accident, and is not a wall against one that means to.
 $private:name = ""
 if ($args.Count -gt 0) { $name = "$($args[0])" }
-$private:rest = @($args | Select-Object -Skip 1)
+# AN INDEX SLICE, NOT `$args | Select-Object -Skip 1`. A pipeline drops a $null item: in-process,
+# `$m = $null; horde echo-args -Verb:$m target` bound verb=[target] target=[], exit 0 - the next word
+# became the value (third review of PR #12, finding 1). A slice keeps the $null in its place, and
+# keeps each item's parameter tag (measured 2026-09-30, cli\Arguments.ps1 says which copies lose it).
+$private:rest = @()
+if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }
 
 if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }
 

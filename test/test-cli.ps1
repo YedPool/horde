@@ -18,19 +18,13 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "cli\Commands.ps1")
 
-function Invoke-Horde {
-    # Run horde as its own process. Returns { code; out; err } with the two streams kept apart.
-    # Not `2>&1`: on PowerShell 5.1 that turns a native command's stderr into an error record.
-    param([string]$Root, [string[]]$Arguments, [switch]$AsTyped)
-    $script = Join-Path $Root "horde.ps1"
+function Start-HordeProcess {
+    # Run powershell.exe with these arguments. Returns { code; out; err } with the two streams kept
+    # apart. Not `2>&1`: on PowerShell 5.1 that turns a native command's stderr into an error record.
+    param([string]$PowerShellArguments)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    if ($AsTyped) {
-        $quoted = @($Arguments | ForEach-Object { if ($_ -match '^-') { $_ } else { "'" + ($_ -replace "'", "''") + "'" } }) -join " "
-        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"& '" + $script + "' " + $quoted + "; exit `$LASTEXITCODE`""
-    } else {
-        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + $script + "`" " + (($Arguments | ForEach-Object { "`"" + $_ + "`"" }) -join " ")
-    }
+    $psi.Arguments = $PowerShellArguments
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -40,6 +34,31 @@ function Invoke-Horde {
     $err = $p.StandardError.ReadToEnd()
     $p.WaitForExit()
     return [pscustomobject]@{ code = $p.ExitCode; out = $out; err = $err }
+}
+
+function Invoke-Horde {
+    # Run horde as its own process, from a script (-File) or as typed at a prompt (-Command).
+    # Typed, a word starting with "-" or "$" is left unquoted, so that PowerShell parses it as it
+    # would at a prompt: -Json:$false and $null are syntax there, not text. Every other word is quoted.
+    param([string]$Root, [string[]]$Arguments, [switch]$AsTyped)
+    $script = Join-Path $Root "horde.ps1"
+    if ($AsTyped) {
+        $quoted = @($Arguments | ForEach-Object { if ($_ -match '^[-$]') { $_ } else { "'" + ($_ -replace "'", "''") + "'" } }) -join " "
+        return (Start-HordeProcess -PowerShellArguments ("-NoProfile -ExecutionPolicy Bypass -Command `"& '" + $script + "' " + $quoted + "; exit `$LASTEXITCODE`""))
+    }
+    return (Start-HordeProcess -PowerShellArguments ("-NoProfile -ExecutionPolicy Bypass -File `"" + $script + "`" " + (($Arguments | ForEach-Object { "`"" + $_ + "`"" }) -join " ")))
+}
+
+function Invoke-HordeInProcess {
+    # Run PowerShell code that calls horde IN-PROCESS - `& $horde ...` from inside a script, the way a
+    # command or another script calls it - in a process of its own, so that horde's exit code and its
+    # stderr are read as Invoke-Horde reads them. This is not typed mode: -Command parses one line of
+    # text, while here a variable set earlier reaches horde as the object it holds, $null included.
+    param([string]$Root, [string]$Code)
+    $file = Join-Path $Root ("in-process-" + [guid]::NewGuid().ToString("N") + ".ps1")
+    Set-Content -LiteralPath $file -Encoding Ascii -Value ('$horde = Join-Path $PSScriptRoot "horde.ps1"' + "`r`n" + $Code + "`r`nexit `$LASTEXITCODE")
+    try { return (Start-HordeProcess -PowerShellArguments ("-NoProfile -ExecutionPolicy Bypass -File `"" + $file + "`"")) }
+    finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ""
@@ -243,6 +262,16 @@ try {
         $r = Invoke-Horde -Root $tmp -Arguments @("nested-call", "hello") -AsTyped:$typed
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0 verb=[]") ("horde called from inside a command binds its own colon value" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }
+    # A $null VALUE KEEPS ITS PLACE. horde took its arguments as `$args | Select-Object -Skip 1`, and
+    # a pipeline drops a $null item: in-process, `$m = $null; horde echo-args -Verb:$m target` bound
+    # verb=[target] target=[] with exit 0 - the next word shifted into the parameter (third review of
+    # PR #12, finding 1). Typed at a prompt, -Verb:$null x did the same.
+    foreach ($code in @('$m = $null; & $horde echo-args -Verb:$m target', '$m = $null; & $horde echo-args -Verb $m target')) {
+        $r = Invoke-HordeInProcess -Root $tmp -Code $code
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[target] json=False count=0 verb=[]") ("a null value keeps its place, and the next word is not shifted into its parameter" + ", in-process: " + $code + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Verb:$null', "x") -AsTyped
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[x] json=False count=0 verb=[]") ("a null value keeps its place, and the next word is not shifted into its parameter" + ", typed at a prompt: -Verb:`$null x (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # A QUOTE DOUBLED INSIDE A QUOTED ARGUMENT, from a script. powershell.exe ends the quote at the
     # doubled quote and .NET's [Environment]::GetCommandLineArgs does not: measured 2026-09-29, the
     # line `"x"" -Json"` reached the script as two items, x" and -Json (a switch), and .NET read it as

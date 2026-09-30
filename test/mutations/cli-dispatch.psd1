@@ -8,6 +8,10 @@
            Find = '$ErrorActionPreference = "Stop"'
            Replace = "param([Parameter(Position = 0)]`$Command, [Parameter(ValueFromRemainingArguments = `$true)]`$Rest)`n`$ErrorActionPreference = `"Stop`"" }
         # -?, -h and --help.
+        # The command's items, taken with every $null in its place.
+        @{ Name = "rest-drops-null"
+           Find = 'if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }'
+           Replace = '$rest = @($args | Select-Object -Skip 1)' }
         @{ Name = "no-default-to-help"
            Find = 'if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }'
            Replace = 'if ($name -eq "") { $name = "help" }' }

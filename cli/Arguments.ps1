@@ -79,8 +79,11 @@ function Resolve-HordeArguments {
         }
         $pname = Get-HordeParameterName -Item $item
         if ($pname -and "$item".EndsWith(":")) {
-            # Typed, "-Json:" with nothing after it is a parse error before horde runs, so a colon
-            # with no item after it cannot arrive this way; refused all the same, never guessed.
+            # Typed, "-Json:" with nothing after it is a parse error before horde runs, and -Json:$m
+            # with $m unset arrives as "-Json:" and a $null item, which horde.ps1 keeps. It did not
+            # always: taken through a pipeline the $null was dropped and the NEXT word became the
+            # value (third review of PR #12, finding 1). A colon item with nothing after it means an
+            # item was lost before this point; it is refused, never guessed.
             if ($j + 1 -ge $items.Count) { return (& $fail ("parameter " + $item + " needs a value after the colon")) }
             if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
             $value = $items[$j + 1]

@@ -149,6 +149,11 @@ sources:
 - disposition: test
 - where: test/test-cli.ps1 :: "a switch followed by a truth word from a script is refused, never bound as two arguments"
 
+### L-028 A $null argument keeps its place, so the next word never shifts into its parameter
+- source: third review of YedPool/horde PR #12, finding 1, measured 2026-09-30 on PowerShell 5.1: horde took its arguments as `$args | Select-Object -Skip 1`, and a pipeline drops a $null item. In-process, `$m = $null; horde echo-args -Verb:$m target` (and `-Verb $m target`) bound verb=[target] target=[] with exit 0, and typed `-Verb:$null x` bound verb=[x]. An index slice of $args keeps the $null and every parameter tag; now all three bind target=[...] verb=[]
+- disposition: test
+- where: test/test-cli.ps1 :: "a null value keeps its place, and the next word is not shifted into its parameter"
+
 ### L-027 Every user-facing command is driven end to end, in a terminal that is not the user's
 - source: CONTRIBUTING.md section 2 "Test end to end, the way a user would", which the migration plan's step 0.9 makes the CLI's gate; and section 3, YedPool/wezfleet tasks/lessons.md 2026-08-16, for why the terminal is a separate WezTerm instance and never a window. test/e2e/e2e-cli.ps1 spawns `powershell -File horde.ps1 --help` and `... version` in panes of an isolated instance and reads their screens; run 2026-09-30: 20 PASS, exit 0
 - disposition: test
