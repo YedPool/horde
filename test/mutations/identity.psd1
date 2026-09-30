@@ -73,7 +73,7 @@
            Find = 'if (Test-Path -LiteralPath $tp -PathType Leaf) {'
            Replace = 'if ($true) {' }
         @{ Name = "codex-ttl-not-applied"
-           Find = 'else { $k["liveStatus"] = Limit-HordeAge -Answer (New-HordeKnown -Value "$($st.value)" -ObservedAt $at) -TtlSeconds $TtlSeconds -Now $Now }'
+           Find = 'else { $k["liveStatus"] = Limit-HordeAge -Answer (New-HordeKnown -Value "$($st.value)" -ObservedAt $at) -TtlSeconds $ttl -Now $Now }'
            Replace = 'else { $k["liveStatus"] = New-HordeKnown -Value "$($st.value)" -ObservedAt $at }' }
         @{ Name = "codex-ended-expires"
            Find = 'elseif ("$($st.value)" -ceq "ended") {'
@@ -141,5 +141,11 @@
         @{ Name = "orphan-names-not-provisional"
            Find = 'provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }'
            Replace = 'provisional = @{} }' }
+        @{ Name = "ttl-passed-in-unguarded"
+           Find = '$ttl = Get-HordeCodexTtlSeconds -Value $TtlSeconds'
+           Replace = '$ttl = $TtlSeconds' }
+        @{ Name = "ttl-parse-stricter-than-wezfleet"
+           Find = '[System.Globalization.NumberStyles]::Integer'
+           Replace = '[System.Globalization.NumberStyles]::None' }
     )
 }

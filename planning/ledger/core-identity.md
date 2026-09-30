@@ -85,7 +85,7 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - where: test/test-identity.ps1 :: "a codex ended reading never expires"
 
 ### L-014 A codex TTL override that is not a positive integer is ignored
-- source: YedPool/wezfleet lib/CodexStatus.ps1:75-84 (Get-WfCodexStatusTtlSeconds, default 900 at :68); test_debug/test-codex-status.ps1:214-216. horde core/Tristate.ps1 Limit-HordeAge throws on such a TTL, so identity must fall back to 900 before calling it
+- source: YedPool/wezfleet lib/CodexStatus.ps1:75-84 (Get-WfCodexStatusTtlSeconds, default 900 at :68); test_debug/test-codex-status.ps1:214-216. horde core/Tristate.ps1 Limit-HordeAge throws on such a TTL, so identity must fall back to 900 before calling it. AMENDED 2026-09-30, review finding 4 of PR #19: the comment claimed wezfleet's rule exactly, but wezfleet's [int]::TryParse(string, out) uses NumberStyles.Integer and accepts "+60" and " 60", which Horde's NumberStyles.None refused; Horde now parses the same way, and a TTL passed in as -TtlSeconds takes the same fallback, so -TtlSeconds 0 no longer throws for the whole read
 - disposition: test
 - where: test/test-identity.ps1 :: "a bad codex TTL override falls back to the default"
 
@@ -248,3 +248,8 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 2 of PR #19, 2026-09-30 (see L-046); a node process that a control file does verify is that claude session and does not stand in the way.
 - disposition: test
 - where: test/test-identity.ps1 :: "a node process no file verifies leaves the orphan answer unknown"
+
+### L-048 A TTL passed in takes the same fallback as the override
+- source: review finding 4 of PR #19, 2026-09-30, with the reviewer's probe: Get-HordeIdentity -TtlSeconds 0 threw from Limit-HordeAge and failed the whole read, claude included. The fallback now applies to a TTL passed in as well as to WEZFLEET_CODEX_STATUS_TTL.
+- disposition: test
+- where: test/test-identity.ps1 :: "a bad TTL passed in falls back to the default instead of failing the read"

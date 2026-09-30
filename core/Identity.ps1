@@ -83,12 +83,17 @@ function ConvertTo-HordeClaudeProjectKey {
 }
 
 function Get-HordeCodexTtlSeconds {
-    # wezfleet's rule exactly (lib/CodexStatus.ps1:75-84): an override that is not a positive integer
-    # is IGNORED, not honoured. core/tristate's Limit-HordeAge throws on such a TTL instead, so the
-    # fallback has to happen here, before it is called.
+    # wezfleet's rule (lib/CodexStatus.ps1:75-84): an override that is not a positive integer is
+    # IGNORED, not honoured. core/tristate's Limit-HordeAge throws on such a TTL instead, so the
+    # fallback has to happen here, before it is called - for the environment's override and for a
+    # TTL passed in alike. The parse is wezfleet's: [int]::TryParse with no style is
+    # NumberStyles.Integer, which allows white space around the digits and a leading sign, so "+60"
+    # and " 60" are 60 in both (review finding 4 of PR #19). One difference is kept: wezfleet parses
+    # in the current culture, this in the invariant one, which differs only for a culture whose sign
+    # symbols are not + and -.
     param($Value = $env:WEZFLEET_CODEX_STATUS_TTL)
     $n = 0
-    if ("$Value" -ne "" -and [int]::TryParse("$Value", [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n) -and $n -gt 0) { return $n }
+    if ("$Value" -ne "" -and [int]::TryParse("$Value", [System.Globalization.NumberStyles]::Integer, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n) -and $n -gt 0) { return $n }
     return $script:HordeCodexTtlDefault
 }
 
@@ -374,6 +379,8 @@ function Read-HordeCodexControlFiles {
         $TtlSeconds = (Get-HordeCodexTtlSeconds),
         [datetime]$Now = (Get-Date)
     )
+    # A TTL passed in takes the override's fallback, so a bad one cannot fail the whole read.
+    $ttl = Get-HordeCodexTtlSeconds -Value $TtlSeconds
     $gaps = New-Object System.Collections.ArrayList
     $entries = New-Object System.Collections.ArrayList
     foreach ($f in (Get-HordeControlFiles -Dir $Dir -Agent "codex" -Gaps $gaps)) {
@@ -404,7 +411,7 @@ function Read-HordeCodexControlFiles {
         elseif ("$($st.value)" -ceq "unknown") { $k["liveStatus"] = New-HordeUnknown -Reason "the codex hook itself reported unknown" }
         elseif ($script:HordeCodexStatuses -cnotcontains "$($st.value)") { $k["liveStatus"] = New-HordeUnknown -Reason ("the codex status '" + $st.value + "' is not one Horde knows") }
         elseif ("$($st.value)" -ceq "ended") { $k["liveStatus"] = New-HordeKnown -Value "ended" -ObservedAt $at }
-        else { $k["liveStatus"] = Limit-HordeAge -Answer (New-HordeKnown -Value "$($st.value)" -ObservedAt $at) -TtlSeconds $TtlSeconds -Now $Now }
+        else { $k["liveStatus"] = Limit-HordeAge -Answer (New-HordeKnown -Value "$($st.value)" -ObservedAt $at) -TtlSeconds $ttl -Now $Now }
         [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "codex writes no" -Provisional @{ transcriptPath = "taken from the codex control file; no derivation of a codex transcript path has been measured" } -ProcessCheck "unchecked"))
     }
     $orphans = New-HordeUnknown -Reason "codex writes no pid, so a codex process cannot be matched to a file"

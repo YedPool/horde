@@ -356,6 +356,16 @@ Check ((Get-HordeCodexTtlSeconds -Value "") -eq 900 -and (Get-HordeCodexTtlSecon
 Check ((Get-HordeCodexTtlSeconds -Value "30") -eq 30) "CONTROL: a good codex TTL override is honoured"
 $rx4 = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x -Processes (Table @()) -TtlSeconds 30 -Now $now
 Check ((St $rx4.records["c-idle"].fields.liveStatus) -eq "unknown") "the TTL passed in is the one applied"
+# wezfleet parses the override with [int]::TryParse's default style, which allows a sign and white
+# space around the digits; Horde refused both and so fell back where wezfleet honoured (review
+# finding 4 of PR #19).
+Check ((Get-HordeCodexTtlSeconds -Value "+60") -eq 60 -and (Get-HordeCodexTtlSeconds -Value " 60") -eq 60 -and (Get-HordeCodexTtlSeconds -Value "60 ") -eq 60) "a codex TTL override is parsed as wezfleet parses it"
+# A TTL PASSED IN goes through the same fallback, so a bad one cannot make Limit-HordeAge throw for
+# the whole read: -TtlSeconds 0 did.
+$rx4b = $null; $ttlThrew = $null
+try { $rx4b = Get-HordeIdentity -ClaudeDir $empty -ProjectsDir $pDir -CodexDir $x -Processes (Table @()) -TtlSeconds 0 -Now $now } catch { $ttlThrew = $_.Exception.Message }
+if ($null -ne $ttlThrew) { Write-Host ("  the read threw: " + $ttlThrew) -ForegroundColor Red }
+Check ($null -eq $ttlThrew -and $null -ne $rx4b -and (Val $rx4b.records["c-idle"].fields.liveStatus) -eq "idle") "a bad TTL passed in falls back to the default instead of failing the read"
 
 # A session id is unique across agents too: the same id under both is a duplicate, not two sessions.
 $x5 = NewDir "codex"
