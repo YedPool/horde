@@ -141,7 +141,11 @@ function Get-HordeRoleCount {
     # master or orchestrator (ledger L-003). One master plus one live roleless session used to count
     # as "warchief known 1" (review, 2026-09-29). A retired session's role does not matter to a live
     # count, so it is not consulted.
-    param($Read, [Parameter(Mandatory = $true)][string]$Role)
+    param($Read, [Parameter(Mandatory = $true)][string]$Role, $Table = $null)
+    # Only a native role can be counted. Stored roles are translated on read, so wezfleet's "master"
+    # never matches anything and used to answer a known 0 while a master was running.
+    if ($null -eq $Table) { $Table = Get-HordeRoleTable }
+    if ($Table.native -notcontains $Role) { throw ("cannot count role '" + $Role + "': count one of " + ($Table.native -join ", ")) }
     if ($Read.complete.state -ne "known") { return (New-HordeUnknown -Reason ("cannot count: " + $Read.complete.reason)) }
     $unsure = @($Read.sessions | Where-Object { -not $_.retired -and $_.role.state -ne "known" } | ForEach-Object { $_.id })
     if ($unsure.Count -gt 0) {

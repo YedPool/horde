@@ -133,6 +133,10 @@ try {
     Check ($wc.state -eq "known" -and $wc.value -eq 1) "CONTROL: with every record readable, the warchief count is known"
     $oc = Get-HordeRoleCount -Read $readClean -Role "orc"
     Check ($oc.state -eq "known" -and $oc.value -eq 1) "a retired orc is not counted among the live ones"
+    # Counting "master" - wezfleet's word - matched nothing and answered a known 0 while a master ran.
+    $wrongWord = $null
+    try { $wrongWord = Get-HordeRoleCount -Read $readClean -Role "master" } catch { $wrongWord = "threw: " + $_.Exception.Message }
+    Check ("$wrongWord" -like "threw:*warchief*") "counting a role that is not a native horde role is refused, naming the native ones"
 
     # One record that cannot be parsed: the counts become unknown instead of silently shrinking.
     Set-Content -LiteralPath (Join-Path $sess "broken.json") -Value "{ not json"
