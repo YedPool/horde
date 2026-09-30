@@ -109,7 +109,9 @@ Check ($zero.state -eq "known" -and (Get-HordeValue $zero) -eq 0) "a known zero 
 $blank = New-HordeKnown -Value ""
 Check ($blank.state -eq "known" -and (Get-HordeValue $blank) -eq "") "a known empty string stays known"
 $no = New-HordeKnown -Value $false
-Check ($no.state -eq "known" -and (Get-HordeValue $no) -eq $false) "a known false is not absent"
+# -is [bool] as well as -eq: 0 -eq $false is true in PowerShell, so -eq alone would pass a known 0.
+$noValue = Get-HordeValue $no
+Check ($no.state -eq "known" -and $noValue -is [bool] -and $noValue -eq $false) "a known false is not absent"
 
 Write-Host ""
 Write-Host "--- there is nothing to read out of absent or unknown ---" -ForegroundColor Cyan
@@ -153,10 +155,22 @@ Check (($deepRecord | ConvertTo-Json -Compress -Depth 10) -like '*"n":3*') "a st
 
 # The round trip through JSON, which is where shape is usually lost.
 $now = [datetime]::UtcNow
-foreach ($orig in @((New-HordeKnown -Value @() -ObservedAt $now), (New-HordeKnown -Value 0 -ObservedAt $now), (New-HordeAbsent -ObservedAt $now), $u)) {
+# The state alone surviving is not enough: a known 0 that came back as @(0), or an empty list that
+# came back as $null, would keep its state and lose its meaning. So the value's shape is compared too.
+function Get-ValueShape { param($V)
+    if ($null -eq $V) { return "null" }
+    if ($V -is [array]) { return ("array[" + $V.Count + "](" + ((@($V) | ForEach-Object { Get-ValueShape $_ }) -join ",") + ")") }
+    return ($V.GetType().Name + "=" + $V) }
+function Get-AnswerShape { param($A)
+    $shape = $A.state
+    if ($A.state -eq "known") { $v = Get-HordeValue $A; $shape += " " + (Get-ValueShape $v) }
+    if ($null -ne $A.observedAt) { $shape += " at " + ([datetime]$A.observedAt).ToUniversalTime().ToString("o") }
+    return $shape }
+foreach ($orig in @((New-HordeKnown -Value @() -ObservedAt $now), (New-HordeKnown -Value @(5) -ObservedAt $now), (New-HordeKnown -Value 0 -ObservedAt $now), (New-HordeKnown -Value $false -ObservedAt $now), (New-HordeKnown -Value "" -ObservedAt $now), (New-HordeAbsent -ObservedAt $now), $u)) {
     $json = ConvertTo-HordeAnswerRecord $orig | ConvertTo-Json -Compress -Depth 5
     $back = ConvertFrom-HordeAnswerRecord -Record ($json | ConvertFrom-Json)
     Check ($back.state -eq $orig.state) ("the stored form of an " + $orig.state + " answer survives a JSON round trip as " + $orig.state + " (" + $json + ")")
+    Check ((Get-AnswerShape $back) -eq (Get-AnswerShape $orig)) ("and its value keeps its shape: " + (Get-AnswerShape $orig))
 }
 
 Write-Host ""
@@ -198,7 +212,13 @@ Check ((Limit-HordeAge -Answer (ConvertFrom-HordeAnswerRecord -Record ($freshJso
 Write-Host ""
 Write-Host "--- the caller states what an unknown costs ---" -ForegroundColor Cyan
 
-Check (Throws { Resolve-HordeAnswer -Answer $u } "OnUnknown") "resolving unknown without a policy throws"
+# Checked on the declaration, not by calling without -OnUnknown: a missing mandatory parameter throws
+# only in a non-interactive host - in a console it PROMPTS, and the suite hangs on stdin. Mandatory
+# with no default is what makes the call fail (or stop and ask) rather than pick a policy silently.
+$onUnknownParam = (Get-Command Resolve-HordeAnswer).Parameters["OnUnknown"]
+$onUnknownMandatory = @($onUnknownParam.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory }).Count -gt 0
+$onUnknownAst = @((Get-Command Resolve-HordeAnswer).ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq "OnUnknown" })
+Check ($onUnknownMandatory -and $onUnknownAst.Count -eq 1 -and $null -eq $onUnknownAst[0].DefaultValue) "resolving unknown without a policy throws"
 $r = Resolve-HordeAnswer -Answer $u -OnUnknown Refuse
 Check ($r.outcome -eq "refused" -and $r.reason -eq $u.reason) "refusing on unknown keeps the reason, so the refusal can say why"
 Check ((Resolve-HordeAnswer -Answer $u -OnUnknown Permit).outcome -eq "permitted") "permitting is a separate, named outcome, never mistaken for known"
