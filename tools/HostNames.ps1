@@ -54,6 +54,14 @@
 #     setup ("Illegal characters in path"), so whether Get-ChildItem under PowerShell 5.1 lists such a
 #     file is not known.
 #   - SUBSTITUTION inside an allowlisted file (see WHAT COUNTS above).
+#
+# THE DISK, NOT GIT. The scan reads the working tree (see Get-HordeRepoFiles for why), so what fails
+# locally and what a pull request holds can differ: a local file that is untracked or ignored and
+# names a host fails the suite on that machine only, and a committed file deleted from the working
+# tree passes there. No .gitignore exists and no suite leaves files in the tree - `git status
+# --ignored --short` printed nothing on 2026-09-30 after every suite had run - so today the two agree.
+# A tool that starts leaving artefacts in the tree should write them outside it, or bring a .gitignore
+# and teach this scan to honour it.
 
 $script:HordeHostNamesProseFolder = "planning"
 $script:HordeHostNamesProseTypes = @(".md", ".html")
