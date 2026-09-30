@@ -143,7 +143,7 @@
     { "name": "nameSince", "owner": "agent",
       "read": [ { "store": "X2", "field": "nameSince" } ] },
     { "name": "waitingFor", "owner": "agent",
-      "provisional": "only permission prompt has been seen on disk (1 of 10 control files on 2026-09-30, the one whose status was waiting); dialog open, input needed, sandbox request and goal proposal are the other literals in the Claude Code 2.1.285 binary, unmeasured on disk. The text is carried as written and never matched on",
+      "provisional": "only permission prompt has been seen on disk (1 of 10 control files on 2026-09-30, the one whose status was waiting); dialog open, input needed, sandbox request and goal proposal are the other literals in the Claude Code 2.1.285 binary, unmeasured on disk. The text is carried as written and never matched on. The rule that a running session's file without the key waits for nothing is measured on idle files only: on 2026-09-30 the 9 idle control files (7 written by 2.1.284, 2 by 2.1.285) lacked it and the one waiting file had it, and that file was written by 2.1.284. No 2.1.285 file has been seen waiting, so that 2.1.285 writes the key whenever it waits - and so that a missing key means not waiting - is read from its binary, not measured",
       "read": [ { "store": "X2", "field": "waitingFor", "when": "the session's process is running. Claude Code writes the key beside status only while the session waits on the user, and leaves it out otherwise (absent from the 9 idle control files of 10 on 2026-09-30), so a running session's file without it waits for nothing - unless its status says it is waiting, which leaves the wait unknown. Codex's control file (W8) has no such key: its hook writes idle, busy, ended or unknown" } ] }
   ],
   "dropped": [
