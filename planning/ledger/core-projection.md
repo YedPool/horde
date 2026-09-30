@@ -464,3 +464,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 6: the process table was a Win32_Process call in core and the local namespace a "windows" constant, so a node on another system (horde planning/execution-plan-remote.md R12) could not supply its own
 - disposition: test
 - where: test/test-projection.ps1 :: "the projection reads processes through the platform it is given"
+
+### L-088 The view keys a session on its bare id until engines K1 keys it on (harness, id)
+- source: review of horde PR #31, finding 7; planning/execution-plan-engines.md step 12 (K1: "the same id under two harnesses gives two records"), sequenced after the remote plan's R10 and before Phase 3 step 3.8, changing the record, view and restore-plan schemas together
+- disposition: comment
+- where: core/Projection.ps1 :: "THE KEY IS THE BARE ID, IGNORING CASE, UNTIL ENGINES K1"

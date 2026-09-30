@@ -379,6 +379,15 @@ function Get-HordeSessionIds {
     # environment: CLAUDE_CODE_SESSION_ID is inherited, so it never identifies another session
     # (YedPool/wezfleet lib/Protocol.ps1:438-441, which mapped the caller's own id onto every pane
     # with no file - parity difference P-02).
+    #
+    # THE KEY IS THE BARE ID, IGNORING CASE, UNTIL ENGINES K1, and on purpose. The engines plan keys a
+    # session on (harness, id), so the same id under two harnesses is two records, and compares ids
+    # ignoring case only for harnesses whose ids are UUIDs (planning/execution-plan-engines.md step 12,
+    # K1). K1 changes schema/session-record.v1, schema/session-view.v1 and schema/restore-plan.v1
+    # together, in a fixed sequence after the remote plan's R10 split and before Phase 3 step 3.8, so
+    # keying on the pair here alone would fork the view from the record it describes. Until then, one
+    # id under two agents is not merged silently: core/identity reports it as a duplicate and keeps
+    # neither (test/test-identity.ps1, "one session id under two agents is a duplicate").
     param($Identity, $Registry, $PaneVerdicts, $ReportLinks)
     $seen = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($k in @($Identity.records.Keys)) { if (-not $seen.ContainsKey($k)) { $seen[$k] = "X2" } }
