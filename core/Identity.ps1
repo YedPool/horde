@@ -102,6 +102,15 @@ function Get-HordeProcessTable {
     # or unknown with the reason. Read-only: CIM's Win32_Process, which opens no process handle.
     # Unknown is not empty: wezfleet's Get-WfClaudeProcesses returned an empty list when the query
     # failed (lib/Common.ps1:657-659), which a caller cannot tell from no processes.
+    #
+    # WHAT IS MEASURED AND WHAT IS NOT (review finding 8 of PR #19). CIM gives CreationDate as a local
+    # time, converted here with ToUniversalTime. Cross-checked 2026-09-30: for 10 of 10 live control
+    # files, CIM's time, .NET's Process.StartTime and procStart agreed to the microsecond, and .NET's
+    # ticks equalled procStart's exactly; across all 339 processes readable both ways, CIM and .NET
+    # agreed to the microsecond. All of them started and were read in the same daylight-saving period.
+    # UNMEASURED: a process started before a daylight-saving change and read after it, and above all
+    # one started in the hour the clocks repeat, where a local time names two instants and the
+    # conversion can land an hour off - which would read a live process as a reused pid.
     return (Invoke-HordeRead -What "the process table" -Read {
         $t = @{}
         foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, Name, CreationDate -ErrorAction Stop)) {
