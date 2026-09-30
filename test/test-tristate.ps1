@@ -306,5 +306,10 @@ Check ((Resolve-HordeAnswer -Answer (New-HordeKnown -Value 7) -OnUnknown Refuse)
 # THE TRAP THIS MODULE CANNOT REMOVE, pinned so nobody relies on the opposite: an answer is an
 # object, and every object is true to `if`.
 Check ([bool](New-HordeUnknown -Reason "x") -eq $true) "an unknown answer is still true to an if, so an answer is never tested with a bare if"
+# The second trap, pinned the same way: .value is readable without the state check, and reads as
+# null for an unknown - the silent "none". A value is read with Get-HordeValue.
+$valueOfUnknown = "not read"
+$valueOfUnknown = (New-HordeUnknown -Reason "x").value
+Check ($null -eq $valueOfUnknown) "an unknown answer's value property reads as null without throwing, so a value is read with Get-HordeValue"
 
 Complete-HordeSuite -Success "unknown is never read as none"

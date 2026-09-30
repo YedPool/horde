@@ -204,6 +204,6 @@ sources:
 
 
 ### L-040 The value of an answer can still be read without checking its state
-- source: YedPool/horde PR #9 review, 2026-09-29, finding 7: `.value` is an ordinary property, so `$answer.value` bypasses Get-HordeValue's throw on absent and unknown
+- source: YedPool/horde PR #9 review, 2026-09-29, finding 7: `.value` is an ordinary property, so `$answer.value` bypasses Get-HordeValue's throw on absent and unknown; second review, 2026-09-29, finding 7: the file header still said there was no value to read out of absent or unknown, so the trap now sits in the header beside the `if ($answer)` one
 - disposition: comment
 - where: core/Tristate.ps1 :: "the rule is carried by review and by this comment"

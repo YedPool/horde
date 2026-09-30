@@ -11,13 +11,19 @@
 # So there is exactly one shape, and the two decisions that went wrong are made impossible to skip:
 #   - An answer is { state; value; reason; observedAt } with state known, absent or unknown. Nothing
 #     else is an answer: not $null, not @(), not -1, not "".
-#   - There is no value to read out of absent or unknown. Get-HordeValue throws on both.
+#   - Get-HordeValue, the way to read a value, throws on absent and on unknown: there is none.
 #   - Unknown always says why. New-HordeUnknown refuses an empty reason.
 #   - What an unknown COSTS is the caller's decision, and the caller must state it:
 #     Resolve-HordeAnswer has a mandatory -OnUnknown and no default.
 #
-# ONE TRAP THIS CANNOT REMOVE, and says so: an answer is an object, and every object is true to `if`.
-# `if ($answer)` is always taken, whatever the state. Test the state, or resolve it.
+# TWO TRAPS THIS CANNOT REMOVE, and says so:
+#   - An answer is an object, and every object is true to `if`. `if ($answer)` is always taken,
+#     whatever the state. Test the state, or resolve it.
+#   - .value is an ordinary property. `$answer.value` reads it WITHOUT the state check Get-HordeValue
+#     makes, and gives $null for absent and unknown alike - exactly the silent "none" this module
+#     exists to stop. Hiding it would break Resolve-HordeAnswer and the stored form, so instead
+#     the rule is carried by review and by this comment (ledger L-040): read a value with
+#     Get-HordeValue, or only after testing the state.
 #
 # POWERSHELL 5.1 SHAPE RULES, measured (see the ledger, L-004 and L-005): a function returning @()
 # delivers $null, and one returning @(5) delivers 5. A collection held in a PROPERTY survives, so the
@@ -100,9 +106,7 @@ function Test-HordeAnswer {
     if ($Answer.state -ceq "known" -and ($null -eq $Answer.value -or $Answer.value -is [System.DBNull])) { return $false }
     # The same rule as New-HordeAnswer, for a hand-built answer: an observation time is a date or nothing.
     if ($null -ne $Answer.observedAt -and $Answer.observedAt -isnot [datetime]) { return $false }
-    # NOT DONE, on purpose: .value is an ordinary property, so `$answer.value` reads it without the
-    # state check Get-HordeValue makes. Hiding it would break Resolve-HordeAnswer and the stored form;
-    # the rule is carried by review and by this comment (ledger L-040).
+    # NOT DONE, on purpose: .value stays readable without a state check. See the file header.
     return $true
 }
 
