@@ -164,6 +164,26 @@ foreach ($t in @("1e30", "-1e30", "79228162514264337593543950336")) {
     $found = Enum-Findings (Read-JsonNumber $t) $one
     Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a whole number beyond Decimal's range, " + $t + ", is refused by enum [1], not thrown on (" + ($found -join "; ") + ")")
 }
+# THE GUARD IS "IS AN INTEGER", NOT "IS NOT A STRING". PowerShell converts $true to 1, so a looser
+# guard accepted $true for enum [1]; a one-element array is not a number at all.
+$found = Enum-Findings $true $one
+Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''True'', not one of: 1') ("true is not the whole number 1 (" + ($found -join "; ") + ")")
+$found = Enum-Findings (,@(1)) $one
+Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a list holding 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+# EVERY INTEGER TYPE Test-HordeSchemaType ACCEPTS IS ACCEPTED HERE TOO, including Int16 and Byte,
+# which the "number" type does not list.
+foreach ($v in @([int16]1, [byte]1, [long]1)) {
+    $found = Enum-Findings $v $one
+    Check ($found.Count -eq 0) ("a whole-number enum accepts 1 held as " + $v.GetType().Name + " (" + ($found -join "; ") + ")")
+}
+# AN ENUM MEMBER MAY BE Int32 OR Int64, the two types ConvertFrom-Json gives a whole number in range.
+$longOne = [pscustomobject]@{ enum = @([long]1) }
+$found = Enum-Findings 1 $longOne
+Check ($found.Count -eq 0) ("an Int64 enum member is accepted and matches 1 (" + ($found -join "; ") + ")")
+# An Int16 or Byte MEMBER is refused, on purpose: no schema file can produce one, since ConvertFrom-Json
+# gives Int32, Int64, Decimal or Double, and a refusal is a loud error at the schema, never a silent
+# wrong answer about a value.
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @([int16]1) }) } "enum at $ may hold only") "an Int16 enum member is refused: no schema file can hold one"
 # A value built in PowerShell may hold a list as an ArrayList rather than an array.
 $listSchema = [pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ list = [pscustomobject]@{ type = "array"; items = $intSchema } } }
 Check (@(Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, 2) } -Schema $listSchema).Count -eq 0) "an ArrayList is an array"

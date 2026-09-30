@@ -21,6 +21,15 @@
         @{ Name = "enum-whole-number-never-matches"
            Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
            Replace = 'elseif ($false) { $ok = $true }' }
+        @{ Name = "enum-whole-number-guard-only-not-string"
+           Find = '(Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs('
+           Replace = '($Value -isnot [string]) -and [Math]::Abs(' }
+        @{ Name = "enum-whole-number-guard-as-number"
+           Find = '(Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs('
+           Replace = '(Test-HordeSchemaType -Value $Value -Type "number") -and [Math]::Abs(' }
+        @{ Name = "enum-member-int32-only"
+           Find = '$isWhole = ($e -is [int] -or $e -is [long])'
+           Replace = '$isWhole = ($e -is [int])' }
         @{ Name = "enum-range-guard-removed"
            Find = ' -and [Math]::Abs([double]$Value) -lt 1e19'
            Replace = '' }
