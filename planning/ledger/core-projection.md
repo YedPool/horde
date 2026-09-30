@@ -459,3 +459,8 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 5: HORDE_SKIP_REALITY was set by hand in the shell running tools/Mutate.ps1, and a normal run with it set printed the same green banner as a whole run
 - disposition: test
 - where: test/test-mutate.ps1 :: "a spec's environment reaches every run of its suite"
+
+### L-087 Core's process table and its namespace come from a platform
+- source: review of horde PR #31, finding 6: the process table was a Win32_Process call in core and the local namespace a "windows" constant, so a node on another system (horde planning/execution-plan-remote.md R12) could not supply its own
+- disposition: test
+- where: test/test-projection.ps1 :: "the projection reads processes through the platform it is given"

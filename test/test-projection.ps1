@@ -329,6 +329,24 @@ $okLong = Read-HordeHostInstance -Port (InstPort ([pscustomobject]@{ id = $longI
 Check ($okLong.state -eq "known" -and "$($okLong.value.id)" -ceq $longId -and $longId.Length -gt 64) "an instance id composed of distro, socket and server pid is kept whole"
 
 Write-Host ""
+Write-Host "--- the process table is the platform's ---" -ForegroundColor Cyan
+# Core's own process table and the namespace its pids live in come from a platform, not from a
+# Windows call in core (review of PR #31, finding 6), so a node on another system supplies its own.
+$winPlat = Get-HordeLocalPlatform
+Check ("$($winPlat.processSpace)" -ceq "windows" -and $winPlat.processTable -is [scriptblock]) "the local platform names its process namespace and its process-table reader"
+$posixTable = ProcsOf $base
+$posixBlock = { return $posixTable }.GetNewClosure()
+$posix = New-HordePlatform -Name "posix-node" -ProcessSpace "posix" -ProcessTable $posixBlock
+$nsCaps2 = @{ "list" = "yes"; "pid" = "yes" }
+$rbp = { return , @([pscustomobject]@{ handle = "a"; pid = 7; space = "posix" }, [pscustomobject]@{ handle = "b"; pid = 7; space = "windows" }) }
+$pxPort = New-HordeHostPort -Name "fake" -StoredHandles @() -Capabilities $nsCaps2 -Handles $rbp -Instance { $null }
+$pxRows = @{}; foreach ($r in @(Val (Read-HordeHostHandles -Port $pxPort -Platform $posix))) { $pxRows[$r.handle] = $r }
+Check ((Val $pxRows["a"].pid) -eq 7 -and $pxRows["b"].pid.state -eq "unknown" -and $pxRows["b"].pid.reason -like "*namespace windows, not posix*") "on another platform its own namespace's pids are known and windows ones are not"
+$ppx = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "claude\sessions") -ProjectsDir (Join-Path $base "claude\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "claude\pane-sessions") -Platform $posix -HostPort (HostOf $base) -LayoutPort (LayoutOf $base) -TtlSeconds 900 -Now $now
+Check (@($ppx.sessions).Count -eq 34 -and (Val (Ans $ppx 1 "pid")) -eq 1001) "the projection reads processes through the platform it is given"
+Check (Throws { New-HordePlatform -Name "x" -ProcessSpace "mars" -ProcessTable { $null } } "namespace") "a platform's namespace is one core knows"
+
+Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan
 $two = Fault $p "session-in-two-handles"
 Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (Ans $p 13 "pane")) -eq "unknown") "a session in two handles is reported"
@@ -649,7 +667,7 @@ Check ($plainReads.Count -eq 0) "every foreign file is read through the shared r
 # repository-wide ratchet; this check pins the projection's files to zero, with no allowance).
 $hostNames = @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory | ForEach-Object { Join-Path $_.FullName "names.txt" } | Where-Object { Test-Path -LiteralPath $_ } |
     ForEach-Object { Get-Content -LiteralPath $_ } | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\|' } | ForEach-Object { ($_ -split '\|')[0].Trim().ToLowerInvariant() } | Where-Object { $_ -ne "" })
-$newCore = @("Projection.ps1", "HostPort.ps1", "Faults.ps1", "PaneSessions.ps1", "WezfleetState.ps1")
+$newCore = @("Projection.ps1", "HostPort.ps1", "Faults.ps1", "PaneSessions.ps1", "WezfleetState.ps1", "Platform.ps1")
 $named = @($newCore | Where-Object { $txt = (Get-Content -LiteralPath (Join-Path $root ("core\" + $_)) -Raw).ToLowerInvariant(); @($hostNames | Where-Object { $txt.Contains($_) }).Count -gt 0 })
 foreach ($x in $named) { Write-Host ("  names a terminal: core/" + $x) -ForegroundColor Red }
 $caught = ($hostNames.Count -ge 1 -and ("x " + $hostNames[0].ToUpperInvariant() + " y").ToLowerInvariant().Contains($hostNames[0]))

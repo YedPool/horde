@@ -63,6 +63,7 @@
 
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "Platform.ps1")
 
 # The closed vocabulary of what a host may offer (the runtime verbs and facts of the terminal port;
 # layout capabilities belong to the layout port). A name outside it is refused, so a typo cannot
@@ -73,8 +74,6 @@ $script:HordeHostCapabilityStates = @("yes", "no", "declined", "unverified")
 # The stores that hold bare handle text (core/ownership.json): registry, claims, roster, reports and
 # pane-sessions files.
 $script:HordeHandleStores = @("W1", "W2", "W4", "W5", "X1")
-# The namespace core's own process table lives in (Get-HordeProcessTable reads Win32_Process).
-$script:HordeLocalProcessSpace = "windows"
 
 function ConvertTo-HordeHostCapabilities {
     # A declaration as a full table: every name, each yes, no, declined or unverified. A name that is
@@ -183,20 +182,21 @@ function ConvertTo-HordeInstanceText {
 }
 
 function Read-HordeHandleNamespaced {
-    # A row's pid or cwd as an answer, in core's namespace only. Unknown when the host does not offer
-    # it, the row gives none, the row names no space, or the space is not core's: a pid from a Linux
-    # subsystem is a different process from the Windows pid with the same number, and is never
-    # compared with it.
-    param($Port, $Row, [string]$Field)
+    # A row's pid or cwd as an answer, in the platform's namespace only. Unknown when the host does not
+    # offer it, the row gives none, the row names no space, or the space is not the platform's: a pid
+    # from a Linux subsystem is a different process from the Windows pid with the same number, and is
+    # never compared with it. The platform (core/Platform.ps1) says which namespace core's own process
+    # table is in.
+    param($Port, $Row, [string]$Field, [string]$LocalSpace)
     if (-not (Test-HordeHostCapability -Port $Port -Name $Field)) { return (New-HordeUnknown -Reason (Get-HordeHostCapabilityReason -Port $Port -Name $Field)) }
     $v = Get-HordeField -Record $Row -Name $Field
     if ($v.state -ne "known") { return (New-HordeUnknown -Reason ("the host gives no " + $Field + " for this handle")) }
     $sp = Get-HordeField -Record $Row -Name "space"
-    if ($sp.state -ne "known" -or "$($sp.value)" -cnotmatch '^(windows|posix|synthetic|wsl:[A-Za-z0-9._-]{1,64})$') {
+    if ($sp.state -ne "known" -or "$($sp.value)" -cnotmatch $script:HordeProcessSpacePattern) {
         return (New-HordeUnknown -Reason ("the host gives a " + $Field + " with no namespace, so it cannot be placed"))
     }
-    if ("$($sp.value)" -cne $script:HordeLocalProcessSpace) {
-        return (New-HordeUnknown -Reason ("the " + $Field + " is in namespace " + $sp.value + ", not " + $script:HordeLocalProcessSpace + " where core's process table lives, and is never compared across namespaces"))
+    if ("$($sp.value)" -cne $LocalSpace) {
+        return (New-HordeUnknown -Reason ("the " + $Field + " is in namespace " + $sp.value + ", not " + $LocalSpace + " where core's process table lives, and is never compared across namespaces"))
     }
     if ($Field -eq "pid") {
         if (($v.value -isnot [int] -and $v.value -isnot [long]) -or $v.value -le 0) { return (New-HordeUnknown -Reason "the host's pid is not a positive whole number") }
@@ -210,8 +210,9 @@ function Read-HordeHostHandles {
     # The port's handle list as an answer: known @( { handle; window; tab; hostTitle; pid; cwd } ),
     # pid and cwd each an answer, or unknown. A list with a malformed or repeated handle is unknown as
     # a whole: one bad row makes it impossible to say which handles are live.
-    param($Port)
+    param($Port, $Platform = (Get-HordeLocalPlatform))
     Assert-HordeHostPort $Port
+    Assert-HordePlatform $Platform
     if (-not (Test-HordeHostCapability -Port $Port -Name "list")) { return (New-HordeUnknown -Reason (Get-HordeHostCapabilityReason -Port $Port -Name "list")) }
     # Flattened one level, so a port may return its rows plainly or as one list with the unary comma
     # (PowerShell 5.1 delivers the second as a single element holding the list).
@@ -234,8 +235,8 @@ function Read-HordeHostHandles {
             window = $(if ($wf.state -eq "known") { ConvertTo-HordeHandleText $wf.value } else { $null })
             tab = $(if ($tf.state -eq "known") { ConvertTo-HordeHandleText $tf.value } else { $null })
             hostTitle = $(if ($tt.state -eq "known") { "$($tt.value)" } else { $null })
-            pid = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "pid")
-            cwd = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "cwd")
+            pid = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "pid" -LocalSpace $Platform.processSpace)
+            cwd = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "cwd" -LocalSpace $Platform.processSpace)
         })
     }
     return (New-HordeKnown -Value $rows.ToArray())

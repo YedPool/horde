@@ -57,6 +57,7 @@
 . (Join-Path $PSScriptRoot "Identity.ps1")
 . (Join-Path $PSScriptRoot "WezfleetState.ps1")
 . (Join-Path $PSScriptRoot "PaneSessions.ps1")
+. (Join-Path $PSScriptRoot "Platform.ps1")
 . (Join-Path $PSScriptRoot "HostPort.ps1")
 . (Join-Path $PSScriptRoot "Faults.ps1")
 
@@ -66,23 +67,6 @@ $script:HordeTerminalEvents = @("done", "failed")
 # How recent activity must be to count as proof of life when the handle is gone: wezfleet's orphan
 # grace (lib/Protocol.ps1 Get-WfSessionState -OrphanGraceSeconds 120).
 $script:HordeOrphanGraceSeconds = 120
-
-function Get-HordeProjectionProcessTable {
-    # The process table as core/identity reads it, plus each process's command line: the only
-    # involuntary witness to one conversation running in two processes (YedPool/wezfleet
-    # lib/Common.ps1:656-662, "THE COMMAND LINE IS THE ONLY INVOLUNTARY WITNESS"). Read-only CIM.
-    # Its pids are in the windows namespace; a pid a host gives from any other namespace is never
-    # looked up here (core/HostPort.ps1, "PID AND CWD CARRY A NAMESPACE").
-    return (Invoke-HordeRead -What "the process table" -Read {
-        $t = @{}
-        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, Name, CreationDate, CommandLine -ErrorAction Stop)) {
-            $created = $null
-            if ($null -ne $p.CreationDate) { $created = ([datetime]$p.CreationDate).ToUniversalTime() }
-            $t[[int]$p.ProcessId] = [pscustomobject]@{ pid = [int]$p.ProcessId; name = "$($p.Name)"; created = $created; commandLine = $p.CommandLine }
-        }
-        return $t
-    })
-}
 
 function Get-HordeOwnershipRules {
     # core/ownership.json, Horde's own file: fields by name, and the provisional marks.
@@ -1070,12 +1054,17 @@ function Get-HordeProjection {
         [string]$ProjectsDir = (Get-HordeClaudeProjectsDir),
         [string]$CodexDir = (Get-HordeCodexSessionsDir),
         [string]$PaneSessionsDir = (Get-HordePaneSessionsDir),
-        $Processes = (Get-HordeProjectionProcessTable),
+        # The platform supplies the process table and its namespace (core/Platform.ps1); -Processes, when
+        # given, is used instead of the platform's reader, as tests inject one.
+        $Platform = (Get-HordeLocalPlatform),
+        $Processes = $null,
         $HostPort = (New-HordeUnavailableHostPort -Reason "no host adapter is attached (the first one arrives under hosts/ in a later step)"),
         $LayoutPort = $null,
         $TtlSeconds = (Get-HordeCodexTtlSeconds),
         [datetime]$Now = (Get-Date)
     )
+    Assert-HordePlatform $Platform
+    if ($null -eq $Processes) { $Processes = & $Platform.processTable }
     Assert-HordeProcessTable $Processes
     Assert-HordeHostPort $HostPort
     $rules = Get-HordeOwnershipRules
@@ -1089,7 +1078,7 @@ function Get-HordeProjection {
         host = $null; paneVerdicts = $null; transcripts = (Get-HordeTranscriptIndex -ProjectsDir $ProjectsDir)
         layout = (Read-HordeLayoutSaves -LayoutPort $LayoutPort); links = $null; idSources = $null
     }
-    $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort) -Port $HostPort
+    $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort -Platform $Platform) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort) -Port $HostPort
     $C.paneVerdicts = Get-HordePaneFileVerdicts -PaneRead $C.paneRead -Context $C.host -Registry $C.wf.registry -VerifiedLive $C.identity.verifiedLive
     $C.links = Get-HordeReportLinks -Runs $C.wf.runs
     $C.idSources = Get-HordeSessionIds -Identity $C.identity -Registry $C.wf.registry -PaneVerdicts $C.paneVerdicts -ReportLinks $C.links
