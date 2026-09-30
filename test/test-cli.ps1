@@ -193,18 +193,44 @@ try {
         # A COLON BINDS A VALUE TO ITS PARAMETER. $args holds -Json:$false as two items - "-Json:" and
         # $false typed, "-Json" and "$false" from a script - and splatting them on turned -Json on and
         # sent the value to the first positional parameter: json=True target=[False], exit 0 (review
-        # of PR #12, finding 1).
+        # of PR #12, finding 1). Typed, the colon survives on the parameter's text and the pair is
+        # rejoined. From a script the colon is gone and the value is the WORD "$false", so it is refused
+        # rather than guessed at (cli\Arguments.ps1 says why).
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$false') -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        if ($typed) {
+            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("a switch turned off with a colon stays off" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        } else {
+            Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*arrived as text*" -and $r.err -like "*usage: horde echo-args*") ("a colon value that arrived as text is refused, never guessed at" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$true', "abc") -AsTyped:$typed
-        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        if ($typed) {
+            Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=True count=0") ("a switch turned on with a colon is on, and the next word is still positional, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        } else {
+            Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*arrived as text*") ("a colon value that arrived as text is refused, never guessed at, with a word after it" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5") -AsTyped:$typed
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=5") ("a value given with a colon reaches its parameter, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json") -AsTyped:$typed
         Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=True count=0") ("a plain switch is still on, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
-        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped:$typed
-        Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + ")")
+        # CALLED FROM INSIDE A COMMAND, horde is in-process, so its $args carry PowerShell's own tags
+        # whatever started the outer horde. The process command-line reader this replaced read the
+        # OUTER horde's command line here, and bound the inner call wrongly (second review of PR #12).
+        $r = Invoke-Horde -Root $tmp -Arguments @("nested-call", "hello") -AsTyped:$typed
+        Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[] json=False count=0") ("horde called from inside a command binds its own colon value" + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     }
+    # A QUOTE DOUBLED INSIDE A QUOTED ARGUMENT, from a script. powershell.exe ends the quote at the
+    # doubled quote and .NET's [Environment]::GetCommandLineArgs does not: measured 2026-09-29, the
+    # line `"x"" -Json"` reached the script as two items, x" and -Json (a switch), and .NET read it as
+    # one. The command-line reader compared the two and refused with exit 2, "could not match the
+    # command line" (second review of PR #12, finding 2). Now what binds is what PowerShell delivered.
+    # Typed at a prompt this line is PowerShell's own syntax, with nothing to compare, so it is not run.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5", 'x"" -Json')
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq 'target=[x"] json=True count=5') ("a doubled quote is split as PowerShell splits it, never refused as unmatched (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # Typed, a colon value a switch cannot take is PowerShell's to refuse. From a script "-Json:false"
+    # arrives exactly as "-Json false" does - a switch and a word - so horde cannot tell them apart
+    # and does not try (measured 2026-09-29; see cli\Arguments.ps1).
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped
+    Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + ")")
     # Asking a command for help is not an error: `horde echo-args -?` exited 1 with PowerShell's
     # '"helpTarget" is null' (review of PR #12, finding 6). -?, -h and --help after a command name
     # print its usage and summary and exit 0, as they print horde's help before one.
@@ -216,9 +242,9 @@ try {
         }
     }
     # Typed at a prompt, "-Json:" with nothing after it is a PowerShell parse error before horde runs.
-    # From a script it reached horde as nothing at all, or as a bare -Json, depending on position.
-    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:")
-    Check ($r.code -eq 2 -and $r.err -like "*-Json:*") ("a colon with no value after it is refused, from a script (got " + $r.code + ": " + $r.out.Trim() + ")")
+    # From a script it reaches horde as nothing at all, or swallows the next word, depending on
+    # position (measured 2026-09-29) - and $args keeps no trace of it, so horde cannot refuse it.
+    # The process command-line reader that once did is gone (see cli\Arguments.ps1); there is no test.
     $r = Invoke-Horde -Root $tmp -Arguments @("boom")
     Check ($r.code -eq 1 -and $r.err -like "*boom failed on purpose*") "a command that fails exits 1 and says why"
     # A binding error raised INSIDE a command's body is the command failing, not the command line being

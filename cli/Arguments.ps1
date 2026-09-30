@@ -1,18 +1,33 @@
 # Reading a command's arguments out of $args, so that each one reaches the command's run block
-# meaning what it meant on the command line.
+# meaning what it meant on the command line - or is refused when horde cannot know what it meant.
 #
 # WHY THIS EXISTS. horde forwards $args, and PowerShell hands a script its unbound arguments in a
 # form that loses one thing: a value joined to its parameter by a colon. Measured 2026-09-29 on
 # PowerShell 5.1, `horde echo-args -Json:$false`:
-#   typed at a prompt   $args = "-Json:" (tagged as a parameter), $false (a [bool])
-#   from a script, -File $args = "-Json" (tagged as a parameter), "$false" (a string)
+#   typed, or called in-process   $args = "-Json:" (tagged as a parameter), $false (a [bool])
+#   from a script, -File          $args = "-Json" (tagged as a parameter), "$false" (a [string])
 # Splatted on as they stand, -Json became a bare switch - ON - and $false went to the first
 # positional parameter: json=True target=[False], exit 0 (review of PR #12, finding 1).
 #
-# Typed, the colon survives on the parameter's text, so the pair can be rejoined from $args alone.
-# From a script it does not: "-Json:$false" and "-Json" "$false" arrive identical. The only record of
-# the colon is the process's own command line, so that is read to learn WHICH items were joined -
-# and the values themselves are still taken from $args, the objects PowerShell made.
+# TYPED, OR IN-PROCESS, THE PAIR IS REJOINED. PowerShell itself parsed the line, the colon survives
+# on the parameter's text, and the value is the object PowerShell made. Nothing is guessed.
+#
+# FROM A SCRIPT, THE COLON IS GONE, and nothing in $args says it was ever there: "-Count:5" and
+# "-Count 5" arrive identical, which is harmless, but so do "-Json:$false" and "-Json $false", which
+# is not. So an argument that is exactly the WORD "$true" or "$false" - a [string], never the [bool]
+# a typed $false is - is refused with exit 2, saying why. It can only have come from a script, where
+# it almost certainly meant a switch's value, and horde does not guess which parameter it was for.
+#
+# WHAT IS NOT CAUGHT, measured 2026-09-29, from a script: "-Json:false" arrives as "-Json" "false",
+# the same as "-Json false", and binds that way; "-Json:" with nothing after it arrives as nothing,
+# or swallows the next word ("-Json: -Count 5" delivers -Json, then the words "-Count" and "5").
+# Neither leaves a trace in $args.
+#
+# NO LONGER READ: THE PROCESS COMMAND LINE. The first fix re-read [Environment]::GetCommandLineArgs()
+# to learn where the colons had been. The second review of PR #12 measured it binding wrong values
+# silently when horde was called from inside a command (it read the OUTER horde's command line), and
+# refusing lines .NET and powershell.exe split differently (`"x"" -Json"`: two items to PowerShell,
+# one to .NET). It reconstructed information -File mode had already discarded, so it was removed.
 #
 # The parameter tag is a note property PowerShell puts on each item it parsed as a parameter. Only
 # the items of $args carry it: copied into a .NET list the tag is lost, and splatting then passes
@@ -27,86 +42,48 @@ function Get-HordeParameterName {
     return $null
 }
 
-function Get-HordeFileModeArguments {
-    # When this process was started as `powershell -File <ScriptPath> ...`, the arguments after the
-    # script path exactly as the process received them: { found; args }. Otherwise found is $false -
-    # typed at a prompt, or called from another script, the command line belongs to someone else.
-    param([string]$ScriptPath)
-    $none = [pscustomobject]@{ found = $false; args = @() }
-    if (-not $ScriptPath) { return $none }
-    $cl = [Environment]::GetCommandLineArgs()
-    $want = [System.IO.Path]::GetFullPath($ScriptPath)
-    for ($k = 1; $k -lt $cl.Count - 1; $k++) {
-        if ($cl[$k] -notmatch '\A[-/]f(i(le?)?)?\z') { continue }
-        $target = $null
-        try { $target = [System.IO.Path]::GetFullPath($cl[$k + 1]) } catch { continue }
-        if ($target -ieq $want) {
-            return [pscustomobject]@{ found = $true; args = @($cl | Select-Object -Skip ($k + 2)) }
-        }
-    }
-    return $none
-}
-
-function ConvertFrom-HordeFileModeValue {
-    # A colon value from a script's command line is always a string. "$true" and "$false" are the two
-    # PowerShell documents for a switch in -File mode, so they become booleans; anything else stays a
-    # string for the parameter's own type to convert, or refuse.
-    param([string]$Text)
-    if ($Text -ieq '$true') { return $true }
-    if ($Text -ieq '$false') { return $false }
-    return $Text
-}
-
 function Resolve-HordeArguments {
     # Split a command's arguments into { named; positional; problem } for `& $run @named @positional`.
-    # named holds every parameter given with a colon; positional holds everything else, in order, as
-    # the very objects $args held. problem is a message when the arguments cannot be read faithfully.
+    # named holds every parameter given with a colon that survived (typed or in-process); positional
+    # holds everything else, in order, as the very objects $args held. problem is a message when the
+    # arguments cannot be read faithfully, and the caller exits 2 with it.
     #
-    # Items: the command's items from $args. Raw: the same arguments as the process received them,
-    # when it was started with -File (Get-HordeFileModeArguments), else $null.
-    param($Items, $Raw)
+    # Items: the command's items from $args.
+    param($Items)
     $named = @{}
     $positional = @()
     $items = @($Items)
     $fail = { param($m) return [pscustomobject]@{ named = @{}; positional = @(); problem = $m } }
 
-    if ($null -eq $Raw) {
-        for ($j = 0; $j -lt $items.Count; $j++) {
-            $pname = Get-HordeParameterName -Item $items[$j]
-            if ($pname -and "$($items[$j])".EndsWith(":")) {
-                if ($j + 1 -ge $items.Count) { return (& $fail ("parameter " + $items[$j] + " needs a value after the colon")) }
-                if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
-                $named[$pname] = $items[$j + 1]
-                $j++
-                continue
+    for ($j = 0; $j -lt $items.Count; $j++) {
+        $item = $items[$j]
+        $pname = Get-HordeParameterName -Item $item
+        if ($pname -and "$item".EndsWith(":")) {
+            # Typed, "-Json:" with nothing after it is a parse error before horde runs, so a colon
+            # with no item after it cannot arrive this way; refused all the same, never guessed.
+            if ($j + 1 -ge $items.Count) { return (& $fail ("parameter " + $item + " needs a value after the colon")) }
+            if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
+            $item = $items[$j + 1]
+            if ($item -is [string] -and ($item -ieq '$true' -or $item -ieq '$false')) {
+                # Typed as the quoted text '$false': still a word, not a truth value.
+                return (& $fail (Get-HordeTextBoolProblem -Text $item))
             }
-            $positional += $items[$j]
+            $named[$pname] = $item
+            $j++
+            continue
         }
-        return [pscustomobject]@{ named = $named; positional = $positional; problem = $null }
-    }
-
-    # From a script: walk the raw arguments and $args together. A raw "-Name:value" arrives as two
-    # items - the parameter, then the value - and is joined; every other raw argument is one item.
-    # A raw "-Name:" with nothing after the colon arrived as a bare -Name, or as nothing at all,
-    # depending on its position (measured), so it is refused rather than guessed at.
-    $j = 0
-    foreach ($r in @($Raw)) {
-        if ($r -match '\A-([^:]+):(.*)\z') {
-            $pname = $Matches[1]; $value = $Matches[2]
-            if ($value -eq "") { return (& $fail ("parameter " + $r + " needs a value after the colon")) }
-            if ($j + 1 -lt $items.Count -and (Get-HordeParameterName -Item $items[$j]) -ceq $pname -and "$($items[$j + 1])" -ceq $value) {
-                if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
-                $named[$pname] = ConvertFrom-HordeFileModeValue -Text $value
-                $j += 2
-                continue
-            }
+        if ($item -is [string] -and ($item -ieq '$true' -or $item -ieq '$false')) {
+            return (& $fail (Get-HordeTextBoolProblem -Text $item))
         }
-        if ($j -ge $items.Count) { $j = -1; break }
-        $positional += $items[$j]
-        $j++
-    }
-    if ($j -ne $items.Count) {
-        return (& $fail ("could not match the command line to the arguments PowerShell delivered (" + @($Raw).Count + " given, " + $items.Count + " delivered)"))
+        $positional += $item
     }
     return [pscustomobject]@{ named = $named; positional = $positional; problem = $null }
+}
+
+function Get-HordeTextBoolProblem {
+    # The message for an argument that is the word "$true" or "$false" rather than the value.
+    param([string]$Text)
+    return ("the argument '" + $Text + "' arrived as text, not as " + $Text + ": run as a script (powershell -File), " +
+        "PowerShell drops the colon from -Name:" + $Text + " and passes the value as a word, so horde cannot tell which " +
+        "parameter it was for. Leave the switch out to keep it off, or give it bare to turn it on")
 }

@@ -84,8 +84,8 @@ sources:
 - disposition: test
 - where: test/test-cli.ps1 :: "a command that fails exits 1 and says why"
 
-### L-014 A value joined to its parameter with a colon is one argument, typed or from a script
-- source: review of YedPool/horde PR #12, finding 1, measured 2026-09-29 on PowerShell 5.1: `horde echo-args -Json:$false` gave json=True target=[False], because $args holds the pair as two items ("-Json:" and $false typed; "-Json" and "$false" from -File, with the colon gone). This is the second half of L-007: forwarding from $args keeps a switch a switch, but not its colon value
+### L-014 A value joined to its parameter with a colon is one argument, where PowerShell kept the colon
+- source: review of YedPool/horde PR #12, finding 1, measured 2026-09-29 on PowerShell 5.1: `horde echo-args -Json:$false` gave json=True target=[False], because $args holds the pair as two items ("-Json:" and $false typed; "-Json" and "$false" from -File, with the colon gone). This is the second half of L-007: forwarding from $args keeps a switch a switch, but not its colon value. Typed or in-process the colon survives on the tagged item and the pair is rejoined; from -File it does not, and L-020 says what is done instead
 - disposition: test
 - where: test/test-cli.ps1 :: "a switch turned off with a colon stays off"
 
@@ -108,3 +108,13 @@ sources:
 - source: review of YedPool/horde PR #12, finding 5: `Get-ChildItem -NoSuchParam` inside a run block was reported as exit 2 with the usage
 - disposition: test
 - where: test/test-cli.ps1 :: "a binding error inside a command's body exits 1 without the usage"
+
+### L-019 horde never reads the process command line to recover what -File mode discarded
+- source: second review of YedPool/horde PR #12, finding 1 and 2, measured 2026-09-29 on PowerShell 5.1: the reader of [Environment]::GetCommandLineArgs() read the OUTER horde's command line when horde was called from inside a command, and exited 2 "could not match the command line" on `"x"" -Json"`, which powershell.exe splits into two items and .NET into one. It reconstructed information -File mode had already thrown away, so it was removed rather than patched
+- disposition: test
+- where: test/test-cli.ps1 :: "horde called from inside a command binds its own colon value"
+
+### L-020 A switch value that -File mode turned into a word is refused, never guessed at
+- source: second review of YedPool/horde PR #12, measured 2026-09-29 on PowerShell 5.1: from -File, `-Json:$false` arrives as the tagged "-Json" then the [string] "$false", exactly as `-Json $false` does. Any argument that is the word "$true" or "$false" exits 2 and says the value arrived as text. Not caught, because $args keeps no trace of them: "-Json:false" (arrives as "-Json false") and a bare "-Json:" (arrives as nothing, or swallows the next word)
+- disposition: test
+- where: test/test-cli.ps1 :: "a colon value that arrived as text is refused, never guessed at"
