@@ -19,7 +19,9 @@
 # which wezfleet cannot tell apart, lib/Hierarchy.ps1:42-58), parent-cycle, pane-sessions-hijack
 # (YedPool/wezfleet f09f4e1), running-but-retired, orphan-process (core/identity), fleet-id-on-two-
 # records, label-held-twice, session-id-not-uuid (core-identity L-052: identity keys ids the stored
-# record refuses, and this is where that is decided - keyed, and flagged).
+# record refuses, and this is where that is decided - keyed, and flagged), and roster-entry-twice (a
+# roster or run manifest listing one fleet id twice, whose entry the run resolver never picks - the
+# review of PR #31, finding 8).
 #
 # A REGISTRY RECORD WITH NO CONTROL FILE IS NOT A FAULT: that is a stopped session, and absence is a
 # liveStatus answer (7 of 16 live records on 2026-09-30).
