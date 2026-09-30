@@ -49,3 +49,24 @@ and "passed"; a ledger update changed 3 of the intended lines.
 
 **Rule:** after every scripted edit, assert it changed something (`cmp`, a diff line count) before
 trusting what follows.
+
+## Mutation testing kill code runs broken kill code
+
+The isolation harness's mutation run broke the kill-safety rules on purpose and then ran the fast
+suite - which killed whatever the broken walker returned, starting from real processes. The third
+review found it. If a process id had been reused at the wrong moment, a mutant would have killed a
+process that was not the suite's; nothing recorded what, if anything, it did kill.
+
+**Rule:** a test of code that kills or deletes never lets that code choose the victim. The test
+passes a guarded killer (or deleter) that acts only on things the test created and still holds, and
+records - never acts on - anything else. A broken rule then becomes a failed check, never a harmed
+stranger. The same goes for any destructive code under mutation.
+
+## A helper that returns a value alongside output lies to if
+
+A test helper, Throws, returned whatever its block printed together with $false; PowerShell reads
+that array as true, so a "must throw" check passed when nothing threw. Separately, `-like` on a
+list returns the matching items rather than a boolean.
+
+**Rule:** Check refuses any condition that is not exactly true or false, and helpers discard their
+blocks' output (`$null = & $Block`).
