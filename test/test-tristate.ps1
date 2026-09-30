@@ -141,6 +141,12 @@ Check ((Throws { Limit-HordeAge -Answer $ancient -TtlSeconds "NaN" -Now $t } "po
 # Parsed in the current culture, "1,5" was fifteen seconds here and 1.5 in a comma-decimal culture.
 Check (Throws { Limit-HordeAge -Answer $busy -TtlSeconds "1,5" -Now $t } "positive") "a TTL written with a comma is refused, whatever the culture"
 Check ((Limit-HordeAge -Answer $busy -TtlSeconds "60.5" -Now $t.AddSeconds(60)).state -eq "known") "CONTROL: a TTL with a decimal point is honoured"
+# An observation time in the future has a negative age, which is never past any TTL: such an answer
+# never went stale. A few seconds of clock skew between writers is allowed; more is not believed.
+$future = New-HordeKnown -Value "idle" -ObservedAt $t.AddSeconds(60)
+Check ((Limit-HordeAge -Answer $future -TtlSeconds 60 -Now $t).state -eq "unknown") "an answer observed in the future is unknown, not fresh forever"
+$skewed = New-HordeKnown -Value "idle" -ObservedAt $t.AddSeconds(3)
+Check ((Limit-HordeAge -Answer $skewed -TtlSeconds 60 -Now $t).state -eq "known") "CONTROL: a few seconds of clock skew is allowed"
 # Real answers are stored and read back, which makes observedAt a UTC time, while the default -Now
 # is local. Compared as they stood, a UTC- zone saw every stored answer as observed in the future,
 # so none ever expired (measured at UTC-4, 2026-09-29: 120s old read as known with a 60s TTL).

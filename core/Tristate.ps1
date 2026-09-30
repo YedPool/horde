@@ -26,6 +26,8 @@
 Set-StrictMode -Off
 
 $script:HordeAnswerStates = @("known", "absent", "unknown")
+# How far in the future an observation time may be before Limit-HordeAge stops believing it.
+$script:HordeClockSkewSeconds = 5
 
 function New-HordeAnswer {
     param([string]$State, $Value, [string]$Reason, $ObservedAt)
@@ -194,6 +196,12 @@ function Limit-HordeAge {
     # defaults to local time; subtracting them as they stand ignores the Kind, so in a UTC- zone every
     # stored answer looked observed in the future and never expired (measured at UTC-4, 2026-09-29).
     $age = ($Now.ToUniversalTime() - ([datetime]$Answer.observedAt).ToUniversalTime()).TotalSeconds
+    # A future observation has a negative age, which is never past any TTL, so it would never go stale.
+    # 5 seconds of skew is allowed: an allowance for writers' clocks disagreeing slightly, not a
+    # measured figure - no Horde writer runs off-machine yet. Beyond that the time is not believed.
+    if ($age -lt -$script:HordeClockSkewSeconds) {
+        return (New-HordeUnknown -Reason ("observed " + [int](-$age) + "s in the future, past the " + $script:HordeClockSkewSeconds + "s skew allowance, so its age cannot be trusted"))
+    }
     if ($age -gt $ttl) {
         return (New-HordeUnknown -Reason ("stale: observed " + [int]$age + "s ago, past its " + $ttl + "s TTL"))
     }
