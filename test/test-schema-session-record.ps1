@@ -25,7 +25,10 @@ $own = Get-HordeOwnership
 function Copy-HordeJson { param($Value) return (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json) }
 
 function Get-HordeReadOrder {
-    # The ownership table's read precedence for one field, in the form the schema documents it.
+    # The ownership table's read precedence for one field, in the form the schema documents it: store
+    # and field only. A store's guard and a read's `when` clause are left out on purpose - the schema
+    # says so, and core/ownership.json is where they are read - so a changed guard or when is not
+    # drift here; test/test-ownership.ps1 owns those.
     param($Field)
     return ((@($Field.read) | ForEach-Object { "$($_.store) $($_.field)" }) -join ", then ")
 }
@@ -52,6 +55,14 @@ function Get-HordeRecordDrift {
     # A DROPPED FIELD IS NOT CARRIED. Read from the table, so a field dropped later is covered too.
     foreach ($d in @($Own.dropped | Where-Object { $null -ne $_ })) {
         if ($props.ContainsKey("$($d.name)")) { [void]$out.Add("'" + $d.name + "' is dropped by the ownership table but stored by the schema") }
+    }
+    # A STORED FIELD IS NEVER PROVISIONAL. The table marks a rule provisional when it rests on
+    # something unmeasured; the record stores a plain value and has nowhere to carry that mark, so a
+    # stored provisional value would read as fact. No stored field has the mark today (checked by this
+    # line on every run); if one gains it, the field needs the session-view (step 2.3), not this record.
+    foreach ($n in $expected) {
+        $f = Get-HordeOwnershipField -Doc $Own -Name $n
+        if ($null -ne $f.PSObject.Properties["provisional"]) { [void]$out.Add("'" + $n + "' is provisional in the ownership table (" + $f.provisional + "), and the stored record has no way to mark it") }
     }
     # EACH STORED FIELD SAYS WHO WRITES IT AND HOW IT IS READ UNTIL THE SWITCH, as the table does.
     foreach ($n in $stored) {
@@ -103,6 +114,8 @@ $o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "sessionId").ow
 Check (Drifts $o $schema "sessionId's*") "sessionId's owner changing is noticed"
 $o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "role").read = @([pscustomobject]@{ store = "W2"; field = "role" }, [pscustomobject]@{ store = "W1"; field = "role" })
 Check (Drifts $o $schema "'role' documents a read order*") "a read order changed in the table is noticed in the schema's documentation"
+$o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "role") | Add-Member -NotePropertyName provisional -NotePropertyValue "unmeasured"
+Check (Drifts $o $schema "'role' is provisional in the ownership table*") "a stored field that becomes provisional is noticed: the record cannot carry the mark"
 $s = Copy-HordeJson $schema; $s.properties | Add-Member -NotePropertyName pid -NotePropertyValue ([pscustomobject]@{ type = "integer"; "x-horde-owner" = "agent" })
 Check (Drifts $own $s "'pid' is stored, but its owner is agent*") "a field added to the schema that the engine does not own is noticed"
 $s = Copy-HordeJson $schema; $s.properties.PSObject.Properties.Remove("spawnedAt")
