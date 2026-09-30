@@ -9,7 +9,8 @@
 #
 # Everything in Horde that reads another system's file goes through Read-HordeSharedText.
 
-Set-StrictMode -Off
+# No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
+# caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 
 function Open-HordeSharedStream {
     # A read-only stream that shares read, write and delete. The caller disposes it.

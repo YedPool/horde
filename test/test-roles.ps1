@@ -5,6 +5,8 @@
 # tests use.
 
 $ErrorActionPreference = "Continue"
+# Strictest mode throughout, so the module is proved to work for a caller that uses it.
+Set-StrictMode -Version Latest
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "core\Roles.ps1")
@@ -25,6 +27,13 @@ function SectionStopped { param([string]$Section, $Err)
 function RoleOf { param($R) if ($R.role.state -eq "known") { return "$($R.role.value)" } return "unknown" }
 
 $table = Get-HordeRoleTable
+
+Write-Host ""
+Write-Host "--- loading the module ---" -ForegroundColor Cyan
+# core/Roles.ps1 and core/ReadShared.ps1 each switched strict mode off at file scope, which - dot-
+# sourced - switched it off for the caller, undoing the same fix made in core/Tristate.ps1.
+$strictKept = & { Set-StrictMode -Version Latest; . (Join-Path $root "core\Roles.ps1"); try { $null = $hordeNeverAssignedVariable; $false } catch { $true } }
+Check ($strictKept -eq $true) "dot-sourcing core/roles leaves the caller's strict mode on"
 
 Write-Host ""
 Write-Host "--- the alias table ---" -ForegroundColor Cyan

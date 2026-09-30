@@ -21,7 +21,8 @@
 #
 # The table is data (core\roles.json), so a further vocabulary is a row, not code.
 
-Set-StrictMode -Off
+# No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
+# caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 
@@ -117,13 +118,19 @@ function Read-HordeWezfleetRoles {
             # Skipped as wezfleet skips it (lib/Registry.ps1:122, "corrupt, not authoritative"), so
             # counts agree with it - but listed, because a silently dropped record is how a session,
             # a master included, goes missing without anyone being told.
-            if ("$($rec.claudeSessionId)" -ne $id) { [void]$mismatched.Add($f.FullName); continue }
+            # Fields are looked up, never dereferenced: under strict mode a missing property throws.
+            $idField = Get-HordeField -Record $rec -Name "claudeSessionId"
+            $storedId = ""
+            if ($idField.state -eq "known") { $storedId = "$($idField.value)" }
+            if ($storedId -ne $id) { [void]$mismatched.Add($f.FullName); continue }
             $r = Read-HordeRecordRole -Record $rec -Table $Table
             # RETIRED IS READ AS WEZFLEET READS IT: by truthiness, so a record with no retired field is
             # LIVE. Every wezfleet test is `if ($r.retired)` or `-not $_.retired` (lib/Hierarchy.ps1:42,
             # lib/Registry.ps1:393 and :509 casts [bool] the same way). This is the one missing field
             # NOT read as unknown: records predate retiring, and a live count must match wezfleet's.
-            [void]$sessions.Add([pscustomobject]@{ id = $id; retired = [bool]$rec.retired; role = $r.role; raw = $r.raw; field = $r.field })
+            $retField = Get-HordeField -Record $rec -Name "retired"
+            $isRetired = ($retField.state -eq "known" -and [bool]$retField.value)
+            [void]$sessions.Add([pscustomobject]@{ id = $id; retired = $isRetired; role = $r.role; raw = $r.raw; field = $r.field })
         }
     }
     # A missing claims directory IS legitimately empty: wezfleet creates it only when it first
