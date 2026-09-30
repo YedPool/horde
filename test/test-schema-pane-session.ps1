@@ -29,6 +29,22 @@ Check (@(Test-HordeSchema -Value @(1, "x") -Schema ([pscustomobject]@{ type = "a
 Check (Throws { Get-HordeSchema -Name "..\core\Schema" } "not a schema name") "a schema name cannot reach a file outside the schema folder"
 
 Write-Host ""
+Write-Host "--- keys are compared exactly, as the readers compare them ---" -ForegroundColor Cyan
+
+# wezterm-resurrect's Lua reads session_id with a case-sensitive table lookup, so a file whose only
+# id is SESSION_ID has no id as far as it is concerned. The validator must agree, for the keys of the
+# value AND for the names in the schema's properties.
+function Has { param($Found, [string]$Like) return (@(@($Found) | Where-Object { $_ -clike $Like }).Count -gt 0) }
+$exactSchema = [pscustomobject]@{ type = "object"; required = @("a"); properties = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }; additionalProperties = $false }
+Check (Has (Test-HordeSchema -Value ([pscustomobject]@{ A = 1 }) -Schema $exactSchema) "$ has no 'a'") "a required key is not satisfied by one differing only in case"
+Check (Has (Test-HordeSchema -Value ([pscustomobject]@{ A = 1 }) -Schema $exactSchema) "$ has 'A', which the schema does not allow") "a key differing only in case from a property is not that property"
+Check (Has (Test-HordeSchema -Value @{ A = 1 } -Schema $exactSchema) "$ has no 'a'") "the same holds for a value built as a hashtable, whose own lookups ignore case"
+# MEASURED 2026-09-29 on Windows PowerShell 5.1: ConvertFrom-Json refuses text holding two keys that
+# differ only in case ("contains the duplicated keys 'a' and 'A'"), so such a file never reaches the
+# validator; the real-file check below reports it as not JSON.
+Check (Throws { '{"a":1,"A":2}' | ConvertFrom-Json } "duplicated keys") "CONTROL: ConvertFrom-Json refuses keys differing only in case, so no file can carry both"
+
+Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
 Check ($valid.Count -ge 6) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
@@ -41,6 +57,7 @@ Write-Host ""
 Write-Host "--- a file that breaks what the readers rely on is not ---" -ForegroundColor Cyan
 function Says { param([string]$Rel, [string]$Like) return (@(Findings (Read-Fixture $Rel) | Where-Object { $_ -like $Like }).Count -gt 0) }
 Check (Says "invalid\no-session-id.json" '*has no ''session_id''*') "a file with no session id is invalid"
+Check (Says "invalid\uppercase-session-id.json" '*has no ''session_id''*') "a file whose only id is SESSION_ID is invalid: resurrect's Lua looks up session_id case-sensitively"
 Check (Says "invalid\bad-session-id.json" '*.session_id does not match*') "a session id that is not a UUID is invalid, as wezfleet's reader refuses it"
 Check (Says "invalid\wrong-event.json" '*.hook_event_name is*not one of*') "a file from any hook but SessionStart is invalid"
 Check (Says "invalid\wrong-type.json" '*.context_tokens should be integer*') "a known field with the wrong type is invalid"

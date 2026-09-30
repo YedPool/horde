@@ -68,10 +68,14 @@ function Test-HordeSchema {
     }
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     if ($isObject) {
-        $have = @{}
+        # KEYS ARE COMPARED EXACTLY, like JSON Schema and like wezterm-resurrect's Lua, which reads
+        # session_id with a case-sensitive lookup. A PowerShell hashtable ignores case, so with @{} here
+        # a file holding SESSION_ID and no session_id passed (review of PR #15). Both the value's keys
+        # and the schema's property names go into ordinal dictionaries.
+        $have = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
         foreach ($p in (Get-HordeObjectProps $Value)) { $have[$p.Name] = $p.Value }
         foreach ($r in @($kw["required"])) { if ($null -ne $r -and -not $have.ContainsKey("$r")) { [void]$findings.Add($Path + " has no '" + $r + "'") } }
-        $props = @{}
+        $props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
         if ($kw.ContainsKey("properties")) { foreach ($p in (Get-HordeSchemaProps $kw["properties"])) { $props[$p.Name] = $p.Value } }
         foreach ($name in @($have.Keys)) {
             if ($props.ContainsKey($name)) {

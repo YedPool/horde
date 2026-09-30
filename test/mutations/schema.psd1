@@ -33,6 +33,12 @@
         @{ Name = "integer-accepts-string"
            Find = '"integer" { return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte]) }'
            Replace = '"integer" { return $true }' }
+        @{ Name = "value-keys-ignore-case"
+           Find = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
+           Replace = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "property-names-ignore-case"
+           Find = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
+           Replace = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
         @{ Name = "schema-name-unchecked"
            Find = 'if ($Name -cnotmatch ''\A[a-z][a-z0-9-]*\.v[0-9]+\z'') { throw'
            Replace = 'if ($false) { throw' }
