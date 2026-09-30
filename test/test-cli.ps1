@@ -211,6 +211,11 @@ try {
     Check ($r.code -eq 2 -and $r.err -like "*-Json:*") ("a colon with no value after it is refused, from a script (got " + $r.code + ": " + $r.out.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("boom")
     Check ($r.code -eq 1 -and $r.err -like "*boom failed on purpose*") "a command that fails exits 1 and says why"
+    # A binding error raised INSIDE a command's body is the command failing, not the command line being
+    # wrong. Every ParameterBindingException used to mean exit 2 and the usage (review of PR #12,
+    # finding 5).
+    $r = Invoke-Horde -Root $tmp -Arguments @("inner-bind")
+    Check ($r.code -eq 1 -and $r.err -like "horde inner-bind: *NoSuchParameterForHordeTests*" -and $r.err -notlike "*usage:*") ("a binding error inside a command's body exits 1 without the usage (got " + $r.code + ": " + $r.err.Trim() + ")")
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
     $r = Invoke-Horde -Root $tmp -Arguments @("side-effect")
     Check ($r.code -eq 1 -and $r.err.StartsWith("horde side-effect: ") -and $r.err -like "*top-level statements*") ("a broken command file is reported under its command's name and exits 1 (got " + $r.code + ": " + $r.err.Trim() + ")")

@@ -18,13 +18,11 @@
 # the items of $args carry it: copied into a .NET list the tag is lost, and splatting then passes
 # "-Json" as a plain string (measured). So items are only ever moved with PowerShell's own arrays.
 
-$script:HordeParameterTag = "<CommandParameterName>"
-
 function Get-HordeParameterName {
     # The parameter name PowerShell tagged an argument with, or $null if it is not a parameter.
     param($Item)
     if ($null -eq $Item) { return $null }
-    $p = $Item.PSObject.Properties[$script:HordeParameterTag]
+    $p = $Item.PSObject.Properties["<CommandParameterName>"]
     if ($p) { return "$($p.Value)" }
     return $null
 }

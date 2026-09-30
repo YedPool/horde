@@ -16,11 +16,17 @@ Set-StrictMode -Off
 
 # Groups, in display order. A command naming a group not listed here is refused, so help can never
 # silently drop one.
-$script:HordeCommandGroups = [ordered]@{
-    about = "about horde"
+#
+# FUNCTIONS, NOT $script: VARIABLES. These functions are called from a command's run block, which
+# cli\Runner.ps1 runs in a script scope of its own, and $script: there means the runner's scope:
+# measured 2026-09-29, help run that way found no groups and reported every key as unknown.
+function Get-HordeCommandGroups {
+    return [ordered]@{
+        about = "about horde"
+    }
 }
 
-$script:HordeCommandKeys = @("name", "group", "usage", "summary")
+function Get-HordeCommandKeys { return @("name", "group", "usage", "summary") }
 
 function Get-HordeRoot { return (Split-Path -Parent $PSScriptRoot) }
 
@@ -147,13 +153,13 @@ function Read-HordeCommandAst {
             if ($why) { [void]$findings.Add($why) }
             continue
         }
-        if ($script:HordeCommandKeys -notcontains $key) { [void]$findings.Add("declares an unknown key '" + $key + "'"); continue }
+        if ((Get-HordeCommandKeys) -notcontains $key) { [void]$findings.Add("declares an unknown key '" + $key + "'"); continue }
         $text = Get-HordeConstantString -ValueAst $pair.Item2
         if ($null -eq $text) { [void]$findings.Add("'" + $key + "' is not a constant string, so it cannot be read without running the file") }
         else { $info[$key] = $text }
     }
     if (-not $hasRun) { [void]$findings.Add("has no 'run' script block") }
-    foreach ($k in $script:HordeCommandKeys) {
+    foreach ($k in (Get-HordeCommandKeys)) {
         if (-not $info.Contains($k) -or "$($info[$k])".Trim() -eq "") { [void]$findings.Add("has no " + $k) }
     }
     $base = [System.IO.Path]::GetFileNameWithoutExtension($Path)
@@ -163,7 +169,7 @@ function Read-HordeCommandAst {
     if ($info.Contains("name") -and -not (Test-HordeCommandName -Name "$($info["name"])")) {
         [void]$findings.Add("name '" + $info["name"] + "' is not lowercase letters, digits and hyphens")
     }
-    if ($info.Contains("group") -and -not $script:HordeCommandGroups.Contains("$($info["group"])")) {
+    if ($info.Contains("group") -and -not (Get-HordeCommandGroups).Contains("$($info["group"])")) {
         [void]$findings.Add("names group '" + $info["group"] + "', which help does not list")
     }
     if ($info.Contains("usage") -and $info.Contains("name") -and
@@ -233,11 +239,12 @@ function Format-HordeHelp {
     $all = Get-HordeCommands -Dir $Dir
     $lines = New-Object System.Collections.ArrayList
     [void]$lines.Add("usage: horde <command> [arguments]")
-    foreach ($g in $script:HordeCommandGroups.Keys) {
+    $groups = Get-HordeCommandGroups
+    foreach ($g in $groups.Keys) {
         $rows = @($all.commands | Where-Object { $_.group -eq $g } | Sort-Object name)
         if ($rows.Count -eq 0) { continue }
         [void]$lines.Add("")
-        [void]$lines.Add("  " + $script:HordeCommandGroups[$g])
+        [void]$lines.Add("  " + $groups[$g])
         foreach ($c in $rows) {
             [void]$lines.Add("    horde " + $c.usage)
             [void]$lines.Add("        " + $c.summary)

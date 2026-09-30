@@ -45,15 +45,19 @@ if ($bound.problem) {
 }
 $named = $bound.named
 $positional = $bound.positional
+$runner = Join-Path $PSScriptRoot "cli\Runner.ps1"
 
 try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $command = Import-HordeCommand -Path $lookup.command.path
-    & $command.run @named @positional
+    & $runner -Run $command.run -Named $named -Positional $positional
 }
 catch [System.Management.Automation.ParameterBindingException] {
+    # Only the run block's own binding is a command-line error; cli\Runner.ps1 says how that is told.
+    $isOwn = $null -ne $_.Exception.CommandInvocation -and "$($_.Exception.CommandInvocation.ScriptName)" -ieq $runner
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
+    if (-not $isOwn) { exit 1 }
     [Console]::Error.WriteLine("usage: horde " + $lookup.command.usage)
     exit 2
 }
