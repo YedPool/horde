@@ -25,23 +25,23 @@
            Find = 'if (Test-HordePlanningProse -Rel $rel) { continue }'
            Replace = '' }
         @{ Name = "planning-any-type-skipped"
-           Find = 'return ($script:HordeHostNamesProseTypes -contains ([System.IO.Path]::GetExtension($Rel).ToLowerInvariant()))'
+           Find = 'return ($script:HordeHostNamesProseTypes -contains [System.IO.Path]::GetExtension($Rel))'
            Replace = 'return $true' }
         @{ Name = "planning-extension-compared-with-case"
-           Find = '([System.IO.Path]::GetExtension($Rel).ToLowerInvariant())'
-           Replace = '([System.IO.Path]::GetExtension($Rel))' }
+           Find = '$script:HordeHostNamesProseTypes -contains'
+           Replace = '$script:HordeHostNamesProseTypes -ccontains' }
         @{ Name = "planning-other-type-not-refused"
-           Find = 'Add-Finding "(repository)" $f.rel'
-           Replace = 'continue; Add-Finding "(repository)" $f.rel' }
+           Find = 'Add-Finding "(repository)" $f.rel "is under planning/'
+           Replace = 'continue; Add-Finding "(repository)" $f.rel "is under planning/' }
         @{ Name = "planning-prose-entry-kept"
            Find = ' -or (Test-HordePlanningProse -Rel $p)) {'
            Replace = ') {' }
         @{ Name = "own-folder-scanned"
-           Find = '$skip = @($own) + $script:HordeHostNamesExcluded'
-           Replace = '$skip = @() + $script:HordeHostNamesExcluded' }
+           Find = '$skip = @($own)'
+           Replace = '$skip = @()' }
         @{ Name = "every-host-folder-exempt"
-           Find = '$skip = @($own) + $script:HordeHostNamesExcluded'
-           Replace = '$skip = @("hosts") + $script:HordeHostNamesExcluded' }
+           Find = '$skip = @($own)'
+           Replace = '$skip = @("hosts")' }
         @{ Name = "git-folder-scanned"
            Find = '(Test-HordeUnderFolder -Rel $rel -Folders (@(".git") + $Skip))'
            Replace = '(Test-HordeUnderFolder -Rel $rel -Folders $Skip)' }
@@ -66,11 +66,11 @@
            Find = 'if (-not $a) { Add-Finding $hn $f.rel ('
            Replace = 'if (-not $a) { continue; Add-Finding $hn $f.rel (' }
         @{ Name = "growth-accepted"
-           Find = 'if ($c -gt $a.lines) {'
+           Find = 'if ($c -gt $a.count) {'
            Replace = 'if ($false) {' }
         # --- shrink-only
         @{ Name = "over-count-accepted"
-           Find = 'elseif ($c -lt $a.lines) {'
+           Find = 'elseif ($c -lt $a.count) {'
            Replace = 'elseif ($false) {' }
         @{ Name = "stale-entry-kept"
            Find = 'elseif ($seen[$k] -eq 0) {'
@@ -79,7 +79,7 @@
            Find = 'if (-not $seen.ContainsKey($k)) {'
            Replace = 'if ($false) {' }
         @{ Name = "excluded-path-entry-kept"
-           Find = 'if (Test-HordeUnderFolder -Rel $p -Folders $skip) {'
+           Find = 'if ((Test-HordeUnderFolder -Rel $p -Folders $skip) -or (Test-HordePlanningProse -Rel $p)) {'
            Replace = 'if ($false) {' }
         @{ Name = "duplicate-entry-kept"
            Find = 'if ($allowed.ContainsKey($key)) {'
@@ -91,11 +91,11 @@
            Find = 'if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) {'
            Replace = 'if ($false) {' }
         @{ Name = "entry-shape-unchecked"
-           Find = 'if ($r.cells.Count -ne 3) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($r.cells.Count -ne 3) { Add-Finding'
+           Replace = 'if ($false) { Add-Finding' }
         @{ Name = "backslash-path-not-normalised"
-           Find = '$p = ($r.cells[0] -replace ''\\'', ''/'').TrimStart(''/'')'
-           Replace = '$p = $r.cells[0].TrimStart(''/'')' }
+           Find = 'return ($Path -replace ''\\'', ''/'').TrimStart(''/'')'
+           Replace = 'return $Path.TrimStart(''/'')' }
         # --- shrink-only, against origin/main
         @{ Name = "shrink-new-entry-accepted"
            Find = 'if (-not $oldAllow.ContainsKey($k)) {'

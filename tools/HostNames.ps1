@@ -106,6 +106,13 @@ function Get-HordeHostNameSet {
     return $set
 }
 
+function ConvertTo-HordeAllowPath {
+    # An allowlist path as the scan writes paths: forward slashes, no leading slash. One function, so
+    # the working tree's list and origin/main's are read the same way.
+    param([string]$Path)
+    return ($Path -replace '\\', '/').TrimStart('/')
+}
+
 function Get-HordeAllowMap {
     # path (forward slashes, lower-cased) -> { path; count } from an allowlist's well-formed lines.
     param([string]$Text)
@@ -114,7 +121,7 @@ function Get-HordeAllowMap {
         if ($r.cells.Count -ne 3) { continue }
         $c = 0
         if (-not [int]::TryParse($r.cells[1], [ref]$c)) { continue }
-        $p = ($r.cells[0] -replace '\\', '/').TrimStart('/')
+        $p = ConvertTo-HordeAllowPath $r.cells[0]
         $map[$p.ToLowerInvariant()] = [pscustomobject]@{ path = $p; count = $c }
     }
     return $map
@@ -201,10 +208,10 @@ function Test-HordeUnderFolder {
 
 function Test-HordePlanningProse {
     # Is the forward-slash relative path a .md or .html file under planning/? The extension is
-    # compared ignoring case, as the filesystem compares names.
+    # compared ignoring case, as the filesystem compares names: -contains ignores case by itself.
     param([string]$Rel)
     if (-not (Test-HordeUnderFolder -Rel $Rel -Folders @($script:HordeHostNamesProseFolder))) { return $false }
-    return ($script:HordeHostNamesProseTypes -contains ([System.IO.Path]::GetExtension($Rel).ToLowerInvariant()))
+    return ($script:HordeHostNamesProseTypes -contains [System.IO.Path]::GetExtension($Rel))
 }
 
 function Get-HordeFirstNonAsciiByte {
@@ -317,7 +324,7 @@ function Test-HordeHostNames {
             foreach ($r in (Read-HordeHostTable -Path $allowPath)) {
                 $where = $own + "/allowlist.txt:" + $r.line
                 if ($r.cells.Count -ne 3) { Add-Finding $hn $where "an allowlist line is <path> | <mentions> | <why this file may name the host>"; continue }
-                $p = ($r.cells[0] -replace '\\', '/').TrimStart('/')
+                $p = ConvertTo-HordeAllowPath $r.cells[0]
                 $allowCount = 0
                 if (-not [int]::TryParse($r.cells[1], [ref]$allowCount) -or $allowCount -lt 1) { Add-Finding $hn $where ("the mention count for " + $p + " must be a whole number of at least 1"); continue }
                 if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { Add-Finding $hn $where ($p + " needs a reason of at least a sentence"); continue }
