@@ -1,0 +1,7 @@
+$HordeCommand = @{
+    name    = "zeta"
+    group   = "about"
+    usage   = "zeta"
+    summary = "a well-formed declaration in a file that is not a .ps1 file"
+    run     = { [CmdletBinding()] param() "zeta ran" }
+}

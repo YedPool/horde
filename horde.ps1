@@ -19,14 +19,14 @@ $rest = @($args | Select-Object -Skip 1)
 
 if ($name -eq "" -or $name -eq "--help" -or $name -eq "-h" -or $name -eq "-?") { $name = "help" }
 
-$found = Get-HordeCommandFile -Name $name
+$found = (Find-HordeCommand -Name $name).command
 if (-not $found) {
     [Console]::Error.WriteLine("horde: unknown command '" + $name + "'")
     Format-HordeHelp | ForEach-Object { [Console]::Error.WriteLine($_) }
     exit 2
 }
 
-$command = Import-HordeCommand -Path $found
+$command = Import-HordeCommand -Path $found.path
 try {
     & $command.run @rest
 }

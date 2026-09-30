@@ -139,10 +139,22 @@ function Read-HordeCommandAst {
 function Get-HordeCommands {
     # Every command file in Dir, read without running any of them. Returns { commands; findings },
     # where each finding names its file. A broken file is a finding, never silently skipped.
+    #
+    # NOT `-Filter *.ps1`. The filter is matched by Windows against 8.3 short names too, so it returned
+    # zeta.ps1x (short name ZETA~1.PS1) - measured 2026-09-29 in %TEMP% - and help listed a command no
+    # name could reach. The extension is compared here instead, case-insensitively so that a file
+    # named X.PS1 becomes a finding rather than silently vanishing.
     param([string]$Dir = (Get-HordeCommandDir))
     $commands = New-Object System.Collections.ArrayList
     $findings = New-Object System.Collections.ArrayList
-    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter *.ps1 -File | Sort-Object Name)) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -File | Where-Object { $_.Extension -ieq ".ps1" } | Sort-Object Name)) {
+        if ($f.Extension -cne ".ps1") { [void]$findings.Add($f.Name + ": the extension must be .ps1, in lowercase"); continue }
+        # A reserved device name (nul.ps1, CON.ps1, com1.ps1) can only be created through a \?\ path,
+        # and was listed by help while `horde nul` said "unknown command" (review of PR #12).
+        if ($f.BaseName -imatch '\A(con|prn|aux|nul|com[1-9]|lpt[1-9])\z') {
+            [void]$findings.Add($f.Name + ": " + $f.BaseName + " is a reserved device name on Windows, so it cannot be a command")
+            continue
+        }
         $r = Read-HordeCommandAst -Path $f.FullName
         if ($r.info) { [void]$commands.Add($r.info) }
         foreach ($x in $r.findings) { [void]$findings.Add($f.Name + ": " + $x) }
@@ -150,14 +162,20 @@ function Get-HordeCommands {
     return [pscustomobject]@{ commands = @($commands); findings = @($findings) }
 }
 
-function Get-HordeCommandFile {
-    # The file for one command name, or $null. The name is checked BEFORE it touches a path, so
-    # "..\something" cannot reach a file outside the commands folder.
+function Find-HordeCommand {
+    # The command called Name, looked up in the SAME listing help is generated from, so a command is
+    # reachable exactly when help lists it. Returns { command; findings }: command is $null when there
+    # is none, and findings are those of a broken file of that name, so the caller can say why.
+    #
+    # The name is never joined onto a path. The first version built "<dir>\<name>.ps1" and tested it,
+    # which is how listing and dispatch came to disagree (review of PR #12, finding 4); a name like
+    # "..\Commands" now simply matches no listed command.
     param([string]$Name, [string]$Dir = (Get-HordeCommandDir))
-    if (-not (Test-HordeCommandName -Name $Name)) { return $null }
-    $p = Join-Path $Dir ($Name + ".ps1")
-    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
-    return $p
+    $all = Get-HordeCommands -Dir $Dir
+    $command = @($all.commands | Where-Object { $_.name -ceq $Name }) | Select-Object -First 1
+    $mine = @()
+    if (Test-HordeCommandName -Name $Name) { $mine = @($all.findings | Where-Object { $_.StartsWith($Name + ".ps1: ") }) }
+    return [pscustomobject]@{ command = $command; findings = $mine }
 }
 
 function Import-HordeCommand {

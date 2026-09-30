@@ -126,9 +126,40 @@ $tmp = Join-Path $env:TEMP ("horde-cli-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path (Join-Path $tmp "cli\commands") | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "horde.ps1") -Destination $tmp
 Copy-Item -LiteralPath (Join-Path $root "VERSION") -Destination $tmp
-Copy-Item -LiteralPath (Join-Path $root "cli\Commands.ps1") -Destination (Join-Path $tmp "cli")
+Copy-Item -Path (Join-Path $root "cli\*.ps1") -Destination (Join-Path $tmp "cli")
+Copy-Item -LiteralPath (Join-Path $root "cli\commands\help.ps1") -Destination (Join-Path $tmp "cli\commands")
 Copy-Item -Path (Join-Path $root "test\fixtures\cli\extra\*.ps1") -Destination (Join-Path $tmp "cli\commands")
+# Two files that look like commands and are not. zeta.ps1x is matched by `Get-ChildItem -Filter *.ps1`
+# through its 8.3 short name (ZETA~1.PS1), measured 2026-09-29 in %TEMP%. nul.ps1 is a reserved
+# device name: it can only be created through a \?\ path, and was listed by help while `horde nul`
+# said "unknown command" (review of PR #12, finding 4). It cannot be committed as a fixture - a
+# checkout on Windows could not write it - so it is made here from zeta's declaration.
+$standInCommands = Join-Path $tmp "cli\commands"
+$longPrefix = [string][char]92 + [char]92 + "?" + [char]92
+Copy-Item -LiteralPath (Join-Path $root "test\fixtures\cli\lookalike\zeta.ps1x") -Destination $standInCommands
+$nulPath = $longPrefix + (Join-Path $standInCommands "nul.ps1")
+[System.IO.File]::WriteAllText($nulPath, ([System.IO.File]::ReadAllText((Join-Path $standInCommands "zeta.ps1x")) -replace "zeta", "nul"))
 try {
+    Write-Host ""
+    Write-Host "--- help and dispatch find the same files ---" -ForegroundColor Cyan
+    Check ([System.IO.File]::Exists($nulPath)) "CONTROL: a command file named nul.ps1 really exists"
+    $listed = Get-HordeCommands -Dir $standInCommands
+    $listedNames = @($listed.commands | ForEach-Object { $_.name })
+    if (@(Get-ChildItem -LiteralPath $standInCommands -Filter *.ps1 -File | Where-Object { $_.Name -eq "zeta.ps1x" }).Count -eq 1) {
+        Check $true "CONTROL: on this volume, -Filter *.ps1 really matches zeta.ps1x"
+        Check ($listedNames -notcontains "zeta") "a .ps1x file is not listed as a command, though -Filter *.ps1 matches it"
+    } else {
+        Write-Host "  [SKIP] this volume makes no 8.3 short names, so the .ps1x look-alike cannot be tested here" -ForegroundColor Yellow
+    }
+    Check ($listedNames -notcontains "nul") "a command file with a reserved device name is not listed"
+    Check (@($listed.findings | Where-Object { $_ -like "nul.ps1:*reserved*" }).Count -eq 1) "and it is named as a broken command file instead"
+    $h = Invoke-Horde -Root $tmp -Arguments @("help")
+    Check ($h.code -eq 0 -and $h.out -like "*    horde echo-args*") "CONTROL: help in the stand-in root lists its commands"
+    $r = Invoke-Horde -Root $tmp -Arguments @("nul")
+    Check ($h.out -notlike "*    horde nul*" -and $r.code -eq 2) "help does not list a command that dispatch cannot reach"
+    $unreached = @($listedNames | Where-Object { -not ((Get-Command Find-HordeCommand -ErrorAction SilentlyContinue) -and (Find-HordeCommand -Name $_ -Dir $standInCommands).command) })
+    Check ($listedNames.Count -gt 0 -and $unreached.Count -eq 0) ("dispatch finds every command that help lists" + $(if ($unreached.Count) { ": not " + ($unreached -join ", ") } else { "" }))
+
     foreach ($typed in @($false, $true)) {
         $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "abc", "-Json", "-Count", "5") -AsTyped:$typed
@@ -138,8 +169,11 @@ try {
     Check ($r.code -eq 1 -and $r.err -like "*boom failed on purpose*") "a command that fails exits 1 and says why"
 }
 finally {
+    # nul.ps1 first, through the same \?\ path that made it: an ordinary path names the device.
+    if ([System.IO.File]::Exists($nulPath)) { [System.IO.File]::Delete($nulPath) }
     if ((Split-Path -Leaf $tmp) -match '^horde-cli-test-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
+Check (-not (Test-Path -LiteralPath $tmp)) "the stand-in root was removed"
 
 Write-Host ""
 if ($fails.Count) {
