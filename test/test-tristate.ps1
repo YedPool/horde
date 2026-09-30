@@ -109,6 +109,16 @@ Check ((Limit-HordeAge -Answer $idle -TtlSeconds 60 -Now $t.AddSeconds(61)).stat
 Check ((Limit-HordeAge -Answer $busy -TtlSeconds 60 -Now $t.AddSeconds(59)).state -eq "known") "CONTROL: a reading inside its TTL stays known"
 Check ((Limit-HordeAge -Answer (New-HordeKnown -Value 1) -TtlSeconds 60 -Now $t).state -eq "unknown") "a reading with no observation time cannot be aged, so it is unknown"
 Check ((Throws { Limit-HordeAge -Answer $busy -TtlSeconds 0 } "positive") -and (Throws { Limit-HordeAge -Answer $busy -TtlSeconds "6o" } "positive")) "a non-positive TTL is refused"
+# Real answers are stored and read back, which makes observedAt a UTC time, while the default -Now
+# is local. Compared as they stood, a UTC- zone saw every stored answer as observed in the future,
+# so none ever expired (measured at UTC-4, 2026-09-29: 120s old read as known with a 60s TTL).
+$oldJson = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value "idle" -ObservedAt (Get-Date).AddSeconds(-120)) | ConvertTo-Json -Compress -Depth 5
+$oldBack = ConvertFrom-HordeAnswerRecord -Record ($oldJson | ConvertFrom-Json)
+Check ((Limit-HordeAge -Answer $oldBack -TtlSeconds 60).state -eq "unknown") "a stored answer read back and aged with the default clock expires"
+$utcStamped = New-HordeKnown -Value "idle" -ObservedAt ([datetime]::UtcNow.AddSeconds(-120))
+Check ((Limit-HordeAge -Answer $utcStamped -TtlSeconds 60).state -eq "unknown") "an answer stamped in UTC expires against the default clock"
+$freshJson = ConvertTo-HordeAnswerRecord (New-HordeKnown -Value "idle" -ObservedAt (Get-Date).AddSeconds(-10)) | ConvertTo-Json -Compress -Depth 5
+Check ((Limit-HordeAge -Answer (ConvertFrom-HordeAnswerRecord -Record ($freshJson | ConvertFrom-Json)) -TtlSeconds 60).state -eq "known") "CONTROL: a stored answer read back inside its TTL stays known"
 
 Write-Host ""
 Write-Host "--- the caller states what an unknown costs ---" -ForegroundColor Cyan

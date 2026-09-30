@@ -168,7 +168,10 @@ function Limit-HordeAge {
     if (-not [double]::TryParse("$TtlSeconds", [ref]$ttl) -or $ttl -le 0) { throw ("a TTL must be a positive number of seconds, not '" + $TtlSeconds + "'") }
     if ($Answer.state -eq "unknown") { return $Answer }
     if ($null -eq $Answer.observedAt) { return (New-HordeUnknown -Reason "the answer has no observation time, so its age cannot be checked") }
-    $age = ($Now - [datetime]$Answer.observedAt).TotalSeconds
+    # Both sides in UTC. A stored answer reads back with a UTC observedAt (RoundtripKind) and -Now
+    # defaults to local time; subtracting them as they stand ignores the Kind, so in a UTC- zone every
+    # stored answer looked observed in the future and never expired (measured at UTC-4, 2026-09-29).
+    $age = ($Now.ToUniversalTime() - ([datetime]$Answer.observedAt).ToUniversalTime()).TotalSeconds
     if ($age -gt $ttl) {
         return (New-HordeUnknown -Reason ("stale: observed " + [int]$age + "s ago, past its " + $ttl + "s TTL"))
     }
