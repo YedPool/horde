@@ -22,8 +22,10 @@
 # POWERSHELL 5.1 SHAPE RULES, measured (see the ledger, L-004 and L-005): a function returning @()
 # delivers $null, and one returning @(5) delivers 5. A collection held in a PROPERTY survives, so the
 # value lives in .value, and Get-HordeValue returns it with the unary comma so it arrives as it went in.
-
-Set-StrictMode -Off
+#
+# NO Set-StrictMode HERE. This file is dot-sourced, so a file-scope Set-StrictMode sets the CALLER's
+# mode: an earlier `Set-StrictMode -Off` switched strict mode off for everything that loaded it. The
+# functions are written to run under -Version Latest, and test/test-tristate.ps1 runs under it.
 
 $script:HordeAnswerStates = @("known", "absent", "unknown")
 # How far in the future an observation time may be before Limit-HordeAge stops believing it.
@@ -63,7 +65,9 @@ function New-HordeUnknown {
     $why = $Reason
     if ($ErrorRecord) {
         $msg = "$ErrorRecord"
-        if ($ErrorRecord.Exception) { $msg = $ErrorRecord.Exception.Message }
+        # Looked up, not dereferenced: under strict mode `.Exception` on a plain string throws.
+        $exProp = $ErrorRecord.PSObject.Properties["Exception"]
+        if ($null -ne $exProp -and $null -ne $exProp.Value) { $msg = $exProp.Value.Message }
         $why = $Reason + ": " + $msg
     }
     return (New-HordeAnswer -State "unknown" -Value $null -Reason $why -ObservedAt $null)
@@ -74,6 +78,11 @@ function Test-HordeAnswer {
     param($Answer)
     if ($null -eq $Answer -or $Answer -isnot [System.Management.Automation.PSCustomObject]) { return $false }
     if (@($Answer.PSObject.TypeNames) -notcontains "Horde.Answer") { return $false }
+    # All four fields must exist. Checked by lookup, because under strict mode reading a missing
+    # property throws instead of giving $null.
+    foreach ($field in @("state", "value", "reason", "observedAt")) {
+        if ($null -eq $Answer.PSObject.Properties[$field]) { return $false }
+    }
     # Case-sensitive, like the stored form: "KNOWN" is not a state Horde writes, and -notcontains
     # would have accepted it.
     if ($script:HordeAnswerStates -cnotcontains "$($Answer.state)") { return $false }

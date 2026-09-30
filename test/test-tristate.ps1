@@ -5,6 +5,10 @@
 # panes reported closed that were open. planning/ledger/core-tristate.md cites each one.
 
 $ErrorActionPreference = "Continue"
+# The whole suite runs under the strictest mode, so the module is proved to work for a caller that
+# uses it. The module once switched strict mode off at file scope, which - dot-sourced - switched it
+# off for the caller too.
+Set-StrictMode -Version Latest
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "core\Tristate.ps1")
@@ -18,6 +22,20 @@ function Check { param($Cond, [string]$What)
     else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 function Throws { param([scriptblock]$Block, [string]$Like = "")
     try { $null = & $Block; return $false } catch { return ("$($_.Exception.Message)" -like "*$Like*") } }
+
+Write-Host ""
+Write-Host "--- loading the module ---" -ForegroundColor Cyan
+
+$strictKept = & { Set-StrictMode -Version Latest; . (Join-Path $root "core\Tristate.ps1"); try { $null = $hordeNeverAssignedVariable; $false } catch { $true } }
+Check ($strictKept -eq $true) "dot-sourcing the module leaves the caller's strict mode on"
+# Under strict mode, reading a property an object does not have throws. Measured 2026-09-29: both of
+# these threw "The property ... cannot be found" once the module stopped switching strict mode off.
+$typeOnly = $null
+try { $typeOnly = Test-HordeAnswer ([pscustomobject]@{ PSTypeName = "Horde.Answer" }) } catch { $typeOnly = "threw: $_" }
+Check ($typeOnly -eq $false) "under strict mode, an object with the type name and no fields is not an answer, and does not throw"
+$textError = $null
+try { $textError = (New-HordeUnknown -Reason "could not read" -ErrorRecord "the mux did not answer").reason } catch { $textError = "threw: $_" }
+Check ($textError -eq "could not read: the mux did not answer") "under strict mode, an unknown built from a plain-text error keeps the text"
 
 Write-Host ""
 Write-Host "--- reading a source ---" -ForegroundColor Cyan
