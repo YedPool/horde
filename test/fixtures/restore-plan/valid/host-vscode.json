@@ -84,11 +84,7 @@
                 "root": {
                   "slot": "w"
                 }
-              }
-            ]
-          },
-          {
-            "tabs": [
+              },
               {
                 "title": "fleet: D wezfleet orc",
                 "root": {
@@ -105,11 +101,7 @@
                     }
                   ]
                 }
-              }
-            ]
-          },
-          {
-            "tabs": [
+              },
               {
                 "title": "horde: E horde orc",
                 "root": {

@@ -58,7 +58,7 @@
                   "properties": {
                     "tabs": {
                       "type": "array",
-                      "description": "One tab per window in a plan for a host with no tabs.",
+                      "description": "One tab per window in a plan for a host with no tabs. VS Code and Cursor are one window (one folder), and each tab is a terminal group in it.",
                       "items": {
                         "type": "object",
                         "required": ["title", "root"],

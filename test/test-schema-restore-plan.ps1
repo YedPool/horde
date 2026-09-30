@@ -78,11 +78,13 @@ Write-Host "--- a degraded plan per host fits that host, and drops no session --
 
 # What each host in section 4's capability table can apply. The engine that degrades a plan to these
 # is step 4.2; here the fixtures are held to them, so a fixture cannot claim a host it does not fit.
-# depth: how deep containers nest (a lone leaf is 0). tabs: at most this many per window.
+# depth: how deep containers nest (a lone leaf is 0). tabs: at most this many per window. windows: at most
+# this many per workspace. VS Code / Cursor is ONE window, one folder (review of PR #17): its tabs are
+# terminal groups in that window, so it has no tab limit and a window limit of 1.
 $hosts = @{
-    wezterm = @{ depth = 99; ratios = $true;  tabs = 99; workspaces = 99; named = $true }
-    vscode  = @{ depth = 1;  ratios = $false; tabs = 1;  workspaces = 1;  named = $false }
-    console = @{ depth = 0;  ratios = $false; tabs = 1;  workspaces = 1;  named = $false }
+    wezterm = @{ depth = 99; ratios = $true;  tabs = 99; windows = 99; workspaces = 99; named = $true }
+    vscode  = @{ depth = 1;  ratios = $false; tabs = 99; windows = 1;  workspaces = 1;  named = $false }
+    console = @{ depth = 0;  ratios = $false; tabs = 1;  windows = 99; workspaces = 1;  named = $false }
 }
 function Get-Depth { param($Node) $c = $Node.PSObject.Properties["children"]; if ($null -eq $c) { return 0 }; $m = 0; foreach ($k in @($c.Value)) { $d = Get-Depth $k; if ($d -gt $m) { $m = $d } }; return (1 + $m) }
 function Get-Nodes { param($Node) $Node; $c = $Node.PSObject.Properties["children"]; if ($null -ne $c) { foreach ($k in @($c.Value)) { Get-Nodes $k } } }
@@ -94,7 +96,9 @@ function Get-Misfits {
     if ($ws.Count -gt $Cap.workspaces) { $out += ("" + $ws.Count + " workspaces") }
     foreach ($w in $ws) {
         if (-not $Cap.named -and $null -ne $w.PSObject.Properties["name"]) { $out += "a workspace name" }
-        foreach ($win in @($w.windows)) {
+        $wins = @($w.windows)
+        if ($wins.Count -gt $Cap.windows) { $out += ("" + $wins.Count + " windows in a workspace") }
+        foreach ($win in $wins) {
             $tabs = @($win.tabs)
             if ($tabs.Count -gt $Cap.tabs) { $out += ("" + $tabs.Count + " tabs in a window") }
             foreach ($t in $tabs) {
@@ -122,8 +126,8 @@ foreach ($h in @("wezterm", "vscode", "console")) {
     Check ($slots -ceq $fullSlots) ($h + ": every slot of the full plan is placed, once (" + $slots + ")")
 }
 $vs = Read-Fixture "valid\host-vscode.json"
-Check ((@($vs.layout.workspaces[0].windows[1].tabs[0].root.children | ForEach-Object { $_.slot }) -join ",") -ceq "d,d1,d2") "vscode: the nested split is flattened into one level in its left-to-right, top-to-bottom order"
-Check (@($vs.layout.workspaces[0].windows | ForEach-Object { $_.tabs[0].title } | Where-Object { $_ -notmatch '^(fleet|horde): ' }).Count -eq 0) "vscode: the workspace name survives as a prefix on every title"
+Check ((@($vs.layout.workspaces[0].windows[0].tabs[1].root.children | ForEach-Object { $_.slot }) -join ",") -ceq "d,d1,d2") "vscode: the nested split is flattened into one level in its left-to-right, top-to-bottom order"
+Check (@($vs.layout.workspaces[0].windows[0].tabs | ForEach-Object { $_.title } | Where-Object { $_ -notmatch '^(fleet|horde): ' }).Count -eq 0) "vscode: the workspace name survives as a prefix on every title"
 
 Write-Host ""
 Write-Host "--- invalid plans, each refused for its own reason ---" -ForegroundColor Cyan
