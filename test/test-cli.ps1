@@ -206,6 +206,16 @@ try {
         $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:false") -AsTyped:$typed
         Check ($r.code -eq 2 -and $r.err -like "*usage: horde echo-args*") ("a colon value a switch cannot take is refused with the usage, as PowerShell refuses it, " + $how + " (got " + $r.code + ": " + $r.out.Trim() + ")")
     }
+    # Asking a command for help is not an error: `horde echo-args -?` exited 1 with PowerShell's
+    # '"helpTarget" is null' (review of PR #12, finding 6). -?, -h and --help after a command name
+    # print its usage and summary and exit 0, as they print horde's help before one.
+    foreach ($typed in @($false, $true)) {
+        $how = "from a script"; if ($typed) { $how = "typed at a prompt" }
+        foreach ($ask in @("-?", "-h", "--help")) {
+            $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", $ask) -AsTyped:$typed
+            Check ($r.code -eq 0 -and $r.out -like 'usage: horde echo-args `[<target>`]*reports how its arguments were bound*'  -and $r.err.Trim() -eq "") ("asking a command for help prints its usage and exits 0: " + $ask + ", " + $how + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+        }
+    }
     # Typed at a prompt, "-Json:" with nothing after it is a PowerShell parse error before horde runs.
     # From a script it reached horde as nothing at all, or as a bare -Json, depending on position.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json:")

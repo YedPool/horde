@@ -9,7 +9,8 @@
 # arrives in $args as two items and is rejoined by cli\Arguments.ps1, which says how.
 #
 # EXIT CODES ARE 0, 1 OR 2, AND NOTHING ELSE, so a caller can act on them:
-#   0  the command ran and returned
+#   0  the command ran and returned, or help was asked for: `horde`, `horde --help`, or -?, -h or
+#      --help anywhere after a command name, which prints that command's usage
 #   1  the command failed: it threw, its file is broken, it called `exit` - with any code, 0
 #      included, because a command reports failure by throwing and success by returning, and an
 #      `exit` skips horde's own reporting - or it returned with $LASTEXITCODE not 0, meaning the
@@ -38,6 +39,15 @@ if (-not $lookup.command) {
     [Console]::Error.WriteLine("horde: unknown command '" + $name + "'")
     Format-HordeHelp | ForEach-Object { [Console]::Error.WriteLine($_) }
     exit 2
+}
+
+# -?, -h or --help after a command name asks for that command's help, as they ask for horde's before
+# one. Left to PowerShell, -? failed with '"helpTarget" is null' and exit 1, -h was an unknown
+# parameter, and typed --help became the value of the first positional parameter (review of PR #12).
+if (@($rest | Where-Object { @("-?", "-h", "--help") -contains "$_" }).Count -gt 0) {
+    Write-Output ("usage: horde " + $lookup.command.usage)
+    Write-Output ("    " + $lookup.command.summary)
+    exit 0
 }
 
 $raw = Get-HordeFileModeArguments -ScriptPath $PSCommandPath
