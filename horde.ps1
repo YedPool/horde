@@ -19,6 +19,15 @@
 #      last program it ran failed and it did not say it had handled that. A command that handles a
 #      program's failure itself sets $global:LASTEXITCODE = 0 (see cli\commands\version.ps1).
 #   2  the command line was wrong: an unknown command, or arguments the command does not accept
+#
+# TWO LIMITS ON THAT PROMISE, both measured 2026-09-29 on PowerShell 5.1:
+# - A command that calls [Environment]::Exit(n) ends the whole process at once, and horde exits n:
+#   `[Environment]::Exit(5)` in a body gave exit 5. Nothing in a script can prevent or observe it;
+#   a command must return or throw, and review is what holds it to that.
+# - Run as `powershell -Command "& horde.ps1 ..."`, the process exits with 0 or 1 - whether the
+#   last statement succeeded - not with horde's code: an unknown command gave 1, not 2. A -Command
+#   caller that wants 0, 1 or 2 appends `; exit $LASTEXITCODE`, which gave 2. `powershell -File`
+#   passes horde's code through as it is.
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")

@@ -99,8 +99,8 @@ sources:
 - disposition: test
 - where: test/test-cli.ps1 :: "and loading it runs none of it"
 
-### L-017 horde exits 0, 1 or 2, whatever the command does
-- source: review of YedPool/horde PR #12, finding 6: a command's `exit 7` made horde exit 7, a bare `exit` made it exit 0, and a program left failed inside a command left horde exiting 0
+### L-017 horde exits 0, 1 or 2 whatever the command does, short of ending the process itself
+- source: review of YedPool/horde PR #12, finding 6: a command's `exit 7` made horde exit 7, a bare `exit` made it exit 0, and a program left failed inside a command left horde exiting 0. Second review, finding 4, measured 2026-09-29: a body calling [Environment]::Exit(5) ends the process and horde exits 5, which no script can prevent; this is carried as a comment in horde.ps1, not claimed. Second review, finding 6: a `powershell -Command` caller gets 0 or 1 unless it appends `; exit $LASTEXITCODE` (unknown command: 1 without, 2 with), also stated there
 - disposition: test
 - where: test/test-cli.ps1 :: "a command that calls exit makes horde exit 1 and says so"
 
@@ -133,3 +133,8 @@ sources:
 - source: second review of YedPool/horde PR #12, finding 5: a body that set $state.completed = $true and called `exit 0` made horde exit 0, because it runs in a scope below horde's and the runner's. Measured 2026-09-29 on PowerShell 5.1: before, the body saw 14 of their variables; made private, it sees none by name, though Get-Variable -Scope 1 or 2 still reaches them, so this guards against accidents and not against a body that means to
 - disposition: test
 - where: test/test-cli.ps1 :: "a command body cannot see horde's own variables"
+
+### L-024 [Environment]::Exit in a command cannot be stopped, and a -Command caller must pass the code on
+- source: second review of YedPool/horde PR #12, findings 4 and 6, measured 2026-09-29 on PowerShell 5.1: `[Environment]::Exit(5)` in a body gave horde exit 5; `powershell -Command "& horde.ps1 no-such-command"` exited 1, and 2 only with `; exit $LASTEXITCODE` appended
+- disposition: comment
+- where: horde.ps1 :: "caller that wants 0, 1 or 2 appends"
