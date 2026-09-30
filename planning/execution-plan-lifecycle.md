@@ -567,7 +567,7 @@ adapter, and their differences are capability flags on the (harness, provider) p
 
 | operation | input | output |
 |---|---|---|
-| `Get-TranscriptCapability` | harness, provider profile | the flags of 4.3, each `{ state: yes, no, unmeasured; evidence }` |
+| `Get-TranscriptCapability` | harness, provider profile | the flags of 4.3, each `{ state: yes, no, declined, unverified; evidence }` |
 | `Find-Transcript` | a binding | the transcript file(s) and their identity (path, file id, creation time); the Claude rule is `transcriptPath`'s derivation in `core/ownership.json` |
 | `Open-TranscriptCursor` | a file, a stored cursor or none | a cursor `{ fileId, offset, carry }`; a file shorter than the offset, or with another file id, yields `truncated` or `replaced`, never a silent restart |
 | `Read-TranscriptEvents` | a cursor | the unified events (4.2) for the complete lines past the offset, and the new cursor; a partial last line is carried, not parsed |
@@ -602,20 +602,21 @@ text and asserts the marker appears in no output line.
 
 | flag | claude-code | codex | gemini-cli | via claude-code: GLM, Qwen, DeepSeek |
 |---|---|---|---|---|
-| `transcript.tail` (append-only, line-delimited, tailable by offset) | yes: M-50, M-51 | yes: rollout JSONL (metrics 2.5) | unmeasured: docs only | as claude-code |
-| `turn.end` marker | yes: `system/turn_duration`, `stop_hook_summary` (design C1) | unmeasured | unmeasured | as claude-code |
-| `tool.pairing` | yes: tool_use / tool_result ids | unmeasured | unmeasured | as claude-code |
-| `task.background` start and completion | yes: task notifications | unmeasured | unmeasured | as claude-code |
-| `reap.notice` | yes: `<status>killed</status>` user line (M-33) | no reaper known | unmeasured | as claude-code |
-| `tokens.perTurn` | yes | no: cumulative only | unmeasured | **estimated** where the endpoint lacks token counting (agent-engines section 3) |
-| `tokens.cumulative` | no | yes: `total_token_usage` (metrics 2.5) | unmeasured | no |
-| `cache.fields` | yes | unmeasured | unmeasured | **no** for DeepSeek, which ignores `cache_control` (agent-engines section 3) |
-| `model.perMessage` | yes | yes: session start `model` | unmeasured | yes, the provider's id |
-| `compact.marker`, `sessionId.stableAcrossCompact` | yes, yes (O-1) | unmeasured | unmeasured | as claude-code |
-| `status.file` | yes: control file (X2) | no native file (measured); Horde's hook-written file stands in | unmeasured | as claude-code |
+| `transcript.tail` (append-only, line-delimited, tailable by offset) | yes: M-50, M-51 | yes: rollout JSONL (metrics 2.5) | unverified: docs only | as claude-code |
+| `turn.end` marker | yes: `system/turn_duration`, `stop_hook_summary` (design C1) | unverified | unverified | as claude-code |
+| `tool.pairing` | yes: tool_use / tool_result ids | unverified | unverified | as claude-code |
+| `task.background` start and completion | yes: task notifications | unverified | unverified | as claude-code |
+| `reap.notice` | yes: `<status>killed</status>` user line (M-33) | no reaper known | unverified | as claude-code |
+| `tokens.perTurn` | yes | no: cumulative only | unverified | **estimated** where the endpoint lacks token counting (agent-engines section 3) |
+| `tokens.cumulative` | no | yes: `total_token_usage` (metrics 2.5) | unverified | no |
+| `cache.fields` | yes | unverified | unverified | **no** for DeepSeek, which ignores `cache_control` (agent-engines section 3) |
+| `model.perMessage` | yes | yes: session start `model` | unverified | yes, the provider's id |
+| `compact.marker`, `sessionId.stableAcrossCompact` | yes, yes (O-1) | unverified | unverified | as claude-code |
+| `status.file` | yes: control file (X2) | no native file (measured); Horde's hook-written file stands in | unverified | as claude-code |
 | `loopGuard` | yes where the founder's hook is installed | no | no | as claude-code |
 
-`unmeasured` never satisfies a requirement: the classifier answers `unknown: <flag> unmeasured for
+`unverified` never satisfies a requirement: the classifier answers `unknown: <flag> unverified for
+The capability vocabulary is shared with the host capability files: `yes`, `no`, `declined`, `unverified`, and `unverified` counts as `no` (engines plan, one vocabulary everywhere).
 <harness>` rather than guessing.
 
 **How a flag becomes `yes`.** Only through a test. Each adapter keeps
@@ -629,7 +630,7 @@ the harness version in use is newer than the newest measured one, until that ver
 `surveyedVersions` rule `core/ownership.json` already applies). The agent's ledger,
 `planning/ledger/agent-<name>.md`, records each measurement as an entry with disposition `test`
 and `where:` that suite and its assertion, which the ledger gate checks is a quoted string on a code
-line. A flag with no measurement stays `unmeasured`, with no file.
+line. A flag with no measurement stays `unverified`, with no file.
 
 ## 4.4 The follower: one per machine, one reader
 
@@ -725,7 +726,7 @@ engine's record, and uses two channels:
 
 **Host unknown changes nothing**: neither channel needs a host handle, so an orc whose pane is unknown,
 or which has no pane, is still reached. **What does change the path**: the orc's harness has
-`message-inject` `no` or `unmeasured`, its messaging address is unknown, or no receipt arrives within
+`message-inject` `no` or `unverified`, its messaging address is unknown, or no receipt arrives within
 60 s (an **estimate**; the one measured wake latency is 1 to 3 s, M-32). Then the alerter escalates the
 same entry to the warchief by the same two channels, and if the warchief cannot be reached either, to a
 Windows notification to the founder through `platform/windows/`. Horde never types into a pane to
@@ -831,7 +832,7 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
 10. **`core/Observe.ps1`, the classifier** [H2], with the `stalled` and `looping` detectors of 4.5.
     The pure function of design C2 over injected observations. Tests first, one fixture per state from
     today's transcripts (M-31 to M-34): "waiting on a live job is never stalled"; "a report with a live
-    child is not closable"; "a reap then silence is stalled after two minutes"; "an unmeasured flag
+    child is not closable"; "a reap then silence is stalled after two minutes"; "an unverified flag
     answers unknown, never a state".
 11. **`horde follow`** [H6]. The loop, the scheduled-task install through `horde install`, the
     job-handle lifetime test; the observer's files pass step 4's tripwire. Gate: one hour in the
@@ -842,11 +843,11 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
 13. **The session-message primitive and wake messages** [H8].
     - **The primitive, first.** `Send-SessionMessage` in the engine port, and
       `agents/claude-code/Message.ps1` (the peer socket named by the control file) behind it; codex and
-      gemini-cli declare `message-inject` `unmeasured` until a measurement and its test flip it (4.3).
+      gemini-cli declare `message-inject` `unverified` until a measurement and its test flip it (4.3).
       It takes a binding and a text, addresses by `messagingAddress`, never by a host handle, and
       returns a tristate receipt: `known: delivered` only when the follower sees the text's marker
       arrive as a user turn in the recipient's transcript. Tests first: "a receipt is unknown until the
-      marker is seen"; "a refused delivery is known refused with its reason"; "an unmeasured engine
+      marker is seen"; "a refused delivery is known refused with its reason"; "an unverified engine
       answers unknown, never delivered"; "the primitive never types into a pane". This is the primitive
       remote R21 and the future delivery half of `tell` reuse.
     - **Wake messages on top of it.** The alerter, the mailbox (H5), `horde inbox`, the doorbell,
@@ -970,7 +971,7 @@ before migration step 3.8. H with Phase 5.
 - Windows 10 nesting: documented, not measured here (J-3 ran on 10.0.26200).
 - Whether the terminal's default closes a pane only on a clean exit; a harness that exits non-zero
   might leave its pane open (step 22 measures `spawn.exitCloses`).
-- Every `unmeasured` cell in 4.3.
+- Every `unverified` cell in 4.3.
 - The estimates, each a starting value the metrics tune: the 256 MB raise step and the 14-day quiet
   period (1.4); the 20-turn follow-up window (4.5); the 400-byte, three-line wake size (4.5); the 60 s
   receipt timeout and the 10 wakes per orc per minute (Part 5).
