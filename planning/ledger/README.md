@@ -3,7 +3,8 @@
 A ledger is written for a module **before** that module replaces anything in the old systems. It
 lists everything the old code learned that could apply to the new one, with where each lesson came
 from and what was done about it. `test/test-ledger.ps1` checks every ledger in this folder and fails
-the build on any entry that nobody dealt with.
+on any entry that nobody dealt with. (There is no CI yet; the suite is run by hand and by review.
+See "What the gate does not check" below.)
 
 Why this exists: the knowledge in the systems Horde replaces is large and scattered - most of
 wezfleet's commits carry explanatory bodies, and about a third of its library is comment. Read once
@@ -54,8 +55,8 @@ and check - and exactly one `disposition`:
 
 | disposition | means | also needs |
 |---|---|---|
-| `test` | the lesson is enforced by a test in Horde | `where: <test file> :: "<assertion text>"` - the file must exist and contain that text |
-| `comment` | the lesson is carried as an explanatory comment | `where: <file>` - the file must exist |
+| `test` | the lesson is enforced by a test in Horde | `where: <test file> :: "<assertion text>"` - a `.ps1` file under `test/`, inside the repository, containing that text **as a quoted string** of at least three words |
+| `comment` | the lesson is carried as an explanatory comment | `where: <file> :: "<phrase>"` - a file inside the repository, not a ledger, containing that phrase of at least three words |
 | `dropped` | the lesson does not apply to Horde | `reason: <why>` - at least a sentence |
 
 `dropped` is a legitimate answer. Much of what the old systems learned was about typing into terminal
@@ -67,9 +68,30 @@ where the next reader can disagree with it.
 - **Every entry has a source.** A lesson that cannot be traced cannot be re-examined.
 - **Every entry has exactly one disposition.** "Nobody looked" becomes an empty field instead of an
   absence.
-- **A `test` disposition names a test that exists and contains the quoted assertion.** Otherwise
-  writing `test` next to every entry would satisfy the gate while enforcing nothing.
-- **A `comment` disposition names a file that exists.**
-- **A `dropped` disposition gives a reason.**
-- **All five sources are marked searched.**
+- **A `test` disposition names a real test and quotes one of its assertions.** The file must be a
+  `.ps1` under `test/`, inside the repository, and must contain the quoted text *as a quoted string*
+  of at least three words. Each part closes a way an independent review found to pass the gate
+  without reading anything: naming a directory, naming the ledger itself, climbing out with `..`,
+  or quoting a single letter that appears in every file.
+- **A `comment` disposition names a file and quotes the phrase that carries the lesson.** The file
+  must exist inside the repository and must not be a ledger. Without the phrase, nothing would show
+  the lesson was carried anywhere - `.` used to pass.
+- **A `dropped` disposition gives a reason of at least four distinct words.** Enough to stop `n/a`
+  and `a a a a`, not so strict that a short, true reason is refused.
+- **The header - everything before the first entry - names the module, what it replaces, and all
+  five sources as searched.** Only the header counts; sources claimed inside an entry do not.
 - **Entry ids are unique within a ledger.**
+
+## What the gate does not check
+
+Stated so nobody relies on a guarantee the code does not give.
+
+- **That a ledger exists at all.** A module could replace old code with no ledger and the suite would
+  still pass. Until something enforces it, review does.
+- **That a source is real.** Any non-empty `source:` is accepted. A reader can follow it; the gate
+  cannot.
+- **That a quoted assertion is the right one.** The gate proves the quoted test name exists. It
+  cannot prove that test actually enforces the lesson. That is a reviewer's question.
+- **Assertions that contain a double quote.** They cannot be cited, because the quote ends the
+  `where:` text. The gate refuses them rather than guessing, so the failure is safe but real.
+- **Anything, automatically.** There is no CI yet. The suite runs when someone runs it.
