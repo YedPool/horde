@@ -289,8 +289,18 @@ function ConvertFrom-HordeAnswerRecord {
     $at = $null
     $atField = Get-HordeField -Record $Record -Name "observedAt"
     if ($atField.state -eq "known") {
-        $parsed = [datetime]::MinValue
-        if ([datetime]::TryParse("$($atField.value)", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $at = $parsed }
+        # A [datetime] is taken as it is: turned into text first, a UTC one lost its zone and was read
+        # as local (measured at UTC-4, 2026-09-29: ten seconds old read as four hours in the future).
+        $candidate = $null
+        if ($atField.value -is [datetime]) { $candidate = $atField.value }
+        else {
+            $parsed = [datetime]::MinValue
+            if ([datetime]::TryParse("$($atField.value)", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { $candidate = $parsed }
+        }
+        # A time with no zone (Kind Unspecified) is NOT an observation time. It cannot be placed: read
+        # as local, the text a UTC writer wrote at UTC-4 is four hours older than it looks, and a stale
+        # answer stayed known (review, 2026-09-29). With no time, Limit-HordeAge makes it unknown.
+        if ($null -ne $candidate -and $candidate.Kind -ne [System.DateTimeKind]::Unspecified) { $at = $candidate }
     }
     $reason = ""
     $rField = Get-HordeField -Record $Record -Name "reason"

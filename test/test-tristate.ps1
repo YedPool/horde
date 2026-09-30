@@ -179,6 +179,20 @@ $forgedList = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = @("known")
 Check ((Test-HordeAnswer $forgedList) -eq $false) "an answer whose state is a list is not an answer"
 Check ((ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "known" })).state -eq "unknown") "a stored known with no value is unknown"
 Check ((ConvertFrom-HordeAnswerRecord -Record $null).state -eq "unknown") "no report is unknown, not absent"
+# A stored time with no zone cannot be placed in time: read as local, the same text written by a
+# UTC writer at UTC-4 is four hours older than it looks, so a stale answer stayed known (review,
+# 2026-09-29). It is treated as no observation time, which ages to unknown.
+$zonelessText = (Get-Date).AddSeconds(-10).ToString("yyyy-MM-ddTHH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+$zoneless = ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "known"; value = "idle"; reason = ""; observedAt = $zonelessText })
+Check ($zoneless.state -eq "known" -and $null -eq $zoneless.observedAt) ("a stored time with no zone is not an observation time (" + $zonelessText + ")")
+Check ((Limit-HordeAge -Answer $zoneless -TtlSeconds 60).state -eq "unknown") "so an answer stored with a zone-less time is unknown once aged"
+$zonedText = (Get-Date).AddSeconds(-10).ToString("yyyy-MM-ddTHH:mm:sszzz", [System.Globalization.CultureInfo]::InvariantCulture)
+$zoned = ConvertFrom-HordeAnswerRecord -Record ([pscustomobject]@{ state = "known"; value = "idle"; reason = ""; observedAt = $zonedText })
+Check ((Limit-HordeAge -Answer $zoned -TtlSeconds 60).state -eq "known") ("CONTROL: a stored time with an offset keeps its place and stays known (" + $zonedText + ")")
+# A record held in memory can carry a real [datetime]. Turned into text to be parsed, a UTC one lost its
+# zone and was read as local - at UTC-4, observed ten seconds ago read as four hours in the future.
+$inMemory = ConvertFrom-HordeAnswerRecord -Record @{ state = "known"; value = "idle"; reason = ""; observedAt = [datetime]::UtcNow.AddSeconds(-10) }
+Check ((Limit-HordeAge -Answer $inMemory -TtlSeconds 60).state -eq "known") "a record holding a UTC time as a date keeps its zone"
 
 # ConvertTo-Json's default depth is 2, counted from the record: anything deeper in the value is
 # written as its type name. The documented rule is to pass -Depth; this pins why.
