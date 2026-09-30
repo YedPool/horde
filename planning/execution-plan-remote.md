@@ -4,10 +4,10 @@ Agreed 2026-09-30. The order of work that lets Horde run sessions on another mac
 them from this one: a central listener on the hub, nodes that dial it, an allowlisted protocol that
 is never a remote shell, a transport port whose first real adapter is ssh, and a boundary with a
 separate overlay repository (Tailscale or WireGuard) that supplies only an address and a health
-answer. Its companions are `planning/execution-plan-engines.md` and `planning/execution-plan-hosts.md`
-(PR #30) and `planning/execution-plan-lifecycle.md` (PR #29). This plan builds nothing those plans
-build; where it needs their work it names the step. Step numbers are as of the engines plan at `9b9dba3` and the
-lifecycle plan at `9a88a11`; each is also named by title, so a reference survives a renumbering.
+answer. Its companions, all on `origin/main`, are `planning/execution-plan-engines.md`,
+`planning/execution-plan-hosts.md`, `planning/execution-plan-lifecycle.md` and
+`planning/execution-plan-phase-3.md`. This plan builds nothing those plans build; where it needs
+their work it names the step, by number and by title.
 
 Planning prose may name terminals, engines and transport programs. Code may not: CONTRIBUTING 14,
 extended to `agents/<name>/` by engines E1 and to `transports/<name>/` by step R5 below.
@@ -16,7 +16,7 @@ extended to `agents/<name>/` by engines E1 and to `transports/<name>/` by step R
 
 The remote-sessions design, written 2026-09-30, read-only, not committed. Its measurements are cited
 as M-01 to M-09 and its sections by number. It rests on the settled decisions of the engine-settings,
-lifecycle, hosts and metrics designs, as carried in the three companion plans.
+lifecycle, hosts and metrics designs, as carried in the companion plans.
 
 From the remote design's own "Decisions taken":
 
@@ -50,7 +50,8 @@ the ssh client and not the server (M-02, M-03); WSL `ubuntu-binder` has sshd 9.6
 
 The first four tags are the engines plan's; PHASE5 is added here.
 
-- **NOW**: needs only what is on `main`, plus a named step of a companion plan where given.
+- **NOW**: needs only what is on `main`. A step that waits on a named step of another plan says so
+  in its own line and is not NOW.
 - **PROJ**: waits until `feature/core-projection` merges with the HostPort contract (namespace-tagged
   pid and cwd, unique handles, mandatory `-Capabilities`).
 - **SPAWN**: waits for Horde's spawn and launch commands (migration step 3.8, engines E10, and the
@@ -94,15 +95,26 @@ Also for remote:
 - **R11 extends the rule of `planning/ledger/core-identity.md`** that a pid is looked up only in its
   own space. Its entry cites this plan; no old code is replaced.
 - **R21 replaces wezfleet `tell`'s duplicate guard** (`commands/tell.ps1` `Get-WfTellSuccessLines`,
-  2026-09-16: a correction suppressed as a duplicate). It extends the tell ledger Phase 3 step 3.6
-  writes; if none exists when R21 starts, it writes `planning/ledger/core-delivery.md` first. L-037
-  of `core-identity.md` (the Claude pipe is undocumented internal IPC) is cited there.
+  2026-09-16: a correction suppressed as a duplicate). It adds that entry to the ledgers lifecycle
+  step 13 writes for the primitive (`planning/ledger/core-alerter.md` and the message half of
+  `agent-claude-code.md`), and cites L-037 of `core-identity.md` (the Claude pipe is undocumented
+  internal IPC).
 
 ## Steps
 
-A. The protocol core (NOW; test-only, installs nothing)
+A. The protocol core (test-only, installs nothing; each step's tag in its line)
 
-1. **R1. Contracts.** `schema/link-frame.v1`, `link-verbs.v1`, `node-manifest.v1`,
+0. **R0. The permission-level vocabulary** (NOW). One small data file, `core/permission-levels.json`:
+   a closed, ordered list of Horde permission levels, each with a one-line meaning in Horde's terms
+   and no harness flag (starting proposal, settled in R0's review: `plan` < `ask` < `edits` <
+   `bypass`). It lands on its own, **before engines E2**, and breaks a cycle: E2's `permissionLevels`
+   checks (every level mapped exactly once per harness) and R9's ceiling both read this file, so
+   neither waits on the other. Tests first: the list is non-empty, ordered, and has no duplicate; a
+   level added or removed fails a fixture descriptor that maps the old list, so E2's check sees the
+   change; the file names no harness (the ratchet). **Follow-up owed:** the engines plan's E2 says
+   "the remote plan owns the closed, ordered vocabulary"; it needs a one-line reference to R0 and
+   `core/permission-levels.json`.
+1. **R1. Contracts** (NOW). `schema/link-frame.v1`, `link-verbs.v1`, `node-manifest.v1`,
    `transport-capabilities.v1`, `overlay-endpoint.v1`, with golden fixtures (D4). Every verb row has
    `additionalProperties: false`, an effect class (`read`, `write`, `spawn`, `kill`, lifecycle H13)
    and a `since`. Tests first:
@@ -110,22 +122,31 @@ A. The protocol core (NOW; test-only, installs nothing)
    - **no verb takes a command line, script, program path, environment map or arbitrary file path**:
      a fixture verb with an `argv`, `path` or `env` argument fails, and so does one whose argument
      type is an open object;
-   - **no verb returns raw worker context**: every read result schema is closed and size-capped, and
-     a fixture verb returning a transcript or tool-output field fails (the purity guard, see R14);
+   - **no verb returns raw worker context**: every read result schema is closed and carries a size
+     cap, and a fixture verb returning a transcript or tool-output field fails (the purity guard, see
+     R14);
+   - **size caps are data in the contract, not schema keywords.** `core/Schema.ps1` has no length or
+     byte keywords, so R1 declares each cap as a field of the verb row (`maxArgsBytes`,
+     `maxResultBytes`, and per string field a `maxBytes`: the prompt and message bodies 64 KiB, the
+     handoff 64 KiB) and the frame cap in `link-frame.v1` (1 MiB, never above 4 MiB). A verb row
+     without a result cap fails. R2 enforces them;
    - the absent verbs of design 6.4 (exec, shell, file, config set, credential, kill by pid, update)
      are each a refused fixture.
-2. **R2. `remote/Protocol.ps1`.** NDJSON frames, the envelope, version negotiation. The encoder
+2. **R2. `remote/Protocol.ps1`** (NOW). NDJSON frames, the envelope, version negotiation. The encoder
    escapes every non-ASCII character as `\uXXXX` (PowerShell 5.1's `ConvertTo-Json` does not,
-   CONTRIBUTING 12); the decoder refuses a raw byte above 0x7F. Frame cap 1 MiB, never above 4 MiB.
-   Every `result` is in `ConvertTo-HordeAnswerRecord` form, so no bare value crosses. Tests first:
-   escaping round-trips; a raw non-ASCII byte is a framing error; a frame at cap + 1 is refused at
-   the sender; a stdout line that is not a frame closes the link; no common protocol version ends in
+   CONTRIBUTING 12); the decoder refuses a raw byte above 0x7F. `Test-HordeProtocolLimits` enforces
+   every cap R1 declares as data (frame, args, result, per-field bytes), on send and on receive,
+   because the schema checker cannot. Every `result` is in `ConvertTo-HordeAnswerRecord` form, so no
+   bare value crosses. Tests first: escaping round-trips; a raw non-ASCII byte is a framing error; a
+   frame at cap + 1 is refused at the sender; a field one byte over its declared `maxBytes` is refused
+   on both sides, and a cap removed from the data turns the test red; a stdout line that is not a frame closes the link; no common protocol version ends in
    `bye`. Mutations on the escaper and the cap.
 3. **R3. `remote/Journal.ps1`.** The request and message journals: `FileMode.CreateNew` per id,
-   `argsHash`, states `accepted|done|failed|refused`, 30-day retention. The root is a parameter; the
-   default is under `Get-HordeHome` (engines E6). Tests first: two racing writers, one act; the same id
+   `argsHash`, states `accepted|done|failed|refused`, 30-day retention (NOW). The root is a
+   parameter, so this step needs no home folder; callers pass a root under `Get-HordeHome` (Phase 3
+   plan step 1) once it exists. Tests first: two racing writers, one act; the same id
    with another `argsHash` is refused; a resend returns the recorded state and acts nothing.
-4. **R4. The transport port and `transports/local`.** `New-HordeTransport` with `Open` and `Probe`,
+4. **R4. The transport port and `transports/local`** (NOW). `New-HordeTransport` with `Open` and `Probe`,
    capabilities as data validated by R1's schema, and a conformance suite generated from each
    transport's `capabilities.json` (every `yes` a positive test, every `no` an honest refusal, as
    hosts step 3). `local` is a named pipe `\\.\pipe\horde-node-<deviceId>` whose ACL admits only the
@@ -133,7 +154,8 @@ A. The protocol core (NOW; test-only, installs nothing)
    path can pick it. Tests first: the pipe refuses another user (a test account, or the refusal
    asserted through the ACL read back); the in-process pair is refused where `auth.peer: yes` is
    required.
-5. **R5. `transports/ssh`, and Rule 14 gains `transports/`.**
+5. **R5. `transports/ssh`, and Rule 14 gains `transports/`** (waits for engines E1, lifecycle step
+   5 and hosts step 5, the three earlier edits to `tools/HostNames.ps1`).
    - `Argv.ps1` builds argv from data, never from a user's config: `-F none`, `-T`, the Horde key,
      `IdentitiesOnly`, `IdentityAgent=none`, a Horde `UserKnownHostsFile`, `StrictHostKeyChecking=yes`,
      `HostKeyAlias=horde-hub-<hubId>`, `BatchMode=yes`, keepalives, `ControlMaster=no
@@ -141,13 +163,19 @@ A. The protocol core (NOW; test-only, installs nothing)
      copy (M-03) cannot win. Exit 255 maps to `unknown: transport error`, stderr's first line the
      reason, and stderr never enters the frame reader (no `2>&1`, CONTRIBUTING 12).
    - **The throwaway sshd in WSL** (`transports/ssh/test/Isolation.ps1`, design 12.3 T2): temp keys,
-     a free loopback port, a test-only `sshd_config` with `ForceCommand` an echo script, started as
-     `wsl.exe -d <distro> --exec /usr/sbin/sshd -D -e -f <path>`, killed and its temp root removed at
-     the end. The distro comes from configuration (CONTRIBUTING 11).
+     a free loopback port, a test-only `sshd_config` with `ForceCommand` an echo script and
+     **`AuthorizedKeysFile` pinned to the temp root**, so the WSL user's own `authorized_keys` is never
+     consulted; started as `wsl.exe -d <distro> --exec /usr/sbin/sshd -D -e -f <path>`. The distro
+     comes from configuration (CONTRIBUTING 11).
+   - **Cleanup runs in `finally`**: sshd is killed by the pid the harness started (checked through
+     its `PidFile` and start time), and the temp root with its keys is removed, so an aborted or
+     failed run leaves no key behind. A mutation that throws mid-suite must still leave the temp root
+     gone.
    - Assertions before anything runs: `ssh.exe -G` with the production argv shows only the temp
      identity, the temp known_hosts and `controlmaster no`. **Control:** the same `-G` without `-F
-     none` shows the user's config taking effect (M-05), so the check can see the hazard. The
-     `~/.ssh` hashes are recorded.
+     none` shows the user's config taking effect (M-05), so the check can see the hazard. The SHA-256
+     and length of every file in the Windows `~/.ssh` **and in the WSL distro's `~/.ssh`** (the
+     sshd's user, root here, M-04) are recorded before and compared after; any change fails.
    - Cases, each with its mutation: bytes round-trip, including a 1 MiB frame; a client-requested
      command is ignored; `-L` is refused; a pty is refused; a wrong host key refuses with 255 mapped
      to `unknown`; an unknown client key is refused; an `expiry-time` in the past is refused; the link
@@ -155,21 +183,24 @@ A. The protocol core (NOW; test-only, installs nothing)
    - If WSL localhost forwarding does not reach the sshd (unmeasured, design 12.3), the suite prints
      `[SKIP] <reason>`, never green.
    - `tools/HostNames.ps1` gains a third root: nothing outside `transports/<name>/` names `ssh`,
-     `ssh.exe`, `sshd` or an ssh option. Engines E1 (lifecycle step 5) and hosts step 5 also edit
-     that file; the three land one after another, in that order, never together. Fixture trees first, as E1's.
-6. **R6. `remote/Clock.ps1` and liveness answers.** Four-timestamp offset and round-trip per link;
+     `ssh.exe`, `sshd` or an ssh option. This is the **fourth** edit to that file, in a fixed order:
+     engines E1 (the `agents/*` ratchet), then lifecycle step 5 (its names under that ratchet), then
+     hosts step 5 (the cross-host import), then R5. Each rebases on the one before. Fixture trees
+     first, as E1's.
+6. **R6. `remote/Clock.ps1` and liveness answers** (NOW). Four-timestamp offset and round-trip per link;
    every remote `observedAt` stored with the node's stamp and the hub's receive time; freshness
    (`Limit-HordeAge`) judged on receive time; an offset above `HordeClockSkewSeconds` is a node fault.
    The three liveness tristates of design 7.1 as pure functions. Tests first: a node clock 10 min
    fast does not make stale data fresh; link silent past 60 s is `unknown` naming the last frame
    time; a node without `bye` is never `known false`.
-7. **R7. Device id, `core/Device.ps1`.** `Get-HordeDeviceId` reads or creates
-   `<HORDE_HOME>/node/node.json` with `CreateNew`: a random UUID, never from a host name or hardware;
-   `deviceName` a handle only. After engines E6. The lifecycle follower's `machineId` (the stream
-   path `<machineId>.jsonl` of its step 7) **is** this device id: lifecycle step 7 takes it from here,
-   so R7 lands first. Tests first: two racing first calls give one id; a copied `node.json` on a second
+7. **R7. Device id, `core/Device.ps1`** (waits for Phase 3 plan step 1, `Get-HordeHome`).
+   `Get-HordeDeviceId` reads or creates `<HordeHome>/node/node.json` with `CreateNew`: a random
+   UUID, never from a host name or hardware; `deviceName` a handle only. The lifecycle follower's
+   `machineId` (the stream path `<machineId>.jsonl` of lifecycle step 7) **is** this device id, so R7
+   lands before lifecycle step 7. **Follow-up owed:** the lifecycle plan does not name this
+   dependency; its step 7 needs one line saying `machineId` comes from R7's `Get-HordeDeviceId`. Tests first: two racing first calls give one id; a copied `node.json` on a second
    machine is caught at enrolment (R17), not here, and the test says so.
-8. **R8. The overlay boundary, Horde's side.** `remote/Overlay.ps1` resolves
+8. **R8. The overlay boundary, Horde's side** (NOW). `remote/Overlay.ps1` resolves
    `link.hub.address = overlay:<name>` by running `horde-overlay endpoint --name <name> --json` and
    validating the output against `schema/overlay-endpoint.v1` (R1). **Horde owns that schema**; the
    overlay repo imports nothing of Horde's and Horde imports nothing of its code. Health is advisory:
@@ -177,12 +208,12 @@ A. The protocol core (NOW; test-only, installs nothing)
    healthy)`. Horde never starts, stops or configures a tunnel. Tests first against a fake
    `horde-overlay` on a temp PATH: output that fails the schema is `unknown`, never a guessed address;
    a missing command is `unknown` with the reason.
-9. **R9. Node policy, including the permission-mode ceiling** (after engines E3 and E4). The node's
+9. **R9. Node policy, including the permission-mode ceiling** (waits for R0 and engines E2 to E4). The node's
    policy is keys in its own L1, through the one resolver, like `admission.tier`: `remote.repos[]`,
    `remote.profiles[]` (names offered to the hub), `remote.dailySpawnCap`, and
-   `remote.permissionCeiling`. The ceiling is a closed, ordered Horde vocabulary; each harness maps it
-   to its own flags in `agents/<name>/agent.json` (a field requested of engines E2, so core names no
-   flag). Default: **below prompts-bypassed**, unless the node's owner sets it higher. Like
+   `remote.permissionCeiling`. The ceiling is a level of R0's vocabulary; each harness maps the
+   levels to its own flags in `agents/<name>/agent.json` `permissionLevels` (engines E2), so core
+   names no flag. Default: **below prompts-bypassed**, unless the node's owner sets it higher. Like
    `admission.*`, the keys may be set only in L1 or L4; the checker refuses them in a run spec or a
    spawn. This step is the key, the checker and a pure `Test-HordeRemotePolicy` over a request;
    enforcement is R19. Tests first: a request above the ceiling is **refused with the reason, never
@@ -195,7 +226,9 @@ B. Identity and the session record (PROJ; must merge before migration step 3.8)
 10. **R10. The fleet record and the binding record: first of one ordered sequence of v1 edits.**
     Four PRs edit `schema/session-record.v1` in place, across three plans. Each is safe only while no
     writer exists (engine-settings decision 5), so **all four land as one ordered sequence before
-    Phase 3 step 3.8**, each rebased on the one before, and any later change is a v2:
+    Phase 3 step 3.8**, each rebased on the one before, and any later change is a v2. The same order
+    is the gate on step 3.8 in `planning/execution-plan-phase-3.md`, and the engines plan (its group
+    C) and the lifecycle plan (its step 24) state it too. R10 also needs R7, for `device`:
     1. **R10, the split** (this plan). First, because the other three add fields to the records it
        creates. `schema/session-record.v1` stays the fleet record, written only by the hub's engine:
        role, parent, label, labelCycle, origin, runId, fleetSessionId, title, dependsOn, retired,
@@ -204,21 +237,21 @@ B. Identity and the session record (PROJ; must merge before migration step 3.8)
        spawned the session and stored on that node; the hub keeps a read-only mirror by cursor (R13).
        `core/ownership.json` gains the owner **`node`** ("the engine on the device that runs the
        session"), and `projectCwd` moves to it.
-    2. **engines K1** (PR #30, branch `docs/engines-hosts-plans`): the key becomes `(harness, id)`
-       and `sessionId` stops assuming a UUID, in both records.
-    3. **engines R1** (same PR): `engine { harness, provider, model, profile, requested, resolvedAt,
-       provenance }` and `resume { argv, envRefs }` land in `session-binding.v1`, owner `node`, not in
-       the fleet record. That changes engines R1's target file and owner, and nothing else in it.
-    4. **lifecycle step 24** (PR #29, branch `docs/lifecycle-plan`): the rows of its 3.4 (`launch`,
-       `binding`, `containment`, `closeOn`, `park`, `closure`, `predecessor`, `successor`) land in
-       `session-binding.v1`, owner `node`, not as `engine` rows of the fleet record.
+    2. **engines K1** (`planning/execution-plan-engines.md` step 12): the key becomes
+       `(harness, id)` and `sessionId` stops assuming a UUID, in both records.
+    3. **engines R1** (engines step 14): `engine { harness, provider, model, profile, requested,
+       resolvedAt, provenance }` and `resume { argv, envRefs }` land in `session-binding.v1`, owner
+       `node`.
+    4. **lifecycle step 24** (`planning/execution-plan-lifecycle.md`, its 3.1 and 3.4): `binding`,
+       `containment`, `predecessor`, `successor` and `closure` land in `session-binding.v1`, owner
+       `node`; `closeOn` and `park` land in the fleet record, because an orc on any machine sets them
+       through the hub. This plan confirms that placement.
 
     A local session is the same split with both writers on one machine. Tests first:
     `test/test-schema-session-record.ps1` computes the fleet record from `engine`-owned stored rows,
     and a new twin computes the binding record from `node`-owned rows; a row with both owners fails; a
     `node` row appearing in the fleet schema fails, and the reverse; `device` is required. Ledger
-    note above. **Coordination:** PRs #29 and #30 are updated to name this order, and the `node`
-    owner, before any of their record edits merges.
+    note above.
 11. **R11. Device on every namespace tag.** On top of the HostPort's `space` (hosts decision 5), every
     pid, procStart and path that leaves a node carries `ns: { device, space }`. Rules, each a test
     with its mutation:
@@ -245,7 +278,8 @@ C. The node and the hub, read path (PROJ)
     with "node D unreachable since T" when the link drops, never `absent`; a partial inventory never
     marks a session absent; a key seen on two devices is a fault, never resolved by picking one.
 14. **R14. `handoff.get`, and context purity.** A goblin's handoff comes back as a distilled document,
-    capped at 64 KiB; transcripts, tool output and exploratory notes stay on the node, on disk, and
+    capped at 64 KiB, the cap declared as data on the verb in R1 and enforced on the node by R2's
+    `Test-HordeProtocolLimits`, since the schema checker has no byte keyword; transcripts, tool output and exploratory notes stay on the node, on disk, and
     are named in the handoff, never sent. There is no file-transfer verb and no `evidence.get` in v1.
     Tests first: a handoff over the cap is refused at the node, not truncated silently; R1's purity
     guard covers the new verb. Lifecycle step 16's purity measure (orc and warchief context tokens
@@ -307,12 +341,14 @@ E. Acting over the link
     a node outbox that drains in seq order on reconnect, alerts older than 24 h delivered marked
     stale. Tests first: a partition queues alerts and they drain in order; nothing is killed because
     of a partition.
-21. **R21. Delivery** (PHASE5; also waits for the local `deliver` primitive, which no plan yet owns:
-    Phase 3 step 3.6 plans only the naming half). `session.deliver` and `delivery.status`, the stages
-    queued, accepted, handed-over, seen, expired, and the message journal. The node hands over through
-    the agent adapter's `deliver`, the same primitive local `horde tell` uses, never Claude's
-    cross-machine route. Tests first with a fake deliverer for each outcome: `held` is `known not
-    delivered: held`, never "failed"; a resend with the same messageId stops at `accepted`; an unheard
+21. **R21. Delivery** (PHASE5; after lifecycle step 13). `session.deliver` and `delivery.status`, the
+    stages queued, accepted, handed-over, seen, expired, and the message journal. The node hands over
+    through **`Send-SessionMessage`, the session-message primitive lifecycle step 13 owns**
+    (`agents/<name>/Message.ps1` behind the engine port), the same primitive local wake messages and
+    the delivery half of `tell` use, never Claude's cross-machine route. `handed-over` records that
+    primitive's tristate receipt; `seen` is its `known: delivered` (the follower saw the marker as a
+    user turn). Tests first with a fake primitive for each outcome: a refusal whose reason is held is
+    `known not delivered: held`, never "failed"; a resend with the same messageId stops at `accepted`; an unheard
     outcome is `unknown` naming the last stage. Ledger note above.
 22. **R22. Fleet adoption (D11)** (SPAWN and INSTALL; after R16 to R19 and overlay O1). A real second
     Windows device, enrolled, runs one real goblin through a working day, shadowed against the same
@@ -330,17 +366,18 @@ this desktop. The overlay never sees Horde keys, never edits sshd and never open
 
 ## What can start now
 
-In order, one PR each: R1; R2, R3 and R4; R6; R7 (after engines E6); R8; R5 (after engines E1 and
-hosts step 5 in `tools/HostNames.ps1`); R9 (after engines E3 and E4). Overlay O1 in its own repo after
-R1.
+The NOW set, in order, one PR each: R0 (before engines E2); R1; R2, R3 and R4; R6; R8. Overlay O1
+in its own repo after R1.
 
 ## What waits
 
+- **Other plans' steps**: R5 (engines E1, lifecycle step 5, hosts step 5); R7 (Phase 3 plan step 1);
+  R9 (R0, engines E2 to E4).
 - **PROJ**: R10 (first of R10, engines K1, engines R1, lifecycle step 24; all four before step 3.8),
   R11, R12 to R15, R20.
 - **INSTALL, awaiting the founder's OK**: R16, then R17.
 - **SPAWN**: R18, R19; R22 also needs INSTALL.
-- **PHASE5**: R21.
+- **PHASE5**: R21 (and lifecycle step 13).
 - **Deferred**: Linux and macOS nodes (decision 6), until the tmux adapter exists and the node's code
   is proven under PowerShell 7, which is on no machine here (M-07).
 
@@ -351,7 +388,5 @@ R1.
 - Whether `ssh.exe` 9.5p2 accepts `GlobalKnownHostsFile=none` and `IdentityAgent=none` (R5's `-G`).
 - Whether WSL 2 localhost forwarding reaches an sshd started with `wsl.exe --exec` (R5 self-check).
 - Whether PowerShell 5.1 writes a BOM or re-encodes stdout for the shim (R2 and R5's first test).
-- The payload a non-child process may post to a Claude session's pipe (R21 depends only on some
-  local `deliver`).
 - That a `\\.\pipe\LOCAL\` pipe is unreachable from Session 0 (reported, not measured; nothing
   depends on it).
