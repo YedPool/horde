@@ -1,0 +1,354 @@
+# Execution plan: remote sessions - the link, the node, and the transport port
+
+Agreed 2026-09-30. The order of work that lets Horde run sessions on another machine and operate
+them from this one: a central listener on the hub, nodes that dial it, an allowlisted protocol that
+is never a remote shell, a transport port whose first real adapter is ssh, and a boundary with a
+separate overlay repository (Tailscale or WireGuard) that supplies only an address and a health
+answer. Its companions are `planning/execution-plan-engines.md` and `planning/execution-plan-hosts.md`
+(PR #30) and `planning/execution-plan-lifecycle.md` (PR #29). This plan builds nothing those plans
+build; where it needs their work it names the step.
+
+Planning prose may name terminals, engines and transport programs. Code may not: CONTRIBUTING 14,
+extended to `agents/<name>/` by engines E1 and to `transports/<name>/` by step R5 below.
+
+## Sources, and what is settled
+
+The remote-sessions design, written 2026-09-30, read-only, not committed. Its measurements are cited
+as M-01 to M-09 and its sections by number. It rests on the settled decisions of the engine-settings,
+lifecycle, hosts and metrics designs, as carried in the three companion plans.
+
+From the remote design's own "Decisions taken":
+
+1. **Nodes dial out to one listener on the hub, and the hub is always also a node**, served over the
+   `local` transport through the same protocol. There is one actuation path; `local` is its
+   degenerate case, not a second code path.
+2. **OPEN, with the founder: may Horde install the Windows OpenSSH Server on this machine?** Elevated,
+   once, listening on loopback and the overlay address only, for a dedicated non-administrator
+   account. Until he answers, the ssh adapter is tested against a throwaway sshd in WSL (step R5), and
+   step R16 does not start.
+3. **The stored session record splits into a fleet record, written only by the hub, and a binding
+   record, written only by the node that runs the session.** It lands before step 3.8's first
+   writer, as an in-place edit of v1 (step R10).
+4. **Each node caps the permission mode of the sessions the hub spawns on it** (step R9).
+5. **The remaining decisions follow the design's recommendations**: no file-transfer verb, so code
+   moves only by git and handoffs come back distilled (8); no remote update verb (9); Rule 14 gains
+   `transports/` (10); the overlay repo is `horde-overlay`, and the hub listens on loopback and the
+   overlay only (11); a partition never kills work (12); link keys are unencrypted ed25519 files with
+   an owner-only ACL, `restrict` and a one-year expiry (13); Tailscale is the overlay's one-click
+   default, WireGuard second, and the existing `vpn-hub` tunnel is never touched (14); Windows nodes
+   first (6); a second, disabled test sshd for the listener's suite (3); delivery only through the
+   node's local `deliver` primitive, never Claude's cross-machine route (7).
+
+Findings that shape every step (design section 0): a Windows sshd kills every process its session
+started and runs in Session 0, so **nothing that must outlive a link, and nothing that opens a
+window, is a child of an ssh session**; Windows `ssh.exe` has no multiplexing and this machine has a
+user `~/.ssh/config` (M-05), so **a Horde link never reads a user's ssh config**; this machine has
+the ssh client and not the server (M-02, M-03); WSL `ubuntu-binder` has sshd 9.6p1 (M-04).
+
+## When each step can start
+
+The first four tags are the engines plan's; PHASE5 is added here.
+
+- **NOW**: needs only what is on `main`, plus a named step of a companion plan where given.
+- **PROJ**: waits until `feature/core-projection` merges with the HostPort contract (namespace-tagged
+  pid and cwd, unique handles, mandatory `-Capabilities`).
+- **SPAWN**: waits for Horde's spawn and launch commands (migration step 3.8, engines E10, and the
+  lifecycle plan's anchor, its step 19).
+- **INSTALL**: a tool or Windows feature not yet on this machine. For R16 it is not enough to tell the
+  founder first: it waits for his OK (decision 2).
+- **PHASE5**: waits for a writer the migration plan's Phase 5 moves behind the contract.
+
+## How every step is done
+
+As the phases 0-2 plan: a worktree from a freshly fetched `origin/main`; a ledger first wherever
+anything is replaced; tests first, every new check mutation-tested; verified from a fresh CRLF
+checkout; an independent adversarial review of every code PR; `gh pr merge --merge`, never squash;
+every count copied from command output. Heavy suites run one at a time in one background job with a
+`DONE=` marker.
+
+Also for remote:
+
+- **Never the user's keys, never `~/.ssh`.** Every ssh test generates its keys in a temp root and
+  removes them. The SHA-256 and length of every file in `~/.ssh` are recorded before and compared
+  after; any change fails the suite. Nothing opens them for writing.
+- **Every remote answer is a `core/tristate` answer.** "I cannot hear the node" is `unknown` with the
+  reason, never `absent` and never a stale value shown as current (design 7).
+- **Option spellings are measured, not quoted.** Every ssh option and every `authorized_keys` option
+  is proven on the installed `ssh.exe` 9.5p2 (R5) or the Windows sshd (R17) before a line depends on
+  it. Until then it is `unverified`, which counts as `no`.
+- **Two ends, one version rule.** A contract change is a new schema file, never an edit, once any
+  node could hold the old one (migration-plan section 8, risk 2). The session-record edits of R10
+  are the one exception, and only because no writer exists before step 3.8.
+
+## Ledger notes
+
+- **No ledger is owed for `remote/` or `transports/`.** Neither old system has remote code: a search
+  for `ssh|tailscale|wireguard` over wezfleet `lib/` and `commands/` finds only the comment at
+  `commands/sessions.ps1:11`, and the same search finding that comment is its control (design
+  finding 1). The one inherited principle, "identity is not location"
+  (wezfleet-v3-rewrite-proposal.html:105-111), is carried as a comment in R7.
+- **R10 edits `core/ownership.json`**, so it re-reads `planning/ledger/core-ownership.md`. Every entry
+  whose `where` names a row that moves to the binding record (projectCwd's `firstCwd` rule first)
+  gets its `where` updated in the same PR, and `test/test-ledger.ps1` must stay green.
+- **R11 extends the rule of `planning/ledger/core-identity.md`** that a pid is looked up only in its
+  own space. Its entry cites this plan; no old code is replaced.
+- **R21 replaces wezfleet `tell`'s duplicate guard** (`commands/tell.ps1` `Get-WfTellSuccessLines`,
+  2026-09-16: a correction suppressed as a duplicate). It extends the tell ledger Phase 3 step 3.6
+  writes; if none exists when R21 starts, it writes `planning/ledger/core-delivery.md` first. L-037
+  of `core-identity.md` (the Claude pipe is undocumented internal IPC) is cited there.
+
+## Steps
+
+A. The protocol core (NOW; test-only, installs nothing)
+
+1. **R1. Contracts.** `schema/link-frame.v1`, `link-verbs.v1`, `node-manifest.v1`,
+   `transport-capabilities.v1`, `overlay-endpoint.v1`, with golden fixtures (D4). Every verb row has
+   `additionalProperties: false`, an effect class (`read`, `write`, `spawn`, `kill`, lifecycle H13)
+   and a `since`. Tests first:
+   - a verb row without an effect class fails;
+   - **no verb takes a command line, script, program path, environment map or arbitrary file path**:
+     a fixture verb with an `argv`, `path` or `env` argument fails, and so does one whose argument
+     type is an open object;
+   - **no verb returns raw worker context**: every read result schema is closed and size-capped, and
+     a fixture verb returning a transcript or tool-output field fails (the purity guard, see R14);
+   - the absent verbs of design 6.4 (exec, shell, file, config set, credential, kill by pid, update)
+     are each a refused fixture.
+2. **R2. `remote/Protocol.ps1`.** NDJSON frames, the envelope, version negotiation. The encoder
+   escapes every non-ASCII character as `\uXXXX` (PowerShell 5.1's `ConvertTo-Json` does not,
+   CONTRIBUTING 12); the decoder refuses a raw byte above 0x7F. Frame cap 1 MiB, never above 4 MiB.
+   Every `result` is in `ConvertTo-HordeAnswerRecord` form, so no bare value crosses. Tests first:
+   escaping round-trips; a raw non-ASCII byte is a framing error; a frame at cap + 1 is refused at
+   the sender; a stdout line that is not a frame closes the link; no common protocol version ends in
+   `bye`. Mutations on the escaper and the cap.
+3. **R3. `remote/Journal.ps1`.** The request and message journals: `FileMode.CreateNew` per id,
+   `argsHash`, states `accepted|done|failed|refused`, 30-day retention. The root is a parameter; the
+   default is under `Get-HordeHome` (engines E6). Tests first: two racing writers, one act; the same id
+   with another `argsHash` is refused; a resend returns the recorded state and acts nothing.
+4. **R4. The transport port and `transports/local`.** `New-HordeTransport` with `Open` and `Probe`,
+   capabilities as data validated by R1's schema, and a conformance suite generated from each
+   transport's `capabilities.json` (every `yes` a positive test, every `no` an honest refusal, as
+   hosts step 3). `local` is a named pipe `\\.\pipe\horde-node-<deviceId>` whose ACL admits only the
+   owning user; an in-process pair for unit tests declares `auth.peer: declined`, so no production
+   path can pick it. Tests first: the pipe refuses another user (a test account, or the refusal
+   asserted through the ACL read back); the in-process pair is refused where `auth.peer: yes` is
+   required.
+5. **R5. `transports/ssh`, and Rule 14 gains `transports/`.**
+   - `Argv.ps1` builds argv from data, never from a user's config: `-F none`, `-T`, the Horde key,
+     `IdentitiesOnly`, `IdentityAgent=none`, a Horde `UserKnownHostsFile`, `StrictHostKeyChecking=yes`,
+     `HostKeyAlias=horde-hub-<hubId>`, `BatchMode=yes`, keepalives, `ControlMaster=no
+     ControlPath=none`, no forwarding (design 2.4). The System32 `ssh.exe` is resolved by path so Git's
+     copy (M-03) cannot win. Exit 255 maps to `unknown: transport error`, stderr's first line the
+     reason, and stderr never enters the frame reader (no `2>&1`, CONTRIBUTING 12).
+   - **The throwaway sshd in WSL** (`transports/ssh/test/Isolation.ps1`, design 12.3 T2): temp keys,
+     a free loopback port, a test-only `sshd_config` with `ForceCommand` an echo script, started as
+     `wsl.exe -d <distro> --exec /usr/sbin/sshd -D -e -f <path>`, killed and its temp root removed at
+     the end. The distro comes from configuration (CONTRIBUTING 11).
+   - Assertions before anything runs: `ssh.exe -G` with the production argv shows only the temp
+     identity, the temp known_hosts and `controlmaster no`. **Control:** the same `-G` without `-F
+     none` shows the user's config taking effect (M-05), so the check can see the hazard. The
+     `~/.ssh` hashes are recorded.
+   - Cases, each with its mutation: bytes round-trip, including a 1 MiB frame; a client-requested
+     command is ignored; `-L` is refused; a pty is refused; a wrong host key refuses with 255 mapped
+     to `unknown`; an unknown client key is refused; an `expiry-time` in the past is refused; the link
+     survives 60 s idle; killing sshd gives `unknown: link lost`.
+   - If WSL localhost forwarding does not reach the sshd (unmeasured, design 12.3), the suite prints
+     `[SKIP] <reason>`, never green.
+   - `tools/HostNames.ps1` gains a third root: nothing outside `transports/<name>/` names `ssh`,
+     `ssh.exe`, `sshd` or an ssh option. Engines E1 and hosts step 5 also edit that file; the three
+     land one after another, in that order, never together. Fixture trees first, as E1's.
+6. **R6. `remote/Clock.ps1` and liveness answers.** Four-timestamp offset and round-trip per link;
+   every remote `observedAt` stored with the node's stamp and the hub's receive time; freshness
+   (`Limit-HordeAge`) judged on receive time; an offset above `HordeClockSkewSeconds` is a node fault.
+   The three liveness tristates of design 7.1 as pure functions. Tests first: a node clock 10 min
+   fast does not make stale data fresh; link silent past 60 s is `unknown` naming the last frame
+   time; a node without `bye` is never `known false`.
+7. **R7. Device id, `core/Device.ps1`.** `Get-HordeDeviceId` reads or creates
+   `<HORDE_HOME>/node/node.json` with `CreateNew`: a random UUID, never from a host name or hardware;
+   `deviceName` a handle only. After engines E6. The lifecycle follower's `machineId` (its step 5
+   stream path `<machineId>.jsonl`) **is** this device id: lifecycle step 5 takes it from here, so R7
+   lands first. Tests first: two racing first calls give one id; a copied `node.json` on a second
+   machine is caught at enrolment (R17), not here, and the test says so.
+8. **R8. The overlay boundary, Horde's side.** `remote/Overlay.ps1` resolves
+   `link.hub.address = overlay:<name>` by running `horde-overlay endpoint --name <name> --json` and
+   validating the output against `schema/overlay-endpoint.v1` (R1). **Horde owns that schema**; the
+   overlay repo imports nothing of Horde's and Horde imports nothing of its code. Health is advisory:
+   a healthy overlay with a refused ssh handshake is `unknown: link refused (overlay reports
+   healthy)`. Horde never starts, stops or configures a tunnel. Tests first against a fake
+   `horde-overlay` on a temp PATH: output that fails the schema is `unknown`, never a guessed address;
+   a missing command is `unknown` with the reason.
+9. **R9. Node policy, including the permission-mode ceiling** (after engines E3 and E4). The node's
+   policy is keys in its own L1, through the one resolver, like `admission.tier`: `remote.repos[]`,
+   `remote.profiles[]` (names offered to the hub), `remote.dailySpawnCap`, and
+   `remote.permissionCeiling`. The ceiling is a closed, ordered Horde vocabulary; each harness maps it
+   to its own flags in `agents/<name>/agent.json` (a field requested of engines E2, so core names no
+   flag). Default: **below prompts-bypassed**, unless the node's owner sets it higher. Like
+   `admission.*`, the keys may be set only in L1 or L4; the checker refuses them in a run spec or a
+   spawn. This step is the key, the checker and a pure `Test-HordeRemotePolicy` over a request;
+   enforcement is R19. Tests first: a request above the ceiling is **refused with the reason, never
+   clamped**; a resume whose recorded binding is above a since-lowered ceiling is refused; a request
+   naming a profile the node does not offer is refused; an environment variable moves nothing, with
+   a control that the L1 file does.
+
+B. Identity and the session record (PROJ; must merge before migration step 3.8)
+
+10. **R10. The fleet record and the binding record: one ordered sequence of v1 edits.** Every edit
+    below is in place on v1, safe only while no writer exists (engine-settings decision 5). They land
+    as four PRs, **in this order**, and each is rebased on the one before:
+    1. **engines K1**, the key: `(harness, id)`, `sessionId` no longer a UUID.
+    2. **R10, the split** (this plan). `schema/session-record.v1` stays the fleet record, written only
+       by the hub's engine: role, parent, label, labelCycle, origin, runId, fleetSessionId, title,
+       dependsOn, retired, retiredAt, and a new required **`device`** (the device id, R7).
+       `projectCwd` leaves it. A new file, `schema/session-binding.v1`, is the binding record, written
+       only by the node engine that spawned the session, stored on that node; the hub keeps a
+       read-only mirror by cursor (R13). `core/ownership.json` gains the owner **`node`** ("the engine
+       on the device that runs the session"), and `projectCwd` moves to it.
+    3. **engines R1**, the binding fields: `engine { harness, provider, model, profile, requested,
+       resolvedAt, provenance }` and `resume { argv, envRefs }` land in `session-binding.v1`, owner
+       `node`, not in the fleet record. That changes engines R1's target file and owner, and nothing
+       else in it.
+    4. **The lifecycle plan's remaining binding rows** (its 3.4: `launch`, `binding`, `containment`,
+       `closeOn`, `park`, `closure`, `predecessor`, `successor`) join `session-binding.v1`, owner
+       `node`, before 3.8, so the lifecycle plan's step 21 needs no v2.
+
+    A local session is the same split with both writers on one machine. Tests first:
+    `test/test-schema-session-record.ps1` computes the fleet record from `engine`-owned stored rows,
+    and a new twin computes the binding record from `node`-owned rows; a row with both owners fails; a
+    `node` row appearing in the fleet schema fails, and the reverse; `device` is required. Ledger
+    note above. **Coordination:** PRs #29 and #30 are updated to name this order before either of
+    their record edits merges.
+11. **R11. Device on every namespace tag.** On top of the HostPort's `space` (hosts decision 5), every
+    pid, procStart and path that leaves a node carries `ns: { device, space }`. Rules, each a test
+    with its mutation:
+    - core never looks up a pid whose `ns.device` is not the local device, in any process table;
+    - two pids are one process only when device, space, pid and procStart all match;
+    - a remote path is displayed and never opened by the hub;
+    - Claude's `pidDomain` (`win32:<user>`, M-01) is carried as the agent's claim under its own name
+      and never stands in for `ns.device`: a fixture with two devices sharing one `pidDomain` stays
+      two devices.
+
+C. The node and the hub, read path (PROJ)
+
+12. **R12. `horde node serve`, read verbs.** `hello`, `node.info`, `sessions.list`, `session.get`,
+    `binding.get`, `observe.since`, `request.status`, and the per-user logon task. `sessions.list` is
+    the node's own projection (step 2.2), built by its own host and agent adapters; `complete` is
+    `known true` only when every store was readable. `observe.since` streams the node follower's file
+    (lifecycle steps 5 and 9) from a `(deviceId, seq)` cursor. `node serve` is a separate process
+    from `horde follow`, whose never-acts tripwire stays. After lifecycle step 9. Gate: T1, the full
+    protocol hub daemon to node daemon over `local`, with a fake host and agent; e2e drives the real
+    `horde` CLI.
+13. **R13. `horde hub serve`, mirrors, `horde nodes`.** Node registry, per-node outbox, mirror files
+    and cursors, the binding-record mirror, `device` in the session view (step 2.3). Tests first: a
+    dropped link resumes at the cursor with no loss and no duplicate; a node's sessions turn `unknown`
+    with "node D unreachable since T" when the link drops, never `absent`; a partial inventory never
+    marks a session absent; a key seen on two devices is a fault, never resolved by picking one.
+14. **R14. `handoff.get`, and context purity.** A goblin's handoff comes back as a distilled document,
+    capped at 64 KiB; transcripts, tool output and exploratory notes stay on the node, on disk, and
+    are named in the handoff, never sent. There is no file-transfer verb and no `evidence.get` in v1.
+    Tests first: a handoff over the cap is refused at the node, not truncated silently; R1's purity
+    guard covers the new verb. The metrics plan's purity measure (orc and warchief context tokens per
+    delivered result) reads remote handoffs the same as local ones.
+15. **R15. `metrics.since`.** Content-free metrics events under the node's metrics gate, same cursor
+    mechanics. Tokens are counted on the node from its own files (metrics decision 7, per machine);
+    the salt never leaves the node, so fingerprints compare only within a device, written into the
+    report as a limit. After metrics M2 and R12. Tests first: a planted content marker crosses in no
+    frame, with a positive control on an allowlisted field.
+
+D. The Windows listener (INSTALL; awaits the founder's OK)
+
+16. **R16. Install the Windows OpenSSH Server - AWAITING THE FOUNDER'S OK** (decision 2).
+    `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, elevated, once. The installer
+    narrows the created `OpenSSH-Server-In-TCP` rule to loopback and the overlay interface (R8),
+    sets `ListenAddress` to the same, and `SyslogFacility LOCAL0` so failures are readable. In the
+    same elevated run, the listener's test fixture (decision 3): a second sshd service,
+    `horde-test-sshd`, startup Disabled, on a spare loopback port with a test config, a throwaway
+    `horde-link-test` account, and a service DACL that lets the founder's account start and stop it
+    unelevated. It never touches the production sshd or `~/.ssh`. Nothing in this step runs before the
+    founder says yes.
+17. **R17. The listener.** The `horde-link` account (not an administrator, no interactive logon, no
+    password), an sshd_config `Match User horde-link` fragment, the stateless attach shim, the hub
+    pipe `\\.\pipe\horde-hub-<hubId>` with an ACL for the founder and `horde-link` only, and `horde node
+    init` (key), `horde hub enroll`, `horde node pin`, `horde hub revoke`, `horde node rotate-key`.
+    Enrolment and pinning move strings the founder carries; no host key is ever accepted from the
+    network. Gate, T3 against `horde-test-sshd`: `command=`, `restrict` and `expiry-time` are honoured
+    (unmeasured on Win32 OpenSSH, so these are the first cases); a requested command and a port
+    forward are refused; a revoked key is refused even with its line restored by hand; `hello`
+    claiming another device than the key's is refused; enrolling a device id already bound to
+    another key is refused.
+
+E. Acting over the link
+
+18. **R18. Containment: the anchor holds the job, the node daemon never does** (SPAWN; after lifecycle
+    step 19). A kill-on-close job ends when its last handle closes, so a daemon holding goblins' job
+    handles would kill every goblin on each upgrade or restart, and remote makes those routine. The
+    handle is held only by the per-goblin anchor the lifecycle plan builds (its 2.2 and steps 18 and
+    19). The node daemon asks the host to start the anchor and never creates, opens-and-keeps or
+    duplicates a job handle; it queries through `core/Contain.ps1`, which closes the handle in the same
+    call (the lifecycle plan's handle-lifetime test). Tests, in the isolated host instance only:
+    restarting `node serve` mid-goblin leaves the goblin and a grandchild alive, checked by pid and
+    procStart; **control:** a test-only daemon variant that keeps a duplicated handle kills them on
+    restart, so the test can see the failure; a static tripwire finds no job-handle call outside
+    `platform/windows/` and the anchor. A goblin is never a child of an ssh session: the spawn path
+    from R19 runs in `node serve`, in the user's session.
+19. **R19. Act verbs** (SPAWN; after step 3.8, R10, R18 and lifecycle steps 21 to 25).
+    `session.spawn`, `session.resume`, `session.close`, `session.park`, `session.route`,
+    `worktree.create`, `worktree.remove`, each journaled (R3) and admitted by the node's own gate
+    (the lifecycle plan's step 29, on the node's own counters). R9's policy is enforced here, the
+    permission ceiling first. Labels are allocated only by the hub before the request leaves.
+    `session.close` carries the pid and procStart the hub last saw, and the node refuses if its view
+    differs. The node's audit log
+    records every act request with its outcome. Then the hub's own CLI switches to reach its own node
+    over `local`, so there is one actuation path. Tests first: one refusal per policy rule, each
+    mutated; a spawn above the ceiling is refused; a request cut by a partition resolves through
+    `request.status`; T1 e2e over `local`, then T2 through the WSL sshd.
+20. **R20. Alerts over the link** (PROJ; after lifecycle step 11 and R13). `alert.raise` from the node,
+    a node outbox that drains in seq order on reconnect, alerts older than 24 h delivered marked
+    stale. Tests first: a partition queues alerts and they drain in order; nothing is killed because
+    of a partition.
+21. **R21. Delivery** (PHASE5; also waits for the local `deliver` primitive, which no plan yet owns:
+    Phase 3 step 3.6 plans only the naming half). `session.deliver` and `delivery.status`, the stages
+    queued, accepted, handed-over, seen, expired, and the message journal. The node hands over through
+    the agent adapter's `deliver`, the same primitive local `horde tell` uses, never Claude's
+    cross-machine route. Tests first with a fake deliverer for each outcome: `held` is `known not
+    delivered: held`, never "failed"; a resend with the same messageId stops at `accepted`; an unheard
+    outcome is `unknown` naming the last stage. Ledger note above.
+22. **R22. Fleet adoption (D11)** (SPAWN and INSTALL; after R16 to R19 and overlay O1). A real second
+    Windows device, enrolled, runs one real goblin through a working day, shadowed against the same
+    work done locally. The PR records who used it, for what, how long, and what broke.
+
+F. The overlay repository (separate; not built here)
+
+`horde-overlay` is its own repository with its own rules. Its only contract with Horde is
+`horde-overlay endpoint --name <n> --json`, emitting `schema/overlay-endpoint.v1` from this repo:
+an address per peer, the local interface, and a tristate health with `observedAt`. O1 (endpoint over
+an existing Tailscale install, read-only) can start once R1 merges; O2 (one-click Tailscale: detect
+and reuse the installed 1.96.3, silent MSI otherwise, `up --auth-key --unattended`) and O3
+(WireGuard, its own tunnel name, never touching `vpn-hub`) follow, tested in a throwaway VM, never on
+this desktop. The overlay never sees Horde keys, never edits sshd and never opens Horde ports.
+
+## What can start now
+
+In order, one PR each: R1; R2, R3 and R4; R6; R7 (after engines E6); R8; R5 (after engines E1 and
+hosts step 5 in `tools/HostNames.ps1`); R9 (after engines E3 and E4). Overlay O1 in its own repo after
+R1.
+
+## What waits
+
+- **PROJ**: R10 (in the order K1, R10, engines R1, lifecycle rows; all before step 3.8), R11, R12 to
+  R15, R20.
+- **INSTALL, awaiting the founder's OK**: R16, then R17.
+- **SPAWN**: R18, R19; R22 also needs INSTALL.
+- **PHASE5**: R21.
+- **Deferred**: Linux and macOS nodes (decision 6), until the tmux adapter exists and the node's code
+  is proven under PowerShell 7, which is on no machine here (M-07).
+
+## Unproven, and written down
+
+- Whether Win32 OpenSSH honours `command=`, `restrict` and `expiry-time`, and how `ForceCommand`
+  quoting behaves through Windows' default shell (R17's first cases).
+- Whether `ssh.exe` 9.5p2 accepts `GlobalKnownHostsFile=none` and `IdentityAgent=none` (R5's `-G`).
+- Whether WSL 2 localhost forwarding reaches an sshd started with `wsl.exe --exec` (R5 self-check).
+- Whether PowerShell 5.1 writes a BOM or re-encodes stdout for the shim (R2 and R5's first test).
+- The payload a non-child process may post to a Claude session's pipe (R21 depends only on some
+  local `deliver`).
+- That a `\\.\pipe\LOCAL\` pipe is unreachable from Session 0 (reported, not measured; nothing
+  depends on it).
