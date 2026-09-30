@@ -16,6 +16,7 @@ Set-StrictMode -Off
 $script:HordeOwnershipFieldKeys = @("name", "owner", "read", "derived", "provisional")
 $script:HordeOwnershipDroppedKeys = @("name", "reason")
 $script:HordeOwnershipReadKeys = @("store", "field", "when")
+$script:HordeOwnershipStoreKeys = @("system", "what", "path", "guard")
 
 function Get-HordeOwnership {
     param([string]$Path = (Join-Path $PSScriptRoot "ownership.json"))
@@ -106,6 +107,21 @@ function Test-HordeOwnership {
     }
     $owners = @($Doc.owners.PSObject.Properties | ForEach-Object { $_.Name })
     $stores = @($Doc.stores.PSObject.Properties | ForEach-Object { $_.Name })
+    # A STORE'S GUARD applies to EVERY read of that store, before the read's own when. It exists
+    # because a condition repeated per read was forgotten per read: the pane-sessions file was
+    # guarded where it gave sessionId and pane and read bare for three other fields (review
+    # finding 6, 2026-09-29). On the store, a read cannot leave it out. So a guard must say
+    # something, and a store key the gate does not know is refused, since a misspelled guard
+    # would read as no guard.
+    foreach ($sp in @($Doc.stores.PSObject.Properties)) {
+        foreach ($k in @($sp.Value.PSObject.Properties | ForEach-Object { $_.Name })) {
+            if ($script:HordeOwnershipStoreKeys -cnotcontains $k) { [void]$findings.Add("store '" + $sp.Name + "' has an unknown key '" + $k + "'") }
+        }
+        $g = $sp.Value.PSObject.Properties["guard"]
+        if ($null -ne $g -and ($g.Value -isnot [string] -or "$($g.Value)".Trim() -eq "")) {
+            [void]$findings.Add("store '" + $sp.Name + "' has an empty guard")
+        }
+    }
     $seen = @{}
     $usedStores = @{}
     $fieldNames = New-Object System.Collections.ArrayList

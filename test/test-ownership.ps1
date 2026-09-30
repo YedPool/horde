@@ -85,6 +85,9 @@ Check ((Says $oneOwnerList "as a list") -and -not (Says $oneOwnerList "more than
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName derived -NotePropertyValue $false -Force }) "but not how or why") "derived given as false is refused"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName derived -NotePropertyValue 0 -Force }) "but not how or why") "derived given as a number is refused"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName provisional -NotePropertyValue $false -Force }) "but not how or why") "provisional given as false is refused"
+Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName gaurd -NotePropertyValue "x" -Force }) "store 'X1' has an unknown key 'gaurd'") "a misspelled key in a store is refused, so a guard cannot vanish"
+Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue " " -Force }) "store 'X1' has an empty guard") "a store guard that says nothing is refused"
+Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue $true -Force }) "store 'X1' has an empty guard") "a store guard that is not text is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
     $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }
