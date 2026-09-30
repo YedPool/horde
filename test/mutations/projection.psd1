@@ -119,6 +119,15 @@
         @{ Name = "cannot-tell-read-as-none"
            Find = 'return (New-HordeCandidate -Store $Store -Field $Field -Answer (New-HordeUnknown -Reason $Reason))'
            Replace = 'return (New-HordeCandidate -Store $Store -Field $Field -Skip $Reason)' }
+        @{ Name = "unlistable-runs-prove-no-run"
+           Find = 'if ($Runs.runsComplete.state -ne "known") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "unjudged-file-proves-no-handle"
+           Find = 'elseif ($C.paneVerdicts.unsure.ContainsKey($S.id)) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "unread-command-line-proves-no-process"
+           Find = 'elseif ($unreadLines.Count -gt 0) { $pidX5 = New-HordeUnsure'
+           Replace = 'elseif ($false) { $pidX5 = New-HordeUnsure' }
         # The engine's fields.
         @{ Name = "claim-read-beside-a-record"
            Find = 'if ($S.w1Unreadable -or $null -ne $S.w1) { return (New-HordeCandidate -Store "W2"'

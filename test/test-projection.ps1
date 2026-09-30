@@ -424,6 +424,40 @@ try { $pcx = Project $base } finally { ${function:Read-HordeControlExtras} = $re
 Check ((St (Ans $pcx "codex-thread-1" "fleetSessionId")) -eq "unknown" -and (Why (Ans $pcx "codex-thread-1" "fleetSessionId")) -like "*could not be read again*") "a codex file that cannot be read again is not a codex file that is missing"
 
 Write-Host ""
+Write-Host "--- an unlistable run, a doubly held file, an unreadable command line ---" -ForegroundColor Cyan
+# Three more skips that could end absent over a store with a hole in it (second review of PR #31,
+# finding 1). A runs directory that cannot be listed may hold the session's run; a pane-sessions file
+# that cannot be judged may be the session's; a claude process whose command line cannot be read may
+# be resuming it.
+$rj = New-Fleet "runs-junction"
+$projDir = Join-Path $rj "wezfleet\proj"
+Rename-Item -LiteralPath (Join-Path $projDir "runs") -NewName "runs-real"
+$gone = Join-Path $projDir "gone-target"
+New-Item -ItemType Directory -Path $gone | Out-Null
+$null = & cmd /c mklink /J (Join-Path $projDir "runs") $gone
+Remove-Item -LiteralPath $gone -Force
+$prj = $null
+try { $prj = Project $rj } finally { $null = & cmd /c rmdir (Join-Path $projDir "runs") }
+$rjBad = @("runId", "title", "dependsOn", "workState", "report" | Where-Object { (St (Ans $prj 3 $_)) -ne "unknown" } | ForEach-Object { $_ + "=" + (St (Ans $prj 3 $_)) })
+foreach ($x in $rjBad) { Write-Host ("  not unknown: " + $x) -ForegroundColor Red }
+Check ($prj.complete["W3"].state -eq "unknown" -and $rjBad.Count -eq 0) "a runs directory that cannot be listed never proves a session is in no run"
+# A pane-sessions file held by two running sessions, and one session named by two files: neither
+# file answers, and the session they name is not thereby proven to be in no handle.
+$hf = New-Fleet "held-files"
+EditReg $hf 2 { param($r) $r.pane = "10" }
+$f10 = Join-Path $hf "claude\pane-sessions\10.json"; $j10 = ReadJson $f10; $j10.session_id = (Sid 4); PutJson $f10 $j10; [System.IO.File]::SetLastWriteTimeUtc($f10, $now.AddHours(-1))
+$phf = Project $hf
+Check ((St (Ans $phf 4 "pane")) -eq "unknown") "a file that two running sessions hold does not prove the session it names is in no handle"
+$tf = New-Fleet "two-files"
+foreach ($h in @("19", "20")) { $fp = Join-Path $tf ("claude\pane-sessions\" + $h + ".json"); $jj = ReadJson $fp; $jj.session_id = (Sid 4); PutJson $fp $jj; [System.IO.File]::SetLastWriteTimeUtc($fp, $now.AddMinutes(-40)) }
+Check ((St (Ans (Project $tf) 4 "pane")) -eq "unknown") "two files naming a session do not prove it is in no handle"
+# A claude process whose command line cannot be read may be resuming any session.
+$nc = New-Fleet "no-command-line"
+PutJson (Join-Path $nc "processes.json") (@(ReadJson (Join-Path $nc "processes.json")) + @([pscustomobject]@{ pid = 1200; name = "claude.exe"; created = "2026-06-01T11:30:00.0000000Z"; commandLine = $null }))
+Check ((St (Ans $p 4 "pid")) -eq "absent") "CONTROL: a stopped session with every command line readable has no pid"
+Check ((St (Ans (Project $nc) 4 "pid")) -eq "unknown") "a claude process whose command line cannot be read leaves a stopped session's pid unknown"
+
+Write-Host ""
 Write-Host "--- runs, reports and work ---" -ForegroundColor Cyan
 Check ((St (Ans $p 15 "runId")) -eq "unknown" -and (Why (Ans $p 15 "runId")) -like "*2 open runs*") "two open runs make the run unknown"
 Check ((St (Ans $p 16 "runId")) -eq "unknown" -and (Why (Ans $p 16 "runId")) -like "*only by closed runs*") "two closed runs are not chosen between"

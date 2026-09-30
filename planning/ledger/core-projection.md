@@ -484,3 +484,10 @@ adapters' own PRs.
 - source: review of horde PR #31, finding 10: agent names in core/Projection.ps1 and core/Faults.ps1, the --resume pattern, and the agent enum in schema/session-view.v1; planning/execution-plan-engines.md step 13 (A4) and step 2 (E1, the agents ratchet, not built yet)
 - disposition: test
 - where: test/test-projection.ps1 :: "every engine name in the projection's files is listed, with its exact count"
+
+## From the second review of PR #31
+
+### L-092 An unlistable runs directory, an unjudged pane file and an unread command line prove nothing absent
+- source: second review of horde PR #31, finding 1: with the runs directory a dangling junction, session 3 read runId, title, dependsOn, workState and report absent, because the run resolver checked only rostersComplete; pane-sessions files held by two sessions or naming a session twice were passed over as "no file"; and a claude process with no readable command line counted as not resuming the session
+- disposition: test
+- where: test/test-projection.ps1 :: "a runs directory that cannot be listed never proves a session is in no run"

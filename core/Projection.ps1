@@ -216,14 +216,18 @@ function Get-HordePaneFileVerdicts {
     # by inheriting another pane's number (YedPool/wezfleet f09f4e1).
     param($PaneRead, $Context, $Registry, $VerifiedLive)
     $bySession = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+    # Sessions a live file names but that file cannot answer for - held by two sessions, one of two
+    # files, or contradicted - with the reason. Their pane is unknown, never "no file names it"
+    # (second review of PR #31, finding 1).
+    $unsure = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $findings = New-Object System.Collections.ArrayList
-    if ($Context.verify.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("no pane-sessions file can be judged: " + $Context.verify.reason)) } }
+    if ($Context.verify.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; unsure = $unsure; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("no pane-sessions file can be judged: " + $Context.verify.reason)) } }
     # running counts instances - the namespaces handles are unique in - not server processes
     # (core/HostPort.ps1), so a host with one server per session reports 1 here and its files are read.
     # The files and the registry's handles must both be this host's: the hijack check compares them.
-    foreach ($st in @("X1", "W1")) { if (@($Context.wrote) -cnotcontains $st) { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the handles in store " + $st + " were not written by this host, so no pane-sessions file can be judged")) } } }
-    if ($Context.instance.value.running -gt 1) { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("" + $Context.instance.value.running + " host instances are running, and a pane-sessions file names no instance, so none can be attributed")) } }
-    if ($PaneRead.complete.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the pane-sessions listing is incomplete (" + $PaneRead.complete.reason + "), so no file can be shown to be the only one naming its session")) } }
+    foreach ($st in @("X1", "W1")) { if (@($Context.wrote) -cnotcontains $st) { return [pscustomobject]@{ bySession = $bySession; unsure = $unsure; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the handles in store " + $st + " were not written by this host, so no pane-sessions file can be judged")) } } }
+    if ($Context.instance.value.running -gt 1) { return [pscustomobject]@{ bySession = $bySession; unsure = $unsure; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("" + $Context.instance.value.running + " host instances are running, and a pane-sessions file names no instance, so none can be attributed")) } }
+    if ($PaneRead.complete.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; unsure = $unsure; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the pane-sessions listing is incomplete (" + $PaneRead.complete.reason + "), so no file can be shown to be the only one naming its session")) } }
     $liveFiles = New-Object System.Collections.ArrayList
     foreach ($f in @($PaneRead.files)) {
         if (-not $Context.live.ContainsKey($f.handle)) { continue }
@@ -258,18 +262,20 @@ function Get-HordePaneFileVerdicts {
     foreach ($k in $groups.Keys) {
         $g = @($groups[$k])
         if ($g.Count -gt 1) {
+            $unsure[$g[0].sessionId] = ("the session is named by the pane-sessions files of " + $g.Count + " handles, so none answers")
             [void]$findings.Add([pscustomobject]@{ kind = "session-in-two-handles"; subjects = @(@($g[0].sessionId) + @($g | ForEach-Object { "handle " + $_.handle })); detail = ("pane-sessions files for handles " + (@($g | ForEach-Object { $_.handle }) -join ", ") + " all name session " + $g[0].sessionId + "; none of them answers") })
             continue
         }
         $f = $g[0]
-        if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { continue }
+        if ($holder.ContainsKey($f.handle) -and $holder[$f.handle].Count -gt 1) { $unsure[$f.sessionId] = ("the pane-sessions file for handle " + $f.handle + " names this session, but two running sessions hold that handle, so the file cannot be judged"); continue }
         if ($holder.ContainsKey($f.handle) -and @($holder[$f.handle])[0] -ine $f.sessionId) {
             [void]$findings.Add([pscustomobject]@{ kind = "pane-sessions-hijack"; subjects = @(@($holder[$f.handle])[0], $f.sessionId, ("handle " + $f.handle)); detail = ("the pane-sessions file for handle " + $f.handle + " names session " + $f.sessionId + ", while running session " + $holder[$f.handle] + " holds that handle in the registry; the file does not answer") })
+            $unsure[$f.sessionId] = ("the pane-sessions file for handle " + $f.handle + " names this session, but a running session holds that handle, so where this one is is unknown")
             continue
         }
         $bySession[$f.sessionId] = $f
     }
-    return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeKnown -Value $true) }
+    return [pscustomobject]@{ bySession = $bySession; unsure = $unsure; findings = $findings.ToArray(); state = (New-HordeKnown -Value $true) }
 }
 
 # ------------------------------------------------------------------------------ transcripts, layout
@@ -373,6 +379,10 @@ function Resolve-HordeRun {
     if ($open.Count -gt 1) { $ids = @($open | ForEach-Object { $_.run.runId }); return [pscustomobject]@{ answer = (New-HordeUnknown -Reason ("fleet id " + $FleetId + " is listed by " + $ids.Count + " open runs, none of which spawned it (" + ($ids -join ", ") + ")")); ambiguous = $ids } }
     if ($hits.Count -eq 1) { return [pscustomobject]@{ answer = (New-HordeKnown -Value $hits[0].run); ambiguous = @() } }
     if ($hits.Count -gt 1) { $ids = @($hits | ForEach-Object { $_.run.runId }); return [pscustomobject]@{ answer = (New-HordeUnknown -Reason ("fleet id " + $FleetId + " is listed only by closed runs, " + $ids.Count + " of them (" + ($ids -join ", ") + "); which one is not chosen")); ambiguous = $ids } }
+    # "No roster lists it" is proven only when every run folder was listed AND every roster read: an
+    # unlistable runs directory hides rosters as surely as an unreadable roster (second review of
+    # PR #31, finding 1).
+    if ($Runs.runsComplete.state -ne "known") { return [pscustomobject]@{ answer = (New-HordeUnknown -Reason ("no readable roster lists fleet id " + $FleetId + ", and the runs are incomplete (" + $Runs.runsComplete.reason + ")")); ambiguous = @() } }
     if ($Runs.rostersComplete.state -ne "known") { return [pscustomobject]@{ answer = (New-HordeUnknown -Reason ("no readable roster lists fleet id " + $FleetId + ", and the rosters are incomplete (" + $Runs.rostersComplete.reason + ")")); ambiguous = @() } }
     return [pscustomobject]@{ answer = (New-HordeAbsent -Note ("no roster lists fleet id " + $FleetId)); ambiguous = @() }
 }
@@ -690,6 +700,7 @@ function Get-HordePaneAnswer {
     }
     if ($C.paneVerdicts.state.state -ne "known") { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Answer $C.paneVerdicts.state)) }
     elseif ($null -ne $S.x1) { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Answer (New-HordeKnown -Value $S.x1.handle))) }
+    elseif ($C.paneVerdicts.unsure.ContainsKey($S.id)) { [void]$cands.Add((New-HordeUnsure -Store "X1" -Field "file name" -Reason $C.paneVerdicts.unsure[$S.id])) }
     else { [void]$cands.Add((New-HordeCandidate -Store "X1" -Field "file name" -Skip "no pane-sessions file passes the guard for this session")) }
     Set-HordeRunLink -S $S -C $C -Fleet (Get-HordePreliminaryFleetId -S $S -C $C)
     $ev = Get-HordeReportEvents $S
@@ -961,7 +972,13 @@ function Complete-HordeSession {
     $procs = @(Get-HordeResumeProcesses -Processes $C.processes -SessionId $id)
     $x5 = $null
     if ($procs.Count -eq 1) { $x5 = $procs[0] }
+    # "No process resumes it" is proven only when every claude process's command line was read
+    # (second review of PR #31, finding 1).
     $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Skip "no process's command line resumes this session"
+    $unreadLines = @()
+    if ($C.processes.state -eq "known") { $unreadLines = @($C.processes.value.Values | Where-Object { $script:HordeClaudeProcessNames -icontains "$($_.name)" -and ($null -eq $_.PSObject.Properties["commandLine"] -or $null -eq $_.commandLine) } | ForEach-Object { $_.pid }) }
+    if ($C.processes.state -ne "known") { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the process table could not be read (" + $C.processes.reason + ")") }
+    elseif ($unreadLines.Count -gt 0) { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the command line of claude process " + (@($unreadLines | Sort-Object) -join ", ") + " cannot be read, so it may resume this session") }
     if ($null -ne $x5) { $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Answer (New-HordeKnown -Value ([int]$x5.pid)) }
     elseif ($procs.Count -gt 1) { $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Answer (New-HordeUnknown -Reason ("" + $procs.Count + " processes resume this session")) }
     $notRunning = $null
