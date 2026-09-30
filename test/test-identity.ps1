@@ -21,15 +21,20 @@ Set-StrictMode -Version Latest
 # directories or the real process table. The functions that would are replaced here, after loading,
 # so a reader that ignored an injected source - or a default that leaked - trips one and is counted.
 # The real ones are kept and put back for the reality check.
+#
+# A TRIP RECORDS AND ANSWERS HARMLESSLY; IT DOES NOT THROW. A throwing trip wire stopped the fixture
+# section at the first leak, before the check that counts trips could run, so the mutation run saw a
+# crashed suite and no failed check - not a catch (measured 2026-09-30, mutant injected-table-ignored).
+# So a tripped table is an unknown answer and a tripped directory is one that does not exist.
 $script:trips = New-Object System.Collections.ArrayList
 $realProcessTable = ${function:Get-HordeProcessTable}
 $realClaudeDir = ${function:Get-HordeClaudeSessionsDir}
 $realProjectsDir = ${function:Get-HordeClaudeProjectsDir}
 $realCodexDir = ${function:Get-HordeCodexSessionsDir}
-function Get-HordeProcessTable { [void]$script:trips.Add("process table"); throw "TRIP: the real process table was read" }
-function Get-HordeClaudeSessionsDir { [void]$script:trips.Add("claude sessions"); throw "TRIP: the real claude sessions directory was named" }
-function Get-HordeClaudeProjectsDir { [void]$script:trips.Add("claude projects"); throw "TRIP: the real claude projects directory was named" }
-function Get-HordeCodexSessionsDir { [void]$script:trips.Add("codex sessions"); throw "TRIP: the real codex sessions directory was named" }
+function Get-HordeProcessTable { [void]$script:trips.Add("process table"); return (New-HordeUnknown -Reason "TRIP: the real process table was asked for") }
+function Get-HordeClaudeSessionsDir { [void]$script:trips.Add("claude sessions"); return (Join-Path $env:TEMP ("horde-identity-trip-" + [guid]::NewGuid().ToString("N"))) }
+function Get-HordeClaudeProjectsDir { [void]$script:trips.Add("claude projects"); return (Join-Path $env:TEMP ("horde-identity-trip-" + [guid]::NewGuid().ToString("N"))) }
+function Get-HordeCodexSessionsDir { [void]$script:trips.Add("codex sessions"); return (Join-Path $env:TEMP ("horde-identity-trip-" + [guid]::NewGuid().ToString("N"))) }
 
 $ownership = Get-HordeOwnership -Path (Join-Path $root "core\ownership.json")
 $agentOwned = @($ownership.fields | Where-Object { "$($_.owner)" -ceq "agent" -and "$($_.name)" -cne "sessionId" } | ForEach-Object { "$($_.name)" })
