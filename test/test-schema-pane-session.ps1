@@ -47,15 +47,23 @@ Check (Has (Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @("1") 
 # threw, 1 and 1.0 differed, and objects were compared by their string form (review of PR #15). Whole
 # numbers are needed for schemaVersion; anything else is refused - even when the value's type already
 # failed.
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a null in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1.5) }) } "enum at $ may hold only strings and whole numbers") "a fraction in an enum is refused"
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings and whole numbers") "an object in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a bad enum is refused even when the value fails its type first"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings, whole numbers and booleans") "a null in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1.5) }) } "enum at $ may hold only strings, whole numbers and booleans") "a fraction in an enum is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings, whole numbers and booleans") "an object in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @($null) }) } "enum at $ may hold only strings, whole numbers and booleans") "a bad enum is refused even when the value fails its type first"
 $one = [pscustomobject]@{ enum = @(1) }
 Check (@(Test-HordeSchema -Value 1 -Schema $one).Count -eq 0) "a whole-number enum accepts that number"
 Check (@(Test-HordeSchema -Value ([decimal]1.0) -Schema $one).Count -eq 0) "and accepts it written as 1.0, which PowerShell reads as a decimal"
 Check (Has (Test-HordeSchema -Value "1" -Schema $one) "$ is '1', not one of: 1") "but not the string of its digits"
 Check (Has (Test-HordeSchema -Value 2 -Schema $one) "$ is '2', not one of: 1") "and not another number"
+$yes = [pscustomobject]@{ enum = @($true) }
+# First that the schema is accepted at all: a refused boolean enum would throw, and a throw inside
+# the checks below reads as a crashed suite rather than a failed check.
+Check (-not (Throws { Test-HordeSchema -Value $true -Schema $yes })) "a boolean enum is a schema the validator accepts"
+Check (@(Test-HordeSchema -Value $true -Schema $yes).Count -eq 0) "a boolean enum accepts that boolean"
+Check (Has (Test-HordeSchema -Value $false -Schema $yes) "$ is 'False', not one of: True") "but not the other one"
+Check (Has (Test-HordeSchema -Value "true" -Schema $yes) "$ is 'true', not one of: True") "and not the word true"
+Check (Has (Test-HordeSchema -Value 1 -Schema $yes) "$ is '1', not one of: True") "and not the number one"
 $twoKeys = [pscustomobject]@{ a = 1; b = 2 }
 $aOnly = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }
 Check (Has (Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly; additionalProperties = $false })) "$ has 'b', which the schema does not allow") "additionalProperties false refuses a key the schema does not name"
@@ -188,6 +196,35 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @([
 $listSchema = [pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ list = [pscustomobject]@{ type = "array"; items = $intSchema } } }
 Check (@(Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, 2) } -Schema $listSchema).Count -eq 0) "an ArrayList is an array"
 Check (Has (Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, "x") } -Schema $listSchema) '$.list`[1`] should be integer') "items checks every element of an ArrayList"
+
+Write-Host ""
+Write-Host "--- local `$ref and definitions, for a recursive shape ---" -ForegroundColor Cyan
+
+# A LAYOUT IS A TREE, so its schema must refer to itself (schema/restore-plan.v1). The validator
+# follows "#/definitions/<name>" and nothing else. Each call here turns an error into a finding, so a
+# validator that throws where it should validate fails a check rather than only recording an error.
+function RefFindings { param($Value, $Schema) try { return @(Test-HordeSchema -Value $Value -Schema $Schema) } catch { return @("THREW: " + $_.Exception.Message) } }
+function Obj { param([string]$Json) return ($Json | ConvertFrom-Json) }
+$intRef = Obj '{ "definitions": { "n": { "type": "integer" } }, "type": "object", "properties": { "a": { "$ref": "#/definitions/n" } } }'
+$f = @(RefFindings (Obj '{ "a": "x" }') $intRef)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$.a should be integer') ("a local `$ref applies its definition, at the referring path (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "a": 3 }') $intRef)
+Check ($f.Count -eq 0) ("CONTROL: a value the definition accepts passes through the `$ref (" + ($f -join "; ") + ")")
+$tree = Obj '{ "definitions": { "node": { "type": "object", "properties": { "v": { "type": "integer" }, "kids": { "type": "array", "items": { "$ref": "#/definitions/node" } } }, "additionalProperties": false } }, "$ref": "#/definitions/node" }'
+$f = @(RefFindings (Obj '{ "v": 1, "kids": [ { "v": 2, "kids": [ { "v": "deep" } ] }, { "v": 3 } ] }') $tree)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$.kids[0].kids[0].v should be integer') ("a definition that refers to itself checks every level of a tree (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "v": 1, "kids": [ { "v": 2, "kids": [ { "v": 4, "pane": 7 } ] } ] }') $tree)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$.kids[0].kids[0] has ''pane'', which the schema does not allow') ("additionalProperties inside a recursive definition holds at depth (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Obj '{ "v": 1, "kids": [ { "v": 2, "kids": [] } ] }') $tree)
+Check ($f.Count -eq 0) ("CONTROL: a valid tree passes (" + ($f -join "; ") + ")")
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "$ref": "http://example.com/s.json#/definitions/n" }') } "only local") "a `$ref to another document is refused, never fetched or skipped"
+Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = 1 }) -Schema (Obj '{ "definitions": { "n": {} }, "properties": { "a": { "$ref": "#/properties/b" } }, "type": "object" }') } "only local") "a local `$ref that is not #/definitions/<name> is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/m" }') } "names no definition") "a `$ref to a definition that does not exist is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "$ref": "#/definitions/n" }') } "names no definition") "a `$ref in a schema with no definitions at all is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/N" }') } "names no definition") "a `$ref names its definition exactly, case included, as a JSON pointer does"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "n": { "type": "integer" } }, "$ref": "#/definitions/n", "type": "string" }') } "beside") "a `$ref with a validation keyword beside it is refused: draft-07 would ignore that keyword"
+Check (Throws { Test-HordeSchema -Value ([pscustomobject]@{ a = 1 }) -Schema (Obj '{ "type": "object", "properties": { "a": { "definitions": { "n": {} } } } }') } "top of a schema") "definitions anywhere but the top of a schema is refused: #/definitions/ would never find them"
+Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "$ref": "#/definitions/a" }') } "circular") "a `$ref chain that loops without reaching a value is refused, not followed forever"
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
