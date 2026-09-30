@@ -154,3 +154,33 @@ sources:
 - source: YedPool/wezfleet lib/Registry.ps1:1302 "if ($age -gt $script:WfClaimTtlMinutes) { return $null }" with :1235 "$script:WfClaimTtlMinutes = 10080", and :1305, the cwd must match; hooks/wf-registry-refresh.ps1:148-151, "if (-not $existing)" then "Read-WfPaneClaim -Pane $pane -Cwd $cwd" - a claim is read only for a session with no record, and is deleted when consumed (:168). The first draft guarded role only, and owner, which the claim carries (lib/Registry.ps1:1260), did not read it. Review finding 7, 2026-09-29. lib/Master.ps1:134 reads claims without a cwd to find a pending master; that is a role count, not a session's field, and is core-roles' concern.
 - disposition: test
 - where: test/test-ownership.ps1 :: "every read of a spawn claim carries the claim reader's full guard"
+
+### L-029 The first draft missed fields the old stores hold; each is now kept or dropped
+- source: YedPool/wezfleet lib/Registry.ps1:349 "lastSeen = $now" (the time every pane rule is measured against), :350 lastTool, :436 labelCycle, :444 retiredAt, :1261-1263 (claims carry labelCycle and spawnedAt); commands/launch.ps1:90-96 (roster title, dependsOn, spawnedAt) and :99 (roster runId); lib/Protocol.ps1:90-91 "$resume = ""claude --resume $claudeSessionId""" stored in status at :110; the claude control file ~/.claude/sessions/<pid>.json, read 2026-09-29, carries procStart, bridgeSessionId and formerNames beside pid. Review finding 8, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "every field the old stores hold is kept or dropped"
+
+### L-030 Run membership is reported as ambiguous, never chosen
+- source: YedPool/wezfleet lib/Common.ps1:269-349 (Resolve-WfRunForSession) "Ambiguity is reported, never guessed - picking a run for someone means typing into a pane they did not mean"; :331 a closed run is history; :334-345 among open runs only a spawned session counts, and two spawned is still ambiguous.
+- disposition: comment
+- where: core/ownership.json :: "are ambiguous and reported, never chosen"
+
+### L-031 A roster entry with no spawnedAt is unknown, not fresh
+- source: YedPool/wezfleet lib/Protocol.ps1:665-669 "unknown is NOT fresh. 94 of 369 roster entries predate spawnedAt, and defaulting those to fresh would reintroduce the failure direction this whole guard exists to close"
+- disposition: comment
+- where: core/ownership.json :: "absent reads as unknown, never as fresh"
+
+### L-032 A pid names the same process only while its creation time is unchanged
+- source: ~/.claude/sessions/<pid>.json carries procStart; measured 2026-09-29, for all 10 control files on this machine procStart equalled the live process's StartTime.ToFileTimeUtc() exactly (10 of 10). A pid is recycled by Windows; the start time is what tells a reused pid apart. Horde CONTRIBUTING.md section 12 records why the comparison must stay in integer ticks.
+- disposition: comment
+- where: core/ownership.json :: "since a reused pid has a different start"
+
+### L-033 The registry's remoteControl field has no writer
+- source: YedPool/wezfleet lib/Registry.ps1:437 sets it only when Set-WfSessionFields is passed -RemoteControl, and a search of every .ps1 in the repository outside lib/Registry.ps1 for RemoteControl finds no caller (the same search finds :434 and :437 inside it, as a control); test_debug/probe-rc-injection.ps1:11 names bridgeSessionId in the control file as the bridge's identity.
+- disposition: comment
+- where: core/ownership.json :: "but no shipped caller passes it, so it is always empty"
+
+### L-034 What a former name's sessionId means is unmeasured
+- source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) lists formerNames entries of name, until and a sessionId different from the file's own; nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
+- disposition: comment
+- where: core/ownership.json :: "whether that is an earlier id of this same conversation"

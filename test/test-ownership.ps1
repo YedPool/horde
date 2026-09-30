@@ -54,6 +54,15 @@ $w2Guard = "$($doc.stores.W2.guard)"
 $ownerStores = @((Get-HordeOwnershipField -Doc $doc -Name "owner").read | ForEach-Object { "$($_.store)" })
 Check ($w2Guard -like "*10080 minutes*" -and $w2Guard -like "*cwd*" -and $w2Guard -like "*no registry record*") "every read of a spawn claim carries the claim reader's full guard"
 Check ($ownerStores -ccontains "W2") "owner, which a spawn claim carries, reads the claim"
+# THE FIELDS THE FIRST DRAFT MISSED (review finding 8), each found in a real store: every one must
+# be named in the required list, so the gate holds it to kept-or-dropped.
+$missedOnce = @("lastSeen", "runId", "labelCycle", "nameSource", "remoteControl", "retiredAt", "lastTool",
+                "title", "dependsOn", "spawnedAt", "procStart", "bridgeSessionId", "formerNames")
+$notRequired = @($missedOnce | Where-Object { @($doc.required) -cnotcontains $_ })
+foreach ($x in $notRequired) { Write-Host ("  not in the required list: " + $x) -ForegroundColor Red }
+Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dropped"
+$resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
+Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
@@ -107,7 +116,7 @@ Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName gua
 Check (Says (Mutated { param($d) $d.stores.X1 | Add-Member -NotePropertyName guard -NotePropertyValue $true -Force }) "store 'X1' has an empty guard") "a store guard that is not text is refused"
 $aDroppedField = { param($d, $reason)
     $d.fields = @($d.fields | Where-Object { $_.name -cne "origin" })
-    $d | Add-Member -NotePropertyName dropped -NotePropertyValue @([pscustomobject]@{ name = "origin"; reason = $reason }) -Force }
+    $d | Add-Member -NotePropertyName dropped -NotePropertyValue (@($d.dropped | Where-Object { $null -ne $_ }) + @([pscustomobject]@{ name = "origin"; reason = $reason })) -Force }
 Check (Says (Mutated { param($d) $d.fields = @() }) "is missing") "an empty table is refused"
 Check (Says (Mutated { param($d) $d.fields = @($d.fields | Where-Object { $_.name -cne "pane" }) }) "'pane' is missing") "a deleted field is refused"
 Check (Says (Mutated { param($d) $d.fields += [pscustomobject]@{ name = "extra"; owner = "engine"; read = @([pscustomobject]@{ store = "W1"; field = "extra" }) } }) "not in the required list") "a field the required list does not name is refused"
