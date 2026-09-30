@@ -15,8 +15,11 @@ function Check { param($Cond, [string]$What)
     if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
     else { Write-Host "  [FAIL] $What" -ForegroundColor Red; $script:fails += $What } }
 
+$rawText = Get-Content -LiteralPath (Join-Path $root "core\ownership.json") -Raw
 $doc = Get-HordeOwnership
-$findings = @(Test-HordeOwnership -Doc $doc)
+# The raw text as well as the parsed table: a repeated key is visible only in the text, because
+# ConvertFrom-Json keeps one of the two values and says nothing.
+$findings = @(try { Test-HordeOwnership -Doc $doc -Text $rawText } catch { "THE GATE THREW: " + $_.Exception.Message })
 foreach ($x in $findings) { Write-Host ("  finding: " + $x) -ForegroundColor Red }
 
 Write-Host ""
@@ -43,6 +46,14 @@ function Mutated { param([scriptblock]$Change)
     & $Change $copy
     return @(Test-HordeOwnership -Doc $copy) }
 function Says { param($Found, [string]$Like) return (@($Found | Where-Object { $_ -like ("*" + $Like + "*") }).Count -gt 0) }
+# A mutation of the RAW TEXT, for what the parsed table cannot show. A replacement that matched
+# nothing would test the unchanged file, so it comes back as a finding of its own that no Says
+# matches. A gate that throws is reported the same way, never skipped.
+function MutatedText { param([string]$Find, [string]$Replace)
+    $i = $rawText.IndexOf($Find, [System.StringComparison]::Ordinal)
+    if ($i -lt 0) { return @("THE MUTATION DID NOT APPLY: " + $Find) }
+    $t = $rawText.Substring(0, $i) + $Replace + $rawText.Substring($i + $Find.Length)
+    try { return @(Test-HordeOwnership -Text $t) } catch { return @("THE GATE THREW: " + $_.Exception.Message) } }
 
 Check (Says (Mutated { param($d) $d.fields[0].owner = @("agent", "engine") }) "more than one owner") "a field with two owners is refused"
 Check (Says (Mutated { param($d) $d.fields[0].owner = "" }) "has no owner") "a field with no owner is refused"
@@ -54,6 +65,12 @@ Check (Says (Mutated { param($d) $d.fields += $d.fields[0] }) "listed twice") "a
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName owners -NotePropertyValue "x" }) "unknown key") "a misspelled key is refused rather than ignored"
 Check (Says (Mutated { param($d) $d.stores | Add-Member -NotePropertyName W99 -NotePropertyValue ([pscustomobject]@{ what = "x" }) }) "no field reads it") "a store no field reads is refused"
 Check (Says (Mutated { param($d) $d.fields[0] | Add-Member -NotePropertyName provisional -NotePropertyValue " " -Force }) "but not how or why") "provisional without a reason is refused"
+Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "owner": "engine",') "appears more than once") "a field with a repeated owner key is refused"
+Check (Says (MutatedText '{ "store": "X2", "field": "sessionId" }' '{ "store": "X2", "store": "W1", "field": "sessionId" }') "appears more than once") "a read entry with a repeated key is refused"
+Check (Says (MutatedText '"owner": "agent",' '"owner": "agent", "Owner": "engine",') "appears more than once") "a key repeated in another case is refused, not thrown"
+$dupControl = @(try { Find-HordeJsonDuplicateKey -Text $rawText } catch { "THE SCAN THREW: " + $_.Exception.Message })
+$storeKeys = ([regex]::Matches($rawText, '"store"')).Count
+Check ($dupControl.Count -eq 0 -and $storeKeys -ge 20) ("CONTROL: one key in many objects is not a repeat (" + $storeKeys + " store keys, " + $dupControl.Count + " repeats)")
 
 Write-Host ""
 if ($fails.Count) {

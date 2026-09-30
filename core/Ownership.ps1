@@ -26,10 +26,78 @@ function Get-HordeOwnershipField {
     return (@($Doc.fields | Where-Object { $_.name -ceq $Name }) | Select-Object -First 1)
 }
 
+function Find-HordeJsonDuplicateKey {
+    # Every key that appears more than once in ONE object of a JSON text, as findings.
+    #
+    # WHY THE TEXT AND NOT THE PARSED TABLE: ConvertFrom-Json keeps one of two repeated keys and
+    # reports nothing, so {"owner":"agent","owner":"engine"} parses to a field with one owner and
+    # passes every check on the parsed object. A review found exactly that on 2026-09-29.
+    #
+    # PER OBJECT, NOT PER FILE: "store" legitimately appears in every read entry. Keys are
+    # compared ignoring case, because PowerShell reads properties ignoring case and Windows
+    # PowerShell 5.1's ConvertFrom-Json throws on two keys that differ only in case.
+    # A key written with escapes is decoded before it is compared, so an escaped spelling of a
+    # key is still the same key.
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $out = New-Object System.Collections.ArrayList
+    $stack = New-Object System.Collections.ArrayList   # one frame per open object or array
+    $i = 0; $n = $Text.Length
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        if ($c -eq '"') {
+            $start = $i; $i++
+            while ($i -lt $n -and $Text[$i] -ne '"') { if ($Text[$i] -eq '\') { $i++ }; $i++ }
+            $i++
+            if ($stack.Count -eq 0) { continue }
+            $top = $stack[$stack.Count - 1]
+            if ($top.kind -ne "object" -or -not $top.expectKey) { continue }
+            $key = $Text.Substring($start + 1, [Math]::Max(0, $i - $start - 2))
+            if ($key.Contains('\')) { try { $key = [string]('"' + $key + '"' | ConvertFrom-Json) } catch { } }
+            $low = $key.ToLowerInvariant()
+            if ($top.keys.ContainsKey($low)) {
+                [void]$out.Add("key '" + $key + "' appears more than once in one object (" + $top.path + ")")
+            }
+            $top.keys[$low] = $true
+            $top.lastKey = $key
+            $top.expectKey = $false
+            continue
+        }
+        if ($c -eq '{' -or $c -eq '[') {
+            $path = "top level"
+            if ($stack.Count -gt 0) {
+                $parent = $stack[$stack.Count - 1]
+                if ($parent.kind -eq "object") { $path = $parent.path + "." + $parent.lastKey }
+                else { $path = $parent.path + "[" + $parent.index + "]" }
+                if ($path.StartsWith("top level.")) { $path = $path.Substring(10) }
+            }
+            $kind = if ($c -eq '{') { "object" } else { "array" }
+            [void]$stack.Add(@{ kind = $kind; keys = @{}; expectKey = ($c -eq '{'); lastKey = ""; index = 0; path = $path })
+        }
+        elseif ($c -eq '}' -or $c -eq ']') { if ($stack.Count -gt 0) { $stack.RemoveAt($stack.Count - 1) } }
+        elseif ($c -eq ',' -and $stack.Count -gt 0) {
+            $top = $stack[$stack.Count - 1]
+            if ($top.kind -eq "object") { $top.expectKey = $true } else { $top.index++ }
+        }
+        $i++
+    }
+    return @($out)
+}
+
 function Test-HordeOwnership {
     # Every way the ownership table can be wrong, as a list of findings. Empty means it holds.
-    param($Doc)
+    # Pass -Text, the file's raw JSON, wherever you have it: only the text shows a repeated key.
+    [CmdletBinding()]
+    param($Doc, [string]$Text = "")
     $findings = New-Object System.Collections.ArrayList
+    if ($Text -ne "") {
+        foreach ($d in @(Find-HordeJsonDuplicateKey -Text $Text)) { [void]$findings.Add($d) }
+        if ($null -eq $Doc) {
+            try { $Doc = $Text | ConvertFrom-Json } catch {
+                [void]$findings.Add("the table is not JSON that PowerShell can read: " + $_.Exception.Message)
+                return @($findings)
+            }
+        }
+    }
     if ($null -eq $Doc -or $null -eq $Doc.fields -or $null -eq $Doc.stores -or $null -eq $Doc.owners) {
         [void]$findings.Add("the document needs owners, stores and fields")
         return @($findings)
