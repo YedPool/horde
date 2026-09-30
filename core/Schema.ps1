@@ -6,7 +6,12 @@
 # than silently skipping a rule it does not understand:
 #
 #   type (object, array, string, integer, number, boolean, null), required, properties,
-#   additionalProperties (true or false), items, enum, pattern, definitions, $ref
+#   additionalProperties (true or false), items, enum, pattern, minimum, definitions, $ref
+#
+# minimum is draft-07's, inclusive, and applies to numbers only: a value that is not a number is the
+# type keyword's to refuse. It is compared EXACTLY, whatever .NET type holds either side (see
+# Compare-HordeSchemaNumber), because 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a
+# Decimal that is 1 as a Double. It exists so schema/session-record.v1 can say labelCycle >= 0.
 #
 # $ref IS LOCAL ONLY, "#/definitions/<name>", resolved against the top of the schema being checked.
 # It exists so a recursive shape - the layout tree of schema/restore-plan.v1 - can be described. A
@@ -28,7 +33,7 @@
 #
 # Returns a list of findings, each naming the path it is about ("$.session_id"). Empty means valid.
 
-$script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern",
+$script:HordeSchemaKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern", "minimum",
                                  '$schema', '$id', "title", "description", "definitions", '$ref')
 $script:HordeSchemaTypes = @("object", "array", "string", "integer", "number", "boolean", "null")
 # The keywords that may sit beside a $ref: they say nothing about the value.
@@ -57,6 +62,65 @@ function Test-HordeSchemaType {
         "number"  { return ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [single]) }
     }
     throw ("the schema names a type this validator does not know: '" + $Type + "'")
+}
+
+function Test-HordeSchemaIsNumber {
+    # Every .NET type a number reaches the validator as: ConvertFrom-Json gives Int32, Int64, Decimal or
+    # Double, and a value built in PowerShell may hold Int16, Byte or Single ("type": "integer" already
+    # accepts Int16 and Byte). Never a string or a boolean.
+    param($Value)
+    return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or
+            $Value -is [double] -or $Value -is [single] -or $Value -is [decimal])
+}
+
+function ConvertTo-HordeSchemaFraction {
+    # A finite number as the exact fraction it holds, numerator over a positive denominator, both
+    # BigInteger. A Decimal's invariant text is exact (it has no exponent form); a Double is its
+    # mantissa times a power of two, read from its bits, so 0.1 as a Double is
+    # 3602879701896397 / 36028797018963968, slightly more than one tenth.
+    param($N)
+    $one = [System.Numerics.BigInteger]::One
+    if ($N -is [decimal]) {
+        $text = $N.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+        $point = $text.IndexOf('.')
+        $scale = 0
+        if ($point -ge 0) { $scale = $text.Length - $point - 1; $text = $text.Remove($point, 1) }
+        return @([System.Numerics.BigInteger]::Parse($text, [System.Globalization.CultureInfo]::InvariantCulture), [System.Numerics.BigInteger]::Pow(10, $scale))
+    }
+    if ($N -is [double] -or $N -is [single]) {
+        # IEEE 754 binary64: 1 sign bit, 11 exponent bits (bias 1023), 52 mantissa bits with an implied
+        # leading 1 unless the exponent field is 0. [double] of a Single is exact.
+        $bits = [BitConverter]::DoubleToInt64Bits([double]$N)
+        $expField = [int](($bits -shr 52) -band 0x7FF)
+        $mantissa = [System.Numerics.BigInteger]($bits -band 0xFFFFFFFFFFFFF)
+        if ($expField -eq 0) { $exp = -1074 } else { $mantissa = [System.Numerics.BigInteger]::Add($mantissa, [System.Numerics.BigInteger]::Pow(2, 52)); $exp = $expField - 1075 }
+        if ($bits -lt 0) { $mantissa = [System.Numerics.BigInteger]::Negate($mantissa) }
+        if ($exp -ge 0) { return @([System.Numerics.BigInteger]::Multiply($mantissa, [System.Numerics.BigInteger]::Pow(2, $exp)), $one) }
+        return @($mantissa, [System.Numerics.BigInteger]::Pow(2, -$exp))
+    }
+    return @([System.Numerics.BigInteger][long]$N, $one)
+}
+
+function Compare-HordeSchemaNumber {
+    # -1, 0 or 1 as A is below, equal to or above B, EXACTLY. Neither may be NaN. Comparing through
+    # [double] called the Decimal 0.99999999999999999999 equal to 1; comparing through [decimal]
+    # throws past Decimal's range (1e30 - the enum's lesson, second review of PR #16) and rounds a
+    # Double to 15 significant digits. As exact fractions, neither happens. An infinity is above or
+    # below every finite number, and equal only to itself.
+    param($A, $B)
+    $aInf = (($A -is [double] -or $A -is [single]) -and [double]::IsInfinity([double]$A))
+    $bInf = (($B -is [double] -or $B -is [single]) -and [double]::IsInfinity([double]$B))
+    if ($aInf -or $bInf) {
+        $ad = 0.0; $bd = 0.0
+        if ($aInf) { $ad = [double]$A } elseif ($A -lt 0) { $ad = -1.0 } elseif ($A -gt 0) { $ad = 1.0 }
+        if ($bInf) { $bd = [double]$B } elseif ($B -lt 0) { $bd = -1.0 } elseif ($B -gt 0) { $bd = 1.0 }
+        if ($aInf -and -not $bInf) { if ($ad -gt 0) { return 1 } else { return -1 } }
+        if ($bInf -and -not $aInf) { if ($bd -gt 0) { return -1 } else { return 1 } }
+        return $ad.CompareTo($bd)
+    }
+    $fa = ConvertTo-HordeSchemaFraction $A
+    $fb = ConvertTo-HordeSchemaFraction $B
+    return [System.Numerics.BigInteger]::Compare([System.Numerics.BigInteger]::Multiply($fa[0], $fb[1]), [System.Numerics.BigInteger]::Multiply($fb[0], $fa[1]))
 }
 
 function Get-HordeSchemaProps {
@@ -145,6 +209,13 @@ function Get-HordeSchemaNodeKeywords {
             $isWhole = ($e -is [int] -or $e -is [long])
             if ($e -isnot [string] -and $e -isnot [bool] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings, whole numbers and booleans; '" + $e + "' is none of them") }
         }
+    }
+    # minimum IS A FINITE NUMBER, never a string, a boolean or null. PowerShell compares "0" or $true
+    # with a number by converting it, so a bad minimum would work, wrongly, instead of failing.
+    if ($kw.ContainsKey("minimum")) {
+        $m = $kw["minimum"]
+        $finite = ((Test-HordeSchemaIsNumber $m) -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m))))
+        if (-not $finite) { throw ("minimum at " + $Path + " must be a number; '" + $m + "' is not one") }
     }
     # A TYPE NAME IS CHECKED HERE as well as when a value meets it, so a definition nothing refers to
     # cannot carry one this validator does not know.
@@ -255,6 +326,11 @@ function Test-HordeSchema {
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
         $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"
         if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
+    }
+    if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {
+        # NaN is at or above nothing, so it is refused, by name: "below" would not be true of it either.
+        if (($Value -is [double] -or $Value -is [single]) -and [double]::IsNaN([double]$Value)) { [void]$findings.Add($Path + " is NaN, which is not at or above the minimum " + $kw["minimum"]) }
+        elseif ((Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0) { [void]$findings.Add($Path + " is " + $Value + ", below the minimum " + $kw["minimum"]) }
     }
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     if ($isObject) {

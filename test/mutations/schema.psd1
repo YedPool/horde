@@ -195,6 +195,42 @@
         @{ Name = "definition-ref-chain-not-walked"
            Find = 'if (-not $targetKw.ContainsKey(''$ref'')) { break }'
            Replace = 'break' }
+        @{ Name = "minimum-not-applied"
+           Find = 'elseif ((Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "minimum-exclusive"
+           Find = '(Compare-HordeSchemaNumber $Value $kw["minimum"]) -lt 0)'
+           Replace = '(Compare-HordeSchemaNumber $Value $kw["minimum"]) -le 0)' }
+        @{ Name = "minimum-compared-as-double"
+           Find = '$fa = ConvertTo-HordeSchemaFraction $A'
+           Replace = 'return ([double]$A).CompareTo([double]$B); $fa = ConvertTo-HordeSchemaFraction $A' }
+        @{ Name = "minimum-compared-as-decimal"
+           Find = '$fa = ConvertTo-HordeSchemaFraction $A'
+           Replace = 'return ([decimal]$A).CompareTo([decimal]$B); $fa = ConvertTo-HordeSchemaFraction $A' }
+        @{ Name = "minimum-schema-value-unchecked"
+           Find = 'if (-not $finite) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "minimum-nan-allowed-in-schema"
+           Find = ' -and -not (($m -is [double] -or $m -is [single]) -and ([double]::IsNaN([double]$m) -or [double]::IsInfinity([double]$m)))'
+           Replace = '' }
+        @{ Name = "minimum-nan-value-accepted"
+           Find = '[void]$findings.Add($Path + " is NaN'
+           Replace = '[void]($Path + " is NaN' }
+        @{ Name = "minimum-applied-to-non-numbers"
+           Find = 'if ($kw.ContainsKey("minimum") -and (Test-HordeSchemaIsNumber $Value)) {'
+           Replace = 'if ($kw.ContainsKey("minimum") -and $null -ne $Value) {' }
+        @{ Name = "minimum-ignores-int16"
+           Find = 'return ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or'
+           Replace = 'return ($Value -is [int] -or $Value -is [long] -or' }
+        @{ Name = "fraction-double-sign-lost"
+           Find = 'if ($bits -lt 0) { $mantissa = [System.Numerics.BigInteger]::Negate($mantissa) }'
+           Replace = '' }
+        @{ Name = "fraction-decimal-scale-lost"
+           Find = '$scale = $text.Length - $point - 1; '
+           Replace = '' }
+        @{ Name = "fraction-double-implied-bit-lost"
+           Find = '$mantissa = [System.Numerics.BigInteger]::Add($mantissa, [System.Numerics.BigInteger]::Pow(2, 52)); '
+           Replace = '' }
         @{ Name = "ref-not-followed"
            Find = 'return @(Test-HordeSchema -Value $Value -Schema $target -Path $Path -Root $Root -RefsHere (@($RefsHere) + $ref))'
            Replace = 'return @()' }

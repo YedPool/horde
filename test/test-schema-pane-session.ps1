@@ -24,7 +24,7 @@ function Has { param($Found, [string]$Like) return (@(@($Found) | Where-Object {
 
 Write-Host ""
 Write-Host "--- the validator refuses what it does not implement ---" -ForegroundColor Cyan
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = 3 }) } "does not implement") "a schema keyword the validator does not implement is refused, never silently skipped"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ maximum = 3 }) } "does not implement") "a schema keyword the validator does not implement is refused, never silently skipped"
 Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "decimal" }) } "does not know") "an unknown type name is refused"
 # A rule the validator cannot apply is refused, never read as "anything goes". Draft-07 allows
 # additionalProperties to be a schema and allows a schema to be true or false; this validator does not
@@ -267,6 +267,48 @@ foreach ($sf in $shipped) {
     $sName = $sf.BaseName
     Check (-not (Throws { Test-HordeSchema -Value $null -Schema (Get-HordeSchema -Name $sName) })) ("the shipped schema " + $sName + " passes the definitions check")
 }
+Write-Host ""
+Write-Host "--- minimum, compared exactly whatever type holds the number ---" -ForegroundColor Cyan
+# Added so schema/session-record.v1 can say labelCycle is never negative, which until now was a
+# writer's rule the schema could not state. Inclusive, as draft-07's minimum is.
+$min0 = [pscustomobject]@{ minimum = 0 }
+# (-1) in brackets: written bare as an argument, -1 is the STRING "-1" (measured 2026-09-30, 5.1).
+Check (Has (Test-HordeSchema -Value (-1) -Schema $min0) '$ is -1, below the minimum 0') "a number below the minimum is refused"
+Check (@(Test-HordeSchema -Value 0 -Schema $min0).Count -eq 0) "the minimum itself is accepted: minimum is inclusive"
+Check (@(Test-HordeSchema -Value 5 -Schema $min0).Count -eq 0) "CONTROL: a number above the minimum is accepted"
+Check (Has (Test-HordeSchema -Value (Read-JsonNumber "-0.5") -Schema $min0) '$ is -0.5, below the minimum 0') "a Decimal fraction below the minimum is refused"
+Check (Has (Test-HordeSchema -Value ([int16]-1) -Schema $min0) '$ is -1, below the minimum 0') "an Int16, which the integer type accepts, is compared too"
+# A VALUE THAT IS NOT A NUMBER IS THE TYPE CHECK'S JOB, never a second finding and never a throw.
+Check (@(Test-HordeSchema -Value "-1" -Schema $min0).Count -eq 0) "minimum says nothing about a string"
+Check (@(Test-HordeSchema -Value $true -Schema $min0).Count -eq 0) "minimum says nothing about a boolean"
+$f = @(RefFindings "-1" ([pscustomobject]@{ type = "integer"; minimum = 0 }))
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ should be integer') ("a string under type integer and minimum is one finding, the type's (" + ($f -join "; ") + ")")
+# THE MINIMUM ITSELF MUST BE A NUMBER. PowerShell compares "0" and $true with numbers by converting
+# them, so a string or boolean minimum would work, wrongly, rather than fail.
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = "0" }) } "minimum at $ must be a number") "a minimum given as a string is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = $true }) } "minimum at $ must be a number") "a minimum given as a boolean is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = $null }) } "minimum at $ must be a number") "a minimum given as null is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ type = "integer"; minimum = "0" }) } "minimum at $ must be a number") "a bad minimum is refused even when the value fails its type first"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ minimum = [double]::NaN }) } "minimum at $ must be a number") "a minimum that is NaN is refused"
+# EXACT ACROSS TYPES. 5.1's ConvertFrom-Json reads 0.99999999999999999999 as a Decimal, and as a Double
+# it is 1 (the ratio edge of core/RestorePlan.ps1, from the same review): comparing through [double]
+# would call it equal to 1. So a Decimal and a Double are compared as the exact values they hold.
+$nines = Read-JsonNumber "0.99999999999999999999"
+$justOver = Read-JsonNumber "1.00000000000000000001"
+Check ($nines -is [decimal] -and [double]$nines -eq 1 -and $justOver -is [decimal] -and [double]$justOver -eq 1) "CONTROL: 5.1 reads both as Decimal, and each is 1 as a Double"
+Check (Has (Test-HordeSchema -Value $nines -Schema ([pscustomobject]@{ minimum = 1 })) '$ is 0.99999999999999999999, below the minimum 1') "a Decimal a hair below a whole-number minimum is refused"
+Check (Has (Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $justOver })) '$ is 1, below the minimum 1.00000000000000000001') "a Double below a Decimal minimum that rounds to it is refused"
+Check (@(Test-HordeSchema -Value 1.0e0 -Schema ([pscustomobject]@{ minimum = $nines })).Count -eq 0) "CONTROL: a Double above a Decimal minimum that rounds to it is accepted"
+Check (Has (Test-HordeSchema -Value (Read-JsonNumber "0.1") -Schema ([pscustomobject]@{ minimum = 0.1 })) '$ is 0.1, below the minimum 0.1') "the Decimal 0.1 is below the Double 0.1, which is slightly more than one tenth"
+# BEYOND DECIMAL'S RANGE IS A RESULT, NEVER A CRASH (the enum's lesson, second review of PR #16).
+$f = @(RefFindings (Read-JsonNumber "1e30") $min0)
+Check ($f.Count -eq 0) ("1e30 is above the minimum 0, and nothing throws (" + ($f -join "; ") + ")")
+$f = @(RefFindings (Read-JsonNumber "-1e30") $min0)
+Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 0') ("-1e30 is below the minimum 0, and nothing throws (" + ($f -join "; ") + ")")
+$f = @(RefFindings ([double]::NegativeInfinity) $min0)
+Check ($f.Count -eq 1 -and $f[0] -clike '$ is *, below the minimum 0') ("negative infinity is below the minimum 0 (" + ($f -join "; ") + ")")
+$f = @(RefFindings ([double]::NaN) $min0)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$ is NaN, which is not at or above the minimum 0') ("NaN is refused: it is at or above nothing (" + ($f -join "; ") + ")")
 
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
