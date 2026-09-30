@@ -2,9 +2,14 @@
 # Each breaks one rule the module exists for; test\test-identity.ps1 must fail for every one of them
 # except those declared Expect = "survives", which name a gap the suite cannot reach.
 #
-# The two mutants that open or write a file act only on files under a horde-identity-* fixture
+# The three mutants that open or write a file act only on files under a horde-identity-* fixture
 # folder: the suite's last section reads this machine's real control directory, and a mutant must
 # never touch that.
+#
+# leaves-a-fresh-file-each-read writes a NEW file name on every read. leaves-a-file-in-fixture-
+# folders writes the same name each time, so after the first read the file is already there when
+# the "no new file" comparison takes its before-picture, and that check cannot be the one to catch
+# it; the fresh name makes it the one (review finding 7 of PR #19).
 @{
     Target = "core\Identity.ps1"
     Suite  = "test\test-identity.ps1"
@@ -153,5 +158,8 @@
         @{ Name = "vanished-pid-called-orphan"
            Find = ' -or $vanishedPids.ContainsKey($pp)) { continue }'
            Replace = ') { continue }' }
+        @{ Name = "leaves-a-fresh-file-each-read"
+           Find = 'try { $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }'
+           Replace = 'try { if ($File.FullName -like "*horde-identity-*") { [System.IO.File]::WriteAllText((Join-Path $File.DirectoryName ([guid]::NewGuid().ToString("N") + ".seen")), "") }; $obj = (Read-HordeSharedText -Path $File.FullName) | ConvertFrom-Json }' }
     )
 }
