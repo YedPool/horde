@@ -26,6 +26,8 @@ founder.
 | engine-settings design | Its "Decisions taken": 1 no environment-variable layer for engine values; **2 `HORDE_HOME` defaults to `%USERPROFILE%\.horde`**; **3 the project engine file waits until a repo needs one, and may then only choose among user-defined providers and only lower the metrics and admission levels, never raise them**; 4 aliases pinned to a concrete id at spawn; **5 the engine and resume-binding fields are added by editing `session-record.v1` in place, safe because no writer exists until migration step 3.8; after that, any change needs a v2**; 6 resume uses the launched binding, and `/model` drift is shown in status and does not rebind; 7 the model ids; 8 selector ranks as designed; **9 the admission tuner may raise reserves automatically after a reap while the gate was open, as a live rule that expires after 7 days, capped at conservative + 1 GB; lowering is only ever proposed**; **10 the pane anchor is a small compiled executable, following `wf-cmdlog.exe`** |
 | metrics design | Its "Decisions taken": no environment switch for metrics; the project layer may lower the level, never raise it; prompts only as a salted fingerprint; quota plus labelled notionalUsd on subscriptions; retention 30 days / 1 year / forever; scoring published; **decision 7 as changed by the founder: tokens and usage are counted only from local sources (transcripts, rollouts, harness logs), never from a provider's usage or billing API; cost is computed separately from token counts and a versioned price table; `reconcile` and the `metered` tier are dropped**; no backfill from before consent. Its "Founder direction": goblin-versus-agent is a central pillar; stalls, loops, missed communications and wasted tokens are first-class detectors that record their token and time cost and feed an improvement backlog; orc and warchief context is reserved for big-picture thinking, and context tokens per delivered result are measured |
 | agent-engines research | Its "Decisions taken": every role resolves a named profile of harness + provider profile + model; GLM, Qwen models and DeepSeek run through the Claude Code harness on Anthropic-format endpoints first; Gemini CLI gets `agents/gemini-cli/`; the session-record key stops assuming a UUID; subscription credentials only on their own vendor's CLI; keys read from named environment variables, never stored |
+| remote design, and the remote plan (in progress, branch `docs/remote-plan`) | Settled remote decision 3: the session record splits into a **fleet record**, written by the hub, and a **binding record**, written by the node, owner `node`. The resume binding and `engine` live in the binding record. Its step R10 makes the split as an in-place `session-record.v1` edit |
+| the engines and hosts plans (PR #30, branch `docs/engines-hosts-plans`) | Engines E1 (the `agents/` port-names ratchet in `tools/HostNames.ps1`), K1 (the record key becomes harness plus id), R1 (the binding in the record: `engine`, `projectCwd`, `resume.argv`, `resume.envRefs`), E10 (the launch stub); hosts step 5 (a cross-host import in `tools/HostNames.ps1`). Engines' A1 to A3, a transcript port and adapters under other names, are not built there: this plan owns them (below) |
 | hosts research | Its "Decisions taken": Windows agents only for now; capability flags per host in `hosts/<name>/capabilities.json` with `state` yes, no, declined or unverified (unverified treated as no); mandatory `-Capabilities` on the host port; pid and cwd tagged with a namespace (`space`) |
 
 `<HordeHome>` below is `%USERPROFILE%\.horde` unless `HORDE_HOME` is set (engine-settings decision 2),
@@ -47,14 +49,52 @@ marker, because memory is the constraint this whole plan is about.
 
 | this plan's steps | need first | why |
 |---|---|---|
-| 4, 5 | nothing; they must land **before Phase 3's commands**: before `horde census`, the first command (Phase 3 plan steps 6 to 8, migration step 3.3), merges | they are the guards every later command is checked against: read commands reach no spawn or kill verb, and core names no engine. Landing them after the commands would mean retro-fitting the commands to pass |
-| 17 (tiers), 24 and 25 (binding, resume) | **engine-settings Half A**: `schema/engine-config.v1`, the layered resolver, `Test-HordeEngineConfig`, `horde config explain/set/validate` | the tier and the binding's `engine` field are resolved and checked by that machinery; this plan adds keys to it and builds none of it |
-| 22, 27 (anchor, spawn) | **engine-settings Half B**: the launch stub `horde launch --job <id>` | the anchor runs the stub to resolve the binding, references and scrub |
+| 4, 5 | step 4 nothing; step 5 **engines E1** first. Both must land **before Phase 3's commands**: before `horde census`, the first command (Phase 3 plan steps 6 to 8, migration step 3.3), merges | they are the guards every later command is checked against: read commands reach no spawn or kill verb, and core names no engine. Landing them after the commands would mean retro-fitting the commands to pass |
+| 17 (tiers), 25 (resume) | **engine-settings Half A**: `schema/engine-config.v1`, the layered resolver, `Test-HordeEngineConfig`, `horde config explain/set/validate` | the tier and the binding's `engine` field are resolved and checked by that machinery; this plan adds keys to it and builds none of it |
+| 27 (spawn through the anchor) | **engines E10**, the launch stub `horde launch --job <id>` | the anchor runs the stub to resolve the binding, references and scrub. Step 22 does not wait: it builds and tests the anchor against a stand-in child (below) |
 | 22, 33 (host flags) | **Phase 3 plan step 2**: `hosts/<name>/capabilities.json` and `schema/host-capabilities.v1.json`, and step 3's WezTerm declaration | the flags of 2.5 are added to that one file and schema, not to a second format |
 | 14, 33 | **Phase 3 plan step 1**, `Get-HordeHome` | every store path here is under `<HordeHome>` |
-| 24 | **migration step 3.8**, the record writer | the binding lives in the engine's session record, which has one writer |
+| 24 | **remote R10, then engines K1, then engines R1**, merged in that order; step 24 must itself merge **before migration step 3.8** | the four in-place `session-record.v1` edits land as one ordered sequence before any record writer exists (below) |
 | 3 (W5's adoption line) | **Phase 3 plan step 5** (migration step 3.2), `adoption/capabilities.txt` | the line W5 adds goes in that file |
 | 15, 16, 20 | **metrics Stage A**: the event writer, the consent sentinel, the span model | detectors, the backlog and the tuner write metrics events |
+
+## What this plan owns, and the order of shared edits
+
+- **The transcript port and the follower are this plan's**, under this plan's names:
+  `core/Transcript.ps1` (the port), `agents/<name>/Transcript.ps1` (the adapters), `core/Observe.ps1`
+  (the classifier) and `horde follow` (steps 7 to 11). The engines plan no longer builds them; its A1 to
+  A3 (`core/TranscriptPort.ps1`, `agents/<name>/Observe.ps1`) are superseded by these steps, and its
+  consumers (engines R2's transcript length, for one) call `Find-Transcript` and the cursor of 4.1.
+- **The anchor is this plan's** (step 22, with `core/Contain.ps1` and `platform/windows/` in step 21).
+  It is built and tested against a **stand-in child**: a small test program that plays the launch
+  stub's part, writing a fixed argv and environment to the anchor's pipe and exiting, so the anchor's
+  job, pipe, graceful end and exit paths are proven without the real stub. Engines E10 builds the real
+  launch stub afterwards, against the pipe contract step 22 defines and tests. The hosts plan's group F
+  proves each host runs the anchor.
+- **The primitive that hands a message to a live session is this plan's** (step 13):
+  `Send-SessionMessage` in the engine port, implemented per engine as
+  `agents/<name>/Message.ps1`, beside that engine's `Transcript.ps1`. It addresses a session by its
+  binding (harness and session id) and its agent-owned `messagingAddress`, never by a host handle, and
+  returns a receipt as a `core/tristate` answer: `known: delivered` when the follower sees the message's
+  marker arrive as a user turn in the recipient's transcript, `known: refused` with the engine's
+  reason, and `unknown` with its reason otherwise (no receipt yet, `message-inject` or
+  `delivery-receipt` not `yes`, the address unreadable). Nothing else in any plan owns it. The remote
+  plan's R21 (message delivery over the link) and the future delivery half of Phase 3's `tell` (after
+  target naming, Phase 3 plan steps 15 to 18) both reuse it rather than building their own.
+- **`tools/HostNames.ps1` is edited three times, one after another**, each rebased on the one before:
+  engines E1 (generalise the ratchet to `agents/*`), then this plan's step 5 (the lifecycle's names
+  under that ratchet), then hosts step 5 (the one allowlisted cross-host import). Never two at once.
+- **`session-record.v1` is edited in place four times**, as one ordered sequence that ends before
+  migration step 3.8 ships the first record writer (engine-settings decision 5):
+  1. remote R10 (branch `docs/remote-plan`): the split into a fleet record (hub-written) and a binding
+     record (node-written, owner `node`), settled remote decision 3;
+  2. engines K1: the key becomes (harness, id);
+  3. engines R1 (branch `docs/engines-hosts-plans`): `engine`, `projectCwd` and `resume.argv` /
+     `resume.envRefs` in the binding record;
+  4. this plan's step 24: the binding's currency, containment, chain and close fields (3.4).
+
+  Each merges only after the one before it, and none after step 3.8; a change after 3.8 is a
+  `session-record.v2`.
 
 ## Measurements this plan rests on
 
@@ -427,20 +467,25 @@ the anchor ships (step 27) new goblins cannot leave one.
 ## 3.1 The binding is the single source of truth
 
 The founder's precondition for automatic close: the goblin's resume information lives in Horde's
-session record, is current, and an orc can read and use it in one step. The binding is:
+session record, is current, and an orc can read and use it in one step. Under settled remote decision 3
+the record has two parts: the **fleet record**, written by the hub, and the **binding record**, written
+by the node the session runs on, owner `node` in `core/ownership.json`'s vocabulary (remote R10 adds
+that owner). The resume binding and `engine` are in the binding record. The binding is:
 
-| binding part | record field | owner (`core/ownership.json` vocabulary) | notes |
+| binding part | record field | record, owner | notes |
 |---|---|---|---|
-| harness | `engine.harness` | `engine` | fixed at spawn; resume can never change it (engine-settings 7) |
-| provider profile | `engine.providerProfile` | `engine` | a profile name, never an endpoint copy or a key |
-| model | `engine.model` (concrete id), `engine.requested` | `engine` | pinned at spawn (engine-settings decision 4); `modelObserved` (owner `agent`, derived) is shown beside it, never merged |
-| session id | `sessionId` | `agent` | set in advance where the harness allows it (`--session-id` for claude-code, local help); learned from the harness's files otherwise |
-| cwd | `projectCwd` | `engine` | the launch directory, which names the transcript folder |
-| argv | `launch.argv` | `engine` | the argv the AgentPort built, without the session-specific resume flag, which the AgentPort adds |
-| environment block | `launch.env[]`: `{ name, value }` or `{ name, ref: { kind, ref } }` | `engine` | non-secret values literally; secrets only as references (engine-settings 6); the checker refuses a secret-shaped value |
-| currency | `binding.revision`, `binding.verifiedAt`, `binding.previous[]` | `engine` | revision increments on every rebind |
-| containment | `containment`: `{ mechanism, name, anchorPid, anchorProcStart, space }` | `engine` | Part 2 |
-| close | `closeOn` (`proof`, `routed`), `park`: `{ reason, until }`, `closure`: `{ state, at, tombstone }` | `engine` | Part A of the design |
+| harness | `engine.harness` | binding, `node` (engines R1) | fixed at spawn; resume can never change it (engine-settings 7). With engines K1 it is also half of the record's key |
+| provider profile | `engine.provider`, `engine.profile` | binding, `node` (engines R1) | a profile name, never an endpoint copy or a key |
+| model | `engine.model` (concrete id), `engine.requested` | binding, `node` (engines R1) | pinned at spawn (engine-settings decision 4); `modelObserved` (owner `agent`, derived) is shown beside it, never merged |
+| session id | `sessionId` | the key (engines K1), owner `agent` | set in advance where the harness allows it (`--session-id` for claude-code, local help); learned from the harness's files otherwise |
+| cwd | `projectCwd` | binding, `node` (engines R1) | the launch directory, which names the transcript folder |
+| argv | `resume.argv` | binding, `node` (engines R1) | the argv the AgentPort built |
+| environment block | `resume.envRefs` | binding, `node` (engines R1) | non-secret values literally; secrets only as references (engine-settings 6); the checker refuses a secret-shaped value |
+| currency | `binding.revision`, `binding.verifiedAt`, `binding.previous[]` | binding, `node` (**step 24**) | revision increments on every rebind |
+| containment | `containment`: `{ mechanism, name, anchorPid, anchorProcStart, space }` | binding, `node` (**step 24**) | written on the node, where the anchor runs; Part 2 |
+| chain | `predecessor`, `successor` | binding, `node` (**step 24**) | 3.2 |
+| close | `closure`: `{ state, at, tombstone }` | binding, `node` (**step 24**) | the closer runs on the node, against its own processes (design C3.4) |
+| orc decisions | `closeOn` (`proof`, `routed`), `park`: `{ reason, until }` | fleet (**step 24**), where remote R10 puts hub-written fields | set by an orc on any machine through `horde route` and `horde park`; if R10 places them otherwise, R10 is the authority and this row follows it |
 
 `resumeCommand` stays an `agent`-owned, **derived** field, but its derivation changes: the AgentPort
 renders it from the binding above. wezfleet's `resume.txt`, the status snapshot's `resumeCommand`
@@ -456,9 +501,9 @@ resume path, which is what makes the binding the single source.
   itself), a harness that forks a new id on resume, and anything that starts a new conversation in the
   same process (whether `/clear` does is unmeasured). The follower watches the agent's control file for
   the goblin's pid+procStart; when the session id it carries changes, it emits `obs.rebind` with both
-  ids. The follower never writes records; the record writer (migration step 3.8, its one writer)
-  subscribes and writes the new revision.
-- **The file name is the session id** (step 3.8). A rebind that changes the id writes a new record and
+  ids. The follower never writes records; the binding record's writer on the node subscribes and
+  writes the new revision.
+- **The record is keyed by (harness, session id)** (engines K1). A rebind that changes the id writes a new record and
   links the two (`predecessor`, `successor`); `horde goblin show` follows the chain to its head, so an
   orc's handle never goes stale.
 - **Verified at close.** The closer's first step (design A3.1) re-reads the binding, confirms the
@@ -486,20 +531,22 @@ and does nothing. `--dry-run` shows what `resume` would do, with the gate's answ
 
 ## 3.4 Schema and ownership changes
 
-- `core/ownership.json`: new rows `engine`, `launch`, `binding`, `containment`, `closeOn`, `park`,
-  `closure`, `predecessor`, `successor` (owner `engine`), and `modelObserved` (owner `agent`,
-  derived); `resumeCommand`'s `derived` text changes as in 3.1. New stores, so provenance can name
-  them: `H1` Horde session record (`<HordeHome>\store\sessions\<sessionId>.json`), `H2` the
-  observation stream (`<HordeHome>\store\observe\<date>\<machineId>.jsonl`), `H3` closure tombstones,
-  `H4` spawn claims (`runs\<id>\spawns\<fleetId>.claim`), `H5` orc mailboxes
+- `core/ownership.json`: engines R1 adds `engine`, `resume` and `modelObserved` (owner `agent`,
+  derived); this plan's step 24 adds `binding`, `containment`, `predecessor`, `successor` and `closure`
+  (binding record, owner `node`) and `closeOn` and `park` (fleet record, as remote R10 places
+  hub-written fields), and changes `resumeCommand`'s `derived` text as in 3.1. New stores, so
+  provenance can name them: `H1` the Horde session record, fleet and binding parts (under
+  `<HordeHome>\store\sessions\`, laid out by remote R10), `H2` the observation stream
+  (`<HordeHome>\store\observe\<date>\<machineId>.jsonl`), `H3` closure tombstones, `H4` spawn claims
+  (`runs\<id>\spawns\<fleetId>.claim`), `H5` orc mailboxes
   (`<HordeHome>\store\mailbox\<sessionId>\`), `X7` the Codex rollout, `X8` the harness's background
   task output files, `X9` the loop-guard state file.
-- `schema/session-record.v1` is **edited in place** (engine-settings decision 5). That is safe because
-  no record writer exists until migration step 3.8; the rows and properties must therefore land
-  before step 3.8 ships its first writer, and any change after that is a `session-record.v2`.
+- `schema/session-record.v1` is **edited in place** (engine-settings decision 5), and step 24 is the
+  fourth and last of four in-place edits: remote R10 (the split), engines K1 (the key), engines R1 (the
+  binding's engine and resume fields), then step 24. All four merge in that order before migration
+  step 3.8 ships the first record writer; any change after that is a `session-record.v2`.
   `additionalProperties` is false and `test/test-schema-session-record.ps1` computes the property
-  list from the ownership table, so each row and its schema property land in one PR (step 24). The
-  session-id pattern stops assuming a UUID in the same edit (agent-engines decision 6).
+  list from the ownership table, so each step's rows and schema properties land in one PR.
 - `schema/observe-event.v1`: the metrics envelope (metrics design 4.2) with the `obs.*` kinds.
 - `schema/host-capabilities.v1.json` (created by Phase 3 plan step 2): the flags of 2.5 join its vocabulary, and `hosts/wezterm/capabilities.json` declares them.
 
@@ -509,7 +556,8 @@ and does nothing. `--dry-run` shows what `resume` would do, with the gate's answ
 
 ## 4.1 One abstraction in core, adapters per engine
 
-`core/Transcript.ps1` defines the port and names no engine. Each adapter lives in
+This plan owns the port, its adapters, the classifier and the follower ("What this plan owns",
+above). `core/Transcript.ps1` defines the port and names no engine. Each adapter lives in
 `agents/<name>/Transcript.ps1` and is registered by its `agent.json`. Order: `claude-code` and `codex`
 first, then `gemini-cli`. GLM, Qwen and DeepSeek are not adapters: they are provider profiles driven
 through the claude-code harness (agent-engines decision 2), so they are read by the claude-code
@@ -667,11 +715,13 @@ engine's record, and uses two channels:
    command) lists it. The mailbox alone does not wake a session that has ended its turn.
 2. **The engine's own message channel, as the doorbell.** When the orc's harness declares
    `message-inject: yes` in `agents/<name>/agent.json` (claude-code: the peer socket named by the
-   control file's `messagingSocketPath`, the `messagingAddress` field, owner `agent`), the alerter asks
-   that adapter to deliver a one-line doorbell carrying the mailbox entry's id. A message arrives as a
-   new turn, which is what wakes an orc that ended its turn to wait. The follower confirms delivery
-   when that id appears as a user turn in the orc's transcript (`delivery-receipt`), and marks the
-   entry delivered.
+   control file's `messagingSocketPath`, the `messagingAddress` field, owner `agent`), the alerter calls
+   the session-message primitive (`Send-SessionMessage`, owned by this plan, step 13) to deliver a
+   one-line doorbell carrying the mailbox entry's id. A message arrives as a
+   new turn, which is what wakes an orc that ended its turn to wait. The receipt is tristate: the
+   follower confirms delivery when that id appears as a user turn in the orc's transcript
+   (`delivery-receipt`), and marks the entry delivered; until then it is `unknown`, never "sent" read
+   as "delivered".
 
 **Host unknown changes nothing**: neither channel needs a host handle, so an orc whose pane is unknown,
 or which has no pane, is still reached. **What does change the path**: the orc's harness has
@@ -726,7 +776,7 @@ is what the one-reader rule forbids.
 
 Numbered through; the design's H-numbers in brackets for traceability. Phase gates follow the
 migration plan: read-only steps sit beside Phase 3; anything that spawns, kills or writes a record
-waits for Phase 5 (and step 3.8 for the record writer). Dependencies on other plans are in the table
+waits for Phase 5, except step 24, which must land before migration step 3.8. Dependencies on other plans are in the table
 near the top.
 
 ## A. Now, in wezfleet
@@ -746,13 +796,14 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
    with a planted-verb control. Tests first: "a read command reaches no spawn verb"; "a read command
    reaches no kill verb"; "a planted spawn verb turns the check red". Ledger: none replaced; the PR
    cites wezfleet's `status`-pumps defect (issue #33) as the reason.
-5. **The port-names ratchet over `agents/`** (engine-settings section 9, its E1). `tools/HostNames.ps1`
-   and `test/test-host-names.ps1` generalise to `hosts/*` and `agents/*`: `agents/<name>/names.txt`,
-   `allowlist.txt` and `growth.txt`, same shrink-only rules against `origin/main`. The first PR
-   measures and allowlists today's engine mentions in core (`core/ownership.json` stores X1 to X3 and
-   W8, `schema/session-record.v1` descriptions, `core/Identity.ps1`), each with its count, so they can
-   only shrink. Tests first: "core names no engine beyond its allowlist"; "a planted engine name in
-   core is caught"; "an engine's allowlist can only shrink".
+5. **The lifecycle's names under the `agents/` ratchet**, after engines E1 has generalised
+   `tools/HostNames.ps1` to `agents/*`, and before hosts step 5 edits it again. This plan introduces
+   engine knowledge core must never hold: each harness's process images (`processImages`, 2.6), its
+   transcript and rollout path fragments, and its control-file and task-output locations. They are
+   declared in `agents/<name>/names.txt`, so the ratchet catches any of them outside the adapter.
+   Tests first: "a planted process image name in core is caught"; "a planted transcript path fragment
+   in core is caught"; "core matches no process image name". "Core names no engine" is E1's own
+   assertion and is not repeated here.
 
 ## C. The read half (beside Phase 3; no writer, no act verb)
 
@@ -788,14 +839,24 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
 12. **`horde watch` and `horde why`** [H7]. Read commands over H2, `-Json`, `why --brief`, two
     end-to-end scenarios each (Phase 3 rule). Tests first: "watch never opens a transcript"; "why brief
     is at most five lines".
-13. **Wake messages** [H8]. The alerter, the mailbox (H5), `horde inbox`, the doorbell through the
-    agent adapter's `message-inject`, receipts, escalation. Tests first with a fake orc session in the
-    isolated harness: "one wake per goblin per transition"; "a restart does not repeat a wake"; "a wake
-    is in the mailbox before any doorbell"; "a wake reaches an orc whose host handle is unknown"; "no
-    receipt escalates to the warchief"; "a wake never types into a pane". Ledger
-    `planning/ledger/core-alerter.md`: wezfleet `lib/Notify.ps1` notices, `lib/Mail.ps1` and
-    `lib/Delivery.ps1` (their lessons on receipts and lost messages; the typed path itself stays unported,
-    migration step 6.1).
+13. **The session-message primitive and wake messages** [H8].
+    - **The primitive, first.** `Send-SessionMessage` in the engine port, and
+      `agents/claude-code/Message.ps1` (the peer socket named by the control file) behind it; codex and
+      gemini-cli declare `message-inject` `unmeasured` until a measurement and its test flip it (4.3).
+      It takes a binding and a text, addresses by `messagingAddress`, never by a host handle, and
+      returns a tristate receipt: `known: delivered` only when the follower sees the text's marker
+      arrive as a user turn in the recipient's transcript. Tests first: "a receipt is unknown until the
+      marker is seen"; "a refused delivery is known refused with its reason"; "an unmeasured engine
+      answers unknown, never delivered"; "the primitive never types into a pane". This is the primitive
+      remote R21 and the future delivery half of `tell` reuse.
+    - **Wake messages on top of it.** The alerter, the mailbox (H5), `horde inbox`, the doorbell,
+      escalation. Tests first with a fake orc session in the isolated harness: "one wake per goblin per
+      transition"; "a restart does not repeat a wake"; "a wake is in the mailbox before any doorbell";
+      "a wake reaches an orc whose host handle is unknown"; "no receipt escalates to the warchief".
+    - Ledger `planning/ledger/core-alerter.md` and the message half of
+      `planning/ledger/agent-claude-code.md`: wezfleet `lib/Notify.ps1` notices, `lib/Mail.ps1` and
+      `lib/Delivery.ps1` (their lessons on receipts and lost messages; the typed path itself stays
+      unported, migration step 6.1).
 14. **`horde orphans`** [H18, first half]. Read-only report of O1, O2 and O4 (O3 deferred to step 33),
     also shown in `horde status` and `horde watch`. Tests first: "an orphan without proof is reported,
     never reclaimed"; "harness processes are recognised only through the agent adapter"; "a planted kill
@@ -833,7 +894,7 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     "nothing lowers a reserve without the founder". Shadowed: raises logged, not written, for a working
     week first.
 
-## F. Containment (the anchor needs engine-settings Half B)
+## F. Containment (the anchor is built against a stand-in child; engines E10 supplies the real stub later)
 
 21. **`core/Contain.ps1` and `platform/windows/`**. Create, name, self-assign, query members and peak,
     terminate. Tests first, turning J-3 into a suite that acts only on processes it created: "a child
@@ -841,7 +902,10 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     job"; "the job handle is not inherited by a child"; "assignment nests under an ambient job".
     Machine probe for `horde install`.
 22. **The anchor**, compiled, plus the host flags of 2.5 in `hosts/wezterm/capabilities.json`, measured
-    in the isolated instance. Tests first: "a pane whose program exits closes"; "closing the pane ends
+    in the isolated instance. It is built against a stand-in child that plays the launch stub (a fixed
+    argv and environment over the pipe), and this step defines the pipe contract engines E10 later
+    implements. Tests first: "the anchor starts what the stand-in stub hands it"; "a stub that exits
+    without a handoff starts nothing"; "a pane whose program exits closes"; "closing the pane ends
     the harness and its children"; "a real harness session runs inside a no-breakaway job" (E2, the
     cheapest prompt that proves it, CONTRIBUTING 3); the anchor's resident memory measured and
     reported, and the goblin prior of P-1 re-measured without a shell.
@@ -850,18 +914,26 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     job object's figure"; "a service outlives its goblin only until its expiry". The pause mechanism is
     unmeasured and chosen in this step.
 
-## G. The writers (Phase 5, and step 3.8 for the record)
+## G. The last in-place record edit, before migration step 3.8
 
-24. **The binding in the record.** Ownership rows and the in-place `session-record.v1` edit of 3.4 in
-    one PR, merged before step 3.8's writer ships; the record writer applies `obs.rebind`. Tests first:
+24. **The binding's lifecycle fields in the record** (3.1, 3.4). The fourth of the four in-place
+    `session-record.v1` edits: after remote R10 (branch `docs/remote-plan`: the fleet and binding
+    split), engines K1 (the key) and engines R1 (branch `docs/engines-hosts-plans`: `engine` and
+    `resume`), and before migration step 3.8 ships the first record writer. Rows and schema properties
+    in one PR. The binding record's writer on the node applies `obs.rebind` once it exists. Tests first:
     "a compaction keeps the binding revision"; "model drift does not rebind"; "a new session id links
-    predecessor and successor"; "a secret-shaped env value is refused".
+    predecessor and successor"; "containment and closure are node-owned fields"; "a secret-shaped env
+    value is refused".
+
+## H. The writers (Phase 5)
+
 25. **`horde goblin show` and `horde resume`.** Tests first: "resume refuses a shorter transcript";
     "resume refuses a harness change"; "resume never falls back to the default profile"; end-to-end in
     the isolated harness.
 26. **Spawn claims** [H12]. `CreateNew` claims, spawn token, `spawn-unknown`, `launch --resume`. Tests
     first: "two pumps, one spawn"; "a killed pump leaves no duplicate". Ledger: `commands/pump.ps1`.
-27. **Goblin spawn through the anchor** [H15]. The pane's program is the anchor, never a shell.
+27. **Goblin spawn through the anchor** [H15], after engines E10. The pane's program is the anchor,
+    never a shell, and the anchor's child is the real launch stub.
 28. **The closer** [H14]. Design A1 states, A3 order, the handle-based end through the anchor, the
     tombstone, the orc notice through the alerter. Isolated harness only; every refusal
     mutation-tested; the victim guard of CONTRIBUTING 9. Ledger `planning/ledger/core-closer.md`:
@@ -880,7 +952,8 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
 
 Order: A now. B before any Phase 3 command merges. C next, in the order given; it answers "what is
 every goblin doing, and what holds memory" with no writer. D once metrics Stage A exists. E and F
-after C, consulted and shadowed before anything acts. G with Phase 5.
+after C, consulted and shadowed before anything acts. G in its place in the in-place edit sequence,
+before migration step 3.8. H with Phase 5.
 
 ---
 
