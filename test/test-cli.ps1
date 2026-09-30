@@ -214,6 +214,12 @@ try {
     # A binding error raised INSIDE a command's body is the command failing, not the command line being
     # wrong. Every ParameterBindingException used to mean exit 2 and the usage (review of PR #12,
     # finding 5).
+    # horde exits 0, 1 or 2 and nothing else. `exit` inside a run block used to end horde itself:
+    # `exit 7` made horde exit 7, and a bare `exit` made it exit 0 (review of PR #12, finding 6).
+    foreach ($f in @("exit-seven", "exit-bare")) {
+        $r = Invoke-Horde -Root $tmp -Arguments @($f)
+        Check ($r.code -eq 1 -and $r.out -like ($f + " started*") -and $r.err -like ("horde " + $f + ": *exit*")) ("a command that calls exit makes horde exit 1 and say so: " + $f + " (got " + $r.code + ": " + $r.err.Trim() + ")")
+    }
     $r = Invoke-Horde -Root $tmp -Arguments @("inner-bind")
     Check ($r.code -eq 1 -and $r.err -like "horde inner-bind: *NoSuchParameterForHordeTests*" -and $r.err -notlike "*usage:*") ("a binding error inside a command's body exits 1 without the usage (got " + $r.code + ": " + $r.err.Trim() + ")")
     Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue

@@ -8,8 +8,12 @@
 # fails if this file grows a param block. A value joined to its parameter with a colon (-Json:$false)
 # arrives in $args as two items and is rejoined by cli\Arguments.ps1, which says how.
 #
-# Exit codes: 0 ran, 1 the command failed, 2 the command line was wrong (unknown command or
-# arguments the command does not accept).
+# EXIT CODES ARE 0, 1 OR 2, AND NOTHING ELSE, so a caller can act on them:
+#   0  the command ran and returned
+#   1  the command failed: it threw, its file is broken, or it called `exit` - with any code, 0
+#      included, because a command reports failure by throwing and success by returning, and an
+#      `exit` skips horde's own reporting
+#   2  the command line was wrong: an unknown command, or arguments the command does not accept
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")
@@ -51,7 +55,8 @@ try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $command = Import-HordeCommand -Path $lookup.command.path
-    & $runner -Run $command.run -Named $named -Positional $positional
+    $state = @{ completed = $false }
+    & $runner -Run $command.run -Named $named -Positional $positional -State $state
 }
 catch [System.Management.Automation.ParameterBindingException] {
     # Only the run block's own binding is a command-line error; cli\Runner.ps1 says how that is told.
@@ -63,6 +68,10 @@ catch [System.Management.Automation.ParameterBindingException] {
 }
 catch {
     [Console]::Error.WriteLine("horde " + $name + ": " + $_.Exception.Message)
+    exit 1
+}
+if (-not $state.completed) {
+    [Console]::Error.WriteLine("horde " + $name + ": the command called exit (code " + $LASTEXITCODE + "); a command returns, or throws to fail")
     exit 1
 }
 exit 0

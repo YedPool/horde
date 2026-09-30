@@ -7,5 +7,11 @@
 # to bind; when that invocation is in THIS file it can only be the call below, because nothing else
 # here calls anything. Measured 2026-09-29 on PowerShell 5.1: the run block's own failure carries this
 # file as its ScriptName, and the body's carries the command file.
-param($Run, $Named, $Positional)
+#
+# AND WHY `exit` STOPS HERE. `exit` inside a script block ends the nearest SCRIPT on the call stack.
+# Called straight from horde.ps1, a command's `exit 7` made horde exit 7 and a bare `exit` made it
+# exit 0 (review of PR #12, finding 6). Called from here, it ends this script instead, the line after
+# the call never runs, and horde sees $State.completed still false. Measured 2026-09-29.
+param($Run, $Named, $Positional, $State)
 & $Run @Named @Positional
+$State.completed = $true
