@@ -452,12 +452,14 @@
   "schemaVersion": 1,
   "planId": "20260929-214500-horde",
   "sessions": [
-    { "slot": "s1", "sessionId": "38d41f80-...", "agent": "claude", "role": "orc",
+    { "slot": "s1", "sessionId": "aaaaaaaa-...", "agent": "claude", "role": "orc",
       "label": "D", "cwd": "C:\\Users\\...\\wezfleet",
-      "resume": { "kind": "claude-resume", "id": "38d41f80-..." } },
-    { "slot": "s2", "sessionId": "01a0ef46-...", "agent": "codex", "role": "goblin",
-      "label": "D1", "parent": "38d41f80-...", "cwd": "C:\\...",
-      "resume": { "kind": "codex-resume", "id": "01a0ef46-..." } }
+      "resume": { "kind": "claude-resume", "id": "aaaaaaaa-...",
+                  "argv": [ "claude", "--resume", "aaaaaaaa-..." ] } },
+    { "slot": "s2", "sessionId": "bbbbbbbb-...", "agent": "codex", "role": "goblin",
+      "label": "D1", "parent": "aaaaaaaa-...", "cwd": "C:\\...",
+      "resume": { "kind": "codex-resume", "id": "bbbbbbbb-...",
+                  "argv": [ "codex", "UNMEASURED-placeholder-see-plan-step-5.1", "bbbbbbbb-..." ] } }
   ],
   "layout": {
     "advisory": true,
@@ -472,15 +474,21 @@
 <p>
   Every leaf of the layout is a <code>slot</code>, and every slot names a session by its stable id.
   Nothing in the plan is keyed by a pane number. The <code>resume</code> block is produced by the
-  AgentPort, so the Lua no longer needs to know that Claude resumes with <code>--resume</code> or how Codex
-  does it - it runs the command it is given.
+  AgentPort, and its <code>argv</code> is the exact command a host runs, program first and one argument
+  per element. A host never turns <code>kind</code> into flags itself, so the Lua no longer needs to know
+  that Claude resumes with <code>--resume</code> or how Codex does it - it runs the command it is given.
+  <code>kind</code> says which AgentPort built it: <code>claude-resume</code>, whose <code>id</code> is the
+  session's own id and whose argv is <code>claude --resume &lt;id&gt;</code> (read off 12 live Claude
+  processes on 2026-09-30), or <code>codex-resume</code>, whose command is not yet measured (step 5.1): its
+  argv above is a placeholder and says so. No two sessions share a <code>kind</code> and <code>id</code>, so
+  no conversation is resumed twice.
 </p>
 
 <h3>Host capabilities</h3>
 <table>
   <tr><th>Capability</th><th class="c">WezTerm Lua</th><th class="c">WezTerm CLI</th><th class="c">VS Code / Cursor</th><th class="c">Plain console</th></tr>
-  <tr><td>Windows</td><td class="c y">yes</td><td class="c y">yes</td><td class="c p">1 per folder</td><td class="c y">yes</td></tr>
-  <tr><td>Tabs</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Windows</td><td class="c y">yes</td><td class="c y">yes</td><td class="c p">1 (one folder per plan)</td><td class="c y">yes</td></tr>
+  <tr><td>Tabs</td><td class="c y">yes</td><td class="c y">yes</td><td class="c p">as terminal groups</td><td class="c n">no</td></tr>
   <tr><td>Splits</td><td class="c y">any depth</td><td class="c y">any depth</td><td class="c p">1 level (groups)</td><td class="c n">no</td></tr>
   <tr><td>Sizes</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
   <tr><td>Workspaces</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
@@ -504,7 +512,9 @@
       whatever happens to the arrangement. This is D3 made mechanical.</li>
   <li>Splits deeper than the host supports are flattened into sibling containers at the deepest supported
       level, preserving left-to-right, top-to-bottom order.</li>
-  <li>No tabs: each tab becomes its own window if windows are supported, otherwise its own terminal.</li>
+  <li>No tabs: each tab becomes its own window if windows are supported, otherwise its own terminal.
+      VS Code / Cursor has one window and no tabs of its own, so a plan for it is one window
+      (one folder), and each tab becomes a terminal group in that window, keeping its title.</li>
   <li>No workspaces: workspace names become a prefix on window or terminal titles, so the grouping is still
       visible to a human.</li>
   <li>No sizes: ratios are dropped. Never approximated, because a guessed size looks like a bug.</li>
@@ -575,7 +585,7 @@
   <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
   <tr><td>2.1</td><td><code>core/identity</code>: merge every agent's control files into one record shape. No terminal in it.</td><td>Unit suite with injected sources.</td><td class="c sz">M</td></tr>
   <tr><td>2.2</td><td>The projection: reads Claude's control files, codex-sessions, the registry, run and roster, pane-sessions, the live pane list, and wezurrect's state directory. <strong>Writes nothing.</strong> Computes the Horde's cardinality faults.</td><td>A test asserting the module contains no file-writing call at all.</td><td class="c sz">L</td></tr>
-  <tr><td>2.3</td><td><code>horde status --json</code>.</td><td>Parity: agrees with today's <code>sessions</code> and <code>census</code> on the same fixtures.</td><td class="c sz">S</td></tr>
+  <tr><td>2.3</td><td><code>horde status --json</code>. Its output gets its own schema here, <code>schema/session-view.v1</code>, deferred from step 1.2 (which describes only the record the engine stores): one answer for every field in <code>core/ownership.json</code>'s <code>required</code>, over every owner; each answer in <code>core/tristate</code>'s form - known, absent or unknown; its provenance - the store and field it was read from; the provisional mark wherever the ownership table has one; and a value type per field, the same as <code>schema/session-record.v1</code>'s for a field the engine stores. These are the first review of step 1.2's findings, carried here.</td><td>Parity: agrees with today's <code>sessions</code> and <code>census</code> on the same fixtures; every answer validates against <code>schema/session-view.v1</code>.</td><td class="c sz">S</td></tr>
 </table>
 
 <h3><span class="phase">PHASE 3</span>The fleet moves onto Horde's commands, one at a time</h3>
@@ -584,6 +594,7 @@
   <tr><td>3.1</td><td><code>horde sessions</code> over the projection - the smallest move, since wezfleet's version is already identity-first. The fleet runs both and compares.</td><td>Shadow: no unexplained difference over a working day of real use.</td><td class="c sz">S</td></tr>
   <tr><td>3.2</td><td><strong>The adoption ledger</strong>: one record of which fleet role uses which command from which system, so "moved" is a fact someone can look up rather than a belief. Built the same way as wezfleet's <code>test-ssot.ps1</code> - a list that can only shrink on the old side.</td><td>A test fails if an entry claims adoption with no recorded use.</td><td class="c sz">S</td></tr>
   <tr><td>3.3-3.7</td><td>One per PR, each shadowed then switched: <code>horde census</code>, <code>horde status</code>, <code>horde tree</code>, message target resolution, and the Warchief's own status loop - last, because it is the one the whole fleet depends on.</td><td>Each: shadow clean, switch made, adoption recorded.</td><td class="c sz">M each</td></tr>
+  <tr><td>3.8</td><td><strong>The engine's record writer</strong> (decided 2026-09-30). The first Horde command that sets an engine-owned field - role, parent or label - owns the one writer of <code>schema/session-record.v1</code>. Until then Horde writes no session record at all. It writes a whole new record and replaces the old one, never edits in place; it keeps the writer's rules the schema cannot state (a label implies a labelCycle; labelCycle is never negative); and the file name is the session id.</td><td>A write test in an isolated store; wezfleet's registry is never written by Horde.</td><td class="c sz">M</td></tr>
 </table>
 
 <h3><span class="phase">PHASE 4</span>The restore engine and the layout port, WezTerm first</h3>

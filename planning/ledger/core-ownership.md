@@ -36,7 +36,7 @@ sources:
 - where: test/test-ownership.ps1 :: "owner is a derived display name; parent is the edge"
 
 ### L-005 A rule that rests on something unmeasured is marked provisional, not encoded as fact
-- source: the installed wezterm-resurrect takes the session id from the saved argv first and its main branch from the pane-sessions file first (plugin/resurrect/process_handlers.lua:282-299 on main); and whether a session id changes on compaction is asserted by YedPool/wezfleet lib/Mail.ps1:116 but contradicted by one observation on 2026-09-29
+- source: the installed wezterm-resurrect takes the session id from the saved argv first and its main branch from the pane-sessions file first (plugin/resurrect/process_handlers.lua:282-299 on main); and whether a session id changes on compaction is asserted by YedPool/wezfleet lib/Mail.ps1:116 but contradicted by one observation on 2026-09-29, and by measurement on 2026-09-30 (L-047); /clear remains unmeasured
 - disposition: test
 - where: test/test-ownership.ps1 :: "a rule that depends on something unmeasured is marked provisional"
 
@@ -181,9 +181,9 @@ sources:
 - where: core/ownership.json :: "but no shipped caller passes it, so it is always empty"
 
 ### L-034 What a former name's sessionId means is unmeasured
-- source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) lists formerNames entries of name, until and a sessionId different from the file's own; nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
+- source: a claude control file read 2026-09-29 (~/.claude/sessions/17948.json) was recorded here as listing a formerNames entry whose sessionId differed from the file's own. CORRECTED 2026-09-30: re-read for the core/identity research, that file's one formerNames entry (until 1790626048401, 2026-09-28T20:07:28.401Z) carries a sessionId EQUAL to the file's own, and its until equals the file's nameSince; it is still the only file of 10 with the field. Whether the file changed between the two readings or the first reading was wrong cannot be reconstructed, so the earlier "different" is withdrawn, not explained. Nothing in wezfleet reads the field, and whether a session id changes on compaction is already contested (L-005).
 - disposition: comment
-- where: core/ownership.json :: "whether that is an earlier id of this same conversation"
+- where: core/ownership.json :: "whether /clear gives the process a new id"
 
 ### L-035 A run's window is the run's, not the session's
 - source: YedPool/wezfleet lib/Protocol.ps1:513-516 "The window this run owns. -1 means not pinned yet" read from run.json windowId; and :524-527, a session that moved windows became unreachable through its spawn-time record. Review finding 9, 2026-09-29.
@@ -244,3 +244,43 @@ sources:
 - source: YedPool/wezfleet lib/Common.ps1:586-590 "elseif ($GuiProcesses.Count -eq 1)" takes the one wezterm-gui as the instance, and :591 "elseif ($GuiProcesses.Count -gt 1) { $out.ambiguous = $true }". Review finding 7, second review, 2026-09-29.
 - disposition: comment
 - where: core/ownership.json :: "exactly one terminal process is running"
+
+### L-047 Compaction does not change a Claude session id; /clear is unmeasured
+- source: measured 2026-09-30 for the core/identity research. 12 auto-compactions inside 7 live claude processes (pid and procStart unchanged across them) left the id unchanged in the transcript (one distinct sessionId, with entries after the boundary), in the control file for that pid, in the SessionStart hook's source=compact pane-sessions file and, for 6 of the 7, in the --resume argument fixed at process start. Across 265 top-level transcripts under ~/.claude/projects: 51 compact_boundary records (47 auto, 4 manual) in 13 files, and 0 files carrying a second sessionId or one different from the file name. Contradicts YedPool/wezfleet lib/Mail.ps1:116 "A Claude session id changes on compact, on /clear" and b50b2d4, whose own measurement found no stranded mail "only because nothing has compacted"; agrees with YedPool/wezfleet planning/registry-design.md:51-52 "The founder's premise that compaction renames a transcript is not supported by the data". /clear: the only evidence is transcript 33059eb5, which opens with the /clear command (2026-08-21T04:30:03Z), and a source=clear pane-sessions file naming d08701e5, which has no transcript; no pair of a pre-clear and a post-clear id in one process exists on disk. Manual /compact is seen only in 4 historical transcripts with no live process to pair.
+- disposition: comment
+- where: core/ownership.json :: "Compaction keeps the session id"
+
+### L-048 Eight control-file keys had no row; each is now kept or dropped
+- source: census of ~/.claude/sessions on 2026-09-30 for the core/identity research: 10 control files, 20 distinct keys (19 in nine files, bridgeSessionId missing from one, formerNames present in one), and version, peerProtocol, peerFeatures, kind, entrypoint, pidDomain, nameSince and statusUpdatedAt appeared in 10 of 10 files and in no X2 read - though L-029 claimed every field the old stores hold was kept or dropped. Values seen: version 2.1.284 x8 and 2.1.285 x2; peerProtocol 1 x10; peerFeatures [notify_idle, artifact_yield] x10; kind interactive x10; entrypoint cli x10 (CORRECTED 2026-09-30, review finding 4 of PR #18: this entry first cited YedPool/wezfleet hooks/wf-registry-refresh.ps1:64-81 as showing that entrypoint tells a nested session apart, but what that hook measured on 2026-09-15 is the environment variable CLAUDE_CODE_ENTRYPOINT - sdk-cli for a nested claude -p, cli for a pane session - not this control-file key, which has never been seen with any value but cli; the row is marked provisional until a nested session's control file is read); pidDomain win32:<user> x10; nameSince and statusUpdatedAt epoch-millisecond integers, with updatedAt equal to statusUpdatedAt in 10 of 10. Seven are kept as agent-owned fields read from X2 (version under the name agentVersion, so it cannot be mistaken for a schema version; kind as sessionKind, beside agent); statusUpdatedAt is dropped because it is liveStatus's observation time, not a fact of its own.
+- disposition: test
+- where: test/test-ownership.ps1 :: "every claude control file key is kept or dropped"
+
+### L-049 A Claude transcript lives under the control file's cwd, keyed with every non-alphanumeric character as a dash
+- source: census 2026-09-30 for the core/identity research: for 10 of 10 control files the transcript exists at ~/.claude/projects/<key(cwd)>/<sessionId>.jsonl, key(cwd) being the control file's cwd with every character outside A-Z, a-z and 0-9 replaced by a dash. The pane-sessions file 23.json, written by the compact hook for session b12f72ab, gives a deeper cwd than that session's control file, and the transcript lives under the control file's. So the first rule in this table, from projectCwd - which reads the pane-sessions cwd second - would have looked in the wrong directory for a live session. And YedPool/wezfleet lib/Registry.ps1:103 "$key = ($Cwd -replace '[:\\/]', '-')" replaces only colons and slashes: the 149 project directories on this machine hold 0 spaces, 0 underscores and 0 dots, and a cwd containing "Dist Folders\Dist_12_23_25_..." lives under "Dist-Folders-Dist-12-23-25-...". The derivation is ported and tested in core/identity.
+- disposition: comment
+- where: core/ownership.json :: "the cwd in its own control file"
+
+### L-050 The project directory is the launch directory; the hook's cwd is the current one
+- source: review finding 1 of PR #18, 2026-09-30: projectCwd read the pane-sessions cwd (X1) second, and that cwd is whatever directory the session was in when the hook fired - the defect L-049 routes the transcript around. Re-measured 2026-09-30: of 265 top-level transcripts under ~/.claude/projects, 210 carry a cwd, 0 sit outside the folder named after their FIRST cwd, and 21 changed directory, all 21 under the first cwd and 0 under the last; of 163 pane-sessions files, 162 have a cwd whose Claude path key is the folder of their own transcript_path and 1 does not (23.json, written by the SessionStart hook with source=compact, whose cwd is a subfolder of its control file's); 10 of 10 control files' cwd keys name a folder holding their transcript. So the running session's control file is read first; the hook's cwd is read only when the folder of the transcript_path in the same file is its key, which is the file's own evidence that it was written from the launch directory. A key cannot be turned back into a directory - every non-alphanumeric character became a dash - so the folder is used as a check, not as a value. Its owner stays the engine (L-054).
+- disposition: test
+- where: test/test-ownership.ps1 :: "the project directory is read first from the running session's control file"
+
+### L-051 The control file's cwd is the launch directory, not the current directory
+- source: the same census: session b12f72ab's control file kept the directory it started in while its pane-sessions file, written after a cd, named a subfolder (review finding 1 of PR #18, 2026-09-30). The cwd row reads the control file first, so the row says which directory that is.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the control file's cwd is labelled as the launch directory"
+
+### L-052 A stopped session's transcript is the one file named for its id, never projectCwd's folder
+- source: review finding 2 of PR #18, 2026-09-30: with no control file the derivation fell back to projectCwd, whose remaining sources (the registry, and the hook's cwd) can hold the current directory (L-050). The pane-sessions file's transcript_path is already the first read. The derivation's fallback is now a search of ~/.claude/projects/*/<sessionId>.jsonl that takes the hit only when there is exactly one: measured 2026-09-30, 265 top-level transcripts, and one session id (cccccccc-9999-4999-8999-cccccccccccc, a fixture id written by wezfleet's apply tests) filed in 55 folders at once, so "the first hit" would be a guess.
+- disposition: test
+- where: test/test-ownership.ps1 :: "a stopped session's transcript is the one file named for its id, never projectCwd's folder"
+
+### L-053 The transcript folder key is measured only on short paths
+- source: review finding 3 of PR #18, 2026-09-30: every measurement behind L-049 is of keys up to 137 characters, the longest of 149 project folders on this machine on 2026-09-30. Whether Claude Code shortens a longer key and appends a hash is unverified - no folder long enough exists to show it. The rule is marked provisional; it fails safe because a derived path is used only after it is checked to exist, and a stopped session falls back to the search by id (L-052).
+- disposition: test
+- where: test/test-ownership.ps1 :: "the transcript folder key is provisional beyond the longest path measured"
+
+### L-054 The project directory stays the engine's, though it is read from the control file while the session runs
+- source: the first fix for review finding 1 of PR #18 (0b1d393) made the agent projectCwd's owner, because the control file is now its first read. That was wrong for what the field is for: the launch directory is needed after the session exits - to find a stopped session's transcript and to resume it - and Claude removes the control file when the session exits, so the fact must live in the engine's own record. schema/session-record.v1 on main (PR #16) already stores projectCwd for the engine as "fixed at start and never revised". So the engine owns it and reads it from the control file while the session runs; the check that every field kept from the control file is the agent's names this as its second exception, beside updatedAt.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the project directory stays the engine's, because it must outlive the control file"
