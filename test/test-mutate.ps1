@@ -18,6 +18,9 @@ function Check { param($Cond, [string]$What)
 
 $target = Join-Path $root "test\fixtures\mutate\target.ps1"
 $before = [System.IO.File]::ReadAllText($target)
+# The throwaway folders present before this suite ran, so only ones IT leaves behind are counted -
+# another mutation run in parallel must not fail this check.
+$foldersBefore = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
 
 $honest = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-honest.psd1" | ForEach-Object { "$_" })
 $honestCode = $LASTEXITCODE
@@ -33,8 +36,22 @@ Check (@($lying | Where-Object { $_ -match '\[BAD\] never-applied: did not apply
 Check (@($lying | Where-Object { $_ -match '\[BAD\] ambiguous: did not apply: the find string occurs [2-9]' }).Count -eq 1) "a find string that matches more than once is rejected"
 Check (@($lying | Where-Object { $_ -match '\[BAD\] gap-without-reason: invalid' }).Count -eq 1) "a gap declared without a reason is rejected"
 
+# "CAUGHT" MUST MEAN A CHECK FAILED. The third review ran an always-failing suite with a mutation that
+# changed nothing, and the tool reported it caught.
+$bb = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-bad-baseline.psd1" | ForEach-Object { "$_" })
+$bbCode = $LASTEXITCODE
+Check ($bbCode -eq 2 -and @($bb | Where-Object { $_ -match 'UNMUTATED suite does not pass' }).Count -eq 1) "a suite that fails before any mutation is refused, so nothing can be counted as caught"
+Check (@($bb | Where-Object { $_ -match '\[OK\]' }).Count -eq 0) "and no mutation is reported against it"
+$hang = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-hangs.psd1" -TimeoutSeconds 3 | ForEach-Object { "$_" })
+$hangCode = $LASTEXITCODE
+Check ($hangCode -eq 2 -and @($hang | Where-Object { $_ -match 'ran past 3s' }).Count -eq 1) "a suite that runs past its time limit is stopped and reported, not waited on forever"
+$crash = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-crash.psd1" | ForEach-Object { "$_" })
+$crashCode = $LASTEXITCODE
+Check ($crashCode -ne 0 -and @($crash | Where-Object { $_ -match '\[BAD\] breaks-the-file: the suite broke' }).Count -eq 1) "a mutation that only crashes the suite is not counted as caught"
+
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
-Check (@(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) }).Count -eq 0) "and no throwaway copy is left behind"
+$left = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | Where-Object { $foldersBefore -notcontains $_.Name })
+Check ($left.Count -eq 0) "and no throwaway copy is left behind"
 
 Write-Host ""
 if ($fails.Count) {

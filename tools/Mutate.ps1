@@ -18,16 +18,28 @@
 #
 # Exit 0 only if every mutation applied exactly once and did what it was expected to.
 
-param([Parameter(Mandatory = $true)][string]$Spec)
+#
+# "CAUGHT" MEANS A CHECK FAILED. Before any mutation, the copied suite is run UNMUTATED and must pass;
+# otherwise every mutation would "fail" the suite for a reason that has nothing to do with it, and read
+# as caught - the third review measured exactly that with an always-failing suite and a no-op
+# mutation. And a mutant run must fail with at least one [FAIL] line: a suite that crashed, or ran past
+# -TimeoutSeconds, did not catch anything and is reported as such.
+#
+# A TIMED-OUT SUITE IS STOPPED, AND ONLY IT. This tool holds the suite's process handle from the moment
+# it starts and kills that process alone; anything the suite itself started is the suite's to clean
+# up, and the report says a run timed out so a person can look.
+
+param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900)
+$script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 
 function Invoke-HordeSuite {
-    # Run a suite as its own process; returns { code; out }. The two streams are read through the
-    # process API, NOT with `2>&1`: under PowerShell 5.1 that turns the first line a suite writes to
+    # Run a suite as its own process; returns { code; out; timedOut }. The two streams are read through
+    # the process API, NOT with `2>&1`: under PowerShell 5.1 that turns the first line a suite writes to
     # stderr into a terminating error - which ended this tool's first run on its first mutation.
-    param([string]$Path)
+    param([string]$Path, [int]$Seconds)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + $Path + "`""
@@ -36,10 +48,24 @@ function Invoke-HordeSuite {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
-    $errTask = $p.StandardError.ReadToEndAsync()
-    $out = $p.StandardOutput.ReadToEnd()
-    $p.WaitForExit()
-    return [pscustomobject]@{ code = $p.ExitCode; out = ($out + "`n" + $errTask.Result) }
+    try {
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit($Seconds * 1000)) {
+            try { $p.Kill() } catch { }
+            [void]$p.WaitForExit(10000)
+            return [pscustomobject]@{ code = -1; out = ""; timedOut = $true }
+        }
+        $p.WaitForExit()
+        return [pscustomobject]@{ code = $p.ExitCode; out = ($outTask.Result + "`n" + $errTask.Result); timedOut = $false }
+    } finally { $p.Dispose() }
+}
+
+function Get-HordeFailLines {
+    param([string]$Out)
+    # Only a line that STARTS with [FAIL] is a failed check. An error message quoting a source line
+    # that contains "[FAIL]" is not - which is how a crashed suite first read as caught.
+    return @(($Out -split "`r?`n") | Where-Object { $_ -match '^\s*\[FAIL\]' } | ForEach-Object { $_.Trim() })
 }
 
 function Get-HordeOccurrences {
@@ -65,7 +91,19 @@ try {
     $suite = Join-Path $work $s.Suite
     $original = [System.IO.File]::ReadAllText($target)
 
-    foreach ($m in $s.Mutations) {
+    $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
+    if ($base.timedOut -or $base.code -ne 0) {
+        $why = "exited " + $base.code
+        if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
+        Write-Host ("  the UNMUTATED suite does not pass in the copy (" + $why + "), so no mutation result would mean anything:") -ForegroundColor Red
+        foreach ($f in (Get-HordeFailLines -Out $base.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+        Write-Host "mutations: not run - baseline failed"
+        $script:baselineFailed = $true
+    }
+
+    $script:toRun = @()
+    if (-not $script:baselineFailed) { $script:toRun = @($s.Mutations) }
+    foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
         $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @() }
@@ -76,10 +114,12 @@ try {
             if ($count -ne 1) { $row.outcome = ("did not apply: the find string occurs " + $count + " times, not once") }
             else {
                 [System.IO.File]::WriteAllText($target, $original.Replace($m.Find, $m.Replace))
-                $run = Invoke-HordeSuite -Path $suite
-                $code = $run.code
-                $row.failures = @(($run.out -split "`r?`n") | Where-Object { $_ -match '\[FAIL\]' } | ForEach-Object { $_.Trim() })
-                if ($code -ne 0) { $row.outcome = "caught" } else { $row.outcome = "survived" }
+                $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
+                $row.failures = @(Get-HordeFailLines -Out $run.out)
+                if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
+                elseif ($run.code -eq 0) { $row.outcome = "survived" }
+                elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
+                else { $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch") }
             }
         }
         [System.IO.File]::WriteAllText($target, $original)
@@ -92,6 +132,8 @@ finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+if ($script:baselineFailed) { exit 2 }
 
 $bad = 0
 foreach ($r in $results) {
