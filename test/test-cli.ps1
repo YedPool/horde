@@ -226,6 +226,15 @@ try {
     # Typed at a prompt this line is PowerShell's own syntax, with nothing to compare, so it is not run.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Count:5", 'x"" -Json')
     Check ($r.code -eq 0 -and $r.out.Trim() -eq 'target=[x"] json=True count=5') ("a doubled quote is split as PowerShell splits it, never refused as unmatched (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # "--" MEANS "END OF PARAMETERS" ONLY TO A PARSER THAT SEES IT. Typed, PowerShell consumes it and
+    # passes what follows as plain words - measured 2026-09-29, "-- -Json" arrived as the untagged
+    # word "-Json". From a script it arrives as the word "--", and "-Json" after it is still tagged as
+    # a parameter: echo-args bound target=[--] json=True, exit 0. horde cannot honour it there, so it
+    # refuses it rather than treat it as a value.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "abc")
+    Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*'--' is not supported*") ("a double dash from a script is refused, not bound as a value" + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "--", "-Json") -AsTyped
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[-Json] json=False count=0") ("typed, a double dash is PowerShell's and what follows it is a word (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # Typed, a colon value a switch cannot take is PowerShell's to refuse. From a script "-Json:false"
     # arrives exactly as "-Json false" does - a switch and a word - so horde cannot tell them apart
     # and does not try (measured 2026-09-29; see cli\Arguments.ps1).

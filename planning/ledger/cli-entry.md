@@ -118,3 +118,8 @@ sources:
 - source: second review of YedPool/horde PR #12, measured 2026-09-29 on PowerShell 5.1: from -File, `-Json:$false` arrives as the tagged "-Json" then the [string] "$false", exactly as `-Json $false` does. Any argument that is the word "$true" or "$false" exits 2 and says the value arrived as text. Not caught, because $args keeps no trace of them: "-Json:false" (arrives as "-Json false") and a bare "-Json:" (arrives as nothing, or swallows the next word)
 - disposition: test
 - where: test/test-cli.ps1 :: "a colon value that arrived as text is refused, never guessed at"
+
+### L-021 "--" has its meaning only where PowerShell parses it, so from a script it is refused
+- source: second review of YedPool/horde PR #12, finding 8, measured 2026-09-29 on PowerShell 5.1: typed, "-- -Json" reached horde as the plain word "-Json"; from -File, "--" arrived as an argument and a -Name after it was still a parameter, giving target=[--] json=True unquoted and "parameter name '' is ambiguous" quoted
+- disposition: test
+- where: test/test-cli.ps1 :: "a double dash from a script is refused, not bound as a value"

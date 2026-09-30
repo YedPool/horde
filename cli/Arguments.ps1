@@ -23,6 +23,10 @@
 # or swallows the next word ("-Json: -Count 5" delivers -Json, then the words "-Count" and "5").
 # Neither leaves a trace in $args.
 #
+# "--" IS REFUSED WHEREVER IT ARRIVES. Typed, PowerShell consumes it before horde runs and what
+# follows is plain words, so horde never sees it. From a script it arrives as an argument, and a
+# -Name after it is still tagged as a parameter, so its meaning cannot be given; it exits 2 instead.
+#
 # NO LONGER READ: THE PROCESS COMMAND LINE. The first fix re-read [Environment]::GetCommandLineArgs()
 # to learn where the colons had been. The second review of PR #12 measured it binding wrong values
 # silently when horde was called from inside a command (it read the OUTER horde's command line), and
@@ -57,6 +61,13 @@ function Resolve-HordeArguments {
 
     for ($j = 0; $j -lt $items.Count; $j++) {
         $item = $items[$j]
+        if ("$item" -ceq "--") {
+            # Typed, PowerShell consumes "--" itself and passes what follows as words. From a script it
+            # arrives as an item - quoted, tagged as a parameter with an empty name, which PowerShell
+            # then reported as "parameter name '' is ambiguous" - and a -Name after it is still a
+            # parameter. Measured 2026-09-29. horde cannot give it its meaning there, so it says so.
+            return (& $fail ("'--' is not supported: run as a script (powershell -File) it arrives as an ordinary argument, not as the end of the parameters, so horde cannot give it that meaning"))
+        }
         $pname = Get-HordeParameterName -Item $item
         if ($pname -and "$item".EndsWith(":")) {
             # Typed, "-Json:" with nothing after it is a parse error before horde runs, so a colon
