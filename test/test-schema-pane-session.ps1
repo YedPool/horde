@@ -2,9 +2,10 @@
 #
 # Step 1.1: "document the existing format exactly as it is". A schema that describes reality has
 # two duties, and both are tested: every real file must pass it, and a file that breaks what the
-# readers rely on must not. Golden fixtures (test/fixtures/pane-session) carry the shapes the census
-# of 163 real files found, with personal paths replaced; the real files on this machine are then
-# checked too, read-only, when they are present.
+# readers rely on must not. Golden fixtures (test/fixtures/pane-session/valid) carry one file for each
+# of the 11 distinct key sets the census of 163 real files found (checked below), plus a multi-line
+# wezfleet-backfill file and one with an unknown source and field; ids and paths are synthetic. The
+# real files on this machine are then checked too, read-only, when they are present.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -140,7 +141,38 @@ Check (Has (Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1,
 Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
-Check ($valid.Count -ge 6) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
+Check ($valid.Count -ge 13) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
+
+# THE 11 KEY SETS OF THE CENSUS (2026-09-29, 163 files; count of files in brackets), each beyond the
+# five keys every file has - session_id, transcript_path, cwd, hook_event_name, source. A key set with
+# no fixture is a shape the suite never checks.
+$censusSets = @(
+    "",                                                                                      # [9]
+    "model,session_title",                                                                   # [84]
+    "model",                                                                                 # [26]
+    "session_title",                                                                         # [17]
+    "model,prompt_id,scratchpad_dir,session_title",                                          # [6]
+    "model,scratchpad_dir",                                                                  # [5]
+    "context_tokens,estimated_cache_write_usd,prompt_cache_likely_expired,scratchpad_dir,seconds_since_last_response,session_title", # [5]
+    "model,prompt_id,scratchpad_dir",                                                        # [5]
+    "context_tokens,estimated_cache_write_usd,prompt_cache_likely_expired,scratchpad_dir,seconds_since_last_response", # [4]
+    "model,prompt_id,session_title",                                                         # [1]
+    "model,scratchpad_dir,session_title"                                                     # [1]
+)
+$baseKeys = @("session_id", "transcript_path", "cwd", "hook_event_name", "source")
+$fixtureSets = @{}
+foreach ($f in $valid) {
+    $names = @((Read-Fixture ("valid\" + $f.Name)).PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { $baseKeys -cnotcontains $_ } | Sort-Object)
+    $fixtureSets[($names -join ",")] = $f.BaseName
+}
+foreach ($k in $censusSets) {
+    $label = $k; if ($k -eq "") { $label = "(the five keys only)" }
+    Check ($fixtureSets.ContainsKey($k)) ("a fixture has the census key set " + $label)
+}
+# wezfleet writes its backfill records with ConvertTo-Json, so the real ones are multi-line (both on
+# this machine, 2026-09-29); the fixture must be too.
+$backfillText = Read-HordeSharedText -Path (Join-Path $fx "valid\wezfleet-backfill.json")
+Check ($backfillText.Trim().Contains("`n") -and (Read-Fixture "valid\wezfleet-backfill.json").source -ceq "wezfleet-backfill") "the wezfleet-backfill fixture is multi-line, as ConvertTo-Json writes it"
 foreach ($f in $valid) {
     $found = Findings (Read-Fixture ("valid\" + $f.Name))
     Check ($found.Count -eq 0) ("valid: " + $f.BaseName + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
