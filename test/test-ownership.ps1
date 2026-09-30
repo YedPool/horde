@@ -72,6 +72,24 @@ $missedOnce = @("lastSeen", "runId", "labelCycle", "nameSource", "remoteControl"
 $notRequired = @($missedOnce | Where-Object { @($doc.required) -cnotcontains $_ })
 foreach ($x in $notRequired) { Write-Host ("  not in the required list: " + $x) -ForegroundColor Red }
 Check ($notRequired.Count -eq 0) "every field the old stores hold is kept or dropped"
+# EVERY KEY A CLAUDE CONTROL FILE HOLDS IS KEPT OR DROPPED, not only the ones a reader happened to
+# want. The census of ~/.claude/sessions on 2026-09-30 found these 20 keys across 10 files - 19 in
+# nine of them, bridgeSessionId missing from one, formerNames in one - and eight had no row at all
+# (ledger L-048). A key is kept when some field reads it from X2, and dropped when a dropped entry
+# names it; a key the agent writes is the agent's, so a kept one is owned by the agent.
+$controlKeys = @("pid", "sessionId", "cwd", "startedAt", "procStart", "version", "peerProtocol", "peerFeatures", "kind",
+                 "entrypoint", "pidDomain", "messagingSocketPath", "name", "nameSource", "nameSince", "updatedAt", "status",
+                 "statusUpdatedAt", "bridgeSessionId", "formerNames")
+$x2Reads = @($doc.fields | ForEach-Object { $ownField = $_; @($ownField.read) | Where-Object { "$($_.store)" -ceq "X2" } | ForEach-Object { [pscustomobject]@{ key = "$($_.field)"; owner = "$($ownField.owner)"; name = "$($ownField.name)" } } })
+$droppedNames = @($doc.dropped | Where-Object { $null -ne $_ } | ForEach-Object { "$($_.name)" })
+$unaccounted = @($controlKeys | Where-Object { @($x2Reads | ForEach-Object { $_.key }) -cnotcontains $_ -and $droppedNames -cnotcontains $_ })
+foreach ($x in $unaccounted) { Write-Host ("  control file key with no row: " + $x) -ForegroundColor Red }
+Check ($controlKeys.Count -eq 20 -and $x2Reads.Count -ge 10) ("CONTROL: the census key list and the table's control-file reads were both found (" + $x2Reads.Count + " reads)")
+Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropped"
+# updatedAt is the one exception, and it is not a copy: lastActivity, the engine's derived "newest
+# sign of life", takes it as one of its inputs.
+$notAgent = @($x2Reads | Where-Object { $_.owner -cne "agent" -and $_.key -cne "updatedAt" } | ForEach-Object { $_.name })
+Check ($notAgent.Count -eq 0) ("a field kept from the claude control file is owned by the agent (" + ($notAgent -join ", ") + ")")
 $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
 $cwdW1 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "W1" })[0]

@@ -32,7 +32,8 @@
                 "hostInstance", "role", "parent", "owner", "label", "name", "origin", "fleetSessionId", "liveStatus",
                 "workState", "report", "lastActivity", "startedAt", "retired", "messagingAddress", "lastSeen", "runId",
                 "labelCycle", "nameSource", "remoteControl", "retiredAt", "lastTool", "title", "dependsOn", "spawnedAt",
-                "procStart", "bridgeSessionId", "formerNames" ],
+                "procStart", "bridgeSessionId", "formerNames", "agentVersion", "peerProtocol", "peerFeatures", "sessionKind",
+                "entrypoint", "pidDomain", "nameSince", "statusUpdatedAt" ],
   "fields": [
     { "name": "sessionId", "owner": "agent",
       "read": [ { "store": "X2", "field": "sessionId" }, { "store": "W1", "field": "file name" },
@@ -122,9 +123,24 @@
       "read": [ { "store": "X2", "field": "bridgeSessionId" } ] },
     { "name": "formerNames", "owner": "agent",
       "provisional": "each former name carries a sessionId. Compaction keeps the session id (measured 2026-09-30: 12 compactions inside 7 live processes, and 51 in 265 transcripts, with no second id), so across a compaction the entry names this conversation; whether /clear gives the process a new id, and so whether an entry can name an earlier conversation, is unmeasured",
-      "read": [ { "store": "X2", "field": "formerNames" } ] }
+      "read": [ { "store": "X2", "field": "formerNames" } ] },
+    { "name": "agentVersion", "owner": "agent",
+      "read": [ { "store": "X2", "field": "version" } ] },
+    { "name": "peerProtocol", "owner": "agent",
+      "read": [ { "store": "X2", "field": "peerProtocol" } ] },
+    { "name": "peerFeatures", "owner": "agent",
+      "read": [ { "store": "X2", "field": "peerFeatures" } ] },
+    { "name": "sessionKind", "owner": "agent",
+      "read": [ { "store": "X2", "field": "kind" } ] },
+    { "name": "entrypoint", "owner": "agent",
+      "read": [ { "store": "X2", "field": "entrypoint" } ] },
+    { "name": "pidDomain", "owner": "agent",
+      "read": [ { "store": "X2", "field": "pidDomain" } ] },
+    { "name": "nameSince", "owner": "agent",
+      "read": [ { "store": "X2", "field": "nameSince" } ] }
   ],
   "dropped": [
-    { "name": "remoteControl", "reason": "wezfleet's registry has the field and Set-WfSessionFields accepts it, but no shipped caller passes it, so it is always empty; whether a session is bridged for remote control is the agent's own bridgeSessionId, read from its control file" }
+    { "name": "remoteControl", "reason": "wezfleet's registry has the field and Set-WfSessionFields accepts it, but no shipped caller passes it, so it is always empty; whether a session is bridged for remote control is the agent's own bridgeSessionId, read from its control file" },
+    { "name": "statusUpdatedAt", "reason": "the time the agent last wrote its live status is carried as the observation time of liveStatus, the answer's observedAt, so a field of its own would be a second copy of one fact; lastActivity already reads the control file's updatedAt, which equalled statusUpdatedAt in 10 of 10 control files on 2026-09-30" }
   ]
 }
