@@ -73,7 +73,7 @@ function EditReg { param([string]$D, $N, [scriptblock]$Edit) $p = RegPath $D $N;
 
 function HostOf {
     # The fake host port, from host.json, with optional overrides.
-    param([string]$D, $Running = $null, $Id = $null, [switch]$Ambiguous, [string[]]$Add = @(), [switch]$NoHandles)
+    param([string]$D, $Running = $null, $Id = $null, [switch]$Ambiguous, [string[]]$Add = @(), [switch]$NoHandles, [hashtable]$Caps = @{})
     $h = ReadJson (Join-Path $D "host.json")
     $rows = @($h.handles | ForEach-Object { [pscustomobject]@{ handle = $_.handle; window = $_.window; tab = $_.tab; hostTitle = $_.hostTitle } })
     foreach ($a in $Add) { $rows += [pscustomobject]@{ handle = $a; window = "1"; tab = "9"; hostTitle = "added" } }
@@ -84,7 +84,10 @@ function HostOf {
     if ($Ambiguous) { $inst.ambiguous = $true }
     $handlesBlock = { return , $rows }.GetNewClosure()
     $instanceBlock = { return $inst }.GetNewClosure()
-    return (New-HordeHostPort -Name "fake" -Handles $handlesBlock -Instance $instanceBlock)
+    # What the fake declares: the two facts the view relies on, and nothing it has not measured.
+    $capTable = @{ "list" = "yes"; "instance.startedAt" = "yes"; "text.read" = "unverified" }
+    foreach ($k in $Caps.Keys) { $capTable[$k] = $Caps[$k] }
+    return (New-HordeHostPort -Name "fake" -Capabilities $capTable -Handles $handlesBlock -Instance $instanceBlock)
 }
 function ProcsOf {
     param([string]$D)
@@ -248,6 +251,45 @@ Check (-not (Has $pn 31) -and (Has $pn 30)) "no session is inferred from a pane 
 $keepEnv = $env:CLAUDE_CODE_SESSION_ID
 try { $env:CLAUDE_CODE_SESSION_ID = (Sid 77); $penv = Project $base } finally { $env:CLAUDE_CODE_SESSION_ID = $keepEnv }
 Check (-not (Has $penv 77) -and @($penv.sessions).Count -eq 34) "the environment never names another session"
+
+Write-Host ""
+Write-Host "--- the host port contract (core/HostPort.ps1) ---" -ForegroundColor Cyan
+# CAPABILITIES ARE DECLARED. A port without a declaration is refused, and so is a name or a state
+# outside the vocabulary; core relies on a capability only when it is yes.
+$noop = { return , @() }
+Check ((Throws { New-HordeHostPort -Name "x" -Capabilities $null -Handles $noop -Instance $noop } "Capabilities") -and (Throws { New-HordeHostPort -Name "x" -Capabilities @{ "list" = "maybe" } -Handles $noop -Instance $noop } "yes, no, declined or unverified") -and (Throws { New-HordeHostPort -Name "x" -Capabilities @{ "readMinds" = "yes" } -Handles $noop -Instance $noop } "not a host capability")) "a host port must declare its capabilities from the closed vocabulary"
+$offPort = New-HordeUnavailableHostPort -Reason "switched off"
+Check (@($script:HordeHostCapabilityNames | Where-Object { Test-HordeHostCapability -Port $offPort -Name $_ }).Count -eq 0 -and $script:HordeHostCapabilityNames.Count -ge 10) "the unavailable host declares every capability no"
+$pnl2 = Project $base -HostPort (HostOf $base -Caps @{ "list" = "no" })
+Check ($pnl2.handles.state -eq "unknown" -and $pnl2.handles.reason -like "*does not offer list*" -and @($pnl2.sessions | Where-Object { $_.fields["pane"].answer.state -ne "unknown" }).Count -eq 0) "a host that does not offer its handle list leaves every pane unknown"
+$pun = Project $base -HostPort (HostOf $base -Caps @{ "instance.startedAt" = "unverified" })
+Check ((St (Ans $pun 1 "pane")) -eq "unknown" -and (Why (Ans $pun 1 "pane")) -like "*does not offer instance.startedAt*") "an unverified capability counts as no"
+$declPort = HostOf $base -Caps @{ "text.read" = "declined" }
+Check ((Test-HordeHostCapability -Port $declPort -Name "text.read") -eq $false -and (Test-HordeHostCapability -Port $declPort -Name "list") -eq $true) "a declined capability is not relied on"
+# A HANDLE IS UNIQUE WITHIN ITS INSTANCE, as plain text; a native id with a sigil is the adapter's to map.
+function RowsPort { param([object[]]$Rows, [hashtable]$Caps = @{ "list" = "yes" }) $rb = { return , $Rows }.GetNewClosure(); return (New-HordeHostPort -Name "fake" -Capabilities $Caps -Handles $rb -Instance $noop) }
+$sigil = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = ([string][char]37 + "1") }))
+Check ($sigil.state -eq "unknown" -and $sigil.reason -like "*plain handle text*") "a native id with a sigil is refused, so adapters map it to handle text"
+$twice = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = "p1" }, [pscustomobject]@{ handle = "p1" }))
+Check ($twice.state -eq "unknown" -and $twice.reason -like "*unique within its instance*") "a handle listed twice in one instance makes the list unknown"
+$composed = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = "s1.p1" }, [pscustomobject]@{ handle = "s2.p1" }))
+Check ($composed.state -eq "known" -and @($composed.value).Count -eq 2) "CONTROL: two servers' panes composed with their session are two handles"
+# RUNNING COUNTS INSTANCES, NOT SERVERS: a host with one server per session reports one instance,
+# and its pane-sessions files are read; two instances refuse them (checked above).
+$p1inst = Project $base -HostPort (HostOf $base -Running 1)
+Check ((Val (Ans $p1inst 10 "pane")) -eq "17" -and (Src (Ans $p1inst 10 "pane")) -eq "X1") "one instance with many servers still reads its pane-sessions files"
+# PID AND CWD CARRY A NAMESPACE, and only core's own is ever compared.
+$nsCaps = @{ "list" = "yes"; "pid" = "yes"; "cwd" = "yes" }
+$ns = Read-HordeHostHandles -Port (RowsPort -Caps $nsCaps @(
+    [pscustomobject]@{ handle = "a"; pid = 4242; cwd = "C:\work"; space = "windows" },
+    [pscustomobject]@{ handle = "b"; pid = 4242; cwd = "/home/w"; space = "wsl:Ubuntu" },
+    [pscustomobject]@{ handle = "c"; pid = 4242; cwd = "C:\work" }))
+$nsRows = @{}; foreach ($r in @(Val $ns)) { $nsRows[$r.handle] = $r }
+Check ($ns.state -eq "known" -and $nsRows["b"].pid.state -eq "unknown" -and $nsRows["b"].pid.reason -like "*never compared across namespaces*" -and $nsRows["b"].cwd.state -eq "unknown") "a pid from another namespace is unknown, never compared"
+Check ($nsRows["c"].pid.state -eq "unknown" -and $nsRows["c"].pid.reason -like "*no namespace*") "a pid with no namespace is unknown"
+Check ((Val $nsRows["a"].pid) -eq 4242 -and (Val $nsRows["a"].cwd) -eq "C:\work") "CONTROL: a pid in core's own namespace is known"
+$nsNo = Read-HordeHostHandles -Port (RowsPort @([pscustomobject]@{ handle = "a"; pid = 4242; space = "windows" }))
+Check (@(Val $nsNo)[0].pid.state -eq "unknown" -and @(Val $nsNo)[0].pid.reason -like "*does not offer pid*") "a pid the host does not declare is not relied on"
 
 Write-Host ""
 Write-Host "--- the pane-sessions guard ---" -ForegroundColor Cyan

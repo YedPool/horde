@@ -383,3 +383,52 @@ sessions.ps1:41-46, status.ps1:8.
 - source: horde PR #24 (b4898cc) adds waitingFor to core/ownership.json required, read only from X2 while the process runs, and waiting as a Claude status; planning/ledger/core-ownership.md L-055 (1 of 10 control files on 2026-09-30, "permission prompt"). The view carries every required field, so it is not optional here; a session no control file names waits on nothing, as with liveStatus
 - disposition: test
 - where: test/test-projection.ps1 :: "a waiting session says what it waits for, from its own control file"
+
+## The host port contract, from research into three more hosts
+
+Researched 2026-09-30 for orchestrator D: tmux 3.4 measured inside WSL, psmux (one server per
+session, Windows) and Ghostty (macOS and Linux only) from their documentation and source. The research
+proposed contract changes C1-C9 before this module merges, while the port has one caller; the lead took
+C1, C3, C4 and C5 into this PR with tests, and C2, C6 and C8 as written contract, and left C7 (a
+shared command dialect and the host-name ratchet) and C9 (native-tool output decoding) to the
+adapters' own PRs.
+
+### L-074 A host declares what it can do; core relies only on yes, and unverified counts as no
+- source: host research 2026-09-30 C5 and the capability matrix (one host cannot read its screen, another cannot send text); horde planning/migration-plan.html D5 "each host declares what it can do"
+- disposition: test
+- where: test/test-projection.ps1 :: "an unverified capability counts as no"
+
+### L-075 Asking for a capability a host lacks is an unknown with the reason, never a crash
+- source: host research 2026-09-30 section 5.1 "asking for an absent verb is an unknown with the reason ... never a throw that reads as a host fault"
+- disposition: test
+- where: test/test-projection.ps1 :: "a host that does not offer its handle list leaves every pane unknown"
+
+### L-076 A handle is unique within its instance, and running counts instances, not servers
+- source: host research 2026-09-30 C3: a host with one server per session numbers panes per server, so a bare pane id repeats inside one instance; counting servers would refuse every pane-sessions file for a user with two sessions (the X1 guard's running > 1 rule)
+- disposition: test
+- where: test/test-projection.ps1 :: "one instance with many servers still reads its pane-sessions files"
+
+### L-077 Handle text is plain; an adapter maps native ids with sigils to it and back
+- source: host research 2026-09-30 C1: pane, window and session ids measured as %1, @0 and $0, which fail the handle rule, and a $ in a reason string is a PowerShell expansion hazard
+- disposition: test
+- where: test/test-projection.ps1 :: "a native id with a sigil is refused, so adapters map it to handle text"
+
+### L-078 A pid or cwd carries its namespace, and core never compares across namespaces
+- source: host research 2026-09-30 C4: a multiplexer inside WSL returns Linux pids and paths, while core's process table is Win32_Process (core/Projection.ps1 Get-HordeProjectionProcessTable)
+- disposition: test
+- where: test/test-projection.ps1 :: "a pid from another namespace is unknown, never compared"
+
+### L-079 The adapter builds the instance id, and it must change when the server restarts
+- source: host research 2026-09-30 C2: a socket path fails the handle rule, and a multiplexer reuses socket names across restarts, so an id built from the name alone would hand a new server the old one's records
+- disposition: comment
+- where: core/HostPort.ps1 :: "THE ADAPTER BUILDS THE INSTANCE ID"
+
+### L-080 Window and tab are the first host's words; each host maps its own levels onto them
+- source: host research 2026-09-30 C6: a multiplexer's session maps to window and its window to tab; a host with windows and tabs maps directly; a missing level is $null
+- disposition: comment
+- where: core/HostPort.ps1 :: "WINDOW AND TAB ARE THE FIRST HOST'S WORDS"
+
+### L-081 A pane's own-id variable is a declared capability, and the adapter propagates it
+- source: host research 2026-09-30 C8: each host names its own variable, and a child started from a pane inside WSL does not see it unless the adapter exports it (measured); core/Identity.ps1 still never falls back to it (planning/ledger/core-identity.md)
+- disposition: comment
+- where: core/HostPort.ps1 :: "A PANE'S OWN-ID VARIABLE IS A CAPABILITY"

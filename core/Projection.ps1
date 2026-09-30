@@ -71,6 +71,8 @@ function Get-HordeProjectionProcessTable {
     # The process table as core/identity reads it, plus each process's command line: the only
     # involuntary witness to one conversation running in two processes (YedPool/wezfleet
     # lib/Common.ps1:656-662, "THE COMMAND LINE IS THE ONLY INVOLUNTARY WITNESS"). Read-only CIM.
+    # Its pids are in the windows namespace; a pid a host gives from any other namespace is never
+    # looked up here (core/HostPort.ps1, "PID AND CWD CARRY A NAMESPACE").
     return (Invoke-HordeRead -What "the process table" -Read {
         $t = @{}
         foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, Name, CreationDate, CommandLine -ErrorAction Stop)) {
@@ -172,6 +174,7 @@ function Get-HordeHostContext {
     elseif ($InstanceAnswer.state -ne "known") { $verify = New-HordeUnknown -Reason ("the host instance is unknown (" + $InstanceAnswer.reason + "), so a stored handle cannot be verified") }
     elseif ($InstanceAnswer.value.running -eq 0) { $verify = New-HordeUnknown -Reason "no terminal instance is running, so a stored handle cannot be verified" }
     elseif ($InstanceAnswer.value.ambiguous) { $verify = New-HordeUnknown -Reason "the host instance is ambiguous, and an ambiguous instance trusts no stored handle" }
+    elseif (-not $InstanceAnswer.value.startedAtOffered) { $verify = New-HordeUnknown -Reason "the host does not offer instance.startedAt, so whether a record was written in this instance cannot be checked" }
     elseif ($null -eq $InstanceAnswer.value.startedAt) { $verify = New-HordeUnknown -Reason "the host did not say when its instance started, so whether a record was written in it cannot be checked" }
     return [pscustomobject]@{ handles = $HandlesAnswer; instance = $InstanceAnswer; live = $live; verify = $verify }
 }
@@ -220,6 +223,8 @@ function Get-HordePaneFileVerdicts {
     $bySession = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
     $findings = New-Object System.Collections.ArrayList
     if ($Context.verify.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("no pane-sessions file can be judged: " + $Context.verify.reason)) } }
+    # running counts instances - the namespaces handles are unique in - not server processes
+    # (core/HostPort.ps1), so a host with one server per session reports 1 here and its files are read.
     if ($Context.instance.value.running -gt 1) { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("" + $Context.instance.value.running + " host instances are running, and a pane-sessions file names no instance, so none can be attributed")) } }
     if ($PaneRead.complete.state -ne "known") { return [pscustomobject]@{ bySession = $bySession; findings = $findings.ToArray(); state = (New-HordeUnknown -Reason ("the pane-sessions listing is incomplete (" + $PaneRead.complete.reason + "), so no file can be shown to be the only one naming its session")) } }
     $liveFiles = New-Object System.Collections.ArrayList

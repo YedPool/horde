@@ -7,16 +7,48 @@
 # hosts/<name>/; until then tests pass a fake port and the reality check passes an unavailable one.
 #
 # WHAT A PORT ANSWERS, both through core/tristate so "could not ask" is never read as "none":
-#   Handles   the live handles, each { handle; window; tab; hostTitle } - handle and window as
-#             text, because a handle is opaque to the engine (D12: a terminal's pane id "is a host
-#             handle ... never a key"). wezfleet turned an unreadable pane list into an empty map
-#             (YedPool/wezfleet lib/Common.ps1:497-503) and census then printed "no live panes."
-#             for a mux it could not read (commands/census.ps1:10-11). Here that is unknown.
+#   Handles   the live handles, each { handle; window; tab; hostTitle } and optionally { pid; cwd;
+#             space } - handle and window as text, because a handle is opaque to the engine (D12: a
+#             terminal's pane id "is a host handle ... never a key"). wezfleet turned an unreadable
+#             pane list into an empty map (YedPool/wezfleet lib/Common.ps1:497-503) and census then
+#             printed "no live panes." for a mux it could not read (commands/census.ps1:10-11).
 #   Instance  { id; startedAt; running; ambiguous }: which host instance the handles belong to,
-#             when it started (a record written before then describes another instance's
-#             handle - YedPool/wezfleet 0e1c75a), how many instances are running, and whether
-#             the port cannot tell which one is meant. wezfleet's Get-WfCurrentInstance had the
-#             same four facts (lib/Common.ps1:539-595).
+#             when it started (a record written before then describes another instance's handle -
+#             YedPool/wezfleet 0e1c75a), how many instances are running, and whether the port
+#             cannot tell which one is meant (lib/Common.ps1:539-595 had the same four facts).
+#
+# THE CONTRACT AN ADAPTER KEEPS. Written before the second host, from research into three more
+# (planning/ledger/core-projection.md L-074 to L-081), while this port has one caller:
+#   CAPABILITIES ARE DECLARED, NEVER INFERRED. New-HordeHostPort takes a mandatory -Capabilities: for
+#     each name in $script:HordeHostCapabilityNames, yes, no, declined (the host could; the adapter
+#     refuses) or unverified. Core relies on a capability only when it is yes; unverified counts as
+#     no, never as an optimistic yes. One host cannot read its screen and another cannot send text,
+#     so asking for what a host lacks is an unknown with that reason, never a crash (D5).
+#   A HANDLE IS UNIQUE WITHIN ITS INSTANCE, and only there. A host whose native ids repeat inside one
+#     instance - one server per session, each numbering its panes from the start - composes the
+#     handle from both, <session>.<pane>, so no two live handles of one instance are the same text.
+#     A list with a repeated handle is unknown as a whole.
+#   RUNNING COUNTS INSTANCES - the namespaces handles are unique in - NOT SERVER PROCESSES. A host
+#     that runs one server per session reports its whole namespace as one instance; counting
+#     servers would read every user with two sessions as two instances, and the projection refuses
+#     every pane-sessions file while more than one instance runs.
+#   HANDLE TEXT IS PLAIN, and the mapping is the adapter's. A native id with a sigil (a leading %, @
+#     or $) fails the handle rule and makes the list unknown; the adapter maps each native id to
+#     plain text (for example %1 to p1) and back, one to one, so no $ reaches a reason string core
+#     builds, where PowerShell would try to expand it.
+#   THE ADAPTER BUILDS THE INSTANCE ID, from whatever names the running server, and the id must change
+#     when the server restarts: a host that reuses a socket name for its next server would otherwise
+#     hand a new instance's handles the old one's records.
+#   WINDOW AND TAB ARE THE FIRST HOST'S WORDS, kept because the restore plan uses them. A host maps its
+#     own levels onto them - a multiplexer's session onto window and its window onto tab; a host with
+#     windows and tabs maps them directly - and gives $null for a level it does not have.
+#   PID AND CWD CARRY A NAMESPACE. A row that gives a pid or cwd names its space: windows,
+#     wsl:<distro>, posix or synthetic. A multiplexer running inside a Linux subsystem returns that
+#     system's pids and paths. Core's process table is the windows one (CIM), so a pid or cwd from
+#     any other space is unknown, with the reason, and is never compared with it.
+#   A PANE'S OWN-ID VARIABLE IS A CAPABILITY (selfHandle), and propagating it is the adapter's job:
+#     each host names its own variable, and a host inside a subsystem must export it to the Windows
+#     processes it starts, or a child never sees it. core/Identity.ps1 still never falls back to it.
 #
 # A port is data plus two script blocks. The projection calls them through Invoke-HordeRead, so a
 # port that throws, writes an error or returns nothing is unknown with the reason, never empty.
@@ -24,23 +56,53 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 
+# The closed vocabulary of what a host may offer (the runtime verbs and facts of the terminal port;
+# layout capabilities belong to the layout port). A name outside it is refused, so a typo cannot
+# declare a capability nobody checks.
+$script:HordeHostCapabilityNames = @("list", "pid", "tty", "cwd", "title.read", "title.set", "text.read", "text.send",
+    "spawn", "spawn.env", "spawn.cwd", "kill", "focus", "selfHandle", "instance.startedAt")
+$script:HordeHostCapabilityStates = @("yes", "no", "declined", "unverified")
+# The namespace core's own process table lives in (Get-HordeProcessTable reads Win32_Process).
+$script:HordeLocalProcessSpace = "windows"
+
+function ConvertTo-HordeHostCapabilities {
+    # A declaration as a full table: every name, each yes, no, declined or unverified. A name that is
+    # not declared is no. Refuses anything else, loudly: a capability table is the adapter's code.
+    param($Capabilities)
+    if ($null -eq $Capabilities) { throw "-Capabilities must declare what the host offers: yes, no, declined or unverified per capability" }
+    $pairs = @()
+    if ($Capabilities -is [System.Collections.IDictionary]) { $pairs = @($Capabilities.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = "$($_.Key)"; Value = $_.Value } }) }
+    elseif ($Capabilities -is [System.Management.Automation.PSCustomObject]) { $pairs = @($Capabilities.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } }) }
+    else { throw "-Capabilities must be a hashtable or object of capability names to yes, no, declined or unverified" }
+    $table = @{}
+    foreach ($n in $script:HordeHostCapabilityNames) { $table[$n] = "no" }
+    foreach ($p in $pairs) {
+        if ($script:HordeHostCapabilityNames -cnotcontains $p.Name) { throw ("'" + $p.Name + "' is not a host capability; one of " + ($script:HordeHostCapabilityNames -join ", ")) }
+        if ($p.Value -isnot [string] -or $script:HordeHostCapabilityStates -cnotcontains $p.Value) { throw ("capability " + $p.Name + " must be yes, no, declined or unverified, not '" + $p.Value + "'") }
+        $table[$p.Name] = $p.Value
+    }
+    return $table
+}
+
 function New-HordeHostPort {
     # A host port. -Name is the host's own name, supplied by its adapter; core never spells one.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][AllowNull()]$Capabilities,
         [Parameter(Mandatory = $true)][scriptblock]$Handles,
         [Parameter(Mandatory = $true)][scriptblock]$Instance
     )
-    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = $Name; available = $true; reason = ""; handles = $Handles; instance = $Instance }
+    $table = ConvertTo-HordeHostCapabilities $Capabilities
+    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = $Name; available = $true; reason = ""; capabilities = $table; handles = $Handles; instance = $Instance }
 }
 
 function New-HordeUnavailableHostPort {
     # A port for a host that cannot be asked - no adapter attached yet, or the adapter cannot reach
-    # its terminal. Every answer through it is unknown with this reason, so a stored handle is never
-    # verified against it (the lead's decision 2, 2026-09-30).
+    # its terminal. It offers nothing, and every answer through it is unknown with this reason, so a
+    # stored handle is never verified against it (the lead's decision 2, 2026-09-30).
     param([Parameter(Mandatory = $true)][string]$Reason)
     if ("$Reason".Trim() -eq "") { throw "an unavailable host port needs a reason" }
-    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = ""; available = $false; reason = $Reason; handles = $null; instance = $null }
+    return [pscustomobject]@{ PSTypeName = "Horde.HostPort"; name = ""; available = $false; reason = $Reason; capabilities = (ConvertTo-HordeHostCapabilities @{}); handles = $null; instance = $null }
 }
 
 function Assert-HordeHostPort {
@@ -50,9 +112,26 @@ function Assert-HordeHostPort {
     }
 }
 
+function Test-HordeHostCapability {
+    # Does the host offer this? $true only for yes: no, declined and unverified all mean core must not
+    # rely on it. A name outside the vocabulary is a programming error and throws.
+    param($Port, [Parameter(Mandatory = $true)][string]$Name)
+    Assert-HordeHostPort $Port
+    if ($script:HordeHostCapabilityNames -cnotcontains $Name) { throw ("'" + $Name + "' is not a host capability") }
+    return ($Port.available -and "$($Port.capabilities[$Name])" -ceq "yes")
+}
+
+function Get-HordeHostCapabilityReason {
+    # Why core will not rely on a capability, for an unknown's reason.
+    param($Port, [string]$Name)
+    if (-not $Port.available) { return ("the host cannot be asked: " + $Port.reason) }
+    return ("the host does not offer " + $Name + " (it declares " + $Port.capabilities[$Name] + ", and only yes is relied on)")
+}
+
 function ConvertTo-HordeHandleText {
     # A handle or window id as text: "12" for 12 and for "12". Anything that is not a whole number
-    # or non-empty text is refused as $null, so a malformed id never becomes a key.
+    # or plain text of letters, digits and . _ : - is refused as $null, so a malformed id - or a
+    # native id with a sigil the adapter failed to map - never becomes a key.
     param($Value)
     if ($null -eq $Value) { return $null }
     if ($Value -is [int] -or $Value -is [long]) { if ($Value -lt 0) { return $null }; return ("" + $Value) }
@@ -61,13 +140,37 @@ function ConvertTo-HordeHandleText {
     return $null
 }
 
+function Read-HordeHandleNamespaced {
+    # A row's pid or cwd as an answer, in core's namespace only. Unknown when the host does not offer
+    # it, the row gives none, the row names no space, or the space is not core's: a pid from a Linux
+    # subsystem is a different process from the Windows pid with the same number, and is never
+    # compared with it.
+    param($Port, $Row, [string]$Field)
+    if (-not (Test-HordeHostCapability -Port $Port -Name $Field)) { return (New-HordeUnknown -Reason (Get-HordeHostCapabilityReason -Port $Port -Name $Field)) }
+    $v = Get-HordeField -Record $Row -Name $Field
+    if ($v.state -ne "known") { return (New-HordeUnknown -Reason ("the host gives no " + $Field + " for this handle")) }
+    $sp = Get-HordeField -Record $Row -Name "space"
+    if ($sp.state -ne "known" -or "$($sp.value)" -cnotmatch '^(windows|posix|synthetic|wsl:[A-Za-z0-9._-]{1,64})$') {
+        return (New-HordeUnknown -Reason ("the host gives a " + $Field + " with no namespace, so it cannot be placed"))
+    }
+    if ("$($sp.value)" -cne $script:HordeLocalProcessSpace) {
+        return (New-HordeUnknown -Reason ("the " + $Field + " is in namespace " + $sp.value + ", not " + $script:HordeLocalProcessSpace + " where core's process table lives, and is never compared across namespaces"))
+    }
+    if ($Field -eq "pid") {
+        if (($v.value -isnot [int] -and $v.value -isnot [long]) -or $v.value -le 0) { return (New-HordeUnknown -Reason "the host's pid is not a positive whole number") }
+        return (New-HordeKnown -Value ([int]$v.value))
+    }
+    if ($v.value -isnot [string] -or "$($v.value)".Trim() -eq "") { return (New-HordeUnknown -Reason "the host's cwd is not text") }
+    return (New-HordeKnown -Value "$($v.value)")
+}
+
 function Read-HordeHostHandles {
-    # The port's handle list as an answer: known @( { handle; window; tab; hostTitle } ), or unknown.
-    # A list with a malformed or repeated handle is unknown as a whole: one bad row makes it
-    # impossible to say which handles are live.
+    # The port's handle list as an answer: known @( { handle; window; tab; hostTitle; pid; cwd } ),
+    # pid and cwd each an answer, or unknown. A list with a malformed or repeated handle is unknown as
+    # a whole: one bad row makes it impossible to say which handles are live.
     param($Port)
     Assert-HordeHostPort $Port
-    if (-not $Port.available) { return (New-HordeUnknown -Reason ("the host cannot be asked: " + $Port.reason)) }
+    if (-not (Test-HordeHostCapability -Port $Port -Name "list")) { return (New-HordeUnknown -Reason (Get-HordeHostCapabilityReason -Port $Port -Name "list")) }
     # Flattened one level, so a port may return its rows plainly or as one list with the unary comma
     # (PowerShell 5.1 delivers the second as a single element holding the list).
     $got = Invoke-HordeRead -What "the host's live handles" -Read { return , @(& $Port.handles | ForEach-Object { $_ }) }
@@ -78,8 +181,8 @@ function Read-HordeHostHandles {
         $hf = Get-HordeField -Record $h -Name "handle"
         $id = $null
         if ($hf.state -eq "known") { $id = ConvertTo-HordeHandleText $hf.value }
-        if ($null -eq $id) { return (New-HordeUnknown -Reason "the host listed a handle that is not a well-formed id") }
-        if ($seen.ContainsKey($id)) { return (New-HordeUnknown -Reason ("the host listed handle " + $id + " twice")) }
+        if ($null -eq $id) { return (New-HordeUnknown -Reason "the host listed a handle that is not plain handle text; an adapter maps native ids to it") }
+        if ($seen.ContainsKey($id)) { return (New-HordeUnknown -Reason ("the host listed handle " + $id + " twice, and a handle must be unique within its instance")) }
         $seen[$id] = $true
         $wf = Get-HordeField -Record $h -Name "window"
         $tf = Get-HordeField -Record $h -Name "tab"
@@ -89,6 +192,8 @@ function Read-HordeHostHandles {
             window = $(if ($wf.state -eq "known") { ConvertTo-HordeHandleText $wf.value } else { $null })
             tab = $(if ($tf.state -eq "known") { ConvertTo-HordeHandleText $tf.value } else { $null })
             hostTitle = $(if ($tt.state -eq "known") { "$($tt.value)" } else { $null })
+            pid = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "pid")
+            cwd = (Read-HordeHandleNamespaced -Port $Port -Row $h -Field "cwd")
         })
     }
     return (New-HordeKnown -Value $rows.ToArray())
@@ -96,7 +201,8 @@ function Read-HordeHostHandles {
 
 function Read-HordeHostInstance {
     # The port's instance as an answer: known { id; startedAt; running; ambiguous }, or unknown.
-    # startedAt must be a UTC-placeable [datetime] or $null; running a whole number.
+    # startedAt is kept only when the host offers instance.startedAt, and must then be a placed
+    # [datetime]; running is a whole number of instances (see the contract above).
     param($Port)
     Assert-HordeHostPort $Port
     if (-not $Port.available) { return (New-HordeUnknown -Reason ("the host cannot be asked: " + $Port.reason)) }
@@ -112,13 +218,15 @@ function Read-HordeHostInstance {
     $idf = Get-HordeField -Record $v -Name "id"
     $id = $null
     if ($idf.state -eq "known") { $id = ConvertTo-HordeHandleText $idf.value }
-    $sf = Get-HordeField -Record $v -Name "startedAt"
     $started = $null
-    if ($sf.state -eq "known") {
-        if ($sf.value -isnot [datetime] -or $sf.value.Kind -eq [System.DateTimeKind]::Unspecified) {
-            return (New-HordeUnknown -Reason "the host gave an instance start time that is not a placed [datetime]")
+    if (Test-HordeHostCapability -Port $Port -Name "instance.startedAt") {
+        $sf = Get-HordeField -Record $v -Name "startedAt"
+        if ($sf.state -eq "known") {
+            if ($sf.value -isnot [datetime] -or $sf.value.Kind -eq [System.DateTimeKind]::Unspecified) {
+                return (New-HordeUnknown -Reason "the host gave an instance start time that is not a placed [datetime]")
+            }
+            $started = $sf.value.ToUniversalTime()
         }
-        $started = $sf.value.ToUniversalTime()
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ id = $id; startedAt = $started; running = [int]$run.value; ambiguous = $ambiguous }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ id = $id; startedAt = $started; running = [int]$run.value; ambiguous = $ambiguous; startedAtOffered = (Test-HordeHostCapability -Port $Port -Name "instance.startedAt") }))
 }
