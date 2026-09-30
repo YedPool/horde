@@ -48,6 +48,12 @@ Check ("$($pane.provisional)" -like "*no single wezfleet function*") "the order 
 # and read bare for projectCwd, transcriptPath and name (review finding 6).
 $x1Guard = "$($doc.stores.X1.guard)"
 Check ($x1Guard -like "*after this terminal instance started*" -and $x1Guard -like "*one wezterm-gui*" -and $x1Guard -like "*hijack*") "every read of the pane-sessions file carries one guard"
+# W2 LIKEWISE: the claim reader's TTL and cwd checks, and the hook's "only for a session with no
+# record", on every read of a claim (review finding 7). The claim carries owner, so owner reads it.
+$w2Guard = "$($doc.stores.W2.guard)"
+$ownerStores = @((Get-HordeOwnershipField -Doc $doc -Name "owner").read | ForEach-Object { "$($_.store)" })
+Check ($w2Guard -like "*10080 minutes*" -and $w2Guard -like "*cwd*" -and $w2Guard -like "*no registry record*") "every read of a spawn claim carries the claim reader's full guard"
+Check ($ownerStores -ccontains "W2") "owner, which a spawn claim carries, reads the claim"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"

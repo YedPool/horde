@@ -149,3 +149,8 @@ sources:
 - source: YedPool/wezfleet lib/Registry.ps1:215-217 "There were FIVE readers of that file ... each applying its own subset of the guards"; the guards at :229 (numeric pane), :247 (one wezterm-gui), :251 (well-formed session_id), :254 (written in this instance), and :672 (exactly one live match); lib/Protocol.ps1:422 adds that the transcript it names must exist. The first draft of this table repeated that mistake: guarded for sessionId and pane, bare for projectCwd, transcriptPath and name. Review finding 6, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "every read of the pane-sessions file carries one guard"
+
+### L-028 A spawn claim is read under the claim reader's full guard, for every field it carries
+- source: YedPool/wezfleet lib/Registry.ps1:1302 "if ($age -gt $script:WfClaimTtlMinutes) { return $null }" with :1235 "$script:WfClaimTtlMinutes = 10080", and :1305, the cwd must match; hooks/wf-registry-refresh.ps1:148-151, "if (-not $existing)" then "Read-WfPaneClaim -Pane $pane -Cwd $cwd" - a claim is read only for a session with no record, and is deleted when consumed (:168). The first draft guarded role only, and owner, which the claim carries (lib/Registry.ps1:1260), did not read it. Review finding 7, 2026-09-29. lib/Master.ps1:134 reads claims without a cwd to find a pending master; that is a role count, not a session's field, and is core-roles' concern.
+- disposition: test
+- where: test/test-ownership.ps1 :: "every read of a spawn claim carries the claim reader's full guard"
