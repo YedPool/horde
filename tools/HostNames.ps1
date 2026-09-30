@@ -56,7 +56,11 @@
 # SWAPPING ONE MENTION FOR ANOTHER IS STILL INVISIBLE. The count is a number per file, so deleting a
 # mention and adding a different one in the same file - a comment's citation traded for a call to the
 # terminal - leaves it unchanged. The ratchet catches growth, not substitution; a reviewer reading the
-# diff of an allowlisted file is what catches that.
+# diff of an allowlisted file is what catches that. KNOWN LIMITATION, recorded in the review of PR 34
+# and not fixed there: the harness allowlists made this larger, because they hold files with dozens of
+# mentions each (core/Identity.ps1 names one harness 72 times), and a new mention traded for a deleted
+# one in such a file is one line among many in its diff. Counting per line or per mention context
+# would close it; until then it is review's to catch.
 #
 # WHAT IS NOT SCANNED, by rule:
 #   - hosts/<name>/ itself: the one place the host's name belongs.
