@@ -26,6 +26,17 @@ function Get-HordeRoot { return (Split-Path -Parent $PSScriptRoot) }
 
 function Get-HordeCommandDir { return (Join-Path $PSScriptRoot "commands") }
 
+function Test-HordeCommandName {
+    # Whether a string is a well-formed command name: lowercase letters, digits and hyphens, starting
+    # with a letter. The ONE rule, used both for the name a file declares and for the name typed on
+    # the command line, so the two can never disagree.
+    #
+    # \A and \z, not ^ and $. In .NET, $ also matches before a final newline, so '^[a-z]+$' accepts
+    # "version`n" (review of PR #12, finding 8).
+    param([string]$Name)
+    return ($Name -cmatch '\A[a-z][a-z0-9-]*\z')
+}
+
 function Get-HordeConstantString {
     # The string a hashtable value is, if it is a plain constant; otherwise $null.
     param($ValueAst)
@@ -111,7 +122,7 @@ function Read-HordeCommandAst {
     if ($info.Contains("name") -and "$($info["name"])" -cne $base) {
         [void]$findings.Add("declares name '" + $info["name"] + "' but the file is " + $base + ".ps1; the file name is the command name")
     }
-    if ($info.Contains("name") -and "$($info["name"])" -cnotmatch '^[a-z][a-z0-9-]*$') {
+    if ($info.Contains("name") -and -not (Test-HordeCommandName -Name "$($info["name"])")) {
         [void]$findings.Add("name '" + $info["name"] + "' is not lowercase letters, digits and hyphens")
     }
     if ($info.Contains("group") -and -not $script:HordeCommandGroups.Contains("$($info["group"])")) {
@@ -143,7 +154,7 @@ function Get-HordeCommandFile {
     # The file for one command name, or $null. The name is checked BEFORE it touches a path, so
     # "..\something" cannot reach a file outside the commands folder.
     param([string]$Name, [string]$Dir = (Get-HordeCommandDir))
-    if ($Name -cnotmatch '^[a-z][a-z0-9-]*$') { return $null }
+    if (-not (Test-HordeCommandName -Name $Name)) { return $null }
     $p = Join-Path $Dir ($Name + ".ps1")
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
     return $p
