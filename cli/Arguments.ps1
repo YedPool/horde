@@ -14,18 +14,25 @@
 #
 # FROM A SCRIPT, THE COLON IS GONE, and nothing in $args says it was ever there: "-Count:5" and
 # "-Count 5" arrive identical, which is harmless, but so do "-Json:$false" and "-Json $false", which
-# is not. So an argument that is exactly the WORD "$true" or "$false" - a [string], never the [bool]
-# a typed $false is - is refused with exit 2, saying why. It can only have come from a script, where
-# it almost certainly meant a switch's value, and horde does not guess which parameter it was for.
+# is not. So an argument that is exactly the WORD "$true", "$false" or "$null", in any case - a
+# [string], never the value a typed $false is - is refused with exit 2, saying why. It can only have
+# come from a script, where it almost certainly meant a value, and horde does not guess which
+# parameter it was for. "$null" joined them in the third review of PR #12 (finding 4): from a
+# script `-Verb:$null x` bound verb=[$null] target=[x], the literal text, exit 0.
 #
 # A SWITCH FOLLOWED BY A TRUTH WORD IS REFUSED TOO. From a script "-Json:false" arrives as "-Json"
 # "false", the same as "-Json false", and bound json=True target=[false] with exit 0 (measured
 # 2026-09-29). The word "false" is also a perfectly good positional value, so the word alone cannot
 # be refused as "$false" is. What horde can know is which parameters are switches - the registry
 # reads them from the run block's param AST without running it - so a switch followed IMMEDIATELY by
-# an untagged word that is true, false, $true or $false, in any case, exits 2: the user is told to
-# omit the switch, give it bare, or put the word before it. Typed, "-Json false" arrives the same way
-# and is refused the same way; typed "-Json:false" keeps the colon and is PowerShell's to refuse.
+# an untagged word that is true, false, $true, $false, 0, 1, yes, no, on or off, in any case, exits
+# 2: the user is told to omit the switch, give it bare, or put the word before it. The third review
+# of PR #12 (finding 4) measured -Json:0, :1, :no and :off from a script binding json=True and the
+# word as the target, exit 0; typed, PowerShell refuses each of them, so a caller cannot have meant
+# a positional by them either way. Typed, "-Json false" arrives the same way and is refused the same
+# way; typed "-Json:false" keeps the colon and is PowerShell's to refuse. Typed "-Json 0" is NOT
+# refused: there 0 arrives as a number, which only PowerShell's own parsing makes, so it is a
+# positional as the line says.
 #
 # A SWITCH FOLLOWED BY A TRUTH VALUE IS REFUSED. Typed or in-process, `-Json $false` arrives as the
 # tagged switch and a [bool] - not a word - and PowerShell binds it as the switch ON and $false an
@@ -35,7 +42,9 @@
 #
 # WHAT IS STILL NOT CAUGHT, measured 2026-09-29, from a script: "-Json:" with nothing after it
 # arrives as nothing, or swallows the next word ("-Json: -Count 5" delivers -Json, then the words
-# "-Count" and "5"). It leaves no trace in $args.
+# "-Count" and "5"). It leaves no trace in $args. And a switch's colon value outside the words above
+# - "-Json:2", "-Json:y", "-Json:$x" - arrives exactly as the switch and an argument would, and binds
+# that way (measured 2026-09-30: json=True target=[2], [y] and [$x], exit 0).
 #
 # "--" IS REFUSED WHEREVER IT ARRIVES. Typed, PowerShell consumes it before horde runs and what
 # follows is plain words, so horde never sees it. From a script it arrives as an argument, and a
@@ -93,16 +102,16 @@ function Resolve-HordeArguments {
             if ($j + 1 -ge $items.Count) { return (& $fail ("parameter " + $item + " needs a value after the colon")) }
             if ($named.ContainsKey($pname)) { return (& $fail ("parameter -" + $pname + " is given more than once")) }
             $value = $items[$j + 1]
-            if ($value -is [string] -and ($value -ieq '$true' -or $value -ieq '$false')) {
+            if (Test-HordeTextValue -Item $value) {
                 # Typed as the quoted text '$false': still a word, not a truth value.
-                return (& $fail (Get-HordeTextBoolProblem -Text $value))
+                return (& $fail (Get-HordeTextValueProblem -Text $value))
             }
             $named[$pname] = $value
             $j++
             continue
         }
-        if ($item -is [string] -and ($item -ieq '$true' -or $item -ieq '$false')) {
-            return (& $fail (Get-HordeTextBoolProblem -Text $item))
+        if (Test-HordeTextValue -Item $item) {
+            return (& $fail (Get-HordeTextValueProblem -Text $item))
         }
         if ($pname -and $j + 1 -lt $items.Count) {
             $next = $items[$j + 1]
@@ -115,7 +124,7 @@ function Resolve-HordeArguments {
             }
             # No separate "is it untagged" test: a tagged item's text starts with "-", so it never
             # matches the pattern, and a check that cannot change the outcome is one no test can hold.
-            if ($next -is [string] -and $next -imatch '\A\$?(true|false)\z' -and
+            if ($next -is [string] -and $next -imatch '\A(\$?(true|false)|[01]|yes|no|on|off)\z' -and
                 (Get-HordeParameterKind -Name $pname -Parameters $Parameters) -eq "switch") {
                 return (& $fail (Get-HordeSwitchWordProblem -Switch "$item" -Word $next))
             }
@@ -205,10 +214,16 @@ function Get-HordeSwitchBoolProblem {
         "comes before the switch if it is an argument")
 }
 
-function Get-HordeTextBoolProblem {
-    # The message for an argument that is the word "$true" or "$false" rather than the value.
+function Test-HordeTextValue {
+    # Whether an item is the WORD "$true", "$false" or "$null", in any case - text, never the value.
+    param($Item)
+    return ($Item -is [string] -and @('$true', '$false', '$null') -contains $Item)
+}
+
+function Get-HordeTextValueProblem {
+    # The message for an argument that is the word "$true", "$false" or "$null" rather than the value.
     param([string]$Text)
     return ("the argument '" + $Text + "' arrived as text, not as " + $Text + ": run as a script (powershell -File), " +
         "PowerShell drops the colon from -Name:" + $Text + " and passes the value as a word, so horde cannot tell which " +
-        "parameter it was for. Leave the switch out to keep it off, or give it bare to turn it on")
+        "parameter it was for. Leave the parameter out, or give a switch bare to turn it on")
 }

@@ -308,7 +308,8 @@ try {
     # true, false, $true or $false in any case exits 2 instead of guessing (see cli\Arguments.ps1).
     $switchWords = @(
         @("-Json:false"), @("-Json", "false"), @("-Json:TRUE"), @("-json", "False"),
-        @("-J", "false"), @("abc", "-Json", "true"), @("-Verbose", "false"))
+        @("-J", "false"), @("abc", "-Json", "true"), @("-Verbose", "false"),
+        @("-Json:0"), @("-Json:1"), @("-Json:no"), @("-Json:OFF"), @("-Json:Yes"), @("-Json", "on"))
     foreach ($w in $switchWords) {
         $r = Invoke-Horde -Root $tmp -Arguments (@("echo-args") + $w)
         Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*is followed by the word*omit the switch*" -and $r.err -like "*usage: horde echo-args*") ("a switch followed by a truth word from a script is refused, never bound as two arguments" + ": " + ($w -join " ") + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
@@ -317,6 +318,34 @@ try {
     # refused the same way; a colon value typed keeps its own handling above.
     $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "false") -AsTyped
     Check ($r.code -eq 2 -and $r.err -like "*is followed by the word*") ("a switch followed by a truth word is refused typed at a prompt too (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # 0, 1, yes, no, on and off are truth words too: from a script -Json:0, :1, :no and :off bound
+    # json=True and the word as the target, exit 0 (third review of PR #12, finding 4). Typed, the
+    # colon forms are PowerShell's to refuse, and the space form is refused like "false".
+    foreach ($w in @("-Json:0", "-Json:no")) {
+        $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", $w) -AsTyped
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*usage: horde echo-args*") ("a truth word joined to a switch by a colon is refused, typed at a prompt: " + $w + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "no") -AsTyped
+    Check ($r.code -eq 2 -and $r.err -like "*is followed by the word 'no'*") ("a switch followed by a truth word is refused typed at a prompt too: -Json no (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # CONTROLS. In-process (and typed unquoted), 0 after a switch arrives as a NUMBER, which only
+    # PowerShell's own parsing makes, so it is a positional. From a script, a word outside the set is
+    # a positional too.
+    $r = Invoke-HordeInProcess -Root $tmp -Code '& $horde echo-args -Json 0'
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[0] json=True count=0 verb=[]") ("a number after a switch is a positional, in-process (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Json", "2")
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[2] json=True count=0 verb=[]") ("a word after a switch that is not a truth word is a positional, from a script: -Json 2 (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # THE WORD "$null" IS TEXT, LIKE "$false". From a script `-Verb:$null x` arrives as "-Verb", the
+    # word "$null" and "x", and bound verb=[$null] target=[x], exit 0; -Json:$null bound json=True
+    # target=[$null] (third review of PR #12, finding 4). Refused, as "$false" is.
+    foreach ($w in @(@('-Json:$null'), @('-Verb:$null', "x"), @('-VERB:$NULL', "x"))) {
+        $r = Invoke-Horde -Root $tmp -Arguments (@("echo-args") + $w)
+        Check ($r.code -eq 2 -and $r.out.Trim() -eq "" -and $r.err -like "*arrived as text*" -and $r.err -like "*usage: horde echo-args*") ("the word `$null is refused as text, never bound as a value, from a script: " + ($w -join " ") + " (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    }
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", "-Verb:'`$null'", "x") -AsTyped
+    Check ($r.code -eq 2 -and $r.err -like "*arrived as text*") ("the quoted text '`$null' joined by a colon is refused as text, typed at a prompt (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    # CONTROL: typed, -Json:$null is the value $null, which PowerShell binds as the switch off.
+    $r = Invoke-Horde -Root $tmp -Arguments @("echo-args", '-Json:$null', "abc") -AsTyped
+    Check ($r.code -eq 0 -and $r.out.Trim() -eq "target=[abc] json=False count=0 verb=[]") ("typed, the value `$null joined to a switch leaves it off (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
     # A SWITCH FOLLOWED BY A TRUTH VALUE, not a word: typed or in-process, `-Json $false` arrives as
     # the tagged switch and a [bool], and bound json=True target=[False] with exit 0 - the switch ON,
     # when the caller almost certainly meant it off (third review of PR #12, finding 3). Refused.

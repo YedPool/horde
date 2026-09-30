@@ -13,11 +13,17 @@
            Replace = 'if ($false) {' }
         # The word "$true" or "$false" is refused wherever it arrives.
         @{ Name = "quoted-colon-text-bool-accepted"
-           Find = 'if ($value -is [string] -and ($value -ieq ''$true'' -or $value -ieq ''$false'')) {'
+           Find = 'if (Test-HordeTextValue -Item $value) {'
            Replace = 'if ($false) {' }
         @{ Name = "positional-text-bool-accepted"
-           Find = 'if ($item -is [string] -and ($item -ieq ''$true'' -or $item -ieq ''$false'')) {'
+           Find = 'if (Test-HordeTextValue -Item $item) {'
            Replace = 'if ($false) {' }
+        @{ Name = "text-null-accepted"
+           Find = '@(''$true'', ''$false'', ''$null'') -contains $Item'
+           Replace = '@(''$true'', ''$false'') -contains $Item' }
+        @{ Name = "text-value-case-sensitive"
+           Find = '@(''$true'', ''$false'', ''$null'') -contains $Item'
+           Replace = '@(''$true'', ''$false'', ''$null'') -ccontains $Item' }
         # "--".
         @{ Name = "double-dash-accepted"
            Find = 'if ("$item" -ceq "--") {'
@@ -27,11 +33,20 @@
            Find = 'if ($pname -and $j + 1 -lt $items.Count) {'
            Replace = 'if ($false) {' }
         @{ Name = "switch-word-needs-dollar"
-           Find = '-imatch ''\A\$?(true|false)\z'''
-           Replace = '-imatch ''\A\$(true|false)\z''' }
+           Find = '\A(\$?(true|false)|'
+           Replace = '\A(\$(true|false)|' }
         @{ Name = "switch-word-case-sensitive"
-           Find = '-imatch ''\A\$?(true|false)\z'''
-           Replace = '-cmatch ''\A\$?(true|false)\z''' }
+           Find = '-imatch ''\A(\$?(true|false)|[01]|yes|no|on|off)\z'''
+           Replace = '-cmatch ''\A(\$?(true|false)|[01]|yes|no|on|off)\z''' }
+        @{ Name = "switch-word-forgets-digits"
+           Find = '(true|false)|[01]|yes'
+           Replace = '(true|false)|yes' }
+        @{ Name = "switch-word-forgets-yes-no"
+           Find = '|yes|no|'
+           Replace = '|' }
+        @{ Name = "switch-word-forgets-on-off"
+           Find = '|on|off)'
+           Replace = ')' }
         # A switch followed by a [bool].
         @{ Name = "switch-bool-accepted"
            Find = 'if ($next -is [bool] -and'
