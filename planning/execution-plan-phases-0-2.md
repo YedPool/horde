@@ -44,3 +44,13 @@ E. Phase 2: the read model
     value type per field, the same as `schema/session-record.v1`'s for a field the engine stores.
 15. Battle test (D11): the Warchief runs `horde status` beside `wezfleet status` and logs every
     disagreement. MILESTONE 2: reported.
+
+## Recorded along the way (2026-09-30)
+
+- The engine's stored session record gets its one writer in Phase 3 (migration-plan step 3.8):
+  the first Horde command that sets role, parent or label owns it.
+- Open follow-ups in core/Schema.ps1, from the reviews of PRs #15 and #17: a `$ref` given as a
+  non-string is followed rather than refused; definitions nothing refers to are never checked;
+  the recursion depth limits (about 47 levels through ConvertFrom-Json, about 100 built in
+  PowerShell) are not stated in the header; a `minimum` keyword would let the schema itself
+  refuse a negative labelCycle.

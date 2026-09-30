@@ -70,3 +70,20 @@ list returns the matching items rather than a boolean.
 
 **Rule:** Check refuses any condition that is not exactly true or false, and helpers discard their
 blocks' output (`$null = & $Block`).
+
+## A background run started with & tells nobody when it ends
+
+Twice on 2026-09-30 a mutation run was started with a shell `&` inside an ordinary command. Nothing
+tracks such a process, so nothing reports when it finishes; a tracked watcher had to be added after
+the fact each time.
+
+**Rule:** long runs go through the tool's own background mechanism, with an exit marker written to
+the log. Never `&` inside a foreground command.
+
+## Agents sharing one scratch folder can delete each other's evidence
+
+A gate's mutation log vanished before it was read: another agent cleaning up the shared scratch
+folder removed it, and the result had to be rerun. A missing log is an unknown result, not a pass.
+
+**Rule:** every run writes its log under a name no other run uses, and a result is read from the
+log it came from - never inferred from a command's exit code alone.
