@@ -34,7 +34,16 @@ Check (Throws { Test-HordeSchema -Value $oneKey -Schema $false } "the schema at 
 Check (Throws { Test-HordeSchema -Value $oneKey -Schema ([pscustomobject]@{ properties = [pscustomobject]@{ a = $true } }) } "the schema at $.a is not an object") "a boolean schema under properties is refused"
 Check (Throws { Test-HordeSchema -Value 1 -Schema "integer" } "the schema at $ is not an object") "a schema that is a string is refused"
 Check (@(Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ "x-note" = "anything" })).Count -eq 0) "x- keys are documentation and are ignored"
-Check (@(Test-HordeSchema -Value "a" -Schema ([pscustomobject]@{ enum = @("A") })).Count -eq 1) "enum compares strings case-sensitively"
+Check (Has (Test-HordeSchema -Value "a" -Schema ([pscustomobject]@{ enum = @("A") })) "$ is 'a', not one of: A") "enum compares strings case-sensitively"
+Check (@(Test-HordeSchema -Value "b" -Schema ([pscustomobject]@{ enum = @("a", "b") })).Count -eq 0) "CONTROL: a string the enum names is accepted"
+Check (Has (Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @("1") })) "$ is '1', not one of: 1") "a number is not the string of its digits"
+# ENUM HOLDS STRINGS ONLY. The first version compared other values as text: $null threw, 1 and 1.0
+# differed, and objects were compared by their string form (review of PR #15). Horde's schemas need
+# only string enums, so anything else is refused - even when the value's type already failed.
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings") "a null in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1) }) } "enum at $ may hold only strings") "a number in an enum is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings") "an object in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @(1) }) } "enum at $ may hold only strings") "a bad enum is refused even when the value fails its type first"
 Check (@(Test-HordeSchema -Value ([pscustomobject]@{ a = 1; b = 2 }) -Schema ([pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }; additionalProperties = $false })).Count -eq 1) "additionalProperties false refuses a key the schema does not name"
 Check (@(Test-HordeSchema -Value @(1, "x") -Schema ([pscustomobject]@{ type = "array"; items = [pscustomobject]@{ type = "integer" } })).Count -eq 1) "items checks every element of an array"
 Check (Throws { Get-HordeSchema -Name "..\core\Schema" } "not a schema name") "a schema name cannot reach a file outside the schema folder"

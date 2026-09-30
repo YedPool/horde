@@ -10,8 +10,14 @@
            Find = 'if (-not (Test-HordeSchemaType -Value $Value -Type "$($kw[''type''])")) {'
            Replace = 'if ($false) {' }
         @{ Name = "enum-ignores-case"
-           Find = 'if ($Value -ceq $e) { $ok = $true }'
-           Replace = 'if ($Value -eq $e) { $ok = $true }' }
+           Find = 'if ($Value -is [string] -and $Value -ceq $e) { $ok = $true }'
+           Replace = 'if ($Value -is [string] -and $Value -eq $e) { $ok = $true }' }
+        @{ Name = "enum-matches-non-string"
+           Find = 'if ($Value -is [string] -and $Value -ceq $e) { $ok = $true }'
+           Replace = 'if ("$Value" -ceq $e) { $ok = $true }' }
+        @{ Name = "enum-accepts-non-string-values"
+           Find = 'if ($e -isnot [string]) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "enum-not-checked"
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
            Replace = 'if ($false) { [void]$findings.Add($Path + " is ''' }

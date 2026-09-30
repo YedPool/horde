@@ -87,6 +87,12 @@ function Test-HordeSchema {
     if ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -isnot [bool]) {
         throw ("additionalProperties at " + $Path + " must be true or false; a schema there is not implemented")
     }
+    # ENUM HOLDS STRINGS ONLY, checked before the value is looked at so a bad schema is refused whatever
+    # the value. The first version compared other values as text: a null threw, 1 and 1.0 differed, and
+    # objects matched by their string form (review of PR #15). Horde's schemas need string enums only.
+    if ($kw.ContainsKey("enum")) {
+        foreach ($e in @($kw["enum"])) { if ($e -isnot [string]) { throw ("enum at " + $Path + " may hold only strings; '" + $e + "' is not one") } }
+    }
     if ($kw.ContainsKey("type")) {
         if (-not (Test-HordeSchemaType -Value $Value -Type "$($kw['type'])")) {
             [void]$findings.Add($Path + " should be " + $kw["type"])
@@ -95,7 +101,7 @@ function Test-HordeSchema {
     }
     if ($kw.ContainsKey("enum")) {
         $ok = $false
-        foreach ($e in @($kw["enum"])) { if ($Value -is [string] -and $e -is [string]) { if ($Value -ceq $e) { $ok = $true } } elseif ("$Value" -eq "$e" -and $Value.GetType() -eq $e.GetType()) { $ok = $true } }
+        foreach ($e in @($kw["enum"])) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
