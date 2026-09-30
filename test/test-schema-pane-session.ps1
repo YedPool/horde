@@ -43,13 +43,19 @@ Check ((-not $xThrew) -and $xFound.Count -eq 0) "x- keys are documentation and a
 Check (Has (Test-HordeSchema -Value "a" -Schema ([pscustomobject]@{ enum = @("A") })) "$ is 'a', not one of: A") "enum compares strings case-sensitively"
 Check (@(Test-HordeSchema -Value "b" -Schema ([pscustomobject]@{ enum = @("a", "b") })).Count -eq 0) "CONTROL: a string the enum names is accepted"
 Check (Has (Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @("1") })) "$ is '1', not one of: 1") "a number is not the string of its digits"
-# ENUM HOLDS STRINGS ONLY. The first version compared other values as text: $null threw, 1 and 1.0
-# differed, and objects were compared by their string form (review of PR #15). Horde's schemas need
-# only string enums, so anything else is refused - even when the value's type already failed.
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings") "a null in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1) }) } "enum at $ may hold only strings") "a number in an enum is refused"
-Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings") "an object in an enum is refused"
-Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @(1) }) } "enum at $ may hold only strings") "a bad enum is refused even when the value fails its type first"
+# ENUM HOLDS STRINGS AND WHOLE NUMBERS ONLY. The first version compared other values as text: $null
+# threw, 1 and 1.0 differed, and objects were compared by their string form (review of PR #15). Whole
+# numbers are needed for schemaVersion; anything else is refused - even when the value's type already
+# failed.
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a null in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @(1.5) }) } "enum at $ may hold only strings and whole numbers") "a fraction in an enum is refused"
+Check (Throws { Test-HordeSchema -Value "x" -Schema ([pscustomobject]@{ enum = @([pscustomobject]@{ a = 1 }) }) } "enum at $ may hold only strings and whole numbers") "an object in an enum is refused"
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ type = "string"; enum = @($null) }) } "enum at $ may hold only strings and whole numbers") "a bad enum is refused even when the value fails its type first"
+$one = [pscustomobject]@{ enum = @(1) }
+Check (@(Test-HordeSchema -Value 1 -Schema $one).Count -eq 0) "a whole-number enum accepts that number"
+Check (@(Test-HordeSchema -Value ([decimal]1.0) -Schema $one).Count -eq 0) "and accepts it written as 1.0, which PowerShell reads as a decimal"
+Check (Has (Test-HordeSchema -Value "1" -Schema $one) "$ is '1', not one of: 1") "but not the string of its digits"
+Check (Has (Test-HordeSchema -Value 2 -Schema $one) "$ is '2', not one of: 1") "and not another number"
 $twoKeys = [pscustomobject]@{ a = 1; b = 2 }
 $aOnly = [pscustomobject]@{ a = [pscustomobject]@{ type = "integer" } }
 Check (Has (Test-HordeSchema -Value $twoKeys -Schema ([pscustomobject]@{ type = "object"; properties = $aOnly; additionalProperties = $false })) "$ has 'b', which the schema does not allow") "additionalProperties false refuses a key the schema does not name"
@@ -144,6 +150,40 @@ foreach ($t in @("1.0", "1e3", "99999999999999999999")) {
 }
 Check (Has (Test-HordeSchema -Value (Read-JsonNumber "1.5") -Schema $intSchema) '$ should be integer') "1.5 is not an integer"
 Check (Has (Test-HordeSchema -Value 1.5 -Schema $intSchema) '$ should be integer') "a Double with a fraction is not an integer"
+# A VALUE BEYOND DECIMAL'S RANGE IS A FINDING, NEVER A CRASH. 5.1's ConvertFrom-Json reads 1e30 and
+# 79228162514264337593543950336 (2^96, one past Decimal.MaxValue) as whole-number Doubles, and the
+# first comparison converted every whole number to Decimal, so both threw instead of being refused
+# (second review of PR #16; measured 2026-09-30: [decimal] of either throws). The call is caught
+# here so the check FAILS rather than crashes, which tools/Mutate.ps1 would not count as caught.
+function Enum-Findings {
+    param($Value, $Schema)
+    try { return ,@(Test-HordeSchema -Value $Value -Schema $Schema) } catch { return ,@("THREW: " + $_.Exception.Message) }
+}
+Check ((Read-JsonNumber "1e30") -is [double] -and (Read-JsonNumber "79228162514264337593543950336") -is [double]) "CONTROL: 5.1 parses 1e30 and 2^96 as Double"
+foreach ($t in @("1e30", "-1e30", "79228162514264337593543950336")) {
+    $found = Enum-Findings (Read-JsonNumber $t) $one
+    Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a whole number beyond Decimal's range, " + $t + ", is refused by enum [1], not thrown on (" + ($found -join "; ") + ")")
+}
+# THE GUARD IS "IS AN INTEGER", NOT "IS NOT A STRING". PowerShell converts $true to 1, so a looser
+# guard accepted $true for enum [1]; a one-element array is not a number at all.
+$found = Enum-Findings $true $one
+Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''True'', not one of: 1') ("true is not the whole number 1 (" + ($found -join "; ") + ")")
+$found = Enum-Findings (,@(1)) $one
+Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a list holding 1 is not the whole number 1 (" + ($found -join "; ") + ")")
+# EVERY INTEGER TYPE Test-HordeSchemaType ACCEPTS IS ACCEPTED HERE TOO, including Int16 and Byte,
+# which the "number" type does not list.
+foreach ($v in @([int16]1, [byte]1, [long]1)) {
+    $found = Enum-Findings $v $one
+    Check ($found.Count -eq 0) ("a whole-number enum accepts 1 held as " + $v.GetType().Name + " (" + ($found -join "; ") + ")")
+}
+# AN ENUM MEMBER MAY BE Int32 OR Int64, the two types ConvertFrom-Json gives a whole number in range.
+$longOne = [pscustomobject]@{ enum = @([long]1) }
+$found = Enum-Findings 1 $longOne
+Check ($found.Count -eq 0) ("an Int64 enum member is accepted and matches 1 (" + ($found -join "; ") + ")")
+# An Int16 or Byte MEMBER is refused, on purpose: no schema file can produce one, since ConvertFrom-Json
+# gives Int32, Int64, Decimal or Double, and a refusal is a loud error at the schema, never a silent
+# wrong answer about a value.
+Check (Throws { Test-HordeSchema -Value 1 -Schema ([pscustomobject]@{ enum = @([int16]1) }) } "enum at $ may hold only") "an Int16 enum member is refused: no schema file can hold one"
 # A value built in PowerShell may hold a list as an ArrayList rather than an array.
 $listSchema = [pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ list = [pscustomobject]@{ type = "array"; items = $intSchema } } }
 Check (@(Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, 2) } -Schema $listSchema).Count -eq 0) "an ArrayList is an array"

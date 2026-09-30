@@ -242,8 +242,10 @@ function Test-HordeOwnership {
 
     # EVERY FIELD ACCOUNTED FOR. Without a list of what must be there, an empty table passed and a
     # deleted field was invisible (review finding 2, 2026-09-29): every check above runs per field,
-    # so a field that is not there is never checked. The list lives in the JSON until
-    # schema/session-record.v1 exists (migration plan step 1.2), and then that schema is the list.
+    # so a field that is not there is never checked. The list is `required` in core/ownership.json,
+    # and it stays there: schema/session-record.v1 is only the record the ENGINE stores - the
+    # engine's own fields that are not derived - so it cannot be the list of every field. The
+    # schema that answers for every field is session-view, deferred to migration plan step 2.3.
     # A field is accounted for by being in `fields` (kept, with an owner and a read rule) or in
     # `dropped` (not carried into Horde, with the reason) - never both, never neither.
     $droppedNames = New-Object System.Collections.ArrayList
