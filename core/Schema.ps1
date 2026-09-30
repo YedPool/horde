@@ -43,6 +43,30 @@ function Get-HordeObjectProps {
     return @($Value.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } })
 }
 
+function ConvertTo-HordeSchemaPattern {
+    # A JSON Schema pattern is an ECMA-262 regular expression; .NET's dialect differs where it matters
+    # here. .NET's $ also matches just before a final newline, so "<uuid>`n" matched the session_id
+    # pattern (review of PR #15; measured on 5.1: [regex]::IsMatch("ab`n", '^ab$') is True). An
+    # unescaped $ outside a character class is rewritten to \z, end of input only. The caller also
+    # passes RegexOptions.ECMAScript, which makes \d and \w ASCII-only as ECMA-262 has them.
+    param([string]$Pattern)
+    $sb = New-Object System.Text.StringBuilder
+    $inClass = $false
+    for ($i = 0; $i -lt $Pattern.Length; $i++) {
+        $c = $Pattern[$i]
+        if ($c -ceq '\') {
+            [void]$sb.Append($c)
+            if ($i + 1 -lt $Pattern.Length) { $i++; [void]$sb.Append($Pattern[$i]) }
+            continue
+        }
+        if ($inClass) { if ($c -ceq ']') { $inClass = $false } }
+        elseif ($c -ceq '[') { $inClass = $true }
+        elseif ($c -ceq '$') { [void]$sb.Append('\z'); continue }
+        [void]$sb.Append($c)
+    }
+    return $sb.ToString()
+}
+
 function Test-HordeSchema {
     param($Value, $Schema, [string]$Path = '$')
     $findings = New-Object System.Collections.ArrayList
@@ -64,7 +88,8 @@ function Test-HordeSchema {
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {
-        if ($Value -cnotmatch "$($kw['pattern'])") { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
+        $re = ConvertTo-HordeSchemaPattern -Pattern "$($kw['pattern'])"
+        if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) { [void]$findings.Add($Path + " does not match " + $kw["pattern"]) }
     }
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     if ($isObject) {

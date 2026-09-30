@@ -45,6 +45,22 @@ Check (Has (Test-HordeSchema -Value @{ A = 1 } -Schema $exactSchema) "$ has no '
 Check (Throws { '{"a":1,"A":2}' | ConvertFrom-Json } "duplicated keys") "CONTROL: ConvertFrom-Json refuses keys differing only in case, so no file can carry both"
 
 Write-Host ""
+Write-Host "--- a pattern means what it means in JSON Schema (ECMA-262), not in .NET ---" -ForegroundColor Cyan
+
+# In .NET, $ also matches before a final newline, so "<uuid>`n" matched the session_id pattern; and
+# .NET's \d and \w match non-ASCII digits and letters, where ECMA-262's do not. MEASURED 2026-09-29 on
+# 5.1: [regex]::IsMatch("ab`n", '^ab$') is True, with '^ab\z' False; '^\d$' matches U+0663 without
+# RegexOptions.ECMAScript and not with it.
+Check ((ConvertTo-HordeSchemaPattern '^a$') -ceq '^a\z') "an end-of-input dollar becomes \z"
+Check ((ConvertTo-HordeSchemaPattern '^a\$$') -ceq '^a\$\z') "an escaped dollar stays a literal dollar"
+Check ((ConvertTo-HordeSchemaPattern '^[$\]]$') -ceq '^[$\]]\z') "a dollar inside a character class stays a literal dollar"
+$uuidOnly = [pscustomobject]@{ type = "string"; pattern = '^[0-9a-f]+$' }
+Check (Has (Test-HordeSchema -Value "abc`n" -Schema $uuidOnly) '$ does not match*') "a trailing newline does not satisfy a pattern ending in $"
+Check (Has (Test-HordeSchema -Value "ABC" -Schema $uuidOnly) '$ does not match*') "a pattern is case-sensitive"
+Check (Has (Test-HordeSchema -Value ([string][char]0x0663) -Schema ([pscustomobject]@{ pattern = '^\d$' })) '$ does not match*') "\d matches ASCII digits only, as in ECMA-262"
+Check (@(Test-HordeSchema -Value "abc" -Schema $uuidOnly).Count -eq 0) "CONTROL: a string the pattern describes still matches"
+
+Write-Host ""
 Write-Host "--- every shape the census found is valid ---" -ForegroundColor Cyan
 $valid = @(Get-ChildItem -LiteralPath (Join-Path $fx "valid") -Filter *.json -File)
 Check ($valid.Count -ge 6) ("CONTROL: the valid fixtures are there (" + $valid.Count + ")")
@@ -59,6 +75,7 @@ function Says { param([string]$Rel, [string]$Like) return (@(Findings (Read-Fixt
 Check (Says "invalid\no-session-id.json" '*has no ''session_id''*') "a file with no session id is invalid"
 Check (Says "invalid\uppercase-session-id.json" '*has no ''session_id''*') "a file whose only id is SESSION_ID is invalid: resurrect's Lua looks up session_id case-sensitively"
 Check (Says "invalid\bad-session-id.json" '*.session_id does not match*') "a session id that is not a UUID is invalid, as wezfleet's reader refuses it"
+Check (Says "invalid\session-id-trailing-newline.json" '*.session_id does not match*') "a session id with a trailing newline is invalid"
 Check (Says "invalid\wrong-event.json" '*.hook_event_name is*not one of*') "a file from any hook but SessionStart is invalid"
 Check (Says "invalid\wrong-type.json" '*.context_tokens should be integer*') "a known field with the wrong type is invalid"
 Check (Says "invalid\not-an-object.json" '*should be object*') "a file that is not an object is invalid"

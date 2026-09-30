@@ -16,8 +16,23 @@
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
            Replace = 'if ($false) { [void]$findings.Add($Path + " is ''' }
         @{ Name = "pattern-not-checked"
-           Find = 'if ($Value -cnotmatch "$($kw[''pattern''])") {'
+           Find = 'if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "pattern-dollar-kept"
+           Find = 'elseif ($c -ceq ''$'') { [void]$sb.Append(''\z''); continue }'
+           Replace = '' }
+        @{ Name = "pattern-escape-not-skipped"
+           Find = 'if ($i + 1 -lt $Pattern.Length) { $i++; [void]$sb.Append($Pattern[$i]) }'
+           Replace = '' }
+        @{ Name = "pattern-class-not-tracked"
+           Find = 'elseif ($c -ceq ''['') { $inClass = $true }'
+           Replace = '' }
+        @{ Name = "pattern-dotnet-dialect"
+           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::None)' }
+        @{ Name = "pattern-ignores-case"
+           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::IsMatch($Value, $re, ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
         @{ Name = "required-not-checked"
            Find = 'if ($null -ne $r -and -not $have.ContainsKey("$r")) {'
            Replace = 'if ($false) {' }
