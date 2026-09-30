@@ -204,3 +204,8 @@ sources:
 - source: YedPool/wezfleet lib/Common.ps1:567 "if ($null -eq $Socket) { $Socket = ""$env:WEZTERM_UNIX_SOCKET"" }" ahead of the one-process fallback at :586-590. The first draft claimed derivation from the socket but did not read it. Review finding 11, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the terminal instance is read from the socket first, which names it exactly"
+
+### L-039 A gap in the store ids is explained where it appears
+- source: review finding 14, 2026-09-29: the store list jumps from W6 to W8 with no reason given. YedPool/wezfleet lib/Allocator.ps1:14 "THE COUNTER IS THE REGISTRY ITSELF" and :169 (registry\labels holds only reservation markers), and the store root's other entries were opened read-only on 2026-09-29: index.json lists runs, delivery.jsonl and raw-send-text.jsonl are append-only logs of sends (the second carries session_id, cwd and pane per send, as an audit record that no identity reader in lib, commands or hooks opens), mail and locks hold messages and lock files.
+- disposition: comment
+- where: core/ownership.json :: "No store is numbered W7"

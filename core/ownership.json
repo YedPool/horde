@@ -25,6 +25,9 @@
     "X6": { "system": "env", "what": "environment in the pane", "path": "WEZTERM_PANE, WEZFLEET_SESSION_ID, CLAUDE_CODE_SESSION_ID and others; inherited, so can be wrong" },
     "R1": { "system": "wezterm-resurrect", "what": "layout saves", "path": "<plugin>\\state\\{workspace,window,tab}\\<name>.json" }
   },
+  "storeIdGaps": {
+    "W7": "No store is numbered W7. The ids were fixed when the table was drafted and are kept rather than renumbered, so citations of W8 stay valid. Which store the draft numbered W7 is in no committed file. The wezfleet stores this table does not list are read by no field of the session record: mail, registry\\labels (label reservation markers; the allocator derives its counter from the registry itself), the run index, the delivery and raw-send logs, and locks."
+  },
   "required": [ "sessionId", "agent", "pid", "cwd", "projectCwd", "transcriptPath", "resumeCommand", "pane", "window",
                 "hostInstance", "role", "parent", "owner", "label", "name", "origin", "fleetSessionId", "liveStatus",
                 "workState", "report", "lastActivity", "startedAt", "retired", "messagingAddress", "lastSeen", "runId",
