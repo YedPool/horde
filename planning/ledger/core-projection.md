@@ -501,3 +501,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 4: with HORDE_SKIP_REALITY set, the suite exited 0 with only its banner changed, so a gate could pass on a partial run, and the banner check was a tautology
 - disposition: test
 - where: test/test-mutate.ps1 :: "a pass code a spec does not declare is not a pass"
+
+### L-095 Every reader of the process table goes through the platform seam
+- source: second review of horde PR #31, finding 5: core/Identity.ps1 Get-HordeProcessTable still read Win32_Process outside core/Platform.ps1, and the seam's reader was named after the projection
+- disposition: test
+- where: test/test-projection.ps1 :: "the process table is read only behind the platform seam"

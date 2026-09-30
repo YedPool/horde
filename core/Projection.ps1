@@ -1100,7 +1100,7 @@ function Get-HordeProjection {
         [datetime]$Now = (Get-Date)
     )
     Assert-HordePlatform $Platform
-    if ($null -eq $Processes) { $Processes = & $Platform.processTable }
+    if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform }
     Assert-HordeProcessTable $Processes
     Assert-HordeHostPort $HostPort
     $rules = Get-HordeOwnershipRules

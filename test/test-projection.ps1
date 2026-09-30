@@ -32,10 +32,10 @@ Set-StrictMode -Version Latest
 # that counts trips still runs (core-identity's lesson, 2026-09-30).
 $script:trips = New-Object System.Collections.ArrayList
 $real = @{}
-foreach ($fn in @("Get-HordeProcessTable", "Get-HordeProjectionProcessTable", "Get-HordeClaudeSessionsDir", "Get-HordeClaudeProjectsDir",
+foreach ($fn in @("Get-HordeProcessTable", "Read-HordeWindowsProcessTable", "Get-HordeClaudeSessionsDir", "Get-HordeClaudeProjectsDir",
                   "Get-HordeCodexSessionsDir", "Get-HordePaneSessionsDir", "Get-HordeWezfleetRoot")) { $real[$fn] = (Get-Item ("function:" + $fn)).ScriptBlock }
 function Get-HordeProcessTable { [void]$script:trips.Add("process table"); return (New-HordeUnknown -Reason "TRIP: the real process table was asked for") }
-function Get-HordeProjectionProcessTable { [void]$script:trips.Add("process table with command lines"); return (New-HordeUnknown -Reason "TRIP: the real process table was asked for") }
+function Read-HordeWindowsProcessTable { [void]$script:trips.Add("process table with command lines"); return (New-HordeUnknown -Reason "TRIP: the real process table was asked for") }
 function Get-HordeClaudeSessionsDir { [void]$script:trips.Add("claude sessions"); return (Join-Path $env:TEMP ("horde-projection-trip-" + [guid]::NewGuid().ToString("N"))) }
 function Get-HordeClaudeProjectsDir { [void]$script:trips.Add("claude projects"); return (Join-Path $env:TEMP ("horde-projection-trip-" + [guid]::NewGuid().ToString("N"))) }
 function Get-HordeCodexSessionsDir { [void]$script:trips.Add("codex sessions"); return (Join-Path $env:TEMP ("horde-projection-trip-" + [guid]::NewGuid().ToString("N"))) }
@@ -350,6 +350,13 @@ Check ((Val $pxRows["a"].pid) -eq 7 -and $pxRows["b"].pid.state -eq "unknown" -a
 $ppx = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "claude\sessions") -ProjectsDir (Join-Path $base "claude\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "claude\pane-sessions") -Platform $posix -HostPort (HostOf $base) -LayoutPort (LayoutOf $base) -TtlSeconds 900 -Now $now
 Check (@($ppx.sessions).Count -eq 34 -and (Val (Ans $ppx 1 "pid")) -eq 1001) "the projection reads processes through the platform it is given"
 Check (Throws { New-HordePlatform -Name "x" -ProcessSpace "mars" -ProcessTable { $null } } "namespace") "a platform's namespace is one core knows"
+# The operating system's process table is read in one place, behind the platform seam (second review
+# of PR #31, finding 5): core/identity used to call it directly.
+$w32 = @(Get-ChildItem -LiteralPath (Join-Path $root "core") -Filter "*.ps1" | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'Win32_Process' } | ForEach-Object { $_.Name })
+foreach ($x in @($w32 | Where-Object { $_ -ne "Platform.ps1" })) { Write-Host ("  reads Win32_Process: core/" + $x) -ForegroundColor Red }
+Check ($w32.Count -eq 1 -and $w32[0] -eq "Platform.ps1") "the process table is read only behind the platform seam"
+$seamTable = Read-HordePlatformProcessTable -Platform $posix
+Check ($seamTable.state -eq "known" -and @($seamTable.value.Keys) -contains 1001) "the seam reads a platform's process table through one neutral function"
 
 Write-Host ""
 Write-Host "--- one writer host per store ---" -ForegroundColor Cyan

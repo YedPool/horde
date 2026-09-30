@@ -39,6 +39,8 @@
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
+# The process table is the platform's (core/Platform.ps1): the one place the operating system is asked.
+. (Join-Path $PSScriptRoot "Platform.ps1")
 # For Get-HordeWezfleetRoot: one definition of where wezfleet's store is, shared with core/roles.
 . (Join-Path $PSScriptRoot "Roles.ps1")
 
@@ -106,28 +108,13 @@ function Get-HordeCodexTtlSeconds {
 }
 
 function Get-HordeProcessTable {
-    # The running processes as an answer: known @{ [int]pid = { pid; name; created } }, created in UTC,
-    # or unknown with the reason. Read-only: CIM's Win32_Process, which opens no process handle.
-    # Unknown is not empty: wezfleet's Get-WfClaudeProcesses returned an empty list when the query
-    # failed (lib/Common.ps1:657-659), which a caller cannot tell from no processes.
-    #
-    # WHAT IS MEASURED AND WHAT IS NOT (review finding 8 of PR #19). CIM gives CreationDate as a local
-    # time, converted here with ToUniversalTime. Cross-checked 2026-09-30: for 10 of 10 live control
-    # files, CIM's time, .NET's Process.StartTime and procStart agreed to the microsecond, and .NET's
-    # ticks equalled procStart's exactly; across all 339 processes readable both ways, CIM and .NET
-    # agreed to the microsecond. All of them started and were read in the same daylight-saving period.
-    # UNMEASURED: a process started before a daylight-saving change and read after it, and above all
-    # one started in the hour the clocks repeat, where a local time names two instants and the
-    # conversion can land an hour off - which would read a live process as a reused pid.
-    return (Invoke-HordeRead -What "the process table" -Read {
-        $t = @{}
-        foreach ($p in @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, Name, CreationDate -ErrorAction Stop)) {
-            $created = $null
-            if ($null -ne $p.CreationDate) { $created = ([datetime]$p.CreationDate).ToUniversalTime() }
-            $t[[int]$p.ProcessId] = [pscustomobject]@{ pid = [int]$p.ProcessId; name = "$($p.Name)"; created = $created }
-        }
-        return $t
-    })
+    # The running processes as an answer: known @{ [int]pid = { pid; name; created; commandLine } },
+    # created in UTC, or unknown with the reason - read through the platform seam, so a node on
+    # another system supplies its own (second review of PR #31, finding 5). Unknown is not empty:
+    # wezfleet's Get-WfClaudeProcesses returned an empty list when the query failed
+    # (lib/Common.ps1:657-659), which a caller cannot tell from no processes. What the Windows reader
+    # measured about creation times is with it, in core/Platform.ps1.
+    return (Read-HordePlatformProcessTable -Platform (Get-HordeLocalPlatform))
 }
 
 function ConvertTo-HordeMicroseconds {
