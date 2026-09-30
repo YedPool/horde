@@ -111,7 +111,11 @@ $r = Invoke-Horde -Root $root -Arguments @("no-such-command")
 Check ($r.code -eq 2 -and $r.err -like "*unknown command 'no-such-command'*") "an unknown command exits 2 and says so"
 $r = Invoke-Horde -Root $root -Arguments @("version", "-Bogus")
 Check ($r.code -eq 2 -and $r.err -like "*usage: horde version*") "a flag the command does not take exits 2 with its usage, never silently ignored"
-$r = Invoke-Horde -Root $root -Arguments @("..\cli\Commands")
+# "..\Commands" is aimed at a file that EXISTS - cli\Commands.ps1, one folder up from cli\commands -
+# so this fails if the name check is removed. The first version aimed at "..\cli\Commands", which is
+# missing either way, and could not fail (review of PR #12).
+Check (Test-Path -LiteralPath (Join-Path $root "cli\Commands.ps1") -PathType Leaf) "CONTROL: the file a path-shaped name would reach really exists"
+$r = Invoke-Horde -Root $root -Arguments @("..\Commands")
 Check ($r.code -eq 2 -and $r.err -like "*unknown command*") "a command name that is a path reaches no file"
 
 # A STAND-IN ROOT with two extra commands, so forwarding and failure can be tested without shipping
