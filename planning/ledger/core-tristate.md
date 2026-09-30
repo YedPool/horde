@@ -202,3 +202,8 @@ sources:
 - disposition: dropped
 - reason: The fix lives in each reader's parser and belongs to the ledger of the module that ports that reader; core/tristate cannot tell a correct unknown from a parser bug.
 
+
+### L-040 The value of an answer can still be read without checking its state
+- source: YedPool/horde PR #9 review, 2026-09-29, finding 7: `.value` is an ordinary property, so `$answer.value` bypasses Get-HordeValue's throw on absent and unknown
+- disposition: comment
+- where: core/Tristate.ps1 :: "the rule is carried by review and by this comment"

@@ -99,6 +99,12 @@ Check (Throws { Get-HordeValue $a } "absent") "reading the value of absent throw
 Check (Throws { Get-HordeValue $null } "not a Horde answer") "a bare null is not an answer at all"
 Check (Throws { Get-HordeValue @() } "not a Horde answer") "and neither is a bare empty array"
 Check (Throws { Get-HordeValue -1 } "not a Horde answer") "nor a bare -1"
+# Hand-built objects that carry the type name but break the shape's rules are not answers either.
+$shouted = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "KNOWN"; value = 1; reason = ""; observedAt = $null }
+Check ((Test-HordeAnswer $shouted) -eq $false) "an answer whose state word is in the wrong case is not an answer"
+$hollow = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "known"; value = $null; reason = ""; observedAt = $null }
+Check ((Test-HordeAnswer $hollow) -eq $false) "a known answer holding null is not an answer"
+Check ((Test-HordeAnswer (New-HordeKnown -Value 0)) -eq $true) "CONTROL: a well-formed known answer is an answer"
 
 Write-Host ""
 Write-Host "--- stored answers and missing fields ---" -ForegroundColor Cyan

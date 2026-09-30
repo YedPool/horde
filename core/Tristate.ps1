@@ -74,8 +74,16 @@ function Test-HordeAnswer {
     param($Answer)
     if ($null -eq $Answer -or $Answer -isnot [System.Management.Automation.PSCustomObject]) { return $false }
     if (@($Answer.PSObject.TypeNames) -notcontains "Horde.Answer") { return $false }
-    if ($script:HordeAnswerStates -notcontains "$($Answer.state)") { return $false }
-    if ($Answer.state -eq "unknown" -and "$($Answer.reason)".Trim() -eq "") { return $false }
+    # Case-sensitive, like the stored form: "KNOWN" is not a state Horde writes, and -notcontains
+    # would have accepted it.
+    if ($script:HordeAnswerStates -cnotcontains "$($Answer.state)") { return $false }
+    if ($Answer.state -ceq "unknown" -and "$($Answer.reason)".Trim() -eq "") { return $false }
+    # New-HordeKnown refuses $null; a hand-built "known" holding $null is refused here for the same
+    # reason - a known nothing is New-HordeAbsent.
+    if ($Answer.state -ceq "known" -and $null -eq $Answer.value) { return $false }
+    # NOT DONE, on purpose: .value is an ordinary property, so `$answer.value` reads it without the
+    # state check Get-HordeValue makes. Hiding it would break Resolve-HordeAnswer and the stored form;
+    # the rule is carried by review and by this comment (ledger L-040).
     return $true
 }
 
