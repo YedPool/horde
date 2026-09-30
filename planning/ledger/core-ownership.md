@@ -191,7 +191,7 @@ sources:
 - where: test/test-ownership.ps1 :: "the run's window is marked as the run's, a fallback for the session"
 
 ### L-036 Fresh, for a registry record, means written in this terminal instance
-- source: YedPool/wezfleet lib/Common.ps1:625-640 (Test-WfWrittenInInstance: the record's instance must match and its lastSeen must not predate the instance start; ambiguous says no); census reads cwd from a record chosen that way, with no age, at lib/Registry.ps1:833 and :859. The first draft said only "fresh". Review finding 10, 2026-09-29.
+- source: YedPool/wezfleet lib/Common.ps1:625-640 (Test-WfWrittenInInstance: a record that names an instance must name this one - :628 "if ($RecordInstance -and $Instance.id -and ""$RecordInstance"" -ne ...) { return $false }", so a record naming none passes - and its lastSeen must not predate the instance start, :638; ambiguous says no, :625); census reads cwd from a record chosen that way, with no age, at lib/Registry.ps1:833 and :859. The first draft said only "fresh". Review finding 10, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the registry's cwd says what fresh means and what it is measured against"
 
@@ -214,3 +214,8 @@ sources:
 - source: YedPool/wezfleet lib/Registry.ps1:1260 (a claim is written with "fleetSessionId = ""$FleetSessionId""") and hooks/wf-registry-refresh.ps1:153 "if (-not $fleetId) { $fleetId = ""$($claim.fleetSessionId)"" }" - the hook takes the fleet id from the claim when WEZFLEET_SESSION_ID is missing, which :142-143 measured at 65 of 263 hook runs; lib/Registry.ps1:322 then sets origin to fleet only when a fleet id is present. The second review of this table found fleetSessionId did not read the claim. Review finding 1, second review, 2026-09-29.
 - disposition: test
 - where: test/test-ownership.ps1 :: "the fleet id a spawn claim carries is read right after the registry"
+
+### L-041 One definition of "written in this terminal instance", used by every read that needs it
+- source: YedPool/wezfleet lib/Common.ps1:628 "if ($RecordInstance -and $Instance.id -and ""$RecordInstance"" -ne ""$($Instance.id)"") { return $false }" - one function, Test-WfWrittenInInstance, decides it for the pane index at lib/Registry.ps1:394 and the act-on finder at :659, and a record with an empty instance passes on lastSeen alone. The table had defined it twice: for pane, the record's instance had to be this one; for cwd, only lastSeen counted. Review finding 2, second review, 2026-09-29.
+- disposition: test
+- where: test/test-ownership.ps1 :: "the registry's cwd and pane use one definition of written in this instance"

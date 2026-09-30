@@ -70,6 +70,12 @@ $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read
 Check ($resumeStores -ccontains "W5") "the stored copy of the resume command is read for comparison"
 $cwdW1 = @((Get-HordeOwnershipField -Doc $doc -Name "cwd").read | Where-Object { "$($_.store)" -ceq "W1" })[0]
 Check ("$($cwdW1.when)" -like "*lastSeen*" -and "$($cwdW1.when)" -like "*instance started*") "the registry's cwd says what fresh means and what it is measured against"
+# ONE DEFINITION OF "WRITTEN IN THIS TERMINAL INSTANCE", word for word in every read that uses it.
+# The pane's read required the record to name this instance and the cwd's did not; wezfleet has
+# one rule for both (lib/Common.ps1:628): a record that names an instance must name this one, a
+# record that names none passes on lastSeen alone.
+$inInstance = "written in this terminal instance: the record's instance matches this one when the record names one, and its lastSeen, the time the hook last saw a tool call, is not before the instance started"
+Check ("$($cwdW1.when)".Contains($inInstance) -and "$($paneW1.when)".Contains($inInstance)) "the registry's cwd and pane use one definition of written in this instance"
 $hostInstance = Get-HordeOwnershipField -Doc $doc -Name "hostInstance"
 Check ("$($hostInstance.read[0].store)" -ceq "X6" -and "$($hostInstance.read[0].field)" -ceq "WEZTERM_UNIX_SOCKET") "the terminal instance is read from the socket first, which names it exactly"
 Check ("$($hostInstance.derived)" -like "*ambiguous*trusts no pane record*") "an ambiguous terminal instance trusts no pane record"
