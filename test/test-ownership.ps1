@@ -29,8 +29,14 @@ Check ($findings.Count -eq 0) "every field has exactly one owner and one read ru
 Check (@($doc.fields).Count -ge 20) ("CONTROL: the table really was read (" + @($doc.fields).Count + " fields)")
 
 $pane = Get-HordeOwnershipField -Doc $doc -Name "pane"
-$paneStores = @($pane.read | ForEach-Object { "$($_.store)" } | Where-Object { $_ -like "W*" } | Sort-Object -Unique)
-Check ($null -ne $pane -and $paneStores.Count -ge 3) "pane, stored three times in wezfleet, has one read order across all of them"
+# THE ORDER, not only the membership. wezfleet reads roster, then status, then registry, each
+# overriding the last (lib/Protocol.ps1:522-537), so the registry comes first and the roster, a
+# spawn-time snapshot that made moved sessions unreachable, comes last. A count alone passed the
+# roster-first order that was the regression.
+$paneOrder = @($pane.read | ForEach-Object { "$($_.store)" })
+$w1 = [array]::IndexOf($paneOrder, "W1"); $w5 = [array]::IndexOf($paneOrder, "W5"); $w4 = [array]::IndexOf($paneOrder, "W4")
+Write-Host ("  pane is read from: " + ($paneOrder -join ", ")) -ForegroundColor DarkGray
+Check ($null -ne $pane -and $w1 -ge 0 -and $w1 -lt $w5 -and $w5 -lt $w4) "pane, stored three times in wezfleet, has one read order across all of them"
 Check ($pane.owner -eq "host" -and "$($pane.derived)" -like "*never identity*") "pane is owned by the host and is never identity"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like "*sessionId*") "the transcript path is derived, never trusted as stored"
 Check ((Get-HordeOwnershipField -Doc $doc -Name "owner").derived -like "*never an edge*") "owner is a derived display name; parent is the edge"
