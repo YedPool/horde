@@ -78,56 +78,149 @@ Write-Host "--- a degraded plan per host fits that host, and drops no session --
 
 # What each host in section 4's capability table can apply. The engine that degrades a plan to these
 # is step 4.2; here the fixtures are held to them, so a fixture cannot claim a host it does not fit.
-# depth: how deep containers nest (a lone leaf is 0). tabs: at most this many per window. windows: at most
-# this many per workspace. VS Code / Cursor is ONE window, one folder (review of PR #17): its tabs are
-# terminal groups in that window, so it has no tab limit and a window limit of 1.
+# depth: how deep containers nest (a lone leaf is 0). tabs: at most this many per window. windows: at
+# most this many per workspace. VS Code / Cursor is ONE window, one folder (review of PR #17): its tabs
+# are terminal groups in that window, so it has no tab limit and a window limit of 1. perWindow: at
+# most this many sessions in a window - a plain console runs one session per window, which its depth
+# of 0 and its one tab per window already imply; it is checked on its own so the rule is written down.
 $hosts = @{
-    wezterm = @{ depth = 99; ratios = $true;  tabs = 99; windows = 99; workspaces = 99; named = $true }
-    vscode  = @{ depth = 1;  ratios = $false; tabs = 99; windows = 1;  workspaces = 1;  named = $false }
-    console = @{ depth = 0;  ratios = $false; tabs = 1;  windows = 99; workspaces = 1;  named = $false }
+    wezterm = @{ depth = 99; ratios = $true;  tabs = 99; windows = 99; workspaces = 99; named = $true;  perWindow = 99 }
+    vscode  = @{ depth = 1;  ratios = $false; tabs = 99; windows = 1;  workspaces = 1;  named = $false; perWindow = 99 }
+    console = @{ depth = 0;  ratios = $false; tabs = 1;  windows = 99; workspaces = 1;  named = $false; perWindow = 1 }
 }
+# THE FLEET, written here and not read from a fixture, so every host's plan - WezTerm's included - is
+# compared with something it could disagree with. The first version compared the WezTerm plan with
+# itself (review of PR #17). Each slot: its session, and the workspace and tab it sits in undegraded.
+$fleet = [ordered]@{
+    w  = @{ id = "7c1e2a90-0000-4000-8000-00000000000a"; ws = "fleet"; title = "W horde warchief" }
+    d  = @{ id = "7c1e2a90-0000-4000-8000-00000000000b"; ws = "fleet"; title = "D wezfleet orc" }
+    d1 = @{ id = "7c1e2a90-0000-4000-8000-00000000000c"; ws = "fleet"; title = "D wezfleet orc" }
+    d2 = @{ id = "7c1e2a90-0000-4000-8000-00000000000d"; ws = "fleet"; title = "D wezfleet orc" }
+    e  = @{ id = "7c1e2a90-0000-4000-8000-00000000000e"; ws = "horde"; title = "E horde orc" }
+}
+$fleetSlots = (@($fleet.Keys | Sort-Object) -join ",")
+$fleetPairs = (@($fleet.Keys | ForEach-Object { $_ + "=" + $fleet[$_].id } | Sort-Object) -join ",")
 function Get-Depth { param($Node) $c = $Node.PSObject.Properties["children"]; if ($null -eq $c) { return 0 }; $m = 0; foreach ($k in @($c.Value)) { $d = Get-Depth $k; if ($d -gt $m) { $m = $d } }; return (1 + $m) }
 function Get-Nodes { param($Node) $Node; $c = $Node.PSObject.Properties["children"]; if ($null -ne $c) { foreach ($k in @($c.Value)) { Get-Nodes $k } } }
+function Get-TabSlots { param($Tab) Get-Nodes $Tab.root | Where-Object { $null -ne $_.PSObject.Properties["slot"] } | ForEach-Object { "$($_.slot)" } }
 function Get-Misfits {
-    # Every way the plan asks more of the host than it has.
+    # Every way the plan asks more of the host than it has, each tagged with the capability it breaks.
     param($Plan, $Cap)
     $out = @()
     $ws = @($Plan.layout.workspaces)
-    if ($ws.Count -gt $Cap.workspaces) { $out += ("" + $ws.Count + " workspaces") }
+    if ($ws.Count -gt $Cap.workspaces) { $out += [pscustomobject]@{ cap = "workspaces"; text = ("" + $ws.Count + " workspaces") } }
     foreach ($w in $ws) {
-        if (-not $Cap.named -and $null -ne $w.PSObject.Properties["name"]) { $out += "a workspace name" }
+        if (-not $Cap.named -and $null -ne $w.PSObject.Properties["name"]) { $out += [pscustomobject]@{ cap = "named"; text = "a workspace name" } }
         $wins = @($w.windows)
-        if ($wins.Count -gt $Cap.windows) { $out += ("" + $wins.Count + " windows in a workspace") }
+        if ($wins.Count -gt $Cap.windows) { $out += [pscustomobject]@{ cap = "windows"; text = ("" + $wins.Count + " windows in a workspace") } }
         foreach ($win in $wins) {
             $tabs = @($win.tabs)
-            if ($tabs.Count -gt $Cap.tabs) { $out += ("" + $tabs.Count + " tabs in a window") }
+            if ($tabs.Count -gt $Cap.tabs) { $out += [pscustomobject]@{ cap = "tabs"; text = ("" + $tabs.Count + " tabs in a window") } }
+            $inWindow = @($tabs | ForEach-Object { Get-TabSlots $_ })
+            if ($inWindow.Count -gt $Cap.perWindow) { $out += [pscustomobject]@{ cap = "perWindow"; text = ("" + $inWindow.Count + " sessions in a window") } }
             foreach ($t in $tabs) {
                 $d = Get-Depth $t.root
-                if ($d -gt $Cap.depth) { $out += ("splits " + $d + " deep in '" + $t.title + "'") }
-                if (-not $Cap.ratios -and @(Get-Nodes $t.root | Where-Object { $null -ne $_.PSObject.Properties["ratio"] }).Count -gt 0) { $out += ("a ratio in '" + $t.title + "'") }
+                if ($d -gt $Cap.depth) { $out += [pscustomobject]@{ cap = "depth"; text = ("splits " + $d + " deep in '" + $t.title + "'") } }
+                if (-not $Cap.ratios -and @(Get-Nodes $t.root | Where-Object { $null -ne $_.PSObject.Properties["ratio"] }).Count -gt 0) { $out += [pscustomobject]@{ cap = "ratios"; text = ("a ratio in '" + $t.title + "'") } }
             }
         }
     }
     return $out
 }
-function Get-LeafSlots { param($Plan) foreach ($w in @($Plan.layout.workspaces)) { foreach ($win in @($w.windows)) { foreach ($t in @($win.tabs)) { Get-Nodes $t.root | Where-Object { $null -ne $_.PSObject.Properties["slot"] } | ForEach-Object { "$($_.slot)" } } } } }
+function Get-TitleMisfits {
+    # Every tab titled otherwise than the fleet says: in a host with workspaces, the fleet's title, in
+    # the workspace it came from; without, that workspace's name as a prefix (degradation rule 4).
+    param($Plan, $Cap)
+    $out = @()
+    foreach ($w in @($Plan.layout.workspaces)) {
+        $wsName = $null; if ($null -ne $w.PSObject.Properties["name"]) { $wsName = "$($w.name)" }
+        foreach ($win in @($w.windows)) {
+            foreach ($t in @($win.tabs)) {
+                $origins = @(Get-TabSlots $t | ForEach-Object { $fleet[$_].ws + "|" + $fleet[$_].title } | Sort-Object -Unique)
+                if ($origins.Count -ne 1) { $out += ("'" + $t.title + "' holds slots from " + $origins.Count + " tabs of the fleet"); continue }
+                $ows, $otitle = $origins[0] -split '\|', 2
+                if ($Cap.named) {
+                    if ($wsName -cne $ows) { $out += ("'" + $t.title + "' is in workspace '" + $wsName + "' but came from '" + $ows + "'") }
+                    $want = $otitle
+                } else { $want = $ows + ": " + $otitle }
+                if ("$($t.title)" -cne $want) { $out += ("'" + $t.title + "' should be '" + $want + "'") }
+            }
+        }
+    }
+    return $out
+}
+function Get-LeafSlots { param($Plan) foreach ($w in @($Plan.layout.workspaces)) { foreach ($win in @($w.windows)) { foreach ($t in @($win.tabs)) { Get-TabSlots $t } } } }
+function Get-SessionPairs { param($Plan) return (@($Plan.sessions | ForEach-Object { "$($_.slot)=$($_.sessionId)" } | Sort-Object) -join ",") }
 
 $full = Read-Fixture "valid\host-wezterm.json"
-$fullSessions = ($full.sessions | ConvertTo-Json -Depth 10 -Compress)
-$fullSlots = (@(Get-LeafSlots $full | Sort-Object) -join ",")
-Check (@(Get-Misfits $full $hosts.vscode).Count -ge 3) ("CONTROL: the full plan does NOT fit VS Code (" + (@(Get-Misfits $full $hosts.vscode) -join "; ") + ")")
+Check (@(Get-Misfits $full $hosts.vscode).Count -ge 3) ("CONTROL: the full plan does NOT fit VS Code (" + (@(Get-Misfits $full $hosts.vscode | ForEach-Object { $_.text }) -join "; ") + ")")
 Check ((Get-Depth $full.layout.workspaces[0].windows[0].tabs[1].root) -eq 2) "CONTROL: the full plan nests splits two deep, so flattening has something to do"
+$sessionForms = @()
 foreach ($h in @("wezterm", "vscode", "console")) {
     $p = Read-Fixture ("valid\host-" + $h + ".json")
-    $mis = @(Get-Misfits $p $hosts[$h])
+    $mis = @(Get-Misfits $p $hosts[$h] | ForEach-Object { $_.text })
     Check ($mis.Count -eq 0) ($h + ": the plan asks nothing the host cannot do (" + ($mis -join "; ") + ")")
-    Check (($p.sessions | ConvertTo-Json -Depth 10 -Compress) -ceq $fullSessions) ($h + ": the sessions are the full plan's, unchanged - degradation never touches them")
+    $pairs = Get-SessionPairs $p
+    Check ($pairs -ceq $fleetPairs) ($h + ": the sessions are the fleet's, each slot with its own session (" + $pairs + ")")
     $slots = (@(Get-LeafSlots $p | Sort-Object) -join ",")
-    Check ($slots -ceq $fullSlots) ($h + ": every slot of the full plan is placed, once (" + $slots + ")")
+    Check ($slots -ceq $fleetSlots) ($h + ": every slot of the fleet is placed, once (" + $slots + ")")
+    $titles = @(Get-TitleMisfits $p $hosts[$h])
+    Check ($titles.Count -eq 0) ($h + ": every title is the fleet's, prefixed by its workspace where the host has none (" + ($titles -join "; ") + ")")
+    $sessionForms += ($p.sessions | ConvertTo-Json -Depth 10 -Compress)
 }
+Check (@($sessionForms | Sort-Object -Unique).Count -eq 1) "the three plans' sessions are identical, field for field - degradation never touches them"
 $vs = Read-Fixture "valid\host-vscode.json"
 Check ((@($vs.layout.workspaces[0].windows[0].tabs[1].root.children | ForEach-Object { $_.slot }) -join ",") -ceq "d,d1,d2") "vscode: the nested split is flattened into one level in its left-to-right, top-to-bottom order"
-Check (@($vs.layout.workspaces[0].windows[0].tabs | ForEach-Object { $_.title } | Where-Object { $_ -notmatch '^(fleet|horde): ' }).Count -eq 0) "vscode: the workspace name survives as a prefix on every title"
+
+# CONTROLS: the checks above can fail, for WezTerm too.
+$bad = Read-Fixture "valid\host-wezterm.json"; $bad.sessions[4].sessionId = "7c1e2a90-0000-4000-8000-0000000000ff"
+Check ((Get-SessionPairs $bad) -cne $fleetPairs) "CONTROL: a WezTerm plan with another session for slot e does not match the fleet"
+$bad = Read-Fixture "valid\host-wezterm.json"; $bad.layout.workspaces[1].windows[0].tabs[0].root.slot = "w"
+Check ((@(Get-LeafSlots $bad | Sort-Object) -join ",") -cne $fleetSlots) "CONTROL: a WezTerm plan that places w twice and e never does not place the fleet"
+$bad = Read-Fixture "valid\host-wezterm.json"; $bad.sessions[0].label = "X"
+Check ((@(($bad.sessions | ConvertTo-Json -Depth 10 -Compress), $sessionForms[1]) | Sort-Object -Unique).Count -eq 2) "CONTROL: a changed label makes the sessions differ"
+
+Write-Host ""
+Write-Host "--- each host limit, broken alone, is seen ---" -ForegroundColor Cyan
+# For each host and each limit it has, a plan made from that host's own fixture that breaks only that
+# limit: the gate accepts it (so the change is well-formed and drops nothing), and the host checks
+# report that capability and no other. A console's one-session-per-window cannot be broken alone -
+# a second session in a window needs a split or a second tab - so its controls report it beside those.
+function New-Tab { param([string]$Title, $Root) return [pscustomobject]@{ title = $Title; root = $Root } }
+function New-Leaf { param([string]$Slot) return [pscustomobject]@{ slot = $Slot } }
+$controls = @(
+    @{ host = "vscode"; caps = "depth"; make = { param($p) $p.layout.workspaces[0].windows[0].tabs[1].root = [pscustomobject]@{ split = "right"; children = @((New-Leaf "d"), [pscustomobject]@{ split = "down"; children = @((New-Leaf "d1"), (New-Leaf "d2")) }) } } }
+    @{ host = "vscode"; caps = "ratios"; make = { param($p) $w = $p.layout.workspaces[0].windows[0]; $w.tabs[1].root = [pscustomobject]@{ split = "right"; ratio = 0.5; children = @((New-Leaf "d"), (New-Leaf "d1")) }; $w.tabs = @($w.tabs) + (New-Tab "fleet: D wezfleet orc" (New-Leaf "d2")) } }
+    @{ host = "vscode"; caps = "windows"; make = { param($p) $w = $p.layout.workspaces[0]; $e = $w.windows[0].tabs[2]; $w.windows[0].tabs = @($w.windows[0].tabs[0], $w.windows[0].tabs[1]); $w.windows = @($w.windows[0], [pscustomobject]@{ tabs = @($e) }) } }
+    @{ host = "vscode"; caps = "workspaces"; make = { param($p) $w = $p.layout.workspaces[0]; $e = $w.windows[0].tabs[2]; $w.windows[0].tabs = @($w.windows[0].tabs[0], $w.windows[0].tabs[1]); $p.layout.workspaces = @($w, [pscustomobject]@{ windows = @([pscustomobject]@{ tabs = @($e) }) }) } }
+    @{ host = "vscode"; caps = "named"; make = { param($p) $p.layout.workspaces[0] | Add-Member -NotePropertyName name -NotePropertyValue "fleet" } }
+    @{ host = "vscode"; caps = "titles"; make = { param($p) $p.layout.workspaces[0].windows[0].tabs[2].title = "fleet: E horde orc" } }
+    @{ host = "console"; caps = "depth,perWindow"; make = { param($p) $w = $p.layout.workspaces[0]; $w.windows[1].tabs[0].root = [pscustomobject]@{ split = "down"; children = @((New-Leaf "d"), (New-Leaf "d1")) }; $w.windows = @($w.windows[0], $w.windows[1], $w.windows[3], $w.windows[4]) } }
+    @{ host = "console"; caps = "perWindow,tabs"; make = { param($p) $w = $p.layout.workspaces[0]; $w.windows[1].tabs = @($w.windows[1].tabs[0], $w.windows[2].tabs[0]); $w.windows = @($w.windows[0], $w.windows[1], $w.windows[3], $w.windows[4]) } }
+    @{ host = "console"; caps = "workspaces"; make = { param($p) $w = $p.layout.workspaces[0]; $e = $w.windows[4]; $w.windows = @($w.windows[0], $w.windows[1], $w.windows[2], $w.windows[3]); $p.layout.workspaces = @($w, [pscustomobject]@{ windows = @($e) }) } }
+    @{ host = "console"; caps = "named"; make = { param($p) $p.layout.workspaces[0] | Add-Member -NotePropertyName name -NotePropertyValue "fleet" } }
+    @{ host = "console"; caps = "titles"; make = { param($p) $p.layout.workspaces[0].windows[4].tabs[0].title = "fleet: E horde orc" } }
+    @{ host = "wezterm"; caps = "titles"; make = { param($p) $p.layout.workspaces[0].windows[0].tabs = @($p.layout.workspaces[0].windows[0].tabs) + $p.layout.workspaces[1].windows[0].tabs[0]; $p.layout.workspaces = @($p.layout.workspaces[0]) } }
+)
+foreach ($c in $controls) {
+    $p = Read-Fixture ("valid\host-" + $c.host + ".json")
+    & $c.make $p
+    $gate = @(Findings $p)
+    $caps = @(Get-Misfits $p $hosts[$c.host] | ForEach-Object { $_.cap })
+    if (@(Get-TitleMisfits $p $hosts[$c.host]).Count -gt 0) { $caps += "titles" }
+    $seen = (@($caps | Sort-Object -Unique) -join ",")
+    Check ($gate.Count -eq 0 -and $seen -ceq $c.caps) ($c.host + ": breaking " + $c.caps + " is seen as exactly that (gate: " + $gate.Count + " findings" + $(if ($gate.Count) { ", " + ($gate -join "; ") } else { "" }) + "; host checks: " + $seen + ")")
+}
+# Every limit each host has is broken by a control above. VS Code has no tab limit (tabs are its terminal
+# groups); a console's ratio cannot be set without a split, which its depth already refuses.
+foreach ($h in @("vscode", "console")) {
+    $limited = @(@("depth", "tabs", "windows", "workspaces", "perWindow") | Where-Object { $hosts[$h][$_] -lt 99 })
+    $limited += @(@("ratios", "named") | Where-Object { -not $hosts[$h][$_] })
+    if ($h -eq "console") { $limited = @($limited | Where-Object { $_ -cne "ratios" }) }
+    $covered = @($controls | Where-Object { $_.host -ceq $h } | ForEach-Object { $_.caps -split "," })
+    $uncovered = @($limited | Where-Object { $covered -cnotcontains $_ })
+    Check ($limited.Count -ge 4 -and $uncovered.Count -eq 0) ($h + ": every limit has a control that breaks it (" + ($limited -join ", ") + "; uncovered: " + ($uncovered -join ", ") + ")")
+}
 
 Write-Host ""
 Write-Host "--- invalid plans, each refused for its own reason ---" -ForegroundColor Cyan
