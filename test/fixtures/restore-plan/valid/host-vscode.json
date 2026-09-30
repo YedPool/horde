@@ -11,7 +11,8 @@
       "cwd": "C:\\Code\\horde",
       "resume": {
         "kind": "claude-resume",
-        "id": "7c1e2a90-0000-4000-8000-00000000000a"
+        "id": "7c1e2a90-0000-4000-8000-00000000000a",
+        "argv": ["claude", "--resume", "7c1e2a90-0000-4000-8000-00000000000a"]
       }
     },
     {
@@ -24,7 +25,8 @@
       "cwd": "C:\\Code\\wezfleet",
       "resume": {
         "kind": "claude-resume",
-        "id": "7c1e2a90-0000-4000-8000-00000000000b"
+        "id": "7c1e2a90-0000-4000-8000-00000000000b",
+        "argv": ["claude", "--resume", "7c1e2a90-0000-4000-8000-00000000000b"]
       }
     },
     {
@@ -37,7 +39,8 @@
       "cwd": "C:\\Code\\wezfleet",
       "resume": {
         "kind": "codex-resume",
-        "id": "7c1e2a90-0000-4000-8000-00000000000c"
+        "id": "7c1e2a90-0000-4000-8000-00000000000c",
+        "argv": ["codex", "UNMEASURED-placeholder-see-plan-step-5.1", "7c1e2a90-0000-4000-8000-00000000000c"]
       }
     },
     {
@@ -50,7 +53,8 @@
       "cwd": "C:\\Code\\wezfleet",
       "resume": {
         "kind": "claude-resume",
-        "id": "7c1e2a90-0000-4000-8000-00000000000d"
+        "id": "7c1e2a90-0000-4000-8000-00000000000d",
+        "argv": ["claude", "--resume", "7c1e2a90-0000-4000-8000-00000000000d"]
       }
     },
     {
@@ -63,7 +67,8 @@
       "cwd": "C:\\Code\\horde",
       "resume": {
         "kind": "claude-resume",
-        "id": "7c1e2a90-0000-4000-8000-00000000000e"
+        "id": "7c1e2a90-0000-4000-8000-00000000000e",
+        "argv": ["claude", "--resume", "7c1e2a90-0000-4000-8000-00000000000e"]
       }
     }
   ],

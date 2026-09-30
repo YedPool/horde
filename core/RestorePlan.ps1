@@ -9,8 +9,20 @@
 #               that is not strictly between 0 and 1 (0 and 1 would give one child the whole space).
 #   sessions  - a slot or a sessionId used by two sessions; a parent that names the session itself,
 #               or no session in the plan.
+#   resume    - two sessions with one resume kind and id; an empty argv; for claude-resume, a resume
+#               id that is not the session's own sessionId, or an argv without --resume followed by it.
 #   placement - a layout slot that names no session; a session whose slot is not in the layout; a slot
 #               placed more than once.
+#
+# UNIQUE ON WHAT IS RESTORED. A slot and a sessionId are names; what a host acts on is the resume
+# block. Two sessions with distinct sessionIds but one resume kind and id would start one
+# conversation twice, in two places - the pane-hijack class again, one level down (review of PR #17).
+# So the (kind, id) pair is unique too, and for Claude, whose resume id IS the conversation id, the
+# two must agree. The host runs argv as given (the AgentPort built it; a host never turns kind into
+# flags), so argv is what is checked for Claude: every --resume in it is followed by the resume id.
+# The form was read, not assumed: 12 live Claude processes on 2026-09-30, every one
+# `claude --resume <uuid>`. codex-resume's argv is UNMEASURED (plan step 5.1) and is not checked
+# beyond being non-empty; it gains its rule when its command is measured.
 #
 # EVERY SESSION IS PLACED EXACTLY ONCE. Section 4's first degradation rule is "sessions are never
 # dropped", and D3 says the session list is authoritative. Checking it on every plan makes the rule
@@ -22,7 +34,9 @@
 # findings about symptoms of the same fault. So a plan the schema refuses gets the schema's findings
 # only, and a plan it accepts gets every finding below, not just the first.
 #
-# Names - slots, session ids - are compared exactly, case included, as the JSON holds them.
+# Slots are compared exactly, case included, as the JSON holds them. Session ids, parents and resume
+# ids are UUIDs and are compared ignoring case: "AAAAAAAA-..." and "aaaaaaaa-..." are one conversation,
+# and an exact comparison let two sessions resume it (review of PR #17).
 
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
@@ -96,6 +110,30 @@ function Test-HordePlanNode {
     }
 }
 
+function Test-HordePlanResume {
+    # One session's resume block: unique on (kind, id), a command to run, and for Claude the right one.
+    param($Session, [int]$Index, $ResumeAt, $Findings)
+    Set-StrictMode -Version Latest
+    $at = '$.sessions[' + $Index + '].resume'
+    $resume = Get-HordePlanProp $Session "resume"
+    $kind = "$(Get-HordePlanProp $resume "kind")"; $rid = "$(Get-HordePlanProp $resume "id")"
+    # kind is one of an enum and holds no space, so the pair key cannot be forged by an id with one.
+    $key = $kind + " " + $rid
+    if ($ResumeAt.ContainsKey($key)) { [void]$Findings.Add($at + " (" + $kind + " '" + $rid + "') is also the resume of " + '$.sessions[' + $ResumeAt[$key] + "]; two sessions would resume one conversation") }
+    else { $ResumeAt[$key] = $Index }
+    $argv = @(Get-HordePlanProp $resume "argv")
+    if ($argv.Count -eq 0) { [void]$Findings.Add($at + ".argv is empty; a host runs the command it is handed, and there is none"); return }
+    if ($kind -cne "claude-resume") { return }
+    $sid = "$(Get-HordePlanProp $Session "sessionId")"
+    if ($rid -ine $sid) { [void]$Findings.Add($at + ".id '" + $rid + "' is not the session's sessionId '" + $sid + "'; Claude resumes a conversation by its own id") }
+    $flags = @(for ($k = 0; $k -lt $argv.Count; $k++) { if ("$($argv[$k])" -ceq "--resume") { $k } })
+    if ($flags.Count -eq 0) { [void]$Findings.Add($at + ".argv has no --resume; a claude-resume command is claude --resume <id>") }
+    foreach ($k in $flags) {
+        $next = $null; if ($k + 1 -lt $argv.Count) { $next = "$($argv[$k + 1])" }
+        if ($null -eq $next -or $next -ine $rid) { [void]$Findings.Add($at + ".argv[" + $k + "] is --resume followed by '" + $next + "', not the resume id '" + $rid + "'") }
+    }
+}
+
 function Add-HordePlanPlacement {
     param($Placements, [string]$Slot, [string]$Path)
     if (-not $Placements.ContainsKey($Slot)) { $Placements[$Slot] = New-Object System.Collections.ArrayList }
@@ -112,9 +150,11 @@ function Test-HordeRestorePlan {
     if ($bySchema.Count -gt 0) { return $bySchema }
 
     $findings = New-Object System.Collections.ArrayList
-    # Ordinal dictionaries: a PowerShell hashtable ignores case, and "S1" is not "s1".
+    # Slots in an ordinal dictionary: a PowerShell hashtable ignores case, and "S1" is not "s1". Ids in
+    # one that ignores case, because a UUID's hex digits in capitals are the same id.
     $slotAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
-    $idAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+    $idAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $resumeAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::OrdinalIgnoreCase)
     $sessions = @(Get-HordePlanProp $Plan "sessions")
     for ($i = 0; $i -lt $sessions.Count; $i++) {
         $slot = "$(Get-HordePlanProp $sessions[$i] "slot")"; $id = "$(Get-HordePlanProp $sessions[$i] "sessionId")"
@@ -122,11 +162,12 @@ function Test-HordeRestorePlan {
         else { $slotAt[$slot] = $i }
         if ($idAt.ContainsKey($id)) { [void]$findings.Add('$.sessions[' + $i + "].sessionId '" + $id + "' is also the sessionId of " + '$.sessions[' + $idAt[$id] + "]") }
         else { $idAt[$id] = $i }
+        Test-HordePlanResume -Session $sessions[$i] -Index $i -ResumeAt $resumeAt -Findings $findings
     }
     for ($i = 0; $i -lt $sessions.Count; $i++) {
         $parent = Get-HordePlanProp $sessions[$i] "parent"
         if ($null -eq $parent) { continue }
-        if ("$parent" -ceq "$(Get-HordePlanProp $sessions[$i] "sessionId")") { [void]$findings.Add('$.sessions[' + $i + "].parent names the session itself") }
+        if ("$parent" -ieq "$(Get-HordePlanProp $sessions[$i] "sessionId")") { [void]$findings.Add('$.sessions[' + $i + "].parent names the session itself") }
         elseif (-not $idAt.ContainsKey("$parent")) { [void]$findings.Add('$.sessions[' + $i + "].parent '" + $parent + "' names no session in the plan") }
     }
 

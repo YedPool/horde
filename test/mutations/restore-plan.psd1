@@ -59,8 +59,41 @@
         @{ Name = "duplicate-id-allowed"
            Find = 'if ($idAt.ContainsKey($id)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "session-ids-exact-case"
+           Find = '$idAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)'
+           Replace = '$idAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::Ordinal)' }
+        @{ Name = "resume-pairs-exact-case"
+           Find = '$resumeAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::OrdinalIgnoreCase)'
+           Replace = '$resumeAt = New-Object ''System.Collections.Generic.Dictionary[string,int]'' ([System.StringComparer]::Ordinal)' }
+        @{ Name = "resume-not-checked"
+           Find = 'Test-HordePlanResume -Session $sessions[$i] -Index $i -ResumeAt $resumeAt -Findings $findings'
+           Replace = '' }
+        @{ Name = "duplicate-resume-allowed"
+           Find = 'if ($ResumeAt.ContainsKey($key)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "empty-argv-allowed"
+           Find = 'if ($argv.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "claude-rules-skipped"
+           Find = 'if ($kind -cne "claude-resume") { return }'
+           Replace = 'return' }
+        @{ Name = "claude-resume-id-not-sessionId-allowed"
+           Find = 'if ($rid -ine $sid) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "claude-resume-id-exact-case"
+           Find = 'if ($rid -ine $sid) {'
+           Replace = 'if ($rid -cne $sid) {' }
+        @{ Name = "claude-argv-without-resume-allowed"
+           Find = 'if ($flags.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "claude-argv-resume-target-unchecked"
+           Find = 'if ($null -eq $next -or $next -ine $rid) {'
+           Replace = 'if ($null -eq $next) {' }
+        @{ Name = "parent-self-exact-case"
+           Find = 'if ("$parent" -ieq "$(Get-HordePlanProp $sessions[$i] "sessionId")") {'
+           Replace = 'if ("$parent" -ceq "$(Get-HordePlanProp $sessions[$i] "sessionId")") {' }
         @{ Name = "parent-self-allowed"
-           Find = 'if ("$parent" -ceq "$(Get-HordePlanProp $sessions[$i] "sessionId")") {'
+           Find = 'if ("$parent" -ieq "$(Get-HordePlanProp $sessions[$i] "sessionId")") {'
            Replace = 'if ($false) {' }
         @{ Name = "parent-unknown-allowed"
            Find = 'elseif (-not $idAt.ContainsKey("$parent")) {'

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "horde/schema/restore-plan.v1",
   "title": "restore-plan v1",
-  "description": "What a host is handed to bring a fleet back (planning/migration-plan.html section 4). Sessions are authoritative and the layout is advisory (D3): the sessions list alone is enough to restore every session with its identity, directory and conversation, and the layout only arranges them. Every leaf of the layout is a slot, every slot names one session, and nothing in the plan is keyed by a pane number - the pane a slot lands in is recorded afterwards, as a realisation, never as identity. What this schema cannot say is checked by core/RestorePlan.ps1: every node is exactly a leaf or a container, every session's slot appears in the layout exactly once (sessions are never dropped), slots and session ids are unique, a parent names another session in the plan, a ratio lies strictly between 0 and 1, and a container has at least two children.",
+  "description": "What a host is handed to bring a fleet back (planning/migration-plan.html section 4). Sessions are authoritative and the layout is advisory (D3): the sessions list alone is enough to restore every session with its identity, directory and conversation, and the layout only arranges them. Every leaf of the layout is a slot, every slot names one session, and nothing in the plan is keyed by a pane number - the pane a slot lands in is recorded afterwards, as a realisation, never as identity. What this schema cannot say is checked by core/RestorePlan.ps1: every node is exactly a leaf or a container, every session's slot appears in the layout exactly once (sessions are never dropped), slots are unique, session ids and resume (kind, id) pairs are unique ignoring case, a claude-resume id is the session's own and its argv resumes that id, argv is not empty, a parent names another session in the plan, a ratio lies strictly between 0 and 1, and a container has at least two children.",
   "type": "object",
   "required": ["schemaVersion", "planId", "sessions", "layout"],
   "properties": {
@@ -16,19 +16,20 @@
         "required": ["slot", "sessionId", "agent", "role", "label", "cwd", "resume"],
         "properties": {
           "slot": { "type": "string", "description": "The name the layout uses for this session, unique in the plan. Never a pane number." },
-          "sessionId": { "type": "string", "description": "The conversation id: the session's stable identity, unique in the plan." },
+          "sessionId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The conversation id: the session's stable identity, unique in the plan ignoring the case of its hex digits (a UUID in capitals is the same id). Same shape as schema/session-record.v1's sessionId." },
           "agent": { "type": "string", "description": "Which agent runs the session, e.g. claude or codex." },
           "role": { "type": "string", "enum": ["warchief", "orc", "goblin"], "description": "The native roles of core/roles.json; test/test-schema-restore-plan.ps1 fails if the two differ." },
           "label": { "type": "string", "description": "The session's fleet label, e.g. D or D1." },
-          "parent": { "type": "string", "description": "The sessionId of the session that spawned this one. When present it names another session in this plan." },
+          "parent": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "description": "The sessionId of the session that spawned this one. When present it names another session in this plan, ignoring case." },
           "cwd": { "type": "string", "description": "The directory the session runs in." },
           "resume": {
             "type": "object",
-            "description": "How to bring the conversation back, produced by the agent's port so a host runs the command it is given without knowing each agent's flags.",
-            "required": ["kind", "id"],
+            "description": "How to bring the conversation back, produced by the AgentPort. A host runs argv as it is given and never turns kind into flags itself. No two sessions share a kind and id (ignoring case), so no conversation is resumed twice.",
+            "required": ["kind", "id", "argv"],
             "properties": {
-              "kind": { "type": "string", "description": "e.g. claude-resume, codex-resume." },
-              "id": { "type": "string", "description": "What the resume command resumes." }
+              "kind": { "type": "string", "enum": ["claude-resume", "codex-resume"], "description": "Which AgentPort produced argv. claude-resume: id is the session's own sessionId (ignoring case) and argv holds --resume followed by that id, as measured on 12 live Claude processes on 2026-09-30 (claude --resume <uuid>). codex-resume: its command is UNMEASURED (planning/migration-plan.html step 5.1); the fixtures carry a placeholder argv that says so, and nothing about its argv is checked until it is measured." },
+              "id": { "type": "string", "pattern": "\\S", "description": "The conversation the command resumes." },
+              "argv": { "type": "array", "items": { "type": "string", "pattern": "\\S" }, "description": "The exact command a host runs, program first, one argument per element, never joined into a line to be re-split. At least one element, each with a non-space character." }
             },
             "additionalProperties": false
           }

@@ -454,10 +454,12 @@
   "sessions": [
     { "slot": "s1", "sessionId": "aaaaaaaa-...", "agent": "claude", "role": "orc",
       "label": "D", "cwd": "C:\\Users\\...\\wezfleet",
-      "resume": { "kind": "claude-resume", "id": "aaaaaaaa-..." } },
+      "resume": { "kind": "claude-resume", "id": "aaaaaaaa-...",
+                  "argv": [ "claude", "--resume", "aaaaaaaa-..." ] } },
     { "slot": "s2", "sessionId": "bbbbbbbb-...", "agent": "codex", "role": "goblin",
       "label": "D1", "parent": "aaaaaaaa-...", "cwd": "C:\\...",
-      "resume": { "kind": "codex-resume", "id": "bbbbbbbb-..." } }
+      "resume": { "kind": "codex-resume", "id": "bbbbbbbb-...",
+                  "argv": [ "codex", "UNMEASURED-placeholder-see-plan-step-5.1", "bbbbbbbb-..." ] } }
   ],
   "layout": {
     "advisory": true,
@@ -472,8 +474,14 @@
 <p>
   Every leaf of the layout is a <code>slot</code>, and every slot names a session by its stable id.
   Nothing in the plan is keyed by a pane number. The <code>resume</code> block is produced by the
-  AgentPort, so the Lua no longer needs to know that Claude resumes with <code>--resume</code> or how Codex
-  does it - it runs the command it is given.
+  AgentPort, and its <code>argv</code> is the exact command a host runs, program first and one argument
+  per element. A host never turns <code>kind</code> into flags itself, so the Lua no longer needs to know
+  that Claude resumes with <code>--resume</code> or how Codex does it - it runs the command it is given.
+  <code>kind</code> says which AgentPort built it: <code>claude-resume</code>, whose <code>id</code> is the
+  session's own id and whose argv is <code>claude --resume &lt;id&gt;</code> (read off 12 live Claude
+  processes on 2026-09-30), or <code>codex-resume</code>, whose command is not yet measured (step 5.1): its
+  argv above is a placeholder and says so. No two sessions share a <code>kind</code> and <code>id</code>, so
+  no conversation is resumed twice.
 </p>
 
 <h3>Host capabilities</h3>

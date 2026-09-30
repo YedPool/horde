@@ -25,6 +25,11 @@ $native = @((Get-HordeRoleTable).native)
 $enum = @($schema.properties.sessions.items.properties.role.enum)
 Check ($native.Count -ge 3) ("CONTROL: core/roles.json was read (" + ($native -join ", ") + ")")
 Check ((($enum | Sort-Object) -join ",") -ceq (($native | Sort-Object) -join ",")) ("the role enum is exactly core/roles.json's native roles (" + ($enum -join ", ") + ")")
+# Each kind is one an AgentPort produces. codex-resume is in the list with its argv UNMEASURED (plan
+# step 5.1): the kind exists, the command it stands for has not been read off a live Codex yet.
+$kinds = @($schema.properties.sessions.items.properties.resume.properties.kind.enum)
+Check (($kinds -join ",") -ceq "claude-resume,codex-resume") ("resume.kind is one of the AgentPort kinds (" + ($kinds -join ", ") + ")")
+Check ($schema.properties.sessions.items.properties.resume.properties.kind.description -cmatch 'codex-resume.*UNMEASURED') "the schema says codex-resume's command is unmeasured"
 # NOTHING IS KEYED BY A PANE NUMBER. Measured on the schema text itself, so a field added anywhere -
 # a session, a node, the top - is seen. CONTROL: the same search finds a word known to be there.
 $schemaText = [System.IO.File]::ReadAllText((Join-Path $root "schema\restore-plan.v1.json"))
@@ -128,6 +133,18 @@ $expect = [ordered]@{
     "parent-not-in-plan"         = @{ like = '$.sessions`[1`].parent * names no session in the plan'; n = 1; schema = $false }
     "parent-is-self"             = @{ like = '$.sessions`[1`].parent names the session itself'; n = 1; schema = $false }
     "slot-case-differs"          = @{ like = '*.root.children`[0`] names slot ''S1'', which no session in the plan has'; n = 2; schema = $false }
+    # What is restored: the conversation each session resumes, and the command a host runs for it.
+    "resume-no-argv"             = @{ like = '$.sessions`[0`].resume has no ''argv'''; n = 1; schema = $true }
+    "resume-kind-unknown"        = @{ like = '$.sessions`[0`].resume.kind is ''claude-continue'', not one of*'; n = 1; schema = $true }
+    "argv-empty-string"          = @{ like = '$.sessions`[0`].resume.argv`[1`] does not match*'; n = 1; schema = $true }
+    "session-id-not-uuid"        = @{ like = '$.sessions`[0`].sessionId does not match*'; n = 1; schema = $true }
+    "parent-not-uuid"            = @{ like = '$.sessions`[1`].parent does not match*'; n = 1; schema = $true }
+    "argv-empty"                 = @{ like = '$.sessions`[1`].resume.argv is empty*'; n = 1; schema = $false }
+    "claude-resume-other-id"     = @{ like = '$.sessions`[0`].resume.id * is not the session''s sessionId*'; n = 1; schema = $false }
+    "claude-argv-no-resume"      = @{ like = '$.sessions`[0`].resume.argv has no --resume*'; n = 1; schema = $false }
+    "claude-argv-other-id"       = @{ like = '$.sessions`[0`].resume.argv`[1`] is --resume followed by *, not the resume id*'; n = 1; schema = $false }
+    "session-id-case-differs"    = @{ like = '$.sessions`[1`].sessionId * is also the sessionId of $.sessions`[0`]*'; n = 1; schema = $false }
+    "resume-pair-case-differs"   = @{ like = '$.sessions`[1`].resume * is also the resume of $.sessions`[0`]*'; n = 1; schema = $false }
 }
 $invalid = @(Get-ChildItem -LiteralPath (Join-Path $fx "invalid") -Filter *.json -File | ForEach-Object { $_.BaseName })
 $unlisted = @($invalid | Where-Object { -not $expect.Contains($_) })
@@ -148,6 +165,26 @@ foreach ($name in $expect.Keys) {
         Check ($bySchema.Count -eq 0) ("  and JSON Schema alone cannot see it (" + ($bySchema -join "; ") + ")")
     }
 }
+
+Write-Host ""
+Write-Host "--- ids name one conversation whatever the case of their hex digits ---" -ForegroundColor Cyan
+# A UUID's hex digits in capitals are the same id, so a comparison that minded case would let two
+# sessions resume one conversation (session-id-case-differs, resume-pair-case-differs above) and would
+# refuse a parent or a resume id that names the right session in capitals (these two).
+$pc = Read-Fixture "valid\section-4-example.json"
+$pc.sessions[1].parent = $pc.sessions[1].parent.ToUpperInvariant()
+$found = @(Findings $pc)
+Check ($found.Count -eq 0) ("a parent in capitals names its session (" + ($found -join "; ") + ")")
+$ps = Read-Fixture "valid\section-4-example.json"
+$ps.sessions[1].parent = $ps.sessions[1].sessionId.ToUpperInvariant()
+$found = @(Findings $ps)
+Check ($found.Count -eq 1 -and $found[0] -like '$.sessions`[1`].parent names the session itself') ("a parent that is the session's own id in capitals names the session itself (" + ($found -join "; ") + ")")
+$rc = Read-Fixture "valid\section-4-example.json"
+$rc.sessions[0].resume.id = $rc.sessions[0].sessionId.ToUpperInvariant()
+$rc.sessions[0].resume.argv = @("claude", "--resume", $rc.sessions[0].resume.id)
+$found = @(Findings $rc)
+Check ($rc.sessions[0].resume.id -cne $rc.sessions[0].sessionId) "CONTROL: the resume id and the sessionId differ in case"
+Check ($found.Count -eq 0) ("a claude resume id in capitals is the session's own id (" + ($found -join "; ") + ")")
 
 Write-Host ""
 Write-Host "--- the gate reports every problem, not the first ---" -ForegroundColor Cyan
