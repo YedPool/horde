@@ -151,7 +151,13 @@ foreach ($n in $live3) { Write-Host ("  still believed after the pid was reused:
 Check ($live3.Count -eq 0) "a reused pid makes every live field unknown"
 Check ((Val $r3.fields.sessionKind) -eq "interactive") "CONTROL: a reused pid leaves the identity fields known"
 
-Check ((Val $id.orphanProcesses) -contains 105 -and @(Val $id.orphanProcesses).Count -eq 1) "a claude process with no control file yields no record"
+$orph = @(Val $id.orphanProcesses)
+Check ($orph -contains 105 -and $orph -notcontains 101 -and $orph -notcontains 106) "a claude process with no control file yields no record"
+# AN ORPHAN IS A CLAUDE PROCESS NO FILE VERIFIES. 103's file is stale and its pid now belongs to a
+# later claude process; counting any file at that pid as a match hid the new process (review
+# finding 2 of PR #19).
+Check ((St $id.orphanProcesses) -eq "known" -and $orph -contains 103 -and $orph.Count -eq 2) "a claude process whose pid a stale file names is still an orphan"
+Check ("$($id.provisional['orphanProcesses'])" -like "*claude.exe*node*") "the process names an orphan is looked for under are marked provisional"
 $liveSet = @(Val $id.verifiedLive)
 Check ((St $id.verifiedLive) -eq "known" -and $liveSet.Count -eq 1 -and $liveSet -contains (Sid 1)) "the live set lists only sessions whose process is verified"
 
@@ -196,6 +202,16 @@ $r9b = Get-HordeIdentity -ClaudeDir $d9b -ProjectsDir $pDir -CodexDir $empty -Pr
 Check (@($r9b.findings | Where-Object { $_ -like "222.json:*procStart*" }).Count -eq 1) "a control file with no procStart is reported as a finding"
 Check (@($r9b.findings | Where-Object { $_ -like "223.json:*no start time*" }).Count -eq 1) "a process the table gives no start time is reported as a finding"
 Check ("$($r9b.records[(Sid 42)].processCheck)" -ceq "uncheckable" -and "$($r1.processCheck)" -ceq "verified" -and "$($r2.processCheck)" -ceq "gone" -and "$($r3.processCheck)" -ceq "reused") "every control file says which process check it passed or failed"
+Check ((St $r9b.orphanProcesses) -eq "unknown" -and $r9b.orphanProcesses.reason -like "*222*") "a claude process whose file cannot be checked is neither an orphan nor verified"
+# CLAUDE CAN RUN UNDER NODE, and a node process no file verifies may be a claude with no file. So
+# the orphan answer is unknown while one runs, never a known list that may be short; a node process
+# a file verifies is that claude, and does not stand in the way.
+$d9c = NewDir "claude"
+PutJson (Join-Path $d9c "231.json") (ClaudeRec 231 (Sid 44) (Created 0))
+$r9c = Get-HordeIdentity -ClaudeDir $d9c -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(231, "node.exe", (Created 0)), @(232, "claude.exe", (Created 3)))) -Now $now
+Check ((St $r9c.orphanProcesses) -eq "known" -and @(Val $r9c.orphanProcesses).Count -eq 1 -and @(Val $r9c.verifiedLive) -contains (Sid 44)) "CONTROL: a claude under node that its file verifies is no orphan"
+$r9d = Get-HordeIdentity -ClaudeDir $d9c -ProjectsDir $pDir -CodexDir $empty -Processes (Table @(@(231, "node.exe", (Created 0)), @(233, "node.exe", (Created 9)))) -Now $now
+Check ((St $r9d.orphanProcesses) -eq "unknown" -and $r9d.orphanProcesses.reason -like "*node*") "a node process no file verifies leaves the orphan answer unknown"
 
 # L-031: startedAt is the session start inside the process, seconds after the process began. It is
 # never the process check - here startedAt equals the table's time and procStart does not.

@@ -238,3 +238,13 @@ read) and of wezfleet's codex-sessions directory (0 files: the codex shape is ta
 - source: review finding 1 of PR #19, 2026-09-30, with the reviewer's probe: a control file for a dead pid and a live, process-verified file naming the same session id made the whole claude listing incomplete and dropped the live session from records and from verifiedLive. A session resumed after its process died leaves exactly that pair on disk. When one file is verified and every other is proven stale (processCheck gone or reused), the verified file is the record and each other file is a finding; two verified files, or any file that cannot be checked (uncheckable, no-table, or a codex file, which carries no pid), is still a duplicate and never settled (L-020).
 - disposition: test
 - where: test/test-identity.ps1 :: "a leftover file for a dead process does not hide the live session it names"
+
+### L-046 An orphan is a claude process no control file verifies, and the process names are provisional
+- source: review finding 2 of PR #19, 2026-09-30, with the reviewer's probe: a stale control file whose pid was reused by a new claude process hid that process from the orphan list, because any file at the pid counted as a match. An orphan is now a claude process that no file VERIFIES; a claude process at the pid of a file that cannot be checked makes the answer unknown. The names looked for, claude.exe and claude, are the only ones seen (11 claude.exe processes on 2026-09-30), but Claude Code can run under node (11 node.exe processes were running the same day, none identifiable by name), so any node process no file verifies makes the answer unknown rather than a known list that may be short; the rule is marked provisional on the result. On this machine that makes the orphan answer unknown whenever a node process runs.
+- disposition: test
+- where: test/test-identity.ps1 :: "a claude process whose pid a stale file names is still an orphan"
+
+### L-047 A node process no control file verifies leaves the orphan answer unknown
+- source: review finding 2 of PR #19, 2026-09-30 (see L-046); a node process that a control file does verify is that claude session and does not stand in the way.
+- disposition: test
+- where: test/test-identity.ps1 :: "a node process no file verifies leaves the orphan answer unknown"

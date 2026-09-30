@@ -52,6 +52,13 @@ $script:HordeCodexTtlDefault = 900
 # The statuses each agent is seen to write. Anything else is not guessed at.
 $script:HordeClaudeStatuses = @("idle", "busy")
 $script:HordeCodexStatuses = @("idle", "busy", "ended")
+# The process names an orphan is looked for under, and the names of a host Claude Code can run
+# inside. PROVISIONAL: claude.exe is the only name seen (11 claude.exe processes on 2026-09-30, all
+# the census found); a Claude run under node is not named claude, so a node process no file verifies
+# makes the orphan answer unknown rather than a list that may be short (review finding 2 of PR #19).
+$script:HordeClaudeProcessNames = @("claude.exe", "claude")
+$script:HordeClaudeHostNames = @("node.exe", "node")
+$script:HordeOrphanProvisional = "an orphan is looked for under the process names claude.exe and claude, the only ones seen; Claude Code can also run under node, which the name does not identify, so a node process no control file verifies makes the answer unknown"
 $script:HordeFormerNamesProvisional = "compaction keeps the session id (core-ownership L-047), but whether /clear gives the process a new id is unmeasured, so a former name's sessionId is carried as written and never merged"
 
 function Get-HordeClaudeSessionsDir { return (Join-Path $env:USERPROFILE ".claude\sessions") }
@@ -226,14 +233,14 @@ function Read-HordeClaudeControlFiles {
     $findings = New-Object System.Collections.ArrayList
     $entries = New-Object System.Collections.ArrayList
     $verified = New-Object System.Collections.ArrayList
-    $filePids = @{}
+    $verifiedPids = @{}
+    $uncheckablePids = @{}
     foreach ($f in (Get-HordeControlFiles -Dir $Dir -Agent "claude" -Gaps $gaps)) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
         # THE FILE IS NAMED BY ITS PID, and one that disagrees with its own pid is refused: 10 of 10
         # agreed on 2026-09-30, and wezfleet keyed by the pid field without ever looking at the name
         # (lib/Mail.ps1:144), so a copied or stale file would have been read as another process.
         if ($base -notmatch '^[0-9]{1,9}$') { [void]$gaps.Add($f.Name + " is not named by a pid, so it is not a control file this reader knows"); continue }
-        $filePids[[int]$base] = $true
         $j = Read-HordeControlJson -File $f -Gaps $gaps
         if ($null -eq $j) { continue }
         $pidField = Get-HordeField -Record $j -Name "pid"
@@ -250,7 +257,8 @@ function Read-HordeClaudeControlFiles {
         $procStartRaw = $null
         if ($procStartField.state -eq "known") { $procStartRaw = $procStartField.value }
         $verdict = Get-HordeProcessVerdict -ProcId $procId -ProcStart $procStartRaw -Processes $Processes
-        if ($verdict.same) { [void]$verified.Add($sid) }
+        if ($verdict.kind -ceq "uncheckable") { $uncheckablePids[$procId] = $true }
+        if ($verdict.same) { [void]$verified.Add($sid); $verifiedPids[$procId] = $true }
         # A stale file and a file that cannot be checked are both findings. An unreadable process
         # table is not one per file: it is said once, in verifiedLive and the orphan answer.
         elseif (@("gone", "reused", "uncheckable") -ccontains $verdict.kind) { [void]$findings.Add($f.Name + ": " + $verdict.reason) }
@@ -319,19 +327,34 @@ function Read-HordeClaudeControlFiles {
         $k["resumeCommand"] = New-HordeUnknown -Reason "the resume command is computed by the AgentPort (step 5.1), not read"
         [void]$entries.Add((New-HordeIdentityRecord -SessionId $sid -Source $f.FullName -Known $k -Missing "the claude control file has no" -Provisional @{ formerNames = $script:HordeFormerNamesProvisional } -ProcessCheck $verdict.kind))
     }
-    # A CLAUDE PROCESS WITH NO CONTROL FILE yields no record: it says nothing about which session it
-    # is. It is listed, because it is a real process holding resources (census 2026-09-30: one such
+    # A CLAUDE PROCESS NO CONTROL FILE VERIFIES yields no record: it says nothing about which session
+    # it is. It is listed, because it is a real process holding resources (census 2026-09-30: one such
     # orphan, alive, whose file Claude had removed). Known only when both the table and the listing
     # are whole - a file that could not be read may be that process's.
+    #
+    # VERIFIES, not merely "has a file at its pid": a stale file whose pid was reused by a new claude
+    # process hid that process when any file at the pid counted (review finding 2 of PR #19). A claude
+    # process at the pid of a file that cannot be checked is neither verified nor an orphan, so the
+    # answer is unknown. And the names are provisional (see $script:HordeOrphanProvisional): a node
+    # process no file verifies may be a claude with no file, so while one runs the answer is unknown,
+    # never a known list that may be short.
     $orphans = $null
     if ($Processes.state -ne "known") { $orphans = New-HordeUnknown -Reason ("the process table could not be read (" + $Processes.reason + ")") }
     elseif ($gaps.Count -gt 0) { $orphans = New-HordeUnknown -Reason "the control listing is incomplete, so a process without a readable file may still have one" }
     else {
         $list = New-Object System.Collections.ArrayList
+        $unsure = New-Object System.Collections.ArrayList
+        $hosts = New-Object System.Collections.ArrayList
         foreach ($p in $Processes.value.Values) {
-            if (("$($p.name)" -ieq "claude.exe" -or "$($p.name)" -ieq "claude") -and -not $filePids.ContainsKey([int]$p.pid)) { [void]$list.Add([int]$p.pid) }
+            $pp = [int]$p.pid
+            if ($verifiedPids.ContainsKey($pp)) { continue }
+            if ($script:HordeClaudeProcessNames -icontains "$($p.name)") {
+                if ($uncheckablePids.ContainsKey($pp)) { [void]$unsure.Add($pp) } else { [void]$list.Add($pp) }
+            } elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { [void]$hosts.Add($pp) }
         }
-        $orphans = New-HordeKnown -Value @($list | Sort-Object)
+        if ($unsure.Count -gt 0) { $orphans = New-HordeUnknown -Reason ("claude process " + (@($unsure | Sort-Object) -join ", ") + " has a control file that cannot be checked, so whether it is that file's process is unknown") }
+        elseif ($hosts.Count -gt 0) { $orphans = New-HordeUnknown -Reason ("" + $hosts.Count + " node process(es) that no control file verifies are running (" + (@($hosts | Sort-Object) -join ", ") + "), and Claude Code can run under node, so a claude process with no file may be among them") }
+        else { $orphans = New-HordeKnown -Value @($list | Sort-Object) }
     }
     return (New-HordeAgentRead -Agent "claude" -Entries $entries -Gaps $gaps -Verified $verified -Orphans $orphans -Findings $findings)
 }
@@ -409,7 +432,9 @@ function Get-HordeIdentity {
     #   verifiedLive     answer: the session ids whose process was checked and is the one described.
     #                    Unknown when the process table or the claude listing is not whole, because a
     #                    session missing from it may be alive.
-    #   orphanProcesses  answer: claude processes running with no control file
+    #   orphanProcesses  answer: claude processes running that no control file verifies; unknown
+    #                    while one cannot be told apart (see $script:HordeOrphanProvisional)
+    #   provisional      field -> why the rule behind it rests on something unmeasured
     #   findings         stale files, reused pids, files that cannot be checked, leftovers beside a
     #                    verified file, former names naming another session
     param(
@@ -479,7 +504,8 @@ function Get-HordeIdentity {
     elseif ($complete["claude"].state -ne "known") { $verifiedLive = New-HordeUnknown -Reason ("the claude listing is incomplete: " + $complete["claude"].reason) }
     else { $verifiedLive = New-HordeKnown -Value @($claudeRead.verified | Where-Object { $records.ContainsKey($_) }) }
     return [pscustomobject]@{ PSTypeName = "Horde.Identity"; records = $records; complete = $complete; duplicates = @($duplicates)
-                              verifiedLive = $verifiedLive; orphanProcesses = $claudeRead.orphans; findings = @($findings) }
+                              verifiedLive = $verifiedLive; orphanProcesses = $claudeRead.orphans; findings = @($findings)
+                              provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }
 }
 
 function Get-HordeSelfSessionId {

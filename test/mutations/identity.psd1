@@ -129,5 +129,17 @@
         @{ Name = "leftover-not-reported"
            Find = '[void]$leftoverFindings.Add('
            Replace = '$null = (' }
+        @{ Name = "orphan-hidden-by-any-file-at-its-pid"
+           Find = 'if ($verdict.kind -ceq "uncheckable") { $uncheckablePids[$procId] = $true }'
+           Replace = '$verifiedPids[$procId] = $true' }
+        @{ Name = "uncheckable-pid-called-orphan"
+           Find = 'if ($uncheckablePids.ContainsKey($pp)) { [void]$unsure.Add($pp) } else { [void]$list.Add($pp) }'
+           Replace = '[void]$list.Add($pp)' }
+        @{ Name = "node-host-ignored"
+           Find = '} elseif ($script:HordeClaudeHostNames -icontains "$($p.name)") { [void]$hosts.Add($pp) }'
+           Replace = '}' }
+        @{ Name = "orphan-names-not-provisional"
+           Find = 'provisional = @{ orphanProcesses = $script:HordeOrphanProvisional } }'
+           Replace = 'provisional = @{} }' }
     )
 }
