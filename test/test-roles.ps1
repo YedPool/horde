@@ -222,6 +222,23 @@ finally {
 }
 
 Write-Host ""
+Write-Host "--- a claim ages in UTC ---" -ForegroundColor Cyan
+
+# wezfleet stores spawnedAt in UTC; -Now defaults to local time. Compared as they stood, the age is off
+# by the local offset: at UTC-4 a claim four hours past the backstop still read as pending, and east
+# of UTC a live one expired early. Claims five minutes either side of the 10080-minute backstop,
+# against a local clock, catch either direction wherever the offset is more than five minutes.
+$claimNowLocal = Get-Date
+$claimNowUtc = $claimNowLocal.ToUniversalTime()
+if ([System.TimeZoneInfo]::Local.GetUtcOffset($claimNowUtc).TotalMinutes -eq 0) {
+    Write-Host "  [SKIP] the local clock is UTC here, so the next two checks cannot tell a zone mix-up from a correct age" -ForegroundColor Yellow
+}
+$claimInside = [pscustomobject]@{ spawnedAt = $claimNowUtc.AddMinutes(-(10080 - 5)).ToString("o") }
+$claimOutside = [pscustomobject]@{ spawnedAt = $claimNowUtc.AddMinutes(-(10080 + 5)).ToString("o") }
+Check ((Test-HordeClaimPending -Claim $claimInside -Now $claimNowLocal) -eq $true) "a claim five minutes inside the seven-day backstop is pending, against a local clock"
+Check ((Test-HordeClaimPending -Claim $claimOutside -Now $claimNowLocal) -eq $false) "a claim five minutes past the seven-day backstop is not pending, against a local clock"
+
+Write-Host ""
 Write-Host "--- a misnamed record may be the only copy of a session ---" -ForegroundColor Cyan
 
 # wezfleet skips a record whose id does not match its file name. When the session it names has no
