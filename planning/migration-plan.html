@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horde - Strangler Migration Plan</title>
+<style>
+  :root {
+    --bg: #12141a; --panel: #1a1d26; --panel2: #21252f; --ink: #e6e8ee; --dim: #9aa3b2;
+    --line: #2d323e; --accent: #7aa2f7; --good: #4ec9a0; --warn: #e5c07b; --bad: #e06c75;
+    --horde: #c96a3f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 32px 16px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.4px; }
+  h1 .brand { color: var(--horde); }
+  .sub { color: var(--dim); font-size: 14px; }
+  h2 { font-size: 20px; margin: 46px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--accent); }
+  p { margin: 0 0 14px; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px;
+         background: var(--panel2); padding: 1px 5px; border-radius: 3px; color: #cfd6e4; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+        padding: 14px 16px; overflow-x: auto; margin: 0 0 18px; font-size: 12.5px; line-height: 1.5;
+        font-family: "Cascadia Mono", Consolas, monospace; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0 0 22px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.6px; }
+  td.c { text-align: center; white-space: nowrap; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+          border-radius: 6px; padding: 14px 18px; margin: 0 0 14px; }
+  .card h4 { margin: 0 0 8px; font-size: 15px; }
+  .card p:last-child { margin-bottom: 0; }
+  .card.horde { border-left-color: var(--horde); }
+  .card.good { border-left-color: var(--good); }
+  .card.warn { border-left-color: var(--warn); }
+  .note { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+          padding: 12px 16px; margin: 0 0 18px; color: var(--dim); font-size: 14px; }
+  .note strong { color: var(--ink); }
+  .y { color: var(--good); font-weight: 600; }
+  .n { color: var(--bad); font-weight: 600; }
+  .p { color: var(--warn); font-weight: 600; }
+  .phase { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.7px;
+           padding: 2px 8px; border-radius: 3px; background: rgba(122,162,247,0.15); color: var(--accent);
+           margin-right: 8px; vertical-align: 2px; }
+  .sz { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--dim); }
+  ol, ul { margin: 0 0 16px; padding-left: 24px; }
+  li { margin-bottom: 7px; }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><span class="brand">Horde</span> - Strangler Migration Plan</h1>
+  <div class="sub">
+    From wezfleet (PowerShell) and wezurrect (Lua) to one session-state engine with pluggable layout hosts.
+    Written 2026-09-29 against measured state of both repositories. Supersedes the order of work in
+    <code>YedPool/wezfleet</code>'s <code>planning/wezfleet-v3-rewrite-proposal.html</code>: same destination,
+    different route. This is the plan's only copy; the one in wezfleet points here.
+  </div>
+</header>
+
+<div class="note">
+  <strong>The whole plan in four sentences.</strong> Replace the system module by module while it keeps
+  running, reading before writing and deleting last. Put a versioned JSON contract between the
+  session-state engine and anything that draws terminals, so WezTerm is one host and VS Code is another.
+  Treat session state as the truth and layout as a suggestion, so a restore never depends on a picture of
+  the screen. And give the Horde's roles a place in the schema, so "exactly one Warchief" is something the
+  system checks rather than something everyone remembers.
+</div>
+
+<h2>1. The decisions this plan rests on</h2>
+
+<div class="card">
+  <h4>D1. A new repository, Horde, built as a strangler of the other two</h4>
+  <p>
+    <strong>Decided 2026-09-29.</strong> Horde is its own private repository. The old wezfleet and
+    wezterm-resurrect repositories stay intact and keep running the fleet throughout.
+  </p>
+  <p>
+    An earlier draft of this plan argued the opposite - migrate inside wezfleet - on the grounds that a
+    third repository adds a synchronisation problem while two already exist. That cost is real, and this
+    is how it is paid: <strong>Horde never writes to the old systems' state until a step's switch.</strong>
+    Its first module only reads their stores. So there is no two-way synchronisation to keep correct;
+    there is one-way reading, which cannot corrupt anything, and a sequence of deliberate, shadowed
+    handovers. What the new repository buys in return is a clean start - structure, history and
+    naming - without carrying the shape of the search that produced the old ones.
+  </p>
+  <p>
+    File references in this plan are to <code>YedPool/wezfleet</code> unless another repository is named.
+  </p>
+</div>
+
+<div class="card">
+  <h4>D2. Read first, write second, delete last</h4>
+  <p>
+    A new reader cannot break anything, because it changes nothing. So the first real module is a
+    projection that reads every existing store and writes none. Consumers move onto it one at a time.
+    Only when every reader goes through it do writers move, because only then can storage change without
+    any consumer noticing. Deletion comes after the replacement has run in production.
+  </p>
+</div>
+
+<div class="card good">
+  <h4>D3. Session state is authoritative; layout is advisory</h4>
+  <p>
+    A restore must bring back every session with the right identity, directory and conversation even if
+    no layout was saved at all. Layout only arranges them. This one rule removes the pane-hijack class
+    structurally: a layout slot refers to a session by its stable id, and the pane it lands in is recorded
+    afterwards as derived fact, never as identity.
+  </p>
+</div>
+
+<div class="card">
+  <h4>D4. Contract before code</h4>
+  <p>
+    Three versioned JSON schemas with golden fixture files that both languages validate against: the
+    session record, the restore plan, and the existing <code>pane-sessions</code> record. Today the Lua
+    reads a format the PowerShell writes and nothing states what it is, so neither side's tests can see
+    the other. That gap is where the hijack lived.
+  </p>
+</div>
+
+<div class="card">
+  <h4>D5. Degradation lives in the engine, not in the adapters</h4>
+  <p>
+    Each host declares what it can do. The engine is told those capabilities and hands the host a plan it
+    can apply completely. Adapters stay dumb and each degradation rule is written and tested once, instead
+    of every host inventing its own idea of what to do when it cannot split a pane.
+    (Capability negotiation; the same idea as the agent capability matrix.)
+  </p>
+</div>
+
+<div class="card">
+  <h4>D6. Shadow before switch</h4>
+  <p>
+    Every time the new path takes over from the old one, it first runs beside it: both compute a result,
+    the differences are logged, the old result is still the one used. Only after a run of clean
+    comparisons does the default flip, and the old path stays behind a flag for one more phase.
+    (Parallel run, also called dark launch.)
+  </p>
+</div>
+
+<div class="card">
+  <h4>D7. Ratchets, not promises</h4>
+  <p>
+    Every "we will convert the rest later" becomes an allowlist that a test forbids from growing. The
+    allowlist can only shrink. This is the mechanism that stops a strangler stalling halfway and leaving
+    two systems forever, which is the characteristic way these migrations fail.
+  </p>
+  <p>
+    <strong>The repository already has one, and the plan extends it rather than inventing a second.</strong>
+    <code>test_debug/test-ssot.ps1</code> names every file still reading the roster and fails on a new one
+    <em>or</em> on a declared one that has since been cleaned up - so the list cannot silently go stale in
+    either direction. Horde's ratchets - the adoption ledger in phase 3 and the ownership table in
+    phase 0 - are built the same way, and live in Horde.
+  </p>
+</div>
+
+<div class="card">
+  <h4>D8. The engine stays PowerShell during the migration</h4>
+  <p>
+    Changing language mid-migration doubles the moving parts. The contract is JSON on purpose, so the
+    engine's language can be revisited after the migration without touching any host.
+  </p>
+</div>
+
+<div class="card horde">
+  <h4>D9. No module is replaced until its knowledge ledger is complete</h4>
+  <p>
+    The instruction: every piece rebuilt with the correct structure <em>and</em> the utmost
+    attention to detail, which means actually reading the old code, pull requests and documentation that
+    hold hard-earned knowledge. Measured, that knowledge is large and scattered:
+  </p>
+  <pre><code>  wezfleet   124 commits, 108 with explanatory bodies (3,832 message lines)
+             12 PRs, 15 planning docs (3,170 lines), 4 BUG write-ups
+             tasks/lessons.md: 24 entries
+             3,551 comment lines in lib/ - 35% of the library is explanation
+             70 dated measurements in comments
+  wezurrect  451 commits, 69 PRs, 8 planning docs, 778 comment lines</code></pre>
+  <p>
+    Too much to read once and remember, so it is harvested <strong>just in time, per module</strong>. Before
+    a step replaces a module, <code>planning/ledger/&lt;module&gt;.md</code> is written from five sources:
+    the module's own comments; <code>git log --follow</code> of every file it spans; every pull request that
+    touched those files, in both repositories; every planning, BUG and lessons entry that names it; and its
+    tests, where each test name is a behaviour someone once needed.
+  </p>
+  <p>
+    Every entry carries a citation - commit, PR, document or <code>file:line</code> - and exactly one
+    disposition: <strong>encoded as a test</strong> in the replacement, <strong>carried as a comment</strong>,
+    or <strong>deliberately dropped, with the reason</strong>. A gate test fails on any entry without one, and
+    the replacing pull request links its ledger. Nothing is lost silently, because "we did not look" becomes
+    a visible empty field instead of an absence.
+  </p>
+  <p>
+    <strong>Why this is not optional, from this plan's own history:</strong> its first version asserted the
+    Warchief had no field and no invariant, without reading <code>Hierarchy.ps1</code> or
+    <code>Master.ps1</code>. Both existed. A ledger for the hierarchy module would have made that impossible.
+  </p>
+</div>
+
+<div class="card">
+  <h4>D10. Branches, worktrees, atomic commits, tightly scoped pull requests</h4>
+  <p>
+    Every step is done on its own branch in its own worktree, in the one folder beside the repository,
+    created from a freshly updated <code>main</code>. From the repository root:
+  </p>
+  <pre><code>  git fetch origin main
+  git worktree add -b &lt;branch&gt; ../horde-worktrees/&lt;name&gt; origin/main</code></pre>
+  <p>
+    One logical change per commit, independently revertible. One concern per pull request, merged as a
+    regular merge commit, never squashed. Worktrees are what make this safe here rather than merely tidy:
+    the house rule is never to switch branches under a running suite, and a worktree is a separate
+    checkout, so work continues while tests run. They are also known to work - repo identity comes from
+    <code>git rev-parse --git-common-dir</code>, so a worktree files runs under the same store, and every
+    commit of this migration's first pull requests was verified from its own worktree.
+  </p>
+</div>
+
+<div class="card horde">
+  <h4>D11. Battle-tested: the fleet runs on each piece before it counts</h4>
+  <p>
+    <strong>Instruction, 2026-09-29:</strong> as much real end-to-end, user-simulated testing as possible,
+    and the fleet moved onto the new system piece by piece so that it is actually battle-tested.
+  </p>
+  <p>
+    So every step that takes something over has a <strong>third gate</strong>, after its tests and its
+    ledger: the live fleet uses it for real work. Concretely, in the order the phases produce them -
+  </p>
+  <ul>
+    <li><strong>Phase 2</strong> - the Warchief's own status checks run <code>horde status</code> beside the
+        old <code>wezfleet status</code>, and every disagreement is logged. The read model is proved by the
+        session that depends on it most.</li>
+    <li><strong>Phase 3</strong> - each command that moves onto the projection is used by the Orcs for their
+        real work before its entry leaves the ratchet.</li>
+    <li><strong>Phase 4</strong> - restores shadow on real WezTerm starts, not only in a test instance, and
+        the default flips only after a run of clean comparisons on the real layout.</li>
+    <li><strong>Phase 7</strong> - a real Goblin is spawned into a VS Code terminal and does real work.</li>
+  </ul>
+  <p>
+    Alongside that, an <strong>end-to-end suite</strong> drives the real <code>horde</code> command line the
+    way a person or an orchestrating session would - spawn, report, message, restore, read status -
+    inside an isolated WezTerm, asserting on what a user would see and on the state left behind. It is
+    built in Phase 0, before there is much to drive, so every later step lands with a scenario rather
+    than acquiring one afterwards.
+  </p>
+  <p>
+    The reason this is a gate and not a preference: the systems being replaced were repeatedly green in
+    their suites and wrong in use. A mechanism once existed, worked and had no callers while three suites
+    agreed it was fine. Use by the real fleet is the one test that cannot be passed by testing the wrong
+    thing.
+  </p>
+</div>
+
+<h2>2. The Horde, as architecture</h2>
+
+<div class="card warn">
+  <h4>Correction to the first version of this section</h4>
+  <p>
+    It said the master orchestrator was a convention, "with no field anywhere that says so and nothing
+    that would notice two of them." That was false, and it was written without reading the two files
+    named after the thing it described. <code>role</code> is already a field on every session record
+    (<code>lib/Registry.ps1:431</code>). <code>lib/Hierarchy.ps1</code> already holds "master
+    orchestrator (exactly one)" as an invariant and reports two masters as a finding rather than choosing
+    between them. <code>lib/Master.ps1</code> already has <code>Invoke-WfMasterEnsure</code>, an idempotent
+    command designed 2026-09-11 with a careful argument for who may start a master and who may not.
+    This is the reason for decision D9: a claim about what the system lacks is checked against the
+    system before it is written down.
+  </p>
+</div>
+
+<p>
+  So the naming scheme does not create structure. It <strong>renames structure that exists and works</strong>
+  - which is a smaller change and a more dangerous one, for reasons the repository has already paid for.
+</p>
+
+<table>
+  <tr><th>Name</th><th>New value</th><th>Value today</th><th class="c">Live now</th><th>Already enforced</th></tr>
+  <tr><td><strong>Thrall</strong>, the Warchief</td><td><code>warchief</code></td><td><code>master</code></td><td class="c">1</td>
+      <td>Exactly one; two is a finding a person resolves (<code>Hierarchy.ps1:85</code>). Absence is repaired only by the explicit, idempotent ensure command, never as a side effect.</td></tr>
+  <tr><td><strong>Orc</strong></td><td><code>orc</code></td><td><code>orchestrator</code></td><td class="c">6</td>
+      <td>Parent edges by session id (<code>Set-WfSessionParent</code>).</td></tr>
+  <tr><td><strong>Goblin</strong></td><td><code>goblin</code></td><td><code>session</code></td><td class="c">-</td>
+      <td>Parent edge to its Orc; <code>Test-WfMayMessage</code> governs who may message whom.</td></tr>
+  <tr><td><strong>Horde</strong></td><td><code>horde</code></td><td><em>none</em></td><td class="c">-</td>
+      <td>New: the root of the projection and the command name. The only genuinely new concept here.</td></tr>
+  <tr><td><strong>Gruumsh</strong></td><td><code>gruumsh</code></td><td><em>none</em></td><td class="c">0</td>
+      <td>Reserved. Nothing in this plan spends it.</td></tr>
+</table>
+<p class="sub">
+  Measured 2026-09-29: the vocabulary is <code>$script:WfRoles = @("master", "orchestrator", "session")</code>
+  at <code>lib/Hierarchy.ps1:28</code>; live records hold master 1, orchestrator 6; nine code sites compare
+  role values literally.
+</p>
+
+<div class="card horde">
+  <h4>Why renaming a stored value is the risky part, from this repository's own history</h4>
+  <p>
+    The obvious way to rename <code>master</code> to <code>warchief</code> is to rewrite every record. That
+    would push every record through the one write path that has <strong>lost <code>role</code> twice</strong>:
+  </p>
+  <ul>
+    <li><strong>2026-09-11:</strong> a writer rebuilt records from a fixed key list, and <code>role</code> and
+        <code>parent</code> were gone within one write. The fix, "merge, never replace - including fields this
+        function has never heard of", is at <code>lib/Registry.ps1:292</code>.</li>
+    <li><strong>2026-09-15:</strong> A's record lost its role, label, owner and parent in a four-minute window
+        with two tool calls in one second. A harness of three concurrent writers <strong>deleted the file in 22 of
+        25 rounds</strong>, because every writer used the same temp name and a replace over an existing file is
+        not atomic (<code>lib/Registry.ps1:130</code>).</li>
+  </ul>
+  <p>
+    <strong>A separate repository removes that risk entirely rather than managing it</strong> (step 0.8).
+    Horde speaks the new vocabulary natively and maps wezfleet's old values through one alias table
+    <em>as it reads them</em>. wezfleet's records are never rewritten, its nine literal comparisons are
+    never touched, and its writer is never exercised by the rename at all. Old values stay readable for
+    as long as any record could hold one, because records outlive the sessions that wrote them. A test
+    proves Horde opens no wezfleet file for writing.
+  </p>
+</div>
+
+<div class="card">
+  <h4>What this changes in the design</h4>
+  <p>
+    The cardinality checks move into the projection, so every consumer sees them instead of only the
+    commands that call <code>Get-WfHierarchyFindings</code> - reported with the same three-valued honesty as
+    everything else: if the registry cannot be read, the Warchief count is <em>unknown</em>, not zero.
+  </p>
+  <p>
+    And the point about the orchestrator being a client of the system still stands: Thrall's
+    <em>decisions</em> - what work exists and who holds it - belong in the Horde's records, so any session
+    can take the Warchief role cold after a compaction. That is the one genuinely missing piece, and it is
+    smaller than the first version of this section implied.
+  </p>
+</div>
+
+<h3>How the vocabulary migrates</h3>
+<ul>
+  <li><strong>No rename of the old system at all.</strong> wezfleet keeps its words for as long as it runs.
+      Horde speaks the new vocabulary from its first line, and one glossary maps old to new for anyone
+      reading both during the overlap.</li>
+  <li><strong><code>horde</code> is Horde's own command</strong>, separate from <code>wezfleet</code>, which
+      keeps working unchanged until the fleet has moved off it. <strong>Thrall is a role, not a command:</strong>
+      it names whichever session currently holds <code>role: warchief</code>, so it appears in records, logs
+      and prose, never as a binary.</li>
+  <li><strong>Existing letter labels (A, B, D...) survive</strong> as labels. Role and label are different
+      facts: role is what a session is, label is what humans call it.</li>
+  <li><strong><code>horde.yaml</code> carries a real cost here.</strong> Windows PowerShell 5.1 has no
+      built-in YAML parser, so YAML manifests mean taking a module dependency. Recommendation:
+      <code>horde.json</code> now, same name, and revisit the format with the engine language (D8).</li>
+</ul>
+
+<h3>Name availability, measured 2026-09-29</h3>
+<table>
+  <tr><th>Where</th><th>horde</th><th>Consequence</th></tr>
+  <tr><td>PowerShell Gallery</td><td class="y">free</td><td>The registry this engine would publish to. Claimable.</td></tr>
+  <tr><td>GitHub <code>YedPool/horde</code></td><td class="y">free</td><td>Available for the repository.</td></tr>
+  <tr><td>npm</td><td class="n">taken</td><td><code>horde@0.0.1</code>, "Unleash the horde!" - looks like a placeholder. Irrelevant unless something ships as a JS package.</td></tr>
+  <tr><td>Name recognition</td><td class="p">shared</td><td>Horde is also a long-standing open-source PHP groupware project (horde.org). Not a registry conflict for a PowerShell tool, but a search-results one worth weighing before going public.</td></tr>
+</table>
+<p class="sub">
+  Thrall was checked too, since it will appear in records: free on PowerShell Gallery and GitHub, taken on
+  npm by a similar placeholder. As a role name inside the tool rather than a published package, exposure
+  is minimal either way.
+</p>
+
+<h2>3. Target architecture</h2>
+
+<pre><code>                          +--------------------------------------------------------+
+   agents write their     |                     THE ENGINE                          |
+   own control files ---> |                                                          |
+   (claude natively,      |   identity        projection          restore planner    |
+    codex via our hook)   |   (tristate)      (one read model,    (sessions +        |
+                          |                    the Horde)          advisory layout)  |
+                          |                                                          |
+                          |   writers - one per fact, from the ownership table       |
+                          +-----+-------------------+--------------------+-----------+
+                                |                   |                    |
+                           AgentPort          TerminalPort          LayoutPort
+                        claude | codex      list  getText  spawn   capabilities
+                        resumeCommand      sendText kill setTitle  capture  apply
+                        capability matrix                          decorate
+                                |                   |                    |
+                +---------------+-------------------+--------------------+
+                |                                                        |
+        hosts/wezterm                                            hosts/vscode
+        - CLI adapter: runtime verbs + layout, out of process    - apply: .vscode/tasks.json
+        - Lua adapter: gui-startup apply (before the window       - capture: none
+          shows), picker, status bar, tab decoration             - runtime text: none
+                                                                  - kill: declined, honestly
+
+   Outputs every consumer reads, and nothing re-derives:
+       horde status --json        the Horde, merged, three-valued
+       horde restore-plan --json        what to bring back, and a suggested arrangement</code></pre>
+
+<p>
+  <strong>Why two ports on a host instead of one.</strong> <em>TerminalPort</em> operates on live panes -
+  it already exists as <code>lib/Hosts.ps1</code>, eight verbs with a conformance suite.
+  <em>LayoutPort</em> is about arrangement: taking a snapshot and reproducing one. They answer different
+  questions and fail differently, and a host can support one without the other - VS Code can apply a
+  layout but cannot read a terminal's text from outside the editor. Keeping them separate means the
+  capability matrix can say that precisely instead of pretending a host is all-or-nothing.
+</p>
+
+<h2>4. The layout abstraction</h2>
+
+<h3>Why WezTerm's own format cannot be the contract</h3>
+<p>
+  wezurrect saves WezTerm's pane tree: workspaces, windows, tabs, and splits with sizes in WezTerm's own
+  terms. VS Code has no splits in that sense - it has terminal groups. tmux has windows and panes but no
+  workspaces. A plain console has processes and nothing else. If the saved format is one host's native
+  shape, every other host has to reverse-engineer it. So the plan describes arrangement
+  <em>logically</em>, and each host maps the logic onto what it has.
+</p>
+
+<h3>The restore plan, v1</h3>
+<pre><code>{
+  "schemaVersion": 1,
+  "planId": "20260929-214500-horde",
+  "sessions": [
+    { "slot": "s1", "sessionId": "38d41f80-...", "agent": "claude", "role": "orc",
+      "label": "D", "cwd": "C:\\Users\\...\\wezfleet",
+      "resume": { "kind": "claude-resume", "id": "38d41f80-..." } },
+    { "slot": "s2", "sessionId": "01a0ef46-...", "agent": "codex", "role": "goblin",
+      "label": "D1", "parent": "38d41f80-...", "cwd": "C:\\...",
+      "resume": { "kind": "codex-resume", "id": "01a0ef46-..." } }
+  ],
+  "layout": {
+    "advisory": true,
+    "workspaces": [ { "name": "wezfleet", "windows": [ { "tabs": [
+      { "title": "D wezfleet orc",
+        "root": { "split": "right", "ratio": 0.6,
+                  "children": [ { "slot": "s1" }, { "slot": "s2" } ] } }
+    ] } ] } ]
+  }
+}</code></pre>
+
+<p>
+  Every leaf of the layout is a <code>slot</code>, and every slot names a session by its stable id.
+  Nothing in the plan is keyed by a pane number. The <code>resume</code> block is produced by the
+  AgentPort, so the Lua no longer needs to know that Claude resumes with <code>--resume</code> or how Codex
+  does it - it runs the command it is given.
+</p>
+
+<h3>Host capabilities</h3>
+<table>
+  <tr><th>Capability</th><th class="c">WezTerm Lua</th><th class="c">WezTerm CLI</th><th class="c">VS Code / Cursor</th><th class="c">Plain console</th></tr>
+  <tr><td>Windows</td><td class="c y">yes</td><td class="c y">yes</td><td class="c p">1 per folder</td><td class="c y">yes</td></tr>
+  <tr><td>Tabs</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Splits</td><td class="c y">any depth</td><td class="c y">any depth</td><td class="c p">1 level (groups)</td><td class="c n">no</td></tr>
+  <tr><td>Sizes</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Workspaces</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Capture layout</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Apply before first paint</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Runtime text (read / type)</td><td class="c p">in-process only</td><td class="c y">yes</td><td class="c n">no</td><td class="c n">no</td></tr>
+  <tr><td>Kill a session</td><td class="c y">yes</td><td class="c y">yes</td><td class="c n">declined</td><td class="c y">yes</td></tr>
+  <tr><td>Decorate (icon, colour, image)</td><td class="c y">yes</td><td class="c p">title only</td><td class="c p">icon, colour</td><td class="c n">no</td></tr>
+</table>
+<p class="sub">
+  Measured: WezTerm CLI has <code>spawn</code>, <code>split-pane</code>, <code>adjust-pane-size</code>,
+  <code>move-pane-to-new-tab</code>, <code>list</code>. VS Code apply via <code>tasks.json</code> with
+  <code>runOn: folderOpen</code> was proven against Cursor today. <strong>To verify in the VS Code spike:</strong>
+  task <code>presentation.group</code> for side-by-side terminals, and task terminal <code>icon</code>/<code>color</code>.
+  "Kill declined" is from today's finding that a session whose editor has exited survived every kill mechanism.
+</p>
+
+<h3>Degradation rules, applied by the engine</h3>
+<ol>
+  <li><strong>Sessions are never dropped.</strong> Every slot in the plan appears in the host's output,
+      whatever happens to the arrangement. This is D3 made mechanical.</li>
+  <li>Splits deeper than the host supports are flattened into sibling containers at the deepest supported
+      level, preserving left-to-right, top-to-bottom order.</li>
+  <li>No tabs: each tab becomes its own window if windows are supported, otherwise its own terminal.</li>
+  <li>No workspaces: workspace names become a prefix on window or terminal titles, so the grouping is still
+      visible to a human.</li>
+  <li>No sizes: ratios are dropped. Never approximated, because a guessed size looks like a bug.</li>
+  <li>The result is recorded as a <em>realisation</em>: which slot landed in which host handle. That is
+      derived, current, and rebuilt on every restore - never used as identity.</li>
+</ol>
+
+<h2>5. Imagery in panes</h2>
+
+<p>
+  Decoration is a host capability like any other, declared, degraded to nothing where unsupported, and
+  never load-bearing. The engine says <em>what</em> a session is - its role, label and state - and each host
+  decides how to show it.
+</p>
+
+<table>
+  <tr><th>Technique</th><th>Where</th><th>Status</th><th>Fit</th></tr>
+  <tr><td>Role icon and colour in the tab title</td><td>WezTerm Lua, <code>format-tab-title</code></td>
+      <td class="y">supported</td><td><strong>Best first step.</strong> Always visible, reflects live state, costs nothing at runtime. Glyphs written as escape sequences so source files stay ASCII.</td></tr>
+  <tr><td>Background image per window</td><td>WezTerm Lua, <code>set_config_overrides</code></td>
+      <td class="y">supported, per window</td><td>Works if each Orc owns a window - a Warchief banner in Thrall's window, a war-camp in each Orc's.</td></tr>
+  <tr><td>Background image per <em>pane</em></td><td>WezTerm</td>
+      <td class="p">unverified - believed unsupported</td><td>Backgrounds appear to be a window-level setting. Needs a measurement before anything is designed around it.</td></tr>
+  <tr><td>Portrait at pane start</td><td><code>wezterm imgcat</code></td>
+      <td class="y">measured present</td><td>Prints into the pane before the agent starts. Whether it survives the agent's own drawing is <strong>unmeasured</strong>.</td></tr>
+  <tr><td>Terminal icon and colour</td><td>VS Code</td><td class="p">to verify</td><td>The natural equivalent of the WezTerm tab decoration.</td></tr>
+</table>
+
+<h2>6. The migration, step by step</h2>
+
+<p class="sub">
+  Every step is its own pull request, shippable on its own, reversible on its own, and gated by a test that
+  must be green. Sizes are relative: <span class="sz">S</span> a session or less,
+  <span class="sz">M</span> about a day, <span class="sz">L</span> several.
+</p>
+
+<h3><span class="phase">PHASE 0</span>Ground rules - Horde exists, nothing changes for the fleet yet</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>0.1</td><td>Baseline the old system: wezfleet PRs #10, #11, #12 merged. <strong>Done 2026-09-29</strong> as merge commits <code>7748839</code>, <code>8e2ccd0</code>, <code>5f708e5</code> in <code>YedPool/wezfleet</code>.</td><td>wezfleet suite green on its <code>main</code>: 1,417 assertions, 0 failures.</td><td class="c sz">S</td></tr>
+  <tr><td>0.2</td><td>Private repository, MIT in the root commit. <strong>Done 2026-09-29</strong>, <code>7c65aee</code>.</td><td>Licence present from the first commit.</td><td class="c sz">S</td></tr>
+  <tr><td>0.3</td><td><code>CONTRIBUTING.md</code> and <code>CLAUDE.md</code>, harvested from the old systems with every citation naming its repository. <strong>Horde PR #1.</strong></td><td>Every citation resolves; nothing personal in the rules themselves.</td><td class="c sz">S</td></tr>
+  <tr><td>0.4</td><td><strong>The knowledge ledger</strong> (D9): the format, the five sources, and a gate test that fails on any entry without a disposition. First, because every later step needs one.</td><td>Gate fails on a fixture ledger with an undisposed entry; passes on a complete one.</td><td class="c sz">S</td></tr>
+  <tr><td>0.5</td><td><strong>The end-to-end harness</strong> (D11): an isolated WezTerm - its own mux, pinned by <code>WEZTERM_UNIX_SOCKET</code>, started with <code>--skip-config</code> - that asserts it cannot see the user's panes before anything runs. Ported from <code>lib/Isolation.ps1</code> with its ledger.</td><td>Its own control: pointed at the live mux, it refuses to run.</td><td class="c sz">M</td></tr>
+  <tr><td>0.6</td><td><strong>Ownership and source precedence</strong>, as data: for every field of Horde's session record, its single future owner, and - until that field's switch - which old store it is read from when the old stores disagree. The old system's duplication is recorded here as reading rules, not repaired.</td><td>Every field has exactly one owner and one precedence rule. Expected to cover at least: pane, stored three times in wezfleet and derivable from a fourth.</td><td class="c sz">M</td></tr>
+  <tr><td>0.7</td><td><code>core/tristate</code>: known, absent, unknown, stated once - with a ledger, since three-valued answers exist in at least four places in wezfleet and Horde must not silently disagree with any of them.</td><td>Ledger complete; unit suite.</td><td class="c sz">S</td></tr>
+  <tr><td>0.8</td><td><strong>Role vocabulary, on read.</strong> Horde speaks <code>warchief</code>, <code>orc</code>, <code>goblin</code> natively and maps wezfleet's <code>master</code>, <code>orchestrator</code>, <code>session</code> through one alias table as it reads. <strong>wezfleet's records are never rewritten</strong> - so the write path that lost <code>role</code> twice is never exercised by the rename at all.</td><td>Both vocabularies read correctly; a test proves Horde opens no wezfleet file for writing.</td><td class="c sz">S</td></tr>
+  <tr><td>0.9</td><td>The <code>horde</code> entry point, with help generated from a command table - the pattern wezfleet already proved, where help cannot drift from the commands. Its first scenario: the end-to-end harness runs <code>horde --help</code> and <code>horde version</code>.</td><td>First end-to-end scenario green in the isolated terminal.</td><td class="c sz">S</td></tr>
+</table>
+
+<div class="note">
+  <strong>Two gates apply to every step that takes something over, in phases 2 to 7, beyond what its row
+  lists:</strong> its knowledge ledger is complete and linked from the pull request (D9), and <strong>the
+  live fleet has used it for real work</strong> - shadowed, then switched, then recorded as adopted (D11).
+  A step that is green but unused is not done.
+</div>
+
+<h3><span class="phase">PHASE 1</span>The contract - the seam between engine and hosts</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>1.1</td><td><code>schema/pane-session.v1</code>: document the <em>existing</em> format exactly as it is, and add <code>schemaVersion</code> additively. Describe reality before changing it.</td><td>Golden fixtures validated by the PowerShell suite <em>and</em> by wezurrect's own spec suite.</td><td class="c sz">M</td></tr>
+  <tr><td>1.2</td><td><code>schema/session-record.v1</code>, including <code>role</code> and <code>parent</code>.</td><td>Fixtures, validated.</td><td class="c sz">S</td></tr>
+  <tr><td>1.3</td><td><code>schema/restore-plan.v1</code>, as in section 4.</td><td>Fixtures, including a degraded plan per host.</td><td class="c sz">S</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 2</span>The read model - one view of the Horde</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>2.1</td><td><code>core/identity</code>: merge every agent's control files into one record shape. No terminal in it.</td><td>Unit suite with injected sources.</td><td class="c sz">M</td></tr>
+  <tr><td>2.2</td><td>The projection: reads Claude's control files, codex-sessions, the registry, run and roster, pane-sessions, the live pane list, and wezurrect's state directory. <strong>Writes nothing.</strong> Computes the Horde's cardinality faults.</td><td>A test asserting the module contains no file-writing call at all.</td><td class="c sz">L</td></tr>
+  <tr><td>2.3</td><td><code>horde status --json</code>.</td><td>Parity: agrees with today's <code>sessions</code> and <code>census</code> on the same fixtures.</td><td class="c sz">S</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 3</span>The fleet moves onto Horde's commands, one at a time</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>3.1</td><td><code>horde sessions</code> over the projection - the smallest move, since wezfleet's version is already identity-first. The fleet runs both and compares.</td><td>Shadow: no unexplained difference over a working day of real use.</td><td class="c sz">S</td></tr>
+  <tr><td>3.2</td><td><strong>The adoption ledger</strong>: one record of which fleet role uses which command from which system, so "moved" is a fact someone can look up rather than a belief. Built the same way as wezfleet's <code>test-ssot.ps1</code> - a list that can only shrink on the old side.</td><td>A test fails if an entry claims adoption with no recorded use.</td><td class="c sz">S</td></tr>
+  <tr><td>3.3-3.7</td><td>One per PR, each shadowed then switched: <code>horde census</code>, <code>horde status</code>, <code>horde tree</code>, message target resolution, and the Warchief's own status loop - last, because it is the one the whole fleet depends on.</td><td>Each: shadow clean, switch made, adoption recorded.</td><td class="c sz">M each</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 4</span>The restore engine and the layout port, WezTerm first</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>4.1</td><td><code>ports/layout</code>: verbs and capabilities as data; conformance suite generated from the verb list, as <code>Get-WfHostVerbs</code> already does for the terminal.</td><td>Suite runs against a stub host.</td><td class="c sz">M</td></tr>
+  <tr><td>4.2</td><td>The restore planner: from the projection to sessions plus advisory layout; the degradation rules from section 4.</td><td>Every degradation rule has a fixture.</td><td class="c sz">L</td></tr>
+  <tr><td>4.3</td><td>WezTerm CLI layout adapter: capture from <code>list</code>, apply with <code>spawn</code> and <code>split-pane</code>.</td><td>Conformance suite in an isolated mux - <code>lib/Isolation.ps1</code> already provides one.</td><td class="c sz">M</td></tr>
+  <tr><td>4.4</td><td><code>horde restore-plan --json</code> and <code>horde restore</code>, out of process.</td><td>Restores a fixture Horde into an isolated mux.</td><td class="c sz">M</td></tr>
+  <tr><td>4.5</td><td><strong>Shadow in wezurrect:</strong> inside <code>gui-startup</code>, the Lua also calls <code>horde restore-plan --json</code> through <code>run_child_process</code> - the call it already makes at <code>encryption.lua:24</code> - compares, and logs differences. It still applies its own plan.</td><td>Diff log exists; nothing about the restore changes.</td><td class="c sz">M</td></tr>
+  <tr><td>4.6</td><td>Flip the default after a run of clean or explained comparisons. The Lua applies the engine's plan through the mux API, before the window paints. Old path kept behind a flag.</td><td>A restore on your real layout, with you watching.</td><td class="c sz">S</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 5</span>Move the writers behind the contract</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>5.1</td><td>Relaunch decisions move to the AgentPort as <code>resumeCommand</code>. The Lua stops reading <code>pane-sessions</code> at <code>process_handlers.lua:162</code> and runs the command in the plan. The Codex resume command is <strong>to be measured</strong>, not assumed.</td><td>Shadow diff clean on relaunch commands.</td><td class="c sz">M</td></tr>
+  <tr><td>5.2</td><td>The <code>pane-sessions</code> writer becomes engine-owned, carrying the pane-hijack fix: a fresh record naming a session that is still alive elsewhere is a hijack, decided from Claude's own list of live sessions.</td><td>The hijack diagnostic from <code>f09f4e1</code> turns from "missed" to "flagged".</td><td class="c sz">M</td></tr>
+  <tr><td>5.3</td><td>Stop storing pane in the roster; derive it at read time.</td><td>Ownership allowlist shrinks.</td><td class="c sz">S</td></tr>
+  <tr><td>5.4</td><td>One session list per run, not two.</td><td>Ownership allowlist shrinks.</td><td class="c sz">S</td></tr>
+  <tr><td>5.5</td><td>wezurrect's instance bookkeeping - its largest file, 964 lines - moves to the engine. The picker is fed from <code>horde instances --json</code>.</td><td>Picker shows the same list, shadowed first.</td><td class="c sz">L</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 6</span>Retire, and bring the Lua home</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>6.1</td><td>The typed-delivery subsystem - <code>Delivery.ps1</code>, <code>Mail.ps1</code>, <code>MailPump.ps1</code>, the mail hook - is <strong>never ported</strong>. Platform cross-session messaging replaced it. Its ledger records every lesson it holds and why each one no longer applies.</td><td>Ledger complete, every entry disposed as dropped-with-reason or carried.</td><td class="c sz">M</td></tr>
+  <tr><td>6.2</td><td>Delete from wezterm-resurrect the Lua whose logic now lives in Horde. What remains is the thin adapter.</td><td>Its spec suite shrinks with it; the contract fixtures still pass on both sides.</td><td class="c sz">M</td></tr>
+  <tr><td>6.3</td><td>Bring the thin adapter into Horde as <code>hosts/wezterm/plugin/</code>, so one contract has one home and one conformance suite. <strong>With Malthe Larsen's MIT notice alongside it</strong> - wezterm-resurrect is a fork of his <code>resurrect.wezterm</code>, and the licence requires the notice to travel with any substantial portion of the code.</td><td>WezTerm loads the plugin from its new path; <code>hosts/wezterm/plugin/LICENSE</code> carries his copyright line verbatim.</td><td class="c sz">S</td></tr>
+  <tr><td>6.4</td><td>Archive wezfleet read-only once the adoption ledger shows nothing in the fleet still uses it. <strong>Archived, not deleted</strong>: its history is where most of the knowledge came from, and the ledgers cite it.</td><td>Adoption ledger empty on the old side for a full working week.</td><td class="c sz">S</td></tr>
+</table>
+
+<h3><span class="phase">PHASE 7</span>The second host - the step that proves the seam</h3>
+<table>
+  <tr><th style="width:52px">Step</th><th>What</th><th>Gate</th><th class="c">Size</th></tr>
+  <tr><td>7.1</td><td>VS Code and Cursor layout adapter: apply by writing <code>.vscode/tasks.json</code>, one task per slot. Spike first to verify grouping and icons.</td><td>The generated conformance suite, passing or declining honestly per verb.</td><td class="c sz">M</td></tr>
+  <tr><td>7.2</td><td>Decoration for both hosts: role icon and colour.</td><td>Visible in both.</td><td class="c sz">S</td></tr>
+  <tr><td>7.3</td><td>End to end: restore a two-session Horde into Cursor. Both appear as peers; <code>horde status</code> shows them with no pane.</td><td>The same proof already run once by hand, now automated.</td><td class="c sz">S</td></tr>
+</table>
+
+<div class="note">
+  <strong>Why the second host is last and not first.</strong> Until a second implementation exists, a port
+  is an argument rather than a fact. Doing VS Code before the WezTerm adapter is on the new contract would
+  mean designing the contract around two hosts at once, one of them live. Doing it last means it is the
+  <em>test</em> of the contract rather than an input to it.
+</div>
+
+<h2>7. What stays Lua, permanently</h2>
+<p>
+  Measured against the 4,930 lines of plugin Lua. These have no equivalent outside WezTerm's own process,
+  so they remain as the WezTerm adapter - estimated at 150 to 250 lines once the logic has moved.
+</p>
+<ul>
+  <li><code>gui-startup</code> - the only way to act before the first window paints.</li>
+  <li><code>InputSelector</code> and <code>PromptInputLine</code> - the interactive picker.</li>
+  <li><code>update-status</code> and <code>format-tab-title</code> - status bar and tab decoration, including the Horde's imagery.</li>
+  <li>Key bindings through <code>action_callback</code>.</li>
+  <li>In-process events: <code>user-var-changed</code>, <code>pane-focus-changed</code>.</li>
+</ul>
+<p>
+  Everything else - instance bookkeeping, persistence, relaunch decisions, tree capture - is logic that
+  happens to be written in Lua, and moves.
+</p>
+
+<h2>8. Risks</h2>
+<table>
+  <tr><th>Risk</th><th>Mitigation</th></tr>
+  <tr><td>The migration stalls halfway, leaving two systems permanently.</td><td>Ratchets (D7): three allowlists that only shrink, each enforced by a test.</td></tr>
+  <tr><td>The two languages drift apart on the contract.</td><td>Shared golden fixtures validated by both suites. A contract change is a new schema version, never an edit.</td></tr>
+  <tr><td>Restore regressions on your real layout.</td><td>Shadow mode (D6) before every switch; the old path stays behind a flag for a phase.</td></tr>
+  <tr><td>Resume semantics differ between agents.</td><td><code>resumeCommand</code> belongs to the AgentPort. The Codex command is measured before it is encoded.</td></tr>
+  <tr><td>Codex restores stop on its model notice.</td><td>An environment prerequisite, reported by <code>horde status</code>, not patched around. Your model setting is not the engine's to change.</td></tr>
+  <tr><td>wezurrect's state encryption is lost in the move.</td><td><code>encryption.lua</code> is a feature to carry, not a detail. Named in step 5.5's gate.</td></tr>
+  <tr><td>Hand-built test harnesses give wrong answers.</td><td>Eight did today. Rule 2 of <code>CONTRIBUTING.md</code>: verify against the shipped command.</td></tr>
+</table>
+
+<h2>9. Decisions taken, 2026-09-29</h2>
+<table>
+  <tr><th style="width:34%">Question</th><th>Decision</th></tr>
+  <tr><td>Where does the work happen?</td><td><strong>A new private repository, Horde</strong>, built as a strangler that reads the old systems before it replaces them (D1). This reversed the plan's first recommendation, which was to migrate inside wezfleet; see D1 for how the cost it warned about is paid.</td></tr>
+  <tr><td>Manifest format?</td><td><code>horde.json</code>. YAML would add a module dependency to Windows PowerShell 5.1; the format is revisited with the engine's language (D8).</td></tr>
+  <tr><td>Where does wezterm-resurrect's thin adapter end up?</td><td>In Horde, at step 6.3, <strong>with Malthe Larsen's MIT notice</strong> carried alongside it.</td></tr>
+  <tr><td>Licence?</td><td>MIT, copyright Yedidya Pool, in Horde's root commit. wezfleet received the same licence separately.</td></tr>
+  <tr><td>First imagery?</td><td>Role icons and colour in the WezTerm tab bar - always visible, reflecting live state, no runtime cost.</td></tr>
+  <tr><td>How is "done" judged?</td><td>By the live fleet using a piece for real work, not by a green suite alone; and every user-facing command has an end-to-end scenario (D11).</td></tr>
+  <tr><td>How is work structured?</td><td>Branches in worktrees beside the repository, atomic commits, one concern per pull request, merge commits never squash (D10); a knowledge ledger before any module is replaced (D9).</td></tr>
+</table>
+
+<h3>Added risk from moving to a separate repository</h3>
+<p>
+  Horde reads files that wezfleet is writing at the same moment. wezfleet's record writer has already
+  been measured losing and even deleting a record under concurrent writes (<code>lib/Registry.ps1:130</code>,
+  2026-09-15), and was fixed with unique temporary names and atomic replacement. A reader can still
+  arrive in the gap: a file absent for a moment, or unparseable. <strong>Horde reads such a file as
+  unknown, never as absent</strong> - so a record caught mid-write produces a "cannot tell" for one
+  read, not a session declared gone. That is exactly the case <code>core/tristate</code> exists for, and
+  it has an end-to-end scenario: read continuously while a writer loops.
+</p>
+
+<footer>
+  Horde migration plan. Planning only: no code and no configuration was changed
+  to produce it. Companion documents in this folder: the public readiness review and the v3 rewrite
+  proposal, whose section 4 this plan replaces.
+</footer>
+
+</div>
+</body>
+</html>
