@@ -117,10 +117,19 @@ function Test-HordeSchema {
         }
     }
     if ($kw.ContainsKey("enum")) {
+    # A WHOLE-NUMBER MEMBER IS AN Int32 OR Int64, checked above, so it is smaller than 1e19 (Int64's
+    # maximum is about 9.22e18). A value at or beyond 1e19 cannot equal one, and is not converted:
+    # [decimal] throws past Decimal's range, so 1e30 - a whole-number Double to 5.1's ConvertFrom-Json -
+    # made this function throw instead of returning a finding (second review of PR #16). A guard at
+    # Decimal's own limit is not enough: 2^96, one past Decimal.MaxValue, is the same Double as
+    # [double][decimal]::MaxValue, and converting either throws (measured 2026-09-30).
+    # An Int16 or Byte VALUE matches, as "type": "integer" accepts it; an Int16 or Byte MEMBER is refused
+    # above, because no schema file can hold one - ConvertFrom-Json gives Int32, Int64, Decimal or
+    # Double - and refusing it is a loud error about the schema, never a wrong answer about a value.
         $ok = $false
         foreach ($e in @($kw["enum"])) {
             if ($e -is [string]) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }
-            elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }
+            elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }
         }
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }

@@ -16,11 +16,17 @@
            Find = 'if ($e -is [string]) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }'
            Replace = 'if ($e -is [string]) { if ("$Value" -ceq $e) { $ok = $true } }' }
         @{ Name = "enum-whole-number-matches-its-string"
-           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
+           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
            Replace = 'elseif ("$Value" -eq "$e") { $ok = $true }' }
         @{ Name = "enum-whole-number-never-matches"
-           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
+           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [Math]::Abs([double]$Value) -lt 1e19 -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
            Replace = 'elseif ($false) { $ok = $true }' }
+        @{ Name = "enum-range-guard-removed"
+           Find = ' -and [Math]::Abs([double]$Value) -lt 1e19'
+           Replace = '' }
+        @{ Name = "enum-range-guard-at-decimal-limit"
+           Find = '[Math]::Abs([double]$Value) -lt 1e19'
+           Replace = '[Math]::Abs([double]$Value) -le [double][decimal]::MaxValue' }
         @{ Name = "enum-accepts-non-string-values"
            Find = 'if ($e -isnot [string] -and -not $isWhole) { throw'
            Replace = 'if ($false) { throw' }

@@ -150,6 +150,20 @@ foreach ($t in @("1.0", "1e3", "99999999999999999999")) {
 }
 Check (Has (Test-HordeSchema -Value (Read-JsonNumber "1.5") -Schema $intSchema) '$ should be integer') "1.5 is not an integer"
 Check (Has (Test-HordeSchema -Value 1.5 -Schema $intSchema) '$ should be integer') "a Double with a fraction is not an integer"
+# A VALUE BEYOND DECIMAL'S RANGE IS A FINDING, NEVER A CRASH. 5.1's ConvertFrom-Json reads 1e30 and
+# 79228162514264337593543950336 (2^96, one past Decimal.MaxValue) as whole-number Doubles, and the
+# first comparison converted every whole number to Decimal, so both threw instead of being refused
+# (second review of PR #16; measured 2026-09-30: [decimal] of either throws). The call is caught
+# here so the check FAILS rather than crashes, which tools/Mutate.ps1 would not count as caught.
+function Enum-Findings {
+    param($Value, $Schema)
+    try { return ,@(Test-HordeSchema -Value $Value -Schema $Schema) } catch { return ,@("THREW: " + $_.Exception.Message) }
+}
+Check ((Read-JsonNumber "1e30") -is [double] -and (Read-JsonNumber "79228162514264337593543950336") -is [double]) "CONTROL: 5.1 parses 1e30 and 2^96 as Double"
+foreach ($t in @("1e30", "-1e30", "79228162514264337593543950336")) {
+    $found = Enum-Findings (Read-JsonNumber $t) $one
+    Check ($found.Count -eq 1 -and $found[0] -clike '$ is ''*'', not one of: 1') ("a whole number beyond Decimal's range, " + $t + ", is refused by enum [1], not thrown on (" + ($found -join "; ") + ")")
+}
 # A value built in PowerShell may hold a list as an ArrayList rather than an array.
 $listSchema = [pscustomobject]@{ type = "object"; properties = [pscustomobject]@{ list = [pscustomobject]@{ type = "array"; items = $intSchema } } }
 Check (@(Test-HordeSchema -Value @{ list = [System.Collections.ArrayList]@(1, 2) } -Schema $listSchema).Count -eq 0) "an ArrayList is an array"
