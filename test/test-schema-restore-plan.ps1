@@ -158,4 +158,35 @@ $found = Findings $two
 Check ($found.Count -eq 2) ("a plan with two problems has two findings (" + ($found -join "; ") + ")")
 Check (@(Findings (Read-Fixture "valid\section-4-example.json")).Count -eq 0) "CONTROL: the plan it was made from has none"
 
+Write-Host ""
+Write-Host "--- a plan built in PowerShell, from hashtables, is read like one parsed from JSON ---" -ForegroundColor Cyan
+# The engine will build plans in memory before it writes one. The schema reads an IDictionary (it did
+# already); the gate once read only PSObject.Properties, so on a hashtable every node had no slot and
+# no children, and a valid plan was refused as "neither a leaf nor a container" (review of PR #17).
+function ConvertTo-PlanHashtable {
+    # The same tree, with every object a Hashtable and every array an object[].
+    param($Value)
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $h = @{}
+        foreach ($p in $Value.PSObject.Properties) { $h[$p.Name] = ConvertTo-PlanHashtable $p.Value }
+        return $h
+    }
+    if ($Value -is [System.Collections.IList]) { $a = @(foreach ($v in $Value) { ,(ConvertTo-PlanHashtable $v) }); return ,$a }
+    return $Value
+}
+Check ((Get-HordePlanProp @{ slot = "s1" } "slot") -ceq "s1") "a hashtable's key is read"
+# A PowerShell hashtable matches keys ignoring case; the plan's keys are exact, as the schema reads them.
+Check ($null -eq (Get-HordePlanProp @{ SLOT = "s1" } "slot")) "a hashtable's key is matched exactly: SLOT is not slot"
+$hPlan = ConvertTo-PlanHashtable (Read-Fixture "valid\host-wezterm.json")
+Check ($hPlan -is [hashtable] -and $hPlan.layout.workspaces[0].windows[0].tabs[1].root -is [hashtable] -and $hPlan.sessions -is [object[]]) "CONTROL: the plan really is hashtables and arrays"
+Check ($hPlan.layout.workspaces[0].windows[0].tabs[1].root.children[1].children.Count -eq 2) "CONTROL: the conversion kept the nested split (2 children two levels down)"
+$found = Findings $hPlan
+Check ($found.Count -eq 0) ("a valid plan built from hashtables has no findings (" + ($found -join "; ") + ")")
+$hBad = ConvertTo-PlanHashtable (Read-Fixture "invalid\dropped-session.json")
+$found = @(Findings $hBad)
+Check ($found.Count -eq 1 -and $found[0] -like '$.sessions`[1`] (slot ''s2'') is not in the layout*') ("an invalid plan built from hashtables is refused for its own reason (" + ($found -join "; ") + ")")
+$hBoth = ConvertTo-PlanHashtable (Read-Fixture "invalid\leaf-and-container.json")
+$found = Findings $hBoth
+Check (@($found | Where-Object { $_ -like '*.tabs`[0`].root is both a leaf and a container*' }).Count -eq 1) ("a hashtable node with a slot and children is both a leaf and a container (" + ($found -join "; ") + ")")
+
 Complete-HordeSuite -Success "a restore plan is valid exactly when section 4 says it is"

@@ -28,9 +28,28 @@
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 . (Join-Path $PSScriptRoot "Schema.ps1")
 
-function Get-HordePlanProp {
-    # A property's value, or $null when the object has none - safe under strict mode.
+function Test-HordePlanHas {
+    # Does the object have this key? A plan may be parsed JSON (PSCustomObject) or built in PowerShell
+    # (any IDictionary). The first version read only PSObject.Properties, where a hashtable does not
+    # keep its keys, so every hashtable node looked empty and a valid plan was refused as "neither a
+    # leaf nor a container" (review of PR #17). Keys are compared exactly, as the schema compares
+    # them: a PowerShell hashtable would otherwise find "slot" under "SLOT".
     param($Object, [string]$Name)
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($k in $Object.Keys) { if ("$k" -ceq $Name) { return $true } }
+        return $false
+    }
+    return ($null -ne $Object.PSObject.Properties[$Name])
+}
+
+function Get-HordePlanProp {
+    # A property's value, or $null when the object has none - safe under strict mode. An array value
+    # is unrolled, as any function output is, so a caller wraps the call in @().
+    param($Object, [string]$Name)
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($k in $Object.Keys) { if ("$k" -ceq $Name) { return $Object[$k] } }
+        return $null
+    }
     $p = $Object.PSObject.Properties[$Name]
     if ($null -eq $p) { return $null }
     return $p.Value
@@ -40,32 +59,34 @@ function Test-HordePlanNode {
     # One node and everything below it. Placements records, per slot, the paths it is placed at.
     param($Node, [string]$Path, $Placements, $Findings)
     Set-StrictMode -Version Latest
-    $slot = $Node.PSObject.Properties["slot"]
-    $split = $Node.PSObject.Properties["split"]
-    $ratio = $Node.PSObject.Properties["ratio"]
-    $children = $Node.PSObject.Properties["children"]
-    $isContainer = ($null -ne $split -or $null -ne $ratio -or $null -ne $children)
-    if ($null -ne $slot -and $isContainer) {
+    $hasSlot = Test-HordePlanHas $Node "slot"
+    $hasSplit = Test-HordePlanHas $Node "split"
+    $hasRatio = Test-HordePlanHas $Node "ratio"
+    $hasChildren = Test-HordePlanHas $Node "children"
+    $slot = "$(Get-HordePlanProp $Node "slot")"
+    $isContainer = ($hasSplit -or $hasRatio -or $hasChildren)
+    if ($hasSlot -and $isContainer) {
         # Counted as placed, so the one fault is not reported a second time as a dropped session;
         # its children are not walked, because which of the two it was meant to be is unknown.
         [void]$Findings.Add($Path + " is both a leaf and a container: it has a slot and a split, ratio or children")
-        Add-HordePlanPlacement -Placements $Placements -Slot "$($slot.Value)" -Path $Path; return
+        Add-HordePlanPlacement -Placements $Placements -Slot $slot -Path $Path; return
     }
-    if ($null -eq $slot -and -not $isContainer) {
+    if (-not $hasSlot -and -not $isContainer) {
         [void]$Findings.Add($Path + " is neither a leaf nor a container: it has no slot, split or children")
         return
     }
-    if ($null -ne $slot) {
-        Add-HordePlanPlacement -Placements $Placements -Slot "$($slot.Value)" -Path $Path
+    if ($hasSlot) {
+        Add-HordePlanPlacement -Placements $Placements -Slot $slot -Path $Path
         return
     }
-    if ($null -eq $split) { [void]$Findings.Add($Path + " is a container with no split") }
-    if ($null -ne $ratio) {
-        $r = [double]$ratio.Value
-        if (-not ($r -gt 0 -and $r -lt 1)) { [void]$Findings.Add($Path + ".ratio is " + $ratio.Value + "; a ratio lies strictly between 0 and 1") }
+    if (-not $hasSplit) { [void]$Findings.Add($Path + " is a container with no split") }
+    if ($hasRatio) {
+        $ratio = Get-HordePlanProp $Node "ratio"
+        $r = [double]$ratio
+        if (-not ($r -gt 0 -and $r -lt 1)) { [void]$Findings.Add($Path + ".ratio is " + $ratio + "; a ratio lies strictly between 0 and 1") }
     }
-    if ($null -eq $children) { [void]$Findings.Add($Path + " is a container with no children"); return }
-    $kids = @($children.Value)
+    if (-not $hasChildren) { [void]$Findings.Add($Path + " is a container with no children"); return }
+    $kids = @(Get-HordePlanProp $Node "children")
     if ($kids.Count -lt 2) {
         $noun = "children"; if ($kids.Count -eq 1) { $noun = "child" }
         [void]$Findings.Add($Path + " is a container with " + $kids.Count + " " + $noun + "; a container has at least 2")
@@ -82,7 +103,8 @@ function Add-HordePlanPlacement {
 }
 
 function Test-HordeRestorePlan {
-    # Findings for one parsed plan; empty means valid. Schema defaults to schema/restore-plan.v1.
+    # Findings for one plan, parsed from JSON or built from dictionaries; empty means valid. Schema
+    # defaults to schema/restore-plan.v1.
     param($Plan, $Schema = $null)
     Set-StrictMode -Version Latest
     if ($null -eq $Schema) { $Schema = Get-HordeSchema -Name "restore-plan.v1" }
@@ -93,9 +115,9 @@ function Test-HordeRestorePlan {
     # Ordinal dictionaries: a PowerShell hashtable ignores case, and "S1" is not "s1".
     $slotAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
     $idAt = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
-    $sessions = @($Plan.sessions)
+    $sessions = @(Get-HordePlanProp $Plan "sessions")
     for ($i = 0; $i -lt $sessions.Count; $i++) {
-        $slot = "$($sessions[$i].slot)"; $id = "$($sessions[$i].sessionId)"
+        $slot = "$(Get-HordePlanProp $sessions[$i] "slot")"; $id = "$(Get-HordePlanProp $sessions[$i] "sessionId")"
         if ($slotAt.ContainsKey($slot)) { [void]$findings.Add('$.sessions[' + $i + "].slot '" + $slot + "' is also the slot of " + '$.sessions[' + $slotAt[$slot] + "]") }
         else { $slotAt[$slot] = $i }
         if ($idAt.ContainsKey($id)) { [void]$findings.Add('$.sessions[' + $i + "].sessionId '" + $id + "' is also the sessionId of " + '$.sessions[' + $idAt[$id] + "]") }
@@ -104,19 +126,19 @@ function Test-HordeRestorePlan {
     for ($i = 0; $i -lt $sessions.Count; $i++) {
         $parent = Get-HordePlanProp $sessions[$i] "parent"
         if ($null -eq $parent) { continue }
-        if ("$parent" -ceq "$($sessions[$i].sessionId)") { [void]$findings.Add('$.sessions[' + $i + "].parent names the session itself") }
+        if ("$parent" -ceq "$(Get-HordePlanProp $sessions[$i] "sessionId")") { [void]$findings.Add('$.sessions[' + $i + "].parent names the session itself") }
         elseif (-not $idAt.ContainsKey("$parent")) { [void]$findings.Add('$.sessions[' + $i + "].parent '" + $parent + "' names no session in the plan") }
     }
 
     $placements = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.ArrayList]' ([System.StringComparer]::Ordinal)
-    $ws = @($Plan.layout.workspaces)
+    $ws = @(Get-HordePlanProp (Get-HordePlanProp $Plan "layout") "workspaces")
     for ($w = 0; $w -lt $ws.Count; $w++) {
-        $wins = @($ws[$w].windows)
+        $wins = @(Get-HordePlanProp $ws[$w] "windows")
         for ($n = 0; $n -lt $wins.Count; $n++) {
-            $tabs = @($wins[$n].tabs)
+            $tabs = @(Get-HordePlanProp $wins[$n] "tabs")
             for ($t = 0; $t -lt $tabs.Count; $t++) {
                 $at = '$.layout.workspaces[' + $w + '].windows[' + $n + '].tabs[' + $t + '].root'
-                Test-HordePlanNode -Node $tabs[$t].root -Path $at -Placements $placements -Findings $findings
+                Test-HordePlanNode -Node (Get-HordePlanProp $tabs[$t] "root") -Path $at -Placements $placements -Findings $findings
             }
         }
     }
@@ -128,7 +150,7 @@ function Test-HordeRestorePlan {
         }
     }
     for ($i = 0; $i -lt $sessions.Count; $i++) {
-        $slot = "$($sessions[$i].slot)"
+        $slot = "$(Get-HordePlanProp $sessions[$i] "slot")"
         if (-not $placements.ContainsKey($slot)) { [void]$findings.Add('$.sessions[' + $i + "] (slot '" + $slot + "') is not in the layout; a plan never drops a session") }
     }
     return @($findings)
