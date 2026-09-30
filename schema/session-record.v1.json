@@ -1,0 +1,1019 @@
+{
+    "$schema":  "http://json-schema.org/draft-07/schema#",
+    "$id":  "horde/schema/session-record.v1",
+    "title":  "session-record v1",
+    "description":  "Horde\u0027s own record of one session. Every field is an answer in core/Tristate.ps1\u0027s stored form - known with a value, absent, or unknown with a reason - so an unknown is a first-class part of the record, never a sentinel. A field the record has not asked about yet is left out; a field it asked about and could not answer is recorded as unknown, with the reason. The field list is core/ownership.json\u0027s, and test/test-schema-session-record.ps1 fails if the two ever differ. Only schemaVersion and sessionId are required.",
+    "type":  "object",
+    "required":  [
+                     "schemaVersion",
+                     "sessionId"
+                 ],
+    "properties":  {
+                       "schemaVersion":  {
+                                             "type":  "integer",
+                                             "enum":  [
+                                                          1
+                                                      ],
+                                             "description":  "Always 1 for this schema."
+                                         },
+                       "sessionId":  {
+                                         "type":  "string",
+                                         "description":  "The conversation id: the record\u0027s identity, so a plain value and never an answer. Owner: agent (core/ownership.json)."
+                                     },
+                       "agent":  {
+                                     "type":  "object",
+                                     "required":  [
+                                                      "state",
+                                                      "reason"
+                                                  ],
+                                     "properties":  {
+                                                        "state":  {
+                                                                      "type":  "string",
+                                                                      "enum":  [
+                                                                                   "known",
+                                                                                   "absent",
+                                                                                   "unknown"
+                                                                               ]
+                                                                  },
+                                                        "value":  {
+                                                                      "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                  },
+                                                        "reason":  {
+                                                                       "type":  "string"
+                                                                   },
+                                                        "observedAt":  {
+                                                                           "description":  "An ISO 8601 UTC time, or null."
+                                                                       }
+                                                    },
+                                     "additionalProperties":  false,
+                                     "x-horde-owner":  "agent",
+                                     "x-horde-derived":  "which agent\u0027s control-file directory the session id was found in"
+                                 },
+                       "pid":  {
+                                   "type":  "object",
+                                   "required":  [
+                                                    "state",
+                                                    "reason"
+                                                ],
+                                   "properties":  {
+                                                      "state":  {
+                                                                    "type":  "string",
+                                                                    "enum":  [
+                                                                                 "known",
+                                                                                 "absent",
+                                                                                 "unknown"
+                                                                             ]
+                                                                },
+                                                      "value":  {
+                                                                    "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                },
+                                                      "reason":  {
+                                                                     "type":  "string"
+                                                                 },
+                                                      "observedAt":  {
+                                                                         "description":  "An ISO 8601 UTC time, or null."
+                                                                     }
+                                                  },
+                                   "additionalProperties":  false,
+                                   "x-horde-owner":  "agent"
+                               },
+                       "cwd":  {
+                                   "type":  "object",
+                                   "required":  [
+                                                    "state",
+                                                    "reason"
+                                                ],
+                                   "properties":  {
+                                                      "state":  {
+                                                                    "type":  "string",
+                                                                    "enum":  [
+                                                                                 "known",
+                                                                                 "absent",
+                                                                                 "unknown"
+                                                                             ]
+                                                                },
+                                                      "value":  {
+                                                                    "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                },
+                                                      "reason":  {
+                                                                     "type":  "string"
+                                                                 },
+                                                      "observedAt":  {
+                                                                         "description":  "An ISO 8601 UTC time, or null."
+                                                                     }
+                                                  },
+                                   "additionalProperties":  false,
+                                   "x-horde-owner":  "agent"
+                               },
+                       "projectCwd":  {
+                                          "type":  "object",
+                                          "required":  [
+                                                           "state",
+                                                           "reason"
+                                                       ],
+                                          "properties":  {
+                                                             "state":  {
+                                                                           "type":  "string",
+                                                                           "enum":  [
+                                                                                        "known",
+                                                                                        "absent",
+                                                                                        "unknown"
+                                                                                    ]
+                                                                       },
+                                                             "value":  {
+                                                                           "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                       },
+                                                             "reason":  {
+                                                                            "type":  "string"
+                                                                        },
+                                                             "observedAt":  {
+                                                                                "description":  "An ISO 8601 UTC time, or null."
+                                                                            }
+                                                         },
+                                          "additionalProperties":  false,
+                                          "x-horde-owner":  "engine"
+                                      },
+                       "transcriptPath":  {
+                                              "type":  "object",
+                                              "required":  [
+                                                               "state",
+                                                               "reason"
+                                                           ],
+                                              "properties":  {
+                                                                 "state":  {
+                                                                               "type":  "string",
+                                                                               "enum":  [
+                                                                                            "known",
+                                                                                            "absent",
+                                                                                            "unknown"
+                                                                                        ]
+                                                                           },
+                                                                 "value":  {
+                                                                               "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                           },
+                                                                 "reason":  {
+                                                                                "type":  "string"
+                                                                            },
+                                                                 "observedAt":  {
+                                                                                    "description":  "An ISO 8601 UTC time, or null."
+                                                                                }
+                                                             },
+                                              "additionalProperties":  false,
+                                              "x-horde-owner":  "agent",
+                                              "x-horde-derived":  "Claude: from sessionId and projectCwd, then checked to exist. Codex: from its control file until a derivation is measured",
+                                              "x-horde-provisional":  "the Codex derivation is unmeasured"
+                                          },
+                       "resumeCommand":  {
+                                             "type":  "object",
+                                             "required":  [
+                                                              "state",
+                                                              "reason"
+                                                          ],
+                                             "properties":  {
+                                                                "state":  {
+                                                                              "type":  "string",
+                                                                              "enum":  [
+                                                                                           "known",
+                                                                                           "absent",
+                                                                                           "unknown"
+                                                                                       ]
+                                                                          },
+                                                                "value":  {
+                                                                              "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                          },
+                                                                "reason":  {
+                                                                               "type":  "string"
+                                                                           },
+                                                                "observedAt":  {
+                                                                                   "description":  "An ISO 8601 UTC time, or null."
+                                                                               }
+                                                            },
+                                             "additionalProperties":  false,
+                                             "x-horde-owner":  "agent",
+                                             "x-horde-derived":  "computed by the AgentPort from the agent kind and session id",
+                                             "x-horde-provisional":  "the installed wezterm-resurrect and its main branch take the session id in opposite orders; which one the shadow compares against is undecided"
+                                         },
+                       "pane":  {
+                                    "type":  "object",
+                                    "required":  [
+                                                     "state",
+                                                     "reason"
+                                                 ],
+                                    "properties":  {
+                                                       "state":  {
+                                                                     "type":  "string",
+                                                                     "enum":  [
+                                                                                  "known",
+                                                                                  "absent",
+                                                                                  "unknown"
+                                                                              ]
+                                                                 },
+                                                       "value":  {
+                                                                     "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                 },
+                                                       "reason":  {
+                                                                      "type":  "string"
+                                                                  },
+                                                       "observedAt":  {
+                                                                          "description":  "An ISO 8601 UTC time, or null."
+                                                                      }
+                                                   },
+                                    "additionalProperties":  false,
+                                    "x-horde-owner":  "host",
+                                    "x-horde-derived":  "the live host handle, recorded in a realisation; never identity",
+                                    "x-horde-provisional":  "reading the pane-sessions file (X1) before the status snapshot (W5) is a Horde decision: no single wezfleet function reads both - census reads the registry then X1, the run snapshot reads roster, then status, then registry - so which is right when they disagree is for the shadow to measure"
+                                },
+                       "window":  {
+                                      "type":  "object",
+                                      "required":  [
+                                                       "state",
+                                                       "reason"
+                                                   ],
+                                      "properties":  {
+                                                         "state":  {
+                                                                       "type":  "string",
+                                                                       "enum":  [
+                                                                                    "known",
+                                                                                    "absent",
+                                                                                    "unknown"
+                                                                                ]
+                                                                   },
+                                                         "value":  {
+                                                                       "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                   },
+                                                         "reason":  {
+                                                                        "type":  "string"
+                                                                    },
+                                                         "observedAt":  {
+                                                                            "description":  "An ISO 8601 UTC time, or null."
+                                                                        }
+                                                     },
+                                      "additionalProperties":  false,
+                                      "x-horde-owner":  "host",
+                                      "x-horde-derived":  "from the live pane list"
+                                  },
+                       "hostInstance":  {
+                                            "type":  "object",
+                                            "required":  [
+                                                             "state",
+                                                             "reason"
+                                                         ],
+                                            "properties":  {
+                                                               "state":  {
+                                                                             "type":  "string",
+                                                                             "enum":  [
+                                                                                          "known",
+                                                                                          "absent",
+                                                                                          "unknown"
+                                                                                      ]
+                                                                         },
+                                                               "value":  {
+                                                                             "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                         },
+                                                               "reason":  {
+                                                                              "type":  "string"
+                                                                          },
+                                                               "observedAt":  {
+                                                                                  "description":  "An ISO 8601 UTC time, or null."
+                                                                              }
+                                                           },
+                                            "additionalProperties":  false,
+                                            "x-horde-owner":  "host",
+                                            "x-horde-derived":  "from the terminal\u0027s socket, which names the instance exactly; with no socket, from the one terminal process running; with no socket and more than one terminal process running, the instance is ambiguous, and an ambiguous instance trusts no pane record"
+                                        },
+                       "role":  {
+                                    "type":  "object",
+                                    "required":  [
+                                                     "state",
+                                                     "reason"
+                                                 ],
+                                    "properties":  {
+                                                       "state":  {
+                                                                     "type":  "string",
+                                                                     "enum":  [
+                                                                                  "known",
+                                                                                  "absent",
+                                                                                  "unknown"
+                                                                              ]
+                                                                 },
+                                                       "value":  {
+                                                                     "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                 },
+                                                       "reason":  {
+                                                                      "type":  "string"
+                                                                  },
+                                                       "observedAt":  {
+                                                                          "description":  "An ISO 8601 UTC time, or null."
+                                                                      }
+                                                   },
+                                    "additionalProperties":  false,
+                                    "x-horde-owner":  "engine"
+                                },
+                       "parent":  {
+                                      "type":  "object",
+                                      "required":  [
+                                                       "state",
+                                                       "reason"
+                                                   ],
+                                      "properties":  {
+                                                         "state":  {
+                                                                       "type":  "string",
+                                                                       "enum":  [
+                                                                                    "known",
+                                                                                    "absent",
+                                                                                    "unknown"
+                                                                                ]
+                                                                   },
+                                                         "value":  {
+                                                                       "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                   },
+                                                         "reason":  {
+                                                                        "type":  "string"
+                                                                    },
+                                                         "observedAt":  {
+                                                                            "description":  "An ISO 8601 UTC time, or null."
+                                                                        }
+                                                     },
+                                      "additionalProperties":  false,
+                                      "x-horde-owner":  "engine"
+                                  },
+                       "owner":  {
+                                     "type":  "object",
+                                     "required":  [
+                                                      "state",
+                                                      "reason"
+                                                  ],
+                                     "properties":  {
+                                                        "state":  {
+                                                                      "type":  "string",
+                                                                      "enum":  [
+                                                                                   "known",
+                                                                                   "absent",
+                                                                                   "unknown"
+                                                                               ]
+                                                                  },
+                                                        "value":  {
+                                                                      "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                  },
+                                                        "reason":  {
+                                                                       "type":  "string"
+                                                                   },
+                                                        "observedAt":  {
+                                                                           "description":  "An ISO 8601 UTC time, or null."
+                                                                       }
+                                                    },
+                                     "additionalProperties":  false,
+                                     "x-horde-owner":  "engine",
+                                     "x-horde-derived":  "the parent\u0027s label, else founder; display only, never an edge"
+                                 },
+                       "label":  {
+                                     "type":  "object",
+                                     "required":  [
+                                                      "state",
+                                                      "reason"
+                                                  ],
+                                     "properties":  {
+                                                        "state":  {
+                                                                      "type":  "string",
+                                                                      "enum":  [
+                                                                                   "known",
+                                                                                   "absent",
+                                                                                   "unknown"
+                                                                               ]
+                                                                  },
+                                                        "value":  {
+                                                                      "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                  },
+                                                        "reason":  {
+                                                                       "type":  "string"
+                                                                   },
+                                                        "observedAt":  {
+                                                                           "description":  "An ISO 8601 UTC time, or null."
+                                                                       }
+                                                    },
+                                     "additionalProperties":  false,
+                                     "x-horde-owner":  "engine"
+                                 },
+                       "name":  {
+                                    "type":  "object",
+                                    "required":  [
+                                                     "state",
+                                                     "reason"
+                                                 ],
+                                    "properties":  {
+                                                       "state":  {
+                                                                     "type":  "string",
+                                                                     "enum":  [
+                                                                                  "known",
+                                                                                  "absent",
+                                                                                  "unknown"
+                                                                              ]
+                                                                 },
+                                                       "value":  {
+                                                                     "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                 },
+                                                       "reason":  {
+                                                                      "type":  "string"
+                                                                  },
+                                                       "observedAt":  {
+                                                                          "description":  "An ISO 8601 UTC time, or null."
+                                                                      }
+                                                   },
+                                    "additionalProperties":  false,
+                                    "x-horde-owner":  "agent"
+                                },
+                       "origin":  {
+                                      "type":  "object",
+                                      "required":  [
+                                                       "state",
+                                                       "reason"
+                                                   ],
+                                      "properties":  {
+                                                         "state":  {
+                                                                       "type":  "string",
+                                                                       "enum":  [
+                                                                                    "known",
+                                                                                    "absent",
+                                                                                    "unknown"
+                                                                                ]
+                                                                   },
+                                                         "value":  {
+                                                                       "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                   },
+                                                         "reason":  {
+                                                                        "type":  "string"
+                                                                    },
+                                                         "observedAt":  {
+                                                                            "description":  "An ISO 8601 UTC time, or null."
+                                                                        }
+                                                     },
+                                      "additionalProperties":  false,
+                                      "x-horde-owner":  "engine"
+                                  },
+                       "fleetSessionId":  {
+                                              "type":  "object",
+                                              "required":  [
+                                                               "state",
+                                                               "reason"
+                                                           ],
+                                              "properties":  {
+                                                                 "state":  {
+                                                                               "type":  "string",
+                                                                               "enum":  [
+                                                                                            "known",
+                                                                                            "absent",
+                                                                                            "unknown"
+                                                                                        ]
+                                                                           },
+                                                                 "value":  {
+                                                                               "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                           },
+                                                                 "reason":  {
+                                                                                "type":  "string"
+                                                                            },
+                                                                 "observedAt":  {
+                                                                                    "description":  "An ISO 8601 UTC time, or null."
+                                                                                }
+                                                             },
+                                              "additionalProperties":  false,
+                                              "x-horde-owner":  "engine"
+                                          },
+                       "liveStatus":  {
+                                          "type":  "object",
+                                          "required":  [
+                                                           "state",
+                                                           "reason"
+                                                       ],
+                                          "properties":  {
+                                                             "state":  {
+                                                                           "type":  "string",
+                                                                           "enum":  [
+                                                                                        "known",
+                                                                                        "absent",
+                                                                                        "unknown"
+                                                                                    ]
+                                                                       },
+                                                             "value":  {
+                                                                           "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                       },
+                                                             "reason":  {
+                                                                            "type":  "string"
+                                                                        },
+                                                             "observedAt":  {
+                                                                                "description":  "An ISO 8601 UTC time, or null."
+                                                                            }
+                                                         },
+                                          "additionalProperties":  false,
+                                          "x-horde-owner":  "agent"
+                                      },
+                       "workState":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "engine",
+                                         "x-horde-derived":  "from reported events, liveness and activity; terminal events are trusted outright"
+                                     },
+                       "report":  {
+                                      "type":  "object",
+                                      "required":  [
+                                                       "state",
+                                                       "reason"
+                                                   ],
+                                      "properties":  {
+                                                         "state":  {
+                                                                       "type":  "string",
+                                                                       "enum":  [
+                                                                                    "known",
+                                                                                    "absent",
+                                                                                    "unknown"
+                                                                                ]
+                                                                   },
+                                                         "value":  {
+                                                                       "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                   },
+                                                         "reason":  {
+                                                                        "type":  "string"
+                                                                    },
+                                                         "observedAt":  {
+                                                                            "description":  "An ISO 8601 UTC time, or null."
+                                                                        }
+                                                     },
+                                      "additionalProperties":  false,
+                                      "x-horde-owner":  "session"
+                                  },
+                       "lastActivity":  {
+                                            "type":  "object",
+                                            "required":  [
+                                                             "state",
+                                                             "reason"
+                                                         ],
+                                            "properties":  {
+                                                               "state":  {
+                                                                             "type":  "string",
+                                                                             "enum":  [
+                                                                                          "known",
+                                                                                          "absent",
+                                                                                          "unknown"
+                                                                                      ]
+                                                                         },
+                                                               "value":  {
+                                                                             "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                         },
+                                                               "reason":  {
+                                                                              "type":  "string"
+                                                                          },
+                                                               "observedAt":  {
+                                                                                  "description":  "An ISO 8601 UTC time, or null."
+                                                                              }
+                                                           },
+                                            "additionalProperties":  false,
+                                            "x-horde-owner":  "engine",
+                                            "x-horde-derived":  "the newest of the command logs, the transcript\u0027s write time, and the agent\u0027s own status time"
+                                        },
+                       "startedAt":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "agent"
+                                     },
+                       "retired":  {
+                                       "type":  "object",
+                                       "required":  [
+                                                        "state",
+                                                        "reason"
+                                                    ],
+                                       "properties":  {
+                                                          "state":  {
+                                                                        "type":  "string",
+                                                                        "enum":  [
+                                                                                     "known",
+                                                                                     "absent",
+                                                                                     "unknown"
+                                                                                 ]
+                                                                    },
+                                                          "value":  {
+                                                                        "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                    },
+                                                          "reason":  {
+                                                                         "type":  "string"
+                                                                     },
+                                                          "observedAt":  {
+                                                                             "description":  "An ISO 8601 UTC time, or null."
+                                                                         }
+                                                      },
+                                       "additionalProperties":  false,
+                                       "x-horde-owner":  "engine"
+                                   },
+                       "messagingAddress":  {
+                                                "type":  "object",
+                                                "required":  [
+                                                                 "state",
+                                                                 "reason"
+                                                             ],
+                                                "properties":  {
+                                                                   "state":  {
+                                                                                 "type":  "string",
+                                                                                 "enum":  [
+                                                                                              "known",
+                                                                                              "absent",
+                                                                                              "unknown"
+                                                                                          ]
+                                                                             },
+                                                                   "value":  {
+                                                                                 "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                             },
+                                                                   "reason":  {
+                                                                                  "type":  "string"
+                                                                              },
+                                                                   "observedAt":  {
+                                                                                      "description":  "An ISO 8601 UTC time, or null."
+                                                                                  }
+                                                               },
+                                                "additionalProperties":  false,
+                                                "x-horde-owner":  "agent"
+                                            },
+                       "lastSeen":  {
+                                        "type":  "object",
+                                        "required":  [
+                                                         "state",
+                                                         "reason"
+                                                     ],
+                                        "properties":  {
+                                                           "state":  {
+                                                                         "type":  "string",
+                                                                         "enum":  [
+                                                                                      "known",
+                                                                                      "absent",
+                                                                                      "unknown"
+                                                                                  ]
+                                                                     },
+                                                           "value":  {
+                                                                         "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                     },
+                                                           "reason":  {
+                                                                          "type":  "string"
+                                                                      },
+                                                           "observedAt":  {
+                                                                              "description":  "An ISO 8601 UTC time, or null."
+                                                                          }
+                                                       },
+                                        "additionalProperties":  false,
+                                        "x-horde-owner":  "engine"
+                                    },
+                       "runId":  {
+                                     "type":  "object",
+                                     "required":  [
+                                                      "state",
+                                                      "reason"
+                                                  ],
+                                     "properties":  {
+                                                        "state":  {
+                                                                      "type":  "string",
+                                                                      "enum":  [
+                                                                                   "known",
+                                                                                   "absent",
+                                                                                   "unknown"
+                                                                               ]
+                                                                  },
+                                                        "value":  {
+                                                                      "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                  },
+                                                        "reason":  {
+                                                                       "type":  "string"
+                                                                   },
+                                                        "observedAt":  {
+                                                                           "description":  "An ISO 8601 UTC time, or null."
+                                                                       }
+                                                    },
+                                     "additionalProperties":  false,
+                                     "x-horde-owner":  "engine"
+                                 },
+                       "labelCycle":  {
+                                          "type":  "object",
+                                          "required":  [
+                                                           "state",
+                                                           "reason"
+                                                       ],
+                                          "properties":  {
+                                                             "state":  {
+                                                                           "type":  "string",
+                                                                           "enum":  [
+                                                                                        "known",
+                                                                                        "absent",
+                                                                                        "unknown"
+                                                                                    ]
+                                                                       },
+                                                             "value":  {
+                                                                           "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                       },
+                                                             "reason":  {
+                                                                            "type":  "string"
+                                                                        },
+                                                             "observedAt":  {
+                                                                                "description":  "An ISO 8601 UTC time, or null."
+                                                                            }
+                                                         },
+                                          "additionalProperties":  false,
+                                          "x-horde-owner":  "engine"
+                                      },
+                       "nameSource":  {
+                                          "type":  "object",
+                                          "required":  [
+                                                           "state",
+                                                           "reason"
+                                                       ],
+                                          "properties":  {
+                                                             "state":  {
+                                                                           "type":  "string",
+                                                                           "enum":  [
+                                                                                        "known",
+                                                                                        "absent",
+                                                                                        "unknown"
+                                                                                    ]
+                                                                       },
+                                                             "value":  {
+                                                                           "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                       },
+                                                             "reason":  {
+                                                                            "type":  "string"
+                                                                        },
+                                                             "observedAt":  {
+                                                                                "description":  "An ISO 8601 UTC time, or null."
+                                                                            }
+                                                         },
+                                          "additionalProperties":  false,
+                                          "x-horde-owner":  "agent"
+                                      },
+                       "retiredAt":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "engine"
+                                     },
+                       "lastTool":  {
+                                        "type":  "object",
+                                        "required":  [
+                                                         "state",
+                                                         "reason"
+                                                     ],
+                                        "properties":  {
+                                                           "state":  {
+                                                                         "type":  "string",
+                                                                         "enum":  [
+                                                                                      "known",
+                                                                                      "absent",
+                                                                                      "unknown"
+                                                                                  ]
+                                                                     },
+                                                           "value":  {
+                                                                         "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                     },
+                                                           "reason":  {
+                                                                          "type":  "string"
+                                                                      },
+                                                           "observedAt":  {
+                                                                              "description":  "An ISO 8601 UTC time, or null."
+                                                                          }
+                                                       },
+                                        "additionalProperties":  false,
+                                        "x-horde-owner":  "engine"
+                                    },
+                       "title":  {
+                                     "type":  "object",
+                                     "required":  [
+                                                      "state",
+                                                      "reason"
+                                                  ],
+                                     "properties":  {
+                                                        "state":  {
+                                                                      "type":  "string",
+                                                                      "enum":  [
+                                                                                   "known",
+                                                                                   "absent",
+                                                                                   "unknown"
+                                                                               ]
+                                                                  },
+                                                        "value":  {
+                                                                      "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                  },
+                                                        "reason":  {
+                                                                       "type":  "string"
+                                                                   },
+                                                        "observedAt":  {
+                                                                           "description":  "An ISO 8601 UTC time, or null."
+                                                                       }
+                                                    },
+                                     "additionalProperties":  false,
+                                     "x-horde-owner":  "engine"
+                                 },
+                       "dependsOn":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "engine"
+                                     },
+                       "spawnedAt":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "engine"
+                                     },
+                       "procStart":  {
+                                         "type":  "object",
+                                         "required":  [
+                                                          "state",
+                                                          "reason"
+                                                      ],
+                                         "properties":  {
+                                                            "state":  {
+                                                                          "type":  "string",
+                                                                          "enum":  [
+                                                                                       "known",
+                                                                                       "absent",
+                                                                                       "unknown"
+                                                                                   ]
+                                                                      },
+                                                            "value":  {
+                                                                          "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                      },
+                                                            "reason":  {
+                                                                           "type":  "string"
+                                                                       },
+                                                            "observedAt":  {
+                                                                               "description":  "An ISO 8601 UTC time, or null."
+                                                                           }
+                                                        },
+                                         "additionalProperties":  false,
+                                         "x-horde-owner":  "agent",
+                                         "x-horde-derived":  "the process\u0027s creation time in Windows file-time ticks; a pid is the same process only while its creation time is unchanged, since a reused pid has a different start"
+                                     },
+                       "bridgeSessionId":  {
+                                               "type":  "object",
+                                               "required":  [
+                                                                "state",
+                                                                "reason"
+                                                            ],
+                                               "properties":  {
+                                                                  "state":  {
+                                                                                "type":  "string",
+                                                                                "enum":  [
+                                                                                             "known",
+                                                                                             "absent",
+                                                                                             "unknown"
+                                                                                         ]
+                                                                            },
+                                                                  "value":  {
+                                                                                "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                            },
+                                                                  "reason":  {
+                                                                                 "type":  "string"
+                                                                             },
+                                                                  "observedAt":  {
+                                                                                     "description":  "An ISO 8601 UTC time, or null."
+                                                                                 }
+                                                              },
+                                               "additionalProperties":  false,
+                                               "x-horde-owner":  "agent"
+                                           },
+                       "formerNames":  {
+                                           "type":  "object",
+                                           "required":  [
+                                                            "state",
+                                                            "reason"
+                                                        ],
+                                           "properties":  {
+                                                              "state":  {
+                                                                            "type":  "string",
+                                                                            "enum":  [
+                                                                                         "known",
+                                                                                         "absent",
+                                                                                         "unknown"
+                                                                                     ]
+                                                                        },
+                                                              "value":  {
+                                                                            "description":  "Present with a value only when state is known (core/Tristate.ps1)."
+                                                                        },
+                                                              "reason":  {
+                                                                             "type":  "string"
+                                                                         },
+                                                              "observedAt":  {
+                                                                                 "description":  "An ISO 8601 UTC time, or null."
+                                                                             }
+                                                          },
+                                           "additionalProperties":  false,
+                                           "x-horde-owner":  "agent",
+                                           "x-horde-provisional":  "each former name carries a sessionId; whether that is an earlier id of this same conversation or another conversation shown in this process is unmeasured"
+                                       }
+                   },
+    "additionalProperties":  false
+}
