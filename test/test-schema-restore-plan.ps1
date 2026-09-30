@@ -155,6 +155,7 @@ $expect = [ordered]@{
     "container-no-children"      = @{ like = '*.tabs`[1`].root is a container with no children'; n = 1; schema = $false }
     "one-child"                  = @{ like = '*.root.children`[1`] is a container with 1 child*at least 2'; n = 1; schema = $false }
     "ratio-zero"                 = @{ like = '*.root.ratio is 0; a ratio lies strictly between 0 and 1'; n = 1; schema = $false }
+    "ratio-three-children"       = @{ like = '*.tabs`[0`].root.ratio is set on a container with 3 children; a ratio is the first child''s share of exactly 2'; n = 1; schema = $false }
     "ratio-one"                  = @{ like = '*.root.ratio is 1; a ratio lies strictly between 0 and 1'; n = 1; schema = $false }
     "dropped-session"            = @{ like = '$.sessions`[1`] (slot ''s2'') is not in the layout*never drop*'; n = 1; schema = $false }
     "slot-used-twice"            = @{ like = 'slot ''s1'' is placed 2 times*exactly once*'; n = 1; schema = $false }

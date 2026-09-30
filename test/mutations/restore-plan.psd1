@@ -53,6 +53,9 @@
         @{ Name = "ratio-one-allowed"
            Find = 'if (-not ($r -gt 0 -and $r -lt 1)) {'
            Replace = 'if (-not ($r -gt 0 -and $r -le 1)) {' }
+        @{ Name = "ratio-on-three-children-allowed"
+           Find = 'if ($hasRatio -and $kids.Count -gt 2) {'
+           Replace = 'if ($false) {' }
         @{ Name = "no-children-allowed"
            Find = 'if (-not $hasChildren) { [void]$Findings.Add($Path + " is a container with no children"); return }'
            Replace = 'if (-not $hasChildren) { return }' }

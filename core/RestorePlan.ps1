@@ -6,7 +6,8 @@
 #
 #   nodes     - a node that is both a leaf (slot) and a container (split, ratio or children), or
 #               neither; a container with no split, with no children, or with fewer than two; a ratio
-#               that is not strictly between 0 and 1 (0 and 1 would give one child the whole space).
+#               that is not strictly between 0 and 1 (0 and 1 would give one child the whole space), or
+#               on a container that does not have exactly two children.
 #   sessions  - a slot or a sessionId used by two sessions; a parent that names the session itself,
 #               or no session in the plan.
 #   resume    - two sessions with one resume kind and id; an empty argv; for claude-resume, a resume
@@ -107,6 +108,11 @@ function Test-HordePlanNode {
         $noun = "children"; if ($kids.Count -eq 1) { $noun = "child" }
         [void]$Findings.Add($Path + " is a container with " + $kids.Count + " " + $noun + "; a container has at least 2")
     }
+    # A ratio is the first child's share, and with three or more children the rest of the space has
+    # no stated division: a host would have to guess it, and a guessed size looks like a bug (section
+    # 4, degradation rule 5). So a ratio is allowed only between exactly two (review of PR #17). Fewer
+    # than two is reported above, once.
+    if ($hasRatio -and $kids.Count -gt 2) { [void]$Findings.Add($Path + ".ratio is set on a container with " + $kids.Count + " children; a ratio is the first child's share of exactly 2") }
     for ($i = 0; $i -lt $kids.Count; $i++) {
         Test-HordePlanNode -Node $kids[$i] -Path ($Path + ".children[" + $i + "]") -Placements $Placements -Findings $Findings
     }

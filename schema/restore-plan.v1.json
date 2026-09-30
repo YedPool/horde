@@ -89,7 +89,7 @@
       "properties": {
         "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Leaf: the slot of a session in this plan, in the same shape as the session's." },
         "split": { "type": "string", "enum": ["right", "down"], "description": "Container: children side by side (right) or stacked (down), in order." },
-        "ratio": { "type": "number", "description": "Container: the share of the first child, strictly between 0 and 1. Absent for a host with no sizes: dropped, never approximated." },
+        "ratio": { "type": "number", "description": "Container: the share of the first child, strictly between 0 and 1. Only on a container with exactly two children. Absent for a host with no sizes: dropped, never approximated." },
         "children": { "type": "array", "items": { "$ref": "#/definitions/node" }, "description": "Container: at least two nodes." }
       },
       "additionalProperties": false

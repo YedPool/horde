@@ -42,7 +42,6 @@
                 "title": "D wezfleet orc",
                 "root": {
                   "split": "right",
-                  "ratio": 0.6,
                   "children": [
                     {
                       "slot": "s1"
