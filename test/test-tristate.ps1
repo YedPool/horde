@@ -46,6 +46,17 @@ $noSuchDir = Join-Path $env:TEMP ("horde-no-such-dir-" + [guid]::NewGuid().ToStr
 $missingPath = Invoke-HordeRead -What "the registry" -Read { , @(Get-ChildItem -LiteralPath $noSuchDir) }
 Check ($missingPath.state -eq "unknown") "a cmdlet error inside a reader is not swallowed into a known empty list"
 Check ($ErrorActionPreference -eq "Continue") "the caller's error preference is untouched by a read"
+# What a NATURAL reader delivers, measured, because the module's comment once claimed otherwise: a
+# reader ending in a bare @() delivers nothing (so unknown), and one ending in @(5) delivers the bare
+# 5. A reader that means "an empty list" must return ,@() - or say absent in so many words.
+$bareEmpty = Invoke-HordeRead -What "the pane list" -Read { @() }
+Check ($bareEmpty.state -eq "unknown") "a reader ending in a bare empty array reads as unknown, not as a known empty list"
+$bareOne = Invoke-HordeRead -What "the pane list" -Read { @(5) }
+$bareOneValue = Get-HordeValue $bareOne
+Check ($bareOne.state -eq "known" -and $bareOneValue -is [int] -and $bareOneValue -eq 5) "a reader ending in a bare one-element array reads as the element, not a list"
+$commaEmpty = Invoke-HordeRead -What "the pane list" -Read { , @() }
+$commaEmptyValue = Get-HordeValue $commaEmpty
+Check ($commaEmpty.state -eq "known" -and $commaEmptyValue -is [array] -and $commaEmptyValue.Count -eq 0) "CONTROL: a reader returning a comma-wrapped empty array reads as a known empty list"
 
 Write-Host ""
 Write-Host "--- absent and unknown stay apart ---" -ForegroundColor Cyan

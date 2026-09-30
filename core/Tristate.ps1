@@ -99,10 +99,15 @@ function Get-HordeValue {
 
 function Invoke-HordeRead {
     # Run a reader and wrap what it returns. A reader that throws gives UNKNOWN carrying the message;
-    # one that returns an answer is passed through; any other return is known - including an empty
-    # collection, zero, false or "". A reader that returns $null (or nothing) has not said which of
-    # absent or unknown it means, so that is unknown too: only the reader can say "none", by returning
+    # one that returns an answer is passed through; any other value that ARRIVES is known - zero,
+    # false and "" included. A reader that returns $null (or nothing) has not said which of absent or
+    # unknown it means, so that is unknown too: only the reader can say "none", by returning
     # New-HordeAbsent.
+    #
+    # WHAT ARRIVES IS NOT ALWAYS WHAT THE READER WROTE (measured, PS 5.1, 2026-09-29): a reader ending
+    # in a bare @() delivers nothing, so it reads as UNKNOWN; one ending in @(5) delivers the bare 5,
+    # so it reads as known Int32, not a list. A reader that means a collection must return it with
+    # the unary comma - `, @()` or `, $list` - or return an answer itself.
     param([Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][scriptblock]$Read)
     $got = $null
     # Most cmdlet failures are non-terminating: they write an error and the reader carries on to its
