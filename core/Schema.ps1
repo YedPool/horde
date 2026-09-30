@@ -98,11 +98,17 @@ function Test-HordeSchema {
     if ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -isnot [bool]) {
         throw ("additionalProperties at " + $Path + " must be true or false; a schema there is not implemented")
     }
-    # ENUM HOLDS STRINGS ONLY, checked before the value is looked at so a bad schema is refused whatever
-    # the value. The first version compared other values as text: a null threw, 1 and 1.0 differed, and
-    # objects matched by their string form (review of PR #15). Horde's schemas need string enums only.
+    # ENUM HOLDS STRINGS AND WHOLE NUMBERS ONLY, checked before the value is looked at so a bad schema is
+    # refused whatever the value. The first version compared other values as text: a null threw, 1 and
+    # 1.0 differed, and objects matched by their string form (review of PR #15). A string matches only an
+    # identical string; a whole number matches a value that is an integer (as "type": "integer" reads it)
+    # of equal value, so 1 and 1.0 are the same and "1" is not. Whole numbers are needed for
+    # schemaVersion, which every Horde record pins to 1.
     if ($kw.ContainsKey("enum")) {
-        foreach ($e in @($kw["enum"])) { if ($e -isnot [string]) { throw ("enum at " + $Path + " may hold only strings; '" + $e + "' is not one") } }
+        foreach ($e in @($kw["enum"])) {
+            $isWhole = ($e -is [int] -or $e -is [long])
+            if ($e -isnot [string] -and -not $isWhole) { throw ("enum at " + $Path + " may hold only strings and whole numbers; '" + $e + "' is neither") }
+        }
     }
     if ($kw.ContainsKey("type")) {
         if (-not (Test-HordeSchemaType -Value $Value -Type "$($kw['type'])")) {
@@ -112,7 +118,10 @@ function Test-HordeSchema {
     }
     if ($kw.ContainsKey("enum")) {
         $ok = $false
-        foreach ($e in @($kw["enum"])) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }
+        foreach ($e in @($kw["enum"])) {
+            if ($e -is [string]) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }
+            elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }
+        }
         if (-not $ok) { [void]$findings.Add($Path + " is '" + $Value + "', not one of: " + (@($kw["enum"]) -join ", ")) }
     }
     if ($kw.ContainsKey("pattern") -and $Value -is [string]) {

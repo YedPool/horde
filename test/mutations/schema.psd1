@@ -13,10 +13,16 @@
            Find = 'if ($Value -is [string] -and $Value -ceq $e) { $ok = $true }'
            Replace = 'if ($Value -is [string] -and $Value -eq $e) { $ok = $true }' }
         @{ Name = "enum-matches-non-string"
-           Find = 'if ($Value -is [string] -and $Value -ceq $e) { $ok = $true }'
-           Replace = 'if ("$Value" -ceq $e) { $ok = $true }' }
+           Find = 'if ($e -is [string]) { if ($Value -is [string] -and $Value -ceq $e) { $ok = $true } }'
+           Replace = 'if ($e -is [string]) { if ("$Value" -ceq $e) { $ok = $true } }' }
+        @{ Name = "enum-whole-number-matches-its-string"
+           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
+           Replace = 'elseif ("$Value" -eq "$e") { $ok = $true }' }
+        @{ Name = "enum-whole-number-never-matches"
+           Find = 'elseif ((Test-HordeSchemaType -Value $Value -Type "integer") -and [decimal]$Value -eq [decimal]$e) { $ok = $true }'
+           Replace = 'elseif ($false) { $ok = $true }' }
         @{ Name = "enum-accepts-non-string-values"
-           Find = 'if ($e -isnot [string]) { throw'
+           Find = 'if ($e -isnot [string] -and -not $isWhole) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "enum-not-checked"
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
