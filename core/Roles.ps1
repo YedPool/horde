@@ -65,7 +65,9 @@ function Read-HordeRecordRole {
 function Get-HordeWezfleetRoot {
     # Where wezfleet keeps its store: WEZFLEET_ROOT when set, else Documents\Code\.wezfleet under the
     # user profile (YedPool/wezfleet lib/Common.ps1:13-17). Not %USERPROFILE%\.wezfleet.
-    if ("$env:WEZFLEET_ROOT".Trim() -ne "") { return $env:WEZFLEET_ROOT }
+    # "Set" means exactly what wezfleet's `if ($env:WEZFLEET_ROOT)` means: non-empty, NOT trimmed. A
+    # value of only spaces is used as it stands, so both read the same store, even a wrong one.
+    if ("$env:WEZFLEET_ROOT" -ne "") { return $env:WEZFLEET_ROOT }
     return (Join-Path $env:USERPROFILE "Documents\Code\.wezfleet")
 }
 

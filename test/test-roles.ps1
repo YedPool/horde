@@ -112,6 +112,12 @@ $keepRoot = $env:WEZFLEET_ROOT
 try {
     $env:WEZFLEET_ROOT = $store
     Check ((Get-HordeWezfleetRoot) -eq $store) "the wezfleet store root honours WEZFLEET_ROOT"
+    # wezfleet uses WEZFLEET_ROOT whenever it is non-empty (lib/Common.ps1:16), spaces and all. Horde
+    # used to trim it and fall back to the default store: a different store from the one wezfleet used.
+    $env:WEZFLEET_ROOT = "   "
+    $spacesRoot = Get-HordeWezfleetRoot
+    $env:WEZFLEET_ROOT = $store
+    Check ($spacesRoot -eq "   ") "a WEZFLEET_ROOT of only spaces is used as wezfleet uses it, not replaced by the default"
 
     # Fingerprint the whole store, then read it with every file held open against writing.
     function Get-StoreFingerprint { param([string]$Dir)
