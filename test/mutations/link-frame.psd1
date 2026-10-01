@@ -15,8 +15,14 @@
            Find = '"time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$",'
            Replace = '"time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z?$",' }
         @{ Name = "request-id-optional"
-           Find = '"req":   { "required": ["verb", "requestId", "args"],'
-           Replace = '"req":   { "required": ["verb", "args"],' }
+           Find = '"req":   { "required": ["verb", "requestId", "issuedAt", "args"],'
+           Replace = '"req":   { "required": ["verb", "issuedAt", "args"],' }
+        @{ Name = "issued-at-optional"
+           Find = '"req":   { "required": ["verb", "requestId", "issuedAt", "args"],'
+           Replace = '"req":   { "required": ["verb", "requestId", "args"],' }
+        @{ Name = "issued-at-any-text"
+           Find = '"issuedAt": { "$ref": "#/definitions/time",'
+           Replace = '"issuedAt": { "type": "string", "x-horde-cap": "nameBytes",' }
         @{ Name = "result-or-error-not-exclusive"
            Find = ', "oneOf": ["result", "error"] }'
            Replace = ' }' }

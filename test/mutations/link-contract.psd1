@@ -104,5 +104,17 @@
         @{ Name = "ceiling-above-4-mib-allowed"
            Find = 'if ($limits["frameBytesCeiling"] -gt 4194304)'
            Replace = 'if ($limits["frameBytesCeiling"] -gt 8388608)' }
+        @{ Name = "resend-may-move-issued-at"
+           Find = 'foreach ($m in @("requestId", "issuedAt", "verb")) {'
+           Replace = 'foreach ($m in @("requestId", "verb")) {' }
+        @{ Name = "resend-args-unchecked"
+           Find = 'if ($a1 -cne $a2) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "resend-may-reuse-frame-id"
+           Find = 'if ("$($Again.id)" -ceq "$($First.id)") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "resend-of-any-kind"
+           Find = 'if ("$(Get-HordeLinkProp $pair[1] ''kind'')" -cne "req") {'
+           Replace = 'if ($false) {' }
     )
 }
