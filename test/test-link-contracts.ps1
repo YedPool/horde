@@ -276,7 +276,18 @@ FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:00
 FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:00+00:00" } "$.issuedAt does not match" "an issuedAt with an offset instead of Z is refused: one spelling of UTC"
 FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:0" + [char]0x0661 + "Z" } "$.issuedAt does not match" "an issuedAt with a non-ASCII digit is refused"
 FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = 1759233600 } "$.issuedAt should be string" "an issuedAt as a number is refused"
-FrameRefuses "res-handoff-absent.json" { param($x) $x | Add-Member -NotePropertyName issuedAt -NotePropertyValue "2026-09-30T12:00:00Z" } "a res frame may not carry 'issuedAt'" "issuedAt is carried by a req and no other kind"
+# ONE SPELLING PER INSTANT, and a real one (review of PR #40). The link carries canonical frames only
+# (step R2), so issuedAt has exactly three fraction digits, as Get-HordeLinkTime writes it; and a value
+# shaped right but naming no instant is refused by parsing it.
+foreach ($other in @("2026-09-30T12:00:00Z", "2026-09-30T12:00:00.0Z", "2026-09-30T12:00:00.0000Z", "2026-09-30T12:00:00.90Z")) {
+    FrameRefuses "req-node-info.json" ([scriptblock]::Create("param(`$x) `$x.issuedAt = '$other'")) "$.issuedAt does not match" ("the second spelling " + $other + " of an instant is refused: issuedAt has exactly three fraction digits")
+}
+foreach ($impossible in @("2026-09-31T12:00:00.000Z", "2026-02-29T12:00:00.000Z", "2026-09-30T24:00:00.000Z", "2026-09-30T12:60:00.000Z", "2026-09-30T12:00:60.000Z", "2026-13-01T12:00:00.000Z", "0000-01-01T00:00:00.000Z")) {
+    FrameRefuses "req-node-info.json" ([scriptblock]::Create("param(`$x) `$x.issuedAt = '$impossible'")) "is not a real UTC instant" ("the impossible issuedAt " + $impossible + " is refused")
+}
+$f = @(Test-FrameWith "req-node-info.json" { param($x) $x.issuedAt = "2028-02-29T23:59:59.999Z" })
+Check ($f.Count -eq 0) "CONTROL: a real instant on a leap day, 2028-02-29T23:59:59.999Z, is accepted"; Show $f
+FrameRefuses "res-handoff-absent.json" { param($x) $x | Add-Member -NotePropertyName issuedAt -NotePropertyValue "2026-09-30T12:00:00.000Z" } "a res frame may not carry 'issuedAt'" "issuedAt is carried by a req and no other kind"
 FrameRefuses "req-node-info.json" { param($x) $x | Add-Member -NotePropertyName re -NotePropertyValue $x.id } "a req frame may not carry 're'" "a req carrying a member of another kind is refused"
 FrameRefuses "res-handoff-absent.json" { param($x) $x | Add-Member -NotePropertyName error -NotePropertyValue ([pscustomobject]@{ code = "internal"; reason = "both" }) } "exactly one of result, error" "a res with both a result and an error is refused"
 FrameRefuses "res-handoff-absent.json" { param($x) $x.PSObject.Properties.Remove("result") } "exactly one of result, error" "a res with neither a result nor an error is refused"
@@ -332,7 +343,7 @@ function New-Resend {
 }
 $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) }) -Contract $contract)
 Check ($f.Count -eq 0) "CONTROL: a resend with a new id, seq and ts and everything else the same is a resend"; Show $f
-$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.issuedAt = $r.ts }) -Contract $contract)
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.issuedAt = "2026-09-30T12:05:00.000Z" }) -Contract $contract)
 Check (Says $f "issuedAt") "a resend whose issuedAt moved is not a resend: issuedAt is fixed when the hub first records the request"
 $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.args.prompt.text = "Something else." }) -Contract $contract)
 Check (Says $f "args") "a resend whose arguments changed is not a resend"

@@ -506,6 +506,16 @@ function Test-HordeLinkFrame {
     $one = @(Get-HordeLinkProp $rule "oneOf" | Where-Object { $null -ne $_ })
     if ($one.Count -gt 0 -and @($one | Where-Object { $members -ccontains $_ }).Count -ne 1) { [void]$out.Add("a $kind frame carries exactly one of " + ($one -join ", ")) }
     if ($out.Count -gt 0) { return @($out) }
+    # issuedAt is a REAL instant, not text shaped like one: the schema's pattern passed 2026-09-31 and
+    # 24:00 (review of PR #40). Parsed with the one format the pattern allows, so a value that parses
+    # is also the one spelling of its instant.
+    if ($members -ccontains "issuedAt") {
+        $issued = [datetime]::MinValue
+        $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+        if (-not [datetime]::TryParseExact("$($Frame.issuedAt)", "yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$issued)) {
+            return @("$.issuedAt '" + $Frame.issuedAt + "' is not a real UTC instant")
+        }
+    }
     if ($members -cnotcontains "verb") { return @() }
     # A refusal names the verb it refuses, which may be one the table does not have ("exec"), so an
     # error res is not looked up: the error is the whole answer.

@@ -134,6 +134,9 @@
         @{ Name = "argument-paths-skip-array-items"
            Find = 'if ($null -ne $items) { foreach ($x in @(Get-HordeLinkArgPaths'
            Replace = 'if ($false) { foreach ($x in @(Get-HordeLinkArgPaths' }
+        @{ Name = "issued-at-not-parsed"
+           Find = 'if ($members -ccontains "issuedAt") {'
+           Replace = 'if ($false) {' }
         @{ Name = "resend-of-any-kind"
            Find = 'if ("$(Get-HordeLinkProp $pair[1] ''kind'')" -cne "req") {'
            Replace = 'if ($false) {' }

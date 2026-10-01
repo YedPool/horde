@@ -21,8 +21,11 @@
            Find = '"req":   { "required": ["verb", "requestId", "issuedAt", "args"],'
            Replace = '"req":   { "required": ["verb", "requestId", "args"],' }
         @{ Name = "issued-at-any-text"
-           Find = '"issuedAt": { "$ref": "#/definitions/time",'
+           Find = '"issuedAt": { "$ref": "#/definitions/issued-time",'
            Replace = '"issuedAt": { "type": "string", "x-horde-cap": "nameBytes",' }
+        @{ Name = "issued-at-any-spelling"
+           Find = '"issuedAt": { "$ref": "#/definitions/issued-time",'
+           Replace = '"issuedAt": { "$ref": "#/definitions/time",' }
         @{ Name = "result-or-error-not-exclusive"
            Find = ', "oneOf": ["result", "error"] }'
            Replace = ' }' }

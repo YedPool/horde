@@ -35,7 +35,7 @@
     "ts": { "$ref": "#/definitions/time", "description": "The sender's clock when it sent the frame." },
     "verb": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)*$", "x-horde-cap": "nameBytes" },
     "requestId": { "$ref": "#/definitions/uuid", "description": "The idempotency key (plan step R3), chosen by the hub; a res repeats it." },
-    "issuedAt": { "$ref": "#/definitions/time", "description": "When the hub first recorded this request, before sending it (plan step R3). Fixed then and the same on every resend, which ts is not: ts is this frame's own send time. The node's journal accepts a requestId it has not seen only while issuedAt is within its replay window (7 days back, 60 minutes ahead), so a resend that moved issuedAt would reopen a window the first send closed. remote/Contract.ps1's Test-HordeLinkResend holds a resend to it." },
+    "issuedAt": { "$ref": "#/definitions/issued-time", "description": "When the hub first recorded this request, before sending it (plan step R3). Fixed then and the same on every resend, which ts is not: ts is this frame's own send time. The node's journal accepts a requestId it has not seen only while issuedAt is within its replay window (7 days back, 60 minutes ahead), so a resend that moved issuedAt would reopen a window the first send closed. remote/Contract.ps1's Test-HordeLinkResend holds a resend to it." },
     "re": { "$ref": "#/definitions/uuid", "description": "The id of the frame this one answers." },
     "args": { "type": "object", "description": "OPEN HERE, CLOSED BY THE VERB: remote/Contract.ps1 checks it against the verb's args in schema/link-verbs.v1, every one of which is closed." },
     "result": { "$ref": "#/definitions/answer" },
@@ -47,6 +47,7 @@
   },
   "definitions": {
     "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "x-horde-cap": "nameBytes", "description": "Lower case: one id has one spelling on the wire, so a journal keyed by it cannot hold the same request twice under two spellings." },
+    "issued-time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$", "x-horde-cap": "nameBytes", "description": "A request's issuedAt: ONE SPELLING PER INSTANT, yyyy-MM-ddTHH:mm:ss.fffZ, exactly three fraction digits, as the link writes every time it makes (remote/Protocol.ps1, Get-HordeLinkTime). The journal compares issuedAt as text on a resend, and the link carries only canonical frames (step R2), so 12:00:00Z and 12:00:00.000Z, one instant, would otherwise be two requests' worth of disagreement. remote/Contract.ps1 also parses it, so an impossible date (2026-09-31, 24:00, a 60th second) is refused, which a pattern cannot say. Review of PR #40, 2026-10-01." },
     "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "x-horde-cap": "nameBytes", "description": "ISO 8601 in UTC, Z only: a time with no zone cannot be placed (core/tristate)." },
     "answer": {
       "type": "object",
