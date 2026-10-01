@@ -16,7 +16,7 @@
   "x-horde-kinds": {
     "description": "Per kind, the members that must be present (beside v, kind, id, seq and ts) and the only ones that may be. res carries exactly one of result and error.",
     "hello": { "required": ["hello"], "allowed": ["hello"] },
-    "req":   { "required": ["verb", "requestId", "args"], "allowed": ["verb", "requestId", "args"] },
+    "req":   { "required": ["verb", "requestId", "issuedAt", "args"], "allowed": ["verb", "requestId", "issuedAt", "args"] },
     "res":   { "required": ["verb", "requestId", "re"], "allowed": ["verb", "requestId", "re", "result", "error"], "oneOf": ["result", "error"] },
     "evt":   { "required": ["verb", "re", "result"], "allowed": ["verb", "re", "result"] },
     "ack":   { "required": ["re"], "allowed": ["re"] },
@@ -35,6 +35,7 @@
     "ts": { "$ref": "#/definitions/time", "description": "The sender's clock when it sent the frame." },
     "verb": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)*$", "x-horde-cap": "nameBytes" },
     "requestId": { "$ref": "#/definitions/uuid", "description": "The idempotency key (plan step R3), chosen by the hub; a res repeats it." },
+    "issuedAt": { "$ref": "#/definitions/time", "description": "When the hub first recorded this request, before sending it (plan step R3). Fixed then and the same on every resend, which ts is not: ts is this frame's own send time. The node's journal accepts a requestId it has not seen only while issuedAt is within its replay window (7 days back, 60 minutes ahead), so a resend that moved issuedAt would reopen a window the first send closed. remote/Contract.ps1's Test-HordeLinkResend holds a resend to it." },
     "re": { "$ref": "#/definitions/uuid", "description": "The id of the frame this one answers." },
     "args": { "type": "object", "description": "OPEN HERE, CLOSED BY THE VERB: remote/Contract.ps1 checks it against the verb's args in schema/link-verbs.v1, every one of which is closed." },
     "result": { "$ref": "#/definitions/answer" },

@@ -457,3 +457,33 @@ function Test-HordeLinkFrame {
     }
     return @()
 }
+
+function Test-HordeLinkResend {
+    # Is Again a resend of the request First? A resend is the same request in a new frame: a new id,
+    # and its own seq and ts, with the same requestId, issuedAt, verb and arguments. The node's journal
+    # (plan step R3) keys on requestId and judges its replay window by issuedAt, so a "resend" that
+    # moved issuedAt would reopen a window the first send closed, and one with other arguments is a
+    # different request under a reused id. Both frames must themselves be valid. Returns findings;
+    # empty means Again is a resend of First.
+    param([Parameter(Mandatory = $true)]$First, [Parameter(Mandatory = $true)]$Again, $Contract = $null)
+    if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
+    $out = New-Object System.Collections.ArrayList
+    # Every finding is collected, not the first: a resend naming another verb is also invalid for its
+    # arguments, and the report says both.
+    $notReq = $false
+    foreach ($pair in @(@("the first frame", $First), @("the resend", $Again))) {
+        if ("$(Get-HordeLinkProp $pair[1] 'kind')" -cne "req") { [void]$out.Add($pair[0] + " is not a req; only a request is resent"); $notReq = $true }
+        foreach ($f in @(Test-HordeLinkFrame -Frame $pair[1] -Contract $Contract)) { [void]$out.Add($pair[0] + ": " + $f) }
+    }
+    if ($notReq) { return @($out) }
+    if ("$($Again.id)" -ceq "$($First.id)") { [void]$out.Add("the resend reuses the frame id " + $First.id + "; a resend is a new frame and needs a new frame id") }
+    foreach ($m in @("requestId", "issuedAt", "verb")) {
+        if ("$(Get-HordeLinkProp $Again $m)" -cne "$(Get-HordeLinkProp $First $m)") { [void]$out.Add("the resend's " + $m + " is '" + (Get-HordeLinkProp $Again $m) + "', not the first send's '" + (Get-HordeLinkProp $First $m) + "'") }
+    }
+    # The arguments compared as JSON text, so key order and every value count. Both frames passed the
+    # contract above, so both are plain data that serialises fully at this depth.
+    $a1 = ConvertTo-Json -InputObject $First.args -Depth 40 -Compress
+    $a2 = ConvertTo-Json -InputObject $Again.args -Depth 40 -Compress
+    if ($a1 -cne $a2) { [void]$out.Add("the resend's args differ from the first send's") }
+    return @($out)
+}
