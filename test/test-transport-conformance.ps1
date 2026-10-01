@@ -98,7 +98,10 @@ foreach ($n in $names) {
     Write-Host ("  declares: " + (($caps | ForEach-Object { $_ + "=" + (Get-HordeTransportSupport -Transport $t -Capability $_) }) -join ", ")) -ForegroundColor DarkGray
 
     Write-Host "--- every word but yes is refused where it is required ---" -ForegroundColor Cyan
-    Check ($t.maxFrameBytes -ge 1048576) "[$n] it carries a frame of 1 MiB, the protocol's cap (design 6.1)"
+    # The protocol's own cap, read from the contract (schema/link-frame.v1, step R1), not copied here.
+    $limits = (Get-HordeSchema -Name "link-frame.v1").'x-horde-limits'
+    Check ($t.maxFrameBytes -ge [int]$limits.frameBytes) "[$n] it carries a frame of the protocol's cap, $($limits.frameBytes) bytes"
+    Check ($t.maxFrameBytes -le [int]$limits.frameBytesCeiling) "[$n] and no more than the protocol's ceiling, $($limits.frameBytesCeiling) bytes"
     foreach ($c in $caps) {
         $word = Get-HordeTransportSupport -Transport $t -Capability $c
         $r = Resolve-HordeTransport -Name $n -Require @($c)
