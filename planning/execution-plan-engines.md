@@ -19,6 +19,9 @@ sibling plans, and each has exactly one owner:
 | the split into a fleet record and a binding record | the remote plan (`planning/execution-plan-remote.md`, PR #32 at `a0cac96`), step R10 | K1 and R1 follow it in one ordered sequence (group C) |
 | the permission-ceiling vocabulary and node policy | the remote plan, step R9 | E2 adds the per-harness mapping it needs |
 | the stream the metrics collectors read | the lifecycle plan's follower | M4 and M6 consume it (group H) |
+| `Get-HordeSessionName`, the one function that turns a fleet record into the name people see for a session | the merged Phase 3 plan, step 15 (`core/Target.ps1`) | N1, E9 and E10 call it; nothing in this plan formats a session name |
+| the binding's `remoteName` field (remote name, session URL, when set) | the lifecycle plan, step 24 | E10 writes it at birth, through the binding record's writer (migration step 3.8) |
+| `horde names` and `horde names repair`, the web-session-name read and repair verb | the lifecycle plan, step 34 | N1 supplies the harness half |
 
 ## Sources, and what is already decided
 
@@ -225,6 +228,15 @@ Half A writes only config files, so it can ship before Horde spawns anything.
      `inexpressible` with the reason. A node then refuses a level its harness cannot express. It never
      lowers it to the nearest level the harness has, because a silent lowering is a policy change
      nobody asked for.
+   - the capability `session.remoteName` (founder request of 2026-10-01, group I): whether Horde can
+     set the name a harness's remote or web view shows for a session, both at birth and on a live
+     session, so that the web title equals the fleet's name and keeps equalling it. claude-code is
+     `yes`, with two pieces of evidence: `--remote-control [name]` read off `claude --help` (2.1.286,
+     2026-09-30), and M's measured repair of 2026-10-01 (the technique brief
+     `TECHNIQUE-web-session-names-2026-10-01.md` in the fleet's briefs folder), after which the
+     founder confirmed the web titles of A and D. codex and gemini-cli are `unverified` until someone
+     measures them. E0's lesson that codex has no name flag is about the terminal session, not a
+     remote view, so it does not settle this.
 
    `core/capabilities.json` says which port can satisfy each capability: `agent`, `host` or `either`.
    Golden fixtures cover the valid shapes and include one fixture per rejected shape. The schema's
@@ -236,6 +248,9 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    - a pure `Get-HordePermissionArgs` given an `inexpressible` level refuses with the reason. The
      control gives it an expressible level and gets that level's fragment back. A mutation that
      returns the nearest lower level instead must turn the test red.
+   - a fixture harness with `session.remoteName: unverified` gets no naming fragment at birth and is
+     answered `unknown` by `horde names` (lifecycle step 34), never `ok` and never `drifted`. The
+     control sets it to `yes` and gets the fragment.
 4. **E3. `schema/engine-config.v1` and `core/EngineConfig.ps1` (`Test-HordeEngineConfig`).** This is
    the design's schema with the five changes above. The checker enforces three rules:
    - **The wire-format rule.** A profile or rule that pairs a harness with a provider whose protocol
@@ -469,6 +484,31 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     provider environment by reference, the scrub list, and the resume argv from a recorded binding.
     Every flag is read off `--help` on this machine. For shadowing, each wezfleet spawn is compared
     with Horde's computed argv, and every difference is logged and explained.
+
+    **Naming at birth** (group I). When the descriptor says `session.remoteName: yes`, the argv also
+    carries the fragment N1 builds from `Get-HordeSessionName` (the merged Phase 3 plan's step 15),
+    so the remote view is named when the session is born, with the same name as the label and the
+    terminal title. The name is never formatted here. `Get-HordeSessionName` takes the fleet view and
+    may answer "no name" with a reason (no label, a label that collides with a lane fleet id, no
+    verified handle). A new pane may not yet show as live when the argv is built, so launch waits a
+    bounded time for the host to answer the pane's handle live, then asks for the name (decided
+    2026-10-01). If the pane is still not visible when the wait ends, the session launches without a
+    name, the reason is reported, and lifecycle step 34 repairs the title later; the same happens on
+    any other "no name" answer. The bound is set by E10's measurement; until then it is an estimate.
+    Tests: "a pane that shows live within the bound is named" (the control); "a pane that never shows
+    live launches unnamed after the bound, with the reason"; "the wait never exceeds the bound" - a
+    mutation that waits without a limit turns it red.
+    This covers every argv this step builds: a fresh spawn, and the resume argv, because a resumed
+    process starts with Remote Control off.
+    Tests, with neutral names in `test/` and the real fragment in `agents/claude-code/test/`:
+    - the fragment equals what `Get-HordeSessionName` returns for the record. The fixture record's
+      label and run title differ, so an adapter that formats its own name fails; a mutation that
+      reads the title instead of calling the function turns the test red;
+    - `--remote-control` takes an optional value, so a missing name must never leave the flag bare in
+      front of a prompt or another argument, which it would take as the name. A record for which
+      `Get-HordeSessionName` answers "no name" gets no fragment and the function's reason. The
+      control gives a record that has a name and gets the flag immediately followed by it;
+    - a harness whose capability is not `yes` gets no fragment, and the spawn still proceeds.
 18. **E10. The `horde launch` stub, and the engine flags on `horde spawn` and in run specs** (after
     the lifecycle plan's step 22). The lifecycle plan builds the anchor first, against a stand-in
     child. This step then builds the real launch stub that the anchor runs as its child. The stub:
@@ -481,7 +521,23 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     - refuses a spawn whose capabilities fail;
     - writes the metrics consent record.
 
-    e2e in the isolated terminal, with the cheapest prompt that proves the point.
+    The stub hands over its argv and exits before the harness draws anything, so recording the birth
+    name is the spawn command's job, not the stub's: `horde spawn` writes the binding's
+    `remoteName` field (lifecycle step 24) through the binding record's writer on the node - the one
+    writer of `schema/session-binding.v1`, which exists only from migration step 3.8. The order holds
+    without a new gate: lifecycle 24 defines the field and merges before 3.8, 3.8 ships the writer,
+    and this step is SPAWN, which already waits for 3.8. It writes the name it passed, `setBy: birth`
+    and the time,
+    then fills the session URL once N1's parser, over the host's screen read, shows Remote Control
+    active. Until then the URL is `unknown`. A session whose Remote Control never shows active still
+    runs, and `horde names` (lifecycle step 34) reports it as `drifted` with the reason. Test: a
+    fixture screen that never shows Remote Control active leaves the URL `unknown`, never empty and
+    never a guess; the control shows it active and the URL is recorded.
+
+    e2e in the isolated terminal, with the cheapest prompt that proves the point. The e2e also
+    measures the real delay between a pane's creation and the host answering its handle live, over
+    repeated spawns, and sets E9's naming wait from that measurement, citing it in a comment. Until
+    then the wait is 5 seconds, marked as an estimate, not a measurement.
 19. **E11. Switch and adoption.** Resume and drift are step 16. The fleet runs a real wave with
     goblins on one model and orcs on another, set only through `horde config`, and the PR records who
     used it and what broke.
@@ -542,6 +598,97 @@ backfill from before consent). A test proves that backfill is refused without on
 
 Dropped: metrics M9 (`reconcile`) and the `metered` tier (metrics 7).
 
+I. Web session names (founder request, 2026-10-01)
+
+The founder asked that the title of every session on claude.ai/code always match the fleet's name for
+it, and keep matching. M measured why it drifts and how to fix it (the technique brief cited in E2):
+`/rename` changes the web title, but the next prompt the session receives (a mail pointer, a delivered
+message) can regenerate the title from that prompt. A name given when Remote Control starts sticks,
+because it ranks above both. The work is split by owner, and each piece is written once:
+
+| piece | where |
+|---|---|
+| the capability `session.remoteName` | E2 (step 3) |
+| the name itself, one function | `Get-HordeSessionName`, the merged Phase 3 plan's step 15 |
+| the claude-code half: birth fragment, screen parser, repair sequence | N1 (step 28, below) |
+| naming at birth | E9 (step 17) builds the argv, E10 (step 18) records the result |
+| the stored name and URL | the lifecycle plan's step 24, `remoteName` in the binding record |
+| the read and the repair verb | the lifecycle plan's step 34, `horde names` and `horde names repair` |
+
+28. **N1. `agents/claude-code/RemoteName.ps1`, the harness half of web session names** (NOW for the
+    pure parts; SPAWN for the measurements). Everything here names the harness, its flags or its
+    screen text, so all of it lives in `agents/claude-code/`, and its screen anchors are declared in
+    that folder's `names.txt` so the ratchet catches them anywhere else. Core reaches it only through
+    the AgentPort. It provides:
+    - **the birth fragment** that E9 adds: `--remote-control` followed by the name it is given. It
+      takes the name as an argument and never formats one;
+    - **a screen parser** over a captured screen (from the host's `text.read`). It answers in
+      neutral states, each in tristate form, so that core and every fixture outside this folder see
+      states, never this harness's screen text: `box` is `empty`, `typed` or `unknown`; `menu` is
+      showing or not, with `cursor` on `disconnect` or `other`; `link` is `disconnected`, `active`
+      (with `url`) or `unknown`;
+    - **`Test-SessionIdentity`, the agent's proof that a pane holds a session** (decided 2026-10-01),
+      which lifecycle step 34 uses only for a session with no anchor containment record. It answers
+      proven only when all three agree: the harness's control file for the process exists (store X2,
+      `~\.claude\sessions\<pid>.json`); its pid and procStart match the live process exactly, the
+      rule wezfleet's mail repair has used since its PR #21; and the host's record for the pane names
+      that same session. Any one missing or disagreeing answers refused, with which one. The control
+      file is named only here. Tests, on fixtures in `agents/claude-code/test/`: the control, where
+      all three agree and the answer is proven; no control file; a control file whose pid differs; a
+      control file whose procStart differs, which is the recycled-pid case; and a host record that
+      names a different session. Each failure branch answers refused with its own reason, and a
+      mutation that drops any one of the three checks turns its test red;
+    - **the repair sequence as data**: the commands and ordered keys, and the neutral state each
+      must reach before the next is sent. The verb that runs it is the lifecycle plan's step 34;
+      this step sends nothing itself.
+
+    Two of the brief's five pitfalls belong to the parser, and each becomes a test, on fixture
+    captures cut from real screens:
+    - **Ghost text is not typed text.** The input box often shows a greyed suggestion. Ctrl+U does not
+      clear it, and typing replaces it, so a check that treats it as typed text skips every pane.
+      Test: a capture with only a suggestion in the box answers `empty`. Control: a capture with
+      typed text answers `typed`. The parser tells them apart only from what the capture shows,
+      such as the suggestion's dim or colour attribute; where the capture cannot show the
+      difference, it answers `unknown`, and lifecycle step 34 skips that session. The brief's own
+      probe (send Ctrl+U and see whether the text remains) erases a real draft, so it is never used,
+      by this parser or by anything that calls it. Test: a capture whose box line carries text with no
+      attribute that tells suggestion from typing answers `unknown`, never `empty`.
+
+    These fixtures need a capture format that keeps the dim and colour attributes, not plain text.
+    Which format, and whether every host's `text.read` can supply it, is left open: it is decided when
+    N1 is built, with the hosts plan, and until a host supplies it, `box` on that host is `unknown`.
+    - **Padding is not text.** The box line contains non-ASCII padding, so "empty" tests for printable
+      characters, never for the absence of spaces. Test: a box line of padding alone answers `empty`.
+      Control: the same line with one printable character answers `typed`. A mutation that tests for
+      spaces instead turns the test red.
+
+    Parser tests for the sequence itself:
+    - after two Up presses, the parser reports the item under the cursor from the screen. A capture
+      with the cursor on "Continue" or "Show QR code" answers `other`, never `disconnect`; step 34
+      acts only on what the parser reports;
+    - a URL is parsed only from a screen that says "/remote-control is active" (`link: active`); any
+      other screen answers `unknown` for the URL.
+
+    These are the only tests that hold this harness's real screen text, and they live in
+    `agents/claude-code/test/`. Lifecycle step 34's tests, and its e2e in `hosts/wezterm/test/e2e/`,
+    use a neutral fixture harness, a neutral slash command and these neutral states (rule 14).
+
+    Measurements, each written to `planning/ledger/agent-claude-code.md` (its remote-name half). A
+    measurement that fails moves the capability to `no`:
+    - a session started with the birth fragment keeps its web title after one prompt the fleet sends
+      it, the case where `/rename` failed. The cheapest prompt, in the isolated terminal; the founder
+      reads the title on claude.ai/code, as he did for A and D;
+    - whether the fragment combines with `--resume` and `--session-id`;
+    - how Horde can tell whether a live session has Remote Control on before sending anything. A bare
+      `/remote-control` sent to a session where it is off would turn it on with an automatic name, so
+      until this is measured, step 34 does not repair a session whose state it cannot read;
+    - whether an account change restarts the harness process or only drops Remote Control;
+    - whether the harness writes the remote name or session URL to a local file Horde could read
+      instead of the screen.
+
+    codex and gemini-cli get no N-step until someone measures a remote view for them; their
+    `session.remoteName` stays `unverified`.
+
 ## What can start now
 
 In order, one PR each:
@@ -550,6 +697,8 @@ In order, one PR each:
    then hosts 5). E0, the ledger, lands with E9 instead (step 1 says why).
 3. E2, E3, E5 and E7.
 4. P1 and P2, as data and tests.
+5. N1's fragment and parser, as pure functions on fixtures, once the merged Phase 3 plan's step 15
+   has fixed `Get-HordeSessionName`'s signature.
 
 ## What waits
 
@@ -567,5 +716,6 @@ In order, one PR each:
   - P3;
   - R3;
   - E9, E10 (after lifecycle 22) and E11;
+  - N1's measurements;
   - G3.
 - **INSTALL**: G1, and after it G2 and G4.

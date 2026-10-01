@@ -57,6 +57,7 @@ marker, because memory is the constraint this whole plan is about.
 | 24 | **remote R10, then engines K1, then engines R1**, merged in that order; step 24 must itself merge **before migration step 3.8** | the four in-place `session-record.v1` edits land as one ordered sequence before any record writer exists (below) |
 | 3 (W5's adoption line) | **Phase 3 plan step 5** (migration step 3.2), `adoption/capabilities.txt` | the line W5 adds goes in that file |
 | 15, 16, 20 | **metrics Stage A**: the event writer, the consent sentinel, the span model | detectors, the backlog and the tuner write metrics events |
+| 34 (web session names) | the merged Phase 3 plan's step 15 (`Get-HordeSessionName`); engines E2 (`session.remoteName`) and N1 (the parser and repair sequence); this plan's steps 4, 6, 10, 22, 24 and 25; and a host that declares `text.send` and `text.read` | the name comes from the one function, the harness half lives in its adapter, the identity proof from the anchor's containment record, and the verb only orchestrates them |
 
 ## What this plan owns, and the order of shared edits
 
@@ -91,7 +92,8 @@ marker, because memory is the constraint this whole plan is about.
   2. engines K1: the key becomes (harness, id);
   3. engines R1 (branch `docs/engines-hosts-plans`): `engine`, `projectCwd` and `resume.argv` /
      `resume.envRefs` in the binding record;
-  4. this plan's step 24: the binding's currency, containment, chain and close fields (3.4).
+  4. this plan's step 24: the binding's currency, containment, chain, close and remote-name fields
+     (3.4).
 
   Each merges only after the one before it, and none after step 3.8; a change after 3.8 is a
   `session-record.v2`.
@@ -486,6 +488,7 @@ that owner). The resume binding and `engine` are in the binding record. The bind
 | chain | `predecessor`, `successor` | binding, `node` (**step 24**) | 3.2 |
 | close | `closure`: `{ state, at, tombstone }` | binding, `node` (**step 24**) | the closer runs on the node, against its own processes (design C3.4) |
 | orc decisions | `closeOn` (`proof`, `routed`), `park`: `{ reason, until }` | fleet (**step 24**), where remote R10 puts hub-written fields | set by an orc on any machine through `horde route` and `horde park`; if R10 places them otherwise, R10 is the authority and this row follows it |
+| remote name | `remoteName`: `{ name, url, setAt, setBy, previous[] }` | binding, `node` (**step 24**) | the name the session's remote view was given and the session URL it got; `setBy` is `birth` (engines E10, through the binding record's writer, which exists from migration step 3.8) or `repair` (step 34). The only place Horde stores the URL, because reconnecting issues a new one. The name is a copy of what `Get-HordeSessionName` returned at that moment, kept so that drift can be seen; it is never read as the session's name |
 
 `resumeCommand` stays an `agent`-owned, **derived** field, but its derivation changes: the AgentPort
 renders it from the binding above. wezfleet's `resume.txt`, the status snapshot's `resumeCommand`
@@ -532,9 +535,9 @@ and does nothing. `--dry-run` shows what `resume` would do, with the gate's answ
 ## 3.4 Schema and ownership changes
 
 - `core/ownership.json`: engines R1 adds `engine`, `resume` and `modelObserved` (owner `agent`,
-  derived); this plan's step 24 adds `binding`, `containment`, `predecessor`, `successor` and `closure`
-  (binding record, owner `node`) and `closeOn` and `park` (fleet record, as remote R10 places
-  hub-written fields), and changes `resumeCommand`'s `derived` text as in 3.1. New stores, so
+  derived); this plan's step 24 adds `binding`, `containment`, `predecessor`, `successor`, `closure`
+  and `remoteName` (binding record, owner `node`) and `closeOn` and `park` (fleet record, as remote
+  R10 places hub-written fields), and changes `resumeCommand`'s `derived` text as in 3.1. New stores, so
   provenance can name them: `H1` the Horde session record, fleet and binding parts (under
   `<HordeHome>\store\sessions\`, laid out by remote R10), `H2` the observation stream
   (`<HordeHome>\store\observe\<date>\<machineId>.jsonl`), `H3` closure tombstones, `H4` spawn claims
@@ -794,8 +797,12 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
 
 4. **`effects` declarations** [H13]. Every command declares `read`, `write`, `spawn` or `kill`; a suite
    parses each `read` command's call graph from its entry point and fails on any spawn or kill verb,
-   with a planted-verb control. Tests first: "a read command reaches no spawn verb"; "a read command
-   reaches no kill verb"; "a planted spawn verb turns the check red". Ledger: none replaced; the PR
+   with a planted-verb control. The host's `text.send` verb counts as an acting verb too, guarded like
+   spawn and kill: typing into a live session changes it as surely as killing it, so no read command,
+   in this plan or in Phase 3, can ever type into a pane (step 34 is the first command that needs
+   it, and it is declared `write`). Tests first: "a read command reaches no spawn verb"; "a read
+   command reaches no kill verb"; "a read command reaches no text-send verb"; "a planted spawn verb
+   turns the check red"; "a planted text-send verb turns the check red". Ledger: none replaced; the PR
    cites wezfleet's `status`-pumps defect (issue #33) as the reason.
 5. **The lifecycle's names under the `agents/` ratchet**, after engines E1 has generalised
    `tools/HostNames.ps1` to `agents/*`, and before hosts step 5 edits it again. This plan introduces
@@ -925,17 +932,22 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     in one PR. The binding record's writer on the node applies `obs.rebind` once it exists. Tests first:
     "a compaction keeps the binding revision"; "model drift does not rebind"; "a new session id links
     predecessor and successor"; "containment and closure are node-owned fields"; "a secret-shaped env
-    value is refused".
+    value is refused"; "a new remote URL keeps the old one in `remoteName.previous`" (the fifth
+    pitfall of step 34: reconnecting issues a new URL, so whatever stored the old one must be
+    updated, and the binding is the one thing that stores it).
 
 ## H. The writers (Phase 5)
 
 25. **`horde goblin show` and `horde resume`.** Tests first: "resume refuses a shorter transcript";
     "resume refuses a harness change"; "resume never falls back to the default profile"; end-to-end in
-    the isolated harness.
+    the isolated harness. A resumed process starts with Remote Control off, so resume names it at birth
+    through the same argv fragment as a spawn (engines E9 and N1); it does not leave the name to a
+    later repair. Test: "a resumed session's argv carries the name `Get-HordeSessionName` gives".
 26. **Spawn claims** [H12]. `CreateNew` claims, spawn token, `spawn-unknown`, `launch --resume`. Tests
     first: "two pumps, one spawn"; "a killed pump leaves no duplicate". Ledger: `commands/pump.ps1`.
 27. **Goblin spawn through the anchor** [H15], after engines E10. The pane's program is the anchor,
-    never a shell, and the anchor's child is the real launch stub.
+    never a shell, and the anchor's child is the real launch stub. The argv the stub receives already
+    carries the birth name (engines E9); this step adds nothing to it.
 28. **The closer** [H14]. Design A1 states, A3 order, the handle-based end through the anchor, the
     tombstone, the orc notice through the alerter. Isolated harness only; every refusal
     mutation-tested; the victim guard of CONTRIBUTING 9. Ledger `planning/ledger/core-closer.md`:
@@ -951,11 +963,121 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     the host adapter answers `pane.bareShell` from the pane's program pid and its own list of shell
     images, and core never reads a title. Until then wezfleet census reports them, and after step 27
     new goblins cannot leave one.
+34. **`horde names` and `horde names repair`: web session titles that match the fleet's names**
+    (founder request, 2026-10-01). It starts after everything its row in "Dependencies outside this
+    plan" lists, and that row is the one list of them. Naming at birth (engines E9 and E10, and steps
+    25 and 27 here) keeps a new session's web title right. This step is for a session whose
+    title has drifted: one whose remote name could not be confirmed at birth, one whose name changed,
+    or one whose process restarted (resurrect) or whose account changed, both of which drop Remote
+    Control.
+
+    - **`horde names`** (effect `read`). One line per live session: the name `Get-HordeSessionName`
+      gives, the name recorded in `remoteName`, and a tristate answer. `ok` means `remoteName.name`
+      equals the current name and `remoteName.setAt` is later than the start of the session's current
+      process (step 6's procStart). `drifted` gives the reason: no `remoteName`, a different name, or
+      a process started after it was set. `unknown` gives the reason, and is the answer whenever the
+      harness's `session.remoteName` is not `yes` (engines E2), so codex and gemini-cli sessions are
+      `unknown` until measured, and whenever `Get-HordeSessionName` answers "no name". `-Summary`
+      prints the three counts; `-Json` gives the rows. Horde cannot read the web title itself, so `ok`
+      means "Horde named it, and nothing it can see has dropped it since"; this is in "Unproven".
+    - **`horde names repair <name> | --drifted | --all`** (effect `write`, and the first command to
+      use the host's `text.send`, which step 4 guards). It runs engines N1's repair sequence on each
+      chosen session through the host's `text.send` and `text.read`, and writes `remoteName` with
+      `setBy: repair` through the binding record's writer. `--all` is for after an account change,
+      which `horde names` cannot see. The sequence, from M's technique: open the harness's
+      remote-control menu; move the cursor to the disconnect item, confirm it there from N1's parser,
+      and press Enter; then reconnect with the name, and read back that it is active and its new URL.
+      Core takes the commands and keys from N1 as data and the screen only as N1's neutral states, so
+      it names no harness.
+
+    Why here and not in Phase 3: Phase 3 moves the fleet's read commands, and step 4's tripwire fails
+    any read command that reaches a write verb or `text.send`; Phase 3 also sends terminal-title
+    repair to host decoration (its step 8). Why this plan: the repair needs what only this plan
+    builds - the tripwire that guards `text.send` (step 4), the process start that shows Remote
+    Control was dropped (step 6), the idle state from the classifier (step 10), the anchor's
+    containment record that proves which process a pane holds (steps 22 and 2.2; engines N1 supplies
+    the proof for sessions that have none), and the binding
+    field that stores the URL (step 24). Why not inside the closer or the watcher: the closer ends
+    sessions and the watcher only reads, while this verb changes a live session's state; `horde watch`
+    may show the `drifted` count from `horde names -Summary`, and nothing more.
+
+    **Identity is proven before every keystroke.** Before it sends anything - the command, each Up,
+    each Enter, each Escape - the repair proves again that the pane still holds the session it means
+    to repair. If the proof fails, or any input to it cannot be read, it sends nothing more to that
+    pane and reports why. A pane whose session was recycled between two keystrokes is never typed
+    into. There are two proofs, equally strict, and the first is always used when it can be:
+    1. **The anchor's containment record** (2.2, item 5), whenever the session has one: the pane's
+       process, re-read from the host, has exactly the harness pid and procStart the record holds.
+    2. **The agent's own proof**, only for a session with no containment record - one started before
+       Horde's anchor existed, which today is the whole fleet. It is the AgentPort's
+       `Test-SessionIdentity`, built in engines N1, and it answers proven only when all three agree:
+       the harness's control file for that process exists; its pid and procStart match the live
+       process exactly; and the host's record for the pane names that same session. Core calls the
+       port and never names the control file.
+
+    A session that neither proof covers is skipped and reported, never typed into. Tests, here with
+    neutral fixtures (the three-way proof's own branches are tested in N1): "a pane whose harness pid
+    and procStart match the containment record gets the next key" (the control); "a pane whose
+    procStart differs from the record gets nothing, and the reason names the mismatch"; "a pane whose
+    process cannot be read gets nothing"; "a session with a containment record is never proved by the
+    agent's proof", so the stronger proof cannot be bypassed - a mutation that tries the agent's proof
+    first turns it red; "a session with no containment record whose agent proof answers proven gets
+    the next key, and one whose agent proof refuses gets nothing, with the port's reason"; "the
+    identity check runs before every key, not once per session" - the fixture swaps the pane's
+    process after the first Up, and no further key is sent. A mutation that checks only once turns
+    the last test red.
+
+    **Rule 14 in the tests.** Every fixture and test of this step outside `agents/claude-code/` uses a
+    neutral fixture harness (`harness-a`), a neutral slash command (`/name-probe`), and N1's neutral
+    parser states, as E9's tests do. No screen text of any real harness appears in `test/` or in
+    `hosts/wezterm/test/e2e/`. The real harness is exercised only by N1's own tests and measurements,
+    in `agents/claude-code/test/`.
+
+    The brief's five pitfalls, each a test in the step that owns it. The two about reading the screen
+    (ghost text, and non-ASCII padding in the input box) are owned by engines N1's parser and tested
+    there. The other three are owned here:
+    - **A leading "/" must arrive as "/".** Git Bash rewrites a leading slash into a Windows path
+      ("C:/Program Files/Git/...") unless `MSYS_NO_PATHCONV=1` is set, and fleet sessions call Horde
+      from Git Bash. Test, host-bound in `hosts/wezterm/test/e2e/`, in the isolated instance, with a
+      stand-in program for `harness-a` that echoes its input: `horde names repair` run from a Git Bash
+      parent, with the variable unset, delivers text that begins with `/name-probe`. Control: the same
+      text passed as a Git Bash argument with the variable unset arrives rewritten, so the instrument
+      can see the failure.
+    - **Never send into a busy session, and never send a line that has been joined to something
+      else.** A busy session queues the command behind its turn, and an arriving mail pointer can
+      join typed text. Tests: "a session the classifier does not answer `idle` is skipped and
+      reported, never waited on in a loop" (an `unknown` state counts as busy); "Enter is sent only
+      when the input line, read back, equals the command exactly" - the fixture has a mail pointer
+      joined to the command, and the step clears nothing and reports it; "a session whose input box
+      N1 reads as `typed` is skipped and reported, never cleared"; "a session whose input box N1
+      reads as `unknown` is skipped and reported", so no draft is lost either way. Nothing in this
+      step ever sends Ctrl+U or any other key that clears the input box.
+    - **A new URL is recorded and the old one kept.** Reconnecting issues a new session URL. Tests:
+      "after a repair the binding holds the new URL, and the old one is in `previous`"; "no file
+      under `<home>` but the binding record holds a session URL" (a planted URL elsewhere turns it
+      red).
+
+    And for the sequence itself, on N1's states:
+    - "Enter is never pressed on the menu unless N1 reports the cursor on the disconnect item"; the
+      fixture state leaves it on another item, the step sends Escape and reports. A mutation that
+      presses Enter after two Up presses without asking the parser turns it red;
+    - "a session whose remote-control state cannot be read is not repaired", until N1 has measured
+      how to read it, because opening the menu where Remote Control is off turns it on with an
+      automatic name;
+    - "a repair that disconnects but cannot reconnect is reported as disconnected", never as done,
+      and the next `horde names` answers `drifted`.
+
+    End-to-end: `horde names`, then `horde names repair --drifted`, then `horde names` again, in the
+    isolated instance, on stand-in `harness-a` sessions the test started (CONTRIBUTING 3 and 9). The
+    real harness's run, and the founder confirming one web title by eye as he did for A and D, are
+    N1's measurement. Ledger: none replaced; M's brief is cited as the source of the technique and
+    its pitfalls. Shadowed first: for a working day, `--drifted` prints what it would send and sends
+    nothing.
 
 Order: A now. B before any Phase 3 command merges. C next, in the order given; it answers "what is
 every goblin doing, and what holds memory" with no writer. D once metrics Stage A exists. E and F
 after C, consulted and shadowed before anything acts. G in its place in the in-place edit sequence,
-before migration step 3.8. H with Phase 5.
+before migration step 3.8. H with Phase 5; step 34 after what its dependency row lists.
 
 ---
 
@@ -973,6 +1095,10 @@ before migration step 3.8. H with Phase 5.
 - Whether the terminal's default closes a pane only on a clean exit; a harness that exits non-zero
   might leave its pane open (step 22 measures `spawn.exitCloses`).
 - Every `unverified` cell in 4.3.
+- What the web title of a session actually is. Horde cannot read claude.ai/code, so `horde names`
+  answers from what Horde recorded, and only the founder's eye confirms the title (step 34).
+- Whether an account change restarts the harness process or only drops Remote Control; until engines
+  N1 measures it, `horde names repair --all` is run by hand after one.
 - The estimates, each a starting value the metrics tune: the 256 MB raise step and the 14-day quiet
   period (1.4); the 20-turn follow-up window (4.5); the 400-byte, three-line wake size (4.5); the 60 s
   receipt timeout and the 10 wakes per orc per minute (Part 5).
