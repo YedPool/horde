@@ -13,10 +13,21 @@
 # PowerShell 5.1.26100.9444 unless said otherwise:
 #   - DACL, protected: Allow this user's SID full control (0x1F019F, PipeAccessRights.FullControl),
 #     Deny NETWORK (S-1-5-2). No other user can open it.
-#   - MANDATORY LABEL S:(ML;;NWNR;;;ME): No-Write-Up and No-Read-Up at Medium. Without it a pipe gets
-#     the default label, No-Write-Up only, and the review of PR #42 measured a LOW-integrity process of
-#     this user opening the node's pipe read-only and reading what the node sent. With it, that open
-#     is "Access to the path is denied".
+#   - MANDATORY LABEL, No-Write-Up and No-Read-Up, at the node's OWN integrity level. Without a label a
+#     pipe gets the default, No-Write-Up only, and the review of PR #42 measured a LOW-integrity process
+#     of this user opening the node's pipe read-only and reading what the node sent. With a fixed
+#     Medium label, its second round measured a MEDIUM process adding an instance to a HIGH node's
+#     pipe and being the instance the hub reached. At the node's own level, any process below it can
+#     neither read, write, nor add an instance.
+#   - THE TRUST BOUNDARY IS THIS USER AT THE NODE'S LEVEL. A process of this user at the node's own
+#     level can add an instance, and GetNamedPipeServerProcessId names the first instance's creator,
+#     not the instance a client reached - so at the same level nothing here can tell which instance the
+#     hub got. That process can equally read the user's files, inject into the node, or run as the
+#     node; Windows draws no line between them. A per-node secret checked in hello was considered and
+#     not added: the remote design's hello (schema/link-frame.v1, step R1) carries none, and any file
+#     holding it that the node can read, a process at the node's level can read too, while one below
+#     that level is already stopped by the label. The ssh transport's peers are authenticated by
+#     enrolled keys instead (plan step R17).
 #   - PIPE_REJECT_REMOTE_CLIENTS. Over \\localhost\pipe a connection is a network logon; the previous
 #     ACL-only pipe ACCEPTED one (measured: connected in 4 ms), so its NETWORK deny alone did not hold.
 #     With the flag the same connect is refused at once as access denied, while an ordinary pipe opened
@@ -27,7 +38,10 @@
 #     client also asks GetNamedPipeServerProcessId who serves the pipe and refuses unless that process
 #     runs at an integrity level at least its own and its image is the node's interpreter
 #     (Test-HordeLocalNodeImage). The image check alone would not have stopped the reviewer - the
-#     squatter was powershell.exe too - which is why integrity is the deciding test.
+#     squatter was powershell.exe too - which is why integrity is the deciding test. THE IMAGE CHECK IS
+#     ADVISORY: it is the first instance's creator's image, so a process at the node's level that
+#     adds an instance to the node's real pipe passes it. It refuses a foreign program that made the
+#     pipe itself, and nothing relies on it beyond that.
 #   - THE NODE CHECKS WHO REACHED IT. On accept, GetNamedPipeClientProcessId gives the client; one
 #     whose integrity is below the node's own is disconnected and refused. The label already stops a
 #     low client at open; this is the second line.
@@ -71,9 +85,14 @@ function Get-HordeLocalUserSid {
 }
 
 function New-HordeLocalPipeSddl {
-    # Owner this user; DACL protected: this user full control, NETWORK denied; label NWNR at Medium.
+    # Owner this user; DACL protected: this user full control, NETWORK denied; label NWNR at THIS
+    # process's own integrity level, as its SID S-1-16-<rid> (SDDL reads it back as LW, ME, HI or SI).
+    # Not a fixed Medium: under ME a Medium process of this user added an instance to a High node's
+    # pipe, and since GetNamedPipeServerProcessId names the first instance's creator, not the instance
+    # a client reached, the hub accepted the adder and sent it session.spawn (review of PR #42, round
+    # 2; measured: HI refuses the Medium add, ME allows it).
     $me = "$(Get-HordeLocalUserSid)"
-    return ("O:" + $me + "D:P(A;;0x1f019f;;;" + $me + ")(D;;0x1f019f;;;NU)S:(ML;;NWNR;;;ME)")
+    return ("O:" + $me + "D:P(A;;0x1f019f;;;" + $me + ")(D;;0x1f019f;;;NU)S:(ML;;NWNR;;;S-1-16-" + (Get-HordeLocalOwnIntegrity) + ")")
 }
 
 function Test-HordeLocalPipeOwner {

@@ -143,7 +143,13 @@ try {
         try {
             $label = [HordeLocalNative]::LabelSddl($listener.state.server.SafePipeHandle)
             Write-Host ("  label: " + $label) -ForegroundColor DarkGray
-            Check ($label -like "*(ML;;NWNR;;;ME)*") "the pipe carries a No-Write-Up, No-Read-Up label at Medium"
+            # At the node's OWN level, not a fixed Medium: under Medium a Medium process of this user could
+            # add an instance to a High node's pipe and be the one the hub reached (review of PR #42, round 2).
+            $own = Get-HordeLocalOwnIntegrity
+            $alias = @{ 4096 = "LW"; 8192 = "ME"; 12288 = "HI"; 16384 = "SI" }
+            $want = "S-1-16-" + $own
+            if ($alias.ContainsKey($own)) { $want = $alias[$own] }
+            Check ($label -like ("*(ML;;NWNR;;;" + $want + ")*")) ("the pipe carries a No-Write-Up, No-Read-Up label at this node's own level (" + $want + ")")
             $hold = Start-HordeLowChild -Mode "hold" -Pipe (Get-HordeLocalPipeName -DeviceId $id) -Folder $lowDir
             $null = Wait-HordeLowLine -Out $hold.out -Pattern "hold: " -Ms 20000
             $ka = Receive-HordeTransportLink -Listener $listener -TimeoutMs 3000
@@ -162,7 +168,8 @@ try {
     # accept on it.
     $id = New-Id
     $pipe = Get-HordeLocalPipeName -DeviceId $id
-    $lowSddl = (New-HordeLocalPipeSddl) -replace "ML;;NWNR;;;ME", "ML;;NWNR;;;LW"
+    $lowSddl = (New-HordeLocalPipeSddl) -replace "ML;;NWNR;;;[^)]*", "ML;;NWNR;;;LW"
+    Check ($lowSddl -like "*(ML;;NWNR;;;LW)*") "CONTROL: the test's own pipe is labelled low"
     $err = 0
     $h = [HordeLocalNative]::CreateServer(($script:HordeLocalPipeRoot + $pipe), $lowSddl, $true, 65536, [ref]$err)
     Check (-not $h.IsInvalid) ("CONTROL: a low-labelled test pipe was made (error " + $err + ")")
@@ -177,6 +184,33 @@ try {
             $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
             Check ($holdText -match "hold: CONNECTED") "CONTROL: the low client did reach the node past the low label"
         } finally { & $t.stop $state }
+    }
+
+    # 4. A process BELOW the node's level adds an instance to the node's live pipe (review of PR #42,
+    # round 2). GetNamedPipeServerProcessId names the FIRST instance's creator, not the instance the hub
+    # reached, so the hub's check passed and it sent session.spawn to the adder. The label at the
+    # node's own level makes the add itself fail. The adder runs one level below this process.
+    $squat = New-HordeSquatProbe -Folder $lowDir
+    $ownIl = Get-HordeLocalOwnIntegrity
+    $below = ""
+    if ($ownIl -ge 12288) { $below = "S-1-16-8192" } elseif ($ownIl -ge 8192) { $below = "S-1-16-4096" }
+    if ($below -eq "") {
+        Write-Host ("  [SKIP] this process runs at integrity " + $ownIl + "; there is no level below it to add an instance from") -ForegroundColor Yellow
+    } else {
+        $id = New-Id
+        $la = Start-HordeTransportListener -Transport $t -Endpoint $id
+        if ($la.state -eq "known") {
+            $listener = Get-HordeValue $la
+            try {
+                $add = Start-HordeSquatProbe -Exe $squat -Mode "add" -Pipe (Get-HordeLocalPipeName -DeviceId $id) -Folder $lowDir -Level $below
+                $null = Wait-HordeLowLine -Out $add.out -Pattern "add: (CREATED|[A-Z][a-zA-Z]*Exception)" -Ms 20000
+                $addText = ""; if (Test-Path -LiteralPath $add.out) { $addText = [System.IO.File]::ReadAllText($add.out) }
+                Write-Host ("  adder at " + $below + ": " + (($addText -split "`r?`n" | Where-Object { $_ }) -join " | ")) -ForegroundColor DarkGray
+                Check ($addText -match "add: UnauthorizedAccessException") ("a process at " + $below + " cannot add an instance to the node's pipe")
+                Check ($addText -notmatch "add: CREATED") "so there is no instance of its for the hub to reach"
+            } finally { Stop-HordeTransportListener -Listener $listener }
+            $null = Wait-HordeLowLine -Out $add.out -Pattern "done" -Ms 20000
+        } else { Check $false "a listener for the instance-adder case" }
     }
 } finally { if (Test-Path -LiteralPath $lowDir) { Remove-Item -LiteralPath $lowDir -Recurse -Force } }
 

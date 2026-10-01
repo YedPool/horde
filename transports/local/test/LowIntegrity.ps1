@@ -8,12 +8,12 @@
 # Also makes a folder the low process can write its report to: a low-integrity process cannot write
 # to the user's ordinary (medium-labelled) folders, so the folder is labelled low with icacls.
 
-if (-not ([System.Management.Automation.PSTypeName]"HordeLowIntegrity").Type) {
+if (-not ([System.Management.Automation.PSTypeName]"HordeLowerIntegrity").Type) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public static class HordeLowIntegrity {
+public static class HordeLowerIntegrity {
     [StructLayout(LayoutKind.Sequential)] struct SID_AND_ATTRIBUTES { public IntPtr Sid; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)] struct TOKEN_MANDATORY_LABEL { public SID_AND_ATTRIBUTES Label; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -28,14 +28,14 @@ public static class HordeLowIntegrity {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
 
-    // The new process's id, or a negative Win32 error.
-    public static int Start(string commandLine) {
+    // The new process's id, or a negative Win32 error. levelSid: S-1-16-4096 low, S-1-16-8192 medium.
+    public static int Start(string commandLine, string levelSid) {
         IntPtr tok, dup, sid;
         if (!OpenProcessToken(GetCurrentProcess(), 0x0002 | 0x0080 | 0x0008 | 0x0001, out tok)) return -Marshal.GetLastWin32Error();
         try {
             if (!DuplicateTokenEx(tok, 0x02000000, IntPtr.Zero, 2, 1, out dup)) return -Marshal.GetLastWin32Error();
             try {
-                if (!ConvertStringSidToSid("S-1-16-4096", out sid)) return -Marshal.GetLastWin32Error();
+                if (!ConvertStringSidToSid(levelSid, out sid)) return -Marshal.GetLastWin32Error();
                 try {
                     TOKEN_MANDATORY_LABEL l = new TOKEN_MANDATORY_LABEL();
                     l.Label.Sid = sid;
@@ -76,7 +76,7 @@ function Start-HordeLowChild {
     $ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
     $child = Join-Path $PSScriptRoot "low-child.ps1"
     $cmd = '"' + $ps + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $child + '" -Mode ' + $Mode + ' -Pipe ' + $Pipe + ' -Out "' + $out + '"'
-    $id = [HordeLowIntegrity]::Start($cmd)
+    $id = [HordeLowerIntegrity]::Start($cmd, "S-1-16-4096")
     if ($id -lt 0) { throw ("could not start a low-integrity process: Win32 error " + (-$id)) }
     return [pscustomobject]@{ pid = $id; out = $out }
 }
@@ -94,4 +94,38 @@ function Wait-HordeLowLine {
         Start-Sleep -Milliseconds 100
     }
     return $false
+}
+
+function New-HordeSquatProbe {
+    # Compile SquatProbe.cs into -Folder with the .NET Framework's own compiler. Returns the exe path.
+    param([string]$Folder)
+    $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (-not (Test-Path -LiteralPath $csc)) { throw ("no C# compiler at " + $csc) }
+    $exe = Join-Path $Folder "SquatProbe.exe"
+    $null = & $csc /nologo /target:exe ("/out:" + $exe) (Join-Path $PSScriptRoot "SquatProbe.cs")
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) { throw ("csc.exe could not build SquatProbe (exit " + $LASTEXITCODE + ")") }
+    return $exe
+}
+
+function Start-HordeSquatProbe {
+    # Run the probe with -Mode serve or add on -Pipe, reporting to a file in -Folder. -Level is an
+    # integrity SID to lower it to (S-1-16-8192 medium, S-1-16-4096 low); without it, it runs at this
+    # process's own level. Returns { pid; out }.
+    param([string]$Exe, [string]$Mode, [string]$Pipe, [string]$Folder, [string]$Level = "")
+    $out = Join-Path $Folder ($Mode + "-" + [guid]::NewGuid().ToString("N") + ".txt")
+    $cmd = '"' + $Exe + '" ' + $Mode + ' ' + $Pipe + ' "' + $out + '" 15'
+    if ($Level -ne "") {
+        $id = [HordeLowerIntegrity]::Start($cmd, $Level)
+        if ($id -lt 0) { throw ("could not start the probe at " + $Level + ": Win32 error " + (-$id)) }
+        return [pscustomobject]@{ pid = $id; out = $out }
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = $Mode + ' ' + $Pipe + ' "' + $out + '" 15'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $id = $p.Id
+    $p.Dispose()
+    return [pscustomobject]@{ pid = $id; out = $out }
 }
