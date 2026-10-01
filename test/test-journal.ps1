@@ -297,6 +297,29 @@ Check (Test-Path -LiteralPath (Join-Path $p "journal.json")) "the marker survive
 $resend = Open-HordeJournalEntry -Root $p -Id $gone -Verb "session.spawn" -Arguments @{ x = $gone } -IssuedAt $now.AddDays(-31) -Now $now
 Check ($resend.decision -ceq "refuse") "a resend of a pruned id is refused by the window, never acted again"
 
+# A CLOCK THAT JUMPED FORWARD AND CAME BACK. The node's clock ran 40 days ahead long enough for a
+# prune, which then removed an entry whose request is, by the real date, still inside the admission
+# window; once the clock was corrected, a resend of that request was admitted and acted on a second
+# time (review of PR #39). The journal now keeps a high-water mark of the latest time it has seen,
+# and judges "too old to admit" against it, so a clock that goes back never reopens the window.
+$hwj = New-TestRoot -Init
+$t0h = [datetime]::UtcNow
+$hid = New-Id
+$null = Open-HordeJournalEntry -Root $hwj -Id $hid -Verb "session.spawn" -Arguments @{ x = 1 } -IssuedAt $t0h -Now $t0h
+Complete-HordeJournalEntry -Root $hwj -Id $hid -State "done" -Result (New-HordeKnown -Value 1) -Now $t0h | Out-Null
+$jump = Get-HordeValue (Remove-HordeJournalExpired -Root $hwj -Now $t0h.AddDays(40))
+Check (@($jump.removed) -contains $hid) "with the clock 40 days ahead, the prune removes the entry"
+$back = Open-HordeJournalEntry -Root $hwj -Id $hid -Verb "session.spawn" -Arguments @{ x = 1 } -IssuedAt $t0h -Now $t0h.AddHours(1)
+Check ($back.decision -ceq "refuse") "after the clock comes back, the resend is refused, not acted on a second time"
+Check ("$($back.reason)" -like "*latest time this journal has seen*") "and the reason names the high-water mark"
+$fresh = Open-HordeJournalEntry -Root $hwj -Id (New-Id) -Verb "session.spawn" -Arguments @{ x = 2 } -IssuedAt $t0h.AddHours(1) -Now $t0h.AddHours(1)
+Check ($fresh.decision -ceq "refuse") "the cost, accepted: a new request is refused too until real time comes within the window of the mark"
+$ctl = New-TestRoot -Init
+$c1 = Open-HordeJournalEntry -Root $ctl -Id (New-Id) -Verb "session.spawn" -Arguments @{ x = 2 } -IssuedAt $t0h.AddHours(1) -Now $t0h.AddHours(1)
+Check ($c1.decision -ceq "act") "control: in a journal whose clock never jumped, that request acts"
+$older = Open-HordeJournalEntry -Root $ctl -Id (New-Id) -Verb "session.spawn" -Arguments @{ x = 3 } -IssuedAt $t0h -Now $t0h
+Check ($older.decision -ceq "act") "and a clock an hour behind the mark still admits a request inside the window"
+
 # A record that cannot be deleted (held open without delete sharing) must leave its outcome in place.
 # Deleting the outcome first would turn a done entry into one with no outcome - unknown for ever.
 $q = New-TestRoot -Init

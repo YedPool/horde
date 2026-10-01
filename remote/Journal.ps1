@@ -26,6 +26,7 @@
 #                           state "accepted". Never rewritten.
 #   <id>.outcome.json       the outcome: state done | failed | refused, the result as a tristate answer
 #                           record, doneAt. Also created with CreateNew, so an id has one outcome.
+#   hw-<ticks>              the high-water mark: the latest time a prune ran at (see CLOCKS below).
 #   The design (section 6.5) drew one file whose state field is rewritten; two write-once files give
 #   the same states without ever rewriting a file another process may be reading.
 #
@@ -50,6 +51,17 @@
 # its retention. Together: any request that could still be admitted finds its entry if it was ever
 # recorded. The issue time is part of argsHash, so a resend cannot refresh it. Entries with no
 # outcome, torn entries and busy entries are never pruned; the report names them.
+#
+# CLOCKS. The argument above holds only if the clock that pruned and the clock that admits agree. A
+# node clock that ran 40 days ahead, pruned, and was then corrected let a resend of a pruned request
+# act a second time (review of PR #39, 2026-09-30). So every prune first records a high-water mark
+# (hw-<ticks> files: the latest time a prune ran at, never lowered), judges ages from the later of
+# its clock and that mark, and admission judges "too old" from the later of its clock and the mark.
+# Whatever the clock does, admission is measured from a time at least as late as any prune used.
+# THE COST, ACCEPTED: after a forward jump that a prune saw, new requests are refused - visibly, with
+# the mark in the reason - until real time comes within the admission window of the mark. A refused
+# request is visible and can be resent; a request run twice cannot be undone. Removing the hw-* files
+# by hand is a deliberate act that reopens the window, and only safe once nothing older can be resent.
 #
 # NOT A JOURNAL IS NOT EMPTY. A root with no marker - a mistyped path, an unmounted drive - would read
 # as "no id ever seen" and let every resend act. Open, Get and Remove refuse to treat it as a journal
@@ -180,6 +192,31 @@ function ConvertFrom-HordeJournalTime {
     if (-not [datetime]::TryParse($Text, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $null }
     if ($parsed.Kind -eq [System.DateTimeKind]::Unspecified) { return $null }
     return $parsed.ToUniversalTime()
+}
+
+function Get-HordeJournalHighWater {
+    # The high-water mark: the latest time a prune of this journal ran at, as UTC, or $null if none
+    # has. It is the largest of the hw-<ticks> files' names, so it never goes down: two prunes racing
+    # each add their own file, and neither can lower the other's.
+    param([string]$Root)
+    $best = [long]0
+    foreach ($f in @(Get-ChildItem -LiteralPath $Root -File -Filter "hw-*" -ErrorAction SilentlyContinue)) {
+        if ($f.Name -cmatch '\Ahw-([0-9]{19})\z') { $t = [long]$Matches[1]; if ($t -gt $best) { $best = $t } }
+    }
+    if ($best -eq 0) { return $null }
+    return (New-Object datetime($best, [System.DateTimeKind]::Utc))
+}
+
+function Set-HordeJournalHighWater {
+    # Record -Time as a high-water mark (an empty file named for its ticks), then remove the marks below
+    # the highest one. Throws if the mark cannot be written.
+    param([string]$Root, [datetime]$Time)
+    $name = "hw-" + $Time.ToUniversalTime().Ticks.ToString("D19", [System.Globalization.CultureInfo]::InvariantCulture)
+    $null = New-HordeJournalFile -Path (Join-Path $Root $name) -Text ""
+    $top = Get-HordeJournalHighWater -Root $Root
+    foreach ($f in @(Get-ChildItem -LiteralPath $Root -File -Filter "hw-*" -ErrorAction SilentlyContinue)) {
+        if ($f.Name -cmatch '\Ahw-([0-9]{19})\z' -and [long]$Matches[1] -lt $top.Ticks) { try { [System.IO.File]::Delete($f.FullName) } catch { } }
+    }
 }
 
 function Get-HordeJournalArgsHash {
@@ -379,7 +416,12 @@ function Open-HordeJournalEntry {
     $cfg = $m.settings
     $nowUtc = $Now.ToUniversalTime()
     $issuedUtc = $IssuedAt.ToUniversalTime()
-    $tooOld = ($nowUtc - $issuedUtc) -gt (New-TimeSpan -Days $cfg.admitDays)
+    # "Too old" is measured from the later of this clock and the high-water mark, the latest time any
+    # prune of this journal ran at - so a clock set back never reopens the window. See CLOCKS above.
+    $ref = $nowUtc
+    $hw = Get-HordeJournalHighWater -Root $Root
+    if ($null -ne $hw -and $hw -gt $ref) { $ref = $hw }
+    $tooOld = ($ref - $issuedUtc) -gt (New-TimeSpan -Days $cfg.admitDays)
     $tooNew = ($issuedUtc - $nowUtc) -gt (New-TimeSpan -Minutes $cfg.maxFutureMinutes)
     $recPath = Join-Path $Root ($Id + ".json")
     if (-not $tooOld -and -not $tooNew) {
@@ -394,7 +436,11 @@ function Open-HordeJournalEntry {
     }
     $got = Get-HordeJournalEntryData -Root $Root -Id $Id
     if ($got.kind -eq "absent") {
-        if ($tooOld) { return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " was issued at " + $issuedUtc.ToString("o") + ", older than this journal's " + $cfg.admitDays + "-day admission window; an id that old may already be pruned, so a first sight of it cannot be told from a resend")) }
+        if ($tooOld) {
+            $from = "this node's clock"
+            if ($ref -gt $nowUtc) { $from = "the latest time this journal has seen, " + $ref.ToString("o") + ", which is later than this node's clock now (" + $nowUtc.ToString("o") + ")" }
+            return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " was issued at " + $issuedUtc.ToString("o") + ", older than this journal's " + $cfg.admitDays + "-day admission window measured from " + $from + "; an id that old may already be pruned, so a first sight of it cannot be told from a resend"))
+        }
         if ($tooNew) { return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " was issued at " + $issuedUtc.ToString("o") + ", more than " + $cfg.maxFutureMinutes + " minutes in the future of this node's clock")) }
         $why = "request " + $Id + " was reported as recorded and then could not be found"
         return (New-HordeJournalDecision -Decision "unknown" -Reason $why -Result (New-HordeUnknown -Reason $why))
@@ -463,7 +509,14 @@ function Remove-HordeJournalExpired {
     $m = Read-HordeJournalMarker -Root $Root
     if (-not $m.ok) { return (New-HordeUnknown -Reason ("nothing was pruned: " + $m.reason)) }
     $cfg = $m.settings
+    # Ages are judged at the later of this clock and the high-water mark, and that time is recorded
+    # as the new mark BEFORE anything is deleted: admission is then measured from a time at least as
+    # late as any prune ever used, whatever the clock does next (CLOCKS above).
     $nowUtc = $Now.ToUniversalTime()
+    $hw = Get-HordeJournalHighWater -Root $Root
+    if ($null -ne $hw -and $hw -gt $nowUtc) { $nowUtc = $hw }
+    try { Set-HordeJournalHighWater -Root $Root -Time $nowUtc }
+    catch { return (New-HordeUnknown -Reason ("nothing was pruned: the high-water mark could not be recorded: " + $_.Exception.Message)) }
     $retention = New-TimeSpan -Days $cfg.retentionDays
     $window = New-TimeSpan -Days $cfg.admitDays -Minutes $cfg.maxFutureMinutes
     $removed = New-Object System.Collections.ArrayList

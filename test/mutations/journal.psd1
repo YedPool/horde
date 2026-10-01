@@ -30,7 +30,7 @@
            Find = 'if (-not $m.ok) { return (New-HordeJournalDecision -Decision "unknown" -Reason $m.reason -Result (New-HordeUnknown -Reason $m.reason)) }'
            Replace = 'if (-not $m.ok) { [void][System.IO.Directory]::CreateDirectory($Root); $m = [pscustomobject]@{ ok = $true; settings = [pscustomobject]@{ admitDays = 7; maxFutureMinutes = 60 } } }' }
         @{ Name = "window-too-old-not-checked"
-           Find = '$tooOld = ($nowUtc - $issuedUtc) -gt (New-TimeSpan -Days $cfg.admitDays)'
+           Find = '$tooOld = ($ref - $issuedUtc) -gt (New-TimeSpan -Days $cfg.admitDays)'
            Replace = '$tooOld = $false' }
         @{ Name = "window-future-not-checked"
            Find = '$tooNew = ($issuedUtc - $nowUtc) -gt (New-TimeSpan -Minutes $cfg.maxFutureMinutes)'
@@ -98,6 +98,12 @@
         @{ Name = "prune-outcome-first"
            Find = 'try { [System.IO.File]::Delete((Join-Path $Root ($id + ".json"))) }'
            Replace = 'try { [System.IO.File]::Delete((Join-Path $Root ($id + ".outcome.json"))); [System.IO.File]::Delete((Join-Path $Root ($id + ".json"))) }' }
+        @{ Name = "admission-ignores-high-water"
+           Find = 'if ($null -ne $hw -and $hw -gt $ref) { $ref = $hw }'
+           Replace = '' }
+        @{ Name = "prune-records-no-high-water"
+           Find = 'try { Set-HordeJournalHighWater -Root $Root -Time $nowUtc }'
+           Replace = 'try { }' }
         @{ Name = "prune-without-marker"
            Find = 'if (-not $m.ok) { return (New-HordeUnknown -Reason ("nothing was pruned: " + $m.reason)) }'
            Replace = 'if (-not $m.ok) { return (New-HordeKnown -Value ([pscustomobject]@{ removed = @(); kept = @() })) }' }
