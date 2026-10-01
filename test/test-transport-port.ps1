@@ -112,7 +112,7 @@ $boom = Reg "fixture-nokeepalive" -Open { param($e, $t) throw "adapter exploded"
 $o = Open-HordeTransportLink -Transport $boom -Endpoint "e" -Role "node"
 Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*adapter exploded*") "an adapter that throws while opening gives unknown with its message, not a crash"
 $p = Test-HordeTransportReachable -Transport $boom -Endpoint "e"
-Check ($p.state -ceq "unknown") "a probe that answers with a bare value is unknown, not believed"
+Check ((Test-HordeAnswer $p) -and $p.state -ceq "unknown") "a probe that answers with a bare value is unknown, not believed"
 $nk = Reg "fixture-nokeepalive"
 
 Write-Host ""
