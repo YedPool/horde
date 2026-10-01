@@ -63,8 +63,10 @@
 
 . (Join-Path $PSScriptRoot "..\core\Tristate.ps1")
 
-$script:HordeJournalIdPattern = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-$script:HordeJournalVerbPattern = '^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$'
+# \A and \z, not ^ and $: in .NET, $ also matches before a final LF, so '^...$' accepted
+# "session.spawn" followed by an LF, and it was acted on (review of PR #39, 2026-09-30).
+$script:HordeJournalIdPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
+$script:HordeJournalVerbPattern = '\A[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*\z'
 $script:HordeJournalOutcomes = @("done", "failed", "refused")
 $script:HordeJournalKinds = @("request", "message")
 $script:HordeJournalMarker = "journal.json"
@@ -463,7 +465,7 @@ function Remove-HordeJournalExpired {
     $kept = New-Object System.Collections.ArrayList
     $files = @(Get-ChildItem -LiteralPath $Root -File -Filter "*.json" | ForEach-Object { $_.Name })
     foreach ($name in $files) {
-        if ($name -cnotmatch '^([0-9a-f-]{36})\.json$') { continue }
+        if ($name -cnotmatch '\A([0-9a-f-]{36})\.json\z') { continue }
         $id = $Matches[1]
         if ($id -cnotmatch $script:HordeJournalIdPattern) { continue }
         $got = Get-HordeJournalEntryData -Root $Root -Id $id
@@ -481,7 +483,7 @@ function Remove-HordeJournalExpired {
     }
     # Outcomes whose record is gone: what a prune cut short between its two deletions leaves.
     foreach ($name in @(Get-ChildItem -LiteralPath $Root -File -Filter "*.outcome.json" | ForEach-Object { $_.Name })) {
-        if ($name -cnotmatch '^([0-9a-f-]{36})\.outcome\.json$') { continue }
+        if ($name -cnotmatch '\A([0-9a-f-]{36})\.outcome\.json\z') { continue }
         $id = $Matches[1]
         if ($id -cnotmatch $script:HordeJournalIdPattern) { continue }
         if ((Read-HordeJournalFile -Path (Join-Path $Root ($id + ".json"))).kind -ne "absent") { continue }

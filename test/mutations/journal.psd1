@@ -71,6 +71,12 @@
         @{ Name = "id-case-ignored"
            Find = 'if ($Id -cnotmatch $script:HordeJournalIdPattern) { return (New-HordeJournalDecision -Decision "refuse"'
            Replace = 'if ($Id -notmatch $script:HordeJournalIdPattern) { return (New-HordeJournalDecision -Decision "refuse"' }
+        @{ Name = "verb-anchored-with-dollar"
+           Find = '\A[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*\z'
+           Replace = '^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$' }
+        @{ Name = "id-anchored-with-dollar"
+           Find = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
+           Replace = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }
         @{ Name = "verb-not-validated"
            Find = 'if ($Verb -cnotmatch $script:HordeJournalVerbPattern) { return'
            Replace = 'if ($false) { return' }

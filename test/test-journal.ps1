@@ -200,6 +200,16 @@ Check ((@(Names (Split-Path -Parent $j)) -join ",") -ceq (@($parentBefore) -join
 $r = Open-HordeJournalEntry -Root $j -Id (New-Id) -Verb "Session Spawn" -Arguments $spawnArgs -IssuedAt $utcNow
 Check ($r.decision -ceq "refuse") "a verb that is not a dotted lowercase name is refused"
 Check ((Get-HordeJournalEntry -Root $j -Id "..\x").state -ceq "unknown") "request.status on a malformed id is unknown"
+# A TRAILING LF IS NOT PART OF A NAME. In .NET regular expressions $ also matches before a final LF,
+# so '^...$' accepted "session.spawn`n" and an id with an LF after it, and the verb was acted on
+# (review of PR #39, 2026-09-30). The patterns end in \z.
+$before = Names $j
+$lfId = Open-HordeJournalEntry -Root $j -Id ((New-Id) + [char]10) -Verb "session.spawn" -Arguments $spawnArgs -IssuedAt $utcNow
+Check ($lfId.decision -ceq "refuse") "an id followed by an LF is refused"
+$lfVerb = Open-HordeJournalEntry -Root $j -Id (New-Id) -Verb ("session.spawn" + [char]10) -Arguments $spawnArgs -IssuedAt $utcNow
+Check ($lfVerb.decision -ceq "refuse") "a verb followed by an LF is refused, not acted on"
+Check ((@(Names $j) -join ",") -ceq (@($before) -join ",")) "and neither wrote a file"
+Check ((Get-HordeJournalEntry -Root $j -Id ((New-Id) + [char]10)).state -ceq "unknown") "request.status on an id followed by an LF is unknown"
 
 Write-Host ""
 Write-Host "--- the admission window: an id too old to be checked is refused, not acted ---" -ForegroundColor Cyan
