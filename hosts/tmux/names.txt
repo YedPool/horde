@@ -1,0 +1,16 @@
+# What identifies tmux. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of these appears
+# in a file outside hosts/tmux/ (and outside planning/, by rule) that hosts/tmux/allowlist.txt does
+# not list, exactly as often as it lists (decision D12). Each is matched as a case-insensitive
+# substring, on every line and on the file's path.
+#
+# name | why it identifies this host
+tmux | the product's own name - as a substring it also catches TMUX, TMUX_PANE, TMUX_TMPDIR and every Horde function named after the multiplexer
+#
+# CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside hosts/tmux/ and planning/:
+#   TMUX_PANE, TMUX_TMPDIR - contain "tmux"; listing them would only count the same lines twice.
+#   psmux - a different host (a native Windows multiplexer that speaks tmux's command language). The
+#     name does not contain "tmux", so it is left to its own hosts/psmux/names.txt when that exists.
+#   wsl - how this machine runs tmux, not a terminal. The same WSL would carry any Linux host.
+#   mux - a generic word for a multiplexer, which fires on host-neutral text.
+#   horde-iso - the socket-name prefix this host's test harness uses; it is Horde's own word, and
+#     every file holding it also names the multiplexer.
