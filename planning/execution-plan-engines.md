@@ -490,9 +490,14 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     so the remote view is named when the session is born, with the same name as the label and the
     terminal title. The name is never formatted here. `Get-HordeSessionName` takes the fleet view and
     may answer "no name" with a reason (no label, a label that collides with a lane fleet id, no
-    verified handle). The stub runs inside the new pane, so the view it passes already holds that
-    pane's handle; whether the host answers it live that early is measured in E10's e2e. On "no name"
-    the argv gets no fragment, the reason is reported, and lifecycle step 34 repairs the title later.
+    verified handle). A new pane may not yet show as live when the argv is built, so launch waits a
+    bounded time for the host to answer the pane's handle live, then asks for the name (decided
+    2026-10-01). If the pane is still not visible when the wait ends, the session launches without a
+    name, the reason is reported, and lifecycle step 34 repairs the title later; the same happens on
+    any other "no name" answer. The bound is set by E10's measurement; until then it is an estimate.
+    Tests: "a pane that shows live within the bound is named" (the control); "a pane that never shows
+    live launches unnamed after the bound, with the reason"; "the wait never exceeds the bound" - a
+    mutation that waits without a limit turns it red.
     This covers every argv this step builds: a fresh spawn, and the resume argv, because a resumed
     process starts with Remote Control off.
     Tests, with neutral names in `test/` and the real fragment in `agents/claude-code/test/`:
@@ -529,7 +534,10 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     fixture screen that never shows Remote Control active leaves the URL `unknown`, never empty and
     never a guess; the control shows it active and the URL is recorded.
 
-    e2e in the isolated terminal, with the cheapest prompt that proves the point.
+    e2e in the isolated terminal, with the cheapest prompt that proves the point. The e2e also
+    measures the real delay between a pane's creation and the host answering its handle live, over
+    repeated spawns, and sets E9's naming wait from that measurement, citing it in a comment. Until
+    then the wait is 5 seconds, marked as an estimate, not a measurement.
 19. **E11. Switch and adoption.** Resume and drift are step 16. The fleet runs a real wave with
     goblins on one model and orcs on another, set only through `horde config`, and the PR records who
     used it and what broke.
@@ -619,6 +627,17 @@ because it ranks above both. The work is split by owner, and each piece is writt
       states, never this harness's screen text: `box` is `empty`, `typed` or `unknown`; `menu` is
       showing or not, with `cursor` on `disconnect` or `other`; `link` is `disconnected`, `active`
       (with `url`) or `unknown`;
+    - **`Test-SessionIdentity`, the agent's proof that a pane holds a session** (decided 2026-10-01),
+      which lifecycle step 34 uses only for a session with no anchor containment record. It answers
+      proven only when all three agree: the harness's control file for the process exists (store X2,
+      `~\.claude\sessions\<pid>.json`); its pid and procStart match the live process exactly, the
+      rule wezfleet's mail repair has used since its PR #21; and the host's record for the pane names
+      that same session. Any one missing or disagreeing answers refused, with which one. The control
+      file is named only here. Tests, on fixtures in `agents/claude-code/test/`: the control, where
+      all three agree and the answer is proven; no control file; a control file whose pid differs; a
+      control file whose procStart differs, which is the recycled-pid case; and a host record that
+      names a different session. Each failure branch answers refused with its own reason, and a
+      mutation that drops any one of the three checks turns its test red;
     - **the repair sequence as data**: the commands and ordered keys, and the neutral state each
       must reach before the next is sent. The verb that runs it is the lifecycle plan's step 34;
       this step sends nothing itself.
