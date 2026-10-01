@@ -90,3 +90,11 @@ test/fixtures/restore-plan/valid/section-4-example.json | 3 | a restore-plan fix
 hosts/wezterm/allowlist.txt | 1 | the other ports' lists name this harness's files and paths by path, so they must be listed here
 hosts/wezterm/growth.txt | 1 | the other ports' lists name this harness's files and paths by path, so they must be listed here
 agents/claude-code/allowlist.txt | 1 | the other ports' lists name this harness's files and paths by path, so they must be listed here
+
+# --- the read model (core/projection, step 2.2): the old stores are this harness's files. Each shrinks at engines A4.
+core/Projection.ps1 | 28 | the read model reads this harness's own stores - its control files, transcripts and pane-sessions files - and finds a process by the conversation it resumes; engines A4 (planning/execution-plan-engines.md step 13) moves these reads into the harness folder
+core/WezfleetState.ps1 | 1 | comments on this harness's path key and control files beside the old registry it reads; engines A4 (planning/execution-plan-engines.md step 13) moves these reads into the harness folder
+schema/session-view.v1.json | 1 | the agent enum of the view names the two harnesses; engines K1 and A4 make it the harness field
+test/test-projection.ps1 | 34 | the projection suite drives the readers engines A4 moves, and its trip wires replace them by name; it shrinks with them
+test/fixtures/projection/fleet/wezfleet/codex-sessions/codex-thread-1.json | 5 | the fixture's control file for this harness, in the old system's codex-sessions store, under that store's own name
+test/mutations/projection.psd1 | 4 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4

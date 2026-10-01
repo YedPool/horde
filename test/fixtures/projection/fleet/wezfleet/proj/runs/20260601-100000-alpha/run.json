@@ -12,7 +12,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work\\gamma",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     },
     {
@@ -21,7 +21,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     },
     {
@@ -32,7 +32,7 @@
       "dependsOn": [
         "alpha"
       ],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     },
     {
@@ -41,7 +41,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     },
     {
@@ -50,7 +50,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     },
     {
@@ -59,7 +59,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     }
   ],

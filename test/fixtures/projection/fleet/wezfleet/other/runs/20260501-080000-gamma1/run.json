@@ -12,7 +12,7 @@
       "prompt": "synthetic",
       "cwd": "C:\\work",
       "dependsOn": [],
-      "exe": "claude",
+      "exe": "harness-a",
       "args": []
     }
   ],

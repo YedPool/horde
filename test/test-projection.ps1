@@ -106,8 +106,8 @@ function Project {
     if ($null -eq $HostPort) { $HostPort = HostOf $D }
     if ($null -eq $Processes) { $Processes = ProcsOf $D }
     if ($null -eq $Layout) { $Layout = LayoutOf $D }
-    return (Get-HordeProjection -WezfleetRoot (Join-Path $D "wezfleet") -ClaudeDir (Join-Path $D "claude\sessions") -ProjectsDir (Join-Path $D "claude\projects") `
-        -CodexDir (Join-Path $D "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $D "claude\pane-sessions") -Processes $Processes -HostPort $HostPort `
+    return (Get-HordeProjection -WezfleetRoot (Join-Path $D "wezfleet") -ClaudeDir (Join-Path $D "agent\sessions") -ProjectsDir (Join-Path $D "agent\projects") `
+        -CodexDir (Join-Path $D "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $D "agent\pane-sessions") -Processes $Processes -HostPort $HostPort `
         -LayoutPort $Layout -TtlSeconds 900 -Now $now)
 }
 function Ans { param($P, $Id, [string]$Field) if ($Id -is [int]) { $Id = Sid $Id }; foreach ($s in $P.sessions) { if ($s.sessionId -ieq $Id) { return $s.fields[$Field] } }; return $null }
@@ -178,7 +178,7 @@ Check ((St (Ans $p 1 "fleetSessionId")) -eq "absent" -and (St (Ans $p 1 "runId")
 Check ((Val (Ans $p 1 "liveStatus")) -eq "idle" -and (Val (Ans $p "codex-thread-1" "liveStatus")) -eq "idle" -and (Src (Ans $p "codex-thread-1" "liveStatus")) -eq "W8" -and (St (Ans $p 4 "liveStatus")) -eq "absent") "live status comes from the agent's own file, and a session with none is not running"
 # waitingFor (PR #24): in the view because the table requires it; read from the control file only.
 $waits = New-Fleet "waiting"
-$w2 = ReadJson (Join-Path $waits "claude\sessions\1002.json"); $w2.status = "waiting"; $w2 | Add-Member -NotePropertyName waitingFor -NotePropertyValue "permission prompt" -Force; PutJson (Join-Path $waits "claude\sessions\1002.json") $w2
+$w2 = ReadJson (Join-Path $waits "agent\sessions\1002.json"); $w2.status = "waiting"; $w2 | Add-Member -NotePropertyName waitingFor -NotePropertyValue "permission prompt" -Force; PutJson (Join-Path $waits "agent\sessions\1002.json") $w2
 $pw2 = Project $waits
 $wf2 = Ans $pw2 2 "waitingFor"
 Check ((Val $wf2) -eq "permission prompt" -and (Src $wf2) -eq "X2" -and "$($wf2.provisional)" -ne "" -and (Val (Ans $pw2 2 "liveStatus")) -eq "waiting") "a waiting session says what it waits for, from its own control file"
@@ -347,7 +347,7 @@ $rbp = { return , @([pscustomobject]@{ handle = "a"; pid = 7; space = "posix" },
 $pxPort = New-HordeHostPort -Name "fake" -StoredHandles @() -Capabilities $nsCaps2 -Handles $rbp -Instance { $null }
 $pxRows = @{}; foreach ($r in @(Val (Read-HordeHostHandles -Port $pxPort -Platform $posix))) { $pxRows[$r.handle] = $r }
 Check ((Val $pxRows["a"].pid) -eq 7 -and $pxRows["b"].pid.state -eq "unknown" -and $pxRows["b"].pid.reason -like "*namespace windows, not posix*") "on another platform its own namespace's pids are known and windows ones are not"
-$ppx = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "claude\sessions") -ProjectsDir (Join-Path $base "claude\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "claude\pane-sessions") -Platform $posix -HostPort (HostOf $base) -LayoutPort (LayoutOf $base) -TtlSeconds 900 -Now $now
+$ppx = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "agent\sessions") -ProjectsDir (Join-Path $base "agent\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "agent\pane-sessions") -Platform $posix -HostPort (HostOf $base) -LayoutPort (LayoutOf $base) -TtlSeconds 900 -Now $now
 Check (@($ppx.sessions).Count -eq 34 -and (Val (Ans $ppx 1 "pid")) -eq 1001) "the projection reads processes through the platform it is given"
 Check (Throws { New-HordePlatform -Name "x" -ProcessSpace "mars" -ProcessTable { $null } } "namespace") "a platform's namespace is one core knows"
 # The operating system's process table is read in one place, behind the platform seam (second review
@@ -373,7 +373,7 @@ Write-Host "--- the pane-file judge and the claim matcher, rule by rule ---" -Fo
 # Each check below isolates one rule a mutant of core/Projection.ps1 breaks (second review of
 # PR #31, finding 8).
 $hv = New-Fleet "hijack-victim"
-$f18 = Join-Path $hv "claude\pane-sessions\18.json"; $j18 = ReadJson $f18; $j18.session_id = (Sid 4); PutJson $f18 $j18; [System.IO.File]::SetLastWriteTimeUtc($f18, $now.AddMinutes(-45))
+$f18 = Join-Path $hv "agent\pane-sessions\18.json"; $j18 = ReadJson $f18; $j18.session_id = (Sid 4); PutJson $f18 $j18; [System.IO.File]::SetLastWriteTimeUtc($f18, $now.AddMinutes(-45))
 Check ((St (Ans (Project $hv) 4 "pane")) -eq "unknown") "a contradicted pane file leaves the session it names in no proven handle"
 $pnoc = Project $base -HostPort (HostOf $base -Stores @("W1", "W4", "W5", "X1"))
 Check ((Val (Ans $pnoc 10 "pane")) -eq "17" -and (St (Ans $pnoc 10 "role")) -eq "unknown" -and (Why (Ans $pnoc 10 "role")) -like "*claims' handles were not written by this host*") "a claim is not matched when this host did not write the claims"
@@ -390,17 +390,17 @@ Check ((FSt $two) -eq "true" -and (Subjects $two) -contains (Sid 13) -and (St (A
 $hij = Fault $p "pane-sessions-hijack"
 Check ((FSt $hij) -eq "true" -and (Subjects $hij) -contains (Sid 11) -and (Subjects $hij) -contains (Sid 12) -and (Val (Ans $p 11 "pane")) -eq "18" -and (St (Ans $p 12 "pane")) -eq "unknown") "a hijacked pane file does not answer"
 $tx = New-Fleet "transcript"
-Remove-Item -LiteralPath (Join-Path $tx ("claude\projects\C--work-delta\" + (Sid 10) + ".jsonl")) -Force
+Remove-Item -LiteralPath (Join-Path $tx ("agent\projects\C--work-delta\" + (Sid 10) + ".jsonl")) -Force
 $ptx = Project $tx
 Check ((St (Ans $ptx 10 "transcriptPath")) -eq "unknown" -and (Why (Ans $ptx 10 "transcriptPath")) -like "*names a transcript that exists*") "a pane file naming a missing transcript does not answer the transcript"
-$f17 = Join-Path $tx "claude\pane-sessions\17.json"
-$j17 = ReadJson $f17; $j17.transcript_path = (Join-Path $tx "claude\projects\C--work-x\aaaaaaaa-0000-4000-8000-000000000021.jsonl"); PutJson $f17 $j17
+$f17 = Join-Path $tx "agent\pane-sessions\17.json"
+$j17 = ReadJson $f17; $j17.transcript_path = (Join-Path $tx "agent\projects\C--work-x\aaaaaaaa-0000-4000-8000-000000000021.jsonl"); PutJson $f17 $j17
 [System.IO.File]::SetLastWriteTimeUtc($f17, $now.AddMinutes(-50))
 $ptx2 = Project $tx
 Check ((Src (Ans $ptx2 10 "transcriptPath")) -eq "X1") "CONTROL: a pane file naming a transcript that exists answers it"
 
 $nops = New-Fleet "no-pane-sessions"
-Remove-Item -LiteralPath (Join-Path $nops "claude\pane-sessions") -Recurse -Force
+Remove-Item -LiteralPath (Join-Path $nops "agent\pane-sessions") -Recurse -Force
 $pnops = Project $nops
 Check ($pnops.complete["X1"].state -eq "unknown" -and $pnops.complete["X1"].reason -like "*no pane-sessions directory*" -and (St (Ans $pnops 10 "pane")) -eq "unknown") "a missing pane-sessions directory is unknown, not empty"
 $ref40 = @($p.inputs.paneRead.refused | Where-Object { $_.name -eq "40.json" })
@@ -482,11 +482,11 @@ Check ($prj.complete["W3"].state -eq "unknown" -and $rjBad.Count -eq 0) "a runs 
 # file answers, and the session they name is not thereby proven to be in no handle.
 $hf = New-Fleet "held-files"
 EditReg $hf 2 { param($r) $r.pane = "10" }
-$f10 = Join-Path $hf "claude\pane-sessions\10.json"; $j10 = ReadJson $f10; $j10.session_id = (Sid 4); PutJson $f10 $j10; [System.IO.File]::SetLastWriteTimeUtc($f10, $now.AddHours(-1))
+$f10 = Join-Path $hf "agent\pane-sessions\10.json"; $j10 = ReadJson $f10; $j10.session_id = (Sid 4); PutJson $f10 $j10; [System.IO.File]::SetLastWriteTimeUtc($f10, $now.AddHours(-1))
 $phf = Project $hf
 Check ((St (Ans $phf 4 "pane")) -eq "unknown") "a file that two running sessions hold does not prove the session it names is in no handle"
 $tf = New-Fleet "two-files"
-foreach ($h in @("19", "20")) { $fp = Join-Path $tf ("claude\pane-sessions\" + $h + ".json"); $jj = ReadJson $fp; $jj.session_id = (Sid 4); PutJson $fp $jj; [System.IO.File]::SetLastWriteTimeUtc($fp, $now.AddMinutes(-40)) }
+foreach ($h in @("19", "20")) { $fp = Join-Path $tf ("agent\pane-sessions\" + $h + ".json"); $jj = ReadJson $fp; $jj.session_id = (Sid 4); PutJson $fp $jj; [System.IO.File]::SetLastWriteTimeUtc($fp, $now.AddMinutes(-40)) }
 Check ((St (Ans (Project $tf) 4 "pane")) -eq "unknown") "two files naming a session do not prove it is in no handle"
 # A claude process whose command line cannot be read may be resuming any session.
 $nc = New-Fleet "no-command-line"
@@ -571,8 +571,8 @@ Check ((FSt (Fault $ppd "warchief-claim-pending")) -eq "true" -and (Subjects (Fa
 # CONTROL for every check: a fleet with nothing wrong gives every check a known false.
 $clean = New-Fleet "clean"
 foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $clean "wezfleet\registry\sessions") -File)) { if ($f.BaseName -ne (Sid 1) -and $f.BaseName -ne (Sid 2)) { Remove-Item -LiteralPath $f.FullName -Force } }
-foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $clean "claude\sessions") -File)) { if (@("1001.json", "1002.json") -notcontains $f.Name) { Remove-Item -LiteralPath $f.FullName -Force } }
-foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $clean "claude\pane-sessions") -File)) { if ($f.Name -ne "10.json") { Remove-Item -LiteralPath $f.FullName -Force } }
+foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $clean "agent\sessions") -File)) { if (@("1001.json", "1002.json") -notcontains $f.Name) { Remove-Item -LiteralPath $f.FullName -Force } }
+foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $clean "agent\pane-sessions") -File)) { if ($f.Name -ne "10.json") { Remove-Item -LiteralPath $f.FullName -Force } }
 Remove-Item -LiteralPath (Join-Path $clean "wezfleet\codex-sessions") -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $clean "wezfleet\codex-sessions") | Out-Null
 foreach ($repo in @("proj", "other")) { Remove-Item -LiteralPath (Join-Path $clean ("wezfleet\" + $repo)) -Recurse -Force }
@@ -596,7 +596,7 @@ Check ((Val (Ans $psn 3 "pane")) -eq "15" -and (Src (Ans $psn 3 "pane")) -eq "W1
 $moved = New-Fleet "moved"
 EditReg $moved 21 { param($r) $r.cwd = "C:\work\moved" }
 $pmv = Project $moved
-$censusRule = Join-Path $moved ("claude\projects\" + ("C:\work\moved" -replace '[:\\/]', '-') + "\" + (Sid 21) + ".jsonl")
+$censusRule = Join-Path $moved ("agent\projects\" + ("C:\work\moved" -replace '[:\\/]', '-') + "\" + (Sid 21) + ".jsonl")
 Check ((Val (Ans $pmv 21 "transcriptPath")) -like "*C--work-x*" -and (Val (Ans $pmv 21 "projectCwd")) -eq "C:\work\x" -and -not (Test-Path -LiteralPath $censusRule)) "parity exception census transcript from current cwd"
 # P-11: census prints the stored owner, "(unowned)" when empty; the view derives the parent's label.
 Check ("$((ReadJson (RegPath $base 4)).owner)" -eq "" -and (Val (Ans $p 4 "owner")) -eq "A") "parity exception owner derived from parent"
@@ -641,7 +641,7 @@ Check ((St $rc1) -eq "unknown" -and @($rc1.shadow | Where-Object { $_.store -eq 
 $rc3 = Ans $p 3 "resumeCommand"
 Check ((St $rc3) -eq "unknown" -and @($rc3.shadow | Where-Object { $_.store -eq "W5" }).Count -eq 1) "the report's stored resume command is a shadow too"
 Check ($p.complete["R1"].state -eq "known" -and $pu.complete["R1"].state -eq "known") "CONTROL: the layout port was read"
-$pnl = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "claude\sessions") -ProjectsDir (Join-Path $base "claude\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "claude\pane-sessions") -Processes (ProcsOf $base) -HostPort (HostOf $base) -TtlSeconds 900 -Now $now
+$pnl = Get-HordeProjection -WezfleetRoot (Join-Path $base "wezfleet") -ClaudeDir (Join-Path $base "agent\sessions") -ProjectsDir (Join-Path $base "agent\projects") -CodexDir (Join-Path $base "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $base "agent\pane-sessions") -Processes (ProcsOf $base) -HostPort (HostOf $base) -TtlSeconds 900 -Now $now
 Check ($pnl.complete["R1"].state -eq "unknown" -and (St (Ans $pnl 1 "resumeCommand")) -eq "unknown") "with no layout port the saves are unknown, not empty"
 
 Write-Host ""
