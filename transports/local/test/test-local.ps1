@@ -309,4 +309,15 @@ if ($la.state -eq "known") {
     } finally { Stop-HordeTransportListener -Listener $listener }
 } else { Check $false "a listener for the churn case" }
 
+Write-Host ""
+Write-Host "--- small things the second review found ---" -ForegroundColor Cyan
+$id = New-Id
+$la = Start-HordeTransportListener -Transport $t -Endpoint $id
+if ($la.state -eq "known") {
+    $listener = Get-HordeValue $la
+    try {
+        $sec = $listener.state.server.GetAccessControl()
+        Check ($sec.AreAccessRulesCanonical -eq $true) "the DACL is in canonical order: the NETWORK deny comes before the allow"
+    } finally { Stop-HordeTransportListener -Listener $listener }
+} else { Check $false "a listener for the DACL-order case" }
 Complete-HordeSuite -Success "the local pipe admits only its own user, and refuses a pipe it did not make"

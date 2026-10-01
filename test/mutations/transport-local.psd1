@@ -12,8 +12,11 @@
     Suite  = "transports\local\test\test-local.ps1"
     Mutations = @(
         @{ Name = "acl-not-protected"
-           Find = 'D:P(A;;0x1f019f;;;'
-           Replace = 'D:(A;;0x1f019f;;;' }
+           Find = 'D:P(D;;0x1f019f;;;NU)'
+           Replace = 'D:(D;;0x1f019f;;;NU)' }
+        @{ Name = "dacl-allow-before-deny"
+           Find = '"D:P(D;;0x1f019f;;;NU)(A;;0x1f019f;;;" + $me + ")S:'
+           Replace = '"D:P(A;;0x1f019f;;;" + $me + ")(D;;0x1f019f;;;NU)S:' }
         @{ Name = "network-not-denied"
            Find = '(D;;0x1f019f;;;NU)'
            Replace = '' }

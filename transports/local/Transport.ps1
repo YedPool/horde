@@ -11,8 +11,8 @@
 # WHO MAY CONNECT (auth.peer). The pipe is made with CreateNamedPipe (transports/local/Native.ps1),
 # because System.IO.Pipes on .NET Framework cannot set what follows. Measured 2026-09-30 on Windows
 # PowerShell 5.1.26100.9444 unless said otherwise:
-#   - DACL, protected: Allow this user's SID full control (0x1F019F, PipeAccessRights.FullControl),
-#     Deny NETWORK (S-1-5-2). No other user can open it.
+#   - DACL, protected, in canonical order: Deny NETWORK (S-1-5-2) first, then Allow this user's SID
+#     full control (0x1F019F, PipeAccessRights.FullControl). No other user can open it.
 #   - MANDATORY LABEL, No-Write-Up and No-Read-Up, at the node's OWN integrity level. Without a label a
 #     pipe gets the default, No-Write-Up only, and the review of PR #42 measured a LOW-integrity process
 #     of this user opening the node's pipe read-only and reading what the node sent. With a fixed
@@ -92,7 +92,10 @@ function New-HordeLocalPipeSddl {
     # a client reached, the hub accepted the adder and sent it session.spawn (review of PR #42, round
     # 2; measured: HI refuses the Medium add, ME allows it).
     $me = "$(Get-HordeLocalUserSid)"
-    return ("O:" + $me + "D:P(A;;0x1f019f;;;" + $me + ")(D;;0x1f019f;;;NU)S:(ML;;NWNR;;;S-1-16-" + (Get-HordeLocalOwnIntegrity) + ")")
+    # The deny comes first: Windows reads a DACL in order and canonical order puts explicit denies
+    # before allows. The first version wrote allow-then-deny, which reads back as non-canonical
+    # (review of PR #42, round 2).
+    return ("O:" + $me + "D:P(D;;0x1f019f;;;NU)(A;;0x1f019f;;;" + $me + ")S:(ML;;NWNR;;;S-1-16-" + (Get-HordeLocalOwnIntegrity) + ")")
 }
 
 function Test-HordeLocalPipeOwner {
