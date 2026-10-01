@@ -53,6 +53,32 @@ $script:HordeLinkResultWords = @("transcript", "transcripts", "tool", "tools", "
     "raw", "log", "logs", "conversation", "history", "messages", "scrollback", "buffer", "screen", "context",
     "prompt", "content", "contents", "jsonl", "diff", "patch", "blob", "env", "environment", "secret", "credential")
 
+# THE VERBS, AND EVERY ARGUMENT EACH MAY TAKE, AS AN ALLOWLIST. The word lists above are a second line:
+# the review of PR #40 (2026-10-01) found argument names they miss (url, remoteUrl, uri, flags,
+# extraArgs, options, hook, stdin, mcp, plugin, systemPrompt, settings) and verbs they miss
+# (node.restart, repo.push, profile.define, auth.login, policy.set, ceiling.raise), and a longer list
+# would miss the next spelling. So a verb the table has must be named here, and every argument its args
+# schema can carry must be listed here by its path - "worktree.name", "sessions[].sessionId" - so an
+# argument cannot be added, or moved under another verb or another parent, without a change to this
+# file that a reviewer reads. The table cannot loosen it: it lives here, not in the table.
+$script:HordeLinkVerbAllow = @{
+    "node.info"       = @()
+    "request.status"  = @("requestId")
+    "handoff.get"     = @("sessionId", "handoffId")
+    "clone.status"    = @("repoId", "worktree")
+    "delivery.status" = @("messageId")
+    "session.spawn"   = @("label", "role", "parent", "runId", "fleetSessionId", "profile", "model", "repoId", "worktree",
+                          "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text", "prompt.handoffRef",
+                          "host", "closeOn")
+    "session.resume"  = @("sessionId", "reresolve", "model")
+    "session.deliver" = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body", "ttlSeconds")
+    "session.close"   = @("sessionId", "expect", "expect.pid", "expect.procStart", "reason")
+    "worktree.create" = @("repoId", "name", "branch", "base")
+    "worktree.remove" = @("repoId", "name")
+    "alert.raise"     = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt")
+    "unowned.report"  = @("sessions", "sessions[].sessionId", "sessions[].harness", "sessions[].startedAt", "observedAt")
+}
+
 # The caps a result string may name. textBytes (a prompt, a message body) is for arguments only, so
 # the largest string a result can hold is a distilled summary.
 $script:HordeLinkResultCaps = @("nameBytes", "reasonBytes", "summaryBytes")
@@ -174,6 +200,33 @@ function Resolve-HordeLinkTarget {
     return [pscustomobject]@{ schema = $s; node = $s; root = $s; label = $Target }
 }
 
+function Get-HordeLinkArgPaths {
+    # Every property path an args schema can carry: "worktree", "worktree.name", "sessions[].sessionId".
+    # $refs are followed in Root; a ref already on the way down stops the walk (a recursive shape is a
+    # finding of Get-HordeLinkSchemaFindings, not a path).
+    param($Node, $Root, [string]$Prefix = "", [string[]]$Refs = @())
+    $out = New-Object System.Collections.ArrayList
+    $n = $Node
+    while ($null -ne (Get-HordeLinkProp $n '$ref')) {
+        $r = "$(Get-HordeLinkProp $n '$ref')"
+        if ($Refs -ccontains $r) { return @() }
+        $Refs = @($Refs) + $r
+        try { $n = Resolve-HordeLinkRef -Ref $r -Root $Root } catch { return @() }
+    }
+    $props = Get-HordeLinkProp $n "properties"
+    if ($null -ne $props) {
+        foreach ($p in @($props.PSObject.Properties)) {
+            $path = $p.Name
+            if ($Prefix -ne "") { $path = $Prefix + "." + $p.Name }
+            [void]$out.Add($path)
+            foreach ($x in @(Get-HordeLinkArgPaths -Node $p.Value -Root $Root -Prefix $path -Refs $Refs)) { [void]$out.Add($x) }
+        }
+    }
+    $items = Get-HordeLinkProp $n "items"
+    if ($null -ne $items) { foreach ($x in @(Get-HordeLinkArgPaths -Node $items -Root $Root -Prefix ($Prefix + "[]") -Refs $Refs)) { [void]$out.Add($x) } }
+    return @($out)
+}
+
 function Get-HordeLinkSchemaFindings {
     # The static rules, for one schema node and everything under it. Role is args, result or frame; it
     # decides which names are refused and which caps a string may name. Where is a readable path into
@@ -262,6 +315,9 @@ function Test-HordeLinkVerbTable {
         $seen[$name] = $true
         $absent = @(Split-HordeLinkName $name | Where-Object { $script:HordeLinkAbsentVerbWords -ccontains $_ })
         if ($absent.Count -gt 0) { [void]$out.Add("$at is a verb the protocol never has ('" + ($absent -join "', '") + "'): no exec, shell, file, env, config, credential, process kill or update verb exists") }
+        $allow = $null
+        if ($script:HordeLinkVerbAllow.ContainsKey($name)) { $allow = $script:HordeLinkVerbAllow[$name] }
+        else { [void]$out.Add("$at is not a verb of remote/Contract.ps1's allowlist: a verb is added there, by review, before any table may carry it") }
         $since = Get-HordeLinkProp $row "since"
         if (($since -is [int] -or $since -is [long]) -and ($protocol -is [int] -or $protocol -is [long]) -and $since -gt $protocol) { [void]$out.Add("$at is since protocol $since, after this table's protocol $protocol") }
         # A node never asks the hub to start or end anything: every spawn and kill travels hub to node,
@@ -281,6 +337,11 @@ function Test-HordeLinkVerbTable {
             catch { [void]$out.Add("$at $part $target is not a schema this validator can read: " + $_.Exception.Message); continue }
             if ($part -ceq "args" -and "$(Get-HordeLinkProp $t.node 'type')" -cne "object") { [void]$out.Add("$at args is not an object") }
             foreach ($f in @(Get-HordeLinkSchemaFindings -Node $t.node -Root $t.root -Where "$at $part $target" -Role $part -Limits $limits)) { [void]$out.Add($f) }
+            if ($part -ceq "args" -and $null -ne $allow) {
+                foreach ($path in @(Get-HordeLinkArgPaths -Node $t.node -Root $t.root)) {
+                    if (@($allow) -cnotcontains $path) { [void]$out.Add("$at args has '" + $path + "', which is not an argument " + $name + " may take: remote/Contract.ps1 lists every one") }
+                }
+            }
         }
     }
     return @($out)

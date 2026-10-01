@@ -33,6 +33,13 @@ function Says {
     return (@($Findings | Where-Object { "$_".Contains($Text) }).Count -gt 0)
 }
 function Show { param($Findings) foreach ($f in @($Findings)) { Write-Host ("         finding: " + $f) -ForegroundColor DarkYellow } }
+function Without-Allowlist {
+    # The findings that are not the verb allowlist's. A probe verb is never on remote/Contract.ps1's
+    # allowlist, so a control built on one asserts that nothing ELSE was found - and that the allowlist
+    # did name it, so the filter is not hiding a silent checker.
+    param($Findings)
+    return @($Findings | Where-Object { -not "$_".Contains("is not a verb of remote/Contract.ps1's allowlist") })
+}
 
 $contract = Get-HordeLinkContract
 $realVerbs = Get-HordeSchema -Name "link-verbs.v1"
@@ -122,7 +129,7 @@ foreach ($absent in @("exec", "shell.open", "script.run", "file.read", "file.wri
 }
 # CONTROL for the word match: a verb named with 'profile' holds the letters of 'file' and is not refused.
 $f = @(Test-VerbsWith { param($v) Add-Row $v "profile.list" })
-Check ($f.Count -eq 0) "a verb whose name only contains the letters of a refused word (profile.list) is not refused"; Show $f
+Check ((Without-Allowlist $f).Count -eq 0 -and $f.Count -eq 1) "a verb whose name only contains the letters of a refused word (profile.list) is refused only for not being on the allowlist"; Show $f
 
 Write-Host ""
 Write-Host "--- C. no verb takes a command line, a program, a path or an environment, or an open object ---" -ForegroundColor Cyan
@@ -154,7 +161,23 @@ Refuses { param($v) $v.definitions.'session-spawn-args'.properties.worktree.addi
 Refuses { param($v) $v.definitions.'session-spawn-args'.properties | Add-Member -NotePropertyName "extraEnv" -NotePropertyValue ('{ "type": "string", "x-horde-cap": "nameBytes" }' | ConvertFrom-Json) } "is an argument named like a command" "adding an environment argument to session.spawn is refused" @("session.spawn")
 # CONTROL for the word match on arguments: profile, repoId and handoffRef are not refused words.
 $f = @(Test-VerbsWith { param($v) Add-ArgVerb $v "profileName" $capped })
-Check ($f.Count -eq 0) "an argument named profileName (holding the letters of file) is not refused"; Show $f
+Check ((Without-Allowlist $f).Count -eq 0 -and $f.Count -eq 1) "an argument named profileName (holding the letters of file) is not refused for its name"; Show $f
+
+Write-Host ""
+Write-Host "--- C2. the verbs, and every argument each takes, are an allowlist in remote/Contract.ps1 ---" -ForegroundColor Cyan
+
+# The word lists miss what nobody thought to list. The review of PR #40 found these verbs and these
+# argument names passing them; an allowlist refuses each without having heard of it.
+foreach ($novel in @("node.restart", "repo.push", "profile.define", "auth.login", "policy.set", "ceiling.raise")) {
+    Refuses ([scriptblock]::Create("param(`$v) Add-Row `$v '$novel'")) "is not a verb of remote/Contract.ps1's allowlist" ("the verb '" + $novel + "', on no word list, is refused because no allowlist names it")
+}
+foreach ($novel in @("url", "remoteUrl", "uri", "flags", "extraArgs", "options", "hook", "stdin", "mcp", "plugin", "systemPrompt", "settings")) {
+    Refuses ([scriptblock]::Create("param(`$v) `$v.definitions.'session-spawn-args'.properties | Add-Member -NotePropertyName '$novel' -NotePropertyValue ('$capped' | ConvertFrom-Json)")) ("args has '" + $novel + "', which is not an argument session.spawn may take") ("an argument named '" + $novel + "' added to session.spawn is refused by its allowlist") @("session.spawn")
+}
+Refuses { param($v) $v.definitions.'session-spawn-args'.properties.worktree.properties | Add-Member -NotePropertyName "url" -NotePropertyValue ($capped | ConvertFrom-Json) } "args has 'worktree.url'" "a nested argument is on the allowlist by its path: worktree.url is refused" @("session.spawn")
+Refuses { param($v) $v.definitions.'session-resume-args'.properties | Add-Member -NotePropertyName "prompt" -NotePropertyValue ($capped | ConvertFrom-Json) } "args has 'prompt', which is not an argument session.resume may take" "an argument allowed to one verb (spawn's prompt) is refused on another (resume)" @("session.resume")
+Refuses { param($v) $v.definitions.'session-spawn-args'.properties | Add-Member -NotePropertyName "name" -NotePropertyValue ($capped | ConvertFrom-Json) } "args has 'name', which is not an argument session.spawn may take" "an argument allowed under one parent (worktree.name) is refused at another (name)" @("session.spawn")
+Refuses { param($v) $v.definitions.'unowned-report-args'.properties.sessions.items.properties | Add-Member -NotePropertyName "cmdline" -NotePropertyValue ($capped | ConvertFrom-Json) } "args has 'sessions[].cmdline'" "an argument inside an array's items is on the allowlist by its path too" @("unowned.report")
 
 Write-Host ""
 Write-Host "--- D. no verb returns raw worker context: every result is closed and capped ---" -ForegroundColor Cyan
@@ -181,7 +204,7 @@ Refuses { param($v) $v.definitions.handoff.properties | Add-Member -NoteProperty
 $f = @(Test-VerbsWith { param($v) $v.'x-horde-verbs'[0].result = "overlay-endpoint.v1" })
 Check (Says $f "is a string that names no cap") "a verb whose result is a whole schema is held to the cap rule (overlay-endpoint.v1 names no caps and is refused as a result)"
 $f = @(Test-VerbsWith { param($v) Add-ResultVerb $v "summaryText" $summary })
-Check ($f.Count -eq 0) "CONTROL: a result string named summaryText, capped at summaryBytes, is accepted"; Show $f
+Check ((Without-Allowlist $f).Count -eq 0 -and $f.Count -eq 1) "CONTROL: a result string named summaryText, capped at summaryBytes, is refused for nothing but its probe verb's absence from the allowlist"; Show $f
 
 Write-Host ""
 Write-Host "--- E. the envelope's own rules ---" -ForegroundColor Cyan

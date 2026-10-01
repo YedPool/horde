@@ -113,6 +113,18 @@
         @{ Name = "resend-may-reuse-frame-id"
            Find = 'if ("$($Again.id)" -ceq "$($First.id)") {'
            Replace = 'if ($false) {' }
+        @{ Name = "verb-allowlist-off"
+           Find = 'else { [void]$out.Add("$at is not a verb of remote/Contract.ps1''s allowlist'
+           Replace = 'elseif ($false) { [void]$out.Add("$at is not a verb of remote/Contract.ps1''s allowlist' }
+        @{ Name = "argument-allowlist-off"
+           Find = 'if (@($allow) -cnotcontains $path) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "argument-paths-not-nested"
+           Find = '$path = $Prefix + "." + $p.Name'
+           Replace = '$path = $p.Name' }
+        @{ Name = "argument-paths-skip-array-items"
+           Find = 'if ($null -ne $items) { foreach ($x in @(Get-HordeLinkArgPaths'
+           Replace = 'if ($false) { foreach ($x in @(Get-HordeLinkArgPaths' }
         @{ Name = "resend-of-any-kind"
            Find = 'if ("$(Get-HordeLinkProp $pair[1] ''kind'')" -cne "req") {'
            Replace = 'if ($false) {' }
