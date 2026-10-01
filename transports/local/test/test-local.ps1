@@ -130,6 +130,7 @@ try {
     Check ($created) "CONTROL: the low-integrity process did create the pipe first"
     $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
     Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*integrity*") "the hub refuses a pipe served by a low-integrity process, naming the integrity"
+    Check ("$($o.reason)" -like "*run the hub and node at the same integrity level*") "and says what to do about it: run the hub and node at the same integrity level"
     if ($o.state -eq "known") { $sneak = Get-HordeValue $o; Write-Host ("         accepted as: " + $sneak.peer.verified + " / " + $sneak.peer.how) -ForegroundColor Red; Close-HordeLink -Link $sneak }
     $null = Wait-HordeLowLine -Out $sq.out -Pattern "done" -Ms 25000
     $sqText = ""; if (Test-Path -LiteralPath $sq.out) { $sqText = [System.IO.File]::ReadAllText($sq.out) }
@@ -179,6 +180,7 @@ try {
             $hold = Start-HordeLowChild -Mode "hold" -Pipe $pipe -Folder $lowDir
             $r = & $t.accept $state 15000
             Check ($r.ok -eq $false -and "$($r.reason)" -like "*integrity*") "the node refuses a client whose integrity is below its own, naming it"
+            Check ("$($r.reason)" -like "*run the hub and node at the same integrity level*") "and says what to do about it"
             if ($r.ok) { & $r.channel.close $r.channel }
             $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
             $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
