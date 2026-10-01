@@ -154,7 +154,8 @@ transports/*/test/test-*.ps1
 agents/*/test/test-*.ps1
 ```
 
-`test/lib/SuiteFiles.ps1` is that list. `test/test-suite.ps1` checks how every suite on it is built,
+Every gate run includes `hosts/*/test/test-*.ps1`, so each host's isolation harness is exercised on
+every run, not only when its own folder changes. `test/lib/SuiteFiles.ps1` is that list. `test/test-suite.ps1` checks how every suite on it is built,
 and fails on any `test-*.ps1` anywhere else in the repository (`test/fixtures/` is data and is
 skipped). A suite outside the gate's folders is one nobody runs, and it reads as coverage: the first
 transport's own suite sat outside `test/test-*.ps1` until the review of PR #42 found it.
