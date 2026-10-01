@@ -459,12 +459,18 @@ Write-Host "--- every script that starts an instance also tears it down, by the 
 $self = $PSCommandPath
 function Get-CodeOnly { param([string]$Path)
     return ((Get-Content -LiteralPath $Path) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n" }
-$scripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File |
-    Where-Object { $_.FullName -ne $harnessPath -and $_.FullName -ne $self })
+$allScripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File)
+$scripts = @($allScripts | Where-Object { $_.FullName -ne $harnessPath -and $_.FullName -ne $self })
 Check ($scripts.Count -gt 0) "CONTROL: the scan sees real scripts, so an empty result below would mean something"
 # BY FULL PATH, NOT BY NAME: a second host brought its own test-isolation.ps1, which is a different
 # file and belongs in the scan. Matching the name alone failed this control the day it arrived.
-Check (@($scripts | Where-Object { $_.FullName -eq $self }).Count -eq 0) "CONTROL: this file is excluded from its own scan"
+# AND NOT A TAUTOLOGY. Filtering by $self and then finding no $self proves nothing if $self is empty
+# or names a file the scan never held (the review of PR 35). So: $self is a real path, the UNFILTERED
+# scan holds it, it also holds another test-isolation.ps1, and only this file left the scan.
+Check ("$self" -ne "" -and @($allScripts | Where-Object { $_.FullName -eq $self }).Count -eq 1) "CONTROL: this file's own path is known, and the unfiltered scan holds it"
+$otherIso = @($allScripts | Where-Object { $_.Name -eq "test-isolation.ps1" -and $_.FullName -ne $self })
+Check ($otherIso.Count -ge 1 -and @($scripts | Where-Object { $_.Name -eq "test-isolation.ps1" }).Count -eq $otherIso.Count) "CONTROL: another host's test-isolation.ps1 is in the scan too, and stays in it"
+Check ($scripts.Count -eq $allScripts.Count - 2 -and @($scripts | Where-Object { $_.FullName -eq $self }).Count -eq 0) "CONTROL: this file, and only it and the harness, is excluded from its own scan"
 $starters = @($scripts | Where-Object { (Get-CodeOnly -Path $_.FullName) -match "Start-HordeIsolatedWezterm" })
 Check ($starters.Count -gt 0) "CONTROL: the scan finds at least one script that starts an instance"
 $missing = @($starters | Where-Object { (Get-CodeOnly -Path $_.FullName) -notmatch "Stop-HordeIsolatedWezterm" })
