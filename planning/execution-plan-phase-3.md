@@ -363,6 +363,16 @@ G. Target naming, the naming half of `tell` (step 3.6)
       - a unique hex prefix of 8 or more characters, in any case;
       - a fleet id.
     - It returns a result and never exits. A refusal exits 1, and a malformed name exits 2.
+    - **`Get-HordeSessionName`, the inverse: the one source of a session's name** (founder request,
+      2026-10-01). A pure function from a fleet record to the name people see for that session:
+      today its label, as M used for the web titles of 2026-10-01. Every place that shows a session's
+      name calls it and formats none of its own: the target result's `name`, the remote-view name at
+      birth (engines E9 and N1), `horde names` and its repair (lifecycle step 34), and host title
+      decoration (migration step 7.2). Tests first:
+      - "every name it returns resolves back to the same session through `horde target`", over every
+        fixture record. So whatever a person reads off a web title or a terminal tab is a name Horde
+        accepts. A mutation that appends the run title turns it red;
+      - "a record with no label has no name, with the reason", never an empty string or the id.
     - Decision 6: a lane fleet id that is also a label elsewhere is ambiguous.
     - Decision 7: a session with no verified handle is refused. "Verified" means the view answers the
       handle as live in the current instance.
@@ -394,6 +404,9 @@ H. Planned when reached
   `Get-WfRunSnapshot`. The step's first decision is what wezfleet's run-scoped output corresponds to
   in Horde's fleet-wide view.
 - **3.7 the Warchief's loop.** Last, because the whole fleet depends on it.
+- **Web session titles are not repaired here.** Repair changes a live session, so it is a write verb
+  and fails the read-command tripwire (lifecycle step 4). It is lifecycle step 34,
+  `horde names repair`; this plan owns only the name it uses (step 15).
 - **3.8 the record writer.** Unchanged from the migration table, except that it has a gate. The first record writer must not merge until these four in-place
   `session-record.v1` edits have merged, in this order:
   1. remote R10, the fleet/binding split (`planning/execution-plan-remote.md`);
