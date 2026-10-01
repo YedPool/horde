@@ -41,7 +41,13 @@ $fake = { param($D, $Argv, $T)
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxNsScan) { $kind = "nsscan" }
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxCleanup) { $kind = "cleanup" }
     elseif ($a[0] -eq "sh") { $kind = "preflight" }
-    return (& $script:answer $kind $a) }
+    $ans = & $script:answer $kind $a
+    # A real scan always ends with "scanned <n>" (n processes it could read); the fake adds it, unless
+    # a test wants the raw answer to prove what happens without it.
+    if ($kind -eq "nsscan" -and -not $script:rawScan -and $ans -and "$($ans.out)" -notmatch '(?m)^scanned \d+$') {
+        $ans = Reply $ans.code ("$($ans.out)" + "scanned 9`n") $ans.err }
+    return $ans }
+$script:rawScan = $false
 # The tmux words after "-f /dev/null". Returned with a leading comma: a one-word command ("kill-server")
 # would otherwise arrive as a bare string, and [0] of a string is its first letter (CONTRIBUTING 12) -
 # the first run of this suite measured exactly that, as a kill-server the fake never recognised.
@@ -341,6 +347,20 @@ try {
     $ug.entry.owner = [pscustomobject]@{ proc = (New-FakeOwnerProc $true); nsInode = ""; ready = $false; failure = "the owner did not report ready in 30s" }
     $vg = Stop-HordeIsolatedTmux -Instance $ug.inst
     Check ($vg.stopped) "CONTROL: the same owner that does exit is stopped - unshare, and so pid 1, are gone with it"
+
+    # A SCAN THAT DID NOT FINISH IS NOT AN EMPTY NAMESPACE. The scan always exited 0, so an answer cut
+    # short read as "nothing left" (the review of PR 35, round 3). It now ends with "scanned <n>".
+    $sc = New-Entry
+    $script:answer = { param($k, $a) return (Reply 0 "") }
+    $script:rawScan = $true
+    Check (Throws { Get-HordeTmuxNsProcs -Entry $sc.entry } "did not finish") "a namespace scan with no completion line throws, rather than reading as empty"
+    $script:answer = { param($k, $a) return (Reply 0 "scanned 0`n") }
+    Check (Throws { Get-HordeTmuxNsProcs -Entry $sc.entry } "did not finish") "and so does one that could read no process at all - it always reads itself"
+    $script:answer = { param($k, $a) return (Reply 0 "977 sleep 304`nscanned 40`n") }
+    $okScan = @(Get-HordeTmuxNsProcs -Entry $sc.entry)
+    Check ($okScan.Count -eq 1 -and $okScan[0] -eq "977 sleep 304") "CONTROL: a finished scan returns its processes, without the completion line"
+    $script:rawScan = $false
+    $script:HordeTmuxStarted.Remove($sc.inst.token)
 
     # THE SOCKET ANSWERS WITH SOMETHING ELSE: neither "ours" nor "no server". Refused.
     $k2 = New-Entry

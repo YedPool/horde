@@ -298,14 +298,20 @@ exit 0
 
 # Every process whose pid namespace is $1 ("pid:[<inode>]"), one per line: "<pid> <command line>".
 # Read from OUTSIDE the namespace, so the pids are the distro's. Newlines in a command line are
-# flattened so one process is one line.
+# flattened so one process is one line. It ENDS with "scanned <n>", n being how many processes'
+# namespaces it could read: without that line, or with n = 0 (it always reads at least itself), the
+# scan did not finish, and Get-HordeTmuxNsProcs refuses to read it as empty (the review of PR 35,
+# round 3: the scan always exited 0, so a cut-short answer read as "nothing left").
 $script:HordeTmuxNsScan = @'
+n=0
 for f in /proc/[0-9]*/ns/pid; do
-  [ "$(readlink "$f" 2>/dev/null)" = "$1" ] || continue
+  l=$(readlink "$f" 2>/dev/null) || continue
+  n=$((n+1))
+  [ "$l" = "$1" ] || continue
   p=${f#/proc/}; p=${p%/ns/pid}
   printf '%s %s\n' "$p" "$(tr '\0\n' '  ' < "/proc/$p/cmdline" 2>/dev/null)"
 done
-exit 0
+echo "scanned $n"
 '@ -replace "`r", ""
 
 function Get-HordeTmuxOwnerArgv {
@@ -367,7 +373,13 @@ function Get-HordeTmuxNsProcs {
     $r = Invoke-HordeWsl -Distro $Entry.distro -Argv @("sh", "-c", $script:HordeTmuxNsScan, "sh", $Entry.nsInode) -TimeoutSeconds $TimeoutSeconds
     $why = Get-HordeWslFailure $r
     if ($why) { throw $why }
-    return @(Get-HordeTmuxLines $r.out)
+    $lines = @(Get-HordeTmuxLines $r.out)
+    $last = ""
+    if ($lines.Count -gt 0) { $last = "$($lines[$lines.Count - 1])".Trim() }
+    if ($r.code -ne 0 -or $last -notmatch '^scanned ([1-9]\d*)$') {
+        throw ("the namespace scan did not finish (exit " + $r.code + ", last line '" + $last + "') - an unfinished scan is not an empty namespace")
+    }
+    return @($lines | Select-Object -First ($lines.Count - 1))
 }
 
 # THE PREFLIGHT, which starts nothing. unshare is checked first and by name: without it there is no

@@ -79,6 +79,9 @@
         @{ Name = "unmeasured-owner-reads-as-stopped"
            Find = '$unmeasured = (-not $e.nsInode) -and (-not $ownerGone)'
            Replace = '$unmeasured = $false' }
+        @{ Name = "unfinished-scan-reads-as-empty"
+           Find = "if (`$r.code -ne 0 -or `$last -notmatch '^scanned ([1-9]\d*)$') {"
+           Replace = 'if ($false) {' }
         @{ Name = "namespace-never-scanned"
            Find = 'if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }'
            Replace = '' }
