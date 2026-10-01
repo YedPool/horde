@@ -45,7 +45,7 @@
     },
     "repos": {
       "type": "array", "x-horde-cap": "listItems",
-      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*(/[A-Za-z0-9._-]+){1,4}$", "x-horde-cap": "nameBytes" }
+      "items": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(/(?!([Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])(\\.|/|$))(?![^/]*\\.(/|$))[A-Za-z0-9._-]+){1,4}$", "x-horde-cap": "nameBytes" }
     },
     "admission": {
       "type": "object", "required": ["tier", "state"], "additionalProperties": false,

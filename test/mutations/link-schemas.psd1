@@ -20,8 +20,24 @@
            Find = '"document": { "type": "string", "pattern": "\\S", "x-horde-cap": "summaryBytes" }'
            Replace = '"document": { "type": "string", "pattern": "\\S", "x-horde-cap": "textBytes" }' }
         @{ Name = "worktree-name-any-text"
-           Find = '"worktree-name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",'
+           Find = '"worktree-name": { "type": "string", "pattern": "^(?!([Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])(\\.|$))(?!.*\\.\\.)(?!.*\\.$)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$",'
            Replace = '"worktree-name": { "type": "string", "pattern": "^.{1,100}$",' }
+        @{ Name = "worktree-name-final-dot"
+           Find = '(?!.*\\.\\.)(?!.*\\.$)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+           Replace = '(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' }
+        @{ Name = "session-id-drive-allowed"
+           Find = '"pattern": "^(?![A-Za-z]:)(?!'
+           Replace = '"pattern": "^(?!'
+        }
+        @{ Name = "session-id-dos-name-allowed"
+           Find = '(?!([Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])([.:]|$))'
+           Replace = '' }
+        @{ Name = "session-id-final-dot-allowed"
+           Find = '(?!.*[.:]$)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+           Replace = '[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' }
+        @{ Name = "repo-id-segment-may-end-in-a-dot"
+           Find = '(?![^/]*\\.(/|$))'
+           Replace = '' }
         @{ Name = "token-any-text"
            Find = '"token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",'
            Replace = '"token": { "type": "string", "pattern": "^.{1,64}$",' }

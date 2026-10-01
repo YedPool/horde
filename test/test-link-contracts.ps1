@@ -284,6 +284,34 @@ FrameRefuses "req-node-info.json" { param($x) $x.verb = "exec" } "unsupported-ve
 FrameRefuses "req-node-info.json" { param($x) $x.args | Add-Member -NotePropertyName argv -NotePropertyValue @("cmd.exe", "/c", "dir") } "$.args has 'argv', which the schema does not allow" "a req smuggling an argv into a verb's arguments is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree | Add-Member -NotePropertyName path -NotePropertyValue "C:\anything" } "$.args.worktree has 'path'" "a spawn smuggling a path into its worktree is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree.name = "..\..\elsewhere" } "$.args.worktree.name does not match" "a worktree name that climbs out of its root is refused"
+# NAMES THAT BECOME FILE NAMES ON THE NODE (review of PR #40). Path.Combine("D:\h", "C:..") is "C:..",
+# a drive-relative path; "foo." is the folder foo; CON is the console device, with or without a dot.
+function Test-Def {
+    # One value against one definition of the real verb table. Returns its findings.
+    param([string]$Def, [string]$Value)
+    return @(Test-HordeSchema -Value $Value -Schema (New-HordeLinkRefSchema -Doc $realVerbs -Ref ("#/definitions/" + $Def)) -Path '$')
+}
+foreach ($bad in @("C:..", "C:x", "z:abc", "a..b", "abc.", "abc:", "CON", "con", "Nul.txt", "COM1", "lpt9:x", "aux")) {
+    Check (Says (Test-Def "session-id" $bad) "does not match") ("the session id '" + $bad + "' is refused")
+}
+foreach ($good in @("11111111-2222-4333-8444-555555555555", "rollout-2026.09.30", "harness:abc", "CONSOLE", "nullable", "COM")) {
+    $f = Test-Def "session-id" $good
+    Check ($f.Count -eq 0) ("CONTROL: the session id '" + $good + "' is accepted"); Show $f
+}
+foreach ($bad in @("foo.", "CON", "con.anything", "LPT1", "a..b", "prn")) {
+    Check (Says (Test-Def "worktree-name" $bad) "does not match") ("the worktree name '" + $bad + "' is refused")
+}
+foreach ($good in @("foo.bar", "CONSOLE", "feature-x", "r1.fix")) {
+    $f = Test-Def "worktree-name" $good
+    Check ($f.Count -eq 0) ("CONTROL: the worktree name '" + $good + "' is accepted"); Show $f
+}
+foreach ($bad in @("github.com/../..", "github.com/a/..", "github.com/./x", "github.com/a/b.", "github.com/CON/x", "github.com/a/nul.git", "github..com/a/b", "-github.com/a/b", "github.com./a/b")) {
+    Check (Says (Test-Def "repo-id" $bad) "does not match") ("the repository id '" + $bad + "' is refused")
+}
+foreach ($good in @("github.com/YedPool/horde", "github.com/YedPool/.github", "gitlab.example.org/group/sub/repo", "github.com/a/b.c")) {
+    $f = Test-Def "repo-id" $good
+    Check ($f.Count -eq 0) ("CONTROL: the repository id '" + $good + "' is accepted"); Show $f
+}
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.profile = "C:\tools\agent.exe" } "$.args.profile does not match" "a profile given as a program path is refused: profiles are names"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.PSObject.Properties.Remove("closeOn") } "$.args has no 'closeOn'" "a spawn missing a required argument is refused"
 FrameRefuses "ping.json" { param($x) $x.PSObject.Properties.Remove("ping"); $x | Add-Member -NotePropertyName pong -NotePropertyValue ([pscustomobject]@{ t1 = $x.ts; t2 = $x.ts; t3 = $x.ts }) } "a ping frame has no 'ping'" "a ping carrying a pong body is refused"
@@ -373,6 +401,7 @@ function DocRefuses {
 }
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.profiles[0].resolves = "sk-not-real" } "$.profiles[0].resolves is 'sk-not-real'" "a manifest profile says only set, missing or unknown about its credential"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("C:\code\horde") } "$.repos[0] does not match" "a manifest names repositories by id, never by path"
+DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("github.com/../..") } "$.repos[0] does not match" "a manifest repository id cannot climb out with .. segments, as the verb table's cannot"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.spaces = @("wsl") } "$.spaces[0] does not match" "a wsl space names its distro"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.PSObject.Properties.Remove("encrypt") } "has no 'encrypt'" "a transport declares every capability"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.encrypt.support = "n/a" } "is 'n/a', not one of" "a capability is yes, no, declined or unverified, nothing else"
