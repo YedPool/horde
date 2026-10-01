@@ -296,6 +296,9 @@ if (Section "hostport" "the host port contract (core/HostPort.ps1)") {
     Check ($pnl2.handles.state -eq "unknown" -and $pnl2.handles.reason -like "*does not offer list*" -and @($pnl2.sessions | Where-Object { $_.fields["pane"].answer.state -ne "unknown" }).Count -eq 0) "a host that does not offer its handle list leaves every pane unknown"
     $pun = Project $base -HostPort (HostOf $base -Caps @{ "instance.startedAt" = "unverified" })
     Check ((St (Ans $pun 1 "pane")) -eq "unknown" -and (Why (Ans $pun 1 "pane")) -like "*does not offer instance.startedAt*") "an unverified capability counts as no"
+    # A start time the host does not offer is not kept, even when the port hands one over: the view would
+    # otherwise carry it as the instance's (mutation run of PR #31, 2026-10-01: nothing else checked it).
+    Check ($null -ne $p.host.instance.value.startedAt -and $null -eq $pun.host.instance.value.startedAt) "a start time the host does not offer is not kept"
     $declPort = HostOf $base -Caps @{ "text.read" = "declined" }
     Check ((Test-HordeHostCapability -Port $declPort -Name "text.read") -eq $false -and (Test-HordeHostCapability -Port $declPort -Name "list") -eq $true) "a declined capability is not relied on"
     # A HANDLE IS UNIQUE WITHIN ITS INSTANCE, as plain text; a native id with a sigil is the adapter's to map.
