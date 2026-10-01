@@ -48,5 +48,6 @@ reason.
 - No absolute home paths, private project names or references to people in shipping code.
 - Ported code keeps its original licence notice.
 - Do not wrap a native command in `2>&1` under PowerShell 5.1.
-- Nothing outside `hosts/<name>/` names a terminal. `hosts/<name>/allowlist.txt` lists the exceptions
-  and only shrinks; `test/test-host-names.ps1` fails on anything new.
+- Nothing outside `hosts/<name>/` names a terminal, and nothing outside `agents/<name>/` names an agent
+  harness. Each port's `allowlist.txt` lists the exceptions and only shrinks;
+  `test/test-host-names.ps1` fails on anything new.

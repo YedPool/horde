@@ -1,9 +1,10 @@
-# DOES ANY FILE OUTSIDE A HOST'S FOLDER NAME THAT HOST? (decision D12)
+# DOES ANY FILE OUTSIDE A PORT'S FOLDER NAME THAT PORT? (decision D12, and CONTRIBUTING rule 14)
 #
-# tools/HostNames.ps1 reads each host's hosts/<name>/names.txt and allowlist.txt and scans every other
-# file. This suite first proves the scan refuses what it must, on throwaway repositories whose one
-# host is invented - "zorbterm" - so that nothing in this file names a real terminal and the ratchet
-# never has to except itself. Then it runs the scan on this repository.
+# tools/HostNames.ps1 reads each port's names.txt and allowlist.txt - every host in hosts/<name>/ and
+# every harness in agents/<name>/ - and scans every other file. This suite first proves the scan
+# refuses what it must, on throwaway repositories whose one host and one harness are invented -
+# "zorbterm" and "zorbcode" - so that nothing in this file names a real terminal or a real harness and
+# the ratchet never has to except itself. Then it runs the scan on this repository.
 #
 # EXACTLY ONE FINDING per refusal, not merely the right one among several, as in test/test-ledger.ps1:
 # a case failing for three reasons at once would otherwise pass for the wrong one.
@@ -28,7 +29,8 @@ function Write-FakeFile {
 
 function New-FakeRepo {
     # A repository with one host, zorbterm, which is named in its own folder and in one allowlisted
-    # file, on exactly two lines. Every case starts from it and changes one thing.
+    # file, on exactly two lines; and one harness, zorbcode, named in its own folder and once in one
+    # allowlisted file. Every case starts from it and changes one thing.
     param([string]$Name)
     $script:repo = Join-Path $fake $Name
     Write-FakeFile "hosts/zorbterm/names.txt" ("# what identifies the invented host`n" +
@@ -39,6 +41,12 @@ function New-FakeRepo {
     Write-FakeFile "hosts/zorbterm/adapter.ps1" "# the Zorbterm adapter, which may name its own host as often as it likes`n"
     Write-FakeFile "docs/rules.md" "Run tests in a separate Zorbterm.`nNever aim at the zorb-sock you work in.`nNothing else here.`n"
     Write-FakeFile "core/engine.ps1" "# sessions, slots and capabilities`n"
+    Write-FakeFile "agents/zorbcode/names.txt" ("# what identifies the invented harness`n" +
+        "zorbcode | the invented agent harness this suite polices in place of a real one`n")
+    Write-FakeFile "agents/zorbcode/allowlist.txt" ("# exceptions`n" +
+        "docs/agents.md | 1 | the agent guide says which harness the fleet starts by default`n")
+    Write-FakeFile "agents/zorbcode/adapter.ps1" "# the Zorbcode adapter, which may name its own harness as often as it likes: zorbcode`n"
+    Write-FakeFile "docs/agents.md" "Sessions start a zorbcode process.`nNothing else here.`n"
     return $script:repo
 }
 
@@ -117,6 +125,30 @@ try {
     Refuses "name-no-reason" { Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbterm/names.txt") -Value "zorbix | zorbix" } "needs a reason" "a name with no real reason is refused"
     Refuses "name-bad-shape" { Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbterm/names.txt") -Value "zorbix" } "a name line is" "a name line without its reason is refused"
     Refuses "no-usable-name" { Write-FakeFile "hosts/zorbterm/names.txt" "# nothing but comments`n" } "lists no usable name" "a names.txt with no names is refused, not read as nothing to check"
+
+
+    Write-Host ""
+    Write-Host "--- a harness is a port too: agents/<name>/ is held to the same rule as hosts/<name>/ ---" -ForegroundColor Cyan
+
+    # Rule 14 keeps each terminal in hosts/<name>/ so the next terminal is an adapter, not an engine
+    # change. The engine-settings design (2026-09-30, section 9) applies the same seam to the agent
+    # harness, and the founder's decision of that day says core never names an engine. So: the same
+    # scan, the same lists and the same shrink-only comparison, over a second family of folders.
+    Refuses "agent-leak" { Write-FakeFile "core/spawn.ps1" "& ZORBCODE --resume`n" } "is not in agents/zorbcode/allowlist.txt" "a new file in core that names a harness is refused, whatever its case"
+    Refuses "agent-leak-path" { Write-FakeFile "test/fixtures/zorbcode-resume.json" "{}`n" } "is not in agents/zorbcode/allowlist.txt" "a file whose PATH names a harness is refused, though its content does not"
+    Refuses "agent-grown" { Write-FakeFile "docs/agents.md" "Sessions start a zorbcode process.`nOr a second zorbcode.`n" } "a new mention" "a file allowlisted for a harness that gains a mention is refused"
+    Refuses "agent-shrunk" { Write-FakeFile "docs/agents.md" "Nothing here.`n" } "no longer names the host" "a harness entry for a file that names it nowhere is refused"
+    Refuses "agent-own-entry" { Add-Content -LiteralPath (Join-Path $script:repo "agents/zorbcode/allowlist.txt") -Value "agents/zorbcode/adapter.ps1 | 1 | the harness's own file, which the scan never reads" } "excluded from the scan by rule" "an entry inside the harness's own folder is refused as not needed"
+    Refuses "agent-no-names" { Write-FakeFile "agents/bare/adapter.ps1" "# a harness folder with no names.txt`n" } "declares no names.txt" "a harness folder with no names.txt is refused - it could not be checked"
+    Refuses "agent-names-host" { Write-FakeFile "agents/zorbcode/adapter.ps1" "# zorbcode, typed into a zorbterm pane`n" } "is not in hosts/zorbterm/allowlist.txt" "a harness's folder that names a host is refused - one port's folder does not excuse another port"
+    Refuses "host-names-agent" { Write-FakeFile "hosts/zorbterm/adapter.ps1" "# zorbterm, running zorbcode`n" } "is not in agents/zorbcode/allowlist.txt" "a host's folder that names a harness is refused"
+    Refuses "agent-names-agent" {
+        Write-FakeFile "agents/other/names.txt" "othercode | a second invented harness, so that one harness can be caught naming another`n"
+        Write-FakeFile "agents/other/adapter.ps1" "# borrowed from zorbcode`n"
+    } "is not in agents/zorbcode/allowlist.txt" "another harness's folder that names this harness is refused"
+    Refuses "agent-folder-named-like-host" {
+        Write-FakeFile "agents/zorbterm/names.txt" "zorbcli | an invented harness whose folder has the same name as the invented host`n"
+    } "is not in hosts/zorbterm/allowlist.txt" "a harness folder with a host's folder name does not exempt that host - a port is its family and its name"
 
     Write-Host ""
     Write-Host "--- what is not scanned, and how lines are counted ---" -ForegroundColor Cyan
@@ -223,9 +255,36 @@ try {
         Write-FakeFile "hosts/other/names.txt" "otherterm | a second invented terminal, which this branch then deletes`n"
         Invoke-FakeGit @("add", "-A"); Invoke-FakeGit @("commit", "-q", "--no-verify", "-m", "other"); Invoke-FakeGit @("update-ref", "refs/remotes/origin/main", "HEAD")
         Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo "hosts/other")
-    } "deleting a host folder" "a host folder on origin/main that is gone here is refused - deleting it would switch its check off"
+    } "deleting its folder" "a host folder on origin/main that is gone here is refused - deleting it would switch its check off"
     $nh = Shrink "sh-new-host" { Write-FakeFile "hosts/other/names.txt" "otherterm | a second invented terminal, new since origin/main`n" }
-    Check ($nh.skip -eq "" -and @($nh.findings).Count -eq 0 -and (@($nh.newHosts) -join ",") -eq "other") "a host new since origin/main is reported as new, not compared - its pull request sets its baseline"
+    Check ($nh.skip -eq "" -and @($nh.findings).Count -eq 0 -and (@($nh.newHosts) -join ",") -eq "hosts/other") "a host new since origin/main is reported as new, not compared - its pull request sets its baseline"
+    # THE SAME COMPARISON FOR A HARNESS. Without it an agents/ allowlist would be exact but not
+    # shrink-only: its count and the mention it allows could rise together in one edit.
+    $agentAllow = "agents/zorbcode/allowlist.txt"
+    $agentTwo = "Sessions start a zorbcode process.`nOr a second zorbcode.`n"
+    $agentTwoEntry = "docs/agents.md | 2 | the agent guide says which harness the fleet starts by default`n"
+    ShrinkRefuses "sh-agent-raised" { Write-FakeFile "docs/agents.md" $agentTwo; Write-FakeFile $agentAllow $agentTwoEntry } "may not rise" "a harness's count raised together with the mention it allows is refused"
+    ShrinkRefuses "sh-agent-new-entry" {
+        Write-FakeFile "core/spawn.ps1" "& zorbcode`n"
+        Add-Content -LiteralPath (Join-Path $script:repo $agentAllow) -Value "core/spawn.ps1 | 1 | the engine starts the invented harness directly"
+    } "not on origin/main" "a new entry in a harness's allowlist is refused, reason and all"
+    ShrinkRefuses "sh-agent-name-removed" { Write-FakeFile "agents/zorbcode/names.txt" "zorbctl | an unrelated invented name, so the file still declares one`n" } "'zorbcode'" "a name deleted from a harness's names.txt since origin/main is refused, and named"
+    ShrinkRefuses "sh-agent-removed" { Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo "agents/zorbcode") } "deleting its folder" "a harness folder on origin/main that is gone here is refused - deleting it would switch its check off"
+    ShrinkPasses "sh-agent-growth" {
+        Write-FakeFile "docs/agents.md" $agentTwo; Write-FakeFile $agentAllow $agentTwoEntry
+        Write-FakeFile "agents/zorbcode/growth.txt" "docs/agents.md | 1 -> 2 | 2026-09-30 | the guide now names the harness in a second example`n"
+    } "a harness's raised count passes with a line in its own growth.txt"
+    ShrinkRefuses "sh-agent-growth-wrong-port" {
+        Write-FakeFile "docs/agents.md" $agentTwo; Write-FakeFile $agentAllow $agentTwoEntry
+        Write-FakeFile "hosts/zorbterm/growth.txt" "docs/agents.md | 1 -> 2 | 2026-09-30 | the guide now names the harness in a second example`n"
+    } "agents/zorbcode/growth.txt recording" "a harness's growth recorded in a host's growth.txt permits nothing - each port reviews its own growth"
+    ShrinkRefuses "sh-agent-growth-append-only" {
+        Write-FakeFile "agents/zorbcode/growth.txt" "docs/agents.md | 0 -> 1 | 2026-09-01 | the guide first named the harness it starts`n"
+        Invoke-FakeGit @("add", "-A"); Invoke-FakeGit @("commit", "-q", "--no-verify", "-m", "main"); Invoke-FakeGit @("update-ref", "refs/remotes/origin/main", "HEAD")
+        Write-FakeFile "agents/zorbcode/growth.txt" "# emptied`n"
+    } "append-only" "a harness's growth.txt is read from origin/main at its own path, so a line removed from it is refused"
+    $na = Shrink "sh-new-agent" { Write-FakeFile "agents/other/names.txt" "othercode | a second invented harness, new since origin/main`n" }
+    Check ($na.skip -eq "" -and @($na.findings).Count -eq 0 -and (@($na.newHosts) -join ",") -eq "agents/other") "a harness new since origin/main is reported as new under its own port, not compared"
     $ng = Shrink "sh-no-git" { Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo ".git") }
     Check ($ng.skip -like "*no .git*" -and @($ng.findings).Count -eq 0) "with no .git the comparison is skipped, and says why"
     $nr = Shrink "sh-no-ref" { Invoke-FakeGit @("update-ref", "-d", "refs/remotes/origin/main") }
@@ -300,26 +359,29 @@ try {
 Write-Host ""
 Write-Host "--- this repository ---" -ForegroundColor Cyan
 
-# CONTROL: each real host's names are armed - EVERY one of them. Its own names.txt is copied into a
-# throwaway repository with one file that uses one declared name; the scan must refuse that file, once
-# per name. Without this, a name that matched nothing would make the real run below pass by seeing
-# nothing. (The first version planted only the first name.)
+# CONTROL: each real port's names are armed - EVERY one of them, for every host and every harness. Its
+# own names.txt is copied into a throwaway repository with one file that uses one declared name; the
+# scan must refuse that file, once per name. Without this, a name that matched nothing would make the
+# real run below pass by seeing nothing. (The first version planted only the first name.)
 $realHosts = @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory -ErrorAction SilentlyContinue)
 Check ($realHosts.Count -ge 1) ("CONTROL: this repository has at least one host to check (" + $realHosts.Count + ")")
-foreach ($h in $realHosts) {
+$realAgents = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory -ErrorAction SilentlyContinue)
+Check ($realAgents.Count -ge 1) ("CONTROL: this repository has at least one harness to check (" + $realAgents.Count + ")")
+foreach ($h in @($realHosts + $realAgents)) {
+    $port = Split-Path -Leaf (Split-Path -Parent $h.FullName)
     $np = Join-Path $h.FullName "names.txt"
     # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so
     # @() made a one-element array holding the whole list: the first run of this loop reported one
     # name for a host that declares three, and planted all three on one line.
     $declared = Read-HordeHostTable -Path $np
-    Check ($declared.Count -ge 1) ("CONTROL: host '" + $h.Name + "' declares at least one name (" + $declared.Count + ")")
+    Check ($declared.Count -ge 1) ("CONTROL: " + $port + "/" + $h.Name + " declares at least one name (" + $declared.Count + ")")
     foreach ($row in $declared) {
         $script:repo = Join-Path $env:TEMP ("horde-hostnames-arm-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         try {
-            Write-FakeFile ("hosts/" + $h.Name + "/names.txt") ([System.IO.File]::ReadAllText($np))
+            Write-FakeFile ($port + "/" + $h.Name + "/names.txt") ([System.IO.File]::ReadAllText($np))
             Write-FakeFile "core/planted.ps1" ("# " + $row.cells[0] + "`n")
             $armed = @(Test-HordeHostNames -RepoRoot $script:repo)
-            Check ((Says $armed "is not in hosts/") -and $armed.Count -eq 1) ("CONTROL: host '" + $h.Name + "' - its declared name '" + $row.cells[0] + "', planted in core/, is caught")
+            Check ((Says $armed ("is not in " + $port + "/" + $h.Name + "/allowlist.txt")) -and $armed.Count -eq 1) ("CONTROL: " + $port + "/" + $h.Name + " - its declared name '" + $row.cells[0] + "', planted in core/, is caught")
             if ($armed.Count -ne 1) { Show $armed }
         } finally {
             Remove-Item -Recurse -Force -LiteralPath $script:repo -ErrorAction SilentlyContinue
@@ -328,7 +390,7 @@ foreach ($h in $realHosts) {
 }
 
 $real = @(Test-HordeHostNames -RepoRoot $root)
-Check ($real.Count -eq 0) "no file outside a host's folder names that host, beyond what its allowlist lists exactly"
+Check ($real.Count -eq 0) "no file outside a port's folder names that port, beyond what its allowlist lists exactly"
 Show $real
 
 # NEVER A SILENT PASS. When this checkout cannot be compared with origin/main, or a host is new on
@@ -340,10 +402,10 @@ if ($shrink.skip) {
     Write-Host ("  [SKIP] the lists were not compared with origin/main: " + $shrink.skip) -ForegroundColor Yellow
 } else {
     foreach ($n in @($shrink.newHosts)) {
-        Write-Host ("  [SKIP] host '" + $n + "' is not on origin/main, so its lists are not compared - its pull request sets their baseline") -ForegroundColor Yellow
+        Write-Host ("  [SKIP] " + $n + " is not on origin/main, so its lists are not compared - its pull request sets their baseline") -ForegroundColor Yellow
     }
-    Check (@($shrink.findings).Count -eq 0) "no host's lists grew since origin/main: no new entry, no raised count, no name removed"
+    Check (@($shrink.findings).Count -eq 0) "no port's lists grew since origin/main: no new entry, no raised count, no name removed"
     Show $shrink.findings
 }
 
-Complete-HordeSuite -Success "nothing outside hosts/<name>/ names a host it may not"
+Complete-HordeSuite -Success "nothing outside hosts/<name>/ or agents/<name>/ names a port it may not"

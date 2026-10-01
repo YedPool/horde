@@ -187,12 +187,21 @@ review finding of its own.
 No emoji and no non-ASCII characters in code, scripts or generated artefacts. Where a glyph is
 wanted, write it as an escape sequence so the source stays ASCII.
 
-## 14. A terminal is named only in its own host folder
+## 14. A terminal, or an agent harness, is named only in its own folder
 
 Nothing outside `hosts/<name>/` names a terminal (migration-plan decision D12): the engine, the
 schemas and the read model speak of sessions, slots and capabilities, so that the next host is a new
 adapter and not an engine change. Host-specific test tooling lives with its host too, in
 `hosts/<name>/test/`.
+
+The same seam holds for the agent harness - the command-line program a session runs. Nothing outside
+`agents/<name>/` names a harness, so that the next harness is a new adapter and not an engine change
+either (engine-settings design, 2026-09-30, section 9; the founder's decision of the same day that core
+never names an engine). A harness folder carries the same `names.txt`, `allowlist.txt` and
+`growth.txt`, read by the same scan, and everything below that is said of a host holds for a harness.
+Core still names the two harnesses the old system ran, because Phases 0 to 2 read their own files;
+those entries were measured when the rule was extended and shrink as the reads move behind the
+AgentPort.
 
 `test/test-host-names.ps1` enforces it. Each host lists what identifies it in
 `hosts/<name>/names.txt`, and every file elsewhere that still names it in

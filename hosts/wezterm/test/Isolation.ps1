@@ -441,7 +441,7 @@ function Stop-HordeIsolatedWezterm {
     # terminal had it ever been passed here. Now the instance must carry the token Start issued, and
     # the live gui must still have the pid and creation time that token names.
     #
-    # WHY CHILDREN ARE CHECKED. On 2026-09-29 two isolated instances "and their claude sessions"
+    # WHY CHILDREN ARE CHECKED. On 2026-09-29 two isolated instances and the agent sessions in them
     # survived their probe runs - about 590 MB, found an hour later by reading the process list. The
     # same day, killing an editor left the agent session inside it alive and beyond the reach of every
     # kill mechanism tried. Killing a terminal is not evidence that what ran in it died.

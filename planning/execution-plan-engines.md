@@ -187,6 +187,14 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    - an unknown exe gets its args back untouched.
 
    Gate: `test/test-ledger.ps1`.
+
+   **E0 lands with E9, not before E1** (decided 2026-09-30, in the review of PR #34). A ledger is
+   gated by `test/test-ledger.ps1`, which accepts exactly three dispositions - `test`, `comment` or
+   `dropped` - and has no `deferred`. Every lesson above is carried by the agent adapters' spawn code
+   (E9, E10), which does not exist yet, so a standalone E0 could only mark each entry `dropped`,
+   which would be false, or point it at a file that does not carry the lesson. The ledger is
+   therefore written in E9's pull request, beside the code its dispositions name, as every ledger in
+   this repository has been. E1 goes first on its own; it replaces nothing, so it needs no ledger.
 2. **E1. The `agents/` folder and a port-names ratchet.** `tools/HostNames.ps1` is generalised to
    cover both `hosts/*` and `agents/*`, with the same rules and the same `origin/main` comparison.
    Tests come first: a fixture tree that names a harness outside its folder fails, and the
@@ -538,9 +546,8 @@ Dropped: metrics M9 (`reconcile`) and the `metered` tier (metrics 7).
 
 In order, one PR each:
 
-1. E0, the ledger.
-2. E1, the ratchet: first in the fixed order of `tools/HostNames.ps1` edits (E1, then lifecycle 5,
-   then hosts 5).
+1. E1, the ratchet: first in the fixed order of `tools/HostNames.ps1` edits (E1, then lifecycle 5,
+   then hosts 5). E0, the ledger, lands with E9 instead (step 1 says why).
 3. E2, E3, E5 and E7.
 4. P1 and P2, as data and tests.
 

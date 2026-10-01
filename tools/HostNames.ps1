@@ -1,7 +1,16 @@
-# HostNames.ps1 - the ratchet for decision D12: nothing outside hosts/<name>/ names that host.
+# HostNames.ps1 - the ratchet for decision D12: nothing outside a port's own folder names that port.
 #
 # Development tooling, not part of the engine. It answers one question: does any file outside a
-# host's own folder name that host - a terminal - where the host's allowlist does not say it may?
+# port's own folder name that port - a terminal in hosts/<name>/, an agent harness in agents/<name>/ -
+# where the port's allowlist does not say it may?
+#
+# TWO FAMILIES OF PORT, ONE RULE. D12 was written for terminals. The engine-settings design of
+# 2026-09-30 (section 9, build step E1) applies the same seam to the agent harness - the CLI process a
+# session runs - and the founder's decision of the same day says core never names an engine. A harness
+# is therefore a port exactly as a host is: its folder is agents/<name>/, with the same names.txt,
+# allowlist.txt and growth.txt, read by the same code below. Everything this header says of a "host"
+# holds for a harness; the word is kept where it was, and a finding names the port by its folder
+# ("hosts/<name>" or "agents/<name>"), so a host and a harness that share a folder name stay apart.
 #
 # WHY A RATCHET AND NOT A RULE ALONE. D12 (planning/migration-plan.html) says the engine, the schemas
 # and the read model speak of sessions, slots and capabilities, never of a particular terminal, so
@@ -47,7 +56,11 @@
 # SWAPPING ONE MENTION FOR ANOTHER IS STILL INVISIBLE. The count is a number per file, so deleting a
 # mention and adding a different one in the same file - a comment's citation traded for a call to the
 # terminal - leaves it unchanged. The ratchet catches growth, not substitution; a reviewer reading the
-# diff of an allowlisted file is what catches that.
+# diff of an allowlisted file is what catches that. KNOWN LIMITATION, recorded in the review of PR 34
+# and not fixed there: the harness allowlists made this larger, because they hold files with dozens of
+# mentions each (core/Identity.ps1 names one harness 72 times), and a new mention traded for a deleted
+# one in such a file is one line among many in its diff. Counting per line or per mention context
+# would close it; until then it is review's to catch.
 #
 # WHAT IS NOT SCANNED, by rule:
 #   - hosts/<name>/ itself: the one place the host's name belongs.
@@ -83,6 +96,9 @@
 # and teach this scan to honour it.
 
 $script:HordeHostNamesProseFolder = "planning"
+# The families of port, each a top-level folder holding one folder per port. A third family is a line
+# here, not a copy of the scan. Order is only the order findings are reported in.
+$script:HordePortFamilies = @("hosts", "agents")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 
@@ -152,8 +168,8 @@ function Test-HordeHostShrink {
     #     path, old count (0 for a new path) and new count - the header says why;
     #   - growth.txt's lines on origin/main must still open the file, in order and unchanged;
     #   - no name origin/main's names.txt declares may be missing, and no host folder may vanish.
-    # A host whose names.txt is not on origin/main at all is NEW: it is listed in newHosts and not
-    # compared, because its first pull request is where its lists are agreed.
+    # A port whose names.txt is not on origin/main at all is NEW: its folder ("agents/<name>") is listed
+    # in newHosts and not compared, because its first pull request is where its lists are agreed.
     #
     # skip is non-empty, and says why, when there is nothing to compare with - no git, no .git at the
     # root (tools/Mutate.ps1's copies), or no such ref. The caller must print it: an unmeasured
@@ -169,34 +185,38 @@ function Test-HordeHostShrink {
     $null = & git -C $RepoRoot rev-parse --verify --quiet ($Ref + "^{commit}")
     if ($LASTEXITCODE -ne 0) { $out.skip = $Ref + " does not exist in this checkout - run git fetch origin main to compare"; return $out }
     $onRef = @{}
-    foreach ($p in @(& git -C $RepoRoot ls-tree -r --name-only $Ref -- hosts)) { $onRef[$p] = $true }
+    foreach ($p in @(& git -C $RepoRoot ls-tree -r --name-only $Ref -- @($script:HordePortFamilies))) { $onRef[$p] = $true }
     if ($LASTEXITCODE -ne 0) { $out.skip = "git ls-tree " + $Ref + " failed with exit code " + $LASTEXITCODE; return $out }
 
-    $hostsDir = Join-Path $RepoRoot "hosts"
+    # Keyed by the port's folder, "hosts/<name>" or "agents/<name>", never by the bare name: a harness
+    # and a host may share a name, and each is compared with its own lists only.
     $here = @{}
-    if (Test-Path -LiteralPath $hostsDir -PathType Container) { foreach ($h in @(Get-ChildItem -LiteralPath $hostsDir -Directory)) { $here[$h.Name] = $h.FullName } }
-    # A HOST FOLDER THAT IS GONE takes its whole check with it, so it is the largest removal of all.
+    foreach ($fam in $script:HordePortFamilies) {
+        $famDir = Join-Path $RepoRoot $fam
+        if (Test-Path -LiteralPath $famDir -PathType Container) { foreach ($h in @(Get-ChildItem -LiteralPath $famDir -Directory)) { $here[$fam + "/" + $h.Name] = $h.FullName } }
+    }
+    # A PORT FOLDER THAT IS GONE takes its whole check with it, so it is the largest removal of all.
     foreach ($p in @($onRef.Keys)) {
-        if ($p -match '^hosts/([^/]+)/names\.txt$' -and -not $here.ContainsKey($Matches[1])) {
-            Add-Finding $Matches[1] ("hosts/" + $Matches[1]) ("is on " + $Ref + " and gone here - deleting a host folder switches its check off")
+        if ($p -match '^([^/]+/[^/]+)/names\.txt$' -and -not $here.ContainsKey($Matches[1])) {
+            Add-Finding $Matches[1] $Matches[1] ("is on " + $Ref + " and gone here - deleting its folder switches its check off")
         }
     }
-    foreach ($hn in @($here.Keys | Sort-Object)) {
-        $own = "hosts/" + $hn
-        if (-not $onRef.ContainsKey($own + "/names.txt")) { [void]$out.newHosts.Add($hn); continue }
+    foreach ($own in @($here.Keys | Sort-Object)) {
+        $hn = $own
+        if (-not $onRef.ContainsKey($own + "/names.txt")) { [void]$out.newHosts.Add($own); continue }
         $oldNames = Get-HordeHostNameSet -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/names.txt"))) -join "`n")
         $newNames = @{}
-        $np = Join-Path $here[$hn] "names.txt"
+        $np = Join-Path $here[$own] "names.txt"
         if (Test-Path -LiteralPath $np -PathType Leaf) { $newNames = Get-HordeHostNameSet -Text ([System.IO.File]::ReadAllText($np)) }
         foreach ($k in @($oldNames.Keys | Sort-Object)) {
             if (-not $newNames.ContainsKey($k)) { Add-Finding $hn ($own + "/names.txt") ("the name '" + $oldNames[$k] + "' is declared on " + $Ref + " and missing here - a name may not be removed") }
         }
-        $growth = Get-HordeGrowthPermits -RepoRoot $RepoRoot -Ref $Ref -HostName $hn -HostDir $here[$hn] -OnRef $onRef
+        $growth = Get-HordeGrowthPermits -RepoRoot $RepoRoot -Ref $Ref -Own $own -HostDir $here[$own] -OnRef $onRef
         foreach ($g in $growth.problems) { Add-Finding $hn $g.path $g.problem }
         $oldAllow = @{}
         if ($onRef.ContainsKey($own + "/allowlist.txt")) { $oldAllow = Get-HordeAllowMap -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/allowlist.txt"))) -join "`n") }
         $newAllow = @{}
-        $ap = Join-Path $here[$hn] "allowlist.txt"
+        $ap = Join-Path $here[$own] "allowlist.txt"
         if (Test-Path -LiteralPath $ap -PathType Leaf) { $newAllow = Get-HordeAllowMap -Text ([System.IO.File]::ReadAllText($ap)) }
         foreach ($k in @($newAllow.Keys | Sort-Object)) {
             $e = $newAllow[$k]
@@ -217,9 +237,11 @@ function Get-HordeGrowthPermits {
     # set of "path|old|new" keys from the lines added since the ref ONLY; problems
     # lists { path; problem } for a ref line gone or changed here and for a malformed added line.
     # The header says why each rule exists.
-    param([string]$RepoRoot, [string]$Ref, [string]$HostName, [string]$HostDir, [hashtable]$OnRef)
+    # Own is the port's folder, "hosts/<name>" or "agents/<name>": each port's growth is recorded, and
+    # reviewed, in its own growth.txt, so a line in a host's file permits nothing for a harness.
+    param([string]$RepoRoot, [string]$Ref, [string]$Own, [string]$HostDir, [hashtable]$OnRef)
     $out = [pscustomobject]@{ permits = @{}; problems = (New-Object System.Collections.ArrayList) }
-    $rel = "hosts/" + $HostName + "/growth.txt"
+    $rel = $Own + "/growth.txt"
     $old = New-Object System.Collections.ArrayList
     if ($OnRef.ContainsKey($rel)) { $old = Split-HordeHostTable -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $rel))) -join "`n") }
     $new = New-Object System.Collections.ArrayList
@@ -358,12 +380,19 @@ function Test-HordeHostNames {
         }
     }
 
-    $hostsDir = Join-Path $RepoRoot "hosts"
-    $hostDirs = @()
-    if (Test-Path -LiteralPath $hostsDir -PathType Container) { $hostDirs = @(Get-ChildItem -LiteralPath $hostsDir -Directory) }
-    foreach ($h in $hostDirs) {
-        $hn = $h.Name
-        $own = "hosts/" + $hn
+    # Every port of every family, each held to its own lists. A port's folder is exempt for that port
+    # only; another port's folder - of either family - is scanned like core.
+    $hostDirs = New-Object System.Collections.ArrayList
+    foreach ($fam in $script:HordePortFamilies) {
+        $famDir = Join-Path $RepoRoot $fam
+        if (Test-Path -LiteralPath $famDir -PathType Container) {
+            foreach ($d in @(Get-ChildItem -LiteralPath $famDir -Directory)) { [void]$hostDirs.Add([pscustomobject]@{ own = ($fam + "/" + $d.Name); dir = $d }) }
+        }
+    }
+    foreach ($port in $hostDirs) {
+        $h = $port.dir
+        $own = $port.own
+        $hn = $own
         $namesPath = Join-Path $h.FullName "names.txt"
         # A HOST THAT DECLARES NO NAMES CANNOT BE POLICED, so it is a finding, not a pass.
         if (-not (Test-Path -LiteralPath $namesPath -PathType Leaf)) {
