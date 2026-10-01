@@ -995,23 +995,37 @@ them. They do not wait for Phase 3's groundwork (its steps 1 to 3) and do not bl
     repair to host decoration (its step 8). Why this plan: the repair needs what only this plan
     builds - the tripwire that guards `text.send` (step 4), the process start that shows Remote
     Control was dropped (step 6), the idle state from the classifier (step 10), the anchor's
-    containment record that proves which process a pane holds (steps 22 and 2.2), and the binding
+    containment record that proves which process a pane holds (steps 22 and 2.2; engines N1 supplies
+    the proof for sessions that have none), and the binding
     field that stores the URL (step 24). Why not inside the closer or the watcher: the closer ends
     sessions and the watcher only reads, while this verb changes a live session's state; `horde watch`
     may show the `drifted` count from `horde names -Summary`, and nothing more.
 
     **Identity is proven before every keystroke.** Before it sends anything - the command, each Up,
-    each Enter, each Escape - the repair re-reads the pane's process from the host and compares it
-    with the harness pid and procStart in the session's containment record (2.2, item 5). If they do
-    not match, or either cannot be read, it sends nothing more to that pane and reports why. A pane
-    whose session was recycled between two keystrokes is never typed into. A session with no
-    containment record - one started before Horde's anchor - cannot be proven, so it is reported and
-    not repaired; until it is respawned, M's technique is done by hand. Tests: "a pane whose harness
-    pid and procStart match the record gets the next key" (the control); "a pane whose procStart
-    differs gets nothing, and the reason names the mismatch"; "a pane whose process cannot be read
-    gets nothing"; "the identity check runs before every key, not once per session" - the fixture
-    swaps the pane's process after the first Up, and no further key is sent. A mutation that checks
-    only once turns the last test red.
+    each Enter, each Escape - the repair proves again that the pane still holds the session it means
+    to repair. If the proof fails, or any input to it cannot be read, it sends nothing more to that
+    pane and reports why. A pane whose session was recycled between two keystrokes is never typed
+    into. There are two proofs, equally strict, and the first is always used when it can be:
+    1. **The anchor's containment record** (2.2, item 5), whenever the session has one: the pane's
+       process, re-read from the host, has exactly the harness pid and procStart the record holds.
+    2. **The agent's own proof**, only for a session with no containment record - one started before
+       Horde's anchor existed, which today is the whole fleet. It is the AgentPort's
+       `Test-SessionIdentity`, built in engines N1, and it answers proven only when all three agree:
+       the harness's control file for that process exists; its pid and procStart match the live
+       process exactly; and the host's record for the pane names that same session. Core calls the
+       port and never names the control file.
+
+    A session that neither proof covers is skipped and reported, never typed into. Tests, here with
+    neutral fixtures (the three-way proof's own branches are tested in N1): "a pane whose harness pid
+    and procStart match the containment record gets the next key" (the control); "a pane whose
+    procStart differs from the record gets nothing, and the reason names the mismatch"; "a pane whose
+    process cannot be read gets nothing"; "a session with a containment record is never proved by the
+    agent's proof", so the stronger proof cannot be bypassed - a mutation that tries the agent's proof
+    first turns it red; "a session with no containment record whose agent proof answers proven gets
+    the next key, and one whose agent proof refuses gets nothing, with the port's reason"; "the
+    identity check runs before every key, not once per session" - the fixture swaps the pane's
+    process after the first Up, and no further key is sent. A mutation that checks only once turns
+    the last test red.
 
     **Rule 14 in the tests.** Every fixture and test of this step outside `agents/claude-code/` uses a
     neutral fixture harness (`harness-a`), a neutral slash command (`/name-probe`), and N1's neutral
