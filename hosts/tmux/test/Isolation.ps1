@@ -218,8 +218,14 @@ function Invoke-HordeTmux {
 function Test-HordeTmuxNoServer {
     # Did tmux answer that no server is listening on the socket? Both wordings were measured on tmux
     # 3.4: "no server running on <path>" and "error connecting to <path> (No such file or directory)".
+    # And a call that `env -C` stopped because our private directory is gone (exit 125, "cannot change
+    # directory", measured) means the same: no server can be listening on a socket in a directory that
+    # does not exist. Pid 1 removes that directory when its server exits, so after a clean stop this is
+    # the answer teardown gets.
     param($Result)
-    return [bool]($Result -and $Result.code -eq 1 -and ($Result.err -match 'no server running on|error connecting to'))
+    if (-not $Result) { return $false }
+    if ($Result.code -eq 1 -and ($Result.err -match 'no server running on|error connecting to')) { return $true }
+    return [bool]($Result.code -eq 125 -and ($Result.err -match '^env: cannot change directory'))
 }
 
 function Test-HordeTmuxIdentity {
@@ -251,17 +257,32 @@ function Test-HordeTmuxIsolation {
 
 function Get-HordeTmuxLines { param([string]$Text) return @(("$Text" -split "`r?`n") | Where-Object { $_.Trim() }) }
 
-# PID 1 OF THE NAMESPACE. Arguments: $1 the session name, then the tmux argv prefix Get-HordeTmuxArgv
-# builds (so the server is named in exactly the same one place as every other call). It prints its
-# namespace ("pid:[<inode>]"), starts the server in the foreground (-D) as its child, waits until the
-# server answers, makes the one session FROM INSIDE - no command from outside ever creates a server,
-# because a client that finds no server starts an unconfined one - prints "ready", and then waits on the
-# server. When the server exits, pid 1 exits, and the kernel kills everything left in the namespace.
+# PID 1 OF THE NAMESPACE. Arguments: the session name, our socket path, our tmux-<uid> folder, our
+# directory, then the tmux argv prefix Get-HordeTmuxArgv builds (so the server is named in exactly the
+# same one place as every other call). It prints its namespace ("pid:[<inode>]"), starts the server in
+# the foreground (-D) as its child, waits until the server answers, makes the one session FROM INSIDE -
+# no command from outside ever creates a server, because a client that finds no server starts an
+# unconfined one - prints "ready", and then waits on the server. When the server exits, pid 1 removes
+# our socket and directories (the cleanup script's rules) and exits, and the kernel kills everything
+# left in the namespace.
+#
+# THE CRASH EXIT. Its stdin is the owner wsl.exe's stdin, which only the process that started the
+# owner holds. The review of PR 35 found that a run that died without tearing down left its server and
+# its directory behind forever. Now a watcher reads that stdin, and at EOF - the teardown closing it, or
+# the Windows process that held it dying (measured: killing that PowerShell delivered EOF in Linux) -
+# stops the server, and pid 1's exit does the rest. The watcher's `kill` is of pid 1's own unreaped
+# child, inside our own namespace: it can name nothing else.
+#
+# fd 3 keeps that stdin for the watcher: an asynchronous list in a non-interactive shell gets
+# /dev/null as its stdin (POSIX), so the watcher reads fd 3, not fd 0. The server gets neither.
 $script:HordeTmuxOwner = @'
-sess=$1; shift
+sess=$1; sock=$2; sub=$3; dir=$4; shift 4
+exec 3<&0
 readlink /proc/self/ns/pid
-"$@" -D </dev/null >/dev/null 2>&1 &
+"$@" -D </dev/null >/dev/null 2>&1 3<&- &
 srv=$!
+{ cat >/dev/null; kill -TERM "$srv" 2>/dev/null; } <&3 &
+exec 3<&-
 i=0
 until "$@" list-sessions >/dev/null 2>&1; do
   i=$((i+1)); [ "$i" -gt 100 ] && { echo "server-did-not-start"; exit 1; }
@@ -270,6 +291,9 @@ done
 "$@" new-session -d -s "$sess" -x 160 -y 48 -c /tmp -- sh </dev/null >/dev/null 2>&1 || { echo "new-session-failed"; exit 1; }
 echo ready
 wait "$srv"
+if [ -S "$sock" ]; then rm -f -- "$sock"; fi
+rmdir -- "$sub" "$dir" 2>/dev/null
+exit 0
 '@ -replace "`r", ""
 
 # Every process whose pid namespace is $1 ("pid:[<inode>]"), one per line: "<pid> <command line>".
@@ -290,14 +314,16 @@ function Get-HordeTmuxOwnerArgv {
     #   --kill-child   if unshare itself dies, pid 1 is killed, and with it the namespace;
     #   --mount-proc   a /proc of the namespace's own, so what runs inside sees only the namespace.
     param($Entry)
-    return @("unshare", "--pid", "--fork", "--kill-child", "--mount-proc", "sh", "-c", $script:HordeTmuxOwner, "sh", $script:HordeTmuxSession) +
-           (Get-HordeTmuxArgv -Entry $Entry -Command @())
+    return @("unshare", "--pid", "--fork", "--kill-child", "--mount-proc", "sh", "-c", $script:HordeTmuxOwner, "sh", $script:HordeTmuxSession,
+             $Entry.socket, ($Entry.dir + "/tmux-" + $Entry.uid), $Entry.dir) + (Get-HordeTmuxArgv -Entry $Entry -Command @())
 }
 
 function Start-HordeWslOwner {
     # Start the owner and hold it: one wsl.exe for the life of the instance, through the process API,
-    # so this process keeps its handle and its stdin. Reads its lines until "ready", a failure word, or
-    # the timeout. Returns { proc; nsInode; ready; failure }.
+    # so this process keeps its handle and its stdin. Its stdin is NEVER closed here: while this process
+    # holds it open the server lives, and when this process dies without a teardown the pipe closes and
+    # pid 1 takes the server down (see $script:HordeTmuxOwner). Reads its lines until "ready", a failure
+    # word, or the timeout. Returns { proc; nsInode; ready; failure }.
     param([string]$Distro, [string[]]$Argv, [int]$TimeoutSeconds = 30)
     if ($script:HordeTmuxOwnerLauncher) { return (& $script:HordeTmuxOwnerLauncher $Distro $Argv $TimeoutSeconds) }
     $out = [pscustomobject]@{ proc = $null; nsInode = ""; ready = $false; failure = "" }
@@ -492,12 +518,14 @@ exit 0
 '@ -replace "`r", ""
 
 function Stop-HordeTmuxOwner {
-    # Let the owner go and wait for its wsl.exe to exit, up to Seconds. Returns $true when it has exited
-    # or there is none. Its handle is released either way; the process itself is never killed from here,
-    # because the verdict is measured in the namespace, not inferred from wsl.exe.
+    # Let the owner go - close its stdin, which is pid 1's crash exit - and wait for its wsl.exe to exit,
+    # up to Seconds. Returns $true when it has exited or there is none. Its handle is released either
+    # way; the process itself is never killed from here, because the verdict is measured in the
+    # namespace, not inferred from wsl.exe.
     param($Entry, [int]$Seconds = 10)
     $o = $Entry.owner
     if (-not $o -or -not $o.proc) { return $true }
+    try { $o.proc.StandardInput.Close() } catch { }
     $done = $o.proc.WaitForExit($Seconds * 1000)
     $o.proc.Dispose()
     $Entry.owner = $null

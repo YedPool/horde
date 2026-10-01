@@ -10,5 +10,11 @@
         @{ Name = "owner-without-pid-namespace"
            Find = '@("unshare", "--pid", "--fork", "--kill-child", "--mount-proc",'
            Replace = '@("unshare", "--fork", "--kill-child", "--mount-proc",' }
+        @{ Name = "no-crash-exit"
+           Find = '{ cat >/dev/null; kill -TERM "$srv" 2>/dev/null; } <&3 &'
+           Replace = ':' }
+        @{ Name = "crash-exit-leaves-the-directory"
+           Find = 'rmdir -- "$sub" "$dir" 2>/dev/null'
+           Replace = ':' }
     )
 }

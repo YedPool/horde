@@ -151,6 +151,8 @@ Check (Test-HordeTmuxNoServer $noSrv) "'no server running on' is read as no serv
 Check (Test-HordeTmuxNoServer (Reply 1 "" "error connecting to /tmp/tmux-0/x (No such file or directory)")) "'error connecting to' is read as no server"
 Check (-not (Test-HordeTmuxNoServer $noProg)) "a missing program is not read as no server"
 Check (-not (Test-HordeTmuxNoServer (Reply 0 "" "no server running on x"))) "exit 0 is never read as no server"
+Check (Test-HordeTmuxNoServer (Reply 125 "" "env: cannot change directory to '/tmp/horde-iso-x': No such file or directory")) "our private directory gone (env -C, exit 125) is read as no server - pid 1 removes it when its server exits"
+Check (-not (Test-HordeTmuxNoServer (Reply 125 "" "something else entirely"))) "but exit 125 alone is not"
 
 Write-Host ""
 Write-Host "--- an inherited TMUX cannot cross into WSL (read-only) ---" -ForegroundColor Cyan
@@ -375,7 +377,9 @@ try {
     $ow = @($script:calls | Where-Object { $_.argv[0] -eq "unshare" })
     Check ($ow.Count -eq 1) "the owner was started exactly once"
     Check ($ow.Count -eq 1 -and ($ow[0].argv[0..8] -join " ") -ceq ("unshare --pid --fork --kill-child --mount-proc sh -c " + $script:HordeTmuxOwner + " sh")) "as pid 1 of a new pid namespace, killed with unshare, with its own /proc"
-    Check ($ow.Count -eq 1 -and $ow[0].argv[9] -ceq "horde-iso" -and ($ow[0].argv[10..($ow[0].argv.Count - 1)] -join " ") -match '^env -C /tmp/horde-iso-([0-9a-f]{32}) -u TMUX -u TMUX_PANE TMUX_TMPDIR=/tmp/horde-iso-\1 tmux -L horde-iso-\1 -f /dev/null$') "and it names the server through the same argv as every other call"
+    $od = @($script:calls | Where-Object { $_.argv[0] -eq "mkdir" } | Select-Object -Last 1)[0].argv[4]
+    Check ($ow.Count -eq 1 -and $ow[0].argv[10] -ceq ($od + "/tmux-0/" + $od.Substring(5)) -and $ow[0].argv[11] -ceq ($od + "/tmux-0") -and $ow[0].argv[12] -ceq $od) "pid 1 is told our socket, our tmux-<uid> folder and our directory, to remove when it exits"
+    Check ($ow.Count -eq 1 -and $ow[0].argv[9] -ceq "horde-iso" -and ($ow[0].argv[13..($ow[0].argv.Count - 1)] -join " ") -match '^env -C /tmp/horde-iso-([0-9a-f]{32}) -u TMUX -u TMUX_PANE TMUX_TMPDIR=/tmp/horde-iso-\1 tmux -L horde-iso-\1 -f /dev/null$') "and it names the server through the same argv as every other call"
     Check ((Get-Calls "new-session").Count -eq 0) "no new-session is ever sent from outside - a client that finds no server would start an unconfined one"
 
     # THE SERVER ANSWERS BUT IS NOT IN OUR NAMESPACE: refused, and our socket's server is killed.
@@ -418,6 +422,8 @@ Check ($code -match '\$all \+= "--exec"' -and $code -notmatch '"--",\s*"tmux"') 
 Check (([regex]::Matches($code, '"tmux", "-L"')).Count -eq 1) "tmux's argv is built in exactly one place, Get-HordeTmuxArgv"
 Check ($code -notmatch 'pkill|killall|kill-server -a|rm -rf|rm -r ') "no pkill, killall, kill-server -a or recursive delete anywhere in the harness"
 Check ($script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null' -and $script:HordeTmuxOwner -match '(?m)^wait "\$srv"$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" new-session ') "pid 1 runs the server in the foreground as its child, makes the session from inside, and waits on the server"
+Check ($script:HordeTmuxOwner -match '(?m)^exec 3<&0$' -and $script:HordeTmuxOwner -match '(?m)^\{ cat >/dev/null; kill -TERM "\$srv" 2>/dev/null; \} <&3 &$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null >/dev/null 2>&1 3<&- &$') "pid 1 watches the owner's stdin on fd 3 and stops the server at EOF - the crash exit - and the server does not hold that stdin"
+Check ($script:HordeTmuxOwner -match '(?m)^if \[ -S "\$sock" \]; then rm -f -- "\$sock"; fi$' -and $script:HordeTmuxOwner -match '(?m)^rmdir -- "\$sub" "\$dir" 2>/dev/null$' -and $script:HordeTmuxOwner -notmatch 'rm -[a-zA-Z]*r') "and when the server has gone, pid 1 removes our socket and directories by rmdir, never recursively"
 
 # The first host's 2026-09-29 lesson (L-018): a script that starts an isolated terminal must tear it
 # down by the real name. Guarded for this host's starter too.

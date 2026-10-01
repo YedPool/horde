@@ -213,6 +213,87 @@ if ($u1 -and $u2) {
 }
 
 Write-Host ""
+Write-Host "=== scenario 5: the process that owns the server dies without tearing down ===" -ForegroundColor Cyan
+
+# A CRASHED RUN. A child PowerShell - started here and held by its handle, the only process this
+# scenario ever kills - starts an isolated server, puts a markless HUP-ignoring child in it, reports
+# the server, and is then killed mid-run, so no teardown runs at all. The server, everything in its
+# namespace, its socket and its directory must all go on their own: the owner's wsl.exe loses its
+# stdin with the dead process, and pid 1 exits on that EOF.
+$crashSecs = 320 + (Get-Random -Maximum 40)
+$crashScript = Join-Path $env:TEMP ("horde-tmux-crash-" + [guid]::NewGuid().ToString("N") + ".ps1")
+$crashBody = @'
+param([string]$Harness, [string]$Distro, [string]$Secs)
+. $Harness
+$i = Start-HordeIsolatedTmux -Distro $Distro
+$e = $script:HordeTmuxStarted[$i.token]
+[void](New-HordeTmuxPane -Instance $i -Command @("env", "-i", "sh", "-c", ("trap '' HUP; exec sleep " + $Secs)))
+[Console]::Out.WriteLine("READY|" + $e.guid + "|" + $e.nsInode)
+[Console]::Out.Flush()
+Start-Sleep -Seconds 600
+# Never reached: this process is killed while it sleeps. A run that did reach here would stop its own.
+[void](Stop-HordeIsolatedTmux -Instance $i)
+'@
+[System.IO.File]::WriteAllText($crashScript, $crashBody)
+$child = $null; $crashG = ""; $crashNs = ""
+$crashUid = "$((Invoke-HordeWsl -Distro $distroUsed -Argv @("id", "-u")).out)".Trim()
+try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + (ConvertTo-HordeWinArg $crashScript) + " -Harness " + (ConvertTo-HordeWinArg (Join-Path $testDir "Isolation.ps1")) + " -Distro " + (ConvertTo-HordeWinArg $distroUsed) + " -Secs " + $crashSecs
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $child = [System.Diagnostics.Process]::Start($psi)
+    [void]$child.StandardError.ReadToEndAsync()
+    $childStart = $child.StartTime
+    $ready = $null
+    $deadline = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $deadline) {
+        $t = $child.StandardOutput.ReadLineAsync()
+        if (-not $t.Wait([int][Math]::Max(1, ($deadline - (Get-Date)).TotalMilliseconds))) { break }
+        if ($null -eq $t.Result) { break }
+        if ($t.Result -match '^READY\|([0-9a-f]{32})\|(pid:\[\d+\])$') { $ready = $Matches; break }
+    }
+    Check ($null -ne $ready) "PRECONDITION: a child PowerShell started an isolated server and reported it"
+    if ($ready) {
+        $crashG = $ready[1]; $crashNs = $ready[2]
+        [void]$runGuids.Add($crashG)
+        $ce = [pscustomobject]@{ distro = $distroUsed; name = ("horde-iso-" + $crashG); nsInode = $crashNs }
+        Check (@(Get-HordeTmuxNsProcs -Entry $ce).Count -ge 3 -and @(Get-EscapeSleeps @($crashSecs)).Count -eq 1) "PRECONDITION: its namespace is running, with the markless child inside"
+        # The ONLY kill in this scenario: the PowerShell this file started, through the handle it holds.
+        $child.Kill()
+        [void]$child.WaitForExit(10000)
+        Check ($child.HasExited) "the owning PowerShell was killed mid-run, so no teardown ran"
+        $gone = $false
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline) {
+            if (@(Get-HordeTmuxNsProcs -Entry $ce).Count -eq 0) { $gone = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        Check $gone ("with its owner dead, every process in the namespace is gone within 30s (" + (@(Get-HordeTmuxNsProcs -Entry $ce) -join "; ") + ")")
+        Check (@(Get-EscapeSleeps @($crashSecs)).Count -eq 0) "and the markless HUP-ignoring child with them"
+        $ghost = [pscustomobject]@{ guid = $crashG; name = ("horde-iso-" + $crashG); dir = ("/tmp/horde-iso-" + $crashG) }
+        $dirLeft = Invoke-HordeWsl -Distro $distroUsed -Argv @("test", "-e", $ghost.dir)
+        Check ($dirLeft.code -eq 1) "its private directory, and the socket in it, are gone - nothing is left behind forever"
+        $wslLeft = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $child.Id) -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "wsl.exe" -and $_.CreationDate -ge $childStart })
+        Check ($wslLeft.Count -eq 0) ("and the dead run's wsl.exe has exited on its own (" + (@($wslLeft | ForEach-Object { $_.ProcessId }) -join ", ") + ")")
+    }
+} finally {
+    if ($child -and -not $child.HasExited) { try { $child.Kill() } catch { } }
+    if ($child) { $child.Dispose() }
+    Remove-Item -LiteralPath $crashScript -Force -ErrorAction SilentlyContinue
+    if ($crashG) {
+        # ONLY WHEN THE CHECKS ABOVE FAILED is there anything here to do: the dead run's server, by its
+        # own socket, its escaped child by its unique command line, and its directory by rmdir.
+        $ghost = [pscustomobject]@{ guid = $crashG; name = ("horde-iso-" + $crashG); dir = ("/tmp/horde-iso-" + $crashG) }
+        $still = Invoke-HordeWsl -Distro $distroUsed -Argv (Get-HordeTmuxArgv -Entry $ghost -Command @("list-sessions"))
+        if ($still.code -eq 0) { [void](Invoke-HordeWsl -Distro $distroUsed -Argv (Get-HordeTmuxArgv -Entry $ghost -Command @("kill-server"))) }
+        Stop-EscapeSleeps @($crashSecs)
+        [void](Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", $script:HordeTmuxCleanup, "sh", ($ghost.dir + "/tmux-" + $crashUid + "/" + $ghost.name), ($ghost.dir + "/tmux-" + $crashUid), $ghost.dir))
+    }
+}
+
+Write-Host ""
 Write-Host "=== scenario 4: the WSL boundary, measured ===" -ForegroundColor Cyan
 
 # 1. `wsl.exe --` hands the arguments to a Linux shell; --exec does not. CONTROL first: the rewrite is
