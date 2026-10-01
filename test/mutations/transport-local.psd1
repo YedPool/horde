@@ -4,9 +4,11 @@
 # The native half (the pipe flags, integrity read) is transport-local-native.psd1; the
 # transport-neutral behaviour of this file (framing, keepalive) is transport-conformance-local.psd1.
 #
-# owner-not-checked-on-open, declared to survive in the first version of this spec, is gone: the
+# No mutant here is declared to survive. owner-not-checked-on-open (round 1) is gone: the
 # review of PR #42 showed the owner check does not stop a low-integrity squatter of the same user, and
 # the integrity check that does is server-integrity-not-checked-on-open, which is caught.
+# image-not-checked-on-open (round 1 survivor) is caught since round 2, by a compiled probe that
+# serves the pipe at this process's own level (transports/local/test/SquatProbe.cs).
 @{
     Target = "transports\local\Transport.ps1"
     Suite  = "transports\local\test\test-local.ps1"
@@ -46,9 +48,7 @@
            Replace = 'return $true' }
         @{ Name = "image-not-checked-on-open"
            Find = 'if (-not (Test-HordeLocalNodeImage -Image $img)) {'
-           Replace = 'if ($false) {'
-           Expect = "survives"
-           Reason = "Reaching this line needs a pipe served at this end's integrity by a program that is not the node's interpreter; every process the suite can start at that level is powershell.exe. Test-HordeLocalNodeImage itself is tested, and any-image-accepted is caught. The integrity check, not the image, is what stops the reviewer's squatter." }
+           Replace = 'if ($false) {' }
         @{ Name = "closed-instance-not-replaced"
            Find = '$fresh = New-HordeLocalServer -Pipe $st.pipe'
            Replace = '$fresh = [pscustomobject]@{ stream = $null; reason = "mutant" }' }

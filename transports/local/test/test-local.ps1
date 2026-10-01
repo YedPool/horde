@@ -212,6 +212,21 @@ try {
             $null = Wait-HordeLowLine -Out $add.out -Pattern "done" -Ms 20000
         } else { Check $false "a listener for the instance-adder case" }
     }
+
+    # 5. A program that is not the node's interpreter, at THIS process's level, serves the pipe first.
+    # Integrity cannot tell it apart; the image check refuses it. (At the same level the image check is
+    # advisory - see transports/local/Transport.ps1 - but it does refuse this, and this kills the mutant
+    # image-not-checked-on-open that the first round declared a survivor.)
+    $id = New-Id
+    $srv = Start-HordeSquatProbe -Exe $squat -Mode "serve" -Pipe (Get-HordeLocalPipeName -DeviceId $id) -Folder $lowDir
+    $up = Wait-HordeLowLine -Out $srv.out -Pattern "serve: CREATED" -Ms 20000
+    Check ($up) "CONTROL: the same-level probe did create the pipe first"
+    $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
+    Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*not a node's interpreter*") "the hub refuses a pipe served by a program that is not the node's interpreter"
+    if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+    $null = Wait-HordeLowLine -Out $srv.out -Pattern "done" -Ms 25000
+    $srvText = ""; if (Test-Path -LiteralPath $srv.out) { $srvText = [System.IO.File]::ReadAllText($srv.out) }
+    Check ($srvText -notmatch "client sent: \S") "and the probe received nothing from the hub"
 } finally { if (Test-Path -LiteralPath $lowDir) { Remove-Item -LiteralPath $lowDir -Recurse -Force } }
 
 Write-Host ""
