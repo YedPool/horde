@@ -49,6 +49,15 @@
 #     a name someone already holds is refused, not shared. Each accept creates the next waiting instance
 #     BEFORE it hands over the connected one, so while the node listens the name is never free. The
 #     review of PR #42 found the old code released the name between one link and the next accept.
+#   - ONE INSTANCE WAITS AT A TIME, AND THAT LEAVES A WINDOW, documented rather than closed. A client
+#     that connects and closes uses up the waiting instance; it is replaced only when the node next
+#     calls Accept. The review of PR #42 (round 3) measured a burst of 50 connect-and-close clients
+#     making the next open time out until the next accept. Closing it needs instances re-armed the
+#     moment a client leaves, which means a thread of the transport's own racing the caller's - not
+#     simple, so not done. What bounds it: only a process of this user at the node's own level can
+#     connect at all (the label refuses everything below), which is the same trust as the node; the
+#     cost is availability, never a wrong peer; and the hub's open fails with a reason and is retried
+#     (lifecycle reconnect, remote design 7.1), while the node's serve loop calls Accept again at once.
 #   - GetImpersonationUserName throws until a byte is read, so it is not used.
 #
 # KEEPALIVE. A read is always pending on the pipe; when the far end's handle closes - its process
