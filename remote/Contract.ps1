@@ -549,13 +549,20 @@ function Test-HordeLinkResend {
     }
     if ($notReq) { return @($out) }
     if ("$($Again.id)" -ceq "$($First.id)") { [void]$out.Add("the resend reuses the frame id " + $First.id + "; a resend is a new frame and needs a new frame id") }
+    # EVERY COMPARISON HERE IS ORDINAL: code unit by code unit. -ceq and -cne compare by culture, which
+    # ignores some characters entirely: the review of PR #40 measured a prompt with a soft hyphen
+    # (U+00AD), a NUL or a zero-width space appended passing as the same request.
     foreach ($m in @("requestId", "issuedAt", "verb")) {
-        if ("$(Get-HordeLinkProp $Again $m)" -cne "$(Get-HordeLinkProp $First $m)") { [void]$out.Add("the resend's " + $m + " is '" + (Get-HordeLinkProp $Again $m) + "', not the first send's '" + (Get-HordeLinkProp $First $m) + "'") }
+        if (-not [string]::Equals("$(Get-HordeLinkProp $Again $m)", "$(Get-HordeLinkProp $First $m)", [System.StringComparison]::Ordinal)) { [void]$out.Add("the resend's " + $m + " is '" + (Get-HordeLinkProp $Again $m) + "', not the first send's '" + (Get-HordeLinkProp $First $m) + "'") }
     }
     # The arguments compared as JSON text, so key order and every value count. Both frames passed the
-    # contract above, so both are plain data that serialises fully at this depth.
+    # contract above, so both are plain data that serialises fully at this depth. ConvertTo-Json keeps
+    # every character of a string (it escapes some, always the same way), so two texts that are equal
+    # code unit by code unit hold the same arguments; the reverse can fail - the same arguments in
+    # another key order differ - which refuses a resend, the safe side. The journal's argsHash over the
+    # link's one canonical spelling (plan steps R2 and R3) is the same rule on the wire.
     $a1 = ConvertTo-Json -InputObject $First.args -Depth 40 -Compress
     $a2 = ConvertTo-Json -InputObject $Again.args -Depth 40 -Compress
-    if ($a1 -cne $a2) { [void]$out.Add("the resend's args differ from the first send's") }
+    if (-not [string]::Equals($a1, $a2, [System.StringComparison]::Ordinal)) { [void]$out.Add("the resend's args differ from the first send's") }
     return @($out)
 }

@@ -114,8 +114,11 @@
            Find = 'foreach ($m in @("requestId", "issuedAt", "verb")) {'
            Replace = 'foreach ($m in @("requestId", "verb")) {' }
         @{ Name = "resend-args-unchecked"
-           Find = 'if ($a1 -cne $a2) {'
+           Find = 'if (-not [string]::Equals($a1, $a2, [System.StringComparison]::Ordinal)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "resend-args-compared-by-culture"
+           Find = 'if (-not [string]::Equals($a1, $a2, [System.StringComparison]::Ordinal)) {'
+           Replace = 'if ($a1 -cne $a2) {' }
         @{ Name = "resend-may-reuse-frame-id"
            Find = 'if ("$($Again.id)" -ceq "$($First.id)") {'
            Replace = 'if ($false) {' }

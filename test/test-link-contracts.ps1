@@ -308,6 +308,12 @@ $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.issu
 Check (Says $f "issuedAt") "a resend whose issuedAt moved is not a resend: issuedAt is fixed when the hub first records the request"
 $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.args.prompt.text = "Something else." }) -Contract $contract)
 Check (Says $f "args") "a resend whose arguments changed is not a resend"
+# Compared code unit by code unit: a culture-aware comparison ignores these three, and passed each as
+# the same request (review of PR #40).
+foreach ($hidden in @(0x00AD, 0x0000, 0x200B)) {
+    $f = @(Test-HordeLinkResend -First $first -Again (New-Resend ([scriptblock]::Create("param(`$r) `$r.args.prompt.text = `$r.args.prompt.text + [char]$hidden"))) -Contract $contract)
+    Check (Says $f "args differ") ("a resend whose prompt gained U+" + $hidden.ToString("X4") + ", which culture-aware comparison ignores, is not a resend")
+}
 $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.verb = "session.resume" }) -Contract $contract)
 Check (Says $f "verb") "a resend naming another verb is not a resend"
 $f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.requestId = "0b000000-0000-4000-8000-0000000000e8" }) -Contract $contract)
