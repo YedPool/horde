@@ -29,7 +29,14 @@
 # it starts and kills that process alone; anything the suite itself started is the suite's to clean
 # up, and the report says a run timed out so a person can look.
 
-param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900)
+#
+# -RunTag NAMES THIS RUN'S THROWAWAY FOLDER: horde-mutate-<tag>-<guid> instead of horde-mutate-<guid>.
+# Several agents run mutations at once in one shared TEMP, so a caller that must find the folders ITS
+# run left behind cannot go by "new since I started" - another run's folder is new too
+# (test/test-mutate.ps1 blamed itself for two foreign runs on 2026-09-30). A tag only that caller
+# knows makes its folders its own. Lowercase letters and digits, 1 to 16.
+
+param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}$')][string]$RunTag)
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -88,7 +95,9 @@ if (-not [System.IO.Path]::IsPathRooted($specPath)) { $specPath = Join-Path $rep
 $s = Import-PowerShellDataFile -LiteralPath $specPath
 foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $s.ContainsKey($k)) { throw ("spec has no " + $k) } }
 
-$work = Join-Path $env:TEMP ("horde-mutate-" + [guid]::NewGuid().ToString("N"))
+$tagPart = ""
+if ($RunTag) { $tagPart = $RunTag + "-" }
+$work = Join-Path $env:TEMP ("horde-mutate-" + $tagPart + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $results = New-Object System.Collections.ArrayList
 try {
@@ -168,8 +177,8 @@ try {
     }
 }
 finally {
-    # Only the folder this run created: a fresh guid name directly in TEMP.
-    if ((Split-Path -Leaf $work) -match '^horde-mutate-[0-9a-f]{32}$' -and (Test-Path -LiteralPath $work)) {
+    # Only the folder this run created: a fresh guid name, with this run's tag if it has one, directly in TEMP.
+    if ((Split-Path -Leaf $work) -match '^horde-mutate-([a-z0-9]{1,16}-)?[0-9a-f]{32}$' -and (Test-Path -LiteralPath $work)) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
