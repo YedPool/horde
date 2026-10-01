@@ -241,10 +241,15 @@ if ($la.state -eq "known") {
         if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
         if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
         # Between this link and the next Accept, a squatter used to find the name free (review of PR #42).
-        $took = $null
-        try { $took = New-Object System.IO.Pipes.NamedPipeServerStream($pipe, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous) } catch { }
-        Check ($null -eq $took) "after a link closes, the name cannot be taken by anyone else while the node still listens"
-        if ($null -ne $took) { $took.Dispose() }
+        # "Taken" means created as a FIRST instance - a squatter's own new pipe of that name. The first
+        # version asked for an ordinary instance with maxInstances 1, which fails against any existing
+        # pipe for that reason alone and so proved nothing about the gap (review of PR #42, round 2).
+        # Asking for 255 instead would add an instance, which at this process's own level is allowed and
+        # is a different case: the instance adder, refused below the node's level by its label, above.
+        $err = 0
+        $took = [HordeLocalNative]::CreateServer(($script:HordeLocalPipeRoot + $pipe), ("D:(A;;GA;;;" + $me + ")"), $true, 4096, [ref]$err)
+        Check ($took.IsInvalid) ("after a link closes, nobody can create the name afresh while the node still listens (first-instance create: error " + $err + ")")
+        $took.Dispose()
         $o2 = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
         $ka2 = Receive-HordeTransportLink -Listener $listener -TimeoutMs 5000
         Check ($o2.state -ceq "known" -and $ka2.state -ceq "known") "and the next link is accepted on the instance that was already waiting"
