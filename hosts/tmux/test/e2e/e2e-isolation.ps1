@@ -62,8 +62,14 @@ function Stop-UserServer { param($U)
 }
 function Get-Entry { param($Inst) return $script:HordeTmuxStarted["$($Inst.token)"] }
 $script:escapeFind = 'for n in "$@"; do for f in /proc/[0-9]*/cmdline; do c=$(tr "\0" " " < "$f" 2>/dev/null); [ "$c" = "sleep $n " ] && { p=${f#/proc/}; echo "${p%/cmdline} sleep $n"; }; done; done; exit 0'
+# THIS RUN'S SLEEP DURATIONS are "<whole>.<8 digits>", the 8 digits drawn once per run: GNU sleep
+# accepts a fractional duration, so the command line "sleep 231.48213907" is this run's alone, and no
+# other process in the distro - the user's own `sleep 231` included - can match it (the review of PR
+# 35, round 3: whole numbers alone matched any sleep of that length, and the cleanup killed them).
+$script:runTag = "{0:D8}" -f ([BitConverter]::ToUInt32([guid]::NewGuid().ToByteArray(), 0) % 100000000)
+function New-RunSleep { param([int]$Whole) return ("" + $Whole + "." + $script:runTag) }
 function Get-EscapeSleeps { param($Secs)
-    # The processes whose whole command line is exactly "sleep <n>" for this run's unique durations.
+    # The processes whose whole command line is exactly "sleep <d>" for this run's own durations.
     $r = Invoke-HordeWsl -Distro $script:distroUsed -Argv (@("sh", "-c", $script:escapeFind, "sh") + @($Secs | ForEach-Object { "$_" }))
     return @(Get-HordeTmuxLines $r.out) }
 # KILL THROUGH A PIDFD: open the process first, then check it is still the one named, then signal
@@ -71,9 +77,8 @@ function Get-EscapeSleeps { param($Secs)
 # pidfd_open and 424 pidfd_send_signal on x86_64 (measured by the review of PR 35 with this perl).
 $script:pidfdKill = 'my ($pid, $want) = @ARGV; my $fd = syscall(434, $pid + 0, 0); exit 0 if $fd < 0; open(my $c, "<", "/proc/$pid/cmdline") or exit 0; local $/; my $cl = <$c>; $cl =~ s/\0/ /g; exit 0 unless $cl eq $want; syscall(424, $fd, 9, 0, 0); exit 0'
 function Stop-EscapeSleeps { param($Secs)
-    # Test cleanup, reached with anything to do only when the check above has already failed: this
-    # test's own escaped children, re-checked by their unique command line through a pidfd, so a failed
-    # run does not leave them for the next run to trip over.
+    # Test cleanup, CALLED ONLY AFTER A CHECK HAS FAILED: this run's own escaped children, re-checked
+    # by their run-unique command line through a pidfd, so a failed run does not leave them behind.
     foreach ($l in @(Get-EscapeSleeps $Secs)) {
         $parts = @($l -split ' ')
         [void](Invoke-HordeWsl -Distro $script:distroUsed -Argv @("perl", "-e", $script:pidfdKill, $parts[0], ("sleep " + $parts[2] + " ")))
@@ -91,10 +96,11 @@ if ($iso) {
     Write-Host ("  distro " + $iso.distro + ", tmux " + $e1.version + ", server pid " + $e1.serverPid + ", socket " + $iso.socket) -ForegroundColor DarkGray
     $marker = "HORDE-E2E-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
     $escapeSecs = $null
+    $foreignPid = ""; $foreignN = ""
     # The marker pane's child sleeps a duration unique to this run too, so that if containment is ever
     # broken - a mutation run breaks it on purpose - it is found and cleaned up by its command line like
     # the escape children below, instead of outliving the run (measured: one did, for its 300 seconds).
-    $markerSecs = 320 + (Get-Random -Maximum 40)
+    $markerSecs = New-RunSleep (320 + (Get-Random -Maximum 40))
     $v1 = $null
     try {
         $count = $null
@@ -114,7 +120,7 @@ if ($iso) {
             Start-Sleep -Milliseconds 700
             $text = Get-HordeTmuxPaneText -Instance $iso -Pane $pane
             Check ("$text" -like "*$marker*") "the command ran and its output is on that pane's screen"
-            $inside = @(Get-HordeTmuxNsProcs -Entry $e1 | Where-Object { $_ -match ('^\d+ sh -c echo HORDE-E2E-|^\d+ sleep ' + $markerSecs + '\s*$') })
+            $inside = @(Get-HordeTmuxNsProcs -Entry $e1 | Where-Object { $_ -match ('^\d+ sh -c echo HORDE-E2E-|^\d+ sleep ' + [regex]::Escape($markerSecs) + '\s*$') })
             Check ($inside.Count -ge 1) ("the pane's process runs inside our namespace: " + ($inside -join "; "))
 
             $shell = New-HordeTmuxPane -Instance $iso -Command @("sh")
@@ -128,7 +134,17 @@ if ($iso) {
             # whole environment (env -i), so no TMUX=<socket> is left to find it by; one also leaves
             # the session (setsid). Both ignore SIGHUP. Each sleeps a duration unique to this run, so
             # it can be found by its exact command line, and expires on its own if all else fails.
-            $escapeSecs = @((200 + (Get-Random -Maximum 50)), (260 + (Get-Random -Maximum 50)))
+            $escapeSecs = @((New-RunSleep (200 + (Get-Random -Maximum 50))), (New-RunSleep (260 + (Get-Random -Maximum 50))))
+            # A FOREIGN SLEEP: a `sleep <N>` started outside any server - standing in for the user's own -
+            # with N the whole number of seconds the first escape child sleeps. The review of PR 35 (round
+            # 3) found the e2e matched any `sleep <N>` in the distro and SIGKILLed every match on every run.
+            $foreignN = ("" + $escapeSecs[0]).Split('.')[0]
+            # `setsid -f`, measured: a sleep put in the background with `&` - setsid or not - died when
+            # its wsl.exe call ended; one forked by `setsid -f` outlived it. Its pid is read back by its
+            # exact command line, before any escape child of the same length exists.
+            $fs = Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", 'setsid -f sleep "$1" </dev/null >/dev/null 2>&1; sleep 0.3; for f in /proc/[0-9]*/cmdline; do c=$(tr "\0" " " < "$f" 2>/dev/null); [ "$c" = "sleep $1 " ] && { p=${f#/proc/}; echo "${p%/cmdline}"; }; done; exit 0', "sh", $foreignN)
+            $foreignPid = "" + @(Get-HordeTmuxLines $fs.out | Select-Object -Last 1)
+            Check ($foreignPid -match '^\d+$') ("PRECONDITION: a foreign 'sleep " + $foreignN + "' is running outside any server (pid " + $foreignPid + ")")
             [void](New-HordeTmuxPane -Instance $iso -Command @("env", "-i", "sh", "-c", ("trap '' HUP; exec sleep " + $escapeSecs[0])))
             [void](New-HordeTmuxPane -Instance $iso -Command @("sh", "-c", ("setsid env -i sh -c 'trap """" HUP; exec sleep " + $escapeSecs[1] + "' & sleep 1")))
             Start-Sleep -Milliseconds 1500
@@ -148,7 +164,13 @@ if ($iso) {
         $left = @(Get-EscapeSleeps $escapeSecs)
         Check ($left.Count -eq 0) ("a child that dropped its environment, or left the session, did not outlive teardown (" + ($left -join "; ") + ")")
         Check (-not ($v1.stopped -and $left.Count -gt 0)) "and teardown never reports stopped while such a child is still running"
-        Stop-EscapeSleeps $escapeSecs
+        if ($left.Count -gt 0) { Stop-EscapeSleeps $escapeSecs }
+    }
+    if ($foreignPid) {
+        $fa = Invoke-HordeWsl -Distro $distroUsed -Argv @("sh", "-c", 'c=$(tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null); [ "$c" = "sleep $2 " ] && echo alive; exit 0', "sh", $foreignPid, $foreignN)
+        Check ("$($fa.out)".Trim() -eq "alive") ("a foreign 'sleep " + $foreignN + "' started outside the server, pid " + $foreignPid + ", is untouched by the run")
+        # Ours to stop: this test started it. Through a pidfd, by its exact command line.
+        [void](Invoke-HordeWsl -Distro $distroUsed -Argv @("perl", "-e", $script:pidfdKill, $foreignPid, ("sleep " + $foreignN + " ")))
     }
     Check ($v1.socketRemoved -and $v1.dirRemoved) "its socket file and its private directory are removed"
     $after = Invoke-HordeWsl -Distro $distroUsed -Argv @("test", "-e", $e1.dir)
@@ -229,7 +251,7 @@ Write-Host "=== scenario 5: the process that owns the server dies without tearin
 # the server, and is then killed mid-run, so no teardown runs at all. The server, everything in its
 # namespace, its socket and its directory must all go on their own: the owner's wsl.exe loses its
 # stdin with the dead process, and pid 1 exits on that EOF.
-$crashSecs = 320 + (Get-Random -Maximum 40)
+$crashSecs = New-RunSleep (320 + (Get-Random -Maximum 40))
 $crashScript = Join-Path $env:TEMP ("horde-tmux-crash-" + [guid]::NewGuid().ToString("N") + ".ps1")
 $crashBody = @'
 param([string]$Harness, [string]$Distro, [string]$Secs)
@@ -244,7 +266,7 @@ Start-Sleep -Seconds 600
 [void](Stop-HordeIsolatedTmux -Instance $i)
 '@
 [System.IO.File]::WriteAllText($crashScript, $crashBody)
-$child = $null; $crashG = ""; $crashNs = ""
+$child = $null; $crashG = ""; $crashNs = ""; $crashFailed = $true
 $crashUid = "$((Invoke-HordeWsl -Distro $distroUsed -Argv @("id", "-u")).out)".Trim()
 try {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -286,14 +308,15 @@ try {
         $wslLeft = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $child.Id) -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq "wsl.exe" -and $_.CreationDate -ge $childStart })
         Check ($wslLeft.Count -eq 0) ("and the dead run's wsl.exe has exited on its own (" + (@($wslLeft | ForEach-Object { $_.ProcessId }) -join ", ") + ")")
+        $crashFailed = -not ($gone -and $dirLeft.code -eq 1)
     }
 } finally {
     if ($child -and -not $child.HasExited) { try { $child.Kill() } catch { } }
     if ($child) { $child.Dispose() }
     Remove-Item -LiteralPath $crashScript -Force -ErrorAction SilentlyContinue
-    if ($crashG) {
-        # ONLY WHEN THE CHECKS ABOVE FAILED is there anything here to do: the dead run's server, by its
-        # own socket, its escaped child by its unique command line, and its directory by rmdir.
+    if ($crashG -and $crashFailed) {
+        # ONLY WHEN THE CHECKS ABOVE FAILED does this run: the dead run's server, by its own socket, its
+        # escaped child by its run-unique command line, and its directory by rmdir.
         $ghost = [pscustomobject]@{ guid = $crashG; name = ("horde-iso-" + $crashG); dir = ("/tmp/horde-iso-" + $crashG) }
         $still = Invoke-HordeWsl -Distro $distroUsed -Argv (Get-HordeTmuxArgv -Entry $ghost -Command @("list-sessions"))
         if ($still.code -eq 0) { [void](Invoke-HordeWsl -Distro $distroUsed -Argv (Get-HordeTmuxArgv -Entry $ghost -Command @("kill-server"))) }
