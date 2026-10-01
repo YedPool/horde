@@ -1,9 +1,9 @@
-# Mutations of remote/Transport.ps1, the transport port. Run:
+# Mutations of transports/Port.ps1, the transport port. Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\transport-port.psd1
 # Each breaks one rule the port exists for; test\test-transport-port.ps1, which drives the port over a
 # scripted byte channel, must fail for every one.
 @{
-    Target = "remote\Transport.ps1"
+    Target = "transports\Port.ps1"
     Suite  = "test\test-transport-port.ps1"
     Mutations = @(
         @{ Name = "partial-frame-delivered"

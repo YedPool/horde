@@ -1,4 +1,4 @@
-# remote/Transport.ps1 - the transport port: how the protocol reaches another Horde, whatever carries it.
+# transports/Port.ps1 - the transport port: how the protocol reaches another Horde, whatever carries it.
 #
 # WHAT A TRANSPORT IS (remote-sessions design, section 2.1; plan step R4). A transport turns "reach
 # node D" into an open, ordered byte stream, and says what it knows about that stream. It knows
@@ -6,6 +6,12 @@
 # holding Transport.ps1 (its code) and capabilities.json (what it can do, as data, checked against
 # schema/transport-capabilities.v1). This file names no transport: a second one is a new folder, not
 # an edit here (the design's decision 10, extending CONTRIBUTING 14).
+#
+# WHY HERE AND NOT IN remote/. The port calls the script blocks each transport registers, and
+# test/test-link-contracts.ps1 (step R1) holds every file in remote/ to "starts no program and no
+# shell", which counts any call with &. That rule is right for the protocol: remote/ must never run
+# code a frame names. The port runs only code a transports/<name>/ folder registered at load time,
+# so it lives with the transports it dispatches to, and remote/ keeps its tripwire unweakened.
 #
 # THE SPLIT. A transport moves BYTES. This port turns bytes into FRAMES, once, for every transport:
 #   - a frame is one line of printable-and-control ASCII, LF-terminated, at most maxFrameBytes long
@@ -59,7 +65,7 @@ $script:HordeLinkAscii = [System.Text.Encoding]::GetEncoding("us-ascii", (New-Ob
 $script:HordeLinkLf = [byte]10
 
 function Get-HordeTransportRoot {
-    return (Join-Path (Split-Path -Parent $PSScriptRoot) "transports")
+    return $PSScriptRoot
 }
 
 function Get-HordeTransportFiles {

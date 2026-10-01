@@ -3,7 +3,7 @@
 # WHY IT EXISTS (remote-sessions design 2.3). The protocol, the journal and the verbs are tested end to
 # end without a pipe or a network; this is the pair they run on. It DECLINES auth.peer in its
 # capabilities.json, and the production path to a node requires auth.peer
-# (Resolve-HordeLinkTransport in remote/Transport.ps1), so no production path can pick it. The
+# (Resolve-HordeLinkTransport in transports/Port.ps1), so no production path can pick it. The
 # conformance suite proves both halves of that.
 #
 # SHARED ACROSS RUNSPACES. The listeners live in one process-wide table kept in the AppDomain's data

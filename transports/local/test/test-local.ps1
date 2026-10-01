@@ -19,7 +19,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
-. (Join-Path $root "remote\Transport.ps1")
+. (Join-Path $root "transports\Port.ps1")
 . (Join-Path $root "transports\local\Transport.ps1")
 
 $t = Get-HordeTransport -Name "local"

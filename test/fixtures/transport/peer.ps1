@@ -19,7 +19,7 @@ param(
     [Parameter(Mandatory = $true)]$Events
 )
 $ErrorActionPreference = "Stop"
-. (Join-Path $Root "remote\Transport.ps1")
+. (Join-Path $Root "transports\Port.ps1")
 foreach ($f in @(Get-HordeTransportFiles)) { . $f }
 $t = Get-HordeTransport -Name $Name
 

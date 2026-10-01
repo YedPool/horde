@@ -1,6 +1,6 @@
 # DOES THE TRANSPORT PORT KEEP A TRANSPORT HONEST ABOUT WHAT IT CAN DO, AND NEVER GUESS A FRAME?
 #
-# Remote plan step R4, the port half (remote/Transport.ps1). Two things are pinned here, both without
+# Remote plan step R4, the port half (transports/Port.ps1). Two things are pinned here, both without
 # any real transport, so every outcome is exact and repeatable:
 #   - REGISTRATION AND CAPABILITIES. A transport folder whose capabilities.json breaks
 #     schema/transport-capabilities.v1, or names another folder, is refused. Only "yes" counts as
@@ -16,7 +16,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
-. (Join-Path $root "remote\Transport.ps1")
+. (Join-Path $root "transports\Port.ps1")
 
 $fx = Join-Path $here "fixtures\transport\caps"
 $script:opened = 0
