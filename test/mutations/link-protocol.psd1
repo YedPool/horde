@@ -18,6 +18,15 @@
         @{ Name = "fast-path-takes-anything"
            Find = '''\A[\x20\x21\x23-\x5B\x5D-\x7E]*\z'''
            Replace = '''\A[\s\S]*\z''' }
+        @{ Name = "nul-crosses"
+           Find = 'if ($code -eq 0) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "lone-high-surrogate-crosses"
+           Find = 'if ($i + 1 -ge $chars.Length -or -not [char]::IsLowSurrogate($chars[$i + 1])) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "lone-low-surrogate-crosses"
+           Find = 'if ($i -eq 0 -or -not [char]::IsHighSurrogate($chars[$i - 1])) { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "upper-case-hex"
            Find = '$code.ToString("x4")'
            Replace = '$code.ToString("X4")' }

@@ -83,12 +83,27 @@ function ConvertTo-HordeWireString {
     # character below 0x20 or above 0x7E as \u and four lower-case hex digits. A character outside the
     # Basic Multilingual Plane is two UTF-16 units in .NET and is written as two escapes, which JSON
     # reads back as the one character.
+    #
+    # REFUSED, BY THROWING, AT THE SENDER: a NUL, and half a surrogate pair. Each has an escape, so the
+    # first version wrote both: the receiver accepted the NUL, and the lone surrogate went out to be
+    # refused only at the other end (review of PR #45). Neither is
+    # text: a NUL ends a string in most of what a node hands text to, and a lone surrogate is not a
+    # character in any encoding. A received one is refused too, because the receiver writes the frame
+    # again with this function and requires the same bytes.
     param([string]$Text)
     if ([regex]::IsMatch($Text, '\A[\x20\x21\x23-\x5B\x5D-\x7E]*\z')) { return ('"' + $Text + '"') }
     $sb = New-Object System.Text.StringBuilder ($Text.Length + 16)
     [void]$sb.Append('"')
-    foreach ($c in $Text.ToCharArray()) {
+    $chars = $Text.ToCharArray()
+    for ($i = 0; $i -lt $chars.Length; $i++) {
+        $c = $chars[$i]
         $code = [int]$c
+        if ($code -eq 0) { throw ("a NUL at character " + $i + " cannot cross the link: it is not text") }
+        if ([char]::IsHighSurrogate($c)) {
+            if ($i + 1 -ge $chars.Length -or -not [char]::IsLowSurrogate($chars[$i + 1])) { throw ("half a surrogate pair at character " + $i + " cannot cross the link: it is not a character") }
+        } elseif ([char]::IsLowSurrogate($c)) {
+            if ($i -eq 0 -or -not [char]::IsHighSurrogate($chars[$i - 1])) { throw ("half a surrogate pair at character " + $i + " cannot cross the link: it is not a character") }
+        }
         if ($c -ceq '"') { [void]$sb.Append('\"') }
         elseif ($c -ceq '\') { [void]$sb.Append('\\') }
         elseif ($code -lt 0x20 -or $code -gt 0x7E) { [void]$sb.Append('\u').Append($code.ToString("x4")) }
@@ -220,9 +235,13 @@ function ConvertTo-HordeFrameBytes {
     $cap = Get-HordeFrameCap -Contract $Contract -FrameBytes $FrameBytes
     $found = @(Test-HordeLinkFrame -Frame $Frame -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Reason ("not sent: " + ($found -join "; "))) }
+    # Written before the caps are measured: a NUL or half a surrogate pair cannot be written, and the
+    # caps measure strings as written, so the refusal is a bad-frame answer here, never a throw.
+    $text = $null
+    try { $text = ConvertTo-HordeWireText $Frame }
+    catch { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Reason ("not sent: the frame holds a value the link cannot carry: " + $_.Exception.Message)) }
     $found = @(Test-HordeProtocolLimits -Frame $Frame -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "oversized" -Reason ("not sent: " + ($found -join "; "))) }
-    $text = ConvertTo-HordeWireText $Frame
     if ($text.Length -gt $cap) { return (New-HordeWireResult -Ok $false -Code "oversized" -Reason ("not sent: the frame is " + $text.Length + " bytes, over the frame cap of " + $cap)) }
     $bytes = New-Object byte[] ($text.Length + 1)
     [void][System.Text.Encoding]::ASCII.GetBytes($text, 0, $text.Length, $bytes, 0)

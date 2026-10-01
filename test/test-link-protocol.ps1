@@ -62,7 +62,25 @@ Check ((ConvertTo-HordeWireString 'a"b\c') -ceq '"a\"b\\c"') "a quote and a back
 Check ((ConvertTo-HordeWireString ("caf" + [char]0xE9)) -ceq '"caf\u00e9"') "e-acute is \u00e9, lower-case hex"
 Check ((ConvertTo-HordeWireString ([string][char]0x7F)) -ceq '"\u007f"') "DEL (0x7F), the first byte past printable ASCII, is escaped"
 Check ((ConvertTo-HordeWireString "~ ") -ceq '"~ "') "tilde (0x7E) and space (0x20), the ends of printable ASCII, are not"
-Check ((ConvertTo-HordeWireString ("a" + [char]9 + [char]10 + [char]13 + [char]0)) -ceq '"a\u0009\u000a\u000d\u0000"') "tab, LF, CR and NUL are escaped, so a raw LF can only end a frame"
+Check ((ConvertTo-HordeWireString ("a" + [char]9 + [char]10 + [char]13 + [char]1)) -ceq '"a\u0009\u000a\u000d\u0001"') "tab, LF, CR and other control characters are escaped, so a raw LF can only end a frame"
+# NOT TEXT, REFUSED AT THE SENDER (review of PR #45): a NUL, and half a surrogate pair, each of which the
+# first encoder wrote as an escape for the receiver to accept or choke on.
+Check (Throws { ConvertTo-HordeWireString ("a" + [char]0 + "b") } "a NUL at character 1") "a NUL is refused at the sender"
+Check (Throws { ConvertTo-HordeWireString ("a" + [char]0xD800 + "x") } "half a surrogate pair at character 1") "a lone high surrogate is refused at the sender"
+Check (Throws { ConvertTo-HordeWireString ("a" + [char]0xD800) } "half a surrogate pair") "a high surrogate at the very end is refused"
+Check (Throws { ConvertTo-HordeWireString ([string][char]0xDE00 + "x") } "half a surrogate pair at character 0") "a lone low surrogate is refused at the sender"
+Check (Throws { ConvertTo-HordeWireString ([string][char]0xDE00 + [char]0xD83D) } "half a surrogate pair") "a pair in the wrong order is refused"
+$nulReq = Copy-Json $golden["req-session-spawn.json"]; $nulReq.args.prompt.text = "go" + [char]0 + "now"
+$nulSent = ConvertTo-HordeFrameBytes -Frame $nulReq -Contract $contract
+Check ($null -ne $nulSent -and -not $nulSent.ok -and $nulSent.code -ceq "bad-frame" -and $null -eq $nulSent.bytes -and (Says $nulSent.reason "a NUL")) "a spawn whose prompt holds a NUL is refused at the sender as bad-frame, naming the NUL, with no bytes and no error"
+$halfReq = Copy-Json $golden["req-session-spawn.json"]; $halfReq.args.prompt.text = "go " + [char]0xD83D
+$halfSent = ConvertTo-HordeFrameBytes -Frame $halfReq -Contract $contract
+Check ($null -ne $halfSent -and -not $halfSent.ok -and $halfSent.code -ceq "bad-frame" -and (Says $halfSent.reason "half a surrogate pair")) "a spawn whose prompt ends in half a surrogate pair is refused at the sender the same way"
+$spLine = $ascii.GetString((Line $golden["req-session-spawn.json"]))
+$U = [string][char]92 + "u"
+Refused (Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + '0000 ')))) "bad-frame" "a NUL" "a received prompt holding an escaped NUL is refused"
+Refused (Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + 'd800 ')))) "bad-frame" "one spelling" "a received prompt holding a lone escaped surrogate is refused (ConvertFrom-Json replaces the half, so the frame is not written again the same)"
+Check ((Decode (Bytes ($spLine.Replace('"text":"', '"text":"' + $U + 'd83d' + $U + 'de00 ')))).ok) "CONTROL: a received prompt holding a whole escaped pair is accepted"
 Check ((ConvertTo-HordeWireString ([char]::ConvertFromUtf32(0x1F600))) -ceq '"\ud83d\ude00"') "a character outside the BMP is its two UTF-16 escapes"
 Check ((ConvertTo-HordeWireString ([string][char]0x2028)) -ceq '"\u2028"') "a line separator (U+2028) is escaped"
 Check ((ConvertTo-HordeWireString "<a href='x'>&</a>") -ceq ('"' + "<a href='x'>&</a>" + '"')) "< > & and ' are written as they are, unlike ConvertTo-Json"
@@ -76,7 +94,7 @@ for ($i = 0; $i -lt 40; $i++) {
     $len = $rng.Next(1, 40)
     for ($j = 0; $j -lt $len; $j++) {
         $pick = $rng.Next(0, 4)
-        if ($pick -eq 0) { [void]$sb.Append([char]$rng.Next(0, 0x80)) }
+        if ($pick -eq 0) { [void]$sb.Append([char]$rng.Next(1, 0x80)) }
         elseif ($pick -eq 1) { [void]$sb.Append([char]$rng.Next(0x80, 0xD800)) }
         elseif ($pick -eq 2) { [void]$sb.Append([char]::ConvertFromUtf32($rng.Next(0x10000, 0x10FFFF))) }
         else { [void]$sb.Append([char]$rng.Next(0xE000, 0x10000)) }
