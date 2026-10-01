@@ -76,6 +76,9 @@
         @{ Name = "verdict-ignores-the-namespace"
            Find = '$survived = (-not $gone) -or ($inNs.Count -gt 0)'
            Replace = '$survived = (-not $gone)' }
+        @{ Name = "unmeasured-owner-reads-as-stopped"
+           Find = '$unmeasured = (-not $e.nsInode) -and (-not $ownerGone)'
+           Replace = '$unmeasured = $false' }
         @{ Name = "namespace-never-scanned"
            Find = 'if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }'
            Replace = '' }

@@ -566,7 +566,12 @@ function Stop-HordeIsolatedTmux {
         # were both pid:[4026532227]), which would read as not empty - the safe error.
         $inNs = @()
         if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }
-        $survived = (-not $gone) -or ($inNs.Count -gt 0)
+        # NO NAMESPACE TO SCAN - the owner timed out before it reported one - leaves only the owner's
+        # exit as evidence: wsl.exe exits when unshare does, and unshare when pid 1 does, which takes
+        # everything in the namespace with it. An owner that has not exited proves nothing, so nothing
+        # is claimed (the review of PR 35, round 3: this path used to read as stopped).
+        $unmeasured = (-not $e.nsInode) -and (-not $ownerGone)
+        $survived = (-not $gone) -or ($inNs.Count -gt 0) -or $unmeasured
 
         # WHAT RAN INSIDE IT is not hunted down and killed one pid at a time: the namespace already took
         # it, and the scan above is the proof. Whatever is still listed there is reported, not killed.
@@ -596,7 +601,8 @@ function Stop-HordeIsolatedTmux {
                     ", processes still in its namespace: " + ($still -join ", ") + ". Kill them by hand.") -ForegroundColor Red
     }
     $reason = ""
-    if ($survived) { $reason = "the server still answers, or its namespace still holds processes" }
+    if ($unmeasured) { $reason = "the owner never reported its namespace and its wsl.exe did not exit, so nothing could be measured" }
+    elseif ($survived) { $reason = "the server still answers, or its namespace still holds processes" }
     elseif ($still.Count -gt 0) { $reason = "processes are still in its namespace" }
     return (& $verdict (-not $survived -and $still.Count -eq 0) $survived $still $sockOk $dirOk $false $reason)
 }

@@ -315,6 +315,33 @@ try {
     $vj = Stop-HordeIsolatedTmux -Instance $j.inst
     Check ($vj.stopped -and $vj.socketRemoved -and (Get-Calls "kill-server").Count -eq 0) "a server that is already gone reads as stopped, and nothing is sent kill-server"
 
+    # NOTHING WAS MEASURED: the owner timed out before it reported its namespace (so there is no
+    # namespace to scan) and its wsl.exe will not exit. The review of PR 35 (round 3) found teardown
+    # then said "stopped" on the socket's word alone. Without a namespace, only the owner's exit is
+    # evidence that pid 1 is gone - and with it everything it held.
+    function New-FakeOwnerProc { param([bool]$Exits)
+        $o = [pscustomobject]@{ exits = $Exits; closed = $false }
+        $si = [pscustomobject]@{ parent = $o }
+        $si | Add-Member -MemberType ScriptMethod -Name Close -Value { $this.parent.closed = $true }
+        $o | Add-Member -NotePropertyName StandardInput -NotePropertyValue $si
+        $o | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms) return $this.exits }
+        $o | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+        return $o }
+    $un = New-Entry
+    $un.entry.nsInode = ""; $un.entry.serverPid = ""
+    $hung = New-FakeOwnerProc $false
+    $un.entry.owner = [pscustomobject]@{ proc = $hung; nsInode = ""; ready = $false; failure = "the owner did not report ready in 30s" }
+    $script:calls.Clear()
+    $script:answer = { param($k, $a) if ($k -eq "tmux") { return (Reply 1 "" "no server running on /tmp/horde-iso-x") }; return (Reply 0 "") }
+    $vu = Stop-HordeIsolatedTmux -Instance $un.inst
+    Check (-not $vu.stopped -and $vu.survived -and "$($vu.reason)" -like "*never reported its namespace*") ("an owner that never reported its namespace and will not exit is not reported stopped (" + $vu.reason + ")")
+    Check ($hung.closed) "and its stdin was closed first, which is pid 1's crash exit"
+    $ug = New-Entry
+    $ug.entry.nsInode = ""; $ug.entry.serverPid = ""
+    $ug.entry.owner = [pscustomobject]@{ proc = (New-FakeOwnerProc $true); nsInode = ""; ready = $false; failure = "the owner did not report ready in 30s" }
+    $vg = Stop-HordeIsolatedTmux -Instance $ug.inst
+    Check ($vg.stopped) "CONTROL: the same owner that does exit is stopped - unshare, and so pid 1, are gone with it"
+
     # THE SOCKET ANSWERS WITH SOMETHING ELSE: neither "ours" nor "no server". Refused.
     $k2 = New-Entry
     $script:calls.Clear()
