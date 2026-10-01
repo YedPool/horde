@@ -516,3 +516,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 9: the projection suite takes over 20 minutes under load, so 105 mutants ran for days; a caught mutant needs only its first [FAIL], and rerunning one after a fix needed the whole spec
 - disposition: test
 - where: test/test-suite.ps1 :: "under fail-fast a suite stops at its first failed check"
+
+### L-098 Each value is type-checked as it is given; the whole view is validated only in tests and on request
+- source: coordinator decision 2026-09-30 for PR #31 and step 2.3: full-view validation costs about 0.6 ms per value with the schema cache (PR #43), about 54 s for 331 real sessions, too slow for every horde status; measured 2026-09-30 for this entry: the per-field gate takes 12,399 ms of a 100,067 ms projection of 333 real sessions (18,981 calls, 0.653 ms each), so it stays
+- disposition: comment
+- where: core/Projection.ps1 :: "VALIDATION: PER FIELD ALWAYS, THE WHOLE VIEW ON REQUEST"

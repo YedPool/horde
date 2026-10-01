@@ -41,6 +41,16 @@
 # kept apart from what it DID (lastActivity, from command logs and transcripts), because 12 of about
 # 28 status fields were voluntary and a quiet session read as a dead one (YedPool/wezfleet cf5c370).
 #
+# VALIDATION: PER FIELD ALWAYS, THE WHOLE VIEW ON REQUEST (decided 2026-09-30 for this module and step
+# 2.3). Every value is checked against its field's type in schema/session-view.v1 as it is given
+# (Limit-HordeViewValue), because that check keeps an answer honest: a stored value the view cannot
+# carry becomes unknown with the reason instead of a known lie. Measured 2026-09-30 over this
+# machine's 333 real sessions, under load: 18,981 calls, 0.653 ms each, 12,399 ms of a 100,067 ms
+# projection - not the dominant cost, so it stays whole. Validating the WHOLE document against the
+# schema costs about 0.6 ms per value even with the schema cache (PR #43), about 54 s for 331
+# sessions, so `horde status` does not do it on every call: it runs in test/test-projection.ps1 (the
+# fixture views and the reality check) and behind an explicit -Validate flag that step 2.3 adds.
+#
 # the roster groups sessions into runs: title, dependsOn, spawnedAt and the run itself still come
 # from it (YedPool/wezfleet 562f0e8 "GROUPING is the roster's proper job"); only identity and the
 # handle moved off it.
