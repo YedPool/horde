@@ -49,10 +49,7 @@
            Find = 'if (-not $ok) { [void]$findings.Add($Path + " is '''
            Replace = 'if ($false) { [void]$findings.Add($Path + " is ''' }
         @{ Name = "pattern-not-checked"
-           Find = 'if (-not [regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "pattern-not-compiled-with-its-node"
-           Find = 'if ($kw.ContainsKey("pattern")) {'
+           Find = 'if (-not $node.regex.IsMatch($Value)) {'
            Replace = 'if ($false) {' }
         @{ Name = "pattern-compile-error-swallowed"
            Find = 'catch { throw ("pattern at " + $Path'
@@ -67,11 +64,11 @@
            Find = 'elseif ($c -ceq ''['') { $inClass = $true }'
            Replace = '' }
         @{ Name = "pattern-dotnet-dialect"
-           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::None)' }
+           Find = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::None)' }
         @{ Name = "pattern-ignores-case"
-           Find = '[regex]::IsMatch($Value, $re, [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
-           Replace = '[regex]::IsMatch($Value, $re, ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
+           Find = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), [System.Text.RegularExpressions.RegexOptions]::ECMAScript)'
+           Replace = '[regex]::new((ConvertTo-HordeSchemaPattern -Pattern "$($kw[''pattern''])"), ([System.Text.RegularExpressions.RegexOptions]::ECMAScript -bor [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))' }
         @{ Name = "required-not-checked"
            Find = 'if ($null -ne $r -and -not $have.ContainsKey("$r")) {'
            Replace = 'if ($false) {' }
@@ -106,8 +103,8 @@
            Find = 'if ($Value -is [System.Collections.IList] -and $kw.ContainsKey("items")) {'
            Replace = 'if ($Value -is [array] -and $kw.ContainsKey("items")) {' }
         @{ Name = "value-keys-ignore-case"
-           Find = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
-           Replace = '$have = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+           Find = '$have = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)'
+           Replace = '$have = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::OrdinalIgnoreCase)' }
         @{ Name = "property-names-ignore-case"
            Find = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
            Replace = '$props = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
@@ -148,8 +145,11 @@
            Find = 'if ($Node -is [System.Collections.IDictionary]) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "hashtable-value-read-as-object"
-           Find = 'if ($Value -is [System.Collections.IDictionary]) { return'
-           Replace = 'if ($false) { return' }
+           Find = 'if ($Value -is [System.Collections.IDictionary]) { foreach ($e in $Value.GetEnumerator())'
+           Replace = 'if ($false) { foreach ($e in $Value.GetEnumerator())' }
+        @{ Name = "node-pattern-not-carried"
+           Find = '$entry = [pscustomobject]@{ kw = $kw; props = $props; regex = $compiled["regex"] }'
+           Replace = '$entry = [pscustomobject]@{ kw = $kw; props = $props; regex = [regex]::new('''') }' }
         @{ Name = "schema-read-as-ansi"
            Find = '[System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)'
            Replace = '(Get-Content -LiteralPath $Path -Raw)' }
@@ -163,8 +163,23 @@
            Find = 'throw ("the schema''s `$ref ''" + $Ref + "'' names no definition")'
            Replace = 'return $null' }
         @{ Name = "definition-name-ignores-case"
-           Find = 'if ($d.Name -ceq $name) { return $d.Value }'
-           Replace = 'if ($d.Name -eq $name) { return $d.Value }' }
+           Find = '$defs = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
+           Replace = '$defs = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
+        @{ Name = "cache-shared-across-roots"
+           Find = '$rootKey = $Root'
+           Replace = '$rootKey = $Root.PSObject.BaseObject' }
+        @{ Name = "cache-shared-across-nodes"
+           Find = '$nodeKey = $Schema'
+           Replace = '$nodeKey = $Schema.PSObject.BaseObject' }
+        @{ Name = "cycle-not-detected-after-first-call"
+           Find = 'if ($rootCache.walked) { return $rootCache.top }'
+           Replace = 'if ($rootCache.walked) { return $rootCache.top }; $rootCache.walked = $true' }
+        @{ Name = "node-object-walked-again"
+           Find = 'if ($script:HordeSchemaWalkSeen.TryGetValue($Schema, [ref]$seenMark)) { return }'
+           Replace = '' }
+        @{ Name = "schema-file-not-checked-on-read"
+           Find = '[void](Assert-HordeSchema -Schema $schemaRead)'
+           Replace = '' }
         @{ Name = "keyword-beside-ref-allowed"
            Find = 'if ($beside.Count -gt 0) { throw'
            Replace = 'if ($false) { throw' }
@@ -181,14 +196,14 @@
            Find = 'if ($kw[''$ref''] -isnot [string]) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "definitions-not-checked"
-           Find = 'Assert-HordeSchemaDefinitions -Root $Root'
+           Find = 'Assert-HordeSchemaDefinitions -Root $Schema'
            Replace = '' }
         @{ Name = "root-subtrees-not-checked"
-           Find = 'Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
+           Find = 'Assert-HordeSchemaSubtrees -Kw $top.kw -Path "#" -Root $Schema'
            Replace = '' }
         @{ Name = "root-walked-under-caller-root"
-           Find = '        Assert-HordeSchemaSubtrees -Kw $kw -Path "#" -Root $Root'
-           Replace = '    }; if ($true) { Assert-HordeSchemaSubtrees -Kw (Get-HordeSchemaNodeKeywords -Schema $Root -Path "#" -AtTop $true) -Path "#" -Root $Root' }
+           Find = '$node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false'
+           Replace = '[void](Assert-HordeSchema -Schema $Root -Path ''#''); $node = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false' }
         @{ Name = "definitions-any-value"
            Find = 'if ($kw.ContainsKey("definitions") -and -not (Test-HordeSchemaType -Value $kw["definitions"] -Type "object")) {'
            Replace = 'if ($false) {' }
