@@ -83,6 +83,13 @@ $other = New-Object System.IO.Pipes.NamedPipeServerStream($pipe, [System.IO.Pipe
 try {
     $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "node" -TimeoutMs 2000
     Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*refused*ACL*") "dialling a pipe whose ACL denies this user is refused, and says the ACL refused it"
+    # A denied open cannot tell the ACL from the label. A Medium hub dialling a High node is denied by
+    # the label before any check runs, and cannot read the label to say so (measured 2026-10-01: a
+    # Medium process's open and its GetNamedSecurityInfo of the label both fail with access denied). The
+    # first message blamed the ACL alone, which misled (review of PR #42, round 3).
+    Check ("$($o.reason)" -like "*integrity level*") "and says it may instead be an integrity level above this end's"
+    Check ("$($o.reason)" -like ("*this end runs at integrity " + (Get-HordeLocalOwnIntegrity) + "*")) "naming this end's own level"
+    Check ("$($o.reason)" -like "*run the hub and node at the same integrity level*") "and says to run the hub and node at the same integrity level"
     $l2 = Start-HordeTransportListener -Transport $t -Endpoint $id
     Check ($l2.state -ceq "unknown" -and "$($l2.reason)" -like "*already in use*") "and a node will not listen on a name someone else already holds"
 } finally { $other.Dispose() }

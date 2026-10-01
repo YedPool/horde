@@ -64,6 +64,9 @@
         @{ Name = "device-id-unchecked"
            Find = 'if ($DeviceId -cnotmatch $script:HordeLocalIdPattern) { return $null }'
            Replace = '' }
+        @{ Name = "denied-open-blames-the-acl-alone"
+           Find = '" denied the open. Either its ACL does not admit this user, or the node runs at a higher integrity level than this end (this end runs at integrity " + (Get-HordeLocalOwnIntegrity) + "); if it is the real node, run the hub and node at the same integrity level"'
+           Replace = '": the ACL does not admit this user"' }
         @{ Name = "acl-refusal-unexplained"
            Find = 'if ($e -is [System.UnauthorizedAccessException]) { return'
            Replace = 'if ($false) { return' }

@@ -196,7 +196,11 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
             $e = $_.Exception
             while ($null -ne $e.InnerException) { $e = $e.InnerException }
             if ($e -is [System.TimeoutException]) { return (New-HordeLocalResult -Ok $false -Reason ("no node answered on " + $pipe + " within " + $TimeoutMs + " ms")) }
-            if ($e -is [System.UnauthorizedAccessException]) { return (New-HordeLocalResult -Ok $false -Reason ("refused: the ACL of " + $pipe + " does not admit this user")) }
+            # A denied open cannot say which of two things denied it: the pipe's ACL (another user's
+            # pipe), or its label (a node at a higher integrity level than this hub). The label cannot be
+            # read to tell them apart - measured 2026-10-01, a Medium process's GetNamedSecurityInfo of a
+            # High node's label fails with access denied too - so both are named (review of PR #42, round 3).
+            if ($e -is [System.UnauthorizedAccessException]) { return (New-HordeLocalResult -Ok $false -Reason ("refused: " + $pipe + " denied the open. Either its ACL does not admit this user, or the node runs at a higher integrity level than this end (this end runs at integrity " + (Get-HordeLocalOwnIntegrity) + "); if it is the real node, run the hub and node at the same integrity level")) }
             return (New-HordeLocalResult -Ok $false -Reason ("could not connect to " + $pipe + ": " + $e.Message))
         }
         $me = Get-HordeLocalUserSid
