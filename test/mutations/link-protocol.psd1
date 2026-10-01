@@ -109,8 +109,23 @@
            Find = 'if ($Reader.pending.Length -gt $limit) {'
            Replace = 'if ($false) {' }
         @{ Name = "negotiation-ignores-our-list"
-           Find = '$Ours -contains [int]$t'
-           Replace = '$true' }
+           Find = 'if ([long]$o -eq [long]$t -and $o -gt $best) { $best = $o }'
+           Replace = 'if ($t -gt $best -and $t -le 2147483647) { $best = $t }' }
+        @{ Name = "hello-version-count-unbounded"
+           Find = 'if ($items.Count -gt $Contract.limits["versionItems"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "hello-version-size-unbounded"
+           Find = '-and [long]$x -gt [long]$Contract.limits["versionMax"]) {'
+           Replace = '-and $false) {' }
+        @{ Name = "bye-reason-not-cut"
+           Find = '$said = Limit-HordeWireString -Text $Reason -Bytes $Contract.limits["reasonBytes"]'
+           Replace = '$said = $Reason' }
+        @{ Name = "cut-splits-surrogate-pairs"
+           Find = 'if ([char]::IsHighSurrogate($Text[$n - 1])) { $n--; continue }'
+           Replace = '' }
+        @{ Name = "bye-names-every-offered-version"
+           Find = '$named = @($theirs | Select-Object -First $Contract.limits["versionItems"])'
+           Replace = '$named = @($theirs)' }
         @{ Name = "no-common-version-no-bye"
            Find = 'if ($p -gt 0) {'
            Replace = 'if ($p -ge 0) {' }

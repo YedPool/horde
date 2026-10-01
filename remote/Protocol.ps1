@@ -206,6 +206,21 @@ function Test-HordeProtocolLimits {
         [void]$walks.Add(@((Get-HordeLinkProp $result "value"), $t.node, $t.root, '$.result.value'))
     }
     $out = New-Object System.Collections.ArrayList
+    # A HELLO'S VERSION LISTS are bounded tighter than any list: at most versionItems entries, none above
+    # versionMax (review of PR #45). listItems (256) let a hello offer 256 versions, whose bye named all
+    # of them in a reason over its cap, and nothing bounded a version's size.
+    $hello = Get-HordeLinkProp $Frame "hello"
+    if ($null -ne $hello) {
+        foreach ($k in @("versionMax", "versionItems")) { if (-not $Contract.limits.ContainsKey($k)) { [void]$out.Add("x-horde-limits has no " + $k + ", so a hello's versions cannot be bounded") } }
+        if ($out.Count -gt 0) { return @($out) }
+        foreach ($list in @("protocols", "verbsVersions")) {
+            $items = @(Get-HordeLinkProp $hello $list)
+            if ($items.Count -gt $Contract.limits["versionItems"]) { [void]$out.Add('$.hello.' + $list + " has " + $items.Count + " versions, over the versionItems cap of " + $Contract.limits["versionItems"]) }
+            foreach ($x in $items) {
+                if (($x -is [int] -or $x -is [long]) -and [long]$x -gt [long]$Contract.limits["versionMax"]) { [void]$out.Add('$.hello.' + $list + " offers version " + $x + ", over the versionMax cap of " + $Contract.limits["versionMax"]) }
+            }
+        }
+    }
     foreach ($w in $walks) {
         foreach ($x in @(Get-HordeLinkNodes -Value $w[0] -Node $w[1] -Root $w[2] -Path $w[3])) {
             $cap = Get-HordeLinkProp $x.node "x-horde-cap"
@@ -373,32 +388,58 @@ function Receive-HordeFrame {
 }
 
 function Select-HordeLinkProtocol {
-    # The highest protocol version both ends list, or 0 when they share none.
+    # The highest protocol version both ends list, or 0 when they share none. Compared as [long], never
+    # cast to [int]: a version of 1099511627776 threw at the cast (review of PR #45). Only a version of
+    # Ours can win, so the answer always fits an [int].
     param([int[]]$Ours, $Theirs)
     $best = 0
     foreach ($t in @($Theirs)) {
-        if (($t -is [int] -or $t -is [long]) -and $Ours -contains [int]$t -and $t -gt $best) { $best = [int]$t }
+        if (-not ($t -is [int] -or $t -is [long])) { continue }
+        foreach ($o in $Ours) { if ([long]$o -eq [long]$t -and $o -gt $best) { $best = $o } }
     }
-    return $best
+    return [int]$best
+}
+
+function Limit-HordeWireString {
+    # Text cut so that it takes at most Bytes on the wire, with " ..." at the end when it was cut. Never
+    # splits a surrogate pair, whose lone half the encoder refuses.
+    param([string]$Text, [int]$Bytes)
+    if ((Measure-HordeWireString $Text) -le $Bytes) { return $Text }
+    $n = [Math]::Min($Text.Length, $Bytes)
+    while ($n -gt 0) {
+        if ([char]::IsHighSurrogate($Text[$n - 1])) { $n--; continue }
+        $cut = $Text.Substring(0, $n) + " ..."
+        if ((Measure-HordeWireString $cut) -le $Bytes) { return $cut }
+        $n--
+    }
+    return "..."
 }
 
 function New-HordeLinkFrameId { return [guid]::NewGuid().ToString("D") }
 function Get-HordeLinkTime { param([datetime]$At = (Get-Date)) return $At.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", [System.Globalization.CultureInfo]::InvariantCulture) }
 
 function New-HordeLinkBye {
-    # A bye frame, the one way a side ends a link on purpose.
-    param([Parameter(Mandatory = $true)][string]$Code, [Parameter(Mandatory = $true)][string]$Reason, [Parameter(Mandatory = $true)][long]$Seq)
-    return [pscustomobject][ordered]@{ v = 1; kind = "bye"; id = (New-HordeLinkFrameId); seq = $Seq; ts = (Get-HordeLinkTime); bye = [pscustomobject][ordered]@{ code = $Code; reason = $Reason } }
+    # A bye frame, the one way a side ends a link on purpose. Its reason is cut to the reasonBytes cap,
+    # so a bye can always be sent, whatever it has to say.
+    param([Parameter(Mandatory = $true)][string]$Code, [Parameter(Mandatory = $true)][string]$Reason, [Parameter(Mandatory = $true)][long]$Seq, $Contract = $null)
+    if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
+    $said = Limit-HordeWireString -Text $Reason -Bytes $Contract.limits["reasonBytes"]
+    return [pscustomobject][ordered]@{ v = 1; kind = "bye"; id = (New-HordeLinkFrameId); seq = $Seq; ts = (Get-HordeLinkTime); bye = [pscustomobject][ordered]@{ code = $Code; reason = $said } }
 }
 
 function Resolve-HordeLinkHello {
     # What to do with the other side's hello: { protocol; bye }. protocol is the highest version both
     # speak; when there is none, protocol is 0 and bye is the frame that ends the link, naming both
     # lists, so the refusal is readable at both ends.
-    param([Parameter(Mandatory = $true)]$Hello, [int[]]$Ours = $script:HordeLinkProtocols, [long]$Seq = 1)
+    param([Parameter(Mandatory = $true)]$Hello, [int[]]$Ours = $script:HordeLinkProtocols, [long]$Seq = 1, $Contract = $null)
+    if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
     $theirs = @(Get-HordeLinkProp (Get-HordeLinkProp $Hello "hello") "protocols")
     $p = Select-HordeLinkProtocol -Ours $Ours -Theirs $theirs
     if ($p -gt 0) { return [pscustomobject]@{ protocol = $p; bye = $null } }
-    $reason = "no common protocol: this end speaks " + ($Ours -join ", ") + " and the other speaks " + ($theirs -join ", ")
-    return [pscustomobject]@{ protocol = 0; bye = (New-HordeLinkBye -Code "no-common-protocol" -Reason $reason -Seq $Seq) }
+    # Their list is named up to versionItems entries; New-HordeLinkBye cuts the rest to the reason cap.
+    $named = @($theirs | Select-Object -First $Contract.limits["versionItems"])
+    $more = ""
+    if ($theirs.Count -gt $named.Count) { $more = " and " + ($theirs.Count - $named.Count) + " more" }
+    $reason = "no common protocol: this end speaks " + ($Ours -join ", ") + " and the other speaks " + ($named -join ", ") + $more
+    return [pscustomobject]@{ protocol = 0; bye = (New-HordeLinkBye -Code "no-common-protocol" -Reason $reason -Seq $Seq -Contract $Contract) }
 }

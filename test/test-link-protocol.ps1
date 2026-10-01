@@ -380,6 +380,46 @@ $e = ConvertTo-HordeFrameBytes -Frame $r.bye -Contract $contract
 Check ($e.ok) "and the bye is a valid frame that encodes"
 if (-not $e.ok) { Write-Host ("         " + $e.reason) -ForegroundColor DarkYellow }
 
+# HOSTILE OFFERS (review of PR #45): a version of 2^40 threw at an [int] cast, and 256 offered versions
+# made a bye reason of 1231 bytes, over its 1024 cap, so the bye could not be sent.
+$huge = [long]1099511627776
+Check ((Select-HordeLinkProtocol -Ours @(1) -Theirs @($huge)) -eq 0) "a version of 1099511627776 is compared, not cast: no common version, and no error"
+Check ((Select-HordeLinkProtocol -Ours @(1) -Theirs @($huge, 1)) -eq 1) "and it does not hide a common version beside it"
+$h3 = Copy-Json $golden["hello-node.json"]; $h3.hello.protocols = @($huge)
+$r3 = Resolve-HordeLinkHello -Hello $h3 -Seq 3
+Check ($r3.protocol -eq 0 -and $null -ne $r3.bye -and (ConvertTo-HordeFrameBytes -Frame $r3.bye -Contract $contract).ok) "a hello offering only 1099511627776 ends in a bye that is sent"
+$h4 = Copy-Json $golden["hello-node.json"]; $h4.hello.protocols = @(2..257)
+$r4 = Resolve-HordeLinkHello -Hello $h4 -Seq 4
+$e4 = ConvertTo-HordeFrameBytes -Frame $r4.bye -Contract $contract
+Check ($r4.protocol -eq 0 -and $e4.ok) "a hello offering 256 versions ends in a bye that is sent"
+if (-not $e4.ok) { Write-Host ("         " + $e4.reason) -ForegroundColor DarkYellow }
+Check ((Measure-HordeWireString $r4.bye.bye.reason) -le $L["reasonBytes"] -and (Says $r4.bye.bye.reason "and 240 more")) ("and its reason names 16 of them and counts the rest, within the reason cap (" + (Measure-HordeWireString $r4.bye.bye.reason) + " bytes)")
+$long = "x" * 1000 + [char]::ConvertFromUtf32(0x1F600) * 300
+$b5 = New-HordeLinkBye -Code "shutdown" -Reason $long -Seq 5
+$e5 = ConvertTo-HordeFrameBytes -Frame $b5 -Contract $contract
+Check ($e5.ok -and (Measure-HordeWireString $b5.bye.reason) -le $L["reasonBytes"] -and $b5.bye.reason.EndsWith(" ...")) "a bye whose reason is far over the cap, cut inside a run of surrogate pairs, is cut to fit and still sent"
+if (-not $e5.ok) { Write-Host ("         " + $e5.reason) -ForegroundColor DarkYellow }
+$b6 = New-HordeLinkBye -Code "shutdown" -Reason "short" -Seq 6
+Check ($b6.bye.reason -ceq "short") "CONTROL: a reason within the cap is left as it is"
+
+# THE RECEIVER BOUNDS A HELLO'S LISTS before negotiation reads them: versionItems entries, versionMax each.
+$V = $L["versionItems"]; $M = $L["versionMax"]
+Check ($V -eq 16 -and $M -eq 65535) "the contract bounds a hello at 16 versions of at most 65535"
+$hOk = Copy-Json $golden["hello-node.json"]; $hOk.hello.protocols = @(1..$V)
+Check ((Decode (Line $hOk)).ok) "a hello offering exactly versionItems versions is received"
+$hOver = Copy-Json $golden["hello-node.json"]; $hOver.hello.protocols = @(1..($V + 1))
+Refused (Decode (Line $hOver)) "oversized" "over the versionItems cap" "a hello offering one more is refused as oversized"
+$hVer = Copy-Json $golden["hello-node.json"]; $hVer.hello.verbsVersions = @(1..($V + 1))
+Refused (Decode (Line $hVer)) "oversized" "verbsVersions has" "and so is one listing one verbs version too many"
+$hMax = Copy-Json $golden["hello-node.json"]; $hMax.hello.protocols = @(1, $M)
+Check ((Decode (Line $hMax)).ok) "a hello offering version versionMax is received"
+$hBig = Copy-Json $golden["hello-node.json"]; $hBig.hello.protocols = @(1, ($M + 1))
+Refused (Decode (Line $hBig)) "oversized" "over the versionMax cap" "a hello offering versionMax + 1 is refused as oversized"
+$hHuge = Copy-Json $golden["hello-node.json"]; $hHuge.hello.protocols = @($huge)
+Refused (Decode (Line $hHuge)) "oversized" "1099511627776" "and so is one offering 1099511627776"
+$sent = ConvertTo-HordeFrameBytes -Frame $hOver -Contract $contract
+Check ((-not $sent.ok) -and $sent.code -ceq "oversized") "the sender refuses to send a hello over versionItems too"
+
 Write-Host ""
 Write-Host "--- G. damaged frames, generated: nothing throws, nothing passes as what it is not ---" -ForegroundColor Cyan
 
