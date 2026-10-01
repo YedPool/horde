@@ -15,6 +15,12 @@ $before = [System.IO.File]::ReadAllText($target)
 # The throwaway folders present before this suite ran, so only ones IT leaves behind are counted -
 # another mutation run in parallel must not fail this check.
 $foldersBefore = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+# ANOTHER AGENT'S RUN, STARTED WHILE THIS SUITE RUNS. Parallel mutation runs are the normal case: on
+# 2026-09-30 two other agents' runs had horde-mutate-* folders in the shared TEMP during a gate, and
+# the check below blamed this suite for them. A folder in that exact name form appears after the
+# before-picture and is still there at the end, as a live run's would be. It is not this suite's.
+$foreign = Join-Path $env:TEMP ("horde-mutate-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $foreign | Out-Null
 
 $honest = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-honest.psd1" | ForEach-Object { "$_" })
 $honestCode = $LASTEXITCODE
@@ -53,5 +59,6 @@ Check ($hcCode -ne 0 -and @($hc | Where-Object { $_ -match '\[BAD\] throws-under
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
 $left = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter "horde-mutate-*" -ErrorAction SilentlyContinue | Where-Object { $foldersBefore -notcontains $_.Name })
 Check ($left.Count -eq 0) "and no throwaway copy is left behind"
+Remove-Item -LiteralPath $foreign -Recurse -Force
 
 Complete-HordeSuite -Success "the mutation tool rejects every way a mutation run can lie"
