@@ -448,6 +448,68 @@ $rawCli = @(([regex]::Matches($harnessCode, '& wezterm @\(')) | ForEach-Object {
 Check ($rawCli.Count -eq 1) "and the one place that calls wezterm directly is the function that adds it"
 Check (-not ($harnessCode -match '& wezterm cli ')) "no other line calls the wezterm CLI without it"
 
+# AND NOT ONLY IN THE HARNESS. The checks above read Isolation.ps1 alone, so a raw call added to any
+# other script - an e2e scenario, a tool, a future host adapter - passed them. wezfleet issue #52,
+# measured 2026-09-30: one `wezterm cli list` aimed at a dead socket left a mux server running with
+# its parent already gone (0 -> 1; with --no-auto-start 0 -> 0), and a call that captured the output
+# blocked for about six and a half minutes because the server inherited the pipe. Four such orphans
+# were found on the machine that day. So the whole repository is read here, as a parse tree: a
+# `wezterm` command anywhere but inside Invoke-HordeWeztermCli fails, and so does a process started
+# by hand with a cli argument list. Starting a gui with `start` is allowed - the harness owns and
+# reaps it. Comments and strings are not commands, so they are not flagged.
+function Find-HordeRawWeztermCall {
+    # -> one row per call that bypasses the helper: { line; text }. $Text is a whole script.
+    param([string]$Text)
+    $tok = $null; $err = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tok, [ref]$err)
+    $rows = @()
+    foreach ($c in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))) {
+        $name = $c.GetCommandName()
+        if (-not $name -or (Split-Path -Leaf $name) -notmatch '^wezterm(\.exe)?$') { continue }
+        $p = $c.Parent; $inHelper = $false
+        while ($p) {
+            if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $p.Name -eq "Invoke-HordeWeztermCli") { $inHelper = $true; break }
+            $p = $p.Parent
+        }
+        if (-not $inHelper) { $rows += [pscustomobject]@{ line = $c.Extent.StartLineNumber; text = $c.Extent.Text } }
+    }
+    # A ProcessStartInfo for wezterm whose arguments reach the CLI.
+    foreach ($a in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                                              $n.Left.Extent.Text -match '\.Arguments$' }, $true))) {
+        if ($a.Right.Extent.Text -match '(^|["''\s])cli(["''\s]|$)') {
+            $block = $a.Parent
+            while ($block -and -not ($block -is [System.Management.Automation.Language.ScriptBlockAst] -or
+                                     $block -is [System.Management.Automation.Language.NamedBlockAst])) { $block = $block.Parent }
+            if ($block -and $block.Extent.Text -match '\.FileName\s*=\s*["'']wezterm(\.exe)?["'']') {
+                $rows += [pscustomobject]@{ line = $a.Extent.StartLineNumber; text = $a.Extent.Text }
+            }
+        }
+    }
+    return $rows
+}
+
+# THE PLANTED CALL: the same line, once raw and once through the helper. The detector must fail the
+# first and pass the second, or the repository scan below proves nothing.
+$plantedRaw = "function Get-Panes {`n    return (& wezterm cli list --format json 2>`$null)`n}`n"
+$plantedRouted = "function Get-Panes {`n    return (Invoke-HordeWeztermCli -Rest @(`"list`", `"--format`", `"json`"))`n}`n"
+Check (@(Find-HordeRawWeztermCall -Text $plantedRaw).Count -eq 1) "CONTROL: a raw wezterm cli call planted outside the helper is found"
+Check (@(Find-HordeRawWeztermCall -Text $plantedRouted).Count -eq 0) "CONTROL: the same call routed through Invoke-HordeWeztermCli is not"
+Check (@(Find-HordeRawWeztermCall -Text "`$psi.FileName = `"wezterm`"`n`$psi.Arguments = `"cli list`"`n").Count -eq 1) "CONTROL: a hand-started process running the CLI is found"
+Check (@(Find-HordeRawWeztermCall -Text "`$psi.FileName = `"wezterm`"`n`$psi.Arguments = `"--skip-config start --always-new-process`"`n").Count -eq 0) "CONTROL: a hand-started gui (``start``) is not"
+Check (@(Find-HordeRawWeztermCall -Text "# & wezterm cli list`nWrite-Host `"& wezterm cli list`"`n").Count -eq 0) "CONTROL: a comment or a string naming the call is not"
+
+$allScripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File | Where-Object { $_.FullName -notmatch '\\\.git\\' })
+$rawAnywhere = @()
+foreach ($f in $allScripts) {
+    foreach ($r in @(Find-HordeRawWeztermCall -Text ([System.IO.File]::ReadAllText($f.FullName)))) {
+        $rawAnywhere += ("{0}:{1}: {2}" -f $f.FullName.Substring($root.Length + 1), $r.line, ($r.text -replace '\s+', ' '))
+    }
+}
+foreach ($x in $rawAnywhere) { Write-Host ("         raw: " + $x) -ForegroundColor Red }
+Check ($allScripts.Count -gt 20) ("CONTROL: the repository scan reads real scripts ({0})" -f $allScripts.Count)
+Check (@($allScripts | Where-Object { $_.FullName -eq $harnessPath }).Count -eq 1) "CONTROL: and the harness, whose one raw call is inside the helper, is among them"
+Check ($rawAnywhere.Count -eq 0) "no script anywhere in the repository calls the wezterm CLI except through Invoke-HordeWeztermCli"
+
 Write-Host ""
 Write-Host "--- every script that starts an instance also tears it down, by the real name ---" -ForegroundColor Cyan
 
