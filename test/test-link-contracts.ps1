@@ -118,7 +118,18 @@ Refuses { param($v) $v.'x-horde-verbs'[0].PSObject.Properties.Remove("since") } 
 Refuses { param($v) $v.'x-horde-verbs'[0].since = 2 } "after this table's protocol" "a verb since a later protocol than the table's is refused"
 Refuses { param($v) $v.'x-horde-verbs'[1].name = "node.info" } "is in the table twice" "a verb named twice is refused" @("node.info")
 Refuses { param($v) $v.'x-horde-verbs'[0] | Add-Member -NotePropertyName handler -NotePropertyValue "Invoke-Anything" } "does not allow" "a row with a member the row definition does not have is refused"
-Refuses { param($v) Add-Row $v "alert.forward" "spawn" "node-to-hub" } "never asks the hub to spawn or kill" "a node-to-hub verb that spawns is refused"
+Refuses { param($v) Add-Row $v "alert.forward" "spawn" "node-to-hub" } "never asks the hub to spawn, drive or kill" "a node-to-hub verb that spawns is refused"
+Refuses { param($v) Add-Row $v "alert.forward" "drive" "node-to-hub" } "never asks the hub to spawn, drive or kill" "a node-to-hub verb that drives a session is refused"
+
+# DRIVE: session.deliver types into a running session, which may run with prompts bypassed. Classed
+# write, it escaped the permission ceiling that gates spawn (review of PR #40). Its class is pinned in
+# remote/Contract.ps1, so a table that reclasses it, or any verb, is refused.
+Check ("$($contract.rows['session.deliver'].effect)" -ceq "drive") "session.deliver is classed drive in the real table"
+Check (@($realVerbs.definitions.'verb-row'.properties.effect.enum) -ccontains "drive") "drive is an effect class of the verb-row definition"
+Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node")) "the deliver contract says it may target only a session this hub spawned on the node"
+$deliverAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.deliver")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$deliverAt].effect = 'write'")) "remote/Contract.ps1 classes it 'drive'" "a table that classes session.deliver write is refused: drive is pinned" @("session.deliver")
+Refuses { param($v) $v.'x-horde-verbs'[5].effect = "read" } "remote/Contract.ps1 classes it 'spawn'" "a table that reclasses session.spawn read is refused" @("session.spawn")
 Refuses { param($v) $v.'x-horde-verbs'[0].args = "#/definitions/nothing-here" } "which is not there" "a row whose args name no definition is refused"
 Refuses { param($v) $v.'x-horde-verbs'[0].result = "no-such-schema.v1" } "which is not there" "a row whose result names no schema is refused"
 # THE ROW RULES ARE THE REAL FILE'S. A table that loosens its own verb-row must not get a pass.

@@ -61,22 +61,29 @@ $script:HordeLinkResultWords = @("transcript", "transcripts", "tool", "tools", "
 # schema can carry must be listed here by its path - "worktree.name", "sessions[].sessionId" - so an
 # argument cannot be added, or moved under another verb or another parent, without a change to this
 # file that a reviewer reads. The table cannot loosen it: it lives here, not in the table.
+#
+# EACH VERB'S EFFECT CLASS IS PINNED HERE TOO, so a table cannot reclass a verb downwards. The class that
+# matters most is drive: session.deliver types into a running session, and the review of PR #40 found
+# that classing it write let it drive any session on the node, a bypass-permission one included. Its
+# class is drive, gated by the node's permission ceiling exactly like spawn (plan step R9), and it may
+# target only a session this hub spawned on that node - hub-owned in the session record (R19, R21).
 $script:HordeLinkVerbAllow = @{
-    "node.info"       = @()
-    "request.status"  = @("requestId")
-    "handoff.get"     = @("sessionId", "handoffId")
-    "clone.status"    = @("repoId", "worktree")
-    "delivery.status" = @("messageId")
-    "session.spawn"   = @("label", "role", "parent", "runId", "fleetSessionId", "profile", "model", "repoId", "worktree",
-                          "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text", "prompt.handoffRef",
-                          "host", "closeOn")
-    "session.resume"  = @("sessionId", "reresolve", "model")
-    "session.deliver" = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body", "ttlSeconds")
-    "session.close"   = @("sessionId", "expect", "expect.pid", "expect.procStart", "reason")
-    "worktree.create" = @("repoId", "name", "branch", "base")
-    "worktree.remove" = @("repoId", "name")
-    "alert.raise"     = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt")
-    "unowned.report"  = @("sessions", "sessions[].sessionId", "sessions[].harness", "sessions[].startedAt", "observedAt")
+    "node.info"       = @{ effect = "read";  args = @() }
+    "request.status"  = @{ effect = "read";  args = @("requestId") }
+    "handoff.get"     = @{ effect = "read";  args = @("sessionId", "handoffId") }
+    "clone.status"    = @{ effect = "read";  args = @("repoId", "worktree") }
+    "delivery.status" = @{ effect = "read";  args = @("messageId") }
+    "session.spawn"   = @{ effect = "spawn"; args = @("label", "role", "parent", "runId", "fleetSessionId", "profile", "model", "repoId",
+                          "worktree", "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text",
+                          "prompt.handoffRef", "host", "closeOn") }
+    "session.resume"  = @{ effect = "spawn"; args = @("sessionId", "reresolve", "model") }
+    "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body",
+                          "ttlSeconds") }
+    "session.close"   = @{ effect = "kill";  args = @("sessionId", "expect", "expect.pid", "expect.procStart", "reason") }
+    "worktree.create" = @{ effect = "write"; args = @("repoId", "name", "branch", "base") }
+    "worktree.remove" = @{ effect = "kill";  args = @("repoId", "name") }
+    "alert.raise"     = @{ effect = "write"; args = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt") }
+    "unowned.report"  = @{ effect = "read";  args = @("sessions", "sessions[].sessionId", "sessions[].harness", "sessions[].startedAt", "observedAt") }
 }
 
 # The caps a result string may name. textBytes (a prompt, a message body) is for arguments only, so
@@ -316,14 +323,18 @@ function Test-HordeLinkVerbTable {
         $absent = @(Split-HordeLinkName $name | Where-Object { $script:HordeLinkAbsentVerbWords -ccontains $_ })
         if ($absent.Count -gt 0) { [void]$out.Add("$at is a verb the protocol never has ('" + ($absent -join "', '") + "'): no exec, shell, file, env, config, credential, process kill or update verb exists") }
         $allow = $null
-        if ($script:HordeLinkVerbAllow.ContainsKey($name)) { $allow = $script:HordeLinkVerbAllow[$name] }
+        $effect = "$(Get-HordeLinkProp $row 'effect')"
+        if ($script:HordeLinkVerbAllow.ContainsKey($name)) {
+            $allow = $script:HordeLinkVerbAllow[$name].args
+            $pinned = $script:HordeLinkVerbAllow[$name].effect
+            if ($effect -cne $pinned) { [void]$out.Add("$at is classed '" + $effect + "'; remote/Contract.ps1 classes it '" + $pinned + "', and a table cannot reclass a verb") }
+        }
         else { [void]$out.Add("$at is not a verb of remote/Contract.ps1's allowlist: a verb is added there, by review, before any table may carry it") }
         $since = Get-HordeLinkProp $row "since"
         if (($since -is [int] -or $since -is [long]) -and ($protocol -is [int] -or $protocol -is [long]) -and $since -gt $protocol) { [void]$out.Add("$at is since protocol $since, after this table's protocol $protocol") }
-        # A node never asks the hub to start or end anything: every spawn and kill travels hub to node,
-        # where the node's own admission and policy decide (plan steps R9 and R19).
-        $effect = "$(Get-HordeLinkProp $row 'effect')"
-        if ("$(Get-HordeLinkProp $row 'direction')" -ceq "node-to-hub" -and ($effect -ceq "spawn" -or $effect -ceq "kill")) { [void]$out.Add("$at travels node to hub with effect $effect; a node never asks the hub to spawn or kill") }
+        # A node never asks the hub to start, drive or end anything: every spawn, drive and kill travels
+        # hub to node, where the node's own admission and policy decide (plan steps R9 and R19).
+        if ("$(Get-HordeLinkProp $row 'direction')" -ceq "node-to-hub" -and ($effect -ceq "spawn" -or $effect -ceq "drive" -or $effect -ceq "kill")) { [void]$out.Add("$at travels node to hub with effect $effect; a node never asks the hub to spawn, drive or kill") }
         foreach ($part in @("args", "result")) {
             $target = Get-HordeLinkProp $row $part
             if ($target -isnot [string]) { continue }

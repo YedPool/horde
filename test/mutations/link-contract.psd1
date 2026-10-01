@@ -51,8 +51,14 @@
            Find = '-and $since -gt $protocol)'
            Replace = '-and $false)' }
         @{ Name = "node-may-ask-hub-to-spawn"
-           Find = '-and ($effect -ceq "spawn" -or $effect -ceq "kill")'
+           Find = '-and ($effect -ceq "spawn" -or $effect -ceq "drive" -or $effect -ceq "kill")'
            Replace = '-and $false' }
+        @{ Name = "node-may-ask-hub-to-drive"
+           Find = '$effect -ceq "spawn" -or $effect -ceq "drive" -or'
+           Replace = '$effect -ceq "spawn" -or' }
+        @{ Name = "effect-class-not-pinned"
+           Find = 'if ($effect -cne $pinned) {'
+           Replace = 'if ($false) {' }
         @{ Name = "args-need-not-be-object"
            Find = 'if ($part -ceq "args" -and "$(Get-HordeLinkProp $t.node ''type'')" -cne "object")'
            Replace = 'if ($false)' }

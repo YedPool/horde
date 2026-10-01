@@ -11,8 +11,11 @@
            Find = '"required": ["name", "direction", "effect", "since", "args", "result"],'
            Replace = '"required": ["name", "direction", "since", "args", "result"],' }
         @{ Name = "effect-class-widened"
-           Find = '"effect": { "type": "string", "enum": ["read", "write", "spawn", "kill"] },'
-           Replace = '"effect": { "type": "string", "enum": ["read", "write", "spawn", "kill", "delete"] },' }
+           Find = '"effect": { "type": "string", "enum": ["read", "write", "spawn", "drive", "kill"] },'
+           Replace = '"effect": { "type": "string", "enum": ["read", "write", "spawn", "drive", "kill", "delete"] },' }
+        @{ Name = "deliver-classed-write"
+           Find = '{ "name": "session.deliver",  "direction": "hub-to-node", "effect": "drive",'
+           Replace = '{ "name": "session.deliver",  "direction": "hub-to-node", "effect": "write",' }
         @{ Name = "handoff-document-raised-to-text"
            Find = '"document": { "type": "string", "pattern": "\\S", "x-horde-cap": "summaryBytes" }'
            Replace = '"document": { "type": "string", "pattern": "\\S", "x-horde-cap": "textBytes" }' }
