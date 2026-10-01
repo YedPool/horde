@@ -235,6 +235,14 @@ FrameRefuses "ping.json" { param($x) $x.ts = "2026-09-30T12:00:10" } "$.ts does 
 FrameRefuses "ping.json" { param($x) $x.seq = 0 } "below the minimum" "a sequence number below 1 is refused"
 FrameRefuses "ping.json" { param($x) $x | Add-Member -NotePropertyName shell -NotePropertyValue "cmd" } "has 'shell', which the schema does not allow" "an envelope member that does not exist is refused"
 FrameRefuses "req-node-info.json" { param($x) $x.PSObject.Properties.Remove("requestId") } "a req frame has no 'requestId'" "a req without a requestId is refused"
+# issuedAt: when the hub first recorded the request (plan step R3's replay window). Required on a req,
+# a UTC time in ASCII digits, carried by no other kind, and the same on every resend - unlike ts.
+FrameRefuses "req-node-info.json" { param($x) $x.PSObject.Properties.Remove("issuedAt") } "a req frame has no 'issuedAt'" "a req without issuedAt is refused"
+FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:00" } "$.issuedAt does not match" "an issuedAt with no zone is refused"
+FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:00+00:00" } "$.issuedAt does not match" "an issuedAt with an offset instead of Z is refused: one spelling of UTC"
+FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = "2026-09-30T12:00:0" + [char]0x0661 + "Z" } "$.issuedAt does not match" "an issuedAt with a non-ASCII digit is refused"
+FrameRefuses "req-node-info.json" { param($x) $x.issuedAt = 1759233600 } "$.issuedAt should be string" "an issuedAt as a number is refused"
+FrameRefuses "res-handoff-absent.json" { param($x) $x | Add-Member -NotePropertyName issuedAt -NotePropertyValue "2026-09-30T12:00:00Z" } "a res frame may not carry 'issuedAt'" "issuedAt is carried by a req and no other kind"
 FrameRefuses "req-node-info.json" { param($x) $x | Add-Member -NotePropertyName re -NotePropertyValue $x.id } "a req frame may not carry 're'" "a req carrying a member of another kind is refused"
 FrameRefuses "res-handoff-absent.json" { param($x) $x | Add-Member -NotePropertyName error -NotePropertyValue ([pscustomobject]@{ code = "internal"; reason = "both" }) } "exactly one of result, error" "a res with both a result and an error is refused"
 FrameRefuses "res-handoff-absent.json" { param($x) $x.PSObject.Properties.Remove("result") } "exactly one of result, error" "a res with neither a result nor an error is refused"
@@ -248,6 +256,32 @@ FrameRefuses "ping.json" { param($x) $x.PSObject.Properties.Remove("ping"); $x |
 FrameRefuses "hello-node.json" { param($x) $x.hello.PSObject.Properties.Remove("t1") } "$.hello has no 't1'" "a hello without its clock stamp is refused"
 FrameRefuses "bye.json" { param($x) $x.bye.reason = "  " } "$.bye.reason does not match" "a bye with a blank reason is refused"
 FrameRefuses "res-handoff-known.json" { param($x) $x.kind = "evt"; $x.PSObject.Properties.Remove("requestId") } "streams events" "an evt frame is refused: no v1 verb streams events"
+
+# A RESEND IS THE SAME REQUEST IN A NEW FRAME: a new id, seq and ts, and the same requestId, issuedAt,
+# verb and args. The journal (plan step R3) keys on requestId and judges its replay window by issuedAt,
+# so a resend that moved issuedAt would reopen a window the first send closed.
+$first = Read-Fx "frames\req-session-spawn.json"
+function New-Resend {
+    param([scriptblock]$Change)
+    $r = Copy-Json $first
+    $r.id = "0a000000-0000-4000-8000-0000000000e8"; $r.seq = 41; $r.ts = "2026-09-30T12:05:00Z"
+    $null = & $Change $r
+    return $r
+}
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) }) -Contract $contract)
+Check ($f.Count -eq 0) "CONTROL: a resend with a new id, seq and ts and everything else the same is a resend"; Show $f
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.issuedAt = $r.ts }) -Contract $contract)
+Check (Says $f "issuedAt") "a resend whose issuedAt moved is not a resend: issuedAt is fixed when the hub first records the request"
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.args.prompt.text = "Something else." }) -Contract $contract)
+Check (Says $f "args") "a resend whose arguments changed is not a resend"
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.verb = "session.resume" }) -Contract $contract)
+Check (Says $f "verb") "a resend naming another verb is not a resend"
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.requestId = "0b000000-0000-4000-8000-0000000000e8" }) -Contract $contract)
+Check (Says $f "requestId") "a frame with another requestId is not a resend of this request"
+$f = @(Test-HordeLinkResend -First $first -Again (New-Resend { param($r) $r.id = $first.id }) -Contract $contract)
+Check (Says $f "new frame id") "a resend reuses no frame id: it is a new frame"
+$f = @(Test-HordeLinkResend -First (Read-Fx "frames\ping.json") -Again (Read-Fx "frames\ping.json") -Contract $contract)
+Check (Says $f "not a req") "only a req can be resent"
 
 Write-Host ""
 Write-Host "--- G. every result is a core/tristate answer, typed by its verb ---" -ForegroundColor Cyan

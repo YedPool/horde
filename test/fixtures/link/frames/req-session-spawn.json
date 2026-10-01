@@ -6,6 +6,7 @@
   "ts": "2026-09-30T12:00:06Z",
   "verb": "session.spawn",
   "requestId": "0b000000-0000-4000-8000-000000000008",
+  "issuedAt": "2026-09-30T11:59:58Z",
   "args": {
     "label": "B3",
     "role": "goblin",
