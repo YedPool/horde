@@ -364,15 +364,26 @@ G. Target naming, the naming half of `tell` (step 3.6)
       - a fleet id.
     - It returns a result and never exits. A refusal exits 1, and a malformed name exits 2.
     - **`Get-HordeSessionName`, the inverse: the one source of a session's name** (founder request,
-      2026-10-01). A pure function from a fleet record to the name people see for that session:
-      today its label, as M used for the web titles of 2026-10-01. Every place that shows a session's
-      name calls it and formats none of its own: the target result's `name`, the remote-view name at
-      birth (engines E9 and N1), `horde names` and its repair (lifecycle step 34), and host title
-      decoration (migration step 7.2). Tests first:
-      - "every name it returns resolves back to the same session through `horde target`", over every
-        fixture record. So whatever a person reads off a web title or a terminal tab is a name Horde
+      2026-10-01). A pure function that takes a session and the fleet view and returns the name
+      people see for that session - today its label, as M used for the web titles of 2026-10-01 -
+      or "no name" with a reason. It answers "no name" exactly where this step's own resolution would
+      not lead back to the session: no label; a label that is also a lane fleet id in the view
+      (decision 6, ambiguous); or no verified handle (decision 7). When step 18 relaxes decision 7,
+      the third reason goes with it, in the same PR. Every place that shows a session's name calls
+      it and formats none of its own: the target result's `name`, the remote-view name at birth
+      (engines E9 and N1), `horde names` and its repair (lifecycle step 34), and host title
+      decoration (migration step 7.2). Tests first, over fixture views that include a collision and
+      a session with no verified handle:
+      - "every name it returns resolves back to the same session through `horde target`", given the
+        same view. So whatever a person reads off a web title or a terminal tab is a name Horde
         accepts. A mutation that appends the run title turns it red;
-      - "a record with no label has no name, with the reason", never an empty string or the id.
+      - "every refusal carries a reason": each "no name" answer names one of the three causes, never
+        an empty string, never the id in place of a name. Controls: the colliding label and the
+        unverified session each get "no name", and the same sessions without the collision, or with
+        the handle verified, get their label;
+      - together the two tests cover every fixture: each session either round-trips or is refused
+        with a reason, and a mutation that drops the collision check makes the first test go red on
+        the colliding fixture.
     - Decision 6: a lane fleet id that is also a label elsewhere is ambiguous.
     - Decision 7: a session with no verified handle is refused. "Verified" means the view answers the
       handle as live in the current instance.
