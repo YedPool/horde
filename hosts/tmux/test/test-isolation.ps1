@@ -459,8 +459,23 @@ Check ($code -notmatch 'pkill|killall|kill-server -a|rm -rf|rm -r ') "no pkill, 
 # NO PER-PID KILL. Containment makes one unnecessary, and the review of PR 35 found the one there was
 # had a gap between checking a pid and killing it. The only kill left is pid 1's watcher stopping its
 # own unreaped child inside its own namespace, which can name nothing else.
-$kills = @([regex]::Matches($code, '\bkill\s+-[A-Z0-9]+[^\n]*') | ForEach-Object { $_.Value })
-Check ($kills.Count -eq 1 -and $kills[0] -match '^kill -TERM "\$srv"') ("the harness sends no signal to any pid but pid 1's own server child (" + ($kills -join " | ") + ")")
+# WIDENED in round 3: the first version matched only `kill -<UPPER|digit>`, so a bare `kill "$p"`,
+# `kill -s KILL`, a perl kill() or a pidfd_send_signal would have passed. Every form of sending a
+# signal is matched now; `kill-server` (tmux's own verb, sent through our socket) is not a signal.
+function Get-SignalSends { param([string]$Text)
+    return @([regex]::Matches($Text, '(?<![\w-])kill(?!-server)\b[^\n]*|pidfd_send_signal|syscall\s*\(\s*424|\.Kill\(\)|Stop-Process|taskkill') | ForEach-Object { $_.Value.Trim() }) }
+foreach ($bait in @('kill "$p"', 'kill -s KILL "$p"', 'kill -9 "$p"', 'perl -e "kill 9, $p"', 'syscall(424, $fd, 9, 0, 0)', 'pidfd_send_signal', '$x.Kill()', 'Stop-Process -Id 4')) {
+    Check (@(Get-SignalSends $bait).Count -ge 1) ("CONTROL: the guard sees a signal sent as " + $bait)
+}
+Check (@(Get-SignalSends 'tmux -L x kill-server').Count -eq 0) "CONTROL: tmux's kill-server verb is not a signal"
+$shellText = $script:HordeTmuxOwner + "`n" + $script:HordeTmuxNsScan + "`n" + $script:HordeTmuxCleanup + "`n" + $script:HordeTmuxPreflight
+$kills = @(Get-SignalSends $shellText)
+Check ($kills.Count -eq 1 -and $kills[0] -match '^kill -TERM "\$srv"') ("every shell script the harness hands to sh signals nothing but pid 1's own server child (" + ($kills -join " | ") + ")")
+$psKills = @([regex]::Matches($code, '\.Kill\(\)|Stop-Process|taskkill|pidfd_send_signal|syscall\s*\(') | ForEach-Object { $_.Value })
+Check ($psKills.Count -eq 1 -and $psKills[0] -eq '.Kill()') ("and the only kill in its PowerShell is one wsl.exe call it started and holds, on timeout (" + ($psKills -join " | ") + ")")
+$e2eText = ((Get-Content -LiteralPath (Join-Path $here "e2e\e2e-isolation.ps1")) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n"
+$e2eSignals = @([regex]::Matches($e2eText, 'pidfd_send_signal|syscall\(424|kill -9|kill "\$') | ForEach-Object { $_.Value })
+Check ($e2eSignals.Count -eq 1 -and $e2eSignals[0] -eq 'syscall(424') ("the e2e signals only through its one pidfd helper (" + ($e2eSignals -join " | ") + ")")
 Check ($code -notmatch '/proc/\[0-9\]\*/environ') "and it reads no process's environment to decide what to kill"
 Check ($script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null' -and $script:HordeTmuxOwner -match '(?m)^wait "\$srv"$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" new-session ') "pid 1 runs the server in the foreground as its child, makes the session from inside, and waits on the server"
 Check ($script:HordeTmuxOwner -match '(?m)^exec 3<&0$' -and $script:HordeTmuxOwner -match '(?m)^\{ cat >/dev/null; kill -TERM "\$srv" 2>/dev/null; \} <&3 &$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null >/dev/null 2>&1 3<&- &$') "pid 1 watches the owner's stdin on fd 3 and stops the server at EOF - the crash exit - and the server does not hold that stdin"
