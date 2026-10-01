@@ -5,7 +5,7 @@
   "capabilities": {
     "auth.peer": {
       "support": "yes",
-      "evidence": "The pipe's ACL allows only the owning user's SID and denies NETWORK, protected from inheritance, read back from the live pipe by transports/local/test/test-local.ps1; a pipe whose ACL denies the caller is refused. The client refuses a pipe whose owner is not its own user. Measured 2026-09-30, Windows PowerShell 5.1.26100.9444."
+      "evidence": "transports/local/test/test-local.ps1, measured 2026-09-30 on Windows PowerShell 5.1.26100.9444: the live pipe's ACL allows only the owning user's SID and denies NETWORK, protected; its label is No-Write-Up and No-Read-Up at Medium, and a low-integrity reader of the same user is denied; it rejects remote clients, and a connect over localhost is refused while an ordinary pipe's is not; the hub refuses a pipe served by a low-integrity process of the same user, and the node refuses a client below its own integrity; a pipe whose ACL denies the caller is refused, and the name stays held between links."
     },
     "encrypt": {
       "support": "no",
