@@ -91,6 +91,10 @@ if ($iso) {
     Write-Host ("  distro " + $iso.distro + ", tmux " + $e1.version + ", server pid " + $e1.serverPid + ", socket " + $iso.socket) -ForegroundColor DarkGray
     $marker = "HORDE-E2E-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
     $escapeSecs = $null
+    # The marker pane's child sleeps a duration unique to this run too, so that if containment is ever
+    # broken - a mutation run breaks it on purpose - it is found and cleaned up by its command line like
+    # the escape children below, instead of outliving the run (measured: one did, for its 300 seconds).
+    $markerSecs = 320 + (Get-Random -Maximum 40)
     $v1 = $null
     try {
         $count = $null
@@ -105,12 +109,12 @@ if ($iso) {
         if ($count -eq 1) {
             # A pane that prints a marker, then ignores SIGHUP and stays: tmux's kill-server sends SIGHUP,
             # and this child is measured to outlive it, so teardown must find and kill it.
-            $pane = New-HordeTmuxPane -Instance $iso -Command @("sh", "-c", ("echo " + $marker + "; trap '' HUP; exec sleep 300"))
+            $pane = New-HordeTmuxPane -Instance $iso -Command @("sh", "-c", ("echo " + $marker + "; trap '' HUP; exec sleep " + $markerSecs))
             Check (Test-HordeTmuxPaneId $pane) ("a pane was spawned running a command: " + $pane)
             Start-Sleep -Milliseconds 700
             $text = Get-HordeTmuxPaneText -Instance $iso -Pane $pane
             Check ("$text" -like "*$marker*") "the command ran and its output is on that pane's screen"
-            $inside = @(Get-HordeTmuxNsProcs -Entry $e1 | Where-Object { $_ -match '^\d+ sh -c echo HORDE-E2E-|^\d+ sleep 300\s*$' })
+            $inside = @(Get-HordeTmuxNsProcs -Entry $e1 | Where-Object { $_ -match ('^\d+ sh -c echo HORDE-E2E-|^\d+ sleep ' + $markerSecs + '\s*$') })
             Check ($inside.Count -ge 1) ("the pane's process runs inside our namespace: " + ($inside -join "; "))
 
             $shell = New-HordeTmuxPane -Instance $iso -Command @("sh")
@@ -130,6 +134,7 @@ if ($iso) {
             Start-Sleep -Milliseconds 1500
             $seen = @(Get-EscapeSleeps $escapeSecs)
             Check ($seen.Count -eq 2) ("PRECONDITION: both markless HUP-ignoring children are running (" + ($seen -join "; ") + ")")
+            $escapeSecs = @($escapeSecs) + @($markerSecs)
         }
     } finally {
         # Teardown runs whatever happened above. A teardown that only runs on success is the leak (L-019).
