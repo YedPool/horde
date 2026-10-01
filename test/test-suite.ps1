@@ -106,6 +106,17 @@ $pcf = Invoke-Fixture "passcode-fails"
 Check ($pcf.code -eq 1) "a suite that fails exits 1 whatever pass code it asked for"
 
 Write-Host ""
+Write-Host "--- fail fast, for mutation runs ---" -ForegroundColor Cyan
+# A mutant is caught at its first failed check; the rest of the suite proves nothing more about it and
+# can take minutes. Under HORDE_FAIL_FAST=1 (set by a mutation spec's Environment) the helper stops at
+# the first [FAIL] (second review of PR #31, finding 9).
+$keepFF = $env:HORDE_FAIL_FAST
+try { $env:HORDE_FAIL_FAST = "1"; $ff = Invoke-Fixture "failfast" } finally { $env:HORDE_FAIL_FAST = $keepFF }
+Check ($ff.code -eq 1 -and $ff.out -like "*[[]FAIL] the first failing check*" -and $ff.out -notlike "*the second failing check*") "under fail-fast a suite stops at its first failed check"
+$ffOff = Invoke-Fixture "failfast"
+Check ($ffOff.code -eq 1 -and $ffOff.out -like "*the second failing check*") "CONTROL: without it every check runs"
+
+Write-Host ""
 Write-Host "--- controls ---" -ForegroundColor Cyan
 $c = Invoke-Fixture "caught"
 Check ($c.code -eq 0) "CONTROL: an error a test catches on purpose does not fail the suite"

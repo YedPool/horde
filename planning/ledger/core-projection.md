@@ -511,3 +511,8 @@ adapters' own PRs.
 - source: second review of horde PR #31, finding 8: the checks added to the pane-sessions judge (writer, two files, contradicted file) and the claim matcher (writer, incomplete registry, unknown handle) had no mutants
 - disposition: test
 - where: test/test-projection.ps1 :: "a claim is not matched when this host did not write the claims"
+
+### L-097 A caught mutant stops at its first failed check, and one mutant can be rerun alone
+- source: second review of horde PR #31, finding 9: the projection suite takes over 20 minutes under load, so 105 mutants ran for days; a caught mutant needs only its first [FAIL], and rerunning one after a fix needed the whole spec
+- disposition: test
+- where: test/test-suite.ps1 :: "under fail-fast a suite stops at its first failed check"

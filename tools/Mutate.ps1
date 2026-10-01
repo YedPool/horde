@@ -35,8 +35,10 @@
 # run left behind cannot go by "new since I started" - another run's folder is new too
 # (test/test-mutate.ps1 blamed itself for two foreign runs on 2026-09-30). A tag only that caller
 # knows makes its folders its own. Lowercase letters and digits, 1 to 16.
-
-param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag)
+#
+# -Only runs just the named mutants of the spec - to rerun one after a fix without the rest - and
+# refuses a name the spec does not have (second review of PR #31, finding 9).
+param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @())
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -105,6 +107,8 @@ foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $s.ContainsKey($k))
 # whole, and only a spec that sets PassCodes = @(3) accepts it (second review of PR #31, finding 4).
 $passCodes = @(0)
 if ($s.ContainsKey("PassCodes")) { $passCodes = @($s.PassCodes | ForEach-Object { [int]$_ }) }
+$unknownOnly = @($Only | Where-Object { @($s.Mutations | ForEach-Object { "$($_.Name)" }) -cnotcontains $_ })
+if ($unknownOnly.Count -gt 0) { Write-Host ("  -Only names mutants the spec does not have: " + ($unknownOnly -join ", ")) -ForegroundColor Red; exit 2 }
 $script:envSaved = @{}
 $specEnv = @{}
 if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
@@ -146,7 +150,10 @@ try {
     }
 
     $script:toRun = @()
-    if (-not $script:baselineFailed) { $script:toRun = @($s.Mutations) }
+    if (-not $script:baselineFailed) {
+        $script:toRun = @($s.Mutations)
+        if ($Only.Count -gt 0) { $script:toRun = @($s.Mutations | Where-Object { $Only -ccontains "$($_.Name)" }) }
+    }
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }

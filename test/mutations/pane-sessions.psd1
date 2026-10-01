@@ -4,7 +4,8 @@
 @{
     Target = "core\PaneSessions.ps1"
     Suite  = "test\test-projection.ps1"
-    Environment = @{ HORDE_SKIP_REALITY = "1" }
+    # Fixtures only, and stop at the first failed check: a caught mutant needs nothing more.
+    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1" }
     # With the reality check skipped the suite passes with exit 3 (test\test-projection.ps1).
     PassCodes = @(3)
     Mutations = @(

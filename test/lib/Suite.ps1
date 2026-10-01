@@ -51,7 +51,13 @@ function Check {
         [void]$script:fails.Add($What); return
     }
     if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; [void]$script:fails.Add($What) }
+    else {
+        Write-Host "  [FAIL] $What" -ForegroundColor Red; [void]$script:fails.Add($What)
+        # FAIL FAST, for mutation runs only: a mutant is caught at its first failed check, and the rest
+        # of a slow suite proves nothing more about it. Set by a spec's Environment (second review of
+        # PR #31, finding 9); an ordinary run reports every check.
+        if ($env:HORDE_FAIL_FAST -eq "1") { Write-Host "  [FAIL-FAST] stopping at the first failed check (HORDE_FAIL_FAST=1)" -ForegroundColor Red; exit 1 }
+    }
 }
 
 function Throws {
