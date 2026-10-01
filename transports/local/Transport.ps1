@@ -242,14 +242,34 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
         param($ListenerState, [int]$TimeoutMs)
         $st = $ListenerState
         if ($null -eq $st.server) { return (New-HordeLocalResult -Ok $false -Reason ("the listener on " + $st.pipe + " has no waiting instance (" + $st.broken + "); stop it and listen again")) }
-        if ($null -eq $st.wait) { $st.wait = $st.server.WaitForConnectionAsync() }
-        try { $came = $st.wait.Wait([Math]::Max(0, $TimeoutMs)) }
-        catch {
+        # A client that connects and closes before this wait starts leaves the instance dead:
+        # WaitForConnectionAsync then throws "The pipe is being closed" - synchronously, which the first
+        # version did outside its try, so the dead instance was kept and every later accept failed the
+        # same way, for ever (review of PR #42, round 2). Now any failure replaces the instance - the
+        # fresh one is made while the dead one still holds the name - and the wait goes on until the
+        # deadline.
+        $deadline = [datetime]::UtcNow.AddMilliseconds([Math]::Max(0, $TimeoutMs))
+        while ($true) {
+            $failed = ""
+            try {
+                if ($null -eq $st.wait) { $st.wait = $st.server.WaitForConnectionAsync() }
+                $came = $st.wait.Wait([int][Math]::Max(0, ($deadline - [datetime]::UtcNow).TotalMilliseconds))
+            } catch {
+                $e = $_.Exception
+                while ($null -ne $e.InnerException) { $e = $e.InnerException }
+                $failed = $e.Message
+            }
+            if ($failed -eq "") { break }
+            $dead = $st.server
             $st.wait = $null
-            try { $st.server.Dispose() } catch { }
-            $st.server = $null
-            $st.broken = "waiting for a peer failed: " + $_.Exception.InnerException.Message
-            return (New-HordeLocalResult -Ok $false -Reason $st.broken)
+            $fresh = New-HordeLocalServer -Pipe $st.pipe
+            try { $dead.Dispose() } catch { }
+            $st.server = $fresh.stream
+            if ($null -eq $fresh.stream) {
+                $st.broken = "an instance failed (" + $failed + ") and could not be replaced: " + $fresh.reason
+                return (New-HordeLocalResult -Ok $false -Reason $st.broken)
+            }
+            if ([datetime]::UtcNow -ge $deadline) { return (New-HordeLocalResult -Ok $false -Reason ("no peer connected within " + $TimeoutMs + " ms (an instance a client had closed was replaced)")) }
         }
         # Not connected in time: the wait stays pending on the same instance for the next call.
         if (-not $came) { return (New-HordeLocalResult -Ok $false -Reason ("no peer connected within " + $TimeoutMs + " ms")) }

@@ -281,4 +281,32 @@ if (-not $plainOk) {
         } finally { Stop-HordeTransportListener -Listener $listener }
     } else { Check $false "a listener for the network case" }
 }
+
+Write-Host ""
+Write-Host "--- clients that connect and close at once do not wedge the listener ---" -ForegroundColor Cyan
+# Review of PR #42, round 2: one client that connected and closed before Accept ran made
+# WaitForConnectionAsync throw "The pipe is being closed" outside the try, so the listener kept the
+# dead instance and every later Accept failed the same way, for ever.
+$id = New-Id
+$pipe = Get-HordeLocalPipeName -DeviceId $id
+$la = Start-HordeTransportListener -Transport $t -Endpoint $id
+if ($la.state -eq "known") {
+    $listener = Get-HordeValue $la
+    try {
+        $churned = 0
+        for ($i = 0; $i -lt 10; $i++) {
+            $c = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipe, [System.IO.Pipes.PipeDirection]::InOut)
+            try { $c.Connect(3000); $churned++ } catch { }
+            $c.Dispose()
+            $null = Receive-HordeTransportLink -Listener $listener -TimeoutMs 300
+        }
+        Check ($churned -ge 1) ("CONTROL: clients did connect and close (" + $churned + " of 10)")
+        $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
+        $ka = Receive-HordeTransportLink -Listener $listener -TimeoutMs 5000
+        Check ($o.state -ceq "known" -and $ka.state -ceq "known") ("after them, a normal client is accepted (open: " + $o.state + ", accept: " + $ka.state + " " + $ka.reason + ")")
+        if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
+    } finally { Stop-HordeTransportListener -Listener $listener }
+} else { Check $false "a listener for the churn case" }
+
 Complete-HordeSuite -Success "the local pipe admits only its own user, and refuses a pipe it did not make"

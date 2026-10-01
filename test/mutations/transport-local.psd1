@@ -46,6 +46,9 @@
            Replace = 'if ($false) {'
            Expect = "survives"
            Reason = "Reaching this line needs a pipe served at this end's integrity by a program that is not the node's interpreter; every process the suite can start at that level is powershell.exe. Test-HordeLocalNodeImage itself is tested, and any-image-accepted is caught. The integrity check, not the image, is what stops the reviewer's squatter." }
+        @{ Name = "closed-instance-not-replaced"
+           Find = '$fresh = New-HordeLocalServer -Pipe $st.pipe'
+           Replace = '$fresh = [pscustomobject]@{ stream = $null; reason = "mutant" }' }
         @{ Name = "gap-between-links"
            Find = '$next = New-HordeLocalServer -Pipe $st.pipe'
            Replace = '$next = [pscustomobject]@{ stream = $null; reason = "mutant" }' }
