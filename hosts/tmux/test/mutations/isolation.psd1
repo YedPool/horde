@@ -59,7 +59,7 @@
 
         # --- teardown kills only its own server
         @{ Name = "teardown-skips-identity-refusal"
-           Find = 'if ($bad) { return (& $verdict $false $false @() @() $false $false $true ($bad + " - refusing to kill it")) }'
+           Find = 'if ($bad) { return (& $verdict $false $false @() $false $false $true ($bad + " - refusing to kill it")) }'
            Replace = '' }
         @{ Name = "identity-ignores-pid-and-start"
            Find = 'if ($parts[1] -ne "$($Entry.serverPid)" -or $parts[2] -ne "$($Entry.startTime)") {'
@@ -79,12 +79,6 @@
         @{ Name = "namespace-never-scanned"
            Find = 'if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }'
            Replace = '' }
-        @{ Name = "sweep-never-kills"
-           Find = '$script:HordeTmuxSweep, "sh", $e.socket, "kill")'
-           Replace = '$script:HordeTmuxSweep, "sh", $e.socket, "list")' }
-        @{ Name = "sweep-matches-any-tmux-child"
-           Find = 'grep -qaF -e "TMUX=$sock,"'
-           Replace = 'grep -qaF -e "TMUX="' }
         @{ Name = "cleanup-under-a-live-server"
            Find = 'if (-not $survived) {'
            Replace = 'if ($true) {' }

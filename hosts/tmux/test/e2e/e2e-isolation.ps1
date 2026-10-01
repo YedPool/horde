@@ -66,13 +66,17 @@ function Get-EscapeSleeps { param($Secs)
     # The processes whose whole command line is exactly "sleep <n>" for this run's unique durations.
     $r = Invoke-HordeWsl -Distro $script:distroUsed -Argv (@("sh", "-c", $script:escapeFind, "sh") + @($Secs | ForEach-Object { "$_" }))
     return @(Get-HordeTmuxLines $r.out) }
+# KILL THROUGH A PIDFD: open the process first, then check it is still the one named, then signal
+# through that same descriptor - a pid reused after the open cannot receive the signal. syscall 434 is
+# pidfd_open and 424 pidfd_send_signal on x86_64 (measured by the review of PR 35 with this perl).
+$script:pidfdKill = 'my ($pid, $want) = @ARGV; my $fd = syscall(434, $pid + 0, 0); exit 0 if $fd < 0; open(my $c, "<", "/proc/$pid/cmdline") or exit 0; local $/; my $cl = <$c>; $cl =~ s/\0/ /g; exit 0 unless $cl eq $want; syscall(424, $fd, 9, 0, 0); exit 0'
 function Stop-EscapeSleeps { param($Secs)
     # Test cleanup, reached with anything to do only when the check above has already failed: this
-    # test's own escaped children, re-checked by their unique command line in the step that kills them,
-    # so a failed run does not leave them for the next run to trip over.
+    # test's own escaped children, re-checked by their unique command line through a pidfd, so a failed
+    # run does not leave them for the next run to trip over.
     foreach ($l in @(Get-EscapeSleeps $Secs)) {
         $parts = @($l -split ' ')
-        [void](Invoke-HordeWsl -Distro $script:distroUsed -Argv @("sh", "-c", 'c=$(tr "\0" " " < "/proc/$1/cmdline" 2>/dev/null); [ "$c" = "sleep $2 " ] && kill -9 "$1"; exit 0', "sh", $parts[0], $parts[2]))
+        [void](Invoke-HordeWsl -Distro $script:distroUsed -Argv @("perl", "-e", $script:pidfdKill, $parts[0], ("sleep " + $parts[2] + " ")))
     } }
 
 Write-Host ""

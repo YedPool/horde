@@ -29,7 +29,7 @@ function Reply { param($Code = 0, [string]$Out = "", [string]$Err = "")
     return [pscustomobject]@{ code = $Code; out = $Out; err = $Err; timedOut = $false; startError = "" } }
 
 # THE FAKE WSL. Records every call as { distro; argv }, and answers from $script:answer, a scriptblock
-# that gets the call's kind ("tmux", "sweep", "nsscan", "cleanup", "mkdir", "preflight") and the argv.
+# that gets the call's kind ("tmux", "nsscan", "cleanup", "mkdir", "preflight") and the argv.
 $script:calls = New-Object System.Collections.ArrayList
 $script:answer = $null
 $fake = { param($D, $Argv, $T)
@@ -38,7 +38,6 @@ $fake = { param($D, $Argv, $T)
     $kind = "other"
     if ($a[0] -eq "env") { $kind = "tmux" }
     elseif ($a[0] -eq "mkdir") { $kind = "mkdir" }
-    elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxSweep) { $kind = "sweep" }
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxNsScan) { $kind = "nsscan" }
     elseif ($a[0] -eq "sh" -and $a[2] -eq $script:HordeTmuxCleanup) { $kind = "cleanup" }
     elseif ($a[0] -eq "sh") { $kind = "preflight" }
@@ -244,7 +243,7 @@ try {
     Check ($vb.refused -and "$($vb.reason)" -like "*not the pid*") "a server on our socket that is not the one Start recorded is refused"
     Check ((Get-Calls "kill-server").Count -eq 0) "and kill-server was never sent to it"
 
-    # OUR SERVER, HEALTHY: killed through our socket, verified gone, swept, cleaned, token spent.
+    # OUR SERVER, HEALTHY: killed through our socket, verified gone, its namespace read empty, cleaned, token spent.
     $c = New-Entry
     $script:calls.Clear()
     Set-Healthy -Entry $c.entry; $script:answer = $script:healthy
@@ -256,8 +255,6 @@ try {
     $idAt = [array]::IndexOf(@($script:calls), @(Get-Calls "display-message")[0])
     $ksAt = [array]::IndexOf(@($script:calls), $ks[0])
     Check ($idAt -ge 0 -and $idAt -lt $ksAt) "the server proved who it was before it was killed"
-    $sw = @($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxSweep })
-    Check ($sw.Count -eq 2 -and $sw[0].argv[4] -ceq $c.entry.socket -and $sw[0].argv[5] -eq "kill" -and $sw[1].argv[5] -eq "list") "what ran inside it is swept by our socket path: killed, then looked for again"
     $cl = @($script:calls | Where-Object { $_.argv[0] -eq "sh" -and $_.argv[2] -eq $script:HordeTmuxCleanup })
     Check ($cl.Count -eq 1 -and $cl[0].argv[4] -ceq $c.entry.socket -and $cl[0].argv[5] -ceq ($c.entry.dir + "/tmux-0") -and $cl[0].argv[6] -ceq $c.entry.dir) "only our socket, our tmux-<uid> folder and our directory are handed to the cleanup"
     Check (@($script:calls | Where-Object { $_.distro -ne "fake-distro" }).Count -eq 0) "every call went to the distro Start recorded"
@@ -274,8 +271,7 @@ try {
     # Only a CRLF checkout can fail this - the gate runs the suites from one (core.autocrlf=true).
     $crlfIn = [System.IO.File]::ReadAllText($harnessPath).Contains("`r`n")
     Write-Host ("  this checkout's harness has " + $(if ($crlfIn) { "CRLF" } else { "LF" }) + " line endings") -ForegroundColor DarkGray
-    Check (-not ($script:HordeTmuxSweep + $script:HordeTmuxServerAlive + $script:HordeTmuxCleanup).Contains("`r")) "the shell scripts handed to sh carry no carriage return, whatever the checkout's line endings"
-    Check ($script:HordeTmuxSweep -match 'grep -qaF -e "TMUX=\$sock,"' -and $script:HordeTmuxSweep -match 'kill -9 "\$p"') "a process is killed only if its own environment carries TMUX=<our socket>,"
+    Check (-not ($script:HordeTmuxOwner + $script:HordeTmuxNsScan + $script:HordeTmuxCleanup + $script:HordeTmuxPreflight).Contains("`r")) "the shell scripts handed to sh carry no carriage return, whatever the checkout's line endings"
 
     # THE SERVER WILL NOT DIE: its socket keeps answering after kill-server. The process check is made
     # to say "gone", so only the socket's answer can show the survival - teardown must measure it.
@@ -312,15 +308,7 @@ try {
     Check (Throws { Assert-HordeTmuxIsolated -Instance $as.inst } "not running inside our namespace") "Assert refuses a server that is not inside our namespace"
     $script:HordeTmuxStarted.Remove($as.inst.token)
 
-    # SOMETHING THAT RAN INSIDE WOULD NOT DIE: reported by pid.
-    $h2 = New-Entry
-    $script:calls.Clear()
-    Set-Healthy -Entry $h2.entry
-    $script:answer = { param($k, $a) if ($k -eq "sweep") { return (Reply 0 "731`n") }; return (& $script:healthy $k $a) }
-    $vh = Stop-HordeIsolatedTmux -Instance $h2.inst
-    Check (-not $vh.stopped -and (@($vh.orphansSurvived) -contains "731")) "a process carrying our TMUX that is still there after the kill is reported, and the teardown is not stopped"
-
-    # THE SERVER IS ALREADY GONE: no kill-server needed; still swept and cleaned.
+    # THE SERVER IS ALREADY GONE: no kill-server needed; its namespace is still read, and it is cleaned.
     $j = New-Entry
     $script:calls.Clear()
     $script:answer = { param($k, $a) if ($k -eq "tmux") { return (Reply 1 "" "no server running on /tmp/horde-iso-x") }; return (Reply 0 "") }
@@ -421,6 +409,12 @@ Check ($code -notmatch '&\s*wsl') "and never through PowerShell's & (which mis-q
 Check ($code -match '\$all \+= "--exec"' -and $code -notmatch '"--",\s*"tmux"') "every call uses --exec, never wsl's -- form, which hands the arguments to a shell to rewrite"
 Check (([regex]::Matches($code, '"tmux", "-L"')).Count -eq 1) "tmux's argv is built in exactly one place, Get-HordeTmuxArgv"
 Check ($code -notmatch 'pkill|killall|kill-server -a|rm -rf|rm -r ') "no pkill, killall, kill-server -a or recursive delete anywhere in the harness"
+# NO PER-PID KILL. Containment makes one unnecessary, and the review of PR 35 found the one there was
+# had a gap between checking a pid and killing it. The only kill left is pid 1's watcher stopping its
+# own unreaped child inside its own namespace, which can name nothing else.
+$kills = @([regex]::Matches($code, '\bkill\s+-[A-Z0-9]+[^\n]*') | ForEach-Object { $_.Value })
+Check ($kills.Count -eq 1 -and $kills[0] -match '^kill -TERM "\$srv"') ("the harness sends no signal to any pid but pid 1's own server child (" + ($kills -join " | ") + ")")
+Check ($code -notmatch '/proc/\[0-9\]\*/environ') "and it reads no process's environment to decide what to kill"
 Check ($script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null' -and $script:HordeTmuxOwner -match '(?m)^wait "\$srv"$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" new-session ') "pid 1 runs the server in the foreground as its child, makes the session from inside, and waits on the server"
 Check ($script:HordeTmuxOwner -match '(?m)^exec 3<&0$' -and $script:HordeTmuxOwner -match '(?m)^\{ cat >/dev/null; kill -TERM "\$srv" 2>/dev/null; \} <&3 &$' -and $script:HordeTmuxOwner -match '(?m)^"\$@" -D </dev/null >/dev/null 2>&1 3<&- &$') "pid 1 watches the owner's stdin on fd 3 and stops the server at EOF - the crash exit - and the server does not hold that stdin"
 Check ($script:HordeTmuxOwner -match '(?m)^if \[ -S "\$sock" \]; then rm -f -- "\$sock"; fi$' -and $script:HordeTmuxOwner -match '(?m)^rmdir -- "\$sub" "\$dir" 2>/dev/null$' -and $script:HordeTmuxOwner -notmatch 'rm -[a-zA-Z]*r') "and when the server has gone, pid 1 removes our socket and directories by rmdir, never recursively"

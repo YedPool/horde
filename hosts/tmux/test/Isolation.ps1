@@ -483,26 +483,9 @@ function Send-HordeTmuxText {
     }
 }
 
-# Every process in the distro whose environment carries TMUX=<socket>, - the variable tmux gives each
-# pane's child, so only what ran inside OUR server has it. $1 is the socket path, $2 "kill" or "list".
-# Each is checked and killed in the same step; the script's own pid is skipped. The socket path is an
-# argument, never spliced into the script text.
-#
 # EVERY SCRIPT BELOW HAS ITS CARRIAGE RETURNS STRIPPED. A checkout with core.autocrlf on gives this
 # file CRLF line endings, a here-string keeps them, and sh reads "sock=$1<CR>" as a different value
 # (CONTRIBUTING 12's autocrlf trap, crossing into Linux).
-$script:HordeTmuxSweep = @'
-sock=$1; me=$$
-for f in /proc/[0-9]*/environ; do
-  p=${f#/proc/}; p=${p%/environ}
-  [ "$p" = "$me" ] && continue
-  if grep -qaF -e "TMUX=$sock," "$f" 2>/dev/null; then
-    if [ "$2" = kill ]; then kill -9 "$p" 2>/dev/null; fi
-    echo "$p"
-  fi
-done
-exit 0
-'@ -replace "`r", ""
 
 # Remove our socket file and our two directories, and nothing else. The socket goes only if it is a
 # socket (-S) at exactly our path; the directories go by rmdir, which refuses a directory that holds
@@ -534,7 +517,7 @@ function Stop-HordeTmuxOwner {
 
 function Stop-HordeIsolatedTmux {
     # TEAR THE SERVER DOWN AND PROVE IT WENT: the server, everything that ran in it, its socket and its
-    # directory. Returns { stopped; survived; orphansKilled; orphansSurvived; socketRemoved; dirRemoved;
+    # directory. Returns { stopped; survived; orphansSurvived; socketRemoved; dirRemoved;
     # refused; reason } so a caller asserts rather than hopes (L-015).
     #
     # IT KILLS ONLY ITS OWN SERVER. The instance must carry a token this process issued (L-028), and
@@ -543,13 +526,13 @@ function Stop-HordeIsolatedTmux {
     # `kill-server` is only ever sent through Get-HordeTmuxArgv, so it names our socket, in our
     # directory, and nothing else.
     param($Instance, [int]$TimeoutSeconds = 30)
-    $verdict = { param($stopped, $survived, $killed, $still, $sockOk, $dirOk, $refused, $reason)
+    $verdict = { param($stopped, $survived, $still, $sockOk, $dirOk, $refused, $reason)
         if ($refused) { Write-Host ("  isolated tmux teardown REFUSED (" + $reason + ") - nothing was killed") -ForegroundColor Red }
-        [pscustomobject]@{ stopped = $stopped; survived = $survived; orphansKilled = @($killed); orphansSurvived = @($still)
+        [pscustomobject]@{ stopped = $stopped; survived = $survived; orphansSurvived = @($still)
                            socketRemoved = $sockOk; dirRemoved = $dirOk; refused = $refused; reason = $reason } }
-    if (-not $Instance) { return (& $verdict $false $false @() @() $false $false $true "no instance was passed - nothing was stopped and nothing was verified") }
+    if (-not $Instance) { return (& $verdict $false $false @() $false $false $true "no instance was passed - nothing was stopped and nothing was verified") }
     $e = Get-HordeTmuxEntry $Instance
-    if (-not $e) { return (& $verdict $false $false @() @() $false $false $true "not a tmux server this process started (no registered token) - refusing to kill anything") }
+    if (-not $e) { return (& $verdict $false $false @() $false $false $true "not a tmux server this process started (no registered token) - refusing to kill anything") }
 
     try {
         # WHO IS ON OUR SOCKET? Our server, nobody, or - refused - someone else.
@@ -557,10 +540,10 @@ function Stop-HordeIsolatedTmux {
             $id = Invoke-HordeTmux -Instance $Instance -Command @("display-message", "-p", "#{socket_path}|#{pid}|#{start_time}") -TimeoutSeconds $TimeoutSeconds
             if ($id.code -eq 0) {
                 $bad = Test-HordeTmuxIdentity -Entry $e -Line $id.out
-                if ($bad) { return (& $verdict $false $false @() @() $false $false $true ($bad + " - refusing to kill it")) }
+                if ($bad) { return (& $verdict $false $false @() $false $false $true ($bad + " - refusing to kill it")) }
                 [void](Invoke-HordeTmux -Instance $Instance -Command @("kill-server") -TimeoutSeconds $TimeoutSeconds)
             } elseif (-not (Test-HordeTmuxNoServer $id)) {
-                return (& $verdict $false $false @() @() $false $false $true ("the server on our socket did not answer and did not say it was gone (exit " + $id.code + ": " + "$($id.err)".Trim() + ") - refusing to act on it"))
+                return (& $verdict $false $false @() $false $false $true ("the server on our socket did not answer and did not say it was gone (exit " + $id.code + ": " + "$($id.err)".Trim() + ") - refusing to act on it"))
             }
         } elseif ($e.nsInode) {
             # Start failed after the owner came up but before the server identified itself. Anything on
@@ -585,17 +568,9 @@ function Stop-HordeIsolatedTmux {
         if ($e.nsInode) { $inNs = @(Get-HordeTmuxNsProcs -Entry $e -TimeoutSeconds $TimeoutSeconds) }
         $survived = (-not $gone) -or ($inNs.Count -gt 0)
 
-        # WHAT RAN INSIDE IT, killed, then looked for again: whatever is still there would not die.
-        $killed = @(); $still = @()
-        $k = Invoke-HordeWsl -Distro $e.distro -Argv @("sh", "-c", $script:HordeTmuxSweep, "sh", $e.socket, "kill") -TimeoutSeconds $TimeoutSeconds
-        $why = Get-HordeWslFailure $k
-        if ($why) { throw $why }
-        $killed = @(Get-HordeTmuxLines $k.out | ForEach-Object { $_.Trim() })
-        if ($killed.Count -gt 0) { Start-Sleep -Milliseconds 300 }
-        $l = Invoke-HordeWsl -Distro $e.distro -Argv @("sh", "-c", $script:HordeTmuxSweep, "sh", $e.socket, "list") -TimeoutSeconds $TimeoutSeconds
-        $why = Get-HordeWslFailure $l
-        if ($why) { throw $why }
-        $still = @(Get-HordeTmuxLines $l.out | ForEach-Object { $_.Trim() }) + @($inNs)
+        # WHAT RAN INSIDE IT is not hunted down and killed one pid at a time: the namespace already took
+        # it, and the scan above is the proof. Whatever is still listed there is reported, not killed.
+        $still = @($inNs)
 
         # OUR SOCKET AND DIRECTORY, only once the server is gone - a survivor keeps its socket, so it
         # can still be reached and cleaned up by hand (the first host's L-023 rule).
@@ -611,17 +586,17 @@ function Stop-HordeIsolatedTmux {
         # WSL ITSELF FAILED MID-TEARDOWN. Nothing is known, so nothing is claimed, and the token is kept
         # so the teardown can be run again once WSL answers.
         Write-Host ("  ISOLATED TMUX SERVER NOT VERIFIED: " + $_.Exception.Message + ". Socket " + $e.socket + " in distro " + $e.distro + ".") -ForegroundColor Red
-        return (& $verdict $false $false @() @() $false $false $false ("WSL failed during teardown: " + $_.Exception.Message))
+        return (& $verdict $false $false @() $false $false $false ("WSL failed during teardown: " + $_.Exception.Message))
     }
 
     # A token is used once (as in the first host's harness): a stale object cannot be torn down twice.
     $script:HordeTmuxStarted.Remove("$($Instance.token)")
     if ($survived -or $still.Count -gt 0) {
         Write-Host ("  ISOLATED TMUX SERVER LEAKED: socket " + $e.socket + " in distro " + $e.distro + ", server survived=" + $survived +
-                    ", processes that would not die: " + ($still -join ", ") + ". Kill them by hand.") -ForegroundColor Red
+                    ", processes still in its namespace: " + ($still -join ", ") + ". Kill them by hand.") -ForegroundColor Red
     }
     $reason = ""
     if ($survived) { $reason = "the server still answers, or its namespace still holds processes" }
-    elseif ($still.Count -gt 0) { $reason = "processes that ran inside it would not die" }
-    return (& $verdict (-not $survived -and $still.Count -eq 0) $survived $killed $still $sockOk $dirOk $false $reason)
+    elseif ($still.Count -gt 0) { $reason = "processes are still in its namespace" }
+    return (& $verdict (-not $survived -and $still.Count -eq 0) $survived $still $sockOk $dirOk $false $reason)
 }
