@@ -105,6 +105,11 @@ function Register-HordeTransport {
     $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $findings = @(Test-HordeTransportCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("transport '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
+    # Once per name. A second registration used to replace the first silently, so a stray copy of a
+    # folder could swap the transport every caller resolves by that name (review of PR #42).
+    if ($script:HordeTransports.ContainsKey("$($caps.transport)")) {
+        throw ("transport '" + $caps.transport + "' is already registered, from " + $script:HordeTransports["$($caps.transport)"].folder + "; the first registration stands")
+    }
     $t = [pscustomobject]@{
         PSTypeName = "Horde.Transport"; name = "$($caps.transport)"; folder = $Folder; capabilities = $caps
         maxFrameBytes = [int]$caps.maxFrameBytes; open = $Open; probe = $Probe; listen = $Listen; accept = $Accept; stop = $Stop

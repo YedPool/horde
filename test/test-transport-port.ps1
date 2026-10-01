@@ -78,6 +78,12 @@ foreach ($case in @(
     Check (@(Get-HordeTransportNames) -notcontains $case.n) ("and " + $case.n + " is not registered")
 }
 Check (Throws { Get-HordeTransport -Name "fixture-none" } "no transport") "asking for a transport nobody registered is an error, not a quiet default"
+# A NAME IS REGISTERED ONCE. Registering a folder whose name is already taken replaced the first
+# transport without a word (review of PR #42): a second copy of a folder, or a stray dot-source,
+# could swap the transport every caller resolves by that name. It is refused, and the first stands.
+$firstGood = Get-HordeTransport -Name "fixture-good"
+Check (Throws { Reg "fixture-good" -Open { param($e, $t) "replaced" } } "already registered") "registering a name a second time is refused"
+Check ([object]::ReferenceEquals((Get-HordeTransport -Name "fixture-good"), $firstGood)) "and the first registration still stands"
 
 Write-Host ""
 Write-Host "--- only 'yes' is having a capability; the production path requires auth.peer ---" -ForegroundColor Cyan
@@ -108,12 +114,11 @@ Check ($script:opened -eq 0) "and the transport's open was never called"
 $o = Open-HordeTransportLink -Transport $good -Endpoint "e" -Role "node"
 Check ($o.state -ceq "known" -and $script:opened -eq 1) "a node dials it (dial.out yes)"
 Check ($o.value.peer.verified -eq $false) "a transport that reports no peer gives an unverified peer, not a trusted one"
-$boom = Reg "fixture-nokeepalive" -Open { param($e, $t) throw "adapter exploded" } -Probe { param($e) "yes" }
+$boom = Reg "fixture-boom" -Open { param($e, $t) throw "adapter exploded" } -Probe { param($e) "yes" }
 $o = Open-HordeTransportLink -Transport $boom -Endpoint "e" -Role "node"
 Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*adapter exploded*") "an adapter that throws while opening gives unknown with its message, not a crash"
 $p = Test-HordeTransportReachable -Transport $boom -Endpoint "e"
 Check ((Test-HordeAnswer $p) -and $p.state -ceq "unknown") "a probe that answers with a bare value is unknown, not believed"
-$nk = Reg "fixture-nokeepalive"
 
 Write-Host ""
 Write-Host "--- receiving: a frame is known only when its LF arrived ---" -ForegroundColor Cyan

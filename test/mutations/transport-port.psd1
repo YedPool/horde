@@ -72,6 +72,9 @@
         @{ Name = "folder-name-not-checked"
            Find = 'if ("$($Capabilities.transport)" -cne $leaf) {'
            Replace = 'if ($false) {' }
+        @{ Name = "second-registration-replaces"
+           Find = 'if ($script:HordeTransports.ContainsKey("$($caps.transport)")) {'
+           Replace = 'if ($false) {' }
         @{ Name = "schema-not-checked"
            Find = '$findings = @(Test-HordeSchema -Value $Capabilities -Schema $schema)'
            Replace = '$findings = @()' }
