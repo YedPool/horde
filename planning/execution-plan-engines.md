@@ -20,7 +20,7 @@ sibling plans, and each has exactly one owner:
 | the permission-ceiling vocabulary and node policy | the remote plan, step R9 | E2 adds the per-harness mapping it needs |
 | the stream the metrics collectors read | the lifecycle plan's follower | M4 and M6 consume it (group H) |
 | `Get-HordeSessionName`, the one function that turns a fleet record into the name people see for a session | the merged Phase 3 plan, step 15 (`core/Target.ps1`) | N1, E9 and E10 call it; nothing in this plan formats a session name |
-| the binding's `remoteControl` field (remote name, session URL, when set) | the lifecycle plan, step 24 | E10 writes it at birth |
+| the binding's `remoteName` field (remote name, session URL, when set) | the lifecycle plan, step 24 | E10 writes it at birth, through the binding record's writer (migration step 3.8) |
 | `horde names` and `horde names repair`, the web-session-name read and repair verb | the lifecycle plan, step 34 | N1 supplies the harness half |
 
 ## Sources, and what is already decided
@@ -488,16 +488,21 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
     **Naming at birth** (group I). When the descriptor says `session.remoteName: yes`, the argv also
     carries the fragment N1 builds from `Get-HordeSessionName` (the merged Phase 3 plan's step 15),
     so the remote view is named when the session is born, with the same name as the label and the
-    terminal title. The name is never formatted here. This covers every argv this step builds: a
-    fresh spawn, and the resume argv, because a resumed process starts with Remote Control off.
+    terminal title. The name is never formatted here. `Get-HordeSessionName` takes the fleet view and
+    may answer "no name" with a reason (no label, a label that collides with a lane fleet id, no
+    verified handle). The stub runs inside the new pane, so the view it passes already holds that
+    pane's handle; whether the host answers it live that early is measured in E10's e2e. On "no name"
+    the argv gets no fragment, the reason is reported, and lifecycle step 34 repairs the title later.
+    This covers every argv this step builds: a fresh spawn, and the resume argv, because a resumed
+    process starts with Remote Control off.
     Tests, with neutral names in `test/` and the real fragment in `agents/claude-code/test/`:
     - the fragment equals what `Get-HordeSessionName` returns for the record. The fixture record's
       label and run title differ, so an adapter that formats its own name fails; a mutation that
       reads the title instead of calling the function turns the test red;
     - `--remote-control` takes an optional value, so a missing name must never leave the flag bare in
-      front of a prompt or another argument, which it would take as the name. A record with no label
-      gets no fragment and a reported reason. The control gives a label and gets the flag immediately
-      followed by the name;
+      front of a prompt or another argument, which it would take as the name. A record for which
+      `Get-HordeSessionName` answers "no name" gets no fragment and the function's reason. The
+      control gives a record that has a name and gets the flag immediately followed by it;
     - a harness whose capability is not `yes` gets no fragment, and the spawn still proceeds.
 18. **E10. The `horde launch` stub, and the engine flags on `horde spawn` and in run specs** (after
     the lifecycle plan's step 22). The lifecycle plan builds the anchor first, against a stand-in
@@ -513,7 +518,11 @@ F. Engine settings, Half B: Horde spawns with the resolved engine (SPAWN)
 
     The stub hands over its argv and exits before the harness draws anything, so recording the birth
     name is the spawn command's job, not the stub's: `horde spawn` writes the binding's
-    `remoteControl` field (lifecycle step 24) with the name it passed, `setBy: birth` and the time,
+    `remoteName` field (lifecycle step 24) through the binding record's writer on the node - the one
+    writer of `schema/session-binding.v1`, which exists only from migration step 3.8. The order holds
+    without a new gate: lifecycle 24 defines the field and merges before 3.8, 3.8 ships the writer,
+    and this step is SPAWN, which already waits for 3.8. It writes the name it passed, `setBy: birth`
+    and the time,
     then fills the session URL once N1's parser, over the host's screen read, shows Remote Control
     active. Until then the URL is `unknown`. A session whose Remote Control never shows active still
     runs, and `horde names` (lifecycle step 34) reports it as `drifted` with the reason. Test: a
@@ -595,7 +604,7 @@ because it ranks above both. The work is split by owner, and each piece is writt
 | the name itself, one function | `Get-HordeSessionName`, the merged Phase 3 plan's step 15 |
 | the claude-code half: birth fragment, screen parser, repair sequence | N1 (step 28, below) |
 | naming at birth | E9 (step 17) builds the argv, E10 (step 18) records the result |
-| the stored name and URL | the lifecycle plan's step 24, `remoteControl` in the binding record |
+| the stored name and URL | the lifecycle plan's step 24, `remoteName` in the binding record |
 | the read and the repair verb | the lifecycle plan's step 34, `horde names` and `horde names repair` |
 
 28. **N1. `agents/claude-code/RemoteName.ps1`, the harness half of web session names** (NOW for the
@@ -605,24 +614,30 @@ because it ranks above both. The work is split by owner, and each piece is writt
     the AgentPort. It provides:
     - **the birth fragment** that E9 adds: `--remote-control` followed by the name it is given. It
       takes the name as an argument and never formats one;
-    - **a screen parser** over a captured screen (text from the host's screen read). It answers, each
-      in tristate form: whether the input box is empty, holds typed text, or is unknown; whether the
-      `/remote-control` menu is showing, and which item the cursor is on; whether "Remote Control
-      disconnected." is shown; whether "/remote-control is active" is shown, and the session URL
-      beside it;
-    - **the repair sequence as data**: the ordered keys, and the screen state each must reach before
-      the next is sent. The verb that runs it is the lifecycle plan's step 34; this step sends
-      nothing itself.
+    - **a screen parser** over a captured screen (from the host's `text.read`). It answers in
+      neutral states, each in tristate form, so that core and every fixture outside this folder see
+      states, never this harness's screen text: `box` is `empty`, `typed` or `unknown`; `menu` is
+      showing or not, with `cursor` on `disconnect` or `other`; `link` is `disconnected`, `active`
+      (with `url`) or `unknown`;
+    - **the repair sequence as data**: the commands and ordered keys, and the neutral state each
+      must reach before the next is sent. The verb that runs it is the lifecycle plan's step 34;
+      this step sends nothing itself.
 
     Two of the brief's five pitfalls belong to the parser, and each becomes a test, on fixture
     captures cut from real screens:
     - **Ghost text is not typed text.** The input box often shows a greyed suggestion. Ctrl+U does not
       clear it, and typing replaces it, so a check that treats it as typed text skips every pane.
       Test: a capture with only a suggestion in the box answers `empty`. Control: a capture with
-      typed text answers `typed`. The mechanism is chosen by measurement in this step, starting with
-      whether the host's screen read can carry the text's dim or colour attribute. The brief's own
-      probe (send Ctrl+U and see whether the text remains) erases a real draft, so it is the last
-      resort, and step 34 never runs it on a pane that might hold one.
+      typed text answers `typed`. The parser tells them apart only from what the capture shows,
+      such as the suggestion's dim or colour attribute; where the capture cannot show the
+      difference, it answers `unknown`, and lifecycle step 34 skips that session. The brief's own
+      probe (send Ctrl+U and see whether the text remains) erases a real draft, so it is never used,
+      by this parser or by anything that calls it. Test: a capture whose box line carries text with no
+      attribute that tells suggestion from typing answers `unknown`, never `empty`.
+
+    These fixtures need a capture format that keeps the dim and colour attributes, not plain text.
+    Which format, and whether every host's `text.read` can supply it, is left open: it is decided when
+    N1 is built, with the hosts plan, and until a host supplies it, `box` on that host is `unknown`.
     - **Padding is not text.** The box line contains non-ASCII padding, so "empty" tests for printable
       characters, never for the absence of spaces. Test: a box line of padding alone answers `empty`.
       Control: the same line with one printable character answers `typed`. A mutation that tests for
@@ -630,10 +645,14 @@ because it ranks above both. The work is split by owner, and each piece is writt
 
     Parser tests for the sequence itself:
     - after two Up presses, the parser reports the item under the cursor from the screen. A capture
-      with the cursor on "Continue" or "Show QR code" answers that item, never "Disconnect this
-      session"; step 34 acts only on what the parser reports;
-    - a URL is parsed only from a screen that says "/remote-control is active"; any other screen
-      answers `unknown` for the URL.
+      with the cursor on "Continue" or "Show QR code" answers `other`, never `disconnect`; step 34
+      acts only on what the parser reports;
+    - a URL is parsed only from a screen that says "/remote-control is active" (`link: active`); any
+      other screen answers `unknown` for the URL.
+
+    These are the only tests that hold this harness's real screen text, and they live in
+    `agents/claude-code/test/`. Lifecycle step 34's tests, and its e2e in `hosts/wezterm/test/e2e/`,
+    use a neutral fixture harness, a neutral slash command and these neutral states (rule 14).
 
     Measurements, each written to `planning/ledger/agent-claude-code.md` (its remote-name half). A
     measurement that fails moves the capability to `no`:
