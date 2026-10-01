@@ -65,6 +65,9 @@
         @{ Name = "date-stringified"
            Find = 'throw ("a value of type " + $Value.GetType().FullName + " cannot be hashed: only JSON data can")'
            Replace = 'return (ConvertTo-HordeJournalCanonical -Value ("" + $Value) -Depth ($Depth + 1))' }
+        @{ Name = "unhashable-arguments-throw"
+           Find = 'catch { return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " cannot be recorded: "'
+           Replace = 'catch { throw; return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " cannot be recorded: "' }
         @{ Name = "second-outcome-accepted"
            Find = 'if ($made -eq "exists") { throw ("request "'
            Replace = 'if ($false) { throw ("request "' }

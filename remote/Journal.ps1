@@ -369,9 +369,11 @@ function Open-HordeJournalEntry {
     )
     if ($Id -cnotmatch $script:HordeJournalIdPattern) { return (New-HordeJournalDecision -Decision "refuse" -Reason ("'" + $Id + "' is not a request id: an id is one lowercase UUID")) }
     if ($Verb -cnotmatch $script:HordeJournalVerbPattern) { return (New-HordeJournalDecision -Decision "refuse" -Reason ("'" + $Verb + "' is not a verb name")) }
-    # Hashed before anything else, so a time with no zone or arguments that are not JSON data throw
-    # here, before a file exists.
-    $hash = Get-HordeJournalArgsHash -Verb $Verb -Arguments $Arguments -IssuedAt $IssuedAt
+    # Hashed before anything else, so a time with no zone or arguments that are not JSON data are
+    # refused here, before a file exists. Refused, not thrown: the arguments came from the far end,
+    # and bad input is answered like any other bad request (review of PR #39).
+    try { $hash = Get-HordeJournalArgsHash -Verb $Verb -Arguments $Arguments -IssuedAt $IssuedAt }
+    catch { return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " cannot be recorded: " + $_.Exception.Message)) }
     $m = Read-HordeJournalMarker -Root $Root
     if (-not $m.ok) { return (New-HordeJournalDecision -Decision "unknown" -Reason $m.reason -Result (New-HordeUnknown -Reason $m.reason)) }
     $cfg = $m.settings

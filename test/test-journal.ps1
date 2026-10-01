@@ -217,6 +217,17 @@ $lfVerb = Open-HordeJournalEntry -Root $j -Id (New-Id) -Verb ("session.spawn" + 
 Check ($lfVerb.decision -ceq "refuse") "a verb followed by an LF is refused, not acted on"
 Check ((@(Names $j) -join ",") -ceq (@($before) -join ",")) "and neither wrote a file"
 Check ((Get-HordeJournalEntry -Root $j -Id ((New-Id) + [char]10)).state -ceq "unknown") "request.status on an id followed by an LF is unknown"
+# ARGUMENTS THAT ARE NOT JSON DATA ARE REFUSED, NOT THROWN. A frame from the far end is input: a
+# request whose arguments cannot be hashed is answered "refuse" with the reason, like any other bad
+# request, rather than raising an error in the node (review of PR #39).
+$before = Names $j
+$nj = $null
+try { $nj = Open-HordeJournalEntry -Root $j -Id (New-Id) -Verb "session.spawn" -Arguments @{ when = (Get-Date) } -IssuedAt $utcNow } catch { $nj = "threw: " + $_.Exception.Message }
+Check ($nj -isnot [string] -and $nj.decision -ceq "refuse" -and "$($nj.reason)" -like "*cannot be hashed*") "arguments holding a date are refused with the reason, not thrown"
+$nz = $null
+try { $nz = Open-HordeJournalEntry -Root $j -Id (New-Id) -Verb "session.spawn" -Arguments $spawnArgs -IssuedAt ([datetime]"2026-09-30T12:00:00") } catch { $nz = "threw: " + $_.Exception.Message }
+Check ($nz -isnot [string] -and $nz.decision -ceq "refuse" -and "$($nz.reason)" -like "*zone*") "an issue time with no zone is refused with the reason, not thrown"
+Check ((@(Names $j) -join ",") -ceq (@($before) -join ",")) "and neither wrote a file"
 
 Write-Host ""
 Write-Host "--- the admission window: an id too old to be checked is refused, not acted ---" -ForegroundColor Cyan
