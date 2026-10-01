@@ -56,6 +56,9 @@
         @{ Name = "decimal-keeps-scale"
            Find = 'if ($Value -eq [decimal]::Truncate($Value)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "decimal-scale-hashed"
+           Find = 'return $Value.ToString($inv).TrimEnd(''0'')'
+           Replace = 'return $Value.ToString($inv)' }
         @{ Name = "non-ascii-raw"
            Find = 'elseif ($c -lt 0x20 -or $c -gt 0x7E) {'
            Replace = 'elseif ($c -lt 0x20) {' }

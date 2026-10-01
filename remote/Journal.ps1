@@ -119,7 +119,10 @@ function ConvertTo-HordeJournalCanonical {
         $Value -is [uint32] -or $Value -is [int64] -or $Value -is [uint64]) { return $Value.ToString($inv) }
     if ($Value -is [decimal]) {
         if ($Value -eq [decimal]::Truncate($Value)) { return [decimal]::Truncate($Value).ToString("0", $inv) }
-        return $Value.ToString($inv)
+        # A decimal keeps its scale: 1.10 prints as "1.10" and 1.1 as "1.1", one number with two texts
+        # (review of PR #39). Trailing zeros after the point are dropped, so both read 1.1, as the
+        # double 1.1 does in round-trip form.
+        return $Value.ToString($inv).TrimEnd('0')
     }
     if ($Value -is [double] -or $Value -is [single]) {
         $d = [double]$Value

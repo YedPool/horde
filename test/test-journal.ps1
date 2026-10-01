@@ -60,6 +60,13 @@ Check ((Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = 1.5 } -IssuedAt $
 Check ((ConvertTo-HordeJournalCanonical -Value ([double]1e15)) -ceq "1000000000000000") "a whole double is written as an integer, not as 1E+15"
 Check ((Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [long]1000000000000000 } -IssuedAt $t0) -ceq (Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [double]1e15 } -IssuedAt $t0)) "so 10^15 as a long and as a double hash the same"
 Check ((Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = 1 } -IssuedAt $t0) -ceq (Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [decimal]"1.0" } -IssuedAt $t0)) "1 and a decimal 1.0 (which keeps its scale when printed) hash the same"
+# A DECIMAL'S SCALE IS NOT ITS VALUE. [decimal]"1.10" prints as 1.10 and [decimal]"1.1" as 1.1; both are
+# the number 1.1, and so is the double 1.1. Hashed by their printed text they differed (review of PR #39).
+$h110 = Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [decimal]"1.10" } -IssuedAt $t0
+Check ($h110 -ceq (Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [decimal]"1.1" } -IssuedAt $t0)) "a decimal 1.10 and a decimal 1.1 hash the same"
+Check ($h110 -ceq (Get-HordeJournalArgsHash -Verb "v.x" -Arguments @{ n = [double]1.1 } -IssuedAt $t0)) "and the same as the double 1.1"
+Check ((ConvertTo-HordeJournalCanonical -Value ([decimal]"-2.500")) -ceq "-2.5") "a negative decimal loses its trailing zeros too"
+Check ((ConvertTo-HordeJournalCanonical -Value ([decimal]"10.0")) -ceq "10") "and a whole one is an integer"
 $uEsc = '\' + 'u00e9'
 Check ((ConvertTo-HordeJournalCanonical -Value ([string][char]0xE9)) -ceq ('"' + $uEsc + '"')) "a non-ASCII character is written as a backslash-u escape, so the hashed text is ASCII"
 Check ((ConvertTo-HordeJournalCanonical -Value $uEsc) -ceq ('"\' + $uEsc + '"')) "the six ASCII characters of that escape are escaped differently from the character they spell"
