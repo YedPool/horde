@@ -87,11 +87,29 @@ function Get-HordeOwnershipRules {
     return [pscustomobject]@{ doc = $doc; fields = $byName; required = @($doc.required | ForEach-Object { "$_" }); dropped = @($doc.dropped) }
 }
 
+function Get-HordeProjectionStatics {
+    # The ownership table, the view schema and its per-field value schemas, and the role table - read
+    # once per process while their files are unchanged, keyed by each file's path and write time.
+    # Measured 2026-10-01: re-reading them cost about 0.7 s of every fixture projection (the view
+    # schema alone 644 ms), and the suite projects about 45 times.
+    $files = @((Join-Path $PSScriptRoot "ownership.json"), (Join-Path (Split-Path -Parent $PSScriptRoot) "schema\session-view.v1.json"), (Join-Path $PSScriptRoot "roles.json"))
+    $key = (@($files | ForEach-Object { $_ + "@" + [System.IO.File]::GetLastWriteTimeUtc($_).Ticks }) -join "|")
+    $cached = Get-Variable -Name HordeProjectionStatics -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cached -and $null -ne $cached.Value -and $cached.Value.key -ceq $key) { return $cached.Value }
+    $viewSchema = Get-HordeSchema -Name "session-view.v1"
+    $statics = [pscustomobject]@{ key = $key; rules = (Get-HordeOwnershipRules); viewSchema = $viewSchema; valueSchemas = (Get-HordeViewValueSchemas -ViewSchema $viewSchema); roleTable = (Get-HordeRoleTable) }
+    $script:HordeProjectionStatics = $statics
+    return $statics
+}
+
 # ------------------------------------------------------------------------------------------ answers
 
 function New-HordeViewAnswer {
     # One answer in the view: a core/tristate answer plus its provenance and marks.
     param($Answer, [string]$Store = "", [string]$Field = "", [string]$Provisional = "", $Shadow = $null)
+    # The full audit, not a type check, on purpose (L-098): `horde status` does not validate the whole
+    # view, so this is the only place an answer changed after it was built - a known one whose value
+    # became $null, a state in the wrong case, an unknown with no reason - is refused.
     Assert-HordeAnswer $Answer
     $src = $null
     if ($Store -ne "" -and $Answer.state -ne "unknown") { $src = [pscustomobject]@{ store = $Store; field = $Field } }
@@ -486,8 +504,8 @@ function Resolve-HordeField {
     param($Candidates, $WhenNone = $null)
     $r = Resolve-HordeCandidates -Candidates $Candidates
     if ($r.answer.state -ne "unknown" -or $null -eq $WhenNone) { return $r }
-    $anyUnknown = @(@($Candidates) | Where-Object { $null -ne $_ -and $_.skip -eq "" -and $_.answer.state -eq "unknown" }).Count -gt 0
-    if ($anyUnknown) { return $r }
+    # A loop, not a pipeline: this runs for most of the ~1,900 fields of a fixture projection.
+    foreach ($cand in @($Candidates)) { if ($null -ne $cand -and $cand.skip -eq "" -and $cand.answer.state -eq "unknown") { return $r } }
     return [pscustomobject]@{ answer = $WhenNone; store = ""; field = ""; why = $r.why }
 }
 
@@ -1113,11 +1131,10 @@ function Get-HordeProjection {
     if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform }
     Assert-HordeProcessTable $Processes
     Assert-HordeHostPort $HostPort
-    $rules = Get-HordeOwnershipRules
-    $viewSchema = Get-HordeSchema -Name "session-view.v1"
+    $statics = Get-HordeProjectionStatics
     $C = [pscustomobject]@{
-        rules = $rules; viewSchema = $viewSchema; valueSchemas = (Get-HordeViewValueSchemas -ViewSchema $viewSchema)
-        roleTable = (Get-HordeRoleTable); now = $Now; processes = $Processes
+        rules = $statics.rules; viewSchema = $statics.viewSchema; valueSchemas = $statics.valueSchemas
+        roleTable = $statics.roleTable; now = $Now; processes = $Processes
         identity = (Get-HordeIdentity -ClaudeDir $ClaudeDir -ProjectsDir $ProjectsDir -CodexDir $CodexDir -Processes $Processes -TtlSeconds $TtlSeconds -Now $Now)
         wf = (Read-HordeWezfleetState -Root $WezfleetRoot)
         paneRead = (Read-HordePaneSessions -Dir $PaneSessionsDir)
