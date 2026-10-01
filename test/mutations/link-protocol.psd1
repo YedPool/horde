@@ -75,6 +75,15 @@
         @{ Name = "any-spelling-accepted"
            Find = 'if (-not [string]::Equals($again, $text, [System.StringComparison]::Ordinal)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "dictionary-keys-in-arrival-order"
+           Find = '[Array]::Sort($keys, [System.StringComparer]::Ordinal)'
+           Replace = '' }
+        @{ Name = "object-keys-in-arrival-order"
+           Find = '[Array]::Sort($keys, [StringComparer]::Ordinal)'
+           Replace = '' }
+        @{ Name = "fractions-written-with-their-scale"
+           Find = 'if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) {'
+           Replace = 'if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) { return $Value.ToString($inv)' }
         @{ Name = "version-not-read-first"
            Find = 'if (-not ($v -is [int] -and $v -eq 1))'
            Replace = 'if ($false)' }

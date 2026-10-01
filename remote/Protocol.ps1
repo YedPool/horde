@@ -16,13 +16,24 @@
 # refused rather than guessed at. One spelling also means a request's arguments hash the same at both
 # ends (the request journal, plan step R3).
 #
+# THE ONE SPELLING FIXES WHAT PARSING FORGETS. The first version wrote keys in the order they arrived
+# and wrote a decimal with the scale it arrived with, so the re-encoded text always matched: swapped
+# keys, 1.0, 1.00 and pid:1234.0 were each accepted as canonical (review of PR #45, 2026-10-01). So:
+#   - keys are written in ORDINAL ORDER, code unit by code unit, at every depth, whatever order the
+#     object was built or received in;
+#   - a number is a WHOLE NUMBER, written as one: no v1 schema has a fractional field, and 1.0 would be
+#     a second spelling of 1, so the encoder refuses a [decimal], [double] or [single] outright, and a
+#     received 1.0, which parses as a decimal, cannot be written again and is refused.
+#
 # WHAT A RECEIVER REFUSES, AND IN WHAT ORDER - cheapest first, so a hostile line costs little:
 #   1. a line longer than the frame cap, before anything is parsed (oversized);
 #   2. a byte order mark anywhere but the start of the stream, UTF-16, and any byte outside printable
 #      ASCII - a raw byte above 0x7F, a NUL, a CR other than one just before the LF (bad-frame);
-#   3. text that is not one JSON object, or is not in the one spelling (bad-frame);
-#   4. a frame whose v is not 1 (unknown-version), read before the schema so that a later version is
-#      named as one and not reported as a malformed v1 frame;
+#   3. text that is not one JSON object (bad-frame);
+#   4. a frame whose v is not 1 (unknown-version), read before the spelling and the schema, so that a
+#      later version - which may spell itself differently - is named as one and not reported as a
+#      malformed v1 frame;
+#   4b. a frame not in the one spelling (bad-frame);
 #   5. anything remote/Contract.ps1 refuses (bad-frame), then any cap it names (oversized).
 # Each refusal carries a reason. The link closes on any of them: a line that is not a frame is never
 # skipped, because a profile banner or a stray Write-Host would otherwise be read past silently
@@ -94,9 +105,10 @@ function Measure-HordeWireString {
 }
 
 function ConvertTo-HordeWireText {
-    # A value as JSON text in the one spelling the link uses. Objects keep their key order; there is no
-    # whitespace. Refused, by throwing: a [datetime] (times cross as ISO text, schema/link-frame.v1), a
-    # NaN or infinity, a key that is not a string, anything nested deeper than 64, and any other type.
+    # A value as JSON text in the one spelling the link uses: keys in ordinal order, whole numbers only,
+    # no whitespace. Refused, by throwing: a [datetime] (times cross as ISO text, schema/link-frame.v1),
+    # a fractional type ([decimal], [double], [single]), a key that is not a string, anything nested
+    # deeper than 64, and any other type.
     param($Value, [int]$Depth = 0)
     if ($Depth -gt $script:HordeWireMaxDepth) { throw ("a value nested more than " + $script:HordeWireMaxDepth + " deep cannot cross the link") }
     $inv = [System.Globalization.CultureInfo]::InvariantCulture
@@ -104,26 +116,33 @@ function ConvertTo-HordeWireText {
     if ($Value -is [string]) { return (ConvertTo-HordeWireString $Value) }
     if ($Value -is [bool]) { if ($Value) { return "true" } else { return "false" } }
     if ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or $Value -is [sbyte] -or
-        $Value -is [uint16] -or $Value -is [uint32] -or $Value -is [uint64] -or $Value -is [decimal]) {
+        $Value -is [uint16] -or $Value -is [uint32] -or $Value -is [uint64]) {
         return $Value.ToString($inv)
     }
-    if ($Value -is [double] -or $Value -is [single]) {
-        $d = [double]$Value
-        if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw "NaN and infinity have no JSON spelling" }
-        return $d.ToString("R", $inv)
+    if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) {
+        throw ("a number on the link is a whole number, written as one; " + $Value.ToString($inv) + " (a " + $Value.PSObject.TypeNames[0] + ") is not, and 1.0 would be a second spelling of 1")
     }
     if ($Value -is [datetime]) { throw "a [datetime] does not cross the link; write it as ISO 8601 text in UTC" }
     $parts = New-Object System.Collections.ArrayList
     if ($Value -is [System.Collections.IDictionary]) {
-        foreach ($k in @($Value.Keys)) {
-            if ($k -isnot [string]) { throw ("an object key must be a string, not " + $k.PSObject.TypeNames[0]) }
+        foreach ($k in @($Value.Keys)) { if ($k -isnot [string]) { throw ("an object key must be a string, not " + $k.PSObject.TypeNames[0]) } }
+        $keys = [string[]]@($Value.Keys)
+        [Array]::Sort($keys, [System.StringComparer]::Ordinal)
+        foreach ($k in $keys) {
             [void]$parts.Add((ConvertTo-HordeWireString $k) + ":" + (ConvertTo-HordeWireText -Value $Value[$k] -Depth ($Depth + 1)))
         }
         return ("{" + ($parts -join ",") + "}")
     }
     if ($Value -is [System.Management.Automation.PSCustomObject]) {
-        foreach ($p in @($Value.PSObject.Properties)) {
-            [void]$parts.Add((ConvertTo-HordeWireString $p.Name) + ":" + (ConvertTo-HordeWireText -Value $p.Value -Depth ($Depth + 1)))
+        # A loop, not the pipeline: this runs for every object of every frame, the fuzz section's
+        # thousands included.
+        $props = @{}
+        $names = New-Object System.Collections.Generic.List[string]
+        foreach ($p in @($Value.PSObject.Properties)) { $props[$p.Name] = $p.Value; $names.Add($p.Name) }
+        $keys = $names.ToArray()
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        foreach ($k in $keys) {
+            [void]$parts.Add((ConvertTo-HordeWireString $k) + ":" + (ConvertTo-HordeWireText -Value $props[$k] -Depth ($Depth + 1)))
         }
         return ("{" + ($parts -join ",") + "}")
     }
@@ -249,6 +268,9 @@ function ConvertFrom-HordeFrameBytes {
     try { $frame = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
     catch { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the line is not JSON: " + $_.Exception.Message)) }
     if ($frame -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason "the line is JSON but not one object") }
+    if (-not (Test-HordeLinkHasProp $frame "v")) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason "the frame has no version (v)") }
+    $v = Get-HordeLinkProp $frame "v"
+    if (-not ($v -is [int] -and $v -eq 1)) { return (New-HordeWireResult -Ok $false -Code "unknown-version" -Bom $bom -Reason ("the frame is version '" + $v + "'; this end reads version 1 only")) }
     $again = $null
     try { $again = ConvertTo-HordeWireText $frame } catch { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the frame holds a value the link cannot carry: " + $_.Exception.Message)) }
     if (-not [string]::Equals($again, $text, [System.StringComparison]::Ordinal)) {
@@ -256,9 +278,6 @@ function ConvertFrom-HordeFrameBytes {
         while ($at -lt $again.Length -and $at -lt $text.Length -and $again[$at] -ceq $text[$at]) { $at++ }
         return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the frame is not in the link's one spelling: it differs from Horde's encoding of it at offset " + $at))
     }
-    if (-not (Test-HordeLinkHasProp $frame "v")) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason "the frame has no version (v)") }
-    $v = Get-HordeLinkProp $frame "v"
-    if (-not ($v -is [int] -and $v -eq 1)) { return (New-HordeWireResult -Ok $false -Code "unknown-version" -Bom $bom -Reason ("the frame is version '" + $v + "'; this end reads version 1 only")) }
     $found = @(Test-HordeLinkFrame -Frame $frame -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ($found -join "; ")) }
     $found = @(Test-HordeProtocolLimits -Frame $frame -Contract $Contract)

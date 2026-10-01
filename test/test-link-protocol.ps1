@@ -115,11 +115,14 @@ foreach ($n in $goldenNames) {
 Check $allCanonical ("all " + $goldenNames.Count + " golden frames encode, decode, and encode again to the same bytes")
 
 Check (Throws { ConvertTo-HordeWireText (Get-Date) } "does not cross the link") "a [datetime] is refused: times cross as ISO text"
-Check (Throws { ConvertTo-HordeWireText ([double]::NaN) } "NaN") "NaN is refused"
+Check (Throws { ConvertTo-HordeWireText ([double]::NaN) } "whole number") "NaN is refused: a number on the link is a whole number"
+Check (Throws { ConvertTo-HordeWireText ([decimal]"1.0") } "whole number") "a decimal 1.0 is refused at the sender: 1.0 would be a second spelling of 1"
+Check (Throws { ConvertTo-HordeWireText ([double]1) } "whole number") "a double, even a whole one, is refused: only an integer type is written as a number"
 Check (Throws { ConvertTo-HordeWireText @{ 1 = "x" } } "key must be a string") "an object key that is not a string is refused"
 $deep = "x"; for ($i = 0; $i -lt 70; $i++) { $deep = @{ d = $deep } }
 Check (Throws { ConvertTo-HordeWireText $deep } "nested more than") "a value nested past 64 is refused, never truncated as ConvertTo-Json does"
-Check ((ConvertTo-HordeWireText ([ordered]@{ z = 1; a = @(); m = [ordered]@{}; n = $null; t = $true; d = [decimal]"1.50" })) -ceq '{"z":1,"a":[],"m":{},"n":null,"t":true,"d":1.50}') "keys keep their order, and each kind of value has one spelling"
+Check ((ConvertTo-HordeWireText ([ordered]@{ z = 1; a = @(); m = [ordered]@{ y = 2; b = 3 }; n = $null; t = $true; B = 4 })) -ceq '{"B":4,"a":[],"m":{"b":3,"y":2},"n":null,"t":true,"z":1}') "keys are written in ordinal order at every depth (B before a), and each kind of value has one spelling"
+Check ((ConvertTo-HordeWireText ([pscustomobject][ordered]@{ seq = 1; id = "x" })) -ceq (ConvertTo-HordeWireText ([pscustomobject][ordered]@{ id = "x"; seq = 1 }))) "the same object built in two key orders is written the same"
 Check ((ConvertTo-HordeWireText -Value @(1)) -ceq '[1]') "a one-element list stays a list"
 
 Write-Host ""
@@ -147,16 +150,34 @@ Refused (Decode (Bytes '"frame"')) "bad-frame" "not one object" "a JSON string i
 Refused (Decode (Bytes ($pingText + $pingText))) "bad-frame" "" "two frames on one line are refused"
 Refused (Decode (Bytes ($pingText + " x"))) "bad-frame" "" "a frame followed by other text is refused"
 Refused (Decode (Bytes ($pingText -replace '":', '": '))) "bad-frame" "one spelling" "a frame with spaces after its colons is refused: one spelling"
-Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":1e1'))) "bad-frame" "one spelling" "a whole number written with an exponent is refused"
+Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":1e1'))) "bad-frame" "whole number" "a whole number written with an exponent is refused: it parses as a double, which the link does not write"
 Refused (Decode (Bytes ($pingText -replace '"kind":"ping"', '"kind":"\u0070ing"'))) "bad-frame" "one spelling" "a character escaped that need not be is refused"
-Refused (Decode (Bytes ($pingText -replace '\{"v":1,', '{v:1,'))) "bad-frame" "" "unquoted keys are refused"
+Refused (Decode (Bytes ($pingText -replace '\{"id":', '{id:'))) "bad-frame" "" "unquoted keys are refused"
 Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":10,"seq":11'))) "bad-frame" "" "a duplicated key is refused"
 Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":10,"SEQ":11'))) "bad-frame" "" "a key repeated in another case is refused"
 Refused (Decode (Bytes ('{"v":1,"deep":' + ("[" * 200) + ("]" * 200) + '}'))) "bad-frame" "" "JSON nested 200 deep is refused without an unexpected error"
 Refused (Decode (Bytes ($pingText -replace '"v":1', '"v":2'))) "unknown-version" "version '2'" "a frame of version 2 is refused as unknown-version"
 Refused (Decode (Bytes '{"v":2,"kind":"stream","payload":{"chunks":[1,2]}}')) "unknown-version" "version 1 only" "a version 2 frame of a shape v1 does not know is still named unknown-version, not malformed"
 Refused (Decode (Bytes ($pingText -replace '"v":1', '"v":"1"'))) "unknown-version" "" "a version written as text is refused"
-Refused (Decode (Bytes ($pingText -replace '"v":1,', ''))) "bad-frame" "no version" "a frame with no version is refused"
+Refused (Decode (Bytes ($pingText -replace ',"v":1', ''))) "bad-frame" "no version" "a frame with no version is refused"
+
+# CANONICAL MEANS ONE SPELLING, NOT ONE PARSE (review of PR #45): each of these parses to the frame the
+# canonical line does, and each was accepted while keys were re-encoded in arrival order and a decimal
+# kept its scale.
+Check ($pingText.StartsWith('{"id":') -and $pingText.EndsWith(',"v":1}')) "CONTROL: the canonical ping's keys are in ordinal order, id first and v last"
+$swapped = [regex]::Replace($pingText, '\A\{("id":"[^"]*"),("kind":"ping")', '{$2,$1')
+Check ($swapped -cne $pingText) "CONTROL: the swap changed the line"
+Refused (Decode (Bytes $swapped)) "bad-frame" "one spelling" "a frame with two top-level keys swapped is refused"
+$spText = $ascii.GetString((Line $golden["req-session-spawn.json"]))
+$spSwapped = [regex]::Replace($spText, '"base":("[^"]*"),"branch":("[^"]*")', '"branch":$2,"base":$1')
+Check ($spSwapped -cne $spText) "CONTROL: the nested swap changed the line"
+Refused (Decode (Bytes $spSwapped)) "bad-frame" "one spelling" "a frame with two nested keys swapped is refused"
+Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":10.0'))) "bad-frame" "whole number" "seq 10.0 is refused: a second spelling of 10"
+Refused (Decode (Bytes ($pingText -replace '"seq":10', '"seq":10.00'))) "bad-frame" "whole number" "seq 10.00 is refused"
+$close = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = "0a000000-0000-4000-8000-0000000000c1"; seq = 3; ts = "2026-09-30T12:00:00Z"; verb = "session.close"; requestId = "0b000000-0000-4000-8000-0000000000c1"; issuedAt = "2026-09-30T12:00:00.000Z"; args = [pscustomobject][ordered]@{ sessionId = "11111111-2222-4333-8444-555555555555"; expect = [pscustomobject][ordered]@{ pid = 1234; procStart = "133420000000000000" }; reason = "the run is done" } }
+$closeText = $ascii.GetString((Line $close))
+Check ((Decode (Bytes $closeText)).ok) "CONTROL: a canonical session.close request with pid 1234 decodes"
+Refused (Decode (Bytes ($closeText -replace '"pid":1234', '"pid":1234.0'))) "bad-frame" "whole number" "the same request with pid 1234.0 is refused"
 Refused (Decode (Line ((Copy-Json $golden["req-node-info.json"]) | ForEach-Object { $_.verb = "exec"; $_ }))) "bad-frame" "unsupported-verb" "a frame naming a verb the table lacks is refused with the contract's reason"
 $sp = Copy-Json $golden["req-session-spawn.json"]
 $sp.args | Add-Member -NotePropertyName argv -NotePropertyValue @("cmd.exe")
