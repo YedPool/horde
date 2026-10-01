@@ -265,21 +265,32 @@ function Update-HordeLinkInput {
     return $false
 }
 
+function Test-HordeLinkOverflow {
+    # Is the first frame in the buffer already over the cap? Then the link is closed, the buffer
+    # cleared, and the reason returned; otherwise "". Receive and Health both ask, so neither lets a
+    # far end that never sends an LF grow the buffer past the cap (review of PR #42 found Health did).
+    param($Link)
+    $lf = $Link.buffer.IndexOf($script:HordeLinkLf)
+    if ($lf -gt $Link.maxFrameBytes -or ($lf -lt 0 -and $Link.buffer.Count -gt $Link.maxFrameBytes)) {
+        $n = $lf
+        if ($n -lt 0) { $n = $Link.buffer.Count }
+        $Link.buffer.Clear()
+        $why = "a frame over the " + $Link.maxFrameBytes + "-byte cap arrived (" + $n + " bytes without an LF); the link was closed, since the next byte cannot be placed"
+        Set-HordeLinkClosed -Link $Link -Reason $why
+        return $why
+    }
+    return ""
+}
+
 function Receive-HordeLinkFrame {
     # The next frame, as a tristate answer: known <the line, without its LF>, or unknown with the
     # reason. Waits up to -TimeoutMs. Never absent: see the file header.
     param([Parameter(Mandatory = $true)]$Link, [int]$TimeoutMs = 30000)
     $deadline = [datetime]::UtcNow.AddMilliseconds([Math]::Max(0, $TimeoutMs))
     while ($true) {
+        $over = Test-HordeLinkOverflow -Link $Link
+        if ($over -ne "") { return (New-HordeUnknown -Reason $over) }
         $lf = $Link.buffer.IndexOf($script:HordeLinkLf)
-        if ($lf -gt $Link.maxFrameBytes -or ($lf -lt 0 -and $Link.buffer.Count -gt $Link.maxFrameBytes)) {
-            $n = $lf
-            if ($n -lt 0) { $n = $Link.buffer.Count }
-            $Link.buffer.Clear()
-            $why = "a frame over the " + $Link.maxFrameBytes + "-byte cap arrived (" + $n + " bytes without an LF); the link was closed, since the next byte cannot be placed"
-            Set-HordeLinkClosed -Link $Link -Reason $why
-            return (New-HordeUnknown -Reason $why)
-        }
         if ($lf -ge 0) {
             $bytes = $Link.buffer.GetRange(0, $lf).ToArray()
             $Link.buffer.RemoveRange(0, $lf + 1)
@@ -365,7 +376,13 @@ function Get-HordeLinkHealth {
     param([Parameter(Mandatory = $true)]$Link)
     # Drain what is already waiting, so a close that arrived behind data is seen. Bounded: a far end
     # that never stops sending must not keep health from answering.
-    for ($i = 0; $i -lt 64; $i++) { if (-not (Update-HordeLinkInput -Link $Link -WaitMs 0)) { break } }
+    # It stops once the buffer holds more than one frame's cap - whole frames waiting are the next
+    # receive's - and a first frame already over the cap closes the link, as a receive would.
+    for ($i = 0; $i -lt 64; $i++) {
+        if ($Link.buffer.Count -gt $Link.maxFrameBytes) { break }
+        if (-not (Update-HordeLinkInput -Link $Link -WaitMs 0)) { break }
+    }
+    $null = Test-HordeLinkOverflow -Link $Link
     if ($Link.closed) { return (New-HordeKnown -Value ([pscustomobject]@{ state = "closed"; reason = $Link.closedReason; since = $Link.closedAt }) -ObservedAt ([datetime]::UtcNow)) }
     if ($Link.keepalive) { return (New-HordeKnown -Value ([pscustomobject]@{ state = "open"; reason = ""; since = $Link.openedAt }) -ObservedAt ([datetime]::UtcNow)) }
     return (New-HordeUnknown -Reason ("no failure seen since " + $Link.openedAt.ToString("o") + ", but transport " + $Link.transport + " cannot notice a dead far end without traffic"))

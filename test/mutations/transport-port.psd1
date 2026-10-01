@@ -57,6 +57,12 @@
         @{ Name = "health-does-not-drain"
            Find = 'for ($i = 0; $i -lt 64; $i++)'
            Replace = 'for ($i = 0; $i -lt 1; $i++)' }
+        @{ Name = "health-drains-past-cap"
+           Find = 'if ($Link.buffer.Count -gt $Link.maxFrameBytes) { break }'
+           Replace = '' }
+        @{ Name = "health-skips-overflow-check"
+           Find = '$null = Test-HordeLinkOverflow -Link $Link'
+           Replace = '' }
         @{ Name = "close-twice-closes-twice"
            Find = 'if ($Link.closed) { return }'
            Replace = '' }

@@ -167,6 +167,19 @@ $h = Get-HordeLinkHealth -Link $l
 Check ($h.state -ceq "known" -and $h.value.state -ceq "closed") "health notices the far end closed without anything being sent"
 $a = Receive-HordeLinkFrame -Link $l -TimeoutMs 2000
 Check ($a.state -ceq "known" -and $a.value -ceq "ok") "and a whole frame that came before the close is still delivered"
+# HEALTH HOLDS THE CAP TOO. Health drains what is waiting so that a close behind data is seen; it
+# used to drain 64 reads whatever they held, so a far end streaming bytes with no LF grew the buffer
+# far past the frame cap between two receives (review of PR #42). 64 reads of 16 bytes, cap 16:
+$flood = @(1..64 | ForEach-Object { , (B ("a" * 16)) })
+$l = Link $good $flood
+$h = Get-HordeLinkHealth -Link $l
+Check ($l.buffer.Count -le 2 * $good.maxFrameBytes) ("health keeps the buffer within the cap while it drains (" + $l.buffer.Count + " bytes held)")
+Check ($h.state -ceq "known" -and $h.value.state -ceq "closed" -and "$($h.value.reason)" -like "*over the 16-byte cap*") "and a line already over the cap closes the link there, as a receive would"
+$l = Link $good @((B ("ab" + [char]10)), (B ("cd" + [char]10)), (B ("ef" + [char]10)), (B ("gh" + [char]10)), (B ("ij" + [char]10)), (B ("kl" + [char]10)), (B ("mn" + [char]10)), "eof")
+$h = Get-HordeLinkHealth -Link $l
+Check ($l.buffer.Count -le 2 * $good.maxFrameBytes -and -not $l.closed) "whole frames waiting are not an overflow: health stops draining at the cap and the link stays open"
+$got = @(1..7 | ForEach-Object { $x = Receive-HordeLinkFrame -Link $l -TimeoutMs 1000; if ($x.state -eq "known") { $x.value } })
+Check (($got -join ",") -ceq "ab,cd,ef,gh,ij,kl,mn") "and every one of them is still received, in order"
 
 Write-Host ""
 Write-Host "--- sending: refused at the sender, or sent, or unknown ---" -ForegroundColor Cyan
