@@ -174,6 +174,9 @@
         @{ Name = "cycle-not-detected-after-first-call"
            Find = 'if ($rootCache.walked) { return $rootCache.top }'
            Replace = 'if ($rootCache.walked) { return $rootCache.top }; $rootCache.walked = $true' }
+        @{ Name = "node-object-walked-again"
+           Find = 'if ($script:HordeSchemaWalkSeen.TryGetValue($Schema, [ref]$seenMark)) { return }'
+           Replace = '' }
         @{ Name = "schema-file-not-checked-on-read"
            Find = '[void](Assert-HordeSchema -Schema $schemaRead)'
            Replace = '' }

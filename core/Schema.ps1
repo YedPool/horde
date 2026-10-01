@@ -221,6 +221,8 @@ function ConvertTo-HordeSchemaPattern {
 # Only what passed is cached: a node or a walk that threw is worked out, and throws, again next time.
 $script:HordeSchemaRoots = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
 $script:HordeSchemaNodes = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
+# The node objects the walk in progress has reached; Assert-HordeSchema starts each walk with a new one.
+$script:HordeSchemaWalkSeen = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
 
 function Get-HordeSchemaRootCache {
     # The per-root entry: definitions by exact name, and walked, set once every node has passed.
@@ -371,6 +373,7 @@ function Assert-HordeSchema {
     }
     # A top that is not an object throws here, before anything is remembered about it.
     $top = Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $true
+    $script:HordeSchemaWalkSeen = New-Object 'System.Runtime.CompilerServices.ConditionalWeakTable[object,object]'
     Assert-HordeSchemaDefinitions -Root $Schema
     # THE ROOT'S OWN SUBTREES ARE CHECKED ONCE HERE TOO (issue #25), for the reason the definitions
     # are: {"properties": {"q": {"maximum": 3}}} accepted {}, because no value reached q (measured
@@ -402,6 +405,16 @@ function Assert-HordeSchemaNode {
     # checked on its own; so a recursive definition is walked once, and the walk ends. Path is a JSON
     # pointer into the schema, "#/definitions/node/properties/children/items".
     param($Schema, [string]$Path, $Root)
+    # A NODE OBJECT IS WALKED ONCE PER WALK (issue #38). A schema built in PowerShell can contain itself
+    # - $h.properties = @{ a = $h } - which JSON cannot, and the walk followed it round for more than
+    # 5 minutes without returning (measured in the review of PR #27). Every node object the walk has
+    # reached is in HordeSchemaWalkSeen, so it is checked the first time and skipped after; the checks
+    # it would get again are the same ones. Only objects are recorded: anything else is refused next.
+    $seenMark = $null
+    if ($Schema -is [System.Management.Automation.PSCustomObject] -or $Schema -is [System.Collections.IDictionary]) {
+        if ($script:HordeSchemaWalkSeen.TryGetValue($Schema, [ref]$seenMark)) { return }
+        $script:HordeSchemaWalkSeen.Add($Schema, $true)
+    }
     $kw = (Get-HordeSchemaNode -Schema $Schema -Path $Path -AtTop $false).kw
     if ($kw.ContainsKey('$ref')) {
         # A chain of bare $refs that comes back to itself would make Test-HordeSchema throw on the

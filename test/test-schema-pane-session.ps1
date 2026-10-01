@@ -353,6 +353,17 @@ Check (Throws { Test-HordeSchema -Value 1 -Schema (Obj '{ "definitions": { "unus
 $loopTwice = Obj '{ "definitions": { "a": { "$ref": "#/definitions/b" }, "b": { "$ref": "#/definitions/a" } }, "type": "integer" }'
 Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "a `$ref loop is refused on the first call"
 Check (Throws { Test-HordeSchema -Value 1 -Schema $loopTwice } "circular") "and on the second call with the same schema object"
+# A SCHEMA THAT CONTAINS ITSELF - possible only when built in PowerShell - is walked once per node
+# object, and ends (issue #38: the walk had followed it round for more than 5 minutes). Values are
+# still checked as deep as they go, and a bad node beside the loop is still found.
+$selfSchema = @{ type = "object" }; $selfSchema.properties = @{ a = $selfSchema }
+$f = @(RefFindings @{ a = @{ a = 1 } } $selfSchema)
+Check ($f.Count -eq 1 -and $f[0] -ceq '$.a.a should be object') ("a schema that contains itself is walked and applied at every depth (" + ($f -join "; ") + ")")
+$selfInDef = [pscustomobject]@{ type = "integer"; definitions = @{} }; $loopNode = @{ type = "object" }; $loopNode.properties = @{ a = $loopNode }; $selfInDef.definitions.x = $loopNode
+$f = @(RefFindings 1 $selfInDef)
+Check ($f.Count -eq 0) ("a definition that contains itself is walked and accepted (" + ($f -join "; ") + ")")
+$selfBad = @{ type = "object" }; $selfBad.properties = @{ a = $selfBad; c = @{ maximum = 3 } }
+Check (Throws { Test-HordeSchema -Value $null -Schema $selfBad } "does not implement") "a bad node beside a loop of objects is still refused"
 # Assert-HordeSchema IS THE CHECK ON ITS OWN, for a caller that loads a schema without a value.
 Check (Throws { Assert-HordeSchema -Schema (Obj '{ "definitions": { "z": { "pattern": "(" } } }') } "pattern at #/definitions/z") "Assert-HordeSchema refuses a schema without any value to check"
 Check (-not (Throws { Assert-HordeSchema -Schema (Obj '{ "definitions": { "z": { "pattern": "^a$" } }, "type": "string" }') })) "CONTROL: and accepts a good one"
