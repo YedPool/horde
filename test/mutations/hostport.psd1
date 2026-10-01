@@ -6,7 +6,9 @@
     Target = "core\HostPort.ps1"
     Suite  = "test\test-projection.ps1"
     # Fixtures only, and stop at the first failed check: a caught mutant needs nothing more.
-    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1" }
+    # Only the sections that kill these mutants (test	est-projection.ps1 SECTIONS): the host port contract, the stored-handle and instance rules, the platform seam and one writer per store.
+    # Every mutant is still run; the whole list must come out as expected (PR #31, 2026-10-01).
+    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "hostport,stored-handle,instance-proven,instance-whole,platform,one-writer" }
     # With the reality check skipped the suite passes with exit 3 (test\test-projection.ps1).
     PassCodes = @(3)
     Mutations = @(
