@@ -117,6 +117,9 @@ public static class HordeLocalNative {
     // or it cannot be read.
     public static string LabelSddl(SafeHandle h) {
         IntPtr sd;
+        // INVALID_HANDLE_VALUE (-1) is also the pseudo-handle of the current process, so GetSecurityInfo
+        // on it answered with THIS process's label (review of PR #42, round 2). Refused before the call.
+        if (h == null || h.IsInvalid || h.IsClosed) return "";
         if (GetSecurityInfo(h, SE_KERNEL_OBJECT, LABEL_SECURITY_INFORMATION, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, out sd) != 0) return "";
         try {
             IntPtr text; uint len;

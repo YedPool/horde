@@ -325,4 +325,6 @@ if ($la.state -eq "known") {
         Check ($sec.AreAccessRulesCanonical -eq $true) "the DACL is in canonical order: the NETWORK deny comes before the allow"
     } finally { Stop-HordeTransportListener -Listener $listener }
 } else { Check $false "a listener for the DACL-order case" }
+$bad = New-Object Microsoft.Win32.SafeHandles.SafePipeHandle([IntPtr]::new(-1), $false)
+Check ([HordeLocalNative]::LabelSddl($bad) -ceq "") "the label of an invalid handle is empty, not this process's own label"
 Complete-HordeSuite -Success "the local pipe admits only its own user, and refuses a pipe it did not make"

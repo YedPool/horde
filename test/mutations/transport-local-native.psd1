@@ -15,6 +15,9 @@
         @{ Name = "integrity-read-as-system"
            Find = 'return Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));'
            Replace = 'return 16384;' }
+        @{ Name = "invalid-handle-label-read"
+           Find = 'if (h == null || h.IsInvalid || h.IsClosed) return "";'
+           Replace = '' }
         @{ Name = "label-not-read"
            Find = 'try { return Marshal.PtrToStringUni(text); } finally { LocalFree(text); }'
            Replace = 'LocalFree(text); return "";' }
