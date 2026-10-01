@@ -36,7 +36,7 @@
 # (test/test-mutate.ps1 blamed itself for two foreign runs on 2026-09-30). A tag only that caller
 # knows makes its folders its own. Lowercase letters and digits, 1 to 16.
 
-param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}$')][string]$RunTag)
+param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag)
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -178,7 +178,7 @@ try {
 }
 finally {
     # Only the folder this run created: a fresh guid name, with this run's tag if it has one, directly in TEMP.
-    if ((Split-Path -Leaf $work) -match '^horde-mutate-([a-z0-9]{1,16}-)?[0-9a-f]{32}$' -and (Test-Path -LiteralPath $work)) {
+    if ((Split-Path -Leaf $work) -match '^horde-mutate-([a-z0-9]{1,16}-)?[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
