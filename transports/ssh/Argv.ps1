@@ -13,11 +13,25 @@
 #                         nothing in the user's ~/.ssh/config applies (ssh_config(5): a -F file is
 #                         read instead of the user's). Chosen over -F none at the coordinator's
 #                         request of 2026-10-02; both keep the user's config out.
-#   -i, IdentitiesOnly=yes, IdentityAgent=none
-#                         only Horde's key is offered. MEASURED 2026-10-02, OpenSSH_for_Windows 9.5p2:
-#                         if the -i file does not exist ssh.exe silently falls back to the default
-#                         ~/.ssh/id_* keys even with -F none and IdentitiesOnly, so Open refuses to start
-#                         without the key file (transports/ssh/Transport.ps1).
+#   IdentityFile, IdentitiesOnly=yes, IdentityAgent=none
+#                         only Horde's key is offered. MEASURED 2026-10-02, OpenSSH_for_Windows 9.5p2: a
+#                         -i file that does not exist when ssh starts adds nothing, and ssh then fills in
+#                         the default ~/.ssh/id_* keys even with -F none and IdentitiesOnly; the review of
+#                         PR #68 (F1) showed that this is a race, since Open checks the file before the
+#                         spawn. -o IdentityFile adds the path without looking at it, so with the key
+#                         gone ssh -G still lists only Horde's path: a vanished key is a failed login and
+#                         never the user's own key. Open still refuses to start without the file.
+#   PATHS, AS SSH READS THEM (review of PR #68, F2): inside a -o value ssh expands %d and %h, cuts at
+#                         #, and fails on a quote (measured with ssh -G), so the known_hosts Open
+#                         checked would not be the one ssh reads. It also SPLITS the value at
+#                         whitespace: MEASURED 2026-10-02, -o IdentityFile=<a path with a space> is
+#                         "extra arguments at end of line", exit 255 - and a profile folder with a
+#                         space in it is ordinary. So each path value is written in double quotes,
+#                         which ssh's own argument splitter removes (measured: spaces, a tilde, a UNC
+#                         path and doubled backslashes all come back byte for byte), and a path holding
+#                         %, #, a quote, anything but printable ASCII, or ending in a backslash (which
+#                         would escape the closing quote) is refused (Test-HordeSshSafePath). ssh -G is
+#                         held to resolving each path byte for byte (transports/ssh/test/test-ssh.ps1).
 #   UserKnownHostsFile=<Horde's>, GlobalKnownHostsFile=none, StrictHostKeyChecking=yes,
 #   HostKeyAlias, UpdateHostKeys=no, CheckHostIP=no
 #                         the host key is checked against Horde's own file only, by hub identity,
@@ -28,8 +42,15 @@
 #                         a dead hub is noticed in about a minute without a frame being sent.
 #   ControlMaster=no, ControlPath=none
 #                         never share a connection with another ssh (design finding 5).
-#   ForwardAgent=no, ClearAllForwardings=yes, ForwardX11=no, PermitLocalCommand=no
-#                         nothing is forwarded and nothing runs locally.
+#   ForwardAgent=no, ForwardX11=no, ForwardX11Trusted=no, ClearAllForwardings=yes, GatewayPorts=no,
+#   Tunnel=no, PermitLocalCommand=no, LocalCommand=none, RemoteCommand=none, RequestTTY=no,
+#   ProxyCommand=none, ProxyJump=none, KnownHostsCommand=none, PKCS11Provider=none,
+#   SecurityKeyProvider=internal
+#                         nothing is forwarded, nothing runs locally or through a proxy, no command
+#                         or provider is loaded. Each is already the default with Horde's empty -F
+#                         config; pinning them here is defence in depth (review of PR #68, F5), each
+#                         accepted by 9.5p2 (ssh -G, measured 2026-10-02; LocalCommand=none reads as
+#                         unset, while an empty LocalCommand= is refused).
 #   LogLevel=INFO         set, so no config can change it, and INFO rather than ERROR: MEASURED
 #                         2026-10-02, 9.5p2 writes the reason for a refused connection ("banner
 #                         exchange: Connection to UNKNOWN port -1: Connection refused") at INFO, and
@@ -64,6 +85,22 @@ function ConvertFrom-HordeSshEndpoint {
     return $out
 }
 
+function Test-HordeSshSafePath {
+    # "" when ssh reads the path exactly as given inside a -o value; otherwise the reason it would not
+    # (header, PATHS, AS SSH READS THEM). The reason never repeats the path's unprintable characters.
+    param([string]$Path)
+    if ($Path -eq "") { return "the path is empty" }
+    $m = [regex]::Match($Path, "[%#'""]|[^\x20-\x7E]")
+    if (-not $m.Success) {
+        if ($Path.EndsWith("\")) { return ("ssh would not read the path '" + $Path + "' as written: it ends in a backslash, which would escape the quote around it") }
+        return ""
+    }
+    $shown = $Path -replace '[^\x20-\x7E]', '?'
+    $what = "'" + $m.Value + "'"
+    if ($m.Value -notmatch '[\x20-\x7E]') { $what = "a character that is not printable ASCII" }
+    return ("ssh would not read the path '" + $shown + "' as written: it holds " + $what + " (ssh expands %, cuts at #, and refuses quotes)")
+}
+
 function Get-HordeSshPaths {
     # Horde's own key, known_hosts and config for the link, under <HordeHome>\node (design 2.4). Enrollment
     # (remote plan R17) writes them; this transport only reads them.
@@ -80,14 +117,19 @@ function Get-HordeSshArgv {
     # The arguments after ssh.exe, for a parsed endpoint and Horde's paths. The header says why each.
     param([Parameter(Mandatory = $true)]$Endpoint, [Parameter(Mandatory = $true)]$Paths)
     if (-not $Endpoint.ok) { throw ("not an endpoint: " + $Endpoint.reason) }
+    foreach ($path in @($Paths.config, $Paths.identity, $Paths.knownHosts)) {
+        $why = Test-HordeSshSafePath -Path $path
+        if ($why -ne "") { throw $why }
+    }
     return @(
         "-F", $Paths.config,
         "-T",
-        "-i", $Paths.identity,
+        "-o", ('IdentityFile="' + $Paths.identity + '"'),
         "-o", "IdentitiesOnly=yes",
         "-o", "IdentityAgent=none",
-        "-o", ("UserKnownHostsFile=" + $Paths.knownHosts),
+        "-o", ('UserKnownHostsFile="' + $Paths.knownHosts + '"'),
         "-o", "GlobalKnownHostsFile=none",
+        "-o", "KnownHostsCommand=none",
         "-o", "StrictHostKeyChecking=yes",
         "-o", ("HostKeyAlias=" + $script:HordeSshHostKeyAliasPrefix + $Endpoint.hubId),
         "-o", "UpdateHostKeys=no",
@@ -98,10 +140,20 @@ function Get-HordeSshArgv {
         "-o", "ServerAliveCountMax=4",
         "-o", "ControlMaster=no",
         "-o", "ControlPath=none",
+        "-o", "ProxyCommand=none",
+        "-o", "ProxyJump=none",
         "-o", "ForwardAgent=no",
-        "-o", "ClearAllForwardings=yes",
         "-o", "ForwardX11=no",
+        "-o", "ForwardX11Trusted=no",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "GatewayPorts=no",
+        "-o", "Tunnel=no",
         "-o", "PermitLocalCommand=no",
+        "-o", "LocalCommand=none",
+        "-o", "RemoteCommand=none",
+        "-o", "RequestTTY=no",
+        "-o", "PKCS11Provider=none",
+        "-o", "SecurityKeyProvider=internal",
         "-o", "LogLevel=INFO",
         "-p", ([string]$Endpoint.port),
         ($Endpoint.user + "@" + $Endpoint.host),
