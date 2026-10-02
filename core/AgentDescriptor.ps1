@@ -38,12 +38,12 @@
 # fails every descriptor written against the old list.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). core/Ownership.ps1 is
-# loaded for Find-HordeJsonDuplicateKey, the repository's duplicate-key scan; it sets strict mode off
-# for its caller, as it always has. It is loaded AFTER core/PermissionLevels.ps1, which defines a
-# second function of the same name that returns the first repeated key instead of every finding: the
-# last definition wins, and Ownership's shape satisfies both callers (R0's tests for a non-null
-# result, and an empty finding list is no result), while R0's would hand Test-HordeOwnership one
-# string where it expects a list.
+# loaded for Find-HordeJsonDuplicateKey; it sets strict mode off for its caller, as it always has.
+# TWO FUNCTIONS HAVE THAT NAME, as of 2026-10-02: core/Ownership.ps1's returns every finding as
+# text, and core/PermissionLevels.ps1's returns the first repeated key or $null. Whichever is
+# dot-sourced last wins, silently, in this file's caller too. Nothing here depends on which: see
+# Get-HordeJsonDuplicateKeyProblems, and test-agent-descriptor checks the refusal under each one
+# loaded last. A shared scanner is to replace both (coordinator, 2026-10-02).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "Schema.ps1")
 . (Join-Path $PSScriptRoot "HostPort.ps1")
@@ -82,11 +82,12 @@ function Assert-HordeAsciiBytes {
 }
 
 function Get-HordeJsonDuplicateKeyProblems {
-    # The duplicate-key findings for a JSON text, as refusals. Filtered to non-empty strings, so the
-    # answer is the same whichever of the repository's duplicate-key scans is loaded: core/Ownership's
-    # returns every finding, and remote R0's core/PermissionLevels one returns the first key or $null.
+    # The duplicate-key findings for a JSON text, as refusals. Relies only on what both scans of that
+    # name share: something non-null comes back when a key repeats, and nothing when none does. Each
+    # non-null item is a refusal, whatever its type or text - a repeated key that is the empty string
+    # is still a repeat - so neither shape is assumed.
     param([string]$Text)
-    return @(@(Find-HordeJsonDuplicateKey -Text $Text) | Where-Object { $_ -is [string] -and $_ -ne "" } | ForEach-Object { "a key appears twice in one object, and only the last would be read: " + $_ })
+    return @(@(Find-HordeJsonDuplicateKey -Text $Text) | Where-Object { $null -ne $_ } | ForEach-Object { "a key appears twice in one object, and only the last would be read: '" + $_ + "'" })
 }
 
 function Read-HordeCapabilityVocabularyText {

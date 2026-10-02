@@ -18,6 +18,9 @@
         @{ Name = "duplicate-key-ignored"
            Find = 'return @(@(Find-HordeJsonDuplicateKey -Text $Text) |'
            Replace = 'return @(@() |' }
+        @{ Name = "duplicate-scan-shape-assumed"
+           Find = 'Where-Object { $null -ne $_ } | ForEach-Object { "a key appears twice'
+           Replace = 'Where-Object { "$_" -like "*appears more than once*" } | ForEach-Object { "a key appears twice' }
         @{ Name = "schema-skipped"
            Find = '@(Test-HordeSchema -Value $d -Schema (Get-HordeSchema -Name "agent-descriptor.v1"))'
            Replace = '@()' }
