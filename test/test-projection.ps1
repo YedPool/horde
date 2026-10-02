@@ -225,6 +225,12 @@ if (Section "precedence" "precedence, one field at a time (core/ownership.json)"
     Check ((Val (Ans $p 3 "workState")) -eq "running") "a reporting session with a live handle is running"
     Check ((Src (Ans $p 3 "lastActivity")) -eq "W6" -and (Val (Ans $p 3 "lastActivity")) -like "2026-06-01T11:59:40*") "last activity takes the newest source"
     Check ((Src (Ans $p 1 "lastActivity")) -eq "X3") "CONTROL: a transcript newer than the control file's time is the newest source"
+    # The newest source wins even when it is not the first one walked: the run's command log comes first
+    # (20 s ago), the transcript after it, made newer here (mutation run of PR #31, 2026-10-01).
+    $act = New-Fleet "activity"
+    [System.IO.File]::SetLastWriteTimeUtc((Join-Path $act ("agent\projects\C--work-gamma\" + (Sid 3) + ".jsonl")), $now.AddSeconds(-5))
+    $pact = Project $act
+    Check ((Src (Ans $pact 3 "lastActivity")) -eq "X3" -and (Val (Ans $pact 3 "lastActivity")) -like "2026-06-01T11:59:55*") "last activity is the newest source, not the first one read"
     Check ((St (Ans $p 15 "lastActivity")) -eq "unknown" -and (Why (Ans $p 15 "lastActivity")) -like "*never idle*") "no transcript leaves last activity unknown"
     Check ((Val (Ans $p 21 "transcriptPath")) -like "*C--work-x*" -and (Src (Ans $p 21 "transcriptPath")) -eq "X3" -and (St (Ans $p 4 "transcriptPath")) -eq "unknown" -and (Why (Ans $p 4 "transcriptPath")) -like "*2 project folders*") "a stopped session's transcript is the one file for its id, never one of two"
     Check ((Src (Ans $p 1 "transcriptPath")) -eq "X2" -and (Val (Ans $p 1 "transcriptPath")) -like "*C--work-alpha*") "a running session's transcript is derived from its control file"
@@ -498,6 +504,10 @@ if (Section "cannot-tell" "a store that cannot tell is not a store that holds no
     $nrBad = @(1, 2 | ForEach-Object { $n = $_; @("fleetSessionId", "parent", "label", "origin") | Where-Object { (St (Ans $pnr $n $_)) -ne "unknown" } | ForEach-Object { "" + $n + " " + $_ + "=" + (St (Ans $pnr $n $_)) } })
     foreach ($x in $nrBad) { Write-Host ("  not unknown: " + $x) -ForegroundColor Red }
     Check ($pnr.complete["W1"].state -eq "unknown" -and $nrBad.Count -eq 0) "an incomplete registry never proves a session has no record"
+    # Where nothing else answers, the registry's hole is the only thing between unknown and absent: session
+    # 34 is known only from a report, and its pane is absent over the whole registry (mutation run of
+    # PR #31, 2026-10-01: every field checked above also had an unsure claim to keep it unknown).
+    Check ((St (Ans $p 34 "pane")) -eq "absent" -and (St (Ans $pnr 34 "pane")) -eq "unknown" -and (Why (Ans $pnr 34 "pane")) -like "*may be the one missing*") "an incomplete registry leaves a pane unknown where no other store answers"
     $realExtras = ${function:Read-HordeControlExtras}
     function Read-HordeControlExtras { param($Record) if ("$($Record.fields.agent.value)" -ceq "codex") { return $null }; return (& $realExtras -Record $Record) }
     $pcx = $null
@@ -560,6 +570,7 @@ if (Section "runs" "runs, reports and work") {
     Add-Content -LiteralPath (Join-Path $bad "wezfleet\proj\runs\20260601-100000-alpha\sessions\alpha\events.jsonl") -Value '{"ts":"2026-06-01T11:59:00Z","event":"do'
     $pb = Project $bad
     Check ((St (Ans $pb 3 "report")) -eq "unknown" -and $pb.complete["W5"].state -eq "unknown") "an event log with a torn line is unknown, never shorter"
+    Check ((St (Ans $pb 3 "workState")) -eq "unknown" -and (Val (Ans $p 3 "workState")) -eq "running") "a torn event log leaves the work state unknown, not read from what came before it"
 
 }
 
@@ -670,6 +681,14 @@ if (Section "silent-winner" "no silent winner") {
     $rt = Fault $pdr "roster-entry-twice"
     Check ((St (Ans $pdr 3 "runId")) -eq "unknown" -and (Why (Ans $pdr 3 "runId")) -like "*twice*" -and (FSt $rt) -eq "true" -and (Subjects $rt) -contains "alpha" -and (Subjects $rt) -contains "20260601-100000-alpha") "a roster that lists one fleet id twice is reported, and chooses neither entry"
     Check ((FSt (Fault $p "roster-entry-twice")) -eq "false") "CONTROL: rosters that list each id once are not a fault"
+    # Either holder may be the one a held file names; neither makes it a hijack of the other (mutation run
+    # of PR #31, 2026-10-01: the check above names only the holder read first).
+    $hold2 = New-Fleet "two-holders-second"
+    EditReg $hold2 2 { param($r) $r.pane = "10" }
+    $fh2 = Join-Path $hold2 "agent\pane-sessions\10.json"; $jh2 = ReadJson $fh2; $jh2.session_id = (Sid 2); PutJson $fh2 $jh2; [System.IO.File]::SetLastWriteTimeUtc($fh2, $now.AddSeconds(-3600))
+    $phd2 = Project $hold2
+    $hij10b = @((Fault $phd2 "pane-sessions-hijack").found | Where-Object { @($_.subjects) -contains "handle 10" })
+    Check ($hij10b.Count -eq 0 -and (St (Ans $phd2 2 "pane")) -eq "unknown") "a file held by two sessions is no hijack whichever of them it names"
 
 }
 
