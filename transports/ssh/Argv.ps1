@@ -71,6 +71,18 @@ $script:HordeSshHubPattern = '\A[a-z0-9][a-z0-9-]{0,62}\z'
 $script:HordeSshEndpointPattern = '\A(?<user>[^@]+)@(?<host>[^:/]+):(?<port>[0-9]{1,5})/(?<hub>[^/]+)\z'
 $script:HordeSshHostKeyAliasPrefix = "horde-hub-"
 
+function Test-HordeSshEndpointFields {
+    # "" when user, host, port and hub id each match their closed pattern; otherwise why not. The one
+    # check both the parser and Get-HordeSshArgv use, so an endpoint object made anywhere else is held to
+    # the same rules before a field of it reaches argv (review of PR #68, round 3).
+    param([string]$User, [string]$HostName, $Port, [string]$HubId)
+    if (-not [regex]::IsMatch($User, $script:HordeSshUserPattern)) { return ("the user '" + $User + "' is not a lowercase account name") }
+    if (-not [regex]::IsMatch($HostName, $script:HordeSshHostPattern)) { return ("the host '" + $HostName + "' is not a DNS name or IPv4 address") }
+    if (-not ($Port -is [int]) -or $Port -lt 1 -or $Port -gt 65535) { return ("the port " + $Port + " is not between 1 and 65535") }
+    if (-not [regex]::IsMatch($HubId, $script:HordeSshHubPattern)) { return ("the hub id '" + $HubId + "' is not lowercase letters, digits and hyphens, at most 63") }
+    return ""
+}
+
 function ConvertFrom-HordeSshEndpoint {
     # "user@host:port/hubId" -> { ok; user; host; port; hubId; reason }.
     param([string]$Endpoint)
@@ -79,10 +91,8 @@ function ConvertFrom-HordeSshEndpoint {
     if (-not $m.Success) { $out.reason = "'" + $Endpoint + "' is not an ssh endpoint: user@host:port/hubId"; return $out }
     $u = $m.Groups["user"].Value; $h = $m.Groups["host"].Value; $hub = $m.Groups["hub"].Value
     $port = [int]$m.Groups["port"].Value
-    if (-not [regex]::IsMatch($u, $script:HordeSshUserPattern)) { $out.reason = "the user '" + $u + "' is not a lowercase account name"; return $out }
-    if (-not [regex]::IsMatch($h, $script:HordeSshHostPattern)) { $out.reason = "the host '" + $h + "' is not a DNS name or IPv4 address"; return $out }
-    if ($port -lt 1 -or $port -gt 65535) { $out.reason = "the port " + $port + " is not between 1 and 65535"; return $out }
-    if (-not [regex]::IsMatch($hub, $script:HordeSshHubPattern)) { $out.reason = "the hub id '" + $hub + "' is not lowercase letters, digits and hyphens, at most 63"; return $out }
+    $why = Test-HordeSshEndpointFields -User $u -HostName $h -Port $port -HubId $hub
+    if ($why -ne "") { $out.reason = $why; return $out }
     $out.ok = $true; $out.user = $u; $out.host = $h; $out.port = $port; $out.hubId = $hub
     return $out
 }
@@ -95,6 +105,10 @@ function Test-HordeSshSafePath {
     # The allowlist (header, PATHS, AS SSH READS THEM): anything outside it is refused.
     $m = [regex]::Match($Path, '[^A-Za-z0-9 \\/:._-]')
     if (-not $m.Success) {
+        # LOCAL AND ABSOLUTE (review of PR #68, round 3): ssh collapses a doubled backslash inside the
+        # quotes, so \\host\share\x would be read as \host\share\x on the current drive.
+        if (-not [regex]::IsMatch($Path, '\A[A-Za-z]:[\\/]')) { return ("ssh would not read the path '" + $Path + "' as written: a path ssh is given starts with a drive letter, as Horde's own local paths do") }
+        if ($Path.Contains("\\") -or $Path.Contains("//")) { return ("ssh would not read the path '" + $Path + "' as written: it doubles a separator, which ssh collapses") }
         if ($Path.EndsWith("\")) { return ("ssh would not read the path '" + $Path + "' as written: it ends in a backslash, which would escape the quote around it") }
         return ""
     }
@@ -120,6 +134,9 @@ function Get-HordeSshArgv {
     # The arguments after ssh.exe, for a parsed endpoint and Horde's paths. The header says why each.
     param([Parameter(Mandatory = $true)]$Endpoint, [Parameter(Mandatory = $true)]$Paths)
     if (-not $Endpoint.ok) { throw ("not an endpoint: " + $Endpoint.reason) }
+    # Data in, argv out: the endpoint is re-checked here, whoever made the object (header of ExecGuard).
+    $whyEp = Test-HordeSshEndpointFields -User "$($Endpoint.user)" -HostName "$($Endpoint.host)" -Port $Endpoint.port -HubId "$($Endpoint.hubId)"
+    if ($whyEp -ne "") { throw ("not an endpoint argv will use: " + $whyEp) }
     foreach ($path in @($Paths.config, $Paths.identity, $Paths.knownHosts)) {
         $why = Test-HordeSshSafePath -Path $path
         if ($why -ne "") { throw $why }
