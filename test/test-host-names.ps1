@@ -399,24 +399,36 @@ try {
     # adapter's to answer. The ratchet alone cannot hold that: a file allowlisted for a harness may name
     # it any way it likes, an image included. So a processImage has a rule of its own with no allowlist:
     # outside every port's folder and outside test/, a file that matches one is refused, unless it is
-    # one of the legacy readers the rule was measured against - a list that can only shrink.
+    # one of the legacy readers the rule was measured against, listed with its exact number of matches
+    # in tools/process-image-legacy.txt - a list that can only shrink (review of PR #57, A1 and A3).
+    $legacyFile = "tools/process-image-legacy.txt"
+    function Write-Legacy { param([string]$Lines) Write-FakeFile $legacyFile ("# legacy readers`n" + $Lines + "`n") }
+    $oldEntry = "core/old.ps1 | 1 | an old reader that matched the invented image before the rule existed"
     function Images {
-        param([string]$Name, [scriptblock]$Change, [string[]]$Legacy)
+        param([string]$Name, [scriptblock]$Change)
         $null = New-FakeRepo $Name
         Add-ZorbcodeName $zcImage
         & $Change
-        return @(Test-HordeProcessImages -RepoRoot $script:repo -Legacy $Legacy)
+        return @(Test-HordeProcessImages -RepoRoot $script:repo)
     }
     function ImagesRefuse {
-        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What, [string[]]$Legacy = @())
-        $f = @(Images $Name $Change $Legacy)
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(Images $Name $Change)
         $ok = ((Says $f $Text) -and $f.Count -eq 1)
         Check $ok $What
         if (-not $ok) { Show $f }
     }
+    function ImagesRefuseBoth {
+        # A refused legacy entry excuses nothing, so its file is then reported too: both, and nothing else.
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(Images $Name $Change)
+        $ok = ((Says $f $Text) -and (Says $f "matches the process image") -and $f.Count -eq 2)
+        Check $ok $What
+        if (-not $ok) { Show $f }
+    }
     function ImagesPass {
-        param([string]$Name, [scriptblock]$Change, [string]$What, [string[]]$Legacy = @())
-        $f = @(Images $Name $Change $Legacy)
+        param([string]$Name, [scriptblock]$Change, [string]$What)
+        $f = @(Images $Name $Change)
         Check ($f.Count -eq 0) $What
         if ($f.Count -gt 0) { Show $f }
     }
@@ -439,11 +451,44 @@ try {
     ImagesPass "img-name-kind" { Write-FakeFile "core/spawn.ps1" "& zorbcode`n" } "a name of kind name is the ratchet's to judge, not this rule's"
     ImagesPass "img-path-kind" { Add-ZorbcodeName $zcPath; Write-FakeFile "core/follow.ps1" "'zc-chatlog-'`n" } "a name of kind path is the ratchet's to judge, not this rule's"
     ImagesPass "img-planning" { Write-FakeFile "planning/ledger/tree.md" "zcrunner.exe was matched by name`n" } "prose under planning/ is not scanned"
-    ImagesPass "img-legacy" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n" } "a listed legacy reader may still match an image" -Legacy @("core/old.ps1")
-    ImagesPass "img-legacy-form" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n" } "a legacy path is read as an allowlist path is: backslashes, any case" -Legacy @("Core\Old.ps1")
-    ImagesRefuse "img-legacy-other" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-FakeFile "core/new.ps1" "@('zcrunner.exe')`n" } "matches the process image" "a legacy entry excuses its own file and no other" -Legacy @("core/old.ps1")
-    ImagesRefuse "img-legacy-stale" { Write-FakeFile "core/old.ps1" "# sessions`n" } "matches no process image" "a legacy reader that no longer matches an image must leave the list - it only shrinks" -Legacy @("core/old.ps1")
-    ImagesRefuse "img-legacy-gone" { } "matches no process image" "a legacy reader that is gone must leave the list" -Legacy @("core/gone.ps1")
+    # THE REGEX-ESCAPED FORM is the same image (review of PR #57, A4): a match written as a pattern.
+    ImagesRefuse "img-escaped" { Write-FakeFile "core/tree.ps1" "if (`$p.Name -match '^zcrunner\.exe$') { }`n" } "matches the process image" "an image written as an escaped regular expression is matched too"
+    ImagesPass "img-legacy" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy $oldEntry } "a listed legacy reader may still match an image, exactly as often as listed"
+    ImagesPass "img-legacy-form" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "Core\Old.ps1 | 1 | an old reader that matched the invented image before the rule existed" } "a legacy path is read as an allowlist path is: backslashes, any case"
+    ImagesRefuse "img-legacy-other" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-FakeFile "core/new.ps1" "@('zcrunner.exe')`n"; Write-Legacy $oldEntry } "matches the process image" "a legacy entry excuses its own file and no other"
+    # A COUNT, NOT A FILE (A3): the excuse covers the matches the file had, and no new one.
+    ImagesRefuse "img-legacy-gains" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe', 'ZCRUNNER.EXE')`n"; Write-Legacy $oldEntry } "2 process image match(es); tools/process-image-legacy.txt allows 1 - a new match" "a legacy reader that gains an image match is refused - the excuse is a count, not a file"
+    ImagesRefuse "img-legacy-gains-escaped" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n`$re = 'zcrunner\.exe'`n"; Write-Legacy $oldEntry } "a new match" "an escaped form added to a legacy reader is a new match"
+    ImagesRefuse "img-legacy-over" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed" } "lower it to 1" "a legacy count above the file's matches must be lowered - it only shrinks"
+    ImagesRefuse "img-legacy-stale" { Write-FakeFile "core/old.ps1" "# sessions`n"; Write-Legacy $oldEntry } "matches no process image" "a legacy reader that no longer matches an image must leave the list - it only shrinks"
+    ImagesRefuse "img-legacy-gone" { Write-Legacy "core/gone.ps1 | 1 | a reader that has since been deleted from the tree" } "matches no process image" "a legacy reader that is gone must leave the list"
+    ImagesRefuse "img-legacy-twice" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy ($oldEntry + "`n" + $oldEntry) } "listed twice" "a legacy entry listed twice is refused"
+    ImagesRefuseBoth "img-legacy-bad-count" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | one | an old reader that matched the invented image before the rule existed" } "must be a whole number" "a legacy count that is not a whole number is refused, and its file is then reported"
+    ImagesRefuseBoth "img-legacy-no-reason" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 1 | old old old old" } "needs a reason" "a legacy entry without a real reason is refused, and its file is then reported"
+    ImagesRefuseBoth "img-legacy-shape" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 1" } "a legacy line is" "a legacy line without its three parts is refused, and its file is then reported"
+
+    # THE LEGACY LIST AGAINST origin/main (A1): an entry not there, or a count above its count, is
+    # refused outright. There is no growth record for this list: it exists only to shrink to nothing.
+    $legacyMore = "core/new.ps1 | 1 | a second reader added after the rule existed"
+    ShrinkRefuses "sh-legacy-added" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy ($oldEntry + "`n" + $legacyMore) } "not on origin/main" "a legacy entry added since origin/main is refused - the list only shrinks"
+    ShrinkRefuses "sh-legacy-raised" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed" } "may not rise" "a legacy count raised since origin/main is refused"
+    ShrinkRefuses "sh-legacy-growth-line" {
+        Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy ($oldEntry + "`n" + $legacyMore)
+        Write-FakeFile "agents/zorbcode/growth.txt" "core/new.ps1 | 0 -> 1 | 2026-10-02 | a second reader added after the rule existed`n"
+    } "not on origin/main" "a growth line admits no legacy entry"
+    ShrinkPasses "sh-legacy-lowered" { Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed"; Save-FakeMain; Write-Legacy $oldEntry } "a legacy count lowered since origin/main passes"
+    ShrinkPasses "sh-legacy-emptied" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy "# empty now" } "a legacy list emptied since origin/main passes"
+    $nl = Shrink "sh-legacy-new" { Write-Legacy $oldEntry }
+    Check ($nl.skip -eq "" -and @($nl.findings).Count -eq 0 -and (@($nl.newHosts) -join ",") -eq $legacyFile) "a legacy list that origin/main does not have is reported as new, not compared - its pull request sets its baseline"
+    # A KIND MAY NOT BE DEMOTED (A2): an image turned into a path or a name leaves the image rule.
+    ShrinkRefuses "sh-kind-demoted" {
+        Add-ZorbcodeName $zcImage; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" ("zorbcode | the invented agent harness this suite polices in place of a real one`n" + "zcrunner.exe | path | the invented harness's own process image, now said to be a path`n")
+    } "processImage on origin/main" "a processImage on origin/main that is another kind here is refused - demoting it would take it out of the image rule"
+    ShrinkPasses "sh-kind-promoted" {
+        Add-ZorbcodeName $zcPath; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" ("zorbcode | the invented agent harness this suite polices in place of a real one`n" + "zc-chatlog- | processImage | the invented fragment, now held to the stricter rule`n")
+    } "a name promoted to processImage passes - the stricter rule only gains"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }
@@ -491,7 +536,7 @@ foreach ($img in $realImages) {
     try {
         Write-FakeFile ($img.own + "/names.txt") ([System.IO.File]::ReadAllText((Join-Path $root ($img.own + "/names.txt"))))
         Write-FakeFile "core/planted.ps1" ("# " + $img.name + "`n")
-        $armed = @(Test-HordeProcessImages -RepoRoot $script:repo -Legacy @())
+        $armed = @(Test-HordeProcessImages -RepoRoot $script:repo)
         Check ((Says $armed ("matches the process image '" + $img.name + "'")) -and $armed.Count -eq 1) ("CONTROL: " + $img.own + " - its declared process image '" + $img.name + "', planted in core/, is refused by the image rule")
         if ($armed.Count -ne 1) { Show $armed }
     } finally {
@@ -499,7 +544,7 @@ foreach ($img in $realImages) {
     }
 }
 $realImageFindings = @(Test-HordeProcessImages -RepoRoot $root)
-Check ($realImageFindings.Count -eq 0) "core matches no process image name, beyond the legacy readers tools/HostNames.ps1 lists"
+Check ($realImageFindings.Count -eq 0) "core matches no process image name, beyond the exact counts tools/process-image-legacy.txt lists"
 Show $realImageFindings
 
 $real = @(Test-HordeHostNames -RepoRoot $root)
