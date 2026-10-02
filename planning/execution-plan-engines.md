@@ -210,7 +210,12 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    (this step, the `agents/*` ratchet), then the lifecycle plan's step 5, then the hosts plan's step 5
    (the cross-host import). Each rebases on the one before.
 3. **E2. `schema/agent-descriptor.v1` and `core/capabilities.json`.** There is one descriptor for each
-   of `agents/claude-code/agent.json` and `agents/codex/agent.json`. Each capability is `yes`, `no`,
+   of `agents/claude-code/agent.json`, `agents/codex/agent.json` and `agents/gemini-cli/agent.json`
+   (the third added when E2 was built, 2026-10-02: the CLI was already installed, so its flags could be
+   read off `--help` with the profile redirected, and every hook and unmeasured capability is
+   `unverified` until G1 measures it). The wire formats are named after vendor and API -
+   `anthropic-messages`, `openai-responses`, `openai-chat`, `google-genai` - so no shared file names a
+   harness. Each capability is `yes`, `no`,
    `declined` or `unverified`, and each has evidence. The descriptor has more fields than the design
    showed:
    - `nativeProvider` (the subscription rule);
@@ -560,8 +565,8 @@ G. The gemini-cli adapter
     - the hooks, and their `GEMINI_SESSION_ID`;
     - whether a status file exists.
 
-    Then `agents/gemini-cli/agent.json` is written with `protocols: [gemini]` and
-    `nativeProvider: google`. Its events map AfterAgent to turn-ended and BeforeAgent to
+    Then `agents/gemini-cli/agent.json`, which E2 wrote with `protocols: [google-genai]` and
+    `nativeProvider: google`, is updated from these measurements. Its events map AfterAgent to turn-ended and BeforeAgent to
     turn-started, and treat SessionEnd as best-effort. `message-inject` stays `unverified` until it is
     measured, so gemini-cli can run goblins but not orcs or the warchief.
 22. **G2. `agents/gemini-cli/Transcript.ps1`** (INSTALL and FOLLOW: after G1 and the lifecycle plan's
