@@ -212,7 +212,14 @@ function Open-HordeTransportLink {
     }
     $r = Invoke-HordeTransportOp -Op $Transport.open -ArgList @($Endpoint, $TimeoutMs) -What ("opening " + $Transport.name + " endpoint '" + $Endpoint + "'")
     if (-not $r.ok) { return (New-HordeUnknown -Reason ("no link to " + $Transport.name + " endpoint '" + $Endpoint + "': " + $r.reason)) }
-    return (New-HordeKnown -Value (New-HordeLink -Transport $Transport -Role $Role -Endpoint $Endpoint -Channel $r.channel -Peer $r.peer))
+    # A CHANNEL HANDED OVER IS NEVER DROPPED (review of PR #68, round 3): if the link cannot be built,
+    # nothing else holds the channel - for a transport that runs a program, that program - so it is closed here.
+    try { $link = New-HordeLink -Transport $Transport -Role $Role -Endpoint $Endpoint -Channel $r.channel -Peer $r.peer }
+    catch {
+        try { & $r.channel.close $r.channel } catch { }
+        return (New-HordeUnknown -Reason ("no link to " + $Transport.name + " endpoint '" + $Endpoint + "': the link could not be built: " + $_.Exception.Message))
+    }
+    return (New-HordeKnown -Value $link)
 }
 
 function Start-HordeTransportListener {
