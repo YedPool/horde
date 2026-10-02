@@ -1,0 +1,77 @@
+# Mutations of the selector behind tools\Mutate.ps1 -Changed.
+# Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\mutate-changed.psd1
+# Each breaks one rule of tools\MutateChanged.ps1 - which lines a diff changed, where a mutant sits,
+# what is selected, when zero is an error; test	est-mutate-changed.ps1 must fail for every one. A
+# selector that drops a mutant it should run makes a review round green for the wrong reason.
+@{
+    Target = "tools\MutateChanged.ps1"
+    Suite  = "test	est-mutate-changed.ps1"
+    # Stop at the first failed check: a caught mutant needs nothing more.
+    Environment = @{ HORDE_FAIL_FAST = "1" }
+    Mutations = @(
+        # --- reading the diff
+        @{ Name = "drops-modified-lines"
+           Find = '''^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'''
+           Replace = '''^@@ -\d+,0 \+(\d+)(?:,(\d+))? @@''' }
+        @{ Name = "no-count-means-zero"
+           Find = '$count = 1'
+           Replace = '$count = 0' }
+        @{ Name = "range-short-by-one"
+           Find = '$i -lt $start + $count;'
+           Replace = '$i -lt $start + $count - 1;' }
+        @{ Name = "deletion-unmarked"
+           Find = '[void]$files[$cur].Add($start); [void]$files[$cur].Add($start + 1)'
+           Replace = '$null = 0' }
+        @{ Name = "deletion-one-side"
+           Find = '; [void]$files[$cur].Add($start + 1)'
+           Replace = '' }
+        @{ Name = "deleted-file-not-touched"
+           Find = '$cur = ConvertTo-HordeDiffKey $hdr.Groups[1].Value'
+           Replace = '$cur = $null' }
+        @{ Name = "keys-keep-case"
+           Find = 'return $p.ToLowerInvariant()'
+           Replace = 'return $p' }
+        @{ Name = "keys-keep-backslashes"
+           Find = '($Path.Trim() -replace ''\\'', ''/'')'
+           Replace = '($Path.Trim())' }
+        @{ Name = "diff-against-head-not-merge-base"
+           Find = '"--no-ext-diff", $sha, "--"'
+           Replace = '"--no-ext-diff", "HEAD", "--"' }
+        @{ Name = "untracked-ignored"
+           Find = 'Add-HordeWholeFile -Changed $changed -Path $rel -LineCount $n'
+           Replace = '$null = $n' }
+        @{ Name = "bad-base-accepted"
+           Find = 'if ($mb.code -ne 0 -or -not $mb.out.Trim()) {'
+           Replace = 'if ($false) {' }
+        # --- placing a mutant
+        @{ Name = "missing-target-placed"
+           Find = 'if ($null -eq $Text) { return [pscustomobject]@{ status = "missing"'
+           Replace = 'if ($null -eq $Text) { return [pscustomobject]@{ status = "located"' }
+        @{ Name = "ambiguous-placed-at-first"
+           Find = 'if ($n -gt 1) {'
+           Replace = 'if ($n -gt 99) {' }
+        @{ Name = "lines-counted-from-zero"
+           Find = '$line = 1'
+           Replace = '$line = 0' }
+        # --- the selection
+        @{ Name = "skips-unlocatable"
+           Find = '$sel = $true; $why = "find string not found in "'
+           Replace = '$sel = $false; $why = "find string not found in "' }
+        @{ Name = "skips-ambiguous"
+           Find = '$sel = $true; $why = "find string occurs "'
+           Replace = '$sel = $false; $why = "find string occurs "' }
+        @{ Name = "new-in-spec-ignored"
+           Find = '} elseif ($null -ne $sp.baseKeys -and'
+           Replace = '} elseif ($false -and' }
+        @{ Name = "base-spec-read-as-empty"
+           Find = 'foreach ($m in @($old.Mutations)) {'
+           Replace = 'foreach ($m in @()) {' }
+        @{ Name = "no-spec-folders-searched"
+           Find = 'foreach ($p in @(($pattern -split "/") + "mutations")) {'
+           Replace = 'foreach ($p in @(($pattern -split "/"))) {' }
+        # --- zero is not a pass
+        @{ Name = "zero-on-a-touched-target-passes"
+           Find = 'if ($hit.Count -gt 0) {'
+           Replace = 'if ($hit.Count -gt 99) {' }
+    )
+}
