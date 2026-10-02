@@ -157,4 +157,13 @@ Add-Prop (Get-Rule $docs.L1 "user-default").set "fixture.level" "medium"
 Check (@(Get-Findings (ConvertTo-DocList $docs) -Registry $fixtureReg | Where-Object { $_.code -ceq "key-value" -and $_.detail -like "*medium*" }).Count -eq 1) "a value its kind does not allow -> key-value"
 Check (@(Get-Findings (ConvertTo-DocList $docs) | Where-Object { $_.code -ceq "unknown-key" }).Count -eq 1) "CONTROL: without the fixture registry the same key is unknown"
 
+function Get-RegRefusal { param([string]$Text) try { $null = Read-HordeConfigKeysText -Text $Text; return "" } catch { return "$($_.Exception.Message)" } }
+$regText = [System.IO.File]::ReadAllText((Join-Path $root "core\config-keys.json"))
+Check ((Get-RegRefusal $regText) -eq "") "CONTROL: the registry's own text loads through the text reader"
+Check ((Get-RegRefusal ($regText.Replace('"name": "harness"', '"name": "profile"'))) -like "*profile*twice*") "the registry refuses a key listed twice"
+Check ((Get-RegRefusal ($regText.Replace('"layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "model" }', '"layers": ["L0", "L9"], "value": { "kind": "model" }'))) -like "*model*layers*") "the registry refuses a layer that does not exist"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "colour" }'))) -like "*colour*") "the registry refuses a value kind it does not know"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": [] }'))) -like "*enum with no values*") "the registry refuses an enum with no values"
+Check ((Get-RegRefusal ($regText.Replace('{ "name": "model",', '{ "name": "model", "name": "model",'))) -like "*more than once*") "the registry refuses a key repeated in one object"
+
 Complete-HordeSuite -Success "an engine configuration is refused for each listed finding, and the golden one for none"
