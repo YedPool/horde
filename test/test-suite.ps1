@@ -45,7 +45,8 @@ Check (Throws { throw "expected text" } "expected") "CONTROL: a block that throw
 Write-Host ""
 Write-Host "--- every suite is built the same way ---" -ForegroundColor Cyan
 
-# Checked on the syntax tree of every test/test-*.ps1 and every hosts/<name>/test/test-*.ps1: the
+# Checked on the syntax tree of every test/test-*.ps1, every hosts/<name>/test/test-*.ps1 and every
+# agents/<name>/test/test-*.ps1: the
 # helper cannot protect a suite that forgets its trap line, forgets to end through
 # Complete-HordeSuite, or exits early. The review of this helper measured each of the three leaving a
 # failed check with exit 0. A host's suites live in its own folder (D12), and a suite this scan did
@@ -60,7 +61,17 @@ foreach ($h in @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory
     }
 }
 Check ($hostSuites.Count -ge 1) ("CONTROL: the scan finds the hosts' suites too (" + $hostSuites.Count + ")")
-$suites = @($suites) + @($hostSuites)
+# An agent harness's suites live in its own folder for the same reason (CONTRIBUTING 14): their
+# fixtures are the harness's own files.
+$agentSuites = @()
+foreach ($h in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory -ErrorAction SilentlyContinue)) {
+    $ht = Join-Path $h.FullName "test"
+    if (Test-Path -LiteralPath $ht -PathType Container) {
+        $agentSuites += @(Get-ChildItem -LiteralPath $ht -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })
+    }
+}
+Check ($agentSuites.Count -ge 1) ("CONTROL: the scan finds the agent harnesses' suites too (" + $agentSuites.Count + ")")
+$suites = @($suites) + @($hostSuites) + @($agentSuites)
 foreach ($s in $suites) {
     $tk = $null; $pe = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$tk, [ref]$pe)

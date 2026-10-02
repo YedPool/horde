@@ -138,6 +138,8 @@ try {
     Set-Content -LiteralPath (Join-Path $fakeRoot "agents\harness-a\Transcript.ps1") -Value "# a"
     $files = @(Get-HordeTranscriptAdapterFiles -Root $fakeRoot)
     Check ($files.Count -eq 1 -and $files[0] -like "*harness-a*Transcript.ps1") "an agent folder with a Transcript.ps1 is an adapter; one without is not"
+    $real = @(Get-HordeTranscriptAdapterFiles)
+    Check ($real.Count -ge 1) ("CONTROL: the repository's own agents folder has adapters (" + $real.Count + ")")
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
