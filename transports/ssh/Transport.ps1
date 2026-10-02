@@ -18,7 +18,10 @@
 #     command or with 255 if an error occurred", so 255 is a transport error, never a protocol verdict.
 #
 # STREAM HYGIENE (hosts-research C9; CONTRIBUTING 12): stderr is read on its own and never enters the
-# frame reader; its first line becomes the reason for exit 255. No 2>&1 anywhere.
+# frame reader; its first line becomes the reason for exit 255. No 2>&1 anywhere. STDERR IS BOUNDED
+# (review of PR #68, F3: 150 MiB of stderr grew this process by 266 MiB, and an escape sequence reached
+# the reason): it is drained whenever the link reads or waits, only its first 4096 bytes are kept and
+# the rest is counted and dropped, and the reason is at most 200 printable characters.
 #
 # ONE PROGRAM START, AT ONE CALL SITE: Start-HordeSshProcess, called by Open with the System32 path.
 # tools/ExecScan.ps1 has no policy for transports/ yet (Horde #53); until it has, test-ssh.ps1 holds
@@ -35,6 +38,8 @@ $script:HordeSshBufferBytes = 65536
 $script:HordeSshExitTransportError = 255
 $script:HordeSshProbeTimeoutMs = 5000
 $script:HordeSshBannerPrefixes = @("SSH-2.0-", "SSH-1.99-")
+$script:HordeSshStderrKeepBytes = 4096
+$script:HordeSshReasonChars = 200
 $script:HordeSshHubSide = "the ssh transport's accepting end is the hub's sshd with a forced command, run by horde listen (remote plan R16) for keys enrollment writes (R17); neither is built in step R5"
 
 function Resolve-HordeSshExe {
@@ -86,13 +91,48 @@ function Start-HordeSshProcess {
     return [System.Diagnostics.Process]::Start($psi)
 }
 
+function Update-HordeSshStderr {
+    # Move whatever stderr has ready into the kept bytes, up to the cap, and count the rest as dropped.
+    # Never waits: a read is always pending, and each one that has finished is taken and replaced.
+    param($State)
+    while (-not $State.errEof) {
+        if ($null -eq $State.errTask) { $State.errTask = $State.err.ReadAsync($State.errChunk, 0, $State.errChunk.Length) }
+        if (-not $State.errTask.IsCompleted) { return }
+        $n = 0
+        try { $n = $State.errTask.Result } catch { $n = 0 }
+        $State.errTask = $null
+        if ($n -le 0) { $State.errEof = $true; return }
+        $take = [Math]::Min($script:HordeSshStderrKeepBytes - $State.errKept.Count, $n)
+        for ($k = 0; $k -lt $take; $k++) { $State.errKept.Add($State.errChunk[$k]) }
+        $State.errDropped += ($n - $take)
+    }
+}
+
+function Wait-HordeSshStderrOrExit {
+    # Drain stderr until it ends and the process has exited, or -Ms pass. A process blocked writing a
+    # flood of stderr cannot exit until it is drained, so waiting for the exit alone could wait forever.
+    param($State, [int]$Ms)
+    $deadline = [datetime]::UtcNow.AddMilliseconds($Ms)
+    while ([datetime]::UtcNow -lt $deadline) {
+        Update-HordeSshStderr -State $State
+        if ($State.errEof -and $State.process.HasExited) { return $true }
+        if ($null -ne $State.errTask) { $null = $State.errTask.Wait(100) } else { $null = $State.process.WaitForExit(100) }
+    }
+    Update-HordeSshStderr -State $State
+    return $State.process.HasExited
+}
+
 function Get-HordeSshFirstLine {
-    # The first non-blank line of what a process wrote to stderr, waiting up to -WaitMs for it to end.
-    param($State, [int]$WaitMs = 2000)
-    try {
-        if (-not $State.errTask.Wait($WaitMs)) { return "(stderr still open)" }
-        foreach ($l in ($State.errTask.Result -split "`r?`n")) { if ($l.Trim() -ne "") { return $l.Trim() } }
-    } catch { return "(stderr unreadable)" }
+    # The first non-blank line of the stderr kept so far, as at most 200 printable ASCII characters:
+    # anything else - an escape sequence, a bell - becomes "?", so stderr never writes to a terminal.
+    param($State)
+    $text = [System.Text.Encoding]::ASCII.GetString($State.errKept.ToArray())
+    foreach ($l in ($text -split "`r?`n")) {
+        $clean = ($l -replace '[^\x20-\x7E]', '?').Trim()
+        if ($clean -eq "") { continue }
+        if ($clean.Length -gt $script:HordeSshReasonChars) { $clean = $clean.Substring(0, $script:HordeSshReasonChars) + "..." }
+        return $clean
+    }
     return "(nothing on stderr)"
 }
 
@@ -107,7 +147,8 @@ function New-HordeSshChannel {
     $state = @{
         process = $Process; out = $Process.StandardOutput.BaseStream; in = $in
         buf = (New-Object byte[] $script:HordeSshBufferBytes); pending = $null
-        errTask = $Process.StandardError.ReadToEndAsync()
+        err = $Process.StandardError.BaseStream; errChunk = (New-Object byte[] $script:HordeSshBufferBytes); errTask = $null; errEof = $false
+        errKept = (New-Object System.Collections.Generic.List[byte]); errDropped = [long]0
     }
     return [pscustomobject]@{
         state = $state
@@ -116,7 +157,17 @@ function New-HordeSshChannel {
             $st = $Channel.state
             try {
                 if ($null -eq $st.pending) { $st.pending = $st.out.ReadAsync($st.buf, 0, $st.buf.Length) }
-                if (-not $st.pending.Wait([Math]::Max(0, $WaitMs))) { return [pscustomobject]@{ kind = "none"; bytes = $null; reason = "" } }
+                # Wait on stdout AND stderr: whatever arrives on stderr is drained at once, so a flood of
+                # it can neither stall the process writing it nor pile up here.
+                $deadline = [datetime]::UtcNow.AddMilliseconds([Math]::Max(0, $WaitMs))
+                while (-not $st.pending.IsCompleted) {
+                    Update-HordeSshStderr -State $st
+                    $left = [int][Math]::Ceiling(($deadline - [datetime]::UtcNow).TotalMilliseconds)
+                    if ($left -le 0) { return [pscustomobject]@{ kind = "none"; bytes = $null; reason = "" } }
+                    $waitOn = @($st.pending)
+                    if ($null -ne $st.errTask) { $waitOn += $st.errTask }
+                    $null = [System.Threading.Tasks.Task]::WaitAny([System.Threading.Tasks.Task[]]$waitOn, $left)
+                }
                 $n = $st.pending.Result
             } catch {
                 $st.pending = $null
@@ -130,7 +181,7 @@ function New-HordeSshChannel {
                 [Array]::Copy($st.buf, $copy, $n)
                 return [pscustomobject]@{ kind = "data"; bytes = $copy; reason = "" }
             }
-            if ($st.process.WaitForExit(5000) -and $st.process.ExitCode -eq $script:HordeSshExitTransportError) {
+            if ((Wait-HordeSshStderrOrExit -State $st -Ms 5000) -and $st.process.ExitCode -eq $script:HordeSshExitTransportError) {
                 return [pscustomobject]@{ kind = "error"; bytes = $null; reason = ("ssh exit 255, a transport error: " + (Get-HordeSshFirstLine -State $st)) }
             }
             return [pscustomobject]@{ kind = "eof"; bytes = $null; reason = "" }
@@ -207,6 +258,10 @@ $null = Register-HordeTransport -Folder $script:HordeSshFolder `
         $exe = Resolve-HordeSshExe
         if (-not $exe.ok) { return (New-HordeSshResult -Ok $false -Reason $exe.reason) }
         $paths = Get-HordeSshPaths -HordeHome (Get-HordeHome)
+        foreach ($path in @($paths.config, $paths.identity, $paths.knownHosts)) {
+            $why = Test-HordeSshSafePath -Path $path
+            if ($why -ne "") { return (New-HordeSshResult -Ok $false -Reason $why) }
+        }
         $ready = Test-HordeSshFiles -Paths $paths
         if (-not $ready.ok) { return (New-HordeSshResult -Ok $false -Reason $ready.reason) }
         $proc = Start-HordeSshProcess -FilePath $exe.path -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))
