@@ -100,3 +100,41 @@ from; none was tested against the main it merged into.
 **Rule:** a PR green on its branch can break main when main moved under it. Before merging, run the
 touched suites on the merge result (git merge-tree, or a throwaway merge commit), not only on the
 branch.
+
+## A review round that reruns everything spends its time on lines nobody touched
+
+Review rounds reran every suite and every mutation spec. The hosts-5 change touched two mutation
+targets; `tools\Mutate.ps1 -Changed` places 20 of the repository's 1064 mutants on the lines it
+changed. The other 1044 were rerun on code the round had not touched, and each run made the next
+round wait.
+
+**Rule:** each review round runs the suites covering the changed files and `Mutate.ps1 -Changed`.
+The full suite and the full specs run once per pull request, on the final head merged with current
+`main` (CONTRIBUTING 15).
+
+## A spec that is never run can be broken on main for days
+
+`test\mutations\port-names.psd1`'s `port-own-folder-assumed-hosts` searched for an expression that
+PR #57 (56e99a7) copied into a second function of `tools\HostNames.ps1`. From then on the find
+string occurred twice, the mutant could not apply, and a full run of the spec would have failed.
+Nobody ran it; it was found on 2026-10-02 only because the `-Changed` selector places every mutant.
+
+**Rule:** a property every spec must have is checked on every gate run, cheaply, not left to the
+rare full run: `test\test-mutation-specs.ps1` counts each find string in its target.
+
+## A run that printed nothing was read as a pass
+
+The local gate's first version let a child killed with its caller exit 0, and its third read a
+suite's exit 5 as 0 (2026-10-01). Both looked exactly like a clean run.
+
+**Rule:** a runner treats a suite with no checks, or no closing banner, as NOT RUN - never green. A
+result counts only from a log that ends in the run's own closing line.
+
+## A gate rolled out untested is wrong for every run at once
+
+The remote gate's first pruning rule, keep the newest 10 runs in the shared folder, deleted other
+agents' finished runs (2026-10-01). The local gate's -Wait waited on a leaked server for 3 hours.
+Each was found in use, by the runs it damaged.
+
+**Rule:** gates, runners and test tools get a failure-case matrix - pass, fail, crash, timeout,
+killed, no output, no checks, partial - each row run once and checked, before anyone relies on them.
