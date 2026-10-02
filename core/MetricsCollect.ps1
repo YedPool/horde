@@ -44,6 +44,9 @@
 # core/MetricsStore.ps1, core/MetricsReport.ps1, and the adapters loaded.
 
 $script:HordeCollectSettleMinutes = 10
+# A run's default time budget: 15 minutes, 5 under the scheduled task's 20-minute limit
+# (core/Schedule.ps1), so a scheduled run ends itself instead of being killed.
+$script:HordeCollectMaxSeconds = 900
 # Windows' sharing violation, the one failure to open the lock that means another run holds it.
 $script:HordeSharingViolation = -2147024864
 
@@ -76,14 +79,25 @@ function Read-HordeCollectIndex {
 }
 
 function Write-HordeCollectIndex {
+    # Written whole, by temp file and replace (Write-HordeMetricsFile), AFTER EVERY TRANSCRIPT (review of
+    # #70, NEW-1: written once at the end, a run killed by the scheduler's time limit lost all its work,
+    # and a large backlog never finished). Serialised by .NET in one call, not ConvertTo-Json, so a commit
+    # per transcript stays cheap.
     param([Parameter(Mandatory = $true)][hashtable]$Entries)
-    $out = [ordered]@{}
+    $out = [System.Collections.Generic.Dictionary[string,object]]::new()
     foreach ($k in @($Entries.Keys | Sort-Object)) {
         $e = $Entries[$k]
-        $out[$k] = [ordered]@{ size = $e.size; modifiedTicks = $e.modifiedTicks; outcome = $e.outcome; record = $e.record; firstEventTicks = $e.firstEventTicks; enabledAtTicks = $e.enabledAtTicks; reason = $e.reason }
+        $d = [System.Collections.Generic.Dictionary[string,object]]::new()
+        $d["size"] = [long]$e.size; $d["modifiedTicks"] = [long]$e.modifiedTicks; $d["outcome"] = "$($e.outcome)"; $d["record"] = "$($e.record)"
+        $d["firstEventTicks"] = [long]$e.firstEventTicks; $d["enabledAtTicks"] = [long]$e.enabledAtTicks; $d["reason"] = "$($e.reason)"
+        $out[$k] = $d
     }
-    $doc = [ordered]@{ schemaVersion = 2; kind = "metrics.collectIndex"; entries = $out }
-    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text (ConvertTo-Json -InputObject $doc -Depth 6)
+    $doc = [System.Collections.Generic.Dictionary[string,object]]::new()
+    $doc["schemaVersion"] = 2; $doc["kind"] = "metrics.collectIndex"; $doc["entries"] = $out
+    Add-Type -AssemblyName System.Web.Extensions
+    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $ser.MaxJsonLength = [int]::MaxValue
+    Write-HordeMetricsFile -Path (Get-HordeCollectIndexPath) -Text $ser.Serialize($doc)
 }
 
 function Get-HordeHashText {
@@ -105,8 +119,13 @@ function Get-HordeCollectFiles {
             $base = [System.IO.Path]::GetFullPath($t.dir).TrimEnd('\') + '\'
             foreach ($f in @(Get-ChildItem -LiteralPath $t.dir -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq $t.extension })) {
                 if (-not $seen.Add($f.FullName)) { continue }
+                # The folders below the engine's transcript folder are hashed: a harness names them after the
+                # project, whose path spells out the user (review of #70, verification: C--Users-<name>-...).
                 $rel = $f.FullName.Substring($base.Length).Replace('\', '/')
-                [void]$files.Add([pscustomobject]@{ file = $f; key = ($s.agent + "/" + $t.label + "/" + $rel) })
+                $cut = $rel.LastIndexOf('/')
+                $shown = $rel
+                if ($cut -ge 0) { $shown = (Get-HordeHashText $rel.Substring(0, $cut).ToLowerInvariant()).Substring(0, 16) + "/" + $rel.Substring($cut + 1) }
+                [void]$files.Add([pscustomobject]@{ file = $f; key = ($s.agent + "/" + $t.label + "/" + $shown) })
             }
         }
     }
@@ -135,9 +154,9 @@ function Invoke-HordeMetricsCollect {
     # "off", "refused", "busy" or "done"; only "done" may have written anything.
     # -Now and -RepoRoot are for tests; -SettleMinutes is how long a transcript must be still before
     # its record is final.
-    param([int]$SettleMinutes = $script:HordeCollectSettleMinutes, $Now = $null, [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot))
+    param([int]$SettleMinutes = $script:HordeCollectSettleMinutes, $Now = $null, [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot), [int]$MaxFiles = 0, [int]$MaxSeconds = $script:HordeCollectMaxSeconds)
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
-    $res = [ordered]@{ state = ""; reason = ""; found = 0; unchanged = 0; read = 0; recorded = 0; provisional = 0; beforeConsent = 0; notRecorded = 0; failed = 0; unreadable = 0; noAdapter = 0; removed = 0; wroteIndex = $false; rows = (New-Object System.Collections.ArrayList) }
+    $res = [ordered]@{ state = ""; reason = ""; found = 0; unchanged = 0; read = 0; recorded = 0; provisional = 0; beforeConsent = 0; notRecorded = 0; failed = 0; unreadable = 0; noAdapter = 0; removed = 0; wroteIndex = $false; stoppedEarly = $false; rows = (New-Object System.Collections.ArrayList) }
     $gate = Read-HordeMetricsGate
     if ($gate.state -eq "absent" -or ($gate.state -eq "known" -and $gate.value.level -cne "usage")) { $res.state = "off"; $res.reason = "metrics are off; nothing was collected"; return [pscustomobject]$res }
     if ($gate.state -ne "known") { $res.state = "refused"; $res.reason = ("the gate is refused, so nothing was collected: " + $gate.reason); return [pscustomobject]$res }
@@ -169,14 +188,20 @@ function Invoke-HordeMetricsCollect {
         $table = Read-HordePriceBook
         $enabledTicks = $gate.value.enabledAt.Ticks
         $settleTicks = [TimeSpan]::FromMinutes($SettleMinutes).Ticks
+        # Every file is enumerated first, so a run that stops early still knows which are present and
+        # forgets none it did not reach.
+        $all = @(Get-HordeCollectFiles -Stores $stores.value)
         $present = New-Object 'System.Collections.Generic.HashSet[string]'
-        foreach ($item in (Get-HordeCollectFiles -Stores $stores.value)) {
-            $res.found++
+        foreach ($item in $all) { [void]$present.Add($item.key); [void]$present.Add("hash:" + (Get-HordeHashText $item.key)) }
+        $started = [System.Diagnostics.Stopwatch]::StartNew()
+        $res.found = $all.Count
+        foreach ($item in $all) {
+            # COMMIT what the previous transcript changed, before the next one is touched.
+            if ($dirty) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true; $dirty = $false }
             $f = $item.file
             $path = $f.FullName
             $plainKey = $item.key
             $hashKey = "hash:" + (Get-HordeHashText $plainKey)
-            [void]$present.Add($plainKey); [void]$present.Add($hashKey)
             $size = $f.Length
             $mod = $f.LastWriteTimeUtc.Ticks
             $settled = (($Now.Ticks - $mod) -ge $settleTicks)
@@ -195,6 +220,13 @@ function Invoke-HordeMetricsCollect {
             if ($null -ne $old -and $old.outcome -eq "beforeConsent" -and $old.enabledAtTicks -eq $enabledTicks -and $old.firstEventTicks -gt 0 -and $size -ge $old.size) {
                 $old.size = $size; $old.modifiedTicks = $mod; $old.reason = "began before metrics were enabled, and has only grown since"
                 $dirty = $true; $res.beforeConsent++; continue
+            }
+            # THE BUDGET: a run ends cleanly before the scheduler's time limit would kill it (review of #70,
+            # NEW-1); what it did not reach is read by the next run.
+            if (($MaxFiles -gt 0 -and $res.read -ge $MaxFiles) -or ($started.Elapsed.TotalSeconds -ge $MaxSeconds)) {
+                $res.stoppedEarly = $true
+                $res.reason = ("the run's budget (" + $(if ($MaxFiles -gt 0) { "" + $MaxFiles + " files, " } else { "" }) + $MaxSeconds + " seconds) is spent; the rest is read next run")
+                break
             }
             $entry = [pscustomobject]@{ size = $size; modifiedTicks = $mod; outcome = ""; record = ""; firstEventTicks = [long]0; enabledAtTicks = $enabledTicks; reason = "" }
             if ($null -ne $old) { $entry.record = $old.record; $entries.Remove($key) }
@@ -276,6 +308,7 @@ function Format-HordeMetricsCollect {
     $lines = @("collect: " + $r.found + " transcripts; " + $r.unchanged + " unchanged; " + $r.read + " read; " + $r.recorded + " recorded (" + $r.provisional + " provisional); " + $r.beforeConsent + " from before consent; " + $r.notRecorded + " not recorded; " + $r.failed + " failed; " + $r.noAdapter + " no adapter; " + $r.unreadable + " not readable; " + $r.removed + " gone from the index")
     if ($r.reason -ne "") { $lines += ("collect: " + $r.reason) }
     if (-not $r.wroteIndex) { $lines += "collect: nothing new or changed, nothing written" }
+    if ($r.stoppedEarly) { $lines += "collect: stopped early on its budget; the next run goes on" }
     return $lines
 }
 

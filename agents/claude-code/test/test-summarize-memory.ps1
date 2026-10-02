@@ -73,7 +73,7 @@ function Measure-Peak {
     $outTask = $p.StandardOutput.ReadToEndAsync(); $errTask = $p.StandardError.ReadToEndAsync()
     $peak = 0; $priv = 0
     while (-not $p.HasExited) {
-        try { $p.Refresh(); if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 }; if ($p.PrivateMemorySize64 -gt $priv) { $priv = $p.PrivateMemorySize64 } } catch { }
+        try { $p.Refresh(); if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 }; if ($p.PeakPagedMemorySize64 -gt $priv) { $priv = $p.PeakPagedMemorySize64 } } catch { }
         Start-Sleep -Milliseconds 100
     }
     $p.WaitForExit()

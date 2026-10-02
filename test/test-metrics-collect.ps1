@@ -139,7 +139,7 @@ try {
     $r5 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
     Check ($r5.read -eq 1 -and $r5.removed -eq 1 -and @(Get-Records).Count -eq ($filled + 1) -and @($r5.rows)[0].record -like ("*/" + $newId)) "a moved transcript replaces its own record; it does not get a second one"
     $ix5 = Get-Index
-    Check (@($ix5["entries"].Keys | Where-Object { $_ -like "*renamed-project*" }).Count -eq 1 -and @($ix5["entries"].Keys).Count -eq ($filled + 1)) "and the index follows it: one entry, at its new place"
+    Check (@($ix5["entries"].Values | Where-Object { $_["record"] -like ("*/" + $newId) }).Count -eq 1 -and @($ix5["entries"].Keys).Count -eq ($filled + 1)) "and the index follows it: one entry, at its new place"
     # A COPY of a session is the same session: one record.
     $copyDir = Join-Path (Split-Path -Parent $planted) "elsewhere"
     [void][System.IO.Directory]::CreateDirectory($copyDir)
@@ -156,6 +156,9 @@ try {
     Check (@(Get-Records).Count -eq ($filled + 1)) "and its record stays: the work it measured was done"
     $ixText = [System.IO.File]::ReadAllText((Get-HordeCollectIndexPath))
     Check (-not $ixText.Contains($env:USERPROFILE) -and -not $ixText.Contains($work) -and -not $ixText.ToLowerInvariant().Contains(($env:USERPROFILE.Replace('\', '/')).ToLowerInvariant())) "the index holds no path into the home, only each transcript's place in its engine's folder (review of PR #70, F6)"
+    # The folders a harness names after a project spell out where the user works (review of #70, verification:
+    # a real key held C--Users-<name>-...); a key keeps only a hash of the folder part.
+    Check (-not $ixText.Contains("renamed-project") -and -not $ixText.Contains("fixtures") -and -not $ixText.Contains("elsewhere")) "and no folder name below the engine's transcript folder: only a hash of it, and the file's own name"
 
     Write-Host ""
     Write-Host "--- a transcript still being written is provisional ---" -ForegroundColor Cyan
@@ -253,7 +256,59 @@ try {
     Remove-Item -LiteralPath (Join-Path (Get-HordeMetricsDir) "collect.lock") -Force
 
     Write-Host ""
-    Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
+    Write-Host "--- a large backlog: progress is kept, and a run ends within its budget (review of #70, NEW-1) ---" -ForegroundColor Cyan
+    $backlogDir = Join-Path (Split-Path -Parent $cleanSrc) "backlog"
+    [void][System.IO.Directory]::CreateDirectory($backlogDir)
+    $cleanText = [System.IO.File]::ReadAllText($cleanSrc)
+    $cleanId = [System.IO.Path]::GetFileNameWithoutExtension($cleanSrc)
+    $backlogIds = @()
+    for ($i = 0; $i -lt 30; $i++) {
+        $bid = "b0000000-0000-4000-8000-" + $i.ToString("000000000000")
+        $backlogIds += $bid
+        $bf = Join-Path $backlogDir ($bid + ".jsonl")
+        [System.IO.File]::WriteAllText($bf, ($cleanText -replace [regex]::Escape($cleanId), $bid))
+        Set-Old $bf $settledAt
+    }
+    $countBacklog = { $ix = Get-Index; if ($null -eq $ix) { 0 } else { @($ix["entries"].Values | Where-Object { "$($_["record"])" -match '/b0000000-' }).Count } }
+    # A run that is killed keeps what it finished: the index is committed after every transcript.
+    $envsK = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" metrics collect"
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    foreach ($k in $envsK.Keys) { $psi.EnvironmentVariables[$k] = $envsK[$k] }
+    $kp = [System.Diagnostics.Process]::Start($psi)
+    $null = $kp.StandardOutput.ReadToEndAsync(); $null = $kp.StandardError.ReadToEndAsync()
+    $deadline = [datetime]::UtcNow.AddMinutes(5)
+    $committed = 0
+    while (-not $kp.HasExited -and [datetime]::UtcNow -lt $deadline) {
+        try { $committed = & $countBacklog } catch { $committed = 0 }
+        if ($committed -ge 3) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $killedMidway = (-not $kp.HasExited)
+    if ($killedMidway) { $kp.Kill(); $kp.WaitForExit() }
+    $kp.Dispose()
+    $committed = & $countBacklog
+    Check ($killedMidway -and $committed -ge 3 -and $committed -lt 30) ("a run killed in the middle of a backlog has already committed what it finished (" + $committed + " of 30)")
+    $resume = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    $recIds = @(Get-Records | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } | Where-Object { $_ -like "b0000000-*" })
+    $resumedBacklog = @($resume.rows | Where-Object { $_.record -match '/b0000000-' }).Count
+    Check ($resumedBacklog -eq (30 - $committed) -and $resume.state -eq "done") ("the next run reads only the backlog's transcripts that were not committed (" + $resumedBacklog + " = 30 - " + $committed + ")")
+    Check ($recIds.Count -eq 30 -and @($recIds | Sort-Object -Unique).Count -eq 30 -and (& $countBacklog) -eq 30) "and every transcript of the backlog is recorded exactly once"
+    # A run ends cleanly within its budget, before a scheduler's time limit would kill it.
+    foreach ($bid in $backlogIds[0..4]) { $bf = Join-Path $backlogDir ($bid + ".jsonl"); [System.IO.File]::AppendAllText($bf, "`n"); Set-Old $bf $settledAt.AddMinutes(9) }
+    $bud = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxFiles 2
+    Check ($bud.state -eq "done" -and $bud.read -eq 2 -and $bud.stoppedEarly -and $bud.reason -like "*budget*") "a run with a budget of 2 files reads 2, stops cleanly, and says why"
+    Check ((& $countBacklog) -eq 30 -and $bud.removed -eq 0) "and forgets nothing it did not reach"
+    $bud2 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($bud2.read -eq 3 -and -not $bud2.stoppedEarly) "the next run picks up the other 3"
+    $budS = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 0
+    Check ($budS.state -eq "done" -and $budS.read -eq 0) "CONTROL: a time budget is honoured too (0 seconds: nothing read, nothing lost)"
+    foreach ($bid in $backlogIds) { Remove-Item -LiteralPath (Join-Path $backlogDir ($bid + ".jsonl")) -Force }
+    $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+
+    Write-Host ""    Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
     $envs = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
     [System.IO.File]::AppendAllText($planted, "`n"); Set-Old $planted $settledAt.AddMinutes(4)
     $c1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "collect") -Env $envs

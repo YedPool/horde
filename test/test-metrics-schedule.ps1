@@ -38,6 +38,10 @@ try {
     Check (Throws { New-HordeScheduledJob -Name "bad\name" -Script "s" -HordeHome "h" } "not a job name") "a job name that is not plain is refused"
     Check (Throws { New-HordeScheduledJob -Name "x" -Folder "Microsoft" -Script "s" -HordeHome "h" } "not one of Horde's scheduler folders") "a folder that is not Horde's is refused"
     Check (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Environment @{ "A;B" = "1" } } "not an environment variable name") "an environment name that is not a plain name is refused"
+    # Review of #70, NEW-2: an argument starting with "-" reaches the script as a plain string, not a
+    # switch, and the run fails with exit 2; it is refused when the job is made, not every 30 minutes.
+    Check (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Arguments @("metrics", "-Json") } "cannot start with") "an argument that starts with a dash is refused when the job is made"
+    Check (-not (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Arguments @("metrics", "a-b") } "cannot start with")) "CONTROL: a dash inside an argument is fine"
 
     Write-Host ""
     Write-Host "--- the seam, with a fake scheduler ---" -ForegroundColor Cyan

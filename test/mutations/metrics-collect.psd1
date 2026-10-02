@@ -62,8 +62,20 @@
            Find = '                try { Set-HordeRecordSourceGone -Record $gone.record } catch { $res.failed++ }'
            Replace = '' }
         @{ Name = "index-written-every-run"
-           Find = 'if ($dirty) { Write-HordeCollectIndex'
-           Replace = 'if ($true) { Write-HordeCollectIndex' }
+           Find = '        if ($dirty) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true }'
+           Replace = '        if ($true) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true }' }
+        @{ Name = "committed-only-at-the-end"
+           Find = '            if ($dirty) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true; $dirty = $false }'
+           Replace = '' }
+        @{ Name = "budget-ignored"
+           Find = 'if (($MaxFiles -gt 0 -and $res.read -ge $MaxFiles) -or ($started.Elapsed.TotalSeconds -ge $MaxSeconds)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreached-files-forgotten"
+           Find = '        foreach ($item in $all) { [void]$present.Add($item.key);'
+           Replace = '        foreach ($item in @()) { [void]$present.Add($item.key);' }
+        @{ Name = "project-folder-kept"
+           Find = '                if ($cut -ge 0) { $shown ='
+           Replace = '                if ($false) { $shown =' }
         @{ Name = "lock-ignored"
            Find = '        if ($inner -is [System.IO.IOException] -and $inner.HResult -eq $script:HordeSharingViolation) { $res.state = "busy";'
            Replace = '        $lock = New-Object System.IO.MemoryStream; if ($false) { $res.state = "busy";' }

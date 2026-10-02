@@ -80,6 +80,9 @@ function New-HordeScheduledJob {
     Assert-HordeJobName -Name $Name -Folder $Folder
     if ($EveryMinutes -lt 1 -or $TimeLimitMinutes -lt 1 -or $TimeLimitMinutes -gt $EveryMinutes) { throw "a job runs at least every minute, and stops before its next run" }
     foreach ($k in @($Environment.Keys)) { if ("$k" -cnotmatch '\A[A-Z_][A-Z0-9_]*\z') { throw ("not an environment variable name: '" + $k + "'") } }
+    # An argument starting with "-" reaches the script as a plain string, never a switch, and the run fails
+    # with exit 2 every time it fires (review of #70, NEW-2, measured); refused here, once.
+    foreach ($a in @($Arguments)) { if ("$a".StartsWith("-")) { throw ("a job argument cannot start with '-': '" + $a + "'") } }
     foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
     $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
     return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled }

@@ -25,6 +25,9 @@
         @{ Name = "env-name-unchecked"
            Find = 'if ("$k" -cnotmatch ''\A[A-Z_][A-Z0-9_]*\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "dash-argument-allowed"
+           Find = 'foreach ($a in @($Arguments)) { if ("$a".StartsWith("-")) { throw'
+           Replace = 'foreach ($a in @()) { if ("$a".StartsWith("-")) { throw' }
         @{ Name = "unavailable-scheduler-used"
            Find = '        if ($ok) { return (New-HordeKnown -Value $s) }'
            Replace = '        return (New-HordeKnown -Value $s)' }
