@@ -119,6 +119,16 @@ $o = Open-HordeTransportLink -Transport $boom -Endpoint "e" -Role "node"
 Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*adapter exploded*") "an adapter that throws while opening gives unknown with its message, not a crash"
 $p = Test-HordeTransportReachable -Transport $boom -Endpoint "e"
 Check ((Test-HordeAnswer $p) -and $p.state -ceq "unknown") "a probe that answers with a bare value is unknown, not believed"
+# A LINK THAT CANNOT BE BUILT CLOSES ITS CHANNEL (review of PR #68, round 3, F7): the adapter has handed
+# over a channel - for a transport that runs a program, that program - and nothing else holds it, so the port closes it.
+$savedOpen = $good.open
+$savedLink = ${function:New-HordeLink}
+$good.open = { param($e, $t) $script:lastCh = New-ScriptedChannel; [pscustomobject]@{ ok = $true; channel = $script:lastCh; peer = $null; reason = "" } }
+Set-Item -LiteralPath "function:script:New-HordeLink" -Value { throw "the link could not be built" }
+try { $o = Open-HordeTransportLink -Transport $good -Endpoint "e" -Role "node" } catch { $o = [pscustomobject]@{ state = "threw"; reason = $_.Exception.Message } }
+finally { Set-Item -LiteralPath "function:script:New-HordeLink" -Value $savedLink; $good.open = $savedOpen }
+Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*could not be built*") ("a link that cannot be built is unknown with the reason, not a throw (" + $o.state + ")")
+Check ($script:lastCh.state.closed -eq 1) "and the channel the adapter handed over is closed"
 # LISTENING NEEDS accept (remote plan step R5): a transport whose hub side is served out of this
 # process - the ssh transport's is a server program with a forced command, steps R16 and R17 - may not be asked to listen here.
 $script:listened = 0

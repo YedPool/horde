@@ -98,11 +98,23 @@ try {
     # third surprise the rule is an ALLOWLIST: a path holds only letters, digits, space and \ / : . _ -
     # and every other character is refused, the ones not yet known to matter included.
     foreach ($bad in @("C:\x%d\h", "C:\x%h", "C:\a #b", "C:\o'brien", 'C:\q"q', ("C:\t" + [char]9 + "t"), ("C:\caf" + [char]0xE9), ("C:\n" + [char]10 + "l"),
-                       'C:\d${HOME}', 'C:\d$HOME', 'C:\x~y', 'C:\p(x86)', 'C:\a;b', 'C:\a=b', 'C:\a,b', 'C:\a!b', 'C:\a@b', 'C:\a&b', 'C:\a[b]', 'C:\a+b', 'C:\a`b')) {
+                       'C:\d${HOME}', 'C:\d$HOME', 'C:\x~y', 'C:\p(x86)', 'C:\a;b', 'C:\a=b', 'C:\a,b', 'C:\a!b', 'C:\a@b', 'C:\a&b', 'C:\a[b]', 'C:\a+b', 'C:\a`b',
+                       '\\server\share\h', '//server/share/h', 'C:\a\\b', 'C:/a//b', 'relative\h', 'C:h', '\h')) {
         Check ((Test-HordeSshSafePath -Path $bad) -ne "") ("the path '" + ($bad -replace '[^\x20-\x7E]', '?') + "' is refused for ssh's argv")
         Check (Throws { $null = Get-HordeSshArgv -Endpoint $ok -Paths (Get-HordeSshPaths -HordeHome $bad) } "ssh would") ("and argv is not built under a Horde home of '" + ($bad -replace '[^\x20-\x7E]', '?') + "'")
     }
     Check ((Test-HordeSshSafePath -Path "C:\ends\") -ne "") "a path ending in a backslash is refused: it would escape the quote argv puts around it"
+    # LOCAL AND ABSOLUTE ONLY (review of PR #68, round 3): ssh collapses a doubled backslash inside the
+    # quotes, so \\host\share\x is read as \host\share\x on the current drive, a folder any local user may
+    # create. Horde's own paths are local, so a path starts with a drive letter and never doubles a
+    # separator.
+    Check ((Test-HordeSshSafePath -Path "C:/Users/Jo Smith/.horde") -eq "") "a drive-absolute path with forward slashes is accepted"
+    # ARGV CHECKS THE ENDPOINT IT IS GIVEN (review of PR #68, round 3, LOW): data in, argv out - but a
+    # forged endpoint object that says ok is re-read field by field, never trusted.
+    $forged = [pscustomobject]@{ ok = $true; user = "-oIdentityFile=~/.ssh/id_ed25519"; host = "127.0.0.1"; port = 22; hubId = "h"; reason = "" }
+    Check (Throws { $null = Get-HordeSshArgv -Endpoint $forged -Paths $paths } "not a lowercase account") "argv refuses a forged endpoint object whose user would be an ssh option"
+    $forged.user = "horde-link"; $forged.host = "-oProxyCommand=calc"
+    Check (Throws { $null = Get-HordeSshArgv -Endpoint $forged -Paths $paths } "not a DNS name") "and one whose host would be an ssh option"
     Check ((Test-HordeSshSafePath -Path "C:\Users\Jo Smith\x-y_z\.horde") -eq "") "a path of letters, digits, spaces, dots, hyphens and underscores is accepted: ssh reads those as written (measured)"
 
     Write-Host ""
@@ -122,7 +134,9 @@ try {
 
     Write-Host ""
     Write-Host "--- ssh.exe is the System32 copy, never one found through PATH ---" -ForegroundColor Cyan
-    $sys = Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"
+    # The System32 ssh.exe, named as the adapter names it: from the system directory .NET reports, with
+    # no command and no environment variable involved (review of PR #68, round 3).
+    $sys = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe")
     $fakeBin = Join-Path $tmp "bin"
     New-Item -ItemType Directory -Path $fakeBin | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $fakeBin "ssh.exe"), "not a program")
@@ -184,7 +198,10 @@ try {
         $paths = Get-HordeSshPaths -HordeHome $hh
         $parsed = ConvertFrom-HordeSshEndpoint -Endpoint $ep
         $gArgv = @("-G") + @(Get-HordeSshArgv -Endpoint $parsed -Paths $paths)
-        $g = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv $gArgv)
+        # The adapter's starter puts every ssh.exe in a kill-on-close job; these -G runs get one each.
+        $gJobs = New-Object System.Collections.ArrayList
+        function New-GJob { $j = [HordeSshNative]::NewKillOnCloseJob(); [void]$gJobs.Add($j); return $j }
+        $g = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv $gArgv) -Job (New-GJob)
         [void]$children.Add($g)
         $gOut = $g.StandardOutput.ReadToEnd()
         $null = $g.WaitForExit(30000)
@@ -215,7 +232,7 @@ try {
         Check ((One "knownhostscommand") -ceq "<absent>" -and (One "remotecommand") -ceq "<absent>" -and (One "localcommand") -ceq "<absent>" -and (One "pkcs11provider") -ceq "<absent>") "no known-hosts command, remote command, local command or PKCS#11 provider is set"
         Check ((One "securitykeyprovider") -ceq "internal" -and (One "tunnel") -ceq "false" -and (One "forwardx11trusted") -ceq "no" -and (One "gatewayports") -ceq "no") "the security-key provider is the built-in one, and no tunnel, trusted X11 or gateway port is open"
         function Get-SshG { param([string[]]$Argv)
-            $gp = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (@("-G") + $Argv))
+            $gp = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (@("-G") + $Argv)) -Job (New-GJob)
             [void]$children.Add($gp)
             $txt = $gp.StandardOutput.ReadToEnd()
             $null = $gp.WaitForExit(30000)
@@ -243,7 +260,7 @@ try {
         # CONTROL: the same question without Horde's config and known_hosts options. ssh.exe ignores
         # USERPROFILE and resolves ~ to the real profile (measured 2026-10-02), so this shows the
         # user's own files without touching them: the check above can see the hazard it refuses.
-        $ctl = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv @("-G", "-p", "1", "horde-link@127.0.0.1"))
+        $ctl = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv @("-G", "-p", "1", "horde-link@127.0.0.1")) -Job (New-GJob)
         [void]$children.Add($ctl)
         $ctlOut = $ctl.StandardOutput.ReadToEnd()
         $null = $ctl.WaitForExit(30000)
@@ -281,8 +298,8 @@ try {
         $script:openStarted = New-Object System.Collections.ArrayList
         $realStart = ${function:Start-HordeSshProcess}
         function Start-HordeSshProcess {
-            param([string]$Arguments)
-            $sp = & $realStart -Arguments $Arguments
+            param([string]$Arguments, $Job)
+            $sp = & $realStart -Arguments $Arguments -Job $Job
             [void]$script:openStarted.Add([pscustomobject]@{ process = $sp; id = $sp.Id; at = $sp.StartTime })
             [void]$children.Add($sp)
             return $sp
@@ -294,16 +311,48 @@ try {
             Check ($o.ok -and $script:openStarted.Count -eq 1) "CONTROL: an Open that succeeds starts one ssh.exe"
             if ($script:openStarted.Count -ge 1) { Check (Test-OursAlive $script:openStarted[-1]) "CONTROL: and it is alive, waiting on the silent listener, so a dead one below means it was killed" }
             if ($o.ok) { & $o.channel.close $o.channel }
-            foreach ($step in @("New-HordeSshChannel", "New-HordeSshResult")) {
+            foreach ($step in @("Start-HordeSshProcess", "New-HordeSshChannel", "New-HordeSshResult")) {
                 $before = $script:openStarted.Count
                 $saved = (Get-Item -LiteralPath ("function:" + $step)).ScriptBlock
-                Set-Item -LiteralPath ("function:script:" + $step) -Value { throw "injected failure after the start" }
+                # For the start itself, the throw comes right AFTER the process has started: the window
+                # between the start and anything that could hold it (review of PR #68, round 3).
+                if ($step -eq "Start-HordeSshProcess") { $failing = { param([string]$Arguments, $Job) $null = & $saved -Arguments $Arguments -Job $Job; throw "injected failure after the start" } }
+                else { $failing = { throw "injected failure after the start" } }
+                Set-Item -LiteralPath ("function:script:" + $step) -Value $failing
                 try { $o = Open-Raw $quietEp } finally { Set-Item -LiteralPath ("function:script:" + $step) -Value $saved }
                 Check (-not $o.ok -and "$($o.reason)" -like "*injected failure*") ("a throw in " + $step + ", after ssh.exe started, fails Open (" + $o.reason + ")")
                 Check ($script:openStarted.Count -eq $before + 1) ("CONTROL: Open had started ssh.exe before " + $step + " threw")
                 if ($script:openStarted.Count -eq $before + 1) {
                     Check (-not (Test-OursAlive $script:openStarted[-1])) ("no ssh.exe of ours survives a throw in " + $step + ": checked by pid " + $script:openStarted[-1].id + " and its start time")
                 }
+            }
+            # THE STRUCTURAL GUARANTEE (review of PR #68, round 3; the founder's rule): ssh.exe runs in a Job
+            # Object that kills it when its last handle closes, and only the link holds that handle. So
+            # when the whole Horde process dies mid-link - no finally runs, nothing is closed - the OS
+            # stops ssh.exe. A driver process opens a link and reports its ssh.exe; it is then killed.
+            $drvScript = Join-Path $tmp "driver.ps1"
+            [System.IO.File]::WriteAllText($drvScript, ('. "' + (Join-Path $root "transports\Port.ps1") + '"' + "`r`n" +
+                '. "' + (Join-Path $root "transports\ssh\Transport.ps1") + '"' + "`r`n" +
+                '$o = & (Get-HordeTransport -Name "ssh").open "' + $quietEp + '" 5000' + "`r`n" +
+                'if (-not $o.ok) { [Console]::Out.WriteLine("OPEN-FAILED " + $o.reason); exit 3 }' + "`r`n" +
+                '$sp = $o.channel.state.process' + "`r`n" +
+                '[Console]::Out.WriteLine("SSH " + $sp.Id + " " + $sp.StartTime.Ticks)' + "`r`n" +
+                'Start-Sleep -Seconds 120' + "`r`n"))
+            $drv = Start-TestProcess -FilePath $psExe -Arguments ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + (Join-HordeSshCommandLine -Argv @($drvScript)))
+            [void]$children.Add($drv)
+            $lineTask = $drv.StandardOutput.ReadLineAsync()
+            $gotLine = $lineTask.Wait(60000)
+            $line = $(if ($gotLine) { "$($lineTask.Result)" } else { "" })
+            $m = [regex]::Match($line, '^SSH (\d+) (\d+)$')
+            Check ($m.Success) ("CONTROL: the driver opened a link and named its ssh.exe (" + $line + ")")
+            if ($m.Success) {
+                $rec = [pscustomobject]@{ id = [int]$m.Groups[1].Value; at = [datetime]::new([long]$m.Groups[2].Value) }
+                Check (Test-OursAlive $rec) ("CONTROL: that ssh.exe, pid " + $rec.id + ", is alive while the driver holds the link")
+                $drv.Kill()
+                $null = $drv.WaitForExit(10000)
+                $until = (Get-Date).AddSeconds(10)
+                while ((Test-OursAlive $rec) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
+                Check (-not (Test-OursAlive $rec)) ("when the Horde process holding the link is killed outright, its ssh.exe dies with it: pid " + $rec.id + " and its start time are gone")
             }
         } finally {
             Set-Item -LiteralPath "function:script:Start-HordeSshProcess" -Value $realStart
@@ -519,14 +568,29 @@ if ($Mode -eq "flood") {
         "PSScriptRoot reassigned before the loader" = @('. (Join-Path $PSScriptRoot "Argv.ps1")', ('$PSScriptRoot = "C:\evil"' + "`r`n" + '. (Join-Path $PSScriptRoot "Argv.ps1")'))
         "StartInfo's FileName set after the sanctioned setup" = @('$psi.UseShellExecute = $false', '$psi.FileName = "C:\Windows\System32\cmd.exe"; $psi.UseShellExecute = $false')
         "StartInfo's Arguments set after the sanctioned setup" = @('$psi.UseShellExecute = $false', '$psi.Arguments = "/c calc"; $psi.UseShellExecute = $false')
-        "the executable's relative path reassigned" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; $script:HordeSshExeRelative = "System32\cmd.exe"')
         "the system root reassigned" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; $env:SystemRoot = "C:\evil"')
+        # ROUND 3: the broad classes, not one-off forms.
+        "a cmdlet shadowed inside the start function" = @('function Start-HordeSshProcess {', ('function Start-HordeSshProcess {' + "`r`n" + '    function Join-Path { "C:\Windows\System32\cmd.exe" }'))
+        "a cmdlet shadowed at the top" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; function Join-Path { "C:\Windows\System32\cmd.exe" }')
+        "a function defined twice" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; function Get-HordeSshArgv { @("-oProxyCommand=calc") }')
+        "a function replaced through the function: drive" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; ${function:Get-HordeSshArgv} = { @("-oProxyCommand=calc") }')
+        "an alias set through the alias: drive" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; ${alias:Join-Path} = "Get-Date"')
+        "a variable set through the variable: drive" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; ${variable:x} = 1')
+        "Add-Type outside Native.ps1" = @('$script:HordeSshFolder = $PSScriptRoot', '$script:HordeSshFolder = $PSScriptRoot; Add-Type -TypeDefinition "public class Zz {}"')
     }
     foreach ($k in $edits.Keys) {
         $from = $edits[$k][0]; $to = $edits[$k][1]
         Check ($realTransport.Contains($from)) ("CONTROL: the text '" + $from + "' is in Transport.ps1, so the edit for " + $k + " applies")
         Check ((Test-GuardOn ($realTransport.Replace($from, $to))).Count -ge 1) ("the guard refuses " + $k)
     }
+    # NATIVE.ps1's C# IS PINNED: the guard cannot read C#, so Add-Type's source is held to a SHA-256 a
+    # reviewer agreed to; a changed byte is a finding until the pin is changed with it.
+    $mdN = Join-Path $tmp ("guard-native-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    New-Item -ItemType Directory -Path $mdN | Out-Null
+    foreach ($nf in @("Argv.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $nf)) -Destination $mdN }
+    $nativeText = [System.IO.File]::ReadAllText((Join-Path $root "transports\ssh\Native.ps1"))
+    [System.IO.File]::WriteAllText((Join-Path $mdN "Native.ps1"), $nativeText.Replace("public static class HordeSshNative", "public static class HordeSshNative /* changed */"))
+    Check (@(Get-HordeSshExecFindings -Dir $mdN | Where-Object { "$_" -like "*pinned*" }).Count -ge 1) "the guard refuses Native.ps1 whose C# source differs from the pinned SHA-256"
 } finally {
     $env:HORDE_HOME = $savedHome
     foreach ($c in @($children)) {

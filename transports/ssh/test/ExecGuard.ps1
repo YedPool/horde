@@ -1,6 +1,24 @@
 # ExecGuard.ps1 - what the ssh adapter's code may run, as an allowlist on its syntax tree. Not a suite:
 # transports/ssh/test/test-ssh.ps1 dot-sources it and holds the adapter to it.
 #
+# THREAT MODEL (decided 2026-10-02, after three review rounds of PR #68). This is a LINT against Horde's
+# own code drifting - a contributor's edit or an AI agent's - toward starting something it should not.
+# It is NOT a security boundary against a hostile author: no static scan of PowerShell can be sound (a
+# name built at run time, reflection, a string handed to the engine), and a hostile author can edit this
+# file too. So it closes broad, cheap classes and does not chase one-off forms:
+#   - a defined function never shadows a command: every function the folder defines is at the top
+#     level, defined once, and named <Verb>-HordeSsh<Noun>, which no cmdlet, built-in function or
+#     alias is (round 3: a nested "function Join-Path" in the start function ran cmd.exe);
+#   - no assignment through the function:, alias: or variable: drive (round 3: ${function:...} = {}
+#     replaced the argv builder);
+#   - the program is named without resolving any command: [ProcessStartInfo]::new with
+#     [System.IO.Path]::Combine([System.Environment]::SystemDirectory, ...), so neither a shadowed cmdlet
+#     nor $env:SystemRoot can change it;
+#   - Add-Type only in Native.ps1, with its C# pinned by SHA-256, since C# is not read here.
+# DATA IS BY DESIGN: the endpoint ($ep) and the paths ($paths) flow from Open into argv - data in, argv
+# out. They are not code and are not policed here; Get-HordeSshArgv re-checks every field it is given
+# against the same patterns that parsed it, and Test-HordeSshSafePath every path.
+#
 # WHY AN ALLOWLIST. tools/ExecScan.ps1 scans remote/ only; transports/ has no scan policy yet (Horde
 # #53). The first guard here listed the ways to start a program it had thought of, and the review of
 # PR #68 (2026-10-02) appended 12 forms to Transport.ps1 that it passed, 12 of 12: a bare ssh.exe
@@ -28,13 +46,19 @@
 #     assigned anywhere: the program to start is fixed where it is named.
 # The folder's test/ subfolder is not read: tests start stand-in children on purpose.
 
-$script:HordeSshGuardCmdlets = @("Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome")
-$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
-$script:HordeSshGuardMethods = @("Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
-    "IsMatch", "Kill", "Match", "Max", "Min", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
+$script:HordeSshGuardCmdlets = @("Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome", "Add-Type")
+$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
+# Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
+$script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
+# Add-Type: only here, and only this source (SHA-256 of the C# with line endings as LF).
+$script:HordeSshGuardNativeFile = "Native.ps1"
+$script:HordeSshGuardNativeSha = "E0714A27FBFC3DEB7488E28FF6E5AD0BB15502AB76CEFC2D700275B361A2A478"
+$script:HordeSshGuardMethods = @("Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Contains", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
+    "IsMatch", "Kill", "Match", "Max", "Min", "Assign", "Combine", "NewKillOnCloseJob", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
     "ToCharArray", "ToString", "Trim", "TrimEnd", "Wait", "WaitAny", "WaitForExit", "WriteAsync")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
-    "system.collections.generic.list[byte]", "system.diagnostics.process", "system.io.file", "system.io.fileaccess", "system.net.sockets.socketerror",
+    "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
+    "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
     "system.net.sockets.socketexception", "system.stringcomparison", "system.text.encoding", "system.threading.tasks.task",
     "system.threading.tasks.task[]", "void")
 $script:HordeSshGuardNewTypes = @("System.Diagnostics.ProcessStartInfo", "System.IO.FileStream", "byte[]", "System.Net.Sockets.TcpClient", "System.Text.StringBuilder",
@@ -53,9 +77,8 @@ $script:HordeSshGuardAutomatic = @("_", "args", "ConsoleFileName", "Error", "Eve
 $script:HordeSshGuardStartProps = @("FileName", "Arguments", "WorkingDirectory", "Verb", "UserName", "Password", "PasswordInClearText", "Domain",
     "LoadUserProfile", "EnvironmentVariables", "Environment", "StartInfo")
 # The one way the start is set up, and the one way it is called.
-$script:HordeSshGuardStartSetup = 'New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), $Arguments)'
-$script:HordeSshGuardStartCall = 'Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))'
-$script:HordeSshGuardExeConstant = '$script:HordeSshExeRelative = "System32\OpenSSH\ssh.exe"' 
+$script:HordeSshGuardStartSetup = '[System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe"), $Arguments)'
+$script:HordeSshGuardStartCall = 'Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths)) -Job $job' 
 
 function Get-HordeSshExecFindings {
     # Every finding for the .ps1 files directly in -Dir, as "<file>:<line>: what". Empty means the
@@ -64,19 +87,27 @@ function Get-HordeSshExecFindings {
     $out = New-Object System.Collections.ArrayList
     $files = @(Get-ChildItem -LiteralPath $Dir -Filter "*.ps1" -File)
     $parsed = @()
+    $seenNames = @{}
     $defined = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($f in $files) {
         $tokens = $null; $errs = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
         foreach ($e in @($errs)) { if ($null -ne $e) { [void]$out.Add($f.Name + ":" + $e.Extent.StartLineNumber + ": does not parse: " + $e.Message) } }
         if ($null -ne $ast.ScriptRequirements) { [void]$out.Add($f.Name + ":1: a #requires statement, which loads what it names before the file runs") }
-        foreach ($d in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) { [void]$defined.Add($d.Name) }
+        foreach ($d in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+            [void]$defined.Add($d.Name)
+            $at = $f.Name + ":" + $d.Extent.StartLineNumber + ": "
+            # TOP LEVEL, ONCE, AND NAMED SO IT SHADOWS NOTHING (header).
+            if (-not ($d.Parent -is [System.Management.Automation.Language.NamedBlockAst] -and $null -eq $d.Parent.Parent.Parent)) { [void]$out.Add($at + "the function " + $d.Name + " is defined inside something else, where it shadows a command of the same name") }
+            if (-not [regex]::IsMatch($d.Name, $script:HordeSshGuardFunctionName)) { [void]$out.Add($at + "the function " + $d.Name + " is not named <Verb>-HordeSsh<Noun>, so it could shadow a cmdlet, a function or an alias") }
+            if ($seenNames.ContainsKey($d.Name.ToLowerInvariant())) { [void]$out.Add($at + "the function " + $d.Name + " is defined a second time, replacing the first") }
+            $seenNames[$d.Name.ToLowerInvariant()] = $true
+        }
         $parsed += [pscustomobject]@{ name = $f.Name; ast = $ast }
     }
     $starts = New-Object System.Collections.ArrayList
     $callers = New-Object System.Collections.ArrayList
     $setups = New-Object System.Collections.ArrayList
-    $exeSets = New-Object System.Collections.ArrayList
     foreach ($p in $parsed) {
         $ast = $p.ast
         function Add-At { param($Node, [string]$What) [void]$out.Add($p.name + ":" + $Node.Extent.StartLineNumber + ": " + $What) }
@@ -91,10 +122,19 @@ function Get-HordeSshExecFindings {
             if ($name.Contains(".") -or $name.Contains("\") -or $name.Contains("/")) { Add-At $c ("'" + $name + "' names a program or a path"); continue }
             if (-not $defined.Contains($name) -and $script:HordeSshGuardCmdlets -cnotcontains $name) { Add-At $c ("'" + $name + "' is neither a function this folder defines nor an allowlisted cmdlet"); continue }
             if ($name -ieq "Start-HordeSshProcess") { [void]$callers.Add($c) }
-            if ($name -ieq "New-Object" -and $c.Extent.Text -match 'ProcessStartInfo') {
-                $fn = $c; while ($null -ne $fn -and $fn -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $fn = $fn.Parent }
-                if ($c.Extent.Text -ceq $script:HordeSshGuardStartSetup -and $null -ne $fn -and $fn.Name -ceq "Start-HordeSshProcess") { [void]$setups.Add($c) }
-                else { Add-At $c "a ProcessStartInfo made other than by the one canonical expression in Start-HordeSshProcess" }
+            if ($name -ieq "New-Object" -and $c.Extent.Text -match 'ProcessStartInfo') { Add-At $c "a ProcessStartInfo made with New-Object: only the one canonical ::new in Start-HordeSshProcess" }
+            if ($name -ieq "Add-Type") {
+                $src = $null
+                for ($i = 1; $i -lt $c.CommandElements.Count; $i++) {
+                    $el = $c.CommandElements[$i]
+                    if ($el -is [System.Management.Automation.Language.CommandParameterAst] -and $el.ParameterName -ceq "TypeDefinition" -and $i + 1 -lt $c.CommandElements.Count) { $src = $c.CommandElements[$i + 1] }
+                }
+                if ($p.name -cne $script:HordeSshGuardNativeFile) { Add-At $c "Add-Type outside Native.ps1" }
+                elseif ($src -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { Add-At $c "Add-Type of a source that is not one literal string" }
+                else {
+                    $sha = [BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($src.Value.Replace("`r`n", "`n")))).Replace("-", "")
+                    if ($sha -cne $script:HordeSshGuardNativeSha) { Add-At $c ("Add-Type of C# that is not the pinned source (SHA-256 " + $sha + "); a reviewer changes the pin with the code") }
+                }
             }
             if ($name -ieq "New-Object") {
                 $els = @($c.CommandElements)
@@ -122,6 +162,13 @@ function Get-HordeSshExecFindings {
             $mn = $member.Value
             if ($script:HordeSshGuardEngineProperties -contains $mn) { Add-At $m ("the member " + $mn + ", which leads to the engine"); continue }
             if (-not $isCall) { continue }
+            if ($mn -ceq "new") {
+                $fn = $m; while ($null -ne $fn -and $fn -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $fn = $fn.Parent }
+                $assign = $m.Parent
+                if ($m.Static -and $m.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and $m.Expression.TypeName.FullName -ceq "System.Diagnostics.ProcessStartInfo" -and $m.Extent.Text -ceq $script:HordeSshGuardStartSetup -and $null -ne $fn -and $fn.Name -ceq "Start-HordeSshProcess") { [void]$setups.Add($m) }
+                else { Add-At $m "a ::new other than the one canonical ProcessStartInfo in Start-HordeSshProcess" }
+                continue
+            }
             if ($mn -ceq "Start") {
                 $fn = $m; while ($null -ne $fn -and $fn -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $fn = $fn.Parent }
                 if ($m.Static -and $m.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and $m.Expression.TypeName.FullName -ceq "System.Diagnostics.Process" -and $null -ne $fn -and $fn.Name -ceq "Start-HordeSshProcess") { [void]$starts.Add($m) }
@@ -140,11 +187,11 @@ function Get-HordeSshExecFindings {
                 $colon = $bare.IndexOf(":")
                 if ($colon -ge 0) { $bare = $bare.Substring($colon + 1) }
                 if ($vp.DriveName -ieq "env") { Add-At $a ("an assignment to the environment variable " + $vp.UserPath); continue }
+                # The drive from the path's own text: ${variable:x} parses with no DriveName (measured).
+                $drive = ""
+                if ($vp.UserPath.Contains(":")) { $drive = $vp.UserPath.Substring(0, $vp.UserPath.IndexOf(":")) }
+                if (@("function", "alias", "variable") -contains $drive) { Add-At $a ("an assignment through the " + $drive + ": drive, which replaces a command or a variable by name"); continue }
                 if ($script:HordeSshGuardAutomatic -contains $bare) { Add-At $a ("an assignment to the automatic variable $" + $bare); continue }
-                if ($bare -ieq "HordeSshExeRelative") {
-                    if ($a.Extent.Text -ceq $script:HordeSshGuardExeConstant -and $a.Parent.Parent -is [System.Management.Automation.Language.ScriptBlockAst]) { [void]$exeSets.Add($a) }
-                    else { Add-At $a "the executable's constant set other than once, at the top, to System32\OpenSSH\ssh.exe" }
-                }
             } elseif ($left -is [System.Management.Automation.Language.MemberExpressionAst]) {
                 $lm = $left.Member
                 if ($lm -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { Add-At $a "an assignment to a member named by an expression"; continue }
@@ -165,6 +212,5 @@ function Get-HordeSshExecFindings {
     if ($callers.Count -ne 1) { [void]$out.Add("Start-HordeSshProcess is called " + $callers.Count + " time(s) in the folder, in any casing; exactly once, by Open, is allowed") }
     elseif ($callers[0].Extent.Text -cne $script:HordeSshGuardStartCall) { [void]$out.Add("Start-HordeSshProcess is called other than with Open's argv, built from data") }
     if ($setups.Count -ne 1) { [void]$out.Add("the start is set up " + $setups.Count + " time(s) by the canonical expression; exactly once is allowed") }
-    if ($exeSets.Count -ne 1) { [void]$out.Add("the executable's constant is set " + $exeSets.Count + " time(s); exactly once, at the top, is allowed") }
     return @($out)
 }
