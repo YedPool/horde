@@ -1,5 +1,5 @@
 # DOES THE CODEX ADAPTER TURN A REAL-SHAPED ROLLOUT INTO THE RIGHT RECORDS, AND DO THE MEASURES FIND
-# WHAT WAS PLANTED IN IT?
+# WHAT WAS PLANTED IN IT - THROUGH THE REAL `horde` COMMAND TOO?
 #
 # Fixtures, under fixtures/metrics/: line shapes copied from the rollouts measured on 2026-09-30 (CLI
 # 0.159.2 and 0.159.3), every value invented. "planted" (0.159.3) holds two turns - one completed,
@@ -14,6 +14,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 trap { Register-HordeSuiteError $_; continue }
 foreach ($f in @("Tristate", "ReadShared", "Home", "Transcript", "Price", "Metrics", "MetricsStore")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
 . (Join-Path $root "agents\codex\Transcript.ps1")
+. (Join-Path $root "test\lib\Cli.ps1")
 
 $fixtures = Join-Path $here "fixtures\metrics"
 $plantedPath = Join-Path $fixtures "planted\rollout-2026-09-30T06-00-00-01a0aaaa-1111-7222-8333-444455556666.jsonl"
@@ -100,6 +101,24 @@ try {
     $lr = (Read-HordeTranscript -Path $leaky).value
     $leakJson = ConvertTo-Json -InputObject (New-HordeTranscriptSummaryRecord -Read $lr -Worker (Get-HordeWorkerSummary -Records $lr.records -PriceTable $tbl) -Orc (Get-HordeOrcMeasures -Records $lr.records)) -Depth 30
     Check ($leakJson.IndexOf($secret) -ge 0) "CONTROL: planted in a field the adapter does read (the turn's model), the same search finds it"
+
+    Write-Host ""
+    Write-Host "--- end to end: the real horde command ---" -ForegroundColor Cyan
+    $hashes = @{}; foreach ($p in @(Get-ChildItem -LiteralPath $fixtures -File -Recurse)) { $hashes[$p.FullName] = (Get-FileHash -LiteralPath $p.FullName -Algorithm SHA256).Hash }
+    $homeDir = Join-Path $work "home"
+    $envs = @{ HORDE_HOME = $homeDir; CODEX_HOME = (Join-Path $work "harness-store") }
+    New-Item -ItemType Directory -Path (Join-Path $homeDir "metrics") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\prices.json"), '{ "schemaVersion": 1, "version": "test-observed", "perTokens": 1000000, "models": { "gpt-5.5": { "provider": "openai", "rates": { "input": 5, "cacheRead": 0.5, "output": 30 } } } }')
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\gate.json"), '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-09-30T00:00:00Z" }')
+    $run = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
+    Check ($run.code -eq 0) ("horde metrics summarize exits 0 on the rollouts (" + $run.code + ")")
+    Check ($run.out -match 'rollout-2026-09-30T06-00-00-01a0aaaa-1111-7222-8333-444455556666\.jsonl\s+codex\s+gpt-5\.5\s+\S+\s+3\s+2\s+16,600\s+41,500\s+0\s+100\s+299\.8m \(2026-09-30 10:01\)\s+300\.0m exec_command\s+0\.11') "its row for the planted rollout shows the counts, the 300-minute tool call and the priced cost"
+    Check ($run.out -like "*price table test-observed*" -and $run.out -like "*recorded 3 summaries*") "it names the price table, and with the gate on records the three rollouts"
+    $files = @(Get-ChildItem -LiteralPath (Join-Path $homeDir "metrics\summaries\codex") -File -ErrorAction SilentlyContinue)
+    $text = (@($files | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n")
+    Check ($files.Count -eq 3 -and $text.IndexOf($secret) -lt 0) "the three records written hold no planted secret"
+    $changed = @($hashes.Keys | Where-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash -ne $hashes[$_] })
+    Check ($changed.Count -eq 0 -and $hashes.Count -eq 3) ("every rollout read is byte for byte as it was (" + $hashes.Count + " files checked)")
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }

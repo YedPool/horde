@@ -1,5 +1,5 @@
 # DOES THE CLAUDE CODE ADAPTER TURN A REAL-SHAPED TRANSCRIPT INTO THE RIGHT RECORDS, AND DO THE
-# MEASURES FIND WHAT WAS PLANTED IN IT?
+# MEASURES FIND WHAT WAS PLANTED IN IT - THROUGH THE REAL `horde` COMMAND TOO?
 #
 # Fixtures, under fixtures/metrics/: field names and nesting copied from real records read on
 # 2026-10-01, every value invented. "planted" is an orchestrator transcript holding, on purpose:
@@ -19,6 +19,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 trap { Register-HordeSuiteError $_; continue }
 foreach ($f in @("Tristate", "ReadShared", "Home", "Transcript", "Price", "Metrics", "MetricsStore")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
 . (Join-Path $root "agents\claude-code\Transcript.ps1")
+. (Join-Path $root "test\lib\Cli.ps1")
 
 $fixtures = Join-Path $here "fixtures\metrics"
 $plantedPath = Join-Path $fixtures "planted\11111111-2222-4333-8444-555555555555.jsonl"
@@ -136,6 +137,43 @@ try {
     $leakJson = ConvertTo-Json -InputObject (New-HordeTranscriptSummaryRecord -Read $lr -Worker (Get-HordeWorkerSummary -Records $lr.records -PriceTable $tbl) -Orc (Get-HordeOrcMeasures -Records $lr.records)) -Depth 30
     Check ($leakJson.IndexOf($secret) -ge 0) "CONTROL: planted in a field the adapter does read (a model id), the same search finds it"
 
+    Write-Host ""
+    Write-Host "--- end to end: the real horde command ---" -ForegroundColor Cyan
+    $hashes = @{}; foreach ($p in @(Get-ChildItem -LiteralPath $fixtures -File -Recurse)) { $hashes[$p.FullName] = (Get-FileHash -LiteralPath $p.FullName -Algorithm SHA256).Hash }
+    $homeDir = Join-Path $work "home"
+    $storeDir = Join-Path $work "harness-store"
+    $envs = @{ HORDE_HOME = $homeDir; CLAUDE_CONFIG_DIR = $storeDir }
+    $off = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
+    Check ($off.code -eq 0) ("horde metrics summarize exits 0 (" + $off.code + ")")
+    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+claude-code\s+claude-opus-5-5\s+329\.0m\s+8\s+3\s+28\s+466,000\s+600\s+429\s+300\.0m \(2026-09-30 10:24\)\s+300\.0m Bash') "its table row for the planted transcript shows the counts the instruments found"
+    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+4 \(0\)\s+3 \(workers 1, jobs 1, unattributed 1\)\s+275,306') "and the orchestrator row shows the three still-waiting replies and their context"
+    Check ($off.out -like "*metrics are off (no gate file)*") "with no gate it says metrics are off"
+    Check (-not (Test-Path -LiteralPath (Join-Path $homeDir "metrics\summaries"))) "and records nothing"
+    New-Item -ItemType Directory -Path (Join-Path $homeDir "metrics") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\gate.json"), '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-10-01T00:00:00Z" }')
+    $before = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
+    Check ($before.code -eq 0 -and $before.out -like "*before metrics were enabled*" -and -not (Test-Path -LiteralPath (Join-Path $homeDir "metrics\summaries"))) "transcripts from before the gate's enabledAt are shown and not recorded"
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\gate.json"), '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-09-30T00:00:00Z" }')
+    $on = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
+    $files = @(Get-ChildItem -LiteralPath (Join-Path $homeDir "metrics\summaries\claude-code") -File -ErrorAction SilentlyContinue)
+    Check ($on.code -eq 0 -and $files.Count -eq 3 -and $on.out -like "*recorded 3 summaries*") ("with the gate on, the three transcripts are recorded (" + $files.Count + ")")
+    $text = (@($files | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n")
+    Check ($text.IndexOf($secret) -lt 0) "the recorded summaries hold no planted secret"
+    Check ($text.IndexOf($fixtures) -lt 0 -and $text.IndexOf($fixtures.Replace("\", "\\")) -lt 0) "and no path to the transcript, only its file name"
+    $rec = [System.IO.File]::ReadAllText((Join-Path $homeDir "metrics\summaries\claude-code\11111111-2222-4333-8444-555555555555.json")) | ConvertFrom-Json
+    Check ($rec.orc.stillWaiting.calls -eq 3 -and $rec.worker.longestToolCall.value.seconds -eq 18000 -and $rec.worker.cost.tag -eq "ESTIMATE") "the recorded summary carries the measures, and the cost's ESTIMATE tag"
+    $win = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $plantedPath, "-To", "2026-09-30T10:12:00Z") -Env $envs
+    Check ($win.code -eq 0 -and $win.out -match '1 \(workers 1, jobs 0, unattributed 0\)' -and $win.out -like "*a summary of a time window is shown, never recorded*") "a window shows only its own part, and is not recorded"
+    $badWin = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $plantedPath, "-To", "2026-09-30T10:12:00") -Env $envs
+    Check ($badWin.code -eq 1 -and $badWin.out -like "*with a zone*") "a window bound with no zone is refused"
+    New-Item -ItemType Directory -Path (Join-Path $storeDir "home\metrics") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $storeDir "home\metrics\gate.json"), '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-09-30T00:00:00Z" }')
+    $inside = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $plantedPath) -Env @{ HORDE_HOME = (Join-Path $storeDir "home"); CLAUDE_CONFIG_DIR = $storeDir }
+    Check ($inside.out -like "*inside a harness's own folder*" -and -not (Test-Path -LiteralPath (Join-Path $storeDir "home\metrics\summaries"))) "a Horde home inside the harness's store is refused, and nothing is written there"
+    $json = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanPath, "-Json") -Env $envs
+    Check ($json.code -eq 0 -and (($json.out | ConvertFrom-Json).worker.calls.value) -eq 4) "-Json prints the records as JSON"
+    $changed = @($hashes.Keys | Where-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash -ne $hashes[$_] })
+    Check ($changed.Count -eq 0 -and $hashes.Count -eq 4) ("every transcript read is byte for byte as it was (" + $hashes.Count + " files checked)")
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }

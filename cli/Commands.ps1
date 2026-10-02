@@ -23,6 +23,7 @@ Set-StrictMode -Off
 function Get-HordeCommandGroups {
     return [ordered]@{
         about = "about horde"
+        metrics = "measuring the work"
     }
 }
 
