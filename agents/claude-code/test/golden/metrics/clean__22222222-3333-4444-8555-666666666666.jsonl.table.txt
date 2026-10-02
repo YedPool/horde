@@ -1,0 +1,9 @@
+transcript                                  engine       model            wall  calls  tools  input  cache read  cache write  output  longest gap (start UTC)  longest tool call  notional USD (ESTIMATE)
+22222222-3333-4444-8555-666666666666.jsonl  claude-code  claude-opus-5-5  7.0m  4      2      8      4,600       0            112     3.0m (2026-09-30 10:02)  0.5m Bash          0.00
+
+orchestrator measures (attributed only where the transcript proves the worker)
+transcript                                  notifications (interim, unrecognised note)  still-waiting calls                    their context tokens  worker results landed: chars (~tokens ESTIMATE)  unattributed: chars  job notifications
+22222222-3333-4444-8555-666666666666.jsonl  1 (0, 0)                                    0 (workers 0, jobs 0, unattributed 0)  0                     0 (~0) from 0 workers                            0 in 0               1
+
+cost: notional list price from agents/<engine>/prices.json 2026-09-30.1, agents/<engine>/prices.json 2026-09-30.1; an ESTIMATE, never money spent on a subscription
+not recorded (1): metrics are off (no gate file); nothing was recorded

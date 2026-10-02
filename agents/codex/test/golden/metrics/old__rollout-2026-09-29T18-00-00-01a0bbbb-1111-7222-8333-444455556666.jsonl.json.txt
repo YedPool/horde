@@ -1,0 +1,171 @@
+[
+    {
+        "schemaVersion":  1,
+        "kind":  "transcript.summary",
+        "metricsDefVersion":  "m1",
+        "writtenAt": "<writtenAt>",
+        "adapter":  "codex",
+        "file":  "rollout-2026-09-29T18-00-00-01a0bbbb-1111-7222-8333-444455556666.jsonl",
+        "sessionId":  "01a0bbbb-1111-7222-8333-444455556666",
+        "parseSkipped":  0,
+        "tornTail":  0,
+        "worker":  {
+                       "firstEventAt":  {
+                                            "state":  "known",
+                                            "value":  "2026-09-30T10:00:00.000Z",
+                                            "reason":  "",
+                                            "observedAt":  null
+                                        },
+                       "lastEventAt":  {
+                                           "state":  "known",
+                                           "value":  "2026-09-30T10:02:30.000Z",
+                                           "reason":  "",
+                                           "observedAt":  null
+                                       },
+                       "wallClockSeconds":  {
+                                                "state":  "known",
+                                                "value":  150,
+                                                "reason":  "",
+                                                "observedAt":  null
+                                            },
+                       "longestGap":  {
+                                          "state":  "known",
+                                          "value":  {
+                                                        "seconds":  54,
+                                                        "startedAt":  "2026-09-30T10:01:06.000Z",
+                                                        "afterKind":  "event",
+                                                        "afterLine":  6
+                                                    },
+                                          "reason":  "",
+                                          "observedAt":  null
+                                      },
+                       "calls":  {
+                                     "state":  "known",
+                                     "value":  2,
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "duplicateCallRecords":  0,
+                       "tokens":  {
+                                      "state":  "known",
+                                      "value":  {
+                                                    "input":  1300,
+                                                    "cacheRead":  900,
+                                                    "cacheWrite":  0,
+                                                    "cacheWrite5m":  0,
+                                                    "cacheWrite1h":  0,
+                                                    "cacheWriteUnsplit":  0,
+                                                    "output":  30
+                                                },
+                                      "reason":  "",
+                                      "observedAt":  null
+                                  },
+                       "tokensReportedTotal":  {
+                                                   "state":  "known",
+                                                   "value":  {
+                                                                 "input":  1300,
+                                                                 "cacheRead":  900,
+                                                                 "cacheWrite":  0,
+                                                                 "output":  30,
+                                                                 "cacheWriteSplit":  {
+                                                                                         "state":  "absent",
+                                                                                         "value":  null,
+                                                                                         "reason":  "this harness does not split cache writes by lifetime",
+                                                                                         "observedAt":  null
+                                                                                     }
+                                                             },
+                                                   "reason":  "",
+                                                   "observedAt":  null
+                                               },
+                       "models":  {
+                                      "gpt-5.5":  2
+                                  },
+                       "model":  {
+                                     "state":  "known",
+                                     "value":  "gpt-5.5",
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "toolCalls":  {
+                                         "state":  "known",
+                                         "value":  0,
+                                         "reason":  "",
+                                         "observedAt":  null
+                                     },
+                       "toolCallsWithoutResult":  0,
+                       "toolCallsWithNegativeDuration":  0,
+                       "longestToolCall":  {
+                                               "state":  "absent",
+                                               "value":  null,
+                                               "reason":  "no tool calls",
+                                               "observedAt":  null
+                                           },
+                       "turns":  {
+                                     "state":  "known",
+                                     "value":  1,
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "compactions":  0,
+                       "cost":  {
+                                    "cost":  {
+                                                 "state":  "known",
+                                                 "value":  0.00785,
+                                                 "reason":  "",
+                                                 "observedAt":  null
+                                             },
+                                    "unit":  "notionalUsd",
+                                    "confidence":  "derived",
+                                    "tag":  "ESTIMATE",
+                                    "priceTables":  [
+                                                        "agents/<engine>/prices.json 2026-09-30.1"
+                                                    ]
+                                }
+                   },
+        "orc":  {
+                    "notifications":  0,
+                    "interimNotifications":  0,
+                    "unrecognisedNotes":  0,
+                    "stillWaiting":  {
+                                         "calls":  0,
+                                         "contextTokens":  {
+                                                               "state":  "known",
+                                                               "value":  0,
+                                                               "reason":  "",
+                                                               "observedAt":  null
+                                                           },
+                                         "outputTokens":  {
+                                                              "state":  "known",
+                                                              "value":  0,
+                                                              "reason":  "",
+                                                              "observedAt":  null
+                                                          },
+                                         "callsWithoutUsage":  0,
+                                         "afterUnrecognisedNote":  0,
+                                         "byWorker":  {
+
+                                                      },
+                                         "jobs":  0,
+                                         "unattributed":  0,
+                                         "lines":  [
+
+                                                   ]
+                                     },
+                    "landed":  {
+                                   "byWorker":  {
+
+                                                },
+                                   "workerChars":  0,
+                                   "unattributedChars":  0,
+                                   "unattributedCount":  0,
+                                   "jobChars":  0,
+                                   "jobCount":  0,
+                                   "charsPerToken":  2.38,
+                                   "confidence":  "estimated",
+                                   "tag":  "ESTIMATE",
+                                   "workerTokensEstimated":  0,
+                                   "unattributedTokensEstimated":  0
+                               }
+                }
+    }
+]
