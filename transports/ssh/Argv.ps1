@@ -1,0 +1,134 @@
+# transports/ssh/Argv.ps1 - the ssh transport's argv, built from data and never from a user's config.
+#
+# Remote plan step R5; remote design 2.4. Pure functions: no file is read, no program is started.
+#
+# THE ENDPOINT is user@host:port/hubId - the account the hub's sshd forces into the link (8.3), where
+# the hub is reached, and the hub's identity, which pins its host key (HostKeyAlias=horde-hub-<hubId>)
+# so an overlay address change does not break the pin. Every part is matched against a closed
+# pattern, and none may begin with "-": an endpoint can come from a file another program wrote, and
+# a field that begins with "-" would reach ssh.exe as an option (ProxyCommand runs a program).
+#
+# THE OPTIONS are the design's list. Each is there for a measured or documented reason:
+#   -F <Horde's config>   a config file Horde owns, which Open requires to hold no directive, so
+#                         nothing in the user's ~/.ssh/config applies (ssh_config(5): a -F file is
+#                         read instead of the user's). Chosen over -F none at the coordinator's
+#                         request of 2026-10-02; both keep the user's config out.
+#   -i, IdentitiesOnly=yes, IdentityAgent=none
+#                         only Horde's key is offered. MEASURED 2026-10-02, OpenSSH_for_Windows 9.5p2:
+#                         if the -i file does not exist ssh.exe silently falls back to the default
+#                         ~/.ssh/id_* keys even with -F none and IdentitiesOnly, so Open refuses to start
+#                         without the key file (transports/ssh/Transport.ps1).
+#   UserKnownHostsFile=<Horde's>, GlobalKnownHostsFile=none, StrictHostKeyChecking=yes,
+#   HostKeyAlias, UpdateHostKeys=no, CheckHostIP=no
+#                         the host key is checked against Horde's own file only, by hub identity,
+#                         never added or updated. GlobalKnownHostsFile=none is accepted by 9.5p2
+#                         (ssh -G, measured 2026-10-02; the design had it unproven).
+#   BatchMode=yes         never prompt: a prompt would hang a daemon.
+#   ConnectTimeout, ServerAliveInterval, ServerAliveCountMax
+#                         a dead hub is noticed in about a minute without a frame being sent.
+#   ControlMaster=no, ControlPath=none
+#                         never share a connection with another ssh (design finding 5).
+#   ForwardAgent=no, ClearAllForwardings=yes, ForwardX11=no, PermitLocalCommand=no
+#                         nothing is forwarded and nothing runs locally.
+#   LogLevel=INFO         set, so no config can change it, and INFO rather than ERROR: MEASURED
+#                         2026-10-02, 9.5p2 writes the reason for a refused connection ("banner
+#                         exchange: Connection to UNKNOWN port -1: Connection refused") at INFO, and
+#                         LogLevel=ERROR left stderr empty, so exit 255 would have had no reason.
+#   -T                    no pseudo-terminal: the link is bytes, not a screen.
+#   attach                ignored by the hub, whose key line forces the command (8.3); sent so a log
+#                         reader sees the intent.
+#
+# No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
+
+$script:HordeSshUserPattern = '\A[a-z_][a-z0-9_-]{0,31}\z'
+# A DNS name of lowercase or uppercase labels, or a dotted IPv4 address. No label begins or ends with
+# a hyphen, so the host can never begin with "-".
+$script:HordeSshHostPattern = '\A(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z'
+$script:HordeSshHubPattern = '\A[a-z0-9][a-z0-9-]{0,62}\z'
+$script:HordeSshEndpointPattern = '\A(?<user>[^@]+)@(?<host>[^:/]+):(?<port>[0-9]{1,5})/(?<hub>[^/]+)\z'
+$script:HordeSshHostKeyAliasPrefix = "horde-hub-"
+
+function ConvertFrom-HordeSshEndpoint {
+    # "user@host:port/hubId" -> { ok; user; host; port; hubId; reason }.
+    param([string]$Endpoint)
+    $out = [pscustomobject]@{ ok = $false; user = ""; host = ""; port = 0; hubId = ""; reason = "" }
+    $m = [regex]::Match("$Endpoint", $script:HordeSshEndpointPattern)
+    if (-not $m.Success) { $out.reason = "'" + $Endpoint + "' is not an ssh endpoint: user@host:port/hubId"; return $out }
+    $u = $m.Groups["user"].Value; $h = $m.Groups["host"].Value; $hub = $m.Groups["hub"].Value
+    $port = [int]$m.Groups["port"].Value
+    if (-not [regex]::IsMatch($u, $script:HordeSshUserPattern)) { $out.reason = "the user '" + $u + "' is not a lowercase account name"; return $out }
+    if (-not [regex]::IsMatch($h, $script:HordeSshHostPattern)) { $out.reason = "the host '" + $h + "' is not a DNS name or IPv4 address"; return $out }
+    if ($port -lt 1 -or $port -gt 65535) { $out.reason = "the port " + $port + " is not between 1 and 65535"; return $out }
+    if (-not [regex]::IsMatch($hub, $script:HordeSshHubPattern)) { $out.reason = "the hub id '" + $hub + "' is not lowercase letters, digits and hyphens, at most 63"; return $out }
+    $out.ok = $true; $out.user = $u; $out.host = $h; $out.port = $port; $out.hubId = $hub
+    return $out
+}
+
+function Get-HordeSshPaths {
+    # Horde's own key, known_hosts and config for the link, under <HordeHome>\node (design 2.4). Enrollment
+    # (remote plan R17) writes them; this transport only reads them.
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    $node = Join-Path $HordeHome "node"
+    return [pscustomobject]@{
+        identity = (Join-Path $node "link_ed25519")
+        knownHosts = (Join-Path $node "known_hosts")
+        config = (Join-Path $node "ssh_config")
+    }
+}
+
+function Get-HordeSshArgv {
+    # The arguments after ssh.exe, for a parsed endpoint and Horde's paths. The header says why each.
+    param([Parameter(Mandatory = $true)]$Endpoint, [Parameter(Mandatory = $true)]$Paths)
+    if (-not $Endpoint.ok) { throw ("not an endpoint: " + $Endpoint.reason) }
+    return @(
+        "-F", $Paths.config,
+        "-T",
+        "-i", $Paths.identity,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "IdentityAgent=none",
+        "-o", ("UserKnownHostsFile=" + $Paths.knownHosts),
+        "-o", "GlobalKnownHostsFile=none",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", ("HostKeyAlias=" + $script:HordeSshHostKeyAliasPrefix + $Endpoint.hubId),
+        "-o", "UpdateHostKeys=no",
+        "-o", "CheckHostIP=no",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "ForwardAgent=no",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "ForwardX11=no",
+        "-o", "PermitLocalCommand=no",
+        "-o", "LogLevel=INFO",
+        "-p", ([string]$Endpoint.port),
+        ($Endpoint.user + "@" + $Endpoint.host),
+        "attach"
+    )
+}
+
+function Join-HordeSshCommandLine {
+    # One Windows command line from an argv, so that a program parsing it the C runtime's way (ssh.exe
+    # does) gets each argument back unchanged: an argument with no space, tab or quote passes as it is;
+    # any other is quoted, with backslashes doubled only where they precede a quote or the closing quote.
+    param([string[]]$Argv)
+    $parts = foreach ($a in @($Argv)) {
+        if ($a.Length -gt 0 -and $a -notmatch '[\s"]') { $a; continue }
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append('"')
+        $slashes = 0
+        foreach ($ch in $a.ToCharArray()) {
+            # [char] on purpose: '\' alone is a string, and StringBuilder has no Append(string, count).
+            if ($ch -eq [char]92) { $slashes++; continue }
+            if ($ch -eq [char]34) { [void]$sb.Append([char]92, 2 * $slashes + 1); [void]$sb.Append([char]34); $slashes = 0; continue }
+            if ($slashes -gt 0) { [void]$sb.Append([char]92, $slashes); $slashes = 0 }
+            [void]$sb.Append($ch)
+        }
+        if ($slashes -gt 0) { [void]$sb.Append([char]92, 2 * $slashes) }
+        [void]$sb.Append('"')
+        $sb.ToString()
+    }
+    return (@($parts) -join " ")
+}
