@@ -82,7 +82,8 @@ positive controls, so the study's headline measures come from code rather than b
   named.
 - **`core/MetricsStore.ps1`** and **`core/Home.ps1`**: `Get-HordeHome` (`HORDE_HOME`, default
   `%USERPROFILE%\.horde`, as Phase 3 step 1 specifies; that step still renames `HORDE_ROOT`). The
-  interim gate is `<HordeHome>\metrics\gate.json`, `{ schemaVersion, level, enabledAt }`, level `off`
+  gate is a STOPGAP, accepted for M1 only (coordinator, 2026-10-01) and replaced in M2 by a setting
+  under `horde config`: `<HordeHome>\metrics\gate.json`, `{ schemaVersion, level, enabledAt }`, level `off`
   or `usage`; no file means off, an unreadable one is refused. Records are written to
   `<HordeHome>\metrics\summaries\` only when the gate says `usage` and the transcript began after
   `enabledAt` (decision 2: no backfill). Writes are atomic and never land inside an adapter's store
@@ -111,6 +112,13 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   turn, a resume message to the worker's id). The Study's name-window heuristic is not ported (Study 9
   item 3).
 - `schema/metrics-summary.v1.json` for the record M1 writes, validated before writing.
+- **The gate becomes a setting** (coordinator's decision, 2026-10-01): `metrics.level` in the layered
+  engine-settings precedence, read and written through `horde config` (`horde config set metrics.level
+  usage --scope user`, shown with its provenance by `horde config explain`), the project layer allowed
+  only to lower it (MD 7.3), and no environment variable able to change it (MD 7.2, with the test and
+  its control). M1's stopgap `<HordeHome>\metrics\gate.json` is migrated into the user layer, keeping
+  its `enabledAt` as the consent time, and then removed. This item waits for engine-settings E3 and E4
+  (`core/EngineConfig.ps1`, `core/EngineResolve.ps1`); the rest of M2 does not.
 
 ### M3. The event envelope and the writer (NOW)
 
@@ -135,11 +143,10 @@ The Study 5.6 table as instruments, each with a positive control from the Study 
 call, silent background job, identical-call loop, re-read, error-retry loop, foreground polling loop,
 reap notice. The edit flip-flop detector waits for a known positive.
 
-### M7. The gate in the engine configuration, and consent records (CONFIG)
+### M7. Consent records (CONFIG)
 
-`metrics.*` keys through the engine resolver (MD 7), the lower-only project rule, the environment
-test with its control, the consent sentinel, and harvest refusing sessions with no consent. The
-interim `gate.json` of M1 is migrated and removed.
+The consent sentinel per session (MD 7.4), written at spawn and deleted at close, and harvest
+refusing sessions with no consent record. The gate itself moves into the engine settings in M2.
 
 ### M8. Outcomes (NOW)
 

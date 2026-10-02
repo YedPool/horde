@@ -9,8 +9,11 @@
 #     (design 7.2). HORDE_HOME, a path, is the only variable read, through core/Home.ps1.
 #   - Nothing from before consent is recorded: a transcript whose first event is earlier than
 #     enabledAt is summarised on screen and not written (decision 8, no backfill).
-#   - INTERIM: plan step M7 moves the gate into the engine configuration as metrics.level, with the
-#     project layer allowed only to lower it. This file is then migrated and removed.
+#   - THIS GATE FILE IS A STOPGAP, accepted for M1 only (coordinator's decision, 2026-10-01). Plan step
+#     M2 (planning/execution-plan-metrics.md, "The gate becomes a setting") replaces it with
+#     metrics.level in the layered engine-settings precedence, read and written through `horde config`,
+#     with the project layer allowed only to lower it. gate.json is then migrated into the user layer,
+#     its enabledAt kept as the consent time, and removed. Nothing new should come to depend on it.
 #
 # WHAT IS WRITTEN: one JSON record per transcript, <HordeHome>\metrics\summaries\<adapter>\<name>.json,
 # replaced whole each time (written to a temporary file beside it and moved into place, so a reader
