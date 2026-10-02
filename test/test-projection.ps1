@@ -30,7 +30,7 @@ $root = Split-Path -Parent $here
 # -Section pane,runs. The shared fixture views are built whatever is selected. A name this suite does
 # not have fails the run, so a typo cannot select nothing and pass; and a run that skipped a section
 # exits 3, as a skipped reality check does, so it is never a gate's pass.
-$script:sectionIds = @("view", "precedence", "pane", "hostport", "stored-handle", "instance-proven", "instance-whole", "platform", "one-writer", "judge", "pane-guard", "claim-guard", "carry", "cannot-tell", "holes", "runs", "cardinality", "parity", "silent-winner", "one-agent", "layout", "schema", "writes", "reality")
+$script:sectionIds = @("view", "precedence", "pane", "hostport", "stored-handle", "instance-proven", "instance-whole", "platform", "one-writer", "judge", "pane-guard", "claim-guard", "carry", "cannot-tell", "holes", "runs", "cardinality", "parity", "silent-winner", "one-agent", "layout", "scope", "schema", "writes", "reality")
 $script:sectionsWanted = @()
 if (@($Section).Count -gt 0) { $script:sectionsWanted = @($Section | ForEach-Object { "$_" -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
 elseif ("$env:HORDE_SECTIONS".Trim() -ne "") { $script:sectionsWanted = @("$env:HORDE_SECTIONS" -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
@@ -128,13 +128,13 @@ function LayoutOf {
     return ({ return , $rows }.GetNewClosure())
 }
 function Project {
-    param([string]$D, $HostPort = $null, $Processes = $null, $Layout = $null)
+    param([string]$D, $HostPort = $null, $Processes = $null, $Layout = $null, [string]$Scope = "All")
     if ($null -eq $HostPort) { $HostPort = HostOf $D }
     if ($null -eq $Processes) { $Processes = ProcsOf $D }
     if ($null -eq $Layout) { $Layout = LayoutOf $D }
     return (Get-HordeProjection -WezfleetRoot (Join-Path $D "wezfleet") -ClaudeDir (Join-Path $D "agent\sessions") -ProjectsDir (Join-Path $D "agent\projects") `
         -CodexDir (Join-Path $D "wezfleet\codex-sessions") -PaneSessionsDir (Join-Path $D "agent\pane-sessions") -Processes $Processes -HostPort $HostPort `
-        -LayoutPort $Layout -TtlSeconds 900 -Now $now)
+        -LayoutPort $Layout -TtlSeconds 900 -Now $now -Scope $Scope)
 }
 function Ans { param($P, $Id, [string]$Field) if ($Id -is [int]) { $Id = Sid $Id }; foreach ($s in $P.sessions) { if ($s.sessionId -ieq $Id) { return $s.fields[$Field] } }; return $null }
 function Has { param($P, $Id) if ($Id -is [int]) { $Id = Sid $Id }; return (@($P.sessions | Where-Object { $_.sessionId -ieq $Id }).Count -eq 1) }
@@ -716,6 +716,71 @@ if (Section "layout" "the layout and the resume command") {
 
 }
 
+if (Section "scope" "the current scope (core/Projection.ps1 header, SCOPE)") {
+    # One session's entry of a view document as text, by id, so two scopes compare field for field.
+    function ScopeDoc { param($P) $d = (ConvertTo-HordeSessionViewDocument $P) | ConvertTo-Json -Depth 40 | ConvertFrom-Json; $m = @{}; foreach ($x in @($d.sessions)) { $m["" + $x.sessionId] = ($x | ConvertTo-Json -Depth 40 -Compress) }; return [pscustomobject]@{ doc = $d; byId = $m } }
+    function ScopeDiff { param($All, $Cur) return @($Cur.byId.Keys | Where-Object { -not $All.byId.ContainsKey($_) -or $All.byId[$_] -cne $Cur.byId[$_] }) }
+    # A report-only session of the closed run gamma1: fleet id omega, one report, and with -Pane the
+    # handle that report names, written after this instance started.
+    function AddReportOnly { param([string]$D, $Pane = $null)
+        $runDir = Join-Path $D "wezfleet\other\runs\20260501-080000-gamma1"
+        $ro = ReadJson (Join-Path $runDir "roster.json")
+        $ro.sessions = @($ro.sessions) + @([pscustomobject]@{ id = "omega"; title = "omega"; cwd = "C:\work"; dependsOn = @(); spawned = $true; spawnedAt = "2026-05-01T12:00:00.0000000Z" })
+        PutJson (Join-Path $runDir "roster.json") $ro
+        $sd = Join-Path $runDir "sessions\omega"; New-Item -ItemType Directory -Path $sd -Force | Out-Null
+        $sess = [ordered]@{ id = "omega"; claudeSessionId = (Sid 35); transcriptPath = ""; idSource = ""; cwd = "C:\work"; pid = 1 }
+        if ($null -ne $Pane) { $sess["pane"] = $Pane }
+        $ev = [ordered]@{ ts = "2026-06-01T11:30:00.0000000Z"; seq = 1; event = "done"; summary = "finished"; session = $sess; question = ""; resumeCommand = "" }
+        PutText (Join-Path $sd "events.jsonl") (($ev | ConvertTo-Json -Depth 5 -Compress) + "`n")
+    }
+    function IsCurrent { param([string]$D, $N) return (Has (Project $D -Scope Current) $N) }
+
+    $pcur = Project $base -Scope Current
+    $dAll = ScopeDoc $p; $dCur = ScopeDoc $pcur
+    $curIds = @($pcur.sessions | ForEach-Object { $_.sessionId })
+    Check ($curIds.Count -eq 33 -and -not (Has $pcur 5) -and (Has $p 5)) ("the current scope leaves out the fixture's one historical session, 05: a retired record and nothing else (" + $curIds.Count + " current)")
+    $scopeBad = @(ScopeDiff $dAll $dCur)
+    foreach ($x in $scopeBad) { Write-Host ("  differs from All: " + $x) -ForegroundColor Red }
+    Check ($scopeBad.Count -eq 0) "every field of every current session is identical to its field under All"
+    Check (($dCur.doc.handles | ConvertTo-Json -Depth 20 -Compress) -ceq ($dAll.doc.handles | ConvertTo-Json -Depth 20 -Compress)) "the handle rows are identical under both scopes"
+    Check ("$($dCur.doc.scope)" -ceq "current" -and $null -eq $dAll.doc.PSObject.Properties["scope"]) "a current view says it is one, and a whole view says nothing"
+    Check (@(Test-HordeSchema -Value $dCur.doc -Schema $viewSchema).Count -eq 0 -and @(Test-HordeSessionViewRules -Document $dCur.doc).Count -eq 0) "a current view validates"
+    $prc = Fault $pcur "parent-retired"
+    Check ((FSt $prc) -eq "true" -and (Subjects $prc) -contains (Sid 22) -and (Subjects $prc) -contains (Sid 5)) "a fault that reads the registry still finds the historical session it collides with"
+
+    $ronly = New-Fleet "scope-report-only"; AddReportOnly $ronly
+    $pro = Project $ronly
+    Check ((Has $pro 35) -and (Src (Ans $pro 35 "sessionId")) -eq "W5" -and (St (Ans $pro 35 "pane")) -eq "absent" -and -not (IsCurrent $ronly 35)) "a report-only session of a closed run is historical"
+
+    # Each live signal on its own makes the historical session 05 current.
+    $sg = New-Fleet "scope-running"
+    PutJson (Join-Path $sg "processes.json") (@(ReadJson (Join-Path $sg "processes.json")) + @([pscustomobject]@{ pid = 1301; name = "harness-a.exe"; created = "2026-06-01T11:40:00.0000000Z"; commandLine = ("harness-a --resume " + (Sid 5)) }))
+    Check (IsCurrent $sg 5) "signal 1: a process that resumes a session makes it current"
+    $sg = New-Fleet "scope-live-record"
+    EditReg $sg 5 { param($r) $r.retired = $false }
+    Check (IsCurrent $sg 5) "signal 2: a registry record that is not retired makes a session current"
+    $sg = New-Fleet "scope-torn-record"
+    PutText (RegPath $sg 5) "{ torn"
+    Check (IsCurrent $sg 5) "signal 2: a registry record that cannot be read makes a session current, since it may be live"
+    $sg = New-Fleet "scope-open-run"
+    EditReg $sg 5 { param($r) $r.fleetSessionId = "alpha" }
+    Check (IsCurrent $sg 5) "signal 3: a fleet id an open run lists makes a session current"
+    $sg = New-Fleet "scope-control-file"
+    $cf = ReadJson (Join-Path $sg "agent\sessions\1003.json"); $cf.pid = 1999; $cf.sessionId = (Sid 5); PutJson (Join-Path $sg "agent\sessions\1999.json") $cf
+    Check (IsCurrent $sg 5) "signal 4: a control file that names a session makes it current, running or not"
+    $cx = ReadJson (Join-Path $sg "wezfleet\codex-sessions\codex-thread-1.json"); $cx.sessionId = (Sid 5); PutJson (Join-Path $sg ("wezfleet\codex-sessions\" + (Sid 5) + ".json")) $cx
+    Check (IsCurrent $sg 5) "signal 4: two control files that name a session make it current, though neither is kept"
+    $sg = New-Fleet "scope-pane-file"
+    $pf = ReadJson (Join-Path $sg "agent\pane-sessions\17.json"); $pf.session_id = (Sid 5); $pf30 = Join-Path $sg "agent\pane-sessions\30.json"; PutJson $pf30 $pf; [System.IO.File]::SetLastWriteTimeUtc($pf30, $now.AddMinutes(-10))
+    Check (IsCurrent $sg 5) "signal 4: a pane-sessions file that passes the guard makes a session current"
+    $sg = New-Fleet "scope-stale-pane-file"
+    $pf = ReadJson (Join-Path $sg "agent\pane-sessions\17.json"); $pf.session_id = (Sid 5); $pf30 = Join-Path $sg "agent\pane-sessions\30.json"; PutJson $pf30 $pf; [System.IO.File]::SetLastWriteTimeUtc($pf30, $now.AddHours(-3))
+    Check (-not (IsCurrent $sg 5)) "CONTROL: a pane-sessions file written before this instance started does not"
+    $sg = New-Fleet "scope-live-handle"; AddReportOnly $sg -Pane 30
+    $psg = Project $sg; $psgC = Project $sg -Scope Current
+    Check ((Val (Ans $psg 35 "pane")) -eq "30" -and (Has $psgC 35) -and @(ScopeDiff (ScopeDoc $psg) (ScopeDoc $psgC)).Count -eq 0) "signal 5: a stored handle live in this instance makes a finished session current, and both scopes agree on it"
+}
+
 if (Section "schema" "schema/session-view.v1") {
     $doc = (ConvertTo-HordeSessionViewDocument $p) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
     $sf = @(Test-HordeSchema -Value $doc -Schema $viewSchema)
@@ -938,6 +1003,16 @@ if ($null -ne $rp) {
     $rrf = @(Test-HordeSessionViewRules -Document $rdoc)
     foreach ($x in @($rrf | Select-Object -First 10)) { Write-Host ("  " + $x) -ForegroundColor Red }
     Check ($rrf.Count -eq 0) "the real view keeps the rules the schema cannot state"
+    # The same reading completed in the current scope: every current session as it is under All.
+    $sw.Restart()
+    $rcur = Complete-HordeProjection -C $rp.inputs -Scope Current
+    $rcurMs = $sw.ElapsedMilliseconds
+    $rAllById = @{}; foreach ($x in @($rdoc.sessions)) { $rAllById["" + $x.sessionId] = ($x | ConvertTo-Json -Depth 40 -Compress) }
+    $rcdoc = (ConvertTo-HordeSessionViewDocument $rcur) | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $rScopeBad = @($rcdoc.sessions | Where-Object { -not $rAllById.ContainsKey("" + $_.sessionId) -or $rAllById["" + $_.sessionId] -cne ($_ | ConvertTo-Json -Depth 40 -Compress) } | ForEach-Object { "" + $_.sessionId })
+    foreach ($x in @($rScopeBad | Select-Object -First 10)) { Write-Host ("  differs from All: " + $x) -ForegroundColor Red }
+    Write-Host ("  " + @($rcur.sessions).Count + " of " + @($rp.sessions).Count + " real sessions are current; the current scope completed in " + $rcurMs + " ms") -ForegroundColor DarkGray
+    Check (@($rcur.sessions).Count -ge 1 -and $rScopeBad.Count -eq 0) ("every current real session's fields are identical under both scopes (" + @($rcur.sessions).Count + " current)")
 }
 
 }

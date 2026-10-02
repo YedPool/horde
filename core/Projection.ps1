@@ -51,6 +51,37 @@
 # sessions, so `horde status` does not do it on every call: it runs in test/test-projection.ps1 (the
 # fixture views and the reality check) and behind an explicit -Validate flag that step 2.3 adds.
 #
+# SCOPE: CURRENT OR ALL, ALL BY DEFAULT (decided 2026-10-02 for PR #31; ledger L-099). -Scope All, the
+# default, projects every session any store knows, so the module stays the whole read model for every
+# caller. -Scope Current projects the sessions a live signal names, for horde status (step 2.3 wires
+# horde status to Current and horde status --all to All). A session is CURRENT when ANY of these holds:
+#   1. it is running: a process's command line resumes it (a control file's own status is signal 4);
+#   2. it has a registry record that is not retired - or one that cannot be read, which may be live;
+#   3. it is in an open run - or in a run whose manifest cannot be read, which may be open;
+#   4. a control file names it, or a pane-sessions file that passes the guard. Not a raw file: on this
+#      machine 141 sessions are named by pane-sessions files and none of those files passes the guard
+#      with no host attached; counting raw files would have pulled 113 finished sessions in;
+#   5. a stored handle makes its pane known before claimants are settled - a handle live in this host
+#      instance, written in it.
+# Otherwise it is HISTORICAL. Measured on this machine, 2026-10-02: 32 of 333 sessions are current; 213
+# of the 229 that the structural measurement called historical are report-only sessions of closed runs;
+# no fault finding names a historical session.
+#
+# CURRENT IS NEVER MORE CONFIDENT THAN ALL: every field of a session Current projects is identical to
+# that session's field under All (test/test-projection.ps1, over the fixtures and in the reality check,
+# which completes one reading of the stores both ways). It holds because every input one session's
+# answer takes from another session either comes from a session that is itself current, or is read
+# from a store whole:
+#   - a handle's claimants (decision 1) and the handle rows: only a session whose pane is known before
+#     claimants are settled can claim, and signal 5 makes every such session current;
+#   - the owner: the parent's label is read from the parent's registry record, not its projection;
+#   - duplicate control files, a session resumed by two processes, a pane file's hijack and its two
+#     holders: core/identity, the process table and the registry, read whole;
+#   - the faults that read the registry, the control files or the process table read them whole. Three
+#     faults iterate the projected sessions - run-ambiguous, running-but-retired, session-id-not-uuid -
+#     so under Current they speak for current sessions only;
+#   - what each store's completeness says (the view's complete map) is read once, whatever the scope.
+#
 # the roster groups sessions into runs: title, dependsOn, spawnedAt and the run itself still come
 # from it (YedPool/wezfleet 562f0e8 "GROUPING is the roster's proper job"); only identity and the
 # handle moved off it.
@@ -1122,6 +1153,56 @@ function Complete-HordeSession {
     $S.fields = $ordered
 }
 
+function Get-HordeSessionRuns {
+    # The runs a session may be in, for the scope: the runs whose reports name it, and the runs that list
+    # its registry record's fleet id. A superset of the one run its fields resolve to.
+    param($C, [string]$Id)
+    $runs = New-Object System.Collections.ArrayList
+    if ($C.links.ContainsKey($Id)) { foreach ($l in @($C.links[$Id])) { [void]$runs.Add($l.run) } }
+    if ($C.wf.registry.records.ContainsKey($Id)) {
+        $ff = Get-HordeField -Record $C.wf.registry.records[$Id].record -Name "fleetSessionId"
+        if ($ff.state -eq "known" -and "$($ff.value)" -ne "" -and $C.wf.runs.byFleetId.ContainsKey("$($ff.value)")) { foreach ($r in @($C.wf.runs.byFleetId["$($ff.value)"])) { [void]$runs.Add($r) } }
+    }
+    return $runs.ToArray()
+}
+
+function Get-HordeLiveSignal {
+    # Which of live signals 1 to 4 (the header's SCOPE) makes a session current, or "" when none does.
+    # Signal 5 needs the session's pane, so Complete-HordeProjection judges it.
+    param($C, [string]$Id)
+    if ($C.identity.records.ContainsKey($Id)) { return "a control file names it" }
+    if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }
+    if ($C.paneVerdicts.bySession.ContainsKey($Id)) { return "a guarded pane-sessions file names it" }
+    if ($C.procIndex.resumes.ContainsKey($Id)) { return "a process resumes it" }
+    if ($C.wf.registry.unreadable.Contains($Id)) { return "its registry record cannot be read" }
+    if ($C.wf.registry.records.ContainsKey($Id)) {
+        $rt = Get-HordeField -Record $C.wf.registry.records[$Id].record -Name "retired"
+        if (-not ($rt.state -eq "known" -and [bool]$rt.value)) { return "its registry record is not retired" }
+    }
+    foreach ($run in @(Get-HordeSessionRuns -C $C -Id $Id)) { if ($run.closed.state -ne "known" -or -not [bool]$run.closed.value) { return "it is in a run that is open, or may be" } }
+    return ""
+}
+
+function Test-HordeMayHoldLiveHandle {
+    # Could a stored handle make this session's pane known (signal 5)? A cheap superset, so the pane is
+    # computed only for these: the host can verify handles, and a roster entry or a report in one of the
+    # session's runs names a handle that is live now.
+    param($C, [string]$Id)
+    if ($C.host.verify.state -ne "known") { return $false }
+    foreach ($run in @(Get-HordeSessionRuns -C $C -Id $Id)) {
+        foreach ($e in @($run.entries)) { $h = ConvertTo-HordeHandleText (Get-HordeField -Record $e.entry -Name "pane").value; if ($null -ne $h -and $C.host.live.ContainsKey($h)) { return $true } }
+        foreach ($k in @($run.sessions.Keys)) {
+            foreach ($ev in @($run.sessions[$k].events.events)) {
+                $sess = Get-HordeField -Record $ev -Name "session"
+                if ($sess.state -ne "known") { continue }
+                $h = ConvertTo-HordeHandleText (Get-HordeField -Record $sess.value -Name "pane").value
+                if ($null -ne $h -and $C.host.live.ContainsKey($h)) { return $true }
+            }
+        }
+    }
+    return $false
+}
+
 function Get-HordeProjection {
     # THE READ MODEL. Every store read once, nothing written. Returns
     #   { observedAt; host { name; instance }; sessions; handles; faults; complete; inputs }
@@ -1141,8 +1222,16 @@ function Get-HordeProjection {
         $HostPort = (New-HordeUnavailableHostPort -Reason "no host adapter is attached (the first one arrives under hosts/ in a later step)"),
         $LayoutPort = $null,
         $TtlSeconds = (Get-HordeCodexTtlSeconds),
-        [datetime]$Now = (Get-Date)
+        [datetime]$Now = (Get-Date),
+        # Which sessions to project: All, every session any store knows (the default), or Current, the
+        # sessions a live signal names (the header's SCOPE).
+        [ValidateSet("All", "Current")][string]$Scope = "All",
+        # A reading of the stores an earlier projection made (its .inputs), completed again in -Scope
+        # without reading anything: one reading completed both ways compares exactly (the header's
+        # SCOPE; the reality check does it).
+        $From = $null
     )
+    if ($null -ne $From) { return (Complete-HordeProjection -C $From -Scope $Scope) }
     Assert-HordePlatform $Platform
     if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform }
     Assert-HordeProcessTable $Processes
@@ -1162,12 +1251,26 @@ function Get-HordeProjection {
     $C.paneVerdicts = Get-HordePaneFileVerdicts -PaneRead $C.paneRead -Context $C.host -Registry $C.wf.registry -VerifiedLive $C.identity.verifiedLive
     $C.links = Get-HordeReportLinks -Runs $C.wf.runs
     $C.idSources = Get-HordeSessionIds -Identity $C.identity -Registry $C.wf.registry -PaneVerdicts $C.paneVerdicts -ReportLinks $C.links
+    $C | Add-Member -NotePropertyName hostName -NotePropertyValue "$($HostPort.name)"
+    return (Complete-HordeProjection -C $C -Scope $Scope)
+}
 
-    # Pass 1: every session's handle.
+function Complete-HordeProjection {
+    # The view from one reading of the stores (Get-HordeProjection's context), in a scope (the header's
+    # SCOPE). Reads nothing.
+    param($C, [ValidateSet("All", "Current")][string]$Scope = "All")
+    $Processes = $C.processes
+    $Now = $C.now
+
+    # Pass 1: every session's handle - under -Scope Current, every current session's.
     $states = New-Object System.Collections.ArrayList
     foreach ($sid in @($C.idSources.Keys | Sort-Object)) {
+        $current = ($Scope -ne "Current") -or ((Get-HordeLiveSignal -C $C -Id $sid) -ne "")
+        if (-not $current -and -not (Test-HordeMayHoldLiveHandle -C $C -Id $sid)) { continue }
         $S = New-HordeSessionState -C $C -Id $sid
         $S.pane = Get-HordePaneAnswer -S $S -C $C
+        # Signal 5: a session no other signal names is current when a stored handle makes its pane known.
+        if (-not $current -and $S.pane.answer.state -ne "known") { continue }
         [void]$states.Add($S)
     }
     # Several sessions answering one handle: every claimant is unknown, naming them all (decision 1).
@@ -1214,8 +1317,8 @@ function Get-HordeProjection {
     $faults = @(Get-HordeFaults -States $states -C $C -Claimed $claimed)
     return [pscustomobject]@{
         PSTypeName = "Horde.Projection"; observedAt = $Now.ToUniversalTime()
-        host = [pscustomobject]@{ name = "$($HostPort.name)"; instance = $C.host.instance }
-        sessions = $sessions; handles = $handles; faults = $faults; complete = $complete; inputs = $C
+        host = [pscustomobject]@{ name = $C.hostName; instance = $C.host.instance }
+        sessions = $sessions; handles = $handles; faults = $faults; complete = $complete; inputs = $C; scope = $Scope
     }
 }
 
@@ -1275,7 +1378,7 @@ function ConvertTo-HordeSessionViewDocument {
         $found = @($ft.found | ForEach-Object { [ordered]@{ subjects = @($_.subjects | ForEach-Object { "$_" }); detail = "$($_.detail)" } })
         [void]$faults.Add([ordered]@{ kind = $ft.kind; answer = (ConvertTo-HordeAnswerDocument $ft.answer); found = $found })
     }
-    return [ordered]@{
+    $doc = [ordered]@{
         schemaVersion = 1
         observedAt = (ConvertTo-HordeIsoText $Projection.observedAt)
         host = [ordered]@{ name = "$($Projection.host.name)"; instance = (ConvertTo-HordeAnswerDocument $inst) }
@@ -1284,6 +1387,9 @@ function ConvertTo-HordeSessionViewDocument {
         faults = $faults.ToArray()
         complete = $complete
     }
+    # A current view says so, so no reader takes a session it leaves out for one no store knows.
+    if ($null -ne $Projection.PSObject.Properties["scope"] -and "$($Projection.scope)" -eq "Current") { $doc.Insert(1, "scope", "current") }
+    return $doc
 }
 
 function Test-HordeSessionViewRules {

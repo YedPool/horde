@@ -21,6 +21,13 @@
         1
       ]
     },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "current"
+      ],
+      "description": "Present only in a current view (core/Projection.ps1 -Scope Current): it holds the sessions a live signal names, not every session a store knows. A whole view has no scope."
+    },
     "observedAt": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"

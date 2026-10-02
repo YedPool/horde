@@ -13,7 +13,7 @@
     # Fixtures only, and stop at the first failed check: a caught mutant needs nothing more.
     # Only the sections that kill these mutants (test	est-projection.ps1 SECTIONS): every fixture section but the two that test core/HostPort.ps1 alone (instance-whole, one-writer).
     # Every mutant is still run; the whole list must come out as expected (PR #31, 2026-10-01).
-    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "view,precedence,pane,hostport,stored-handle,instance-proven,platform,judge,pane-guard,claim-guard,carry,cannot-tell,holes,runs,cardinality,parity,silent-winner,one-agent,layout,schema,writes" }
+    Environment = @{ HORDE_SKIP_REALITY = "1"; HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "view,precedence,pane,hostport,stored-handle,instance-proven,platform,judge,pane-guard,claim-guard,carry,cannot-tell,holes,runs,cardinality,parity,silent-winner,one-agent,layout,scope,schema,writes" }
     # With the reality check skipped the suite passes with exit 3 (test\test-projection.ps1).
     PassCodes = @(3)
     Mutations = @(
@@ -192,5 +192,30 @@
         @{ Name = "leaves-a-file-in-fixture-folders"
            Find = '$C.links = Get-HordeReportLinks -Runs $C.wf.runs'
            Replace = 'if ($WezfleetRoot -like "*horde-projection-*") { [System.IO.File]::WriteAllText((Join-Path $WezfleetRoot ([guid]::NewGuid().ToString("N") + ".seen")), "") }; $C.links = Get-HordeReportLinks -Runs $C.wf.runs' }
+        # The scope (core/Projection.ps1 header, SCOPE): each live signal dropped in turn must be caught.
+        @{ Name = "scope-running-ignored"
+           Find = 'if ($C.procIndex.resumes.ContainsKey($Id)) { return "a process resumes it" }'
+           Replace = 'if ($false) { return "a process resumes it" }' }
+        @{ Name = "scope-live-record-ignored"
+           Find = 'if (-not ($rt.state -eq "known" -and [bool]$rt.value)) { return "its registry record is not retired" }'
+           Replace = 'if ($false) { return "its registry record is not retired" }' }
+        @{ Name = "scope-unreadable-record-ignored"
+           Find = 'if ($C.wf.registry.unreadable.Contains($Id)) { return "its registry record cannot be read" }'
+           Replace = 'if ($false) { return "its registry record cannot be read" }' }
+        @{ Name = "scope-open-run-ignored"
+           Find = 'if ($run.closed.state -ne "known" -or -not [bool]$run.closed.value) { return "it is in a run that is open, or may be" }'
+           Replace = 'if ($false) { return "it is in a run that is open, or may be" }' }
+        @{ Name = "scope-control-file-ignored"
+           Find = 'if ($C.identity.records.ContainsKey($Id)) { return "a control file names it" }'
+           Replace = 'if ($false) { return "a control file names it" }' }
+        @{ Name = "scope-duplicate-control-files-ignored"
+           Find = 'if (@($C.identity.duplicates | Where-Object { $_.sessionId -ieq $Id }).Count -gt 0) { return "two control files name it" }'
+           Replace = 'if ($false) { return "two control files name it" }' }
+        @{ Name = "scope-pane-file-ignored"
+           Find = 'if ($C.paneVerdicts.bySession.ContainsKey($Id)) { return "a guarded pane-sessions file names it" }'
+           Replace = 'if ($false) { return "a guarded pane-sessions file names it" }' }
+        @{ Name = "scope-live-handle-ignored"
+           Find = 'if (-not $current -and -not (Test-HordeMayHoldLiveHandle -C $C -Id $sid)) { continue }'
+           Replace = 'if (-not $current) { continue }' }
     )
 }
