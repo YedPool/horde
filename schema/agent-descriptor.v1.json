@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/agent-descriptor.v1",
+  "title": "agent-descriptor v1",
+  "description": "What one agent harness offers, as data: agents/<name>/agent.json (engines plan step E2). Every flag, hook and variable named here is read off the installed program and cited in its evidence. Each capability is declared in the one vocabulary the host and transport capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no and never satisfies a requirement. The capabilities are exactly those core/capabilities.json says an agent can satisfy, and every one is declared. Rules a draft-07 schema cannot say are core/AgentDescriptor.ps1's: name equals the folder name, protocols are distinct, sessionIdPattern compiles and is anchored at both ends, owned variable names are distinct ignoring case, an event the harness supports names its hook and one it lacks names none, and the file is plain ASCII with no key repeated in one object.",
+  "type": "object",
+  "required": ["schemaVersion", "name", "measured", "protocols", "nativeProvider", "sessionIdPattern", "ownedEnv", "events", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "The harness's folder name under agents/." },
+    "measured": {
+      "type": "object",
+      "required": ["cliVersion", "on"],
+      "additionalProperties": false,
+      "description": "Which installed version the flags and hooks below were read from, and when. A later version is a new measurement, not an assumption.",
+      "properties": {
+        "cliVersion": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$" },
+        "on": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+      }
+    },
+    "protocols": {
+      "type": "array",
+      "description": "The wire formats this harness speaks to a provider (engine-settings design, the wire-format table). A harness may be paired only with a provider that serves one of these (engines E3). Named after the vendor and its API, never after a harness. At least one, each once.",
+      "items": { "type": "string", "enum": ["anthropic-messages", "openai-responses", "openai-chat", "google-genai"] }
+    },
+    "nativeProvider": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "The provider whose own login this harness uses. A provider whose credential is harness-login is legal only on the harness that names it here: a subscription runs only on its vendor's own program (agent-engines decision 7, engines E3)." },
+    "sessionIdPattern": { "type": "string", "pattern": "\\S", "description": "A .NET regular expression, anchored at both ends, that every session id this harness gives matches (engines K1)." },
+    "ownedEnv": {
+      "type": "array",
+      "description": "The environment variables this harness reads for its endpoint, credential or model: the scrub list. The launcher removes every owned variable of every harness from a child before it sets the ones that child's binding needs, so no session inherits another's provider (engine-settings design, section 6). Names only: Horde never stores a value.",
+      "items": {
+        "type": "object",
+        "required": ["name", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+          "evidence": { "type": "string", "pattern": "\\S" }
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "description": "Horde's four session events, each mapped to the hook of this harness that reports it. Core sees only Horde's names; the harness's own hook names live here (CONTRIBUTING 14).",
+      "required": ["session-started", "turn-started", "turn-ended", "session-ended"],
+      "additionalProperties": false,
+      "properties": {
+        "session-started": { "$ref": "#/definitions/event" },
+        "turn-started": { "$ref": "#/definitions/event" },
+        "turn-ended": { "$ref": "#/definitions/event" },
+        "session-ended": { "$ref": "#/definitions/event" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Every capability core/capabilities.json says an agent can satisfy (port agent or either), each declared once.",
+      "required": ["message-inject", "delivery-receipt", "resume", "report-hook", "name-at-spawn", "model-select", "provider-select", "session-id-preset", "session.remoteName"],
+      "additionalProperties": false,
+      "properties": {
+        "message-inject": { "$ref": "#/definitions/capability" },
+        "delivery-receipt": { "$ref": "#/definitions/capability" },
+        "resume": { "$ref": "#/definitions/capability" },
+        "report-hook": { "$ref": "#/definitions/capability" },
+        "name-at-spawn": { "$ref": "#/definitions/capability" },
+        "model-select": { "$ref": "#/definitions/capability" },
+        "provider-select": { "$ref": "#/definitions/capability" },
+        "session-id-preset": { "$ref": "#/definitions/capability" },
+        "session.remoteName": { "$ref": "#/definitions/capability" }
+      }
+    }
+  },
+  "definitions": {
+    "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+    "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, on which version, and when. Never blank." },
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "$ref": "#/definitions/support" },
+        "evidence": { "$ref": "#/definitions/evidence" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "hook": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$", "description": "The harness's own name for the hook. Required unless support is no." },
+        "support": { "$ref": "#/definitions/support" },
+        "evidence": { "$ref": "#/definitions/evidence" }
+      }
+    }
+  }
+}
