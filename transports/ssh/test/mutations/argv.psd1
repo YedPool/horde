@@ -27,6 +27,13 @@
         @{ Name = "pkcs11-unpinned"
            Find = '"-o", "PKCS11Provider=none",'
            Replace = '' }
+        # --- round 2 of the review (F2): the path allowlist widened by one character
+        @{ Name = "dollar-allowed-in-paths"
+           Find = '''[^A-Za-z0-9 \\/:._-]'''
+           Replace = '''[^A-Za-z0-9 \\/:._$-]''' }
+        @{ Name = "tilde-allowed-in-paths"
+           Find = '''[^A-Za-z0-9 \\/:._-]'''
+           Replace = '''[^A-Za-z0-9 \\/:._~-]''' }
         @{ Name = "user-config-read"
            Find = '"-F", $Paths.config,'
            Replace = '' }

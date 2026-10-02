@@ -75,6 +75,35 @@
         @{ Name = "stopped-without-the-start-time"
            Find = 'if ($now.StartTime -ne $StartedAt) { return }'
            Replace = '' }
+        # --- round 2 of the review (F4): each harmless if it runs, each refused by the guard
+        @{ Name = "round2-lowercase-second-caller"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { start-hordesshprocess -Arguments "/c echo" }' }
+        @{ Name = "round2-using-statement"
+           Find = '. (Join-Path $PSScriptRoot "Argv.ps1")'
+           Replace = 'using namespace System.Text; . (Join-Path $PSScriptRoot "Argv.ps1")' }
+        @{ Name = "round2-requires"
+           Find = '. (Join-Path $PSScriptRoot "Argv.ps1")'
+           Replace = '#requires -Version 5.1
+. (Join-Path $PSScriptRoot "Argv.ps1")' }
+        @{ Name = "round2-psscriptroot-reassigned"
+           Find = '. (Join-Path $PSScriptRoot "Argv.ps1")'
+           Replace = '$PSScriptRoot = $PSScriptRoot; . (Join-Path $PSScriptRoot "Argv.ps1")' }
+        @{ Name = "round2-filename-assigned"
+           Find = '$psi.UseShellExecute = $false'
+           Replace = '$psi.FileName = $psi.FileName; $psi.UseShellExecute = $false' }
+        @{ Name = "round2-arguments-assigned"
+           Find = '$psi.UseShellExecute = $false'
+           Replace = '$psi.Arguments = $psi.Arguments; $psi.UseShellExecute = $false' }
+        @{ Name = "round2-exe-constant-reassigned"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; $script:HordeSshExeRelative = $script:HordeSshExeRelative' }
+        @{ Name = "round2-environment-assigned"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; $env:HORDE_GUARD_PROBE = "x"' }
+        @{ Name = "round2-setup-not-canonical"
+           Find = '$psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), $Arguments)'
+           Replace = '$psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), ($Arguments))' }
         # --- the review's 12 forms that passed the first guard (F4), each appended where nothing runs it
         @{ Name = "review-bare-ssh-exe"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
