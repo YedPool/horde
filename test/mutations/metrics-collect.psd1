@@ -23,8 +23,29 @@
            Find = '$old.size -eq $size -and $old.modifiedTicks -eq $mod'
            Replace = '$old.size -eq $size' }
         @{ Name = "provisional-never-collected-again"
-           Find = 'if ($old.outcome -ne "provisional" -or -not $settled) { $res.unchanged++; continue }'
-           Replace = '$res.unchanged++; continue' }
+           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }'
+           Replace = 'if ($old.outcome -ne "deferred") { $res.unchanged++; continue }' }
+        @{ Name = "deferred-never-tried-again"
+           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }'
+           Replace = 'if ($old.outcome -ne "provisional" -or -not $settled) { $res.unchanged++; continue }' }
+        @{ Name = "no-deadline-inside-a-file"
+           Find = '                Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds([Math]::Max(0, $MaxSeconds - $started.Elapsed.TotalSeconds)))'
+           Replace = '' }
+        @{ Name = "deferred-read-first"
+           Find = '        $all = @(@($all | Where-Object { $null -eq $entries[$_.key] -or $entries[$_.key].outcome -ne "deferred" }) + @($all | Where-Object { $null -ne $entries[$_.key] -and $entries[$_.key].outcome -eq "deferred" }))'
+           Replace = '' }
+        @{ Name = "never-too-large"
+           Find = 'if ($entry.deferrals -ge $script:HordeCollectMaxDeferrals) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "too-large-read-again"
+           Find = '            if ($null -ne $old -and $old.outcome -eq "tooLarge") { $res.tooLarge++; continue }'
+           Replace = '' }
+        @{ Name = "temp-files-left"
+           Find = '            Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue'
+           Replace = '            $null = $tmp' }
+        @{ Name = "any-tmp-removed"
+           Find = 'Where-Object { $_.Name -cmatch $script:HordeTempNamePattern }'
+           Replace = 'Where-Object { $_.Extension -eq ".tmp" }' }
         @{ Name = "provisional-not-said"
            Find = '                    provisional = (-not $final)'
            Replace = '                    provisional = $false' }

@@ -308,6 +308,66 @@ try {
     foreach ($bid in $backlogIds) { Remove-Item -LiteralPath (Join-Path $backlogDir ($bid + ".jsonl")) -Force }
     $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
 
+    Write-Host ""    Write-Host "--- one file too big for a run never starves the rest (review of #70, the budget) ---" -ForegroundColor Cyan
+    # A run's budget is checked INSIDE a file too: a giant file is abandoned uncommitted ("deferred"),
+    # read last in the next run, and after three deferrals in a row is "tooLarge": skipped, and said.
+    $gDir = Join-Path (Split-Path -Parent $cleanSrc) "giant-backlog"
+    [void][System.IO.Directory]::CreateDirectory($gDir)
+    $giant = Join-Path $gDir "00000000-0000-4000-8000-000000000000.jsonl"
+    $gw = New-Object System.IO.StreamWriter($giant, $false, (New-Object System.Text.UTF8Encoding($false)))
+    try {
+        $gt0 = [datetime]::Parse("2026-09-30T00:00:00Z").ToUniversalTime()
+        for ($i = 0; $i -lt 150000; $i++) {
+            $gw.WriteLine('{"type":"assistant","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"id":"g' + $i + '","model":"model-a","content":[{"type":"tool_use","id":"gt' + $i + '","name":"Bash","input":{}}],"usage":{"input_tokens":3,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"output_tokens":50}}}')
+            $gw.WriteLine('{"type":"user","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2 + 1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"gt' + $i + '","content":"ok"}]}}')
+        }
+    } finally { $gw.Dispose() }
+    Set-Old $giant $settledAt
+    $smallIds = @()
+    for ($i = 0; $i -lt 4; $i++) {
+        $sid = "c0000000-0000-4000-8000-" + $i.ToString("000000000000")
+        $smallIds += $sid
+        $sf = Join-Path $gDir ($sid + ".jsonl")
+        [System.IO.File]::WriteAllText($sf, ($cleanText -replace [regex]::Escape($cleanId), $sid))
+        Set-Old $sf $settledAt
+    }
+    $smallsRecorded = { @(Get-Records | Where-Object { $_.Name -like "c0000000-*" }).Count }
+    $giantEntry = { $ix = Get-Index; $k = @($ix["entries"].Keys | Where-Object { $_ -like "*/00000000-0000-4000-8000-000000000000.jsonl" }); if ($k.Count -eq 1) { $ix["entries"][$k[0]] } else { $null } }
+    $sw1 = [System.Diagnostics.Stopwatch]::StartNew()
+    $g1 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+    $sw1.Stop()
+    Check ($g1.state -eq "done" -and $g1.stoppedEarly -and $sw1.Elapsed.TotalSeconds -lt 40) ("a run whose budget runs out inside a file stops within its budget, not when the file ends (" + [math]::Round($sw1.Elapsed.TotalSeconds) + " s for an 8 s budget)")
+    $ge1 = & $giantEntry
+    Check ($null -ne $ge1 -and $ge1["outcome"] -eq "deferred" -and @(Get-Records | Where-Object { $_.Name -like "00000000-*" }).Count -eq 0) "the file it was reading is deferred, not committed: no record, an index entry that says so"
+    $g2 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+    Check ((& $smallsRecorded) -eq 4) ("a deferred file is read last: within two runs every other transcript is recorded (" + (& $smallsRecorded) + " of 4)")
+    # A deferral counts only when the file was attempted: a run whose budget the others spent first does
+    # not count against it. Each run from here reaches it, since the others are recorded.
+    $attempts = 0
+    for ($k = 0; $k -lt 4; $k++) {
+        $ge = & $giantEntry
+        if ($null -ne $ge -and $ge["outcome"] -eq "tooLarge") { break }
+        $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+        $attempts++
+    }
+    $ge3 = & $giantEntry
+    Check ($null -ne $ge3 -and $ge3["outcome"] -eq "tooLarge" -and [int]$ge3["deferrals"] -eq 3) ("deferred three times in a row, it is marked too large (" + $attempts + " more runs)")
+    $g4 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+    Check ($g4.read -eq 0 -and $g4.tooLarge -eq 1 -and -not $g4.stoppedEarly) "and is then skipped, counted, and the run goes on"
+    $sumOut = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
+    Check ($sumOut.out -like "*too large*00000000-0000-4000-8000-000000000000.jsonl*") "summarize says, loudly, which transcript collect could not read within a run"
+    Remove-Item -LiteralPath $gDir -Recurse -Force
+    $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+
+    Write-Host ""
+    Write-Host "--- a temp file left by a killed write is cleaned up, and only Horde's own ---" -ForegroundColor Cyan
+    $orphan = Join-Path (Get-HordeMetricsDir) (".collect-index.json." + [guid]::NewGuid().ToString("N") + ".tmp")
+    $notOurs = Join-Path (Get-HordeMetricsDir) "notes.tmp"
+    [System.IO.File]::WriteAllText($orphan, "half"); [System.IO.File]::WriteAllText($notOurs, "mine")
+    $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check (-not (Test-Path -LiteralPath $orphan) -and (Test-Path -LiteralPath $notOurs)) "an orphaned temp file of Horde's own pattern is removed at the start of a run; a file that only looks like one is left"
+    Remove-Item -LiteralPath $notOurs -Force
+
     Write-Host ""    Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
     $envs = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
     [System.IO.File]::AppendAllText($planted, "`n"); Set-Old $planted $settledAt.AddMinutes(4)

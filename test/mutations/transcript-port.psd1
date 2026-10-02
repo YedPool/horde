@@ -5,6 +5,9 @@
     Target = "core\Transcript.ps1"
     Suite  = "test\test-transcript-port.ps1"
     Mutations = @(
+        @{ Name = "deadline-ignored"
+           Find = 'if (($n % 500) -eq 0 -and $null -ne $script:HordeReadDeadline -and [datetime]::UtcNow -ge $script:HordeReadDeadline) {'
+           Replace = 'if ($false) {' }
         @{ Name = "second-read-not-bounded"
            Find = 'while (($null -eq $Upto -or $n -lt $limit) -and'
            Replace = 'while (($true) -and'

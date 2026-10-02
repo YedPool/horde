@@ -42,6 +42,11 @@ try {
     # switch, and the run fails with exit 2; it is refused when the job is made, not every 30 minutes.
     Check (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Arguments @("metrics", "-Json") } "cannot start with") "an argument that starts with a dash is refused when the job is made"
     Check (-not (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Arguments @("metrics", "a-b") } "cannot start with")) "CONTROL: a dash inside an argument is fine"
+    # PowerShell reads the Unicode dashes U+2010 to U+2015 and the minus sign U+2212 as "-" too.
+    $lookAlikes = @(0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212)
+    $refusedAll = $true
+    foreach ($c in $lookAlikes) { if (-not (Throws { New-HordeScheduledJob -Name "x" -Script "s" -HordeHome "h" -Arguments @("metrics", ([string][char]$c + "Json")) } "cannot start with")) { $refusedAll = $false } }
+    Check $refusedAll "and so is one that starts with any of the dashes PowerShell reads as one (U+2010 to U+2015, U+2212)"
 
     Write-Host ""
     Write-Host "--- the seam, with a fake scheduler ---" -ForegroundColor Cyan

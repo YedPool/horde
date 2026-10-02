@@ -42,6 +42,22 @@
 
 $script:HordeTranscriptKinds = @("call", "toolCall", "toolResult", "input", "usageTotal", "turnEnd", "compaction", "event")
 $script:HordeTranscriptAdapters = New-Object System.Collections.ArrayList
+# A READ DEADLINE, for a caller with a budget (core/MetricsCollect.ps1; review of #70: a budget checked
+# only between files let one file run 48 s on a 2 s budget). When set, Read-HordeJsonLines checks it every
+# 500 lines and throws $script:HordeReadDeadlineMessage, after setting HordeReadDeadlineHit, so the caller
+# can tell a spent budget from a failure. $null means no deadline.
+$script:HordeReadDeadline = $null
+$script:HordeReadDeadlineHit = $false
+$script:HordeReadDeadlineMessage = "the read deadline passed"
+
+function Set-HordeReadDeadline {
+    # Set (a UTC [datetime]) or clear ($null) the deadline every transcript read checks.
+    param($At)
+    $script:HordeReadDeadline = $At
+    $script:HordeReadDeadlineHit = $false
+}
+
+function Test-HordeReadDeadlineHit { return [bool]$script:HordeReadDeadlineHit }
 
 function ConvertTo-HordeUtcTime {
     # A transcript timestamp as a UTC [datetime], or $null when it is missing or carries no zone.
@@ -145,6 +161,7 @@ function Read-HordeJsonLines {
             $pendingBad = $false
             while (($null -eq $Upto -or $n -lt $limit) -and $null -ne ($text = $reader.ReadLine())) {
                 $n++
+                if (($n % 500) -eq 0 -and $null -ne $script:HordeReadDeadline -and [datetime]::UtcNow -ge $script:HordeReadDeadline) { $script:HordeReadDeadlineHit = $true; throw $script:HordeReadDeadlineMessage }
                 if ($pendingBad) { $skipped++; $pendingBad = $false }
                 if ($null -ne $Upto -and $n -eq $limit -and $Upto.lastBad) { $pendingBad = $true; continue }
                 if ($text.Trim() -eq "") { continue }

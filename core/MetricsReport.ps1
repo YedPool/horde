@@ -153,6 +153,19 @@ function Format-HordeMetricsSummary {
     foreach ($row in $skipped) { [void]$lines.Add("lines not parsed: " + $row.file + ": " + $row.read.parseSkipped + " skipped, " + $row.read.tornTail + " still being written") }
     if ($Result.priceTable.state -eq "known") { [void]$lines.Add("cost: notional list price from " + ($Result.priceTable.value["sources"] -join ", ") + "; an ESTIMATE, never money spent on a subscription") }
     else { [void]$lines.Add("cost: unknown - " + $Result.priceTable.reason) }
+    # Transcripts collect could not read within a run, said loudly (review of #70): they are skipped, and
+    # a person should know their work is missing from the store.
+    $ixPath = Join-Path (Get-HordeMetricsDir) "collect-index.json"
+    if (Test-Path -LiteralPath $ixPath -PathType Leaf) {
+        try {
+            Add-Type -AssemblyName System.Web.Extensions
+            $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+            $ser.MaxJsonLength = [int]::MaxValue
+            $ix = $ser.DeserializeObject((Read-HordeSharedText -Path $ixPath))
+            $big = @($ix["entries"].Keys | Where-Object { "$($ix["entries"][$_]["outcome"])" -ceq "tooLarge" } | ForEach-Object { $_.Substring($_.LastIndexOf('/') + 1) } | Sort-Object)
+            if ($big.Count -gt 0) { [void]$lines.Add("WARNING: collect skips " + $big.Count + " transcripts as too large to read within a run, so they are not in the store: " + ($big -join ", ")) }
+        } catch { [void]$lines.Add("WARNING: the collect index could not be read to say which transcripts it skips") }
+    }
     $written = @($Result.rows | Where-Object { $_.written -ne "" })
     if ($written.Count -gt 0) { [void]$lines.Add("recorded " + $written.Count + " summaries under " + (Join-Path (Get-HordeMetricsDir) "summaries")) }
     $notWritten = @($Result.rows | Where-Object { $_.written -eq "" })

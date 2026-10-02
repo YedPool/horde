@@ -100,6 +100,17 @@ try {
     $seenLines = New-Object System.Collections.ArrayList
     $rs = Read-HordeJsonLines -Path $grow -Control $ctl -Each { param($ln, $v) [void]$seenLines.Add($ln); if ($ln -eq 2) { $ctl.stop = $true } }
     Check ($rs.stopped -and $seenLines.Count -eq 2 -and -not $rs.lastBad) "a reader told to stop stops after that line, and says it stopped"
+    # A READ DEADLINE (review of #70: a run's budget must hold inside a file): a reader past its deadline
+    # stops within 500 lines and says the deadline was why; with none set, the same file is read whole.
+    $long = Join-Path $work "long.jsonl"
+    [System.IO.File]::WriteAllText($long, ((@(1..2000 | ForEach-Object { '{"n":' + $_ + '}' })) -join "`n") + "`n")
+    Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds(-1))
+    $dlCount = 0
+    $dlThrew = Throws { $null = Read-HordeJsonLines -Path $long -Each { param($ln, $v) $script:dlCount++ } } "deadline"
+    $dlHit = Test-HordeReadDeadlineHit
+    Set-HordeReadDeadline -At $null
+    Check ($dlThrew -and $dlHit -and $script:dlCount -lt 600) ("a read past its deadline stops within 500 lines and says the deadline was why (" + $script:dlCount + " lines)")
+    Check (@((Read-HordeJsonLines -Path $long).lines).Count -eq 2000 -and -not (Test-HordeReadDeadlineHit)) "CONTROL: with no deadline the same file is read whole"
 
     Write-Host ""
     Write-Host "--- the json path helper ---" -ForegroundColor Cyan
