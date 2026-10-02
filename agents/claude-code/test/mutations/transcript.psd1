@@ -65,5 +65,8 @@
         @{ Name = "missing-usage-field-is-zero"
            Find = '        if ($null -eq $Max[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
            Replace = '        if ($false) { }' }
+        @{ Name = "session-side-chain-counted"
+           Find = '        if ($isSessionFile -and $v["isSidechain"] -eq $true) {'
+           Replace = '        if ($false) {' }
     )
 }

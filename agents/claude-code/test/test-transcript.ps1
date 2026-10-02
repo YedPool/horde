@@ -170,6 +170,25 @@ try {
     Check ($pu.usage.state -eq "unknown" -and $pu.usage.reason -like "*output_tokens*") "a usage object with no output_tokens is unknown, naming the missing field"
     Check ($calls[0].usage.state -eq "known") "CONTROL: a complete usage object is known"
 
+
+    Write-Host ""
+    Write-Host "--- a side chain inside a session file is not the session's own work ---" -ForegroundColor Cyan
+    # Review of PR #50, F10; metrics design 2.1: an older layout inlined subagent side chains into the
+    # parent file, and those calls are the subagent's, not the session's. Measured 2026-10-02: none of
+    # this machine's 279 session files has such lines; subagent files are all side chain by design.
+    $side = Join-Path $work "side\55555555-6666-4777-8888-999999999999.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $side) -Force | Out-Null
+    $su = @{ input_tokens = 1; cache_read_input_tokens = 0; cache_creation_input_tokens = 0; output_tokens = 1 }
+    $slines = @(
+        @{ type = "assistant"; isSidechain = $false; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; message = @{ id = "own"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "a" }); stop_reason = "end_turn"; usage = $su } },
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:02.000Z"; message = @{ id = "side1"; model = "claude-opus-5-5"; content = @(@{ type = "tool_use"; id = "toolu_SIDE"; name = "Read"; input = @{} }); stop_reason = "tool_use"; usage = $su } },
+        @{ type = "user"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:03.000Z"; message = @{ role = "user"; content = @(@{ type = "tool_result"; tool_use_id = "toolu_SIDE"; content = "x" }) } }
+    )
+    [System.IO.File]::WriteAllText($side, ((@($slines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $sidew = Get-HordeWorkerSummary -Records (Read-HordeTranscript -Path $side).value.records -PriceTable $noTable
+    Check ($sidew.calls.value -eq 1 -and $sidew.toolCalls.value -eq 0) ("side-chain lines in a session file are not the session's calls or tool calls (" + $sidew.calls.value + " calls)")
+    Check ($sws.calls.value -eq 1) "CONTROL: in a subagent file, whose every line is side chain, the calls count"
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is

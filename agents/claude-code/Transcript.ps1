@@ -214,6 +214,7 @@ function Read-ClaudeCodeTranscript {
     $callAt = @{}
     $toolCalls = @{}
     $st = @{ sessionId = ""; turnDurations = 0 }
+    $isSessionFile = ([System.IO.Path]::GetFileName($Path) -notlike "agent-*")
 
     # STREAMED, one line at a time (core/Transcript.ps1, Read-HordeJsonLines -Each): holding a large
     # transcript whole slowed every allocation tenfold. Inside the block, "return" moves to the next line.
@@ -222,6 +223,12 @@ function Read-ClaudeCodeTranscript {
         if ($st.sessionId -eq "" -and $v["sessionId"] -is [string]) { $st.sessionId = $v["sessionId"] }
         $ts = ConvertTo-HordeUtcTime $v["timestamp"]
         if ($null -eq $ts) { return }
+        # A side chain inlined into a SESSION file is a subagent's work, not the session's (review of PR
+        # #50, F10; metrics design 2.1): an event only. A subagent file is all side chain by design.
+        if ($isSessionFile -and $v["isSidechain"] -eq $true) {
+            [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
+            return
+        }
         $type = "$($v["type"])"
 
         if ($type -eq "assistant") {
