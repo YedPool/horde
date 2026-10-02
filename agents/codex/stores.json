@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "why": "Where this harness keeps its configuration and rollouts. Horde never writes inside them (core/MetricsStore.ps1, Get-HordeAgentStoreRoots). CODEX_HOME moves the store, so both it and the default folder are protected.",
+  "roots": [
+    { "profile": ".codex" },
+    { "env": "CODEX_HOME" }
+  ]
+}

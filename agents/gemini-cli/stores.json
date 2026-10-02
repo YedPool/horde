@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "why": "Where this harness keeps its settings and chat transcripts (~/.gemini; experiment program 12.2). It has no transcript adapter yet, and is listed so that Horde never writes inside its folder all the same (review of PR #50, F7). A variable that moves its store has not been measured on this machine; when one is, it is added here.",
+  "roots": [
+    { "profile": ".gemini" }
+  ]
+}

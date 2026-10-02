@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-09-30.1",
+  "observedAt": "2026-09-30",
+  "source": "https://developers.openai.com/api/docs/pricing, read 2026-09-30 (metrics design 2.9)",
+  "currency": "USD",
+  "perTokens": 1000000,
+  "models": {
+    "gpt-5.5": { "provider": "openai", "rates": { "input": 5, "cacheRead": 0.5, "output": 30 } },
+    "gpt-5.4": { "provider": "openai", "rates": { "input": 2.5, "cacheRead": 0.25, "output": 15 } }
+  }
+}

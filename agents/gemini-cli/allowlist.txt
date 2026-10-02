@@ -1,0 +1,6 @@
+# The files outside agents/gemini-cli/ that may name the gemini-cli harness, and exactly how many times
+# (CONTRIBUTING rule 14). None: this folder was added on 2026-10-02 only to declare where the harness
+# keeps its files (stores.json), so that Horde never writes there; nothing outside it names the
+# harness. When a mention must be added, add an entry here AND a line to growth.txt in this folder.
+#
+# path | mentions | why this file may name the harness
