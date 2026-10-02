@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "name": "harness-a",
+  "measured": { "cliVersion": "1.2.3", "on": "2026-10-02" },
+  "protocols": ["anthropic-messages"],
+  "nativeProvider": "provider-a",
+  "sessionIdPattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+  "ownedEnv": [
+    { "name": "PROVIDER_A_BASE_URL", "evidence": "the fixture harness reads its endpoint from it" },
+    { "name": "PROVIDER_A_TOKEN", "evidence": "the fixture harness reads its token from it" }
+  ],
+  "events": {
+    "session-started": { "hook": "Begin", "support": "yes", "evidence": "fixture: measured firing" },
+    "turn-started": { "hook": "Prompt", "support": "unverified", "evidence": "fixture: named in its help, never seen firing" },
+    "turn-ended": { "hook": "Halt", "support": "yes", "evidence": "fixture: measured firing" },
+    "session-ended": { "support": "no", "evidence": "fixture: its help lists no such hook" }
+  },
+  "capabilities": {
+    "message-inject": { "support": "unverified", "evidence": "fixture: a queue command exists, delivery unmeasured" },
+    "delivery-receipt": { "support": "unverified", "evidence": "fixture: not measured" },
+    "resume": { "support": "yes", "evidence": "fixture: --again <id> in its help" },
+    "report-hook": { "support": "yes", "evidence": "fixture: its hooks fire" },
+    "name-at-spawn": { "support": "no", "evidence": "fixture: its help lists no name flag" },
+    "model-select": { "support": "yes", "evidence": "fixture: --model in its help" },
+    "provider-select": { "support": "declined", "evidence": "fixture: Horde chooses not to use it" },
+    "session-id-preset": { "support": "yes", "evidence": "fixture: --id <uuid> in its help" },
+    "session.remoteName": { "support": "unverified", "evidence": "fixture: nobody has measured a remote view" }
+  }
+}
