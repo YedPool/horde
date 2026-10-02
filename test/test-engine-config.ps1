@@ -251,4 +251,7 @@ Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "directi
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "direction": "any"', '"value": { "kind": "model" }, "direction": "lower-only"'))) -like "*direction*enum*") "and a lower-only or raise-only direction on a key that is not an enum: there is no order"
 Check (@($reg | Where-Object { "" + $_.direction -cne "any" }).Count -eq 0 -and @($reg | Where-Object { $null -eq $_.direction }).Count -eq 0) "every binding key in the registry states its direction, any"
 
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "max": 3 }'))) -like "*model*max*") "the registry refuses a field it does not know inside value, too (review of PR #74, F3)"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "values": ["a"] }'))) -like "*model*values*") "and values on a kind that is not an enum"
+
 Complete-HordeSuite -Success "an engine configuration is refused for each listed finding, and the golden one for none"

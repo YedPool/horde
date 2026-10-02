@@ -169,6 +169,17 @@ $s = Get-Ceiling @((New-Layer "L1" (New-Doc @(New-Rule "owner-raise" @{} @{ "fix
 Check ($s.answer.value -ceq "bypass") "the owner's own layer may set it anywhere: direction binds only the layers above L1"
 $s = Get-HordeEngineSetting -Resolution (Resolve @((New-Layer "L4" (New-Doc @(New-Rule "alone" @{} @{ "fixture.ceiling" = "edits" } "cli")))) -Registry $regD) -Key "fixture.ceiling"
 Check ($s.answer.state -ne "known" -and @($s.refused | Where-Object { $_.rule -ceq "alone" -and $_.why -like "*nothing below*" }).Count -eq 1) "with no owner's value to lower from, a higher layer's value is refused, never taken as the base"
+# REVIEW OF PR #74 (HIGH): only the most specific rule of a layer was checked, so when it was refused a
+# less specific rule of the same layer that raised just as far won instead. Every rule is checked
+# before specificity chooses among the ones left.
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "raise-goblins" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "raise-all" @{} @{ "fixture.ceiling" = "bypass" } "cli")))))
+Check ($s.answer.value -ceq "ask" -and @($s.refused | ForEach-Object { $_.rule } | Sort-Object) -join "," -ceq "raise-all,raise-goblins") "the reviewer's case in L4: a specific and a general rule both raising to bypass are both refused, and ask stands"
+$s = Get-Ceiling @($own, (New-Layer "L5" (New-Doc @((New-Rule "spawn-goblins" @{ role = "goblin" } @{ "fixture.ceiling" = "edits" }), (New-Rule "spawn-all" @{} @{ "fixture.ceiling" = "edits" })))))
+Check ($s.answer.value -ceq "ask" -and @($s.refused).Count -eq 2) "the reviewer's case in L5: both rules raising to edits are refused"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-edits" @{} @{ "fixture.ceiling" = "edits" } "cli")))))
+Check ($s.answer.value -ceq "ask" -and @($s.refused).Count -eq 2) "a layer whose two rules both raise, to different values, gives neither"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-plan" @{} @{ "fixture.ceiling" = "plan" } "cli")))))
+Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "to-bypass" }).Count -eq 1) "a layer where the specific rule raises and a less specific one lowers gives the lowered value"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "lower-floor" @{} @{ "fixture.floor" = "low" } "cli")))) "fixture.floor"
 Check ($s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "lower-floor" -and $_.why -like "*raise-only*" }).Count -eq 1) "a raise-only key cannot be lowered from a layer above the owner's"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "raise-floor" @{} @{ "fixture.floor" = "high" } "cli")))) "fixture.floor"
