@@ -232,6 +232,15 @@ never added or raised, and no growth line changes that. A name that is a `proces
 `origin/main` stays one. What a text scan cannot see - an image assembled at run time, a looser
 pattern - is written in the header of `tools/HostNames.ps1`.
 
+**One host may import another's command language, and nothing else of it** (hosts plan step 5). Two
+multiplexers that speak one language share it from the first one's folder, as `Dialect.ps1`. An
+entry `<path> | import | <reason>` in the first host's `allowlist.txt` lets a file in the second
+host's folder name the first exactly once, in the line that dot-sources that `Dialect.ps1`. Inside
+another port's folder that is the only way in: any other mention there fails, except in that port's
+own list files, which name other ports' files by path. The dialect hands out its environment
+variables as data (`Get-HordeMuxDialectEnvNames`), so the importer never spells them. A new import
+entry is growth like any other and needs its line in `growth.txt`.
+
 `test/test-host-names.ps1` enforces it. Each host lists what identifies it in
 `hosts/<name>/names.txt`, and every file elsewhere that still names it in
 `hosts/<name>/allowlist.txt`, with a reason and its exact number of mentions. The list may only

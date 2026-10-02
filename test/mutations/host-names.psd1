@@ -289,5 +289,45 @@
         @{ Name = "kind-demotion-accepted"
            Find = 'if ($oldKinds[$k] -ceq "processImage" -and $newKinds.ContainsKey($k) -and $newKinds[$k] -cne "processImage") {'
            Replace = 'if ($false) {' }
+        # --- the one cross-host import (hosts plan step 5)
+        @{ Name = "import-of-any-file"
+           Find = "'[\\/]' + [regex]::Escape(`$script:HordeDialectFile) + '`$'"
+           Replace = "'[\\/]'" }
+        @{ Name = "import-path-unanchored"
+           Find = "[regex]::Escape(`$script:HordeDialectFile) + '`$'"
+           Replace = "[regex]::Escape(`$script:HordeDialectFile)" }
+        @{ Name = "import-not-dot-sourced"
+           Find = "`$line = '^\s*\.\s+(?:'"
+           Replace = "`$line = '^\s*[.&]\s+(?:'" }
+        @{ Name = "import-through-a-loader"
+           Find = "'|\(\s*Join-Path\s+\`$[A-Za-z_][A-Za-z0-9_:]*\s+'"
+           Replace = "'|\(\s*[A-Za-z-]+\s+(?:\S+\s+)?'" }
+        @{ Name = "import-line-unchecked"
+           Find = 'elseif ($a.import -and -not (Test-HordeDialectImport'
+           Replace = 'elseif ($false -and -not (Test-HordeDialectImport' }
+        @{ Name = "import-line-mention-unchecked"
+           Find = 'if ((Get-HordeMentionSpans -Text $text -Names $Names).Count -ge 1) { return $true }'
+           Replace = 'return $true' }
+        @{ Name = "import-from-any-family"
+           Find = 'if (-not $otherPort -or -not $otherPort.StartsWith($fam + "/")) {'
+           Replace = 'if (-not $otherPort) {' }
+        @{ Name = "import-from-anywhere"
+           Find = 'if (-not $otherPort -or -not $otherPort.StartsWith($fam + "/")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "import-without-dialect"
+           Find = 'if (-not (Test-Path -LiteralPath (Join-Path $h.FullName $script:HordeDialectFile) -PathType Leaf)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "import-word-matched-without-case"
+           Find = '$isImport = ($r.cells[1] -ceq $script:HordeImportCount)'
+           Replace = '$isImport = ($r.cells[1] -eq $script:HordeImportCount)' }
+        @{ Name = "numbered-entry-in-other-port-allowed"
+           Find = '} elseif ($otherPort -and -not (Test-HordePortListFile -Rel $p)) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "list-files-not-exempt"
+           Find = 'return ($script:HordePortListFiles -contains $rest)'
+           Replace = 'return $false' }
+        @{ Name = "shrink-import-invisible"
+           Find = 'if ($r.cells[1] -ceq $script:HordeImportCount) { $c = 1 }'
+           Replace = 'if ($false) { $c = 1 }' }
     )
 }

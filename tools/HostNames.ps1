@@ -26,6 +26,7 @@
 #   names.txt, one per line:      <name> | <why it identifies this host>
 #                             or: <name> | <kind> | <why it identifies this host>
 #   allowlist.txt, one per line:  <path> | <mentions> | <why this file may name the host>
+#                             or: <path> | import | <why> (THE ONE CROSS-HOST IMPORT, below)
 #   growth.txt, one per line:     <path> | <old> -> <new> | <YYYY-MM-DD> | <why the list must grow>
 #   Blank lines and lines beginning with # are ignored in all three.
 #
@@ -56,6 +57,19 @@
 # WHAT A TEXT SCAN CANNOT SEE, so a pass is not read as more: an image built from pieces ('x' + '.exe',
 # "$name.exe"), a looser pattern ("x.\.exe", "x.*"), and the harness's process name without its
 # extension, which is the harness's name and so the ratchet's to count, not this rule's (A4, A5).
+#
+# THE ONE CROSS-HOST IMPORT (hosts plan step 5; hosts decision 3 of 2026-09-30). Two multiplexers
+# share one command language, which lives in the first one's folder as Dialect.ps1; the second
+# imports it rather than copying it. Other ports' folders are scanned, so without a rule of its own
+# every importing file would be a leak. An allowlist entry whose count is the word import lets a file
+# in ANOTHER port's folder OF THE SAME FAMILY name this port exactly once, and only in a line that
+# dot-sources this port's Dialect.ps1; the port must have that file. The dialect hands out what an
+# importer would otherwise spell - its environment variables, which contain the host's name and so
+# collide with the substring match - as data (Get-HordeMuxDialectEnvNames), so nothing else in the
+# importer needs to name the host. Inside another port's folder an import is the ONLY way in: a
+# numbered entry there is refused, except for that port's own list files (names.txt, allowlist.txt,
+# growth.txt), which name other ports' files by path (8 such entries on 2026-10-02). For the
+# origin/main comparison an import entry counts 1, so adding one is growth like any other entry.
 #
 # WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
@@ -134,6 +148,11 @@ $script:HordeHostNamesProseFolder = "planning"
 $script:HordePortFamilies = @("hosts", "agents")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
+# The cross-host import (header, THE ONE CROSS-HOST IMPORT): the count cell that marks it, matched
+# exactly, the one file it may dot-source, and the list files of a port that may name other ports.
+$script:HordeImportCount = "import"
+$script:HordeDialectFile = "Dialect.ps1"
+$script:HordePortListFiles = @("names.txt", "allowlist.txt", "growth.txt")
 # The closed list of kinds a name line may give (header, KINDS OF NAME). Matched exactly.
 $script:HordePortNameKinds = @("name", "processImage", "path")
 # The image rule's exemptions (header, CORE MATCHES NO PROCESS IMAGE). Folders skipped besides every
@@ -221,7 +240,9 @@ function Get-HordeAllowMap {
     foreach ($r in (Split-HordeHostTable -Text $Text)) {
         if ($r.cells.Count -ne 3) { continue }
         $c = 0
-        if (-not [int]::TryParse($r.cells[1], [ref]$c)) { continue }
+        # An import entry allows one mention, so it is compared as a count of 1 (header).
+        if ($r.cells[1] -ceq $script:HordeImportCount) { $c = 1 }
+        elseif (-not [int]::TryParse($r.cells[1], [ref]$c)) { continue }
         $p = ConvertTo-HordeAllowPath $r.cells[0]
         $map[$p.ToLowerInvariant()] = [pscustomobject]@{ path = $p; count = $c }
     }
@@ -384,6 +405,49 @@ function Get-HordeDistinctWordCount {
     return @(@("$Text" -split '\s+' | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) | Sort-Object -Unique).Count
 }
 
+function Get-HordePortFolderOf {
+    # The port folder ("hosts/<name>" or "agents/<name>") a forward-slash relative path lies in, or ""
+    # when it lies in none.
+    param([string]$Rel)
+    foreach ($fam in $script:HordePortFamilies) {
+        if ($Rel -match ('^(' + [regex]::Escape($fam) + '/[^/]+)/')) { return $Matches[1] }
+    }
+    return ""
+}
+
+function Test-HordePortListFile {
+    # Is the path one of a port's own list files - names.txt, allowlist.txt or growth.txt directly in
+    # its folder? Those name other ports' files by path, and a numbered entry for one stays allowed.
+    param([string]$Rel)
+    $port = Get-HordePortFolderOf -Rel $Rel
+    if (-not $port) { return $false }
+    $rest = $Rel.Substring($port.Length + 1)
+    return ($script:HordePortListFiles -contains $rest)
+}
+
+function Test-HordeDialectImport {
+    # Does the file have a line that dot-sources <Folder>/Dialect.ps1 and holds a mention of the port?
+    # The caller has already seen the file name the port exactly once, so the one mention is that line.
+    # THE WHOLE LINE IS THE IMPORT (review of PR #58, B1 and B2): "." and a space, then the dialect's
+    # path as the one thing dot-sourced - a quoted path, or (Join-Path <variable> <quoted path>) - and
+    # nothing after it but an optional comment. The path ends at Dialect.ps1, so a longer file name is
+    # another file; and a path handed to a loader, or passed as an argument to another dot-sourced
+    # file, is refused, because the loader could open any file of the host. A comment, an & call or a
+    # string that merely names the file is not an import either.
+    param([string]$Full, [string]$Folder, [string[]]$Names)
+    $quoted = '(?:"(?<p>[^"]*)"|''(?<p>[^'']*)'')'
+    $line = '^\s*\.\s+(?:' + $quoted + '|\(\s*Join-Path\s+\$[A-Za-z_][A-Za-z0-9_:]*\s+' + $quoted + '\s*\))\s*(?:#.*)?$'
+    $path = '(?:^|[\\/])' + [regex]::Escape($Folder) + '[\\/]' + [regex]::Escape($script:HordeDialectFile) + '$'
+    $ic = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    foreach ($text in ([System.IO.File]::ReadAllText($Full) -split "`n")) {
+        $m = [regex]::Match($text.TrimEnd("`r"), $line, $ic)
+        if (-not $m.Success) { continue }
+        if (-not [regex]::IsMatch($m.Groups["p"].Value, $path, $ic)) { continue }
+        if ((Get-HordeMentionSpans -Text $text -Names $Names).Count -ge 1) { return $true }
+    }
+    return $false
+}
+
 function Test-HordeUnderFolder {
     # Is the forward-slash relative path inside one of the folders? Compared ignoring case, because
     # the filesystem does.
@@ -511,6 +575,7 @@ function Test-HordeHostNames {
     foreach ($port in $hostDirs) {
         $h = $port.dir
         $own = $port.own
+        $fam = $own.Split("/")[0]
         $hn = $own
         $namesPath = Join-Path $h.FullName "names.txt"
         # A HOST THAT DECLARES NO NAMES CANNOT BE POLICED, so it is a finding, not a pass.
@@ -534,14 +599,24 @@ function Test-HordeHostNames {
                 $where = $own + "/allowlist.txt:" + $r.line
                 if ($r.cells.Count -ne 3) { Add-Finding $hn $where "an allowlist line is <path> | <mentions> | <why this file may name the host>"; continue }
                 $p = ConvertTo-HordeAllowPath $r.cells[0]
-                $allowCount = 0
-                if (-not [int]::TryParse($r.cells[1], [ref]$allowCount) -or $allowCount -lt 1) { Add-Finding $hn $where ("the mention count for " + $p + " must be a whole number of at least 1"); continue }
+                $isImport = ($r.cells[1] -ceq $script:HordeImportCount)
+                $allowCount = 1
+                if (-not $isImport -and (-not [int]::TryParse($r.cells[1], [ref]$allowCount) -or $allowCount -lt 1)) { Add-Finding $hn $where ("the mention count for " + $p + " must be a whole number of at least 1, or the word " + $script:HordeImportCount); continue }
                 if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { Add-Finding $hn $where ($p + " needs a reason of at least a sentence"); continue }
                 $key = $p.ToLowerInvariant()
                 if ($allowed.ContainsKey($key)) { Add-Finding $hn $where ($p + " is listed twice"); continue }
                 # AN ENTRY FOR A PATH THE SCAN NEVER READS allows nothing, and would sit there forever.
                 if ((Test-HordeUnderFolder -Rel $p -Folders $skip) -or (Test-HordePlanningProse -Rel $p)) { Add-Finding $hn $where ($p + " is excluded from the scan by rule, so the entry is not needed"); continue }
-                $allowed[$key] = [pscustomobject]@{ path = $p; count = $allowCount }
+                # THE ONE CROSS-HOST IMPORT (header): only from another port of this family, only of a
+                # Dialect.ps1 that exists; and inside another port's folder, the only way in.
+                $otherPort = Get-HordePortFolderOf -Rel $p
+                if ($isImport) {
+                    if (-not $otherPort -or -not $otherPort.StartsWith($fam + "/")) { Add-Finding $hn $where ($p + " is not in another " + $fam + " port's folder - only another " + $fam + " port imports this port's " + $script:HordeDialectFile); continue }
+                    if (-not (Test-Path -LiteralPath (Join-Path $h.FullName $script:HordeDialectFile) -PathType Leaf)) { Add-Finding $hn $where ($own + "/" + $script:HordeDialectFile + " does not exist, so " + $p + " has nothing to import"); continue }
+                } elseif ($otherPort -and -not (Test-HordePortListFile -Rel $p)) {
+                    Add-Finding $hn $where ($p + " is in another port's folder, which may name this port only through an import of its " + $script:HordeDialectFile + ": " + $p + " | " + $script:HordeImportCount + " | <why>"); continue
+                }
+                $allowed[$key] = [pscustomobject]@{ path = $p; count = $allowCount; import = $isImport }
             }
         }
 
@@ -555,6 +630,7 @@ function Test-HordeHostNames {
             if (-not $a) { Add-Finding $hn $f.rel ("has " + $c + " mention(s) of the host and is not in " + $own + "/allowlist.txt"); continue }
             if ($c -gt $a.count) { Add-Finding $hn $f.rel ("has " + $c + " mention(s); the allowlist allows " + $a.count + " - a new mention") }
             elseif ($c -lt $a.count) { Add-Finding $hn $f.rel ("has only " + $c + " mention(s); the allowlist allows " + $a.count + " - lower it to " + $c) }
+            elseif ($a.import -and -not (Test-HordeDialectImport -Full $f.full -Folder $h.Name -Names $names)) { Add-Finding $hn $f.rel ("names the host once, but not in a line that dot-sources " + $own + "/" + $script:HordeDialectFile + " - an import entry allows that line and nothing else") }
         }
         # LISTED, BUT NAMING THE HOST NOWHERE, OR NOT THERE AT ALL: the entry allows what nothing needs.
         foreach ($k in @($allowed.Keys)) {
