@@ -63,6 +63,8 @@ $unpriced = Get-HordeCallCost -Table $table -Call (New-TestCall -Model "model-z"
 Check ($unpriced.state -eq "unknown" -and $unpriced.reason -like "*no price for model 'model-z'*" -and $unpriced.reason -like "*test.1*") "a model the table does not price is unknown, naming the model and the table version"
 $noWriteRate = Get-HordeCallCost -Table $table -Call (New-TestCall -Model "model-b" -Write 10)
 Check ($noWriteRate.state -eq "unknown" -and $noWriteRate.reason -like "*prices only by lifetime*") "cache writes on a model with no cache-write rate are unknown, never free"
+$noOutRate = Get-HordeCallCost -Table $table -Call (New-TestCall -Model "model-c" -In 10 -Out 10 -Read 5)
+Check ($noOutRate.state -eq "unknown" -and $noOutRate.reason -like "*no 'cacheRead' rate*") "tokens in a class the table gives no rate for are unknown, never free"
 $zeroWrites = Get-HordeCallCost -Table $table -Call (New-TestCall -Model "model-b" -In 1000000)
 Check ($zeroWrites.value -eq 5) "CONTROL: a missing rate does not matter when that class has no tokens"
 $flat = Get-HordeCallCost -Table $table -Call (New-TestCall -Model "model-c" -Write 1000000)
