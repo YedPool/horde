@@ -31,6 +31,8 @@ function Get-SpecProblems {
         $s = Import-PowerShellDataFile -LiteralPath $f.FullName
         $target = Join-Path $rootFull "$($s.Target)"
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { [void]$out.Add($rel + ": its target " + $s.Target + " does not exist"); continue }
+        $suitePath = Join-Path $rootFull "$($s.Suite)"
+        if ("$($s.Suite)" -match "[\x00-\x1F]" -or -not (Test-Path -LiteralPath $suitePath -PathType Leaf)) { [void]$out.Add($rel + ": its suite " + ("$($s.Suite)" -replace "[\x00-\x1F]", "?") + " does not exist") }
         $text = [System.IO.File]::ReadAllText($target)
         foreach ($m in @($s.Mutations)) {
             # tools\Mutate.ps1 refuses a find that spans lines, since line endings differ by checkout;
