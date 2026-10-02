@@ -200,13 +200,16 @@ function Resolve-HordeEngine {
         $refused = @()
         $pick = Select-HordeWinner -List $mine
         $raiseOnly = ("" + (Get-HordeAgentProp $entry "tuner")) -ceq "raise-only"
-        if ($raiseOnly -and $pick.top.Count -gt 0 -and @($pick.top | Where-Object { $_.by -ceq "tuner" }).Count -gt 0) {
+        # EVERY tuner rule is checked, not only the winning one: a refused winner must not let a less
+        # specific tuner rule that lowers just as far through (the same hole as the review of PR #74
+        # found in direction).
+        if ($raiseOnly -and @($mine | Where-Object { $_.by -ceq "tuner" }).Count -gt 0) {
             $values = @(Get-HordeConfigItems $entry.value "values")
             $without = Select-HordeWinner -List @($mine | Where-Object { $_.by -cne "tuner" })
             $agreed = @($without.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
             if ($agreed.Count -eq 1) {
                 $floor = [array]::IndexOf($values, $agreed[0])
-                $low = @($pick.top | Where-Object { $_.by -ceq "tuner" -and [array]::IndexOf($values, ("" + $_.value)) -lt $floor })
+                $low = @($mine | Where-Object { $_.by -ceq "tuner" -and [array]::IndexOf($values, ("" + $_.value)) -lt $floor })
                 if ($low.Count -gt 0) {
                     foreach ($c in $low) { $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = "refused: a tuner may only raise this setting, and " + $c.value + " is below " + $agreed[0] } }
                     $mine = @($mine | Where-Object { $low -notcontains $_ })
@@ -227,22 +230,32 @@ function Resolve-HordeEngine {
             $baseVals = @($basePick.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
             if ($baseVals.Count -eq 1) { $current = $baseVals[0] }
             foreach ($rk in @(3, 4, 5)) {
+                # EVERY RULE OF THE LAYER IS CHECKED before specificity chooses (review of PR #74, HIGH):
+                # checking only the most specific one let a less specific rule that raised just as far
+                # win once the first was refused.
                 $inLayer = @($mine | Where-Object { $_.rank -eq $rk })
                 if ($inLayer.Count -eq 0) { continue }
-                $lp = Select-HordeWinner -List $inLayer
-                $lv = @($lp.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
-                if ($lv.Count -ne 1) { continue }
-                $why = $null
-                if ($null -eq $current) { $why = "refused: " + $key + " is " + $dir + " above the owner's layers, and there is nothing below to move from" }
-                else {
-                    $iNew = [array]::IndexOf($values, $lv[0]); $iCur = [array]::IndexOf($values, $current)
-                    if ($dir -ceq "lower-only" -and $iNew -gt $iCur) { $why = "refused: " + $key + " is lower-only above the owner's layers, and " + $lv[0] + " is above " + $current }
-                    if ($dir -ceq "raise-only" -and $iNew -lt $iCur) { $why = "refused: " + $key + " is raise-only above the owner's layers, and " + $lv[0] + " is below " + $current }
+                foreach ($c in $inLayer) {
+                    $why = $null
+                    if ($null -eq $current) { $why = "refused: " + $key + " is " + $dir + " above the owner's layers, and there is nothing below to move from" }
+                    else {
+                        $iNew = [array]::IndexOf($values, ("" + $c.value)); $iCur = [array]::IndexOf($values, $current)
+                        if ($dir -ceq "lower-only" -and $iNew -gt $iCur) { $why = "refused: " + $key + " is lower-only above the owner's layers, and " + $c.value + " is above " + $current }
+                        if ($dir -ceq "raise-only" -and $iNew -lt $iCur) { $why = "refused: " + $key + " is raise-only above the owner's layers, and " + $c.value + " is below " + $current }
+                    }
+                    if ($null -ne $why) {
+                        $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = $why }
+                        $mine = @($mine | Where-Object { $_ -ne $c })
+                    }
                 }
-                if ($null -ne $why) {
-                    foreach ($c in $lp.top) { $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = $why } }
-                    $mine = @($mine | Where-Object { $lp.top -notcontains $_ })
-                } else { $current = $lv[0] }
+                $kept = @($mine | Where-Object { $_.rank -eq $rk })
+                if ($kept.Count -eq 0) { continue }
+                $lp = Select-HordeWinner -List $kept
+                $lv = @($lp.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
+                # A tie that survives is unknown in the end; until then the next layer is held to the
+                # strictest of the tied values, never the most permissive.
+                $idx = @($lv | ForEach-Object { [array]::IndexOf($values, $_) } | Sort-Object)
+                if ($dir -ceq "lower-only") { $current = $values[$idx[0]] } else { $current = $values[$idx[$idx.Count - 1]] }
             }
             $pick = Select-HordeWinner -List $mine
         }

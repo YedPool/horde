@@ -150,6 +150,9 @@ Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $lower))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.state -eq "known" -and $s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "tuned" -and $_.why -like "*only raise*" }).Count -eq 1) "one that lowers it is refused, recorded as refused, and the value below stands"
 Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $byCli))) -Registry $reg) "fixture.reserve") -ceq "low") "CONTROL: a person's live rule may lower it"
+$twoLow = New-Doc @((New-Rule "tuned-goblins" @{ role = "goblin" } @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"), (New-Rule "tuned-all" @{} @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"))
+$s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $twoLow))) -Registry $reg) -Key "fixture.reserve"
+Check ($s.answer.value -ceq "mid" -and @($s.refused).Count -eq 2) "every tuner rule that lowers is refused, not only the most specific - a general one does not get through behind it"
 
 Write-Host ""
 Write-Host "--- a key's direction: what a layer above the owner's may do to its value (review of PR #73, F3) ---" -ForegroundColor Cyan
@@ -180,6 +183,9 @@ $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ rol
 Check ($s.answer.value -ceq "ask" -and @($s.refused).Count -eq 2) "a layer whose two rules both raise, to different values, gives neither"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @((New-Rule "to-bypass" @{ role = "goblin" } @{ "fixture.ceiling" = "bypass" } "cli"), (New-Rule "to-plan" @{} @{ "fixture.ceiling" = "plan" } "cli")))))
 Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "to-bypass" }).Count -eq 1) "a layer where the specific rule raises and a less specific one lowers gives the lowered value"
+$tieSpec = New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "goblin" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-edits" @{ role = "goblin" } @{ "fixture.ceiling" = "edits" })))
+$s = Get-Ceiling @($ownHigh, $tieSpec, (New-Layer "L5" (New-Doc @(New-Rule "after-tie" @{} @{ "fixture.ceiling" = "edits" }))))
+Check (@($s.refused | Where-Object { $_.rule -ceq "after-tie" }).Count -eq 1) "after a tie in a lower layer, the next layer is held to the strictest of the tied values, never the most permissive"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "lower-floor" @{} @{ "fixture.floor" = "low" } "cli")))) "fixture.floor"
 Check ($s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "lower-floor" -and $_.why -like "*raise-only*" }).Count -eq 1) "a raise-only key cannot be lowered from a layer above the owner's"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "raise-floor" @{} @{ "fixture.floor" = "high" } "cli")))) "fixture.floor"
