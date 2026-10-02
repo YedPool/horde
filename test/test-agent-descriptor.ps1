@@ -155,22 +155,22 @@ Test-Rejected "a measurement date that is not a date" { param($d) $d.measured.on
 Test-Rejected "no record of which version was measured" { param($d) Remove-Prop $d "measured" } "measured"
 $dupText = $goldenText.Replace('"nativeProvider": "provider-a",', '"nativeProvider": "provider-a", "nativeProvider": "provider-b",')
 Check ($dupText -ne $goldenText -and (Get-Refusal -Text $dupText) -like "*twice*") "refused: a key repeated in one object, where only the last would be read"
-# TWO SCANS SHARE THE NAME Find-HordeJsonDuplicateKey (core/Ownership.ps1: every finding as text;
-# core/PermissionLevels.ps1: the first repeated key, or $null), and the one dot-sourced last wins. The
-# refusal must not depend on which, so it is checked with each loaded last, and the control proves the
-# other one really was the one answering.
-. (Join-Path $root "core\PermissionLevels.ps1")
-$r0Answer = @(Find-HordeJsonDuplicateKey -Text $dupText)
-Check ($r0Answer.Count -eq 1 -and "$($r0Answer[0])" -ceq "nativeProvider") "CONTROL: with the permission-level scan loaded last, the scan answers with the bare repeated key"
-Check ((Get-Refusal -Text $dupText) -like "*twice*nativeProvider*") "refused all the same with that scan answering"
-Check ((Get-Refusal -Text $goldenText) -eq "") "CONTROL: and the golden descriptor still loads with that scan answering"
+# ONE SCANNER (PR #65). Find-HordeJsonDuplicateKey is defined once, in core/JsonText.ps1, and the two
+# files that used to define their own now load that one. So whichever of them a caller loads last,
+# the scanner answering is the shared one, and the refusal reports every repeated key (review r60, F5).
+$jsonText = [System.IO.Path]::GetFullPath((Join-Path $root "core\JsonText.ps1"))
+function Get-ScannerFile { return [System.IO.Path]::GetFullPath("" + (Get-Command -Name Find-HordeJsonDuplicateKey -CommandType Function).ScriptBlock.File) }
+$defs = @(Get-ChildItem -LiteralPath (Join-Path $root "core") -Filter *.ps1 | Where-Object { [System.IO.File]::ReadAllText($_.FullName) -match '(?m)^\s*function\s+Find-HordeJsonDuplicateKey\b' })
+Check ($defs.Count -eq 1 -and [System.IO.Path]::GetFullPath($defs[0].FullName) -ieq $jsonText) ("exactly one file in core defines the duplicate-key scanner, core/JsonText.ps1 (found: " + (@($defs | ForEach-Object { $_.Name }) -join ", ") + ")")
 $dup2 = $dupText.Replace('"schemaVersion": 1,', '"schemaVersion": 1, "schemaVersion": 1,')
-$why2 = Get-Refusal -Text $dup2
-Check ($dup2 -ne $dupText -and $why2 -like "*nativeProvider*" -and $why2 -like "*schemaVersion*") "with that scan loaded last, BOTH repeated keys are still reported, not just the first (review r60, F5)"
-. (Join-Path $root "core\Ownership.ps1")
-$ownAnswer = @(Find-HordeJsonDuplicateKey -Text $dupText)
-Check ($ownAnswer.Count -eq 1 -and "$($ownAnswer[0])" -like "*appears more than once*") "CONTROL: with the ownership scan loaded last, the scan answers with a finding sentence"
-Check ((Get-Refusal -Text $dupText) -like "*twice*nativeProvider*") "refused all the same with that scan answering"
+foreach ($order in @(@("PermissionLevels", "Ownership"), @("Ownership", "PermissionLevels"))) {
+    foreach ($f in $order) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+    $label = $order[1] + " loaded last"
+    Check ((Get-ScannerFile) -ieq $jsonText) ("with " + $label + ", the scanner answering is still core/JsonText.ps1's")
+    $why2 = Get-Refusal -Text $dup2
+    Check ($dup2 -ne $dupText -and $why2 -like "*twice*nativeProvider*" -and $why2 -like "*schemaVersion*") ("with " + $label + ", a descriptor with two repeated keys is refused naming both")
+    Check ((Get-Refusal -Text $goldenText) -eq "") ("CONTROL: with " + $label + ", the golden descriptor still loads")
+}
 $why = Get-Refusal -Text "{ not json"
 Check ($why -ne "") "refused: text that is not JSON"
 

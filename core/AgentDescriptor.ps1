@@ -43,17 +43,12 @@
 . (Join-Path $PSScriptRoot "HostPort.ps1")
 . (Join-Path $PSScriptRoot "PermissionLevels.ps1")
 
-# THE DUPLICATE-KEY SCAN IS HELD, NOT LOOKED UP BY NAME. Two functions are named
-# Find-HordeJsonDuplicateKey as of 2026-10-02: core/Ownership.ps1's returns every finding, and
-# core/PermissionLevels.ps1's only the first repeated key. Whichever is dot-sourced last wins,
-# silently, so a lookup by name made how many repeats a refusal reports depend on load order (review
-# of PR #60, F5: 2 findings one way, 1 the other). Ownership's is loaded here in a child scope and its
-# script block kept: every repeat is reported whatever the caller loads, and neither its strict-mode
-# setting nor its function name reaches this file's caller. Its answer is still read without assuming
-# its shape (Get-HordeJsonDuplicateKeyProblems). A shared scanner is to replace both (coordinator,
-# 2026-10-02); when it lands, this line is the one to change.
-$hordeAgentCoreDir = $PSScriptRoot
-$script:HordeAgentDuplicateKeyScan = & { . (Join-Path $hordeAgentCoreDir "Ownership.ps1"); ${function:Find-HordeJsonDuplicateKey} }
+# THE ONE DUPLICATE-KEY SCANNER is core/JsonText.ps1's Find-HordeJsonDuplicateKey (PR #65). Until it
+# merged, core/Ownership.ps1 and core/PermissionLevels.ps1 each defined a scanner under that name, and
+# whichever loaded last answered (review of PR #60, F5); test/test-function-names.ps1 now fails on any
+# name defined twice. Its answer is still read without assuming its shape
+# (Get-HordeJsonDuplicateKeyProblems).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 
 $script:HordeAgentCapabilityStates = @("yes", "no", "declined", "unverified")
 $script:HordeCapabilityPorts = @("agent", "host", "either")
@@ -91,7 +86,7 @@ function Get-HordeJsonDuplicateKeyProblems {
     # name shares: something non-null comes back for a repeat, and nothing when there is none. Each
     # non-null item is a refusal, whatever its type or text.
     param([string]$Text)
-    return @(@(& $script:HordeAgentDuplicateKeyScan -Text $Text) | Where-Object { $null -ne $_ } | ForEach-Object { "a key appears twice in one object, and only the last would be read: " + $_ })
+    return @(@(Find-HordeJsonDuplicateKey -Text $Text) | Where-Object { $null -ne $_ } | ForEach-Object { "a key appears twice in one object, and only the last would be read: " + $_ })
 }
 
 function Read-HordeCapabilityVocabularyText {
