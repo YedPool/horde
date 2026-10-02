@@ -82,6 +82,26 @@ try {
     Check ($h1 -eq (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash) "reading a transcript leaves it byte for byte as it was"
 
     Write-Host ""
+    Write-Host "--- a second read sees exactly what the first saw (plan step M2) ---" -ForegroundColor Cyan
+    # An adapter that reads twice reads a file that is still being appended to; the second read must
+    # describe the same file as the first.
+    $grow = Join-Path $work "grow.jsonl"
+    [System.IO.File]::WriteAllText($grow, "{""a"":1}`n{""b"":2}`n{""c"":")
+    $r1 = Read-HordeJsonLines -Path $grow
+    Check ($r1.lineCount -eq 3 -and $r1.lastBad -and $r1.lastTorn -and $r1.tornTail -eq 1) "the first read counts three lines, the last torn"
+    [System.IO.File]::AppendAllText($grow, "3}`n{""d"":4}`n")
+    $r2 = Read-HordeJsonLines -Path $grow -Upto $r1
+    Check (@($r2.lines).Count -eq 2 -and $r2.tornTail -eq 1 -and $r2.parseSkipped -eq 0 -and $r2.lineCount -eq 3) "the second read stops where the first did, and the line that was torn stays torn though it is whole now"
+    Check (@((Read-HordeJsonLines -Path $grow).lines).Count -eq 4) "CONTROL: a fresh read sees the completed line and the one after it"
+    [System.IO.File]::WriteAllText($grow, "{""a"":1}`n")
+    Check (Throws { Read-HordeJsonLines -Path $grow -Upto $r1 } "shorter") "a file that became shorter between the reads was rewritten, and the second read refuses it"
+    $ctl = @{ stop = $false }
+    [System.IO.File]::WriteAllText($grow, "{""a"":1}`n{""b"":2}`n{""c"":3}`n")
+    $seenLines = New-Object System.Collections.ArrayList
+    $rs = Read-HordeJsonLines -Path $grow -Control $ctl -Each { param($ln, $v) [void]$seenLines.Add($ln); if ($ln -eq 2) { $ctl.stop = $true } }
+    Check ($rs.stopped -and $seenLines.Count -eq 2 -and -not $rs.lastBad) "a reader told to stop stops after that line, and says it stopped"
+
+    Write-Host ""
     Write-Host "--- the json path helper ---" -ForegroundColor Cyan
     $parsed = @(Read-HordeJsonLines -Path $live)[0].lines[0].value
     Check ((Get-HordeJsonPath $parsed "a") -eq 1) "a top-level key is read"
