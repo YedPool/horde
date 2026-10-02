@@ -6,17 +6,24 @@
     Mutations = @(
         # --- what counts as a mention
         @{ Name = "mentions-matched-with-case"
-           Find = '$at = $text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)'
-           Replace = '$at = $text.IndexOf($nm, [System.StringComparison]::Ordinal)' }
+           Find = '$at = $Text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = $Text.IndexOf($nm, [System.StringComparison]::Ordinal)' }
         @{ Name = "path-not-checked"
            Find = 'foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }'
            Replace = '' }
         @{ Name = "one-mention-per-name"
-           Find = '$at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
+           Find = '$at = $Text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
            Replace = '$at = -1' }
         @{ Name = "lines-counted-not-mentions"
-           Find = '$at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
-           Replace = '$at = $text.IndexOf("`n", $at); if ($at -ge 0) { $at = $text.IndexOf($nm, $at, [System.StringComparison]::OrdinalIgnoreCase) }' }
+           Find = '$at = $Text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = $Text.IndexOf("`n", $at); if ($at -ge 0) { $at = $Text.IndexOf($nm, $at, [System.StringComparison]::OrdinalIgnoreCase) }' }
+        # --- one place in the text, one mention (lifecycle plan step 5)
+        @{ Name = "overlapping-names-counted-twice"
+           Find = 'if ($s.start -lt $taken) { continue }'
+           Replace = '' }
+        @{ Name = "shortest-name-taken-first"
+           Find = '@{ Expression = { $_.end }; Descending = $true }'
+           Replace = '@{ Expression = { $_.end }; Ascending = $true }' }
         @{ Name = "comment-lines-read-as-data"
            Find = 'if ($t -eq "" -or $t.StartsWith("#")) { continue }'
            Replace = 'if ($t -eq "") { continue }' }
@@ -187,10 +194,60 @@
            Find = '$script:HordeHostNameMinLength = 4'
            Replace = '$script:HordeHostNameMinLength = 1' }
         @{ Name = "name-reason-unchecked"
-           Find = 'if ((Get-HordeDistinctWordCount $r.cells[1]) -lt 4) {'
+           Find = 'if ((Get-HordeDistinctWordCount $out.why) -lt 4) {'
            Replace = 'if ($false) {' }
         @{ Name = "name-shape-unchecked"
-           Find = 'if ($r.cells.Count -ne 2) {'
+           Find = 'else { $out.problem = "a name line is <name> | <why it identifies this host>, or <name> | <kind> | <why>"; return $out }'
+           Replace = 'else { $out.name = $Row.cells[0]; $out.why = "a reason long enough to pass" }' }
+        # --- kinds of name (lifecycle plan step 5)
+        @{ Name = "four-part-line-accepted"
+           Find = 'elseif ($Row.cells.Count -eq 3) {'
+           Replace = 'elseif ($Row.cells.Count -ge 3) {' }
+        @{ Name = "kind-line-refused"
+           Find = 'elseif ($Row.cells.Count -eq 3) { $out.name = $Row.cells[0]; $out.kind = $Row.cells[1]; $out.why = $Row.cells[2] }'
+           Replace = '' }
+        @{ Name = "kind-unchecked"
+           Find = 'if ($script:HordePortNameKinds -cnotcontains $out.kind) {'
            Replace = 'if ($false) {' }
+        @{ Name = "kind-matched-without-case"
+           Find = 'if ($script:HordePortNameKinds -cnotcontains $out.kind) {'
+           Replace = 'if ($script:HordePortNameKinds -notcontains $out.kind) {' }
+        @{ Name = "kind-reason-unchecked"
+           Find = '$out.kind = $Row.cells[1]; $out.why = $Row.cells[2] }'
+           Replace = '$out.kind = $Row.cells[1]; $out.why = "a reason long enough to pass" }' }
+        @{ Name = "shrink-kind-line-invisible"
+           Find = 'if ($r.cells.Count -eq 2 -or $r.cells.Count -eq 3) {'
+           Replace = 'if ($r.cells.Count -eq 2) {' }
+        # --- core matches no process image (Test-HordeProcessImages)
+        @{ Name = "image-finding-dropped"
+           Find = '[void]$found.Add([pscustomobject]@{ host = $hits[0].own;'
+           Replace = 'continue; [void]$found.Add([pscustomobject]@{ host = $hits[0].own;' }
+        @{ Name = "image-path-not-checked"
+           Find = 'if ($f.rel.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or '
+           Replace = 'if (' }
+        @{ Name = "image-matched-with-case"
+           Find = '$text.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$text.IndexOf($img.name, [System.StringComparison]::Ordinal)' }
+        @{ Name = "image-any-kind"
+           Find = 'if (-not $pn.problem -and $pn.kind -ceq $Kind) {'
+           Replace = 'if (-not $pn.problem) {' }
+        @{ Name = "image-test-folder-checked"
+           Find = '$script:HordeProcessImageExempt = @("test")'
+           Replace = '$script:HordeProcessImageExempt = @()' }
+        @{ Name = "image-port-folders-checked"
+           Find = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))'
+           Replace = '-Skip @($script:HordeProcessImageExempt)' }
+        @{ Name = "image-legacy-excuses-any-file"
+           Find = 'if ($legacyPaths.ContainsKey($key)) {'
+           Replace = 'if ($legacyPaths.Count) {' }
+        @{ Name = "image-legacy-stale-kept"
+           Find = 'if (-not $stillMatching.ContainsKey($k)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "image-legacy-not-normalised"
+           Find = '$lp = ConvertTo-HordeAllowPath $l; $legacyPaths[$lp.ToLowerInvariant()] = $lp'
+           Replace = '$legacyPaths[$l] = $l' }
+        @{ Name = "image-legacy-entry-dropped"
+           Find = '"core/Faults.ps1", "core/Identity.ps1", "core/ownership.json")'
+           Replace = '"core/Faults.ps1", "core/Identity.ps1")' }
     )
 }
