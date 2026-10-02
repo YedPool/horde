@@ -384,25 +384,40 @@ function Read-HordeLayoutSaves {
 # ------------------------------------------------------------------------------------------ runs
 
 function Get-HordeReportLinks {
-    # claude session id -> every (run, fleet id) whose event log names it. The event log carries
-    # session.claudeSessionId (YedPool/wezfleet lib/Protocol.ps1 Write-WfEvent); that is the only
-    # link from a roster entry to a session, since a roster names fleet ids.
+    # Which runs' reports name each session: claudeSessionId -> { run; fleetId }, once per run and
+    # fleet id. Reads the two fields directly, by Get-HordeField's rules (a missing or null field does
+    # not name anything), and keeps the links already made in a hash set instead of searching the
+    # list again for every event: 7.2 s of a projection of this machine's real stores went here
+    # (316 event logs; read-phase profile, PR #31, 2026-10-02).
     param($Runs)
     $links = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $made = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($run in @($Runs.runs)) {
         foreach ($fid in @($run.sessions.Keys)) {
             foreach ($e in @($run.sessions[$fid].events.events)) {
-                $s = Get-HordeField -Record $e -Name "session"
-                if ($s.state -ne "known") { continue }
-                $c = Get-HordeField -Record $s.value -Name "claudeSessionId"
-                if ($c.state -ne "known" -or "$($c.value)" -eq "") { continue }
-                $k = "$($c.value)"
+                $sv = Get-HordeFieldValue -Record $e -Name "session"
+                if ($null -eq $sv) { continue }
+                $cv = Get-HordeFieldValue -Record $sv -Name "claudeSessionId"
+                if ($null -eq $cv -or "$cv" -eq "") { continue }
+                $k = "$cv"
+                if (-not $made.Add($k + "|" + $run.dir + "|" + $fid)) { continue }
                 if (-not $links.ContainsKey($k)) { $links[$k] = New-Object System.Collections.ArrayList }
-                if (@($links[$k] | Where-Object { $_.run.dir -eq $run.dir -and $_.fleetId -eq $fid }).Count -eq 0) { [void]$links[$k].Add([pscustomobject]@{ run = $run; fleetId = $fid }) }
+                [void]$links[$k].Add([pscustomobject]@{ run = $run; fleetId = $fid })
             }
         }
     }
     return $links
+}
+
+function Get-HordeFieldValue {
+    # A field's value by Get-HordeField's rules, or $null where it would be unknown: no record, no such
+    # field, or a null value. For loops over many records that only need "is it there, and what".
+    param($Record, [string]$Name)
+    if ($null -eq $Record) { return $null }
+    if ($Record -is [System.Collections.IDictionary]) { if ($Record.Contains($Name)) { return $Record[$Name] }; return $null }
+    $prop = $Record.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
 }
 
 function Resolve-HordeRun {
