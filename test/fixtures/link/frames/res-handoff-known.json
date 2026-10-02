@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "kind": "res",
+  "id": "0a000000-0000-4000-8000-000000000006",
+  "seq": 5,
+  "ts": "2026-09-30T12:00:04Z",
+  "verb": "handoff.get",
+  "requestId": "0b000000-0000-4000-8000-000000000006",
+  "re": "0a000000-0000-4000-8000-000000000016",
+  "result": {
+    "state": "known",
+    "reason": "",
+    "observedAt": "2026-09-30T12:00:03.900Z",
+    "value": {
+      "handoffId": "0c000000-0000-4000-8000-000000000006",
+      "sessionId": "11111111-2222-4333-8444-555555555555",
+      "writtenAt": "2026-09-30T11:59:00Z",
+      "document": "Done: the codec refuses oversized frames. PR opened. The test log stays on the node and is named in section 3."
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "kind": "res",
+  "id": "0a000000-0000-4000-8000-000000000004",
+  "seq": 3,
+  "ts": "2026-09-30T12:00:02Z",
+  "verb": "handoff.get",
+  "requestId": "0b000000-0000-4000-8000-000000000004",
+  "re": "0a000000-0000-4000-8000-000000000014",
+  "result": {
+    "state": "unknown",
+    "reason": "the handoff file could not be read: it is being written"
+  }
+}

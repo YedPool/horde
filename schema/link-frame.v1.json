@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/link-frame.v1",
+  "title": "link-frame v1",
+  "description": "One frame of the Horde link protocol: the envelope every message between a hub and a node travels in, over any transport. It is never a remote shell: a request names a verb from schema/link-verbs.v1 and carries that verb's closed arguments, and nothing else can be asked. ON THE WIRE a frame is one line of JSON, ASCII only (every other character escaped as \\uXXXX), ending in LF; framing, escaping and the byte caps are remote/Protocol.ps1's (step R2). v is the frame format's version and a reader refuses any other value rather than reading it as this one. WHAT THIS SCHEMA CANNOT SAY, because core/Schema.ps1 implements no oneOf, if/then, dependencies or size keywords, and what remote/Contract.ps1 therefore checks: which members each kind carries (x-horde-kinds below: required, and nothing outside allowed); that args are exactly the named verb's closed arguments and a result's value is exactly its result (both in schema/link-verbs.v1); that a result is a core/tristate answer - value present exactly when state is known, observedAt present when state is known or absent, reason non-blank when state is unknown; and every cap in x-horde-limits, which remote/Protocol.ps1 enforces. THE ANSWER FORM is core/tristate's stored form (ConvertTo-HordeAnswerRecord) with a null value and a null observedAt left out rather than written as null, because this validator has no nullable type; schema/session-view.v1 does the same, and ConvertFrom-HordeAnswerRecord reads both forms alike (test/test-link-contracts.ps1 checks that). The schema is not weakened to pretend it can say more. A change to anything here is a new file, link-frame.v2, once any node could hold this one (migration-plan section 8, risk 2); until the first node ships (plan step R12) v1 may still be edited.",
+  "x-horde-limits": {
+    "description": "Every size cap of the protocol, as data. frameBytes is the default cap on one encoded frame, LF excluded; a deployment may raise it, never above frameBytesCeiling. summaryBytes is the most any one string in a RESULT may take, so a distilled document (a handoff, plan step R14) fits and a raw transcript does not. textBytes is the most a free-text ARGUMENT (a prompt, a message body) may take. reasonBytes caps a reason, nameBytes every identifier, name and time, and listItems every array. A string is measured as its encoded form on the wire, escapes included, quotes excluded.",
+    "frameBytes": 1048576,
+    "frameBytesCeiling": 4194304,
+    "summaryBytes": 65536,
+    "textBytes": 65536,
+    "reasonBytes": 1024,
+    "nameBytes": 256,
+    "listItems": 256
+  },
+  "x-horde-kinds": {
+    "description": "Per kind, the members that must be present (beside v, kind, id, seq and ts) and the only ones that may be. res carries exactly one of result and error.",
+    "hello": { "required": ["hello"], "allowed": ["hello"] },
+    "req":   { "required": ["verb", "requestId", "issuedAt", "args"], "allowed": ["verb", "requestId", "issuedAt", "args"] },
+    "res":   { "required": ["verb", "requestId", "re"], "allowed": ["verb", "requestId", "re", "result", "error"], "oneOf": ["result", "error"] },
+    "evt":   { "required": ["verb", "re", "result"], "allowed": ["verb", "re", "result"] },
+    "ack":   { "required": ["re"], "allowed": ["re"] },
+    "ping":  { "required": ["ping"], "allowed": ["ping"] },
+    "pong":  { "required": ["re", "pong"], "allowed": ["re", "pong"] },
+    "bye":   { "required": ["bye"], "allowed": ["bye"] }
+  },
+  "type": "object",
+  "required": ["v", "kind", "id", "seq", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "type": "integer", "enum": [1], "description": "The frame format's version. Any other value is refused, never read as this one." },
+    "kind": { "type": "string", "enum": ["hello", "req", "res", "evt", "ack", "ping", "pong", "bye"] },
+    "id": { "$ref": "#/definitions/uuid", "description": "This frame's id, chosen by its sender." },
+    "seq": { "type": "integer", "minimum": 1, "description": "Per direction per link, starting at 1." },
+    "ts": { "$ref": "#/definitions/time", "description": "The sender's clock when it sent the frame." },
+    "verb": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)*$", "x-horde-cap": "nameBytes" },
+    "requestId": { "$ref": "#/definitions/uuid", "description": "The idempotency key (plan step R3), chosen by the hub; a res repeats it." },
+    "issuedAt": { "$ref": "#/definitions/issued-time", "description": "When the hub first recorded this request, before sending it (plan step R3). Fixed then and the same on every resend, which ts is not: ts is this frame's own send time. The node's journal accepts a requestId it has not seen only while issuedAt is within its replay window (7 days back, 60 minutes ahead), so a resend that moved issuedAt would reopen a window the first send closed. remote/Contract.ps1's Test-HordeLinkResend holds a resend to it." },
+    "re": { "$ref": "#/definitions/uuid", "description": "The id of the frame this one answers." },
+    "args": { "type": "object", "description": "OPEN HERE, CLOSED BY THE VERB: remote/Contract.ps1 checks it against the verb's args in schema/link-verbs.v1, every one of which is closed." },
+    "result": { "$ref": "#/definitions/answer" },
+    "error": { "$ref": "#/definitions/error" },
+    "hello": { "$ref": "#/definitions/hello" },
+    "ping": { "$ref": "#/definitions/ping" },
+    "pong": { "$ref": "#/definitions/pong" },
+    "bye": { "$ref": "#/definitions/bye" }
+  },
+  "definitions": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "x-horde-cap": "nameBytes", "description": "Lower case: one id has one spelling on the wire, so a journal keyed by it cannot hold the same request twice under two spellings." },
+    "issued-time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$", "x-horde-cap": "nameBytes", "description": "A request's issuedAt: ONE SPELLING PER INSTANT, yyyy-MM-ddTHH:mm:ss.fffZ, exactly three fraction digits, as the link writes every time it makes (remote/Protocol.ps1, Get-HordeLinkTime). The journal compares issuedAt as text on a resend, and the link carries only canonical frames (step R2), so 12:00:00Z and 12:00:00.000Z, one instant, would otherwise be two requests' worth of disagreement. remote/Contract.ps1 also parses it, so an impossible date (2026-09-31, 24:00, a 60th second) is refused, which a pattern cannot say. Review of PR #40, 2026-10-01." },
+    "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "x-horde-cap": "nameBytes", "description": "ISO 8601 in UTC, Z only: a time with no zone cannot be placed (core/tristate)." },
+    "answer": {
+      "type": "object",
+      "required": ["state", "reason"],
+      "additionalProperties": false,
+      "description": "A core/tristate answer: the only thing a res or evt may carry as its result, so no bare value crosses the link and an unknown cannot be read as none. value is typed by the verb, in remote/Contract.ps1.",
+      "properties": {
+        "state": { "type": "string", "enum": ["known", "absent", "unknown"] },
+        "value": { "description": "Present exactly when state is known; its shape is the verb's result in schema/link-verbs.v1." },
+        "reason": { "type": "string", "x-horde-cap": "reasonBytes" },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "reason"],
+      "additionalProperties": false,
+      "description": "The request itself was refused and nothing was done. A request that was accepted and then failed is a result, not an error.",
+      "properties": {
+        "code": { "type": "string", "enum": ["bad-frame", "unknown-version", "oversized", "unsupported-verb", "bad-args", "request-id-reused", "refused", "not-admitted", "internal"] },
+        "reason": { "type": "string", "pattern": "\\S", "x-horde-cap": "reasonBytes" }
+      }
+    },
+    "hello": {
+      "type": "object",
+      "required": ["role", "id", "name", "protocols", "verbsVersions", "hordeVersion", "t1"],
+      "additionalProperties": false,
+      "description": "The first frame each side sends. The hub picks the highest protocol both list; none in common ends the link with bye no-common-protocol (step R2).",
+      "properties": {
+        "role": { "type": "string", "enum": ["hub", "node"] },
+        "id": { "$ref": "#/definitions/uuid", "description": "The node's device id, or the hub's hub id." },
+        "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "x-horde-cap": "nameBytes", "description": "A handle for people, never identity." },
+        "protocols": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "x-horde-cap": "listItems" },
+        "verbsVersions": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "x-horde-cap": "listItems" },
+        "hordeVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.+-][A-Za-z0-9.-]{1,64})?$", "x-horde-cap": "nameBytes" },
+        "t1": { "$ref": "#/definitions/time" }
+      }
+    },
+    "ping": {
+      "type": "object",
+      "required": ["t1"],
+      "additionalProperties": false,
+      "properties": { "t1": { "$ref": "#/definitions/time" } }
+    },
+    "pong": {
+      "type": "object",
+      "required": ["t1", "t2", "t3"],
+      "additionalProperties": false,
+      "description": "t1 echoed from the ping; t2 when the ping was received and t3 when the pong was sent, by the answering side's clock (clock offset, plan step R6).",
+      "properties": { "t1": { "$ref": "#/definitions/time" }, "t2": { "$ref": "#/definitions/time" }, "t3": { "$ref": "#/definitions/time" } }
+    },
+    "bye": {
+      "type": "object",
+      "required": ["code", "reason"],
+      "additionalProperties": false,
+      "description": "The sender is closing the link on purpose. A link that ends without one is lost, never closed.",
+      "properties": {
+        "code": { "type": "string", "enum": ["no-common-protocol", "shutdown", "bad-frame", "oversized", "unknown-version", "refused"] },
+        "reason": { "type": "string", "pattern": "\\S", "x-horde-cap": "reasonBytes" }
+      }
+    }
+  }
+}

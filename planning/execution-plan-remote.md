@@ -116,8 +116,8 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    `core/permission-levels.json`.
 1. **R1. Contracts** (NOW). `schema/link-frame.v1`, `link-verbs.v1`, `node-manifest.v1`,
    `transport-capabilities.v1`, `overlay-endpoint.v1`, with golden fixtures (D4). Every verb row has
-   `additionalProperties: false`, an effect class (`read`, `write`, `spawn`, `kill`, lifecycle H13)
-   and a `since`. Tests first:
+   `additionalProperties: false`, an effect class (`read`, `write`, `spawn`, `kill`
+   from lifecycle H13, and `drive`, gated like `spawn`: see R9) and a `since`. Tests first:
    - a verb row without an effect class fails;
    - **no verb takes a command line, script, program path, environment map or arbitrary file path**:
      a fixture verb with an `argv`, `path` or `env` argument fails, and so does one whose argument
@@ -220,6 +220,12 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    clamped**; a resume whose recorded binding is above a since-lowered ceiling is refused; a request
    naming a profile the node does not offer is refused; an environment variable moves nothing, with
    a control that the L1 file does.
+   **The ceiling gates `drive` exactly as it gates `spawn`** (review of PR #40, 2026-10-01). `session.deliver`
+   types into a running session, which acts with whatever permissions it runs under, a prompts-bypassed
+   one included, so R1 classes it `drive`, not `write`, and pins the class in `remote/Contract.ps1`. A
+   deliver may target only a session this hub spawned on that node (hub-owned in the session record);
+   any other target is refused, never forwarded. Tests first: a deliver to a session above the ceiling
+   is refused with the reason, as a spawn is; a deliver to a session the hub did not spawn is refused.
 
 B. Identity and the session record (PROJ; must merge before migration step 3.8)
 
