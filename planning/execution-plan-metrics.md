@@ -114,10 +114,11 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   byte for byte to M1's by golden files written by M1's own command; `agents/claude-code/test/test-summarize-memory.ps1`
   is the probe as a suite. Measured 2026-10-02 on the always-on box: 256 MB on both the 33 MB and the
   133 MB transcripts (M1: 599 and 1,734 MB), and byte for byte M1's output on 13 runs over large
-  varied transcripts. The 200 MB target was below PowerShell's own floor there - the same command on
-  a one-response transcript, 256 MB on that box, 143 MB on the working box - and a forced collection
-  every 1,000 lines did not lower it, so the target is restated (coordinator, 2026-10-02): flat with
-  file size, and within 60 MB of the bare command's floor on the same box.
+  varied transcripts. The bare command's floor - the same command on a one-response transcript - is
+  164 MB on that box and 143 MB on the working box (where the 33 MB file peaks at 155 MB); a forced
+  collection every 1,000 lines did not lower the peak. The 200 MB target is restated (coordinator,
+  2026-10-02): flat with file size, and within 120 MB of the floor on the same box (measured +92 MB
+  and +12 MB); the rise is the garbage collector's room on a box with memory to spare, not records.
 - **`horde metrics collect`** (founder, 2026-10-02: "I want the metrics collector on until we have a
   clear initial method for when to use a real session, when an agent etc."). Finds every transcript in
   the folders each `agents/<name>/stores.json` declares under `transcripts`, and records what is new
