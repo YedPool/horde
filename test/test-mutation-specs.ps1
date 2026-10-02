@@ -13,26 +13,6 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\SuiteFiles.ps1")
 
-function Get-SpecFiles {
-    # Every <suite folder>/mutations/*.psd1, for the suite folders of test\lib\SuiteFiles.ps1.
-    param([string]$Root)
-    $out = New-Object System.Collections.ArrayList
-    foreach ($pattern in $script:HordeSuiteFolders) {
-        $dirs = @(Get-Item -LiteralPath $Root)
-        foreach ($p in @(($pattern -split "/") + "mutations")) {
-            $next = @()
-            foreach ($d in $dirs) {
-                if ($p -eq "*") { $next += @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue) }
-                else { $c = Join-Path $d.FullName $p; if (Test-Path -LiteralPath $c -PathType Container) { $next += @(Get-Item -LiteralPath $c) } }
-            }
-            $dirs = $next
-        }
-        # -Recurse: a spec in a subfolder of mutations/ is still a spec (review of PR #62, probe Q1).
-        foreach ($d in $dirs) { foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "*.psd1" -File -Recurse | Where-Object { $_.Extension -ceq ".psd1" })) { [void]$out.Add($f) } }
-    }
-    return @($out)
-}
-
 function Get-FindCount {
     param([string]$Text, [string]$Find)
     if ($Find.Length -eq 0) { return 0 }
@@ -63,7 +43,7 @@ function Get-SpecProblems {
     return @($out)
 }
 
-$specs = @(Get-SpecFiles -Root $root)
+$specs = @(Get-HordeMutationSpecFiles -Root $root)
 $mutants = 0; foreach ($f in $specs) { $mutants += @((Import-PowerShellDataFile -LiteralPath $f.FullName).Mutations).Count }
 # CONTROLS: the search finds the specs and mutants known to be there, so an empty problem list means
 # something.
@@ -80,7 +60,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $fx "t.ps1"), "function A { return 1 }`r`nfunction B { return 1 }`r`nfunction C { return 3 }`r`n")
     [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\planted.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'twice'; Find = 'return 1'; Replace = 'return 2' }, @{ Name = 'absent'; Find = 'return 9'; Replace = 'return 8' }, @{ Name = 'once'; Find = 'return 3'; Replace = 'return 4' }) }")
     [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\no-target.psd1"), "@{ Target = 'gone.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'x'; Find = 'y'; Replace = 'z' }) }")
-    $planted = @(Get-SpecProblems -Root $fx -Specs @(Get-SpecFiles -Root $fx))
+    $planted = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
     Check (@($planted | Where-Object { $_ -match 'planted\.psd1 :: twice: its find string occurs 2 times' }).Count -eq 1) "CONTROL: a find string that occurs twice is reported, with its spec and mutant"
     Check (@($planted | Where-Object { $_ -match 'planted\.psd1 :: absent: its find string occurs 0 times' }).Count -eq 1) "CONTROL: a find string that does not occur is reported"
     Check (@($planted | Where-Object { $_ -match 'no-target\.psd1: its target gone\.ps1 does not exist' }).Count -eq 1) "CONTROL: a spec whose target is missing is reported"
@@ -93,7 +73,20 @@ try {
     # line endings differ by checkout (probe Q4: it passed this guard).
     [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\multiline.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'spans'; Find = ""return 3 }``r``nfunction C""; Replace = 'x' }) }")
     [System.IO.File]::WriteAllText((Join-Path $fx "t.ps1"), "function A { return 1 }`r`nfunction B { return 1 }`r`nfunction C { return 3 }`r`nfunction C2 { return 3 }`r`n")
-    $planted2 = @(Get-SpecProblems -Root $fx -Specs @(Get-SpecFiles -Root $fx))
+    # ANY mutations FOLDER, AT ANY DEPTH: a port's own spec folder, a spec two folders below
+    # mutations/, and a mutations/ folder outside the suite folders are all specs. One rule, shared
+    # with tools\Mutate.ps1 -Changed, which otherwise never selected what this suite checked (review
+    # of PR #62/#63, 2026-10-02).
+    New-Item -ItemType Directory -Path (Join-Path $fx "agents\demo\test\mutations\deep\deeper") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fx "agents\demo\test\mutations\deep\deeper\port.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'port-deep'; Find = 'return 9'; Replace = 'return 8' }) }")
+    New-Item -ItemType Directory -Path (Join-Path $fx "tools\mutations") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fx "tools\mutations\elsewhere.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'elsewhere'; Find = 'return 9'; Replace = 'return 8' }) }")
+    New-Item -ItemType Directory -Path (Join-Path $fx "test\fixtures\mutations") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\fixtures\mutations\data.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'fixture-data'; Find = 'return 9'; Replace = 'return 8' }) }")
+    $planted2 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
+    Check (@($planted2 | Where-Object { $_ -match 'agents\demo\test\mutations\deep\deeper\port\.psd1 :: port-deep:' }).Count -eq 1) "a spec two folders deep in a port's own mutations folder is checked"
+    Check (@($planted2 | Where-Object { $_ -match 'tools\mutations\elsewhere\.psd1 :: elsewhere:' }).Count -eq 1) "a spec in a mutations folder outside the suite folders is checked"
+    Check (@($planted2 | Where-Object { $_ -match 'fixture-data' }).Count -eq 0) "CONTROL: a mutations folder under test\fixtures is data, not a spec"
     Check (@($planted2 | Where-Object { $_ -match 'sub\\nested\.psd1 :: nested-twice: its find string occurs 2 times' }).Count -eq 1) "a spec in a subfolder of mutations is checked too"
     Check (@($planted2 | Where-Object { $_ -match 'multiline\.psd1 :: spans: its find string spans lines' }).Count -eq 1) "a find string that spans lines is refused, as tools\Mutate.ps1 refuses it"
 } finally {
