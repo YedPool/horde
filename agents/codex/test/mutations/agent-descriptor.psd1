@@ -26,5 +26,14 @@
         @{ Name = "plan-may-escalate"
            Find = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "never"]'
            Replace = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "on-request"]' }
+        @{ Name = "edits-keeps-temp-writable"
+           Find = '"on-request", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.exclude_slash_tmp=true"]'
+           Replace = '"on-request"]' }
+        @{ Name = "edits-precondition-dropped"
+           Find = '"preconditions": [{"name": "windows-sandbox-configured"'
+           Replace = '"preconditionsX": [{"name": "windows-sandbox-configured"' }
+        @{ Name = "plan-offered-headless"
+           Find = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "never"], "entryPoints": ["interactive"]'
+           Replace = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "never"], "entryPoints": ["interactive", "headless"]' }
     )
 }

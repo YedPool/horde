@@ -23,5 +23,8 @@
         @{ Name = "edits-mapped-to-plan"
            Find = '"argv": ["--permission-mode", "acceptEdits"]'
            Replace = '"argv": ["--permission-mode", "plan"]' }
+        @{ Name = "ask-spelt-default"
+           Find = '"argv": ["--permission-mode", "manual"]'
+           Replace = '"argv": ["--permission-mode", "default"]' }
     )
 }
