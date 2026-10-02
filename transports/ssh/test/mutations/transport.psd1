@@ -65,6 +65,16 @@
         @{ Name = "a-call-with-ampersand"
            Find = 'return (Test-HordeSshBanner -Endpoint $Endpoint)'
            Replace = 'return (& Test-HordeSshBanner -Endpoint $Endpoint)' }
+        # --- no orphan: Open hands ssh.exe to the link or stops it (F7)
+        @{ Name = "process-left-on-failure"
+           Find = 'if (-not $handed) { Stop-HordeSshUnowned -Process $proc -StartedAt $startedAt }'
+           Replace = '' }
+        @{ Name = "process-counted-handed-too-early"
+           Find = '$handed = $false'
+           Replace = '$handed = $true' }
+        @{ Name = "stopped-without-the-start-time"
+           Find = 'if ($now.StartTime -ne $StartedAt) { return }'
+           Replace = '' }
         # --- the review's 12 forms that passed the first guard (F4), each appended where nothing runs it
         @{ Name = "review-bare-ssh-exe"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
