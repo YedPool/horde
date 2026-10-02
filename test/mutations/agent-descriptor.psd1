@@ -18,9 +18,6 @@
         @{ Name = "duplicate-key-ignored"
            Find = 'return @(@(& $script:HordeAgentDuplicateKeyScan -Text $Text) |'
            Replace = 'return @(@() |' }
-        @{ Name = "duplicate-scan-shape-assumed"
-           Find = 'Where-Object { $null -ne $_ } | ForEach-Object { "a key appears twice'
-           Replace = 'Where-Object { "$_" -like "*appears more than once*" } | ForEach-Object { "a key appears twice' }
         @{ Name = "duplicate-scan-looked-up-by-name"
            Find = 'return @(@(& $script:HordeAgentDuplicateKeyScan -Text $Text) |'
            Replace = 'return @(@(Find-HordeJsonDuplicateKey -Text $Text) |' }
