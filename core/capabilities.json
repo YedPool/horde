@@ -1,0 +1,13 @@
+{
+  "capabilities": [
+    { "name": "message-inject", "port": "either", "host": "text.send", "meaning": "A message can be delivered into a running session. A host that can type text into a pane satisfies it too." },
+    { "name": "delivery-receipt", "port": "agent", "meaning": "Horde can confirm that a delivered message reached the session, not only that it was sent." },
+    { "name": "resume", "port": "agent", "meaning": "A stopped session can be started again by its id, with its conversation." },
+    { "name": "report-hook", "port": "agent", "meaning": "The harness runs commands Horde gives it on its own events, so a session reports without being polled." },
+    { "name": "name-at-spawn", "port": "agent", "meaning": "A session can be given its display name when it starts." },
+    { "name": "model-select", "port": "agent", "meaning": "The model can be chosen when a session starts." },
+    { "name": "provider-select", "port": "agent", "meaning": "The endpoint and credential of a provider other than the native one can be chosen when a session starts." },
+    { "name": "session-id-preset", "port": "agent", "meaning": "A session can be started with an id Horde chose, so its id is known before it runs." },
+    { "name": "session.remoteName", "port": "agent", "meaning": "Horde can set the name a remote or web view shows for a session, at birth and on a live session." }
+  ]
+}
