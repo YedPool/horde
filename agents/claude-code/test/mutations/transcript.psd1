@@ -15,11 +15,11 @@
            Find = '    if ($cc -is [System.Collections.IDictionary]) {'
            Replace = '    if ($false) {' }
         @{ Name = "job-is-a-worker"
-           Find = 'elseif ($null -ne $tc -and -not $tc.launchesWorker) { $worker = New-HordeAbsent -Note ("about a " + $tc.name + " call, not a worker") }'
-           Replace = 'elseif ($null -ne $tc -and -not $tc.launchesWorker) { $worker = New-HordeKnown -Value $n.taskId }' }
+           Find = 'elseif ($null -ne $tc) { $worker = New-HordeAbsent -Note ("about a " + $tc.name + " call, not a worker") }'
+           Replace = 'elseif ($null -ne $tc) { $worker = New-HordeKnown -Value $tc.id }' }
         @{ Name = "unresolved-guessed-as-worker"
-           Find = 'else { $worker = New-HordeUnknown -Reason ("task " + $n.taskId'
-           Replace = 'else { $worker = New-HordeKnown -Value $n.taskId; $null = ("task " + $n.taskId' }
+           Find = 'else { $worker = New-HordeUnknown -Reason "its task and call resolve to nothing in this transcript or its subagents folder" }'
+           Replace = 'else { $worker = New-HordeKnown -Value "guessed" }' }
         @{ Name = "launch-tool-not-known"
            Find = '$script:ClaudeCodeWorkerTools = @("Agent", "Task")'
            Replace = '$script:ClaudeCodeWorkerTools = @("Task")' }
@@ -53,5 +53,11 @@
         @{ Name = "human-origin-ignored"
            Find = '    if ($Origin -is [System.Collections.IDictionary]) { return ($Origin["kind"] -ceq "task-notification") }'
            Replace = '    if ($Origin -is [System.Collections.IDictionary]) { return $true }' }
+        @{ Name = "task-id-text-trusted"
+           Find = '                    elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }'
+           Replace = '                    elseif ($n.taskId -ne "") { $worker = New-HordeKnown -Value $n.taskId }' }
+        @{ Name = "unchecked-task-id-kept"
+           Find = '                $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }'
+           Replace = '                $keptTask = $n.taskId' }
     )
 }

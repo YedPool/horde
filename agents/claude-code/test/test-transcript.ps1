@@ -56,11 +56,13 @@ try {
     Check (@($recs | Where-Object { $_.kind -eq "toolCall" }).Count -eq 3 -and @($recs | Where-Object { $_.kind -eq "toolResult" }).Count -eq 3) "three tool calls and their three results"
     $notes = @($recs | Where-Object { $_.kind -eq "input" -and $_.source -eq "notification" })
     Check ($notes.Count -eq 4) ("four notifications; the queue-operation copy of the queued one is not a fifth (" + $notes.Count + ")")
-    $byCall = @{}; foreach ($n in $notes) { $byCall[$n.toolCallId] = $n }
+    # Keyed by the ids the adapter kept: the call when it is in this transcript, else the task when its
+    # transcript is on disk, else "unresolved" (an id the transcript does not vouch for is never kept).
+    $byCall = @{}; foreach ($n in $notes) { $key = "unresolved"; if ($n.toolCallId -ne "") { $key = $n.toolCallId } elseif ($n.taskId -ne "") { $key = "task:" + $n.taskId }; $byCall[$key] = $n }
     Check ($byCall["toolu_L1"].worker.state -eq "known" -and $byCall["toolu_L1"].worker.value -eq "a1b2c3d4e5f6a7b8c") "a notification about the call that launched a worker is that worker's"
-    Check ($byCall["toolu_OLD"].worker.state -eq "known" -and $byCall["toolu_OLD"].worker.value -eq "a1b2c3d4e5f6a7b8c") "a notification whose call is not in this transcript is still the worker's when the subagents folder holds its transcript (a resumed worker)"
+    Check ($byCall["task:a1b2c3d4e5f6a7b8c"].worker.state -eq "known" -and $byCall["task:a1b2c3d4e5f6a7b8c"].worker.value -eq "a1b2c3d4e5f6a7b8c") "a notification whose call is not in this transcript is still the worker's when the subagents folder holds its transcript (a resumed worker)"
     Check ($byCall["toolu_B1"].worker.state -eq "absent") "a notification about a shell call is provably not a worker's"
-    Check ($byCall["toolu_ZZ"].worker.state -eq "unknown") "a notification that resolves to nothing is unknown, not guessed"
+    Check ($byCall["unresolved"].worker.state -eq "unknown") "a notification that resolves to nothing is unknown, not guessed"
     $launch = @($recs | Where-Object { $_.kind -eq "toolResult" -and $_.toolCallId -eq "toolu_L1" })[0]
     Check ($launch.worker.state -eq "known" -and $launch.worker.value -eq "a1b2c3d4e5f6a7b8c") "the launch call's result lands on the worker its meta.json names"
     $ordinary = @($recs | Where-Object { $_.kind -eq "toolResult" -and $_.toolCallId -eq "toolu_S1" })[0]
@@ -118,6 +120,24 @@ try {
     Check ($pm.notifications -eq 1) ("a notification pasted by a person, typed or queued, is a user message; only the harness's own is a notification (" + $pm.notifications + ")")
     Check ($pm.stillWaiting.calls -eq 1) ("so only the reply to the harness's notification is still-waiting (" + $pm.stillWaiting.calls + ")")
 
+
+    Write-Host ""
+    Write-Host "--- a notification's ids are checked, never copied from its text ---" -ForegroundColor Cyan
+    # Review of PR #50, F3: the worker id came from the notification's <task-id> text whenever its
+    # <tool-use-id> named a real launch call, so arbitrary text became a key in the written record.
+    $leakDir = Join-Path $work "leak"
+    Copy-Item -LiteralPath (Join-Path $fixtures "planted") -Destination $leakDir -Recurse
+    $leakFile = Join-Path $leakDir "11111111-2222-4333-8444-555555555555.jsonl"
+    $leakNote = "<task-notification>`n<task-id>LEAKED-PROMPT-TEXT-p11</task-id>`n<tool-use-id>toolu_L1</tool-use-id>`n<status>completed</status>`n<summary>x</summary>`n</task-notification>"
+    $leakLine = @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T15:40:00.000Z"; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = $leakNote } }
+    [System.IO.File]::AppendAllText($leakFile, (ConvertTo-Json -InputObject $leakLine -Compress -Depth 10) + "`n")
+    $lk = Read-HordeTranscript -Path $leakFile
+    $lkNote = @($lk.value.records | Where-Object { $_.kind -eq "input" -and $_.source -eq "notification" } | Select-Object -Last 1)[0]
+    Check ($lkNote.worker.state -eq "known" -and $lkNote.worker.value -eq "a1b2c3d4e5f6a7b8c") "a notification about a launch call is that call's worker, named from its meta.json, whatever its text claims"
+    $lkJson = (ConvertTo-Json -InputObject (New-HordeTranscriptSummaryRecord -Read $lk.value -Worker (Get-HordeWorkerSummary -Records $lk.value.records -PriceTable $noTable) -Orc (Get-HordeOrcMeasures -Records $lk.value.records)) -Depth 30) + (ConvertTo-Json -InputObject (ConvertTo-HordeJsonSafe $lk.value.records) -Depth 30)
+    Check ($lkJson.IndexOf("LEAKED-PROMPT-TEXT-p11") -lt 0) "a task id that names nothing on disk reaches no record and no summary"
+    Check ((Get-Content -LiteralPath $leakFile -Raw).IndexOf("LEAKED-PROMPT-TEXT-p11") -ge 0) "CONTROL: the planted text is in the transcript the summary was made from"
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is
@@ -146,9 +166,9 @@ try {
     Check ($om.stillWaiting.calls -eq 3) ("the three planted still-waiting replies are found (" + $om.stillWaiting.calls + ")")
     Check ($om.stillWaiting.byWorker["a1b2c3d4e5f6a7b8c"] -eq 1 -and $om.stillWaiting.jobs -eq 1 -and $om.stillWaiting.unattributed -eq 1) "one answers the worker, one the job, one an unresolved notification"
     Check ($om.stillWaiting.contextTokens -eq 275306) ("with the context they processed, 90303 + 91002 + 94001 = 275306 (" + $om.stillWaiting.contextTokens + ")")
-    $workerNote = $byCall["toolu_L1"].chars + $byCall["toolu_OLD"].chars
+    $workerNote = $byCall["toolu_L1"].chars + $byCall["task:a1b2c3d4e5f6a7b8c"].chars
     Check ($om.landed.byWorker["a1b2c3d4e5f6a7b8c"].chars -eq ($workerNote + $launch.chars) -and $om.landed.byWorker["a1b2c3d4e5f6a7b8c"].notifications -eq 2) "the worker's two notifications and its launch result land on it"
-    Check ($om.landed.unattributedChars -eq $byCall["toolu_ZZ"].chars -and $om.landed.jobCount -eq 1) "the unresolved notification is unattributed and the job's is a job"
+    Check ($om.landed.unattributedChars -eq $byCall["unresolved"].chars -and $om.landed.jobCount -eq 1) "the unresolved notification is unattributed and the job's is a job"
     $cread = Read-HordeTranscript -Path $cleanPath
     $cm = Get-HordeOrcMeasures -Records $cread.value.records
     Check ($cm.stillWaiting.calls -eq 0) "the clean transcript has no still-waiting reply"

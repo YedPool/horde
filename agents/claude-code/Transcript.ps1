@@ -344,14 +344,26 @@ function Read-ClaudeCodeTranscript {
                     [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "user"; chars = $s.text.Length; taskId = ""; toolCallId = ""; interim = $false; worker = $userAbsent }))
                     continue
                 }
-                $worker = $null
+                # THE IDS IN A NOTIFICATION'S TEXT ARE CHECKED, NEVER COPIED (review of PR #50, F3). The
+                # text is the harness's, but what reaches a record must be something this transcript or
+                # its subagents folder vouches for: a task id that names a subagent transcript on disk,
+                # or a tool-use id that is a call in this transcript. Anything else is dropped, so no
+                # text of a notification can become a key in a written summary.
                 $tc = $null
                 if ($n.toolCallId -ne "") { $tc = $toolCalls[$n.toolCallId] }
-                if ($n.taskId -ne "" -and $links.agents.Contains($n.taskId)) { $worker = New-HordeKnown -Value $n.taskId }
-                elseif ($null -ne $tc -and $tc.launchesWorker -and $n.taskId -ne "") { $worker = New-HordeKnown -Value $n.taskId }
-                elseif ($null -ne $tc -and -not $tc.launchesWorker) { $worker = New-HordeAbsent -Note ("about a " + $tc.name + " call, not a worker") }
-                else { $worker = New-HordeUnknown -Reason ("task " + $n.taskId + " and call " + $n.toolCallId + " resolve to nothing in this transcript or its subagents folder") }
-                [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "notification"; chars = $s.text.Length; taskId = $n.taskId; toolCallId = $n.toolCallId; interim = [bool]$n.interim; worker = $worker }))
+                $taskOk = ($n.taskId -ne "" -and $links.agents.Contains($n.taskId))
+                $worker = $null
+                if ($null -ne $tc -and $tc.launchesWorker) {
+                    if ($links.byTool.ContainsKey($tc.id)) { $worker = New-HordeKnown -Value $links.byTool[$tc.id] }
+                    elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
+                    else { $worker = New-HordeKnown -Value $tc.id }
+                }
+                elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
+                elseif ($null -ne $tc) { $worker = New-HordeAbsent -Note ("about a " + $tc.name + " call, not a worker") }
+                else { $worker = New-HordeUnknown -Reason "its task and call resolve to nothing in this transcript or its subagents folder" }
+                $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }
+                $keptCall = ""; if ($null -ne $tc) { $keptCall = $tc.id }
+                [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "notification"; chars = $s.text.Length; taskId = $keptTask; toolCallId = $keptCall; interim = [bool]$n.interim; worker = $worker }))
             }
         }
     }
