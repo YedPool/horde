@@ -203,7 +203,7 @@ review finding of its own.
 No emoji and no non-ASCII characters in code, scripts or generated artefacts. Where a glyph is
 wanted, write it as an escape sequence so the source stays ASCII.
 
-## 14. A terminal, or an agent harness, is named only in its own folder
+## 14. A terminal, an agent harness or a transport is named only in its own folder
 
 Nothing outside `hosts/<name>/` names a terminal (migration-plan decision D12): the engine, the
 schemas and the read model speak of sessions, slots and capabilities, so that the next host is a new
@@ -215,6 +215,11 @@ The same seam holds for the agent harness - the command-line program a session r
 either (engine-settings design, 2026-09-30, section 9; the founder's decision of the same day that core
 never names an engine). A harness folder carries the same `names.txt`, `allowlist.txt` and
 `growth.txt`, read by the same scan, and everything below that is said of a host holds for a harness.
+
+And for the transport - what carries the link between a hub and a node. Nothing outside
+`transports/<name>/` names a transport program or its options (remote design, founder decision 10;
+remote plan step R5), so that the second transport is a new folder and not an engine change.
+`transports/Port.ps1`, beside the transport folders, belongs to none of them and is scanned like core.
 Core still names the two harnesses the old system ran, because Phases 0 to 2 read their own files;
 those entries were measured when the rule was extended and shrink as the reads move behind the
 AgentPort.
