@@ -481,19 +481,31 @@ function Read-HordeControlExtras {
     try { return ((Read-HordeSharedText -Path $Record.source) | ConvertFrom-Json) } catch { return $null }
 }
 
-function Get-HordeResumeProcesses {
-    # pid rows whose command line resumes this session (--resume <id> or -r <id>), from the process
-    # table: the X5 read for pid, procStart and startedAt when "its --resume id matches".
-    param($Processes, [string]$SessionId)
-    $out = New-Object System.Collections.ArrayList
-    if ($Processes.state -ne "known") { return $out.ToArray() }
+function Get-HordeProcessIndex {
+    # The process table read ONCE per projection: { resumes; unreadClaude }. resumes maps a session id
+    # (ignoring case) to the rows whose command line resumes it (--resume <id> or -r <id>), in the
+    # table's order - the X5 read for pid, procStart and startedAt when "its --resume id matches".
+    # unreadClaude lists the pids of claude processes whose command line cannot be read, any of which
+    # may be resuming any session. Both used to be found by scanning the whole table for every
+    # session: 333 sessions x 341 processes, 9.4 s of a real projection (block profile, PR #31,
+    # 2026-10-02). A row is keyed by its FIRST --resume id, the one the per-session scan compared.
+    param($Processes)
+    $resumes = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.ArrayList]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $unread = New-Object System.Collections.ArrayList
+    if ($Processes.state -ne "known") { return [pscustomobject]@{ resumes = $resumes; unreadClaude = @() } }
     foreach ($p in $Processes.value.Values) {
         $cl = $p.PSObject.Properties["commandLine"]
-        if ($null -eq $cl -or $null -eq $cl.Value) { continue }
+        if ($null -eq $cl -or $null -eq $cl.Value) {
+            if ($script:HordeClaudeProcessNames -icontains "$($p.name)") { [void]$unread.Add($p.pid) }
+            continue
+        }
         $m = [regex]::Match("$($cl.Value)", '(?:--resume|-r)(?:\s+|=)"?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')
-        if ($m.Success -and $m.Groups[1].Value -ieq $SessionId) { [void]$out.Add($p) }
+        if (-not $m.Success) { continue }
+        $k = $m.Groups[1].Value
+        if (-not $resumes.ContainsKey($k)) { $resumes[$k] = New-Object System.Collections.ArrayList }
+        [void]$resumes[$k].Add($p)
     }
-    return $out.ToArray()
+    return [pscustomobject]@{ resumes = $resumes; unreadClaude = $unread.ToArray() }
 }
 
 function Resolve-HordeField {
@@ -997,14 +1009,14 @@ function Complete-HordeSession {
     Set-HordeField $S $C "hostInstance" (Resolve-HordeField @((Get-HordeRegistryCandidate $S "instance" -Agentish), $x5i))
 
     # The agent's own fields.
-    $procs = @(Get-HordeResumeProcesses -Processes $C.processes -SessionId $id)
+    $procs = @(); if ($C.procIndex.resumes.ContainsKey($id)) { $procs = @($C.procIndex.resumes[$id].ToArray()) }
     $x5 = $null
     if ($procs.Count -eq 1) { $x5 = $procs[0] }
     # "No process resumes it" is proven only when every claude process's command line was read
     # (second review of PR #31, finding 1).
     $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Skip "no process's command line resumes this session"
     $unreadLines = @()
-    if ($C.processes.state -eq "known") { $unreadLines = @($C.processes.value.Values | Where-Object { $script:HordeClaudeProcessNames -icontains "$($_.name)" -and ($null -eq $_.PSObject.Properties["commandLine"] -or $null -eq $_.commandLine) } | ForEach-Object { $_.pid }) }
+    if ($C.processes.state -eq "known") { $unreadLines = @($C.procIndex.unreadClaude) }
     if ($C.processes.state -ne "known") { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the process table could not be read (" + $C.processes.reason + ")") }
     elseif ($unreadLines.Count -gt 0) { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the command line of claude process " + (@($unreadLines | Sort-Object) -join ", ") + " cannot be read, so it may resume this session") }
     if ($null -ne $x5) { $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Answer (New-HordeKnown -Value ([int]$x5.pid)) }
@@ -1144,6 +1156,7 @@ function Get-HordeProjection {
         paneRead = (Read-HordePaneSessions -Dir $PaneSessionsDir)
         host = $null; paneVerdicts = $null; transcripts = (Get-HordeTranscriptIndex -ProjectsDir $ProjectsDir)
         layout = (Read-HordeLayoutSaves -LayoutPort $LayoutPort); links = $null; idSources = $null
+        procIndex = (Get-HordeProcessIndex -Processes $Processes)
     }
     $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort -Platform $Platform) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort) -Port $HostPort
     $C.paneVerdicts = Get-HordePaneFileVerdicts -PaneRead $C.paneRead -Context $C.host -Registry $C.wf.registry -VerifiedLive $C.identity.verifiedLive
