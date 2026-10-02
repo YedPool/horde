@@ -11,6 +11,7 @@ using namespace System.Diagnostics  # expect: a class or a using statement
 . (Join-Path $PSScriptRoot $loaded)  # expect: dot-sourcing something other than a neighbour file
 . (Join-Path $env:TEMP "Contract.ps1")  # expect: dot-sourcing something other than a neighbour file
 . (Join-Path $PSScriptRoot "..\..\elsewhere.ps1")  # expect: dot-sourcing something other than a neighbour file
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Identity.ps1")  # expect: dot-sourcing something other than a neighbour file
 class HordeControlQ { [string] R() { return "x" } }  # expect: a class or a using statement
 function R01 { $sb = { hostname }; $sb.Invoke() }  # expect: the method Invoke
 function R02 { $sb = { hostname }; $sb.InvokeReturnAsIs() }  # expect: the method InvokeReturnAsIs
@@ -72,7 +73,7 @@ function S08 { param($sb) $sb | ForEach-Object -MemberName Invoke }  # expect: F
 function S09 { $null = $ExecutionContext }  # expect: $ExecutionContext, which reaches the engine
 function S10 { . (Join-Path $PSScriptRoot "Contract.ps1") }  # expect: dot-sourcing
 function S11 { & { 1 } }  # expect: a call with &
-function S12 { Get-ChildItem }  # expect: Get-ChildItem is not an allowlisted cmdlet
+function S12 { Remove-Item "x" }  # expect: Remove-Item is not an allowlisted cmdlet
 function S13 { New-Alias zz Get-Date }  # expect: New-Alias is not an allowlisted cmdlet
 function S14 { param([System.Diagnostics.ProcessStartInfo]$Info) $Info }  # expect: the type [System.Diagnostics.ProcessStartInfo]
 function Join-Path { param($x) $x }  # expect: would shadow a command
@@ -103,3 +104,5 @@ function C23 { param($o) $null = $o | Add-Member "x" "y" }  # expect: Add-Member
 function C24 { $null = New-Object -TypeName System.Collections.ArrayList -Property @{ Capacity = 1 } }  # expect: New-Object -Property
 function C25 { param($o) $null = $o.Where({ $true }) }  # expect: the method Where
 function C26 { param($sb) $null = 1 | Select-Object -Property:@{ N = "x"; E = $sb } }  # expect: Select-Object -Property given a script block or a calculated property
+function C27 { $null = [System.IO.File]::Copy("a", "b") }  # expect: [System.IO.File]::Copy is not a static member
+function C28 { $null = New-Object System.IO.FileInfo "x" }  # expect: New-Object System.IO.FileInfo is not a type

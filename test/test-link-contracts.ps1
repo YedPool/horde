@@ -447,7 +447,7 @@ $ctlPath = Join-Path $fx "shell-control.ps1"
 $ctl = @(Get-HordeExecFindings -Path $ctlPath -Known $known)
 $ctlAst = [System.Management.Automation.Language.Parser]::ParseFile($ctlPath, [ref]$null, [ref]$null)
 $forms = @($ctlAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))
-Check ($forms.Count -eq 92) ("CONTROL: the control file holds 92 forms - the review's 27, the first scan's 9, the verification's 13, 42 that each isolate one rule, and a class method (found " + $forms.Count + ")")
+Check ($forms.Count -eq 94) ("CONTROL: the control file holds 94 forms - the review's 27, the first scan's 9, the verification's 13, 44 that each isolate one rule, and a class method (found " + $forms.Count + ")")
 foreach ($form in $forms) {
     $hits = @(Get-LineFindings $ctl $form.Extent.StartLineNumber)
     Check ($hits.Count -ge 1) ("CONTROL: the form " + $form.Name + " is refused")
@@ -465,7 +465,7 @@ foreach ($text in [System.IO.File]::ReadAllLines($ctlPath)) {
     Check (@($hits | Where-Object { "$_".Contains($want) }).Count -ge 1) ("CONTROL: line " + $lineNo + " is refused because: " + $want)
     if (@($hits | Where-Object { "$_".Contains($want) }).Count -eq 0) { Show $hits }
 }
-Check ($expectCount -eq 96) ("CONTROL: 96 lines of the control file name their reason (found " + $expectCount + ")")
+Check ($expectCount -eq 99) ("CONTROL: 99 lines of the control file name their reason (found " + $expectCount + ")")
 $clean = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-clean.ps1") -Known $known)
 Check ($clean.Count -eq 0) "CONTROL: a file written the way remote/ is written - its loader lines, allowlisted cmdlets, core functions, .NET types that start nothing - has no finding"; Show $clean
 $broken = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-unparsed.ps1") -Known $known)

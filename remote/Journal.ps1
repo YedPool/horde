@@ -73,7 +73,7 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
-. (Join-Path $PSScriptRoot "..\core\Tristate.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 
 # \A and \z, not ^ and $: in .NET, $ also matches before a final LF, so '^...$' accepted
 # "session.spawn" followed by an LF, and it was acted on (review of PR #39, 2026-09-30).
@@ -146,7 +146,7 @@ function ConvertTo-HordeJournalCanonical {
     if ($Value -is [System.Collections.IDictionary]) {
         $keys = New-Object System.Collections.ArrayList
         foreach ($k in $Value.Keys) {
-            if ($k -isnot [string]) { throw ("a key of type " + $k.GetType().FullName + " cannot be hashed: JSON keys are strings") }
+            if ($k -isnot [string]) { throw ("a key of type " + $k.PSObject.TypeNames[0] + " cannot be hashed: JSON keys are strings") }
             [void]$keys.Add($k)
         }
         $sorted = [string[]]$keys.ToArray()
@@ -171,7 +171,7 @@ function ConvertTo-HordeJournalCanonical {
         $parts = foreach ($item in $Value) { ConvertTo-HordeJournalCanonical -Value $item -Depth ($Depth + 1) }
         return ("[" + (@($parts) -join ",") + "]")
     }
-    throw ("a value of type " + $Value.GetType().FullName + " cannot be hashed: only JSON data can")
+    throw ("a value of type " + $Value.PSObject.TypeNames[0] + " cannot be hashed: only JSON data can")
 }
 
 function ConvertTo-HordeJournalTime {
@@ -299,7 +299,7 @@ function Read-HordeJournalMarker {
         admitDays = Get-HordeJournalProp $d "admitDays"; maxFutureMinutes = Get-HordeJournalProp $d "maxFutureMinutes"
     }
     $okNums = $true
-    foreach ($n in @("retentionDays", "admitDays", "maxFutureMinutes")) { $v = $s.$n; if (-not ($v -is [int] -or $v -is [long]) -or $v -lt 0) { $okNums = $false } }
+    foreach ($n in @("retentionDays", "admitDays", "maxFutureMinutes")) { $v = Get-HordeJournalProp $s $n; if (-not ($v -is [int] -or $v -is [long]) -or $v -lt 0) { $okNums = $false } }
     if ((Get-HordeJournalProp $d "v") -ne 1 -or $script:HordeJournalKinds -cnotcontains "$($s.kind)" -or -not $okNums) {
         return [pscustomobject]@{ ok = $false; settings = $null; reason = ("the marker in '" + $Root + "' is not one this version writes, so the journal is unknown") }
     }

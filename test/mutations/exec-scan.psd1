@@ -26,11 +26,17 @@
            Find = '-cnotcontains $base) { return $false }'
            Replace = '-cnotcontains $base -and $false) { return $false }' }
         @{ Name = "loader-any-leaf"
-           Find = '''\A((core|remote)\\)?[A-Za-z][A-Za-z0-9]*\.ps1\z'''
+           Find = '''\A[A-Za-z][A-Za-z0-9]*\.ps1\z'''
            Replace = '''\A.*\z''' }
+        @{ Name = "loader-any-core-file"
+           Find = 'return ($script:HordeExecCoreFiles -ccontains $leaf.Value.Substring(5))'
+           Replace = 'return $true' }
+        @{ Name = "journal-file-any-static"
+           Find = '"io.file" = @("Delete")'
+           Replace = '"io.file" = @("Delete", "Copy")' }
         @{ Name = "core-function-that-runs-a-block-callable"
-           Find = '"Test-HordeSchema", "Read-HordeSchemaFile")'
-           Replace = '"Test-HordeSchema", "Read-HordeSchemaFile", "Invoke-HordeRead")' }
+           Find = '"Test-HordeSchema", "Read-HordeSchemaFile",'
+           Replace = '"Test-HordeSchema", "Read-HordeSchemaFile", "Invoke-HordeRead",' }
         @{ Name = "shadowing-function-allowed"
            Find = 'if ($script:HordeExecCmdlets -contains $d.Name -or $script:HordeExecCoreFunctions -contains $d.Name) {'
            Replace = 'if ($false) {' }
@@ -80,8 +86,8 @@
            Find = 'if ($script:HordeExecTypes -notcontains (ConvertTo-HordeExecTypeKey $t.TypeName.FullName))'
            Replace = 'if ($false)' }
         @{ Name = "scriptblock-type-allowed"
-           Find = '    "io.stream")'
-           Replace = '    "io.stream", "scriptblock")' }
+           Find = '    "int32", "int64")'
+           Replace = '    "int32", "int64", "scriptblock")' }
         @{ Name = "type-key-keeps-system-prefix"
            Find = 'if ($n.StartsWith("system.")) { $n = $n.Substring(7) }'
            Replace = '' }

@@ -59,13 +59,27 @@
 
 # Rule 1. The cmdlets remote/ calls, measured, plus the read-only pipeline cmdlets beside them.
 $script:HordeExecCmdlets = @("Join-Path", "Split-Path", "New-Object", "Where-Object", "ForEach-Object", "Sort-Object",
-    "Select-Object", "Measure-Object", "Add-Member", "ConvertTo-Json", "ConvertFrom-Json", "Get-Date")
+    "Select-Object", "Measure-Object", "Add-Member", "ConvertTo-Json", "ConvertFrom-Json", "Get-Date",
+    # remote/Journal.ps1 (plan step R3) keeps its records as files in a folder it is given. THIS SCAN
+    # IS ABOUT STARTING A PROCESS OR REACHING THE ENGINE, NOT ABOUT DISK: the journal must read, write
+    # and list its own files. Get-ChildItem lists the journal folder (its high-water marks and records);
+    # New-TimeSpan is arithmetic on times.
+    "Get-ChildItem", "New-TimeSpan")
 # Rule 1. The core/ functions remote/ calls, measured. None takes or runs a script block.
-$script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-HordeSchemaFile")
+$script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-HordeSchemaFile",
+    # core/Tristate.ps1's constructors and converters, which the journal answers in. Each takes plain
+    # values; Invoke-HordeRead, in the same file, takes a script block and is NOT here.
+    "New-HordeKnown", "New-HordeAbsent", "New-HordeUnknown", "ConvertTo-HordeAnswerRecord", "ConvertFrom-HordeAnswerRecord")
+# Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
+$script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1")
 
 # Rule 2. The types New-Object may make.
 $script:HordeExecNewTypes = @("System.Collections.ArrayList", "System.Collections.Stack", "System.Collections.Generic.List[string]",
-    "System.Text.StringBuilder", "byte[]")
+    "System.Text.StringBuilder", "byte[]",
+    # The journal's file access: a FileStream opens one journal file to read or to create (CreateNew,
+    # WriteThrough), a StreamReader reads it, UTF8Encoding (no BOM) spells its text, and a datetime is
+    # rebuilt from a high-water mark's ticks. None of them runs anything.
+    "System.IO.FileStream", "System.IO.StreamReader", "System.Text.UTF8Encoding", "datetime")
 
 # Rule 4. The types that may be named, lower case, without a leading "system.". An array of one is
 # allowed as the type itself is.
@@ -75,22 +89,41 @@ $script:HordeExecTypes = @("string", "int", "long", "bool", "byte", "sbyte", "ch
     "globalization.cultureinfo", "globalization.datetimestyles", "stringcomparison", "stringcomparer", "text.encoding",
     # io.stream: allowed only because the one stream remote/ holds is the link's own pipe, handed to
     # New-HordeFrameReader by the transport; remote/ never opens a stream itself.
-    "io.stream")
+    "io.stream",
+    # remote/Journal.ps1's own files (see $HordeExecCmdlets): File and Directory for the static members
+    # listed in $HordeExecStatic (Delete, CreateDirectory) and nothing else; the enums a FileStream is
+    # opened with; the exceptions a failed open is told apart by; SHA-256 for a request's argsHash;
+    # DateTimeKind for UTC times; Int32 and Int64 are int and long by their CLR names.
+    "io.file", "io.directory", "io.filemode", "io.fileaccess", "io.fileshare", "io.fileoptions", "io.ioexception",
+    "io.filenotfoundexception", "io.directorynotfoundexception", "security.cryptography.sha256", "datetimekind",
+    "int32", "int64")
 $script:HordeExecAttributes = @("Parameter", "CmdletBinding")
 
 # Rule 5. Per type (named as in $HordeExecTypes), the static members that may be read or called.
 $script:HordeExecStatic = @{
-    "datetime" = @("TryParseExact", "MinValue")
+    "datetime" = @("TryParseExact", "MinValue", "UtcNow", "TryParse")
+    "decimal" = @("Truncate")
+    "double" = @("IsNaN", "IsInfinity")
+    "datetimekind" = @("Utc", "Unspecified")
+    # The journal's files (see $HordeExecTypes): delete one of its own files, create its own folder.
+    "io.file" = @("Delete")
+    "io.directory" = @("CreateDirectory")
+    "io.filemode" = @("Open", "CreateNew")
+    "io.fileaccess" = @("Read", "Write")
+    "io.fileshare" = @("Read", "None")
+    "io.fileoptions" = @("WriteThrough")
+    # A factory for the hash algorithm, not a script block or a process: SHA256.Create returns a hasher.
+    "security.cryptography.sha256" = @("Create")
     "regex" = @("Match", "Replace", "Split", "IsMatch")
     "string" = @("Equals")
     "globalization.cultureinfo" = @("InvariantCulture")
-    "globalization.datetimestyles" = @("AdjustToUniversal", "AssumeUniversal")
+    "globalization.datetimestyles" = @("AdjustToUniversal", "AssumeUniversal", "RoundtripKind")
     "stringcomparison" = @("Ordinal")
     "stringcomparer" = @("Ordinal")
     "array" = @("Copy", "IndexOf", "Sort")
     "char" = @("IsHighSurrogate", "IsLowSurrogate")
     "guid" = @("NewGuid")
-    "math" = @("Min", "Max")
+    "math" = @("Min", "Max", "Floor", "Abs")
     # GetEncoding: allowed only because it decodes the link's own pipe (Latin-1, one character per byte,
     # to find a byte outside printable ASCII in a received frame); it names an encoding and opens nothing.
     "text.encoding" = @("GetEncoding", "ASCII")
@@ -103,7 +136,10 @@ $script:HordeExecInstanceMethods = @("ToString", "Trim", "Split", "Contains", "S
     "GetBytes", "GetString",
     # Read: allowed only because the stream it reads is the link's own pipe (Read-HordeFrameLine reads
     # the transport's stream into a bounded buffer); remote/ holds no other stream to read.
-    "Read")
+    "Read",
+    # The journal's own files: write and flush a record, read one back, close what was opened; trim a
+    # number's trailing zeros; hash the canonical arguments.
+    "Write", "Flush", "ReadToEnd", "Dispose", "TrimEnd", "ComputeHash")
 
 # Rule 7. Variables refused whatever their scope.
 $script:HordeExecVariables = @("ExecutionContext", "Host", "MyInvocation", "PSCmdlet")
@@ -137,6 +173,7 @@ function Get-HordeExecFunctionNames {
 function Test-HordeExecLoaderDot {
     # Is this dot-sourcing the one allowed form, at the top of the file?
     #   . (Join-Path $PSScriptRoot "<File>.ps1")   or   . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\<File>.ps1")
+    # where a core file is one of $HordeExecCoreFiles: the core files whose functions remote/ may call.
     param($Command)
     if ($Command.Parent -isnot [System.Management.Automation.Language.PipelineAst]) { return $false }
     $p = $Command.Parent.Parent
@@ -153,7 +190,8 @@ function Test-HordeExecLoaderDot {
     $leaf = $join.CommandElements[2]
     if (@('$PSScriptRoot', '(Split-Path -Parent $PSScriptRoot)') -cnotcontains $base) { return $false }
     if ($leaf -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { return $false }
-    return [regex]::IsMatch($leaf.Value, '\A((core|remote)\\)?[A-Za-z][A-Za-z0-9]*\.ps1\z')
+    if ($leaf.Value.StartsWith("core\")) { return ($script:HordeExecCoreFiles -ccontains $leaf.Value.Substring(5)) }
+    return [regex]::IsMatch($leaf.Value, '\A[A-Za-z][A-Za-z0-9]*\.ps1\z')
 }
 
 function Get-HordeExecArgFindings {
