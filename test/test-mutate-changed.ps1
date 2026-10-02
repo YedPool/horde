@@ -29,7 +29,11 @@ $d = ConvertFrom-HordeDiffZero -Text (@(
     "+++ /dev/null",
     "@@ -1,2 +0,0 @@") -join "`n")
 Check ($d.ContainsKey("tools/x.ps1")) "a diff path is keyed in one spelling: forward slashes, lower case"
-Check ((ConvertTo-HordeDiffKey "Tools\X.ps1") -eq "tools/x.ps1") "and a spec's backslash path reaches the same key"
+Check ((ConvertTo-HordeDiffKey "Tools\X.ps1") -ceq "tools/x.ps1") "and a spec's backslash path reaches the same key"
+# Compared with -ceq: -eq, and a PowerShell hashtable's keys, ignore case, so they would pass a key
+# that kept its case - which a case-sensitive set of keys would then miss (mutant keys-keep-case
+# survived on 2026-10-02 until this check compared exactly).
+Check ((ConvertTo-HordeDiffKey "./Hosts/A.PS1") -ceq "hosts/a.ps1") "a key is lower case and has no leading ./, exactly"
 Check ($d["tools/x.ps1"].Contains(3)) "a hunk with no count is one modified line"
 Check (-not $d["tools/x.ps1"].Contains(4) -and -not $d["tools/x.ps1"].Contains(2)) "and only that one line"
 Check ($d["tools/x.ps1"].Contains(11) -and $d["tools/x.ps1"].Contains(12)) "a hunk of two added lines marks both"
