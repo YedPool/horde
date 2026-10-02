@@ -48,6 +48,22 @@ Check ((Find-HordeMutantLine -Text $crlf -Find "line three").line -eq 3) "CONTRO
 Check ((Find-HordeMutantLine -Text $crlf -Find "absent").status -eq "missing") "a find string that is not there cannot be placed"
 Check ((Find-HordeMutantLine -Text $crlf -Find "Get-Dup").status -eq "ambiguous") "a find string that is there twice cannot be placed"
 Check ((Find-HordeMutantLine -Text $null -Find "x").status -eq "missing") "neither can one whose target file is missing"
+# A find string that spans lines is refused by tools\Mutate.ps1, so it cannot be placed on one line either
+# (review of PR #63: the selector placed it on its first line, so -Changed could skip what the full run fails).
+Check ((Find-HordeMutantLine -Text "a`r`nb`r`n" -Find "a`r`nb").status -eq "multiline") "a find string that spans lines cannot be placed"
+$mlRows = @(Select-HordeChangedMutants -Specs @([pscustomobject]@{ spec = "s.psd1"; data = @{ Target = "t.ps1"; Suite = "x.ps1"; Mutations = @(@{ Name = "ml"; Find = "a`nb"; Replace = "c" }) }; text = "a`nb`n"; specChanged = $false }) -Changed @{})
+Check (@($mlRows | Where-Object { $_.selected -and $_.reason -match "spans lines" }).Count -eq 1) "and is run, to be safe"
+
+# A DIFF THAT IS NOT EMPTY BUT PARSES TO NOTHING IS AN ERROR, never "the diff is empty" (review of PR #63:
+# with diff.noprefix or diff.mnemonicPrefix set, every header failed to parse and an edited mutant line
+# was skipped with exit 0).
+$odd = "diff --git i/t.ps1 w/t.ps1`n--- i/t.ps1`n+++ w/t.ps1`n@@ -3 +3 @@`n"
+Check ("$(Get-HordeDiffParseProblem -Text $odd -Changed (ConvertFrom-HordeDiffZero -Text $odd))" -match "parsed") "a diff whose headers do not parse is reported, not read as empty"
+$two = "diff --git a/x.ps1 b/x.ps1`n+++ b/x.ps1`n@@ -1 +1 @@`ndiff --git i/y.ps1 w/y.ps1`n+++ w/y.ps1`n@@ -1 +1 @@`n"
+Check ("$(Get-HordeDiffParseProblem -Text $two -Changed (ConvertFrom-HordeDiffZero -Text $two))" -match "parsed") "so is one where only some files parse"
+$okd = "diff --git a/x.ps1 b/x.ps1`n+++ b/x.ps1`n@@ -1 +1 @@`n"
+Check ("$(Get-HordeDiffParseProblem -Text $okd -Changed (ConvertFrom-HordeDiffZero -Text $okd))" -eq "") "CONTROL: a diff that parses whole is not reported"
+Check ([string](Get-HordeDiffParseProblem -Text "" -Changed @{}) -eq "") "CONTROL: an empty diff is not reported"
 
 $one = New-Object 'System.Collections.Generic.HashSet[int]'; [void]$one.Add(1)
 $rowSel = @([pscustomobject]@{ target = "a.ps1"; selected = $true })
@@ -111,6 +127,7 @@ try {
         '  @{ Name = "missing"; Find = "return 42"; Replace = "return 43" }',
         '  @{ Name = "ambiguous"; Find = "function Get-"; Replace = "function Got-" }')
     Write-Fx "test\mutations\main.psd1" ($mainV1 + @(') }'))
+    Write-Fx "test\mutations\extra.psd1" @('@{ Target = "target.ps1"; Suite = "test\fixture-suite.ps1"; Environment = @{ HORDE_FIXTURE_LEVEL = "1" }; Mutations = @(', '  @{ Name = "x-env"; Find = "function Get-C {"; Replace = "function Get-C { return 0 }; function Old-C {" }', ') }')
     Write-Fx "test\mutations\clean.psd1" @('@{ Target = "target.ps1"; Suite = "test\fixture-suite.ps1"; Mutations = @(', '  @{ Name = "f-clean"; Find = "Get-F { return 6 }"; Replace = "Get-F { return 0 }" }', ') }')
     Write-Fx "test\mutations\other.psd1" @('@{ Target = "other.ps1"; Suite = "test\other-suite.ps1"; Mutations = @(', '  @{ Name = "other-one"; Find = "return 7"; Replace = "return 8" }', ') }')
     Write-Fx "test\mutations\untracked.psd1" @('@{ Target = "untracked.ps1"; Suite = "test\other-suite.ps1"; Mutations = @(', '  @{ Name = "u-whole"; Find = "return 11"; Replace = "return 12" }', ') }')
@@ -126,7 +143,9 @@ try {
         'function Get-D { return 4 }',
         'function Get-E { return 5 }',
         'function Get-F { return 6 }')
-    Write-Fx "test\mutations\main.psd1" ($mainV1 + @('  @{ Name = "a-new-in-spec"; Find = "Get-A { return 1 }"; Replace = "Get-A { return 0 }" }', ') }'))
+    # A spec whose only change is its Environment: what its suite runs changed, so every mutant of it
+    # runs again (review of PR #63, probe P4: a narrowed HORDE_SECTIONS reselected nothing).
+    Write-Fx "test\mutations\extra.psd1" @('@{ Target = "target.ps1"; Suite = "test\fixture-suite.ps1"; Environment = @{ HORDE_FIXTURE_LEVEL = "2" }; Mutations = @(', '  @{ Name = "x-env"; Find = "function Get-C {"; Replace = "function Get-C { return 0 }; function Old-C {" }', ') }')
     $c2 = (Invoke-Fx @("add", "-A")) + (Invoke-Fx @("commit", "-q", "-m", "two"))
     Check ($c1 -eq 0 -and $c2 -eq 0) "CONTROL: the fixture repository has its two commits"
 
@@ -134,7 +153,7 @@ try {
     $empty = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\other.psd1")
     Check ($empty.code -eq 0) "an empty diff is not an error"
     Check (@($empty.lines | Where-Object { $_ -match '^changed: selected none of 1 mutants: the diff is empty' }).Count -eq 1) "an empty diff selects none, and says why"
-    Check (@($empty.lines | Where-Object { $_ -match '^mutations: 0 - ' }).Count -eq 1) "and reports zero mutants run, in the line a gate reads"
+    Check (@($empty.lines | Where-Object { $_ -match '^mutations: none selected - ' }).Count -eq 1) "and says so in the line a gate reads, with no number a gate could count as a run"
     Check (@(Get-Picked $empty.lines "SELECT").Count -eq 0) "and no mutant is listed as selected"
 
     # An untracked target: every line of it is new.
@@ -142,7 +161,7 @@ try {
 
     # THE SELECTION, EXACTLY: every mutant expected in, every mutant expected out.
     $plan = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
-    $wantIn = @("b-modified", "new-added", "d-before-gap", "e-after-gap", "missing", "ambiguous", "a-new-in-spec", "u-whole")
+    $wantIn = @("b-modified", "new-added", "d-before-gap", "e-after-gap", "missing", "ambiguous", "x-env", "u-whole")
     $wantOut = @("a-unchanged", "c-unchanged", "f-unchanged", "f-clean")
     Check ($plan.code -eq 0) "the plan of a two-commit diff exits 0"
     Check (Test-SameSet (Get-Picked $plan.lines "SELECT") $wantIn) ("the selected mutants are exactly " + ($wantIn -join ", ") + " (got " + ((Get-Picked $plan.lines "SELECT") -join ", ") + ")")
@@ -151,10 +170,25 @@ try {
     Check (@($plan.lines | Where-Object { $_ -match ':: b-modified - line 3 of target\.ps1 is added or modified' }).Count -eq 1) "a selected mutant says which changed line it sits on"
     Check (@($plan.lines | Where-Object { $_ -match ':: missing - find string not found .*fail safe' }).Count -eq 1) "a mutant that cannot be found says it runs to be safe"
     Check (@($plan.lines | Where-Object { $_ -match ':: ambiguous - find string occurs \d+ times .*fail safe' }).Count -eq 1) "a mutant found more than once says it runs to be safe"
-    Check (@($plan.lines | Where-Object { $_ -match ':: a-new-in-spec - new or changed in its spec' }).Count -eq 1) "a mutant new in its spec says that is why it runs"
+    Check (@($plan.lines | Where-Object { $_ -match ':: x-env - its spec file changed' }).Count -eq 1) "every mutant of a spec whose file changed runs, and says why"
     Check (@($plan.lines | Where-Object { $_ -match ':: c-unchanged - line 4 of target\.ps1 is unchanged' }).Count -eq 1) "a skipped mutant says its line is unchanged"
     Check (@($plan.lines | Where-Object { $_ -match '^changed: selected 8 of 13 mutants; skipped 5 as unchanged' }).Count -eq 1) "the totals are stated"
     Check (@($plan.lines | Where-Object { $_ -match '^mutations: ' }).Count -eq 0) "a plan prints no result line a gate could read as a run"
+
+    # HOSTILE GIT CONFIGURATION CHANGES NOTHING. Each of these changes what `git diff` prints by default
+    # (review of PR #63, probes P9 and P10: with the first two, an edited mutant line read as "0 files
+    # changed" and was skipped, exit 0). Set in the repository's own config, as a user's would be.
+    $hostile = @(@("diff.noprefix", "true"), @("diff.mnemonicPrefix", "true"), @("diff.srcPrefix", "SRC/"), @("diff.dstPrefix", "DST/"), @("color.diff", "always"), @("color.ui", "always"), @("diff.external", "no-such-diff-tool"), @("diff.relative", "true"), @("core.quotepath", "true"))
+    foreach ($h in $hostile) {
+        $null = Invoke-Fx @("config", $h[0], $h[1])
+        $hp = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
+        $null = Invoke-Fx @("config", "--unset", $h[0])
+        Check ($hp.code -eq 0 -and (Test-SameSet (Get-Picked $hp.lines "SELECT") $wantIn)) ("with " + $h[0] + "=" + $h[1] + " the selection is unchanged (exit " + $hp.code + ", got " + ((Get-Picked $hp.lines "SELECT") -join ", ") + ")")
+    }
+    foreach ($h in $hostile) { $null = Invoke-Fx @("config", $h[0], $h[1]) }
+    $hp = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
+    foreach ($h in $hostile) { $null = Invoke-Fx @("config", "--unset", $h[0]) }
+    Check ($hp.code -eq 0 -and (Test-SameSet (Get-Picked $hp.lines "SELECT") $wantIn)) ("with all of them at once the selection is unchanged (exit " + $hp.code + ")")
 
     # THE UNPLACEABLE MUTANTS ARE RUN, not skipped - and a run of them fails, because they do not apply.
     $run = Invoke-FxMutate @("-Changed", "HEAD~1", "-Spec", "test\mutations\main.psd1")
@@ -163,7 +197,7 @@ try {
     Check (@($run.lines | Where-Object { $_ -match '\[BAD\] ambiguous: did not apply: the find string occurs \d+ times' }).Count -eq 1) "the mutant found more than once was run, and reported"
     Check (@($run.lines | Where-Object { $_ -match '\[OK\] b-modified: caught' }).Count -eq 1) "a selected mutant on a changed line was run, and caught"
     Check (@($run.lines | Where-Object { $_ -match '\[(OK|BAD)\] (a-unchanged|c-unchanged|f-unchanged):' }).Count -eq 0) "no skipped mutant was run"
-    Check (@($run.lines | Where-Object { $_ -match '^mutations: 7, as expected: 5, not: 2' }).Count -eq 1) "the result line counts exactly the selected mutants"
+    Check (@($run.lines | Where-Object { $_ -match '^mutations: 6, as expected: 4, not: 2' }).Count -eq 1) "the result line counts exactly the selected mutants"
     Check (@($run.lines | Where-Object { $_ -match '^mutations: ' }).Count -eq 1) "and it is the only line a gate reads as the result"
 
     # A DIFF THAT TOUCHES A TARGET BUT SELECTS NOTHING IS AN ERROR. Commit 3 edits only the comment.
