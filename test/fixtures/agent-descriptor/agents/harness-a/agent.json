@@ -27,9 +27,9 @@
     "session.remoteName": { "support": "unverified", "evidence": "fixture: nobody has measured a remote view" }
   },
   "permissionLevels": [
-    { "level": "plan", "argv": ["--mode", "look"], "evidence": "fixture: --mode look in its help" },
-    { "level": "ask", "argv": ["--mode", "careful"], "evidence": "fixture: --mode careful in its help" },
-    { "level": "edits", "argv": ["--mode", "edit"], "evidence": "fixture: --mode edit in its help" },
+    { "level": "plan", "argv": ["--mode", "look"], "entryPoints": ["interactive"], "evidence": "fixture: --mode look in its help", "readback": "fixture: the started harness reports mode look", "preconditions": [{ "name": "folder-ok", "evidence": "fixture: look silently becomes careful in a folder it does not trust" }] },
+    { "level": "ask", "argv": ["--mode", "careful"], "entryPoints": ["interactive"], "evidence": "fixture: --mode careful in its help", "readback": "fixture: the started harness reports mode careful" },
+    { "level": "edits", "argv": ["--mode", "edit"], "entryPoints": ["interactive", "headless"], "evidence": "fixture: --mode edit in its help", "readback": "fixture: the started harness reports mode edit" },
     { "level": "bypass", "inexpressible": "the fixture harness has no way to skip every prompt" }
   ]
 }

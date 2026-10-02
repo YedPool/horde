@@ -95,6 +95,17 @@ Test-Rejected "an empty fragment" { param($d) (Get-LevelRow $d "edits").argv = @
 Test-Rejected "a fragment holding a blank word" { param($d) (Get-LevelRow $d "edits").argv = @("--mode", " ") } "argv"
 Test-Rejected "an inexpressible level with a blank reason" { param($d) (Get-LevelRow $d "bypass").inexpressible = " " } "inexpressible"
 Test-Rejected "an inexpressible level that also carries evidence, as if it had a flag" { param($d) Add-Prop (Get-LevelRow $d "bypass") "evidence" "read off the help" } "bypass"
+Test-Rejected "a fragment that does not say which entry point it is for" { param($d) Remove-Prop (Get-LevelRow $d "edits") "entryPoints" } "entry"
+Test-Rejected "a fragment for no entry point" { param($d) (Get-LevelRow $d "edits").entryPoints = @() } "entry"
+Test-Rejected "an entry point listed twice" { param($d) (Get-LevelRow $d "edits").entryPoints = @("headless", "headless") } "twice"
+Test-Rejected "an entry point Horde does not have" { param($d) (Get-LevelRow $d "edits").entryPoints = @("batch") } "entryPoints"
+Test-Rejected "a fragment with no readback of the mode it gives" { param($d) Remove-Prop (Get-LevelRow $d "edits") "readback" } "readback"
+Test-Rejected "a fragment whose readback is blank" { param($d) (Get-LevelRow $d "edits").readback = " " } "readback"
+Test-Rejected "a precondition with blank evidence" { param($d) (Get-LevelRow $d "plan").preconditions[0].evidence = " " } "evidence"
+Test-Rejected "a precondition whose name is not a lower-case word" { param($d) (Get-LevelRow $d "plan").preconditions[0].name = "Folder OK" } "preconditions"
+Test-Rejected "a precondition listed twice" { param($d) $r = Get-LevelRow $d "plan"; $r.preconditions = @($r.preconditions) + @($r.preconditions[0]) } "twice"
+Test-Rejected "an inexpressible level that names an entry point" { param($d) Add-Prop (Get-LevelRow $d "bypass") "entryPoints" @("interactive") } "bypass"
+Test-Rejected "an inexpressible level that names a precondition" { param($d) Add-Prop (Get-LevelRow $d "bypass") "preconditions" @([pscustomobject]@{ name = "x"; evidence = "y" }) } "bypass"
 $levels = @(Get-HordePermissionLevels)
 $grown = @($levels) + @([pscustomobject]@{ name = "sandboxed"; rank = $levels.Count; meaning = "a level added later" })
 $why = ""
@@ -103,19 +114,37 @@ Check ($why -like "*sandboxed*") "a vocabulary that gains a level fails a descri
 
 Write-Host ""
 Write-Host "--- a level the harness cannot express is refused, never lowered ---" -ForegroundColor Cyan
-$p = Get-HordePermissionArgs -Descriptor $golden -Level "edits"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "edits" -EntryPoint "interactive"
 Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode edit") "CONTROL: an expressible level gives that level's fragment"
-$p = Get-HordePermissionArgs -Descriptor $golden -Level "bypass"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "bypass" -EntryPoint "interactive"
 Check ($p.state -eq "unknown") "an inexpressible level is refused (unknown), not answered with some fragment"
 Check ($p.state -eq "unknown" -and $p.reason -like "*no way to skip every prompt*") "and the refusal carries the descriptor's reason"
 Check ($p.state -ne "known" -or (@($p.value) -join " ") -cne "--mode edit") "and never the fragment of the nearest level below it"
-$p = Get-HordePermissionArgs -Descriptor $golden -Level "Bypass"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "Bypass" -EntryPoint "interactive"
 Check ($p.state -eq "unknown" -and $p.reason -like "*not a Horde permission level*") "a level name in another case is not a level, and is refused"
-$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan"
-Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode look") "CONTROL: the lowest level is a level like any other"
-$p1 = Get-HordePermissionArgs -Descriptor $golden -Level "plan"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan" -EntryPoint "interactive" -Verified @("folder-ok")
+Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode look") "CONTROL: the lowest level is a level like any other, once its precondition is verified"
+$p1 = Get-HordePermissionArgs -Descriptor $golden -Level "edits" -EntryPoint "interactive"
 $p1.value[0] = "--changed"
-Check ((@((Get-HordePermissionArgs -Descriptor $golden -Level "plan").value) -join " ") -ceq "--mode look") "a caller that edits the fragment it was given does not change the descriptor"
+Check ((@((Get-HordePermissionArgs -Descriptor $golden -Level "edits" -EntryPoint "interactive").value) -join " ") -ceq "--mode edit") "a caller that edits the fragment it was given does not change the descriptor"
+
+Write-Host ""
+Write-Host "--- a mapping holds only where its preconditions are verified, at its own entry point (review r60) ---" -ForegroundColor Cyan
+# A harness's real permission depends on its environment as well as its flags: a fragment that gives
+# plan in one folder can give ask in another. A precondition nobody verified is unknown, and the
+# caller refuses - neither lowered nor raised.
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan" -EntryPoint "interactive"
+Check ($p.state -eq "unknown" -and $p.reason -like "*folder-ok*not verified*") "a level whose precondition was not verified is refused, naming the precondition"
+Check ($p.state -eq "unknown" -and $p.reason -like "*silently becomes careful*") "and the refusal carries what goes wrong without it"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan" -EntryPoint "interactive" -Verified @("something-else")
+Check ($p.state -eq "unknown") "verifying some other precondition does not count"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan" -EntryPoint "interactive" -Verified @("Folder-OK")
+Check ($p.state -eq "unknown") "nor does the name in another case"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan" -EntryPoint "headless" -Verified @("folder-ok")
+Check ($p.state -eq "unknown" -and $p.reason -like "*interactive*") "a fragment for the interactive entry point is refused for a headless start, naming the one it is for"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "edits" -EntryPoint "headless"
+Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode edit") "CONTROL: a fragment for both entry points serves a headless start"
+Check (Throws { Get-HordePermissionArgs -Descriptor $golden -Level "edits" -EntryPoint "batch" } "batch") "an entry point Horde does not have is a mistake in the caller, and throws"
 
 Write-Host ""
 Write-Host "--- the file as a whole ---" -ForegroundColor Cyan
@@ -135,6 +164,9 @@ $r0Answer = @(Find-HordeJsonDuplicateKey -Text $dupText)
 Check ($r0Answer.Count -eq 1 -and "$($r0Answer[0])" -ceq "nativeProvider") "CONTROL: with the permission-level scan loaded last, the scan answers with the bare repeated key"
 Check ((Get-Refusal -Text $dupText) -like "*twice*nativeProvider*") "refused all the same with that scan answering"
 Check ((Get-Refusal -Text $goldenText) -eq "") "CONTROL: and the golden descriptor still loads with that scan answering"
+$dup2 = $dupText.Replace('"schemaVersion": 1,', '"schemaVersion": 1, "schemaVersion": 1,')
+$why2 = Get-Refusal -Text $dup2
+Check ($dup2 -ne $dupText -and $why2 -like "*nativeProvider*" -and $why2 -like "*schemaVersion*") "with that scan loaded last, BOTH repeated keys are still reported, not just the first (review r60, F5)"
 . (Join-Path $root "core\Ownership.ps1")
 $ownAnswer = @(Find-HordeJsonDuplicateKey -Text $dupText)
 Check ($ownAnswer.Count -eq 1 -and "$($ownAnswer[0])" -like "*appears more than once*") "CONTROL: with the ownership scan loaded last, the scan answers with a finding sentence"
@@ -160,20 +192,28 @@ try {
     Write-Host "--- every agents/<name>/ folder has a descriptor ---" -ForegroundColor Cyan
     [System.IO.File]::WriteAllBytes($file, [System.Text.Encoding]::ASCII.GetBytes($goldenText))
     $all = Get-HordeAgentDescriptors -Root $work
-    Check (@($all.Keys) -ccontains "harness-a" -and @($all.Keys).Count -eq 1) "CONTROL: a tree whose one folder has a descriptor loads it"
+    Check ($all.state -eq "known" -and @($all.value.Keys) -ccontains "harness-a" -and @($all.value.Keys).Count -eq 1) "CONTROL: a tree whose one folder has a descriptor loads it, as a known answer"
     New-Item -ItemType Directory -Path (Join-Path $work "agents\harness-b") -Force | Out-Null
-    Check (Throws { Get-HordeAgentDescriptors -Root $work } "harness-b") "refused: a harness folder with no agent.json, named"
+    $all = Get-HordeAgentDescriptors -Root $work
+    Check ($all.state -eq "unknown" -and $all.reason -like "*harness-b*no agent.json*") "refused (unknown): a harness folder with no agent.json, named"
     $b = Join-Path $work "agents\harness-b\agent.json"
     [System.IO.File]::WriteAllBytes($b, [System.Text.Encoding]::ASCII.GetBytes($goldenText))
-    Check (Throws { Get-HordeAgentDescriptors -Root $work } "harness-b") "refused: a folder whose descriptor names another harness"
+    $all = Get-HordeAgentDescriptors -Root $work
+    Check ($all.state -eq "unknown" -and $all.reason -like "*harness-b*") "refused (unknown): a folder whose descriptor names another harness"
     [System.IO.File]::WriteAllBytes($b, [System.Text.Encoding]::ASCII.GetBytes($goldenText.Replace('"name": "harness-a"', '"name": "harness-b"')))
-    Check (@((Get-HordeAgentDescriptors -Root $work).Keys).Count -eq 2) "CONTROL: with its own descriptor, both folders load"
+    $all = Get-HordeAgentDescriptors -Root $work
+    Check ($all.state -eq "known" -and @($all.value.Keys).Count -eq 2) "CONTROL: with its own descriptor, both folders load"
+    $none = Join-Path $work "no-agents-here"
+    New-Item -ItemType Directory -Path $none -Force | Out-Null
+    $all = Get-HordeAgentDescriptors -Root $none
+    Check ($all.state -eq "absent") "a tree with no agents folder is answered absent, never an empty success (review r60, F6)"
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 $realWhy = ""
 $real = [ordered]@{}
-try { $real = Get-HordeAgentDescriptors -Root $root } catch { $realWhy = ": " + $_.Exception.Message }
+$realAnswer = Get-HordeAgentDescriptors -Root $root
+if ($realAnswer.state -eq "known") { $real = $realAnswer.value } else { $realWhy = ": " + $realAnswer.state + " " + $realAnswer.reason }
 $realFolders = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | ForEach-Object { $_.Name })
 Check ($realWhy -eq "" -and $realFolders.Count -ge 1 -and @($realFolders | Where-Object { @($real.Keys) -cnotcontains $_ }).Count -eq 0) ("every harness folder in this repository has a descriptor that loads (" + $realFolders.Count + " folders)" + $realWhy)
 
