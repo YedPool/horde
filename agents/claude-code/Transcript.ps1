@@ -36,7 +36,8 @@
 #     tool (a background shell job); otherwise unknown. The study instead attributed by "a message
 #     naming the worker in the same turn", which it reported as over- and under-attributing
 #     (study section 9, item 3).
-#   - Interim notifications are those whose text says "still running" or "may be interim" (join.js).
+#   - Interim notifications are those whose text says so in <note>, the harness's own field: "may be
+#     interim" (join.js matched the words anywhere, including the result; review of PR #50, F4).
 #   - The result of a worker-launching call lands on the worker its meta.json toolUseId names.
 #   - Tool results are measured as the characters of their text blocks; images and tool references
 #     count nothing (worker-extract.js). Only lengths are kept, never text.
@@ -173,7 +174,9 @@ function Get-ClaudeCodeNotification {
     $get = { param($tag) $m = [regex]::Match($Text, "<" + $tag + ">([^<]*)</" + $tag + ">"); if ($m.Success) { $m.Groups[1].Value.Trim() } else { "" } }
     return [pscustomobject]@{
         taskId = (& $get "task-id"); toolCallId = (& $get "tool-use-id"); status = (& $get "status")
-        interim = ($Text -match 'still running|may be interim')
+        # Read from <note> only, never the whole text: a result can say "still running" (review of PR
+        # #50, F4). <status> cannot tell: measured 2026-10-02, interim notifications carry "completed".
+        interim = ((& $get "note") -match 'may be interim|still running')
     }
 }
 

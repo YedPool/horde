@@ -138,6 +138,26 @@ try {
     Check ($lkJson.IndexOf("LEAKED-PROMPT-TEXT-p11") -lt 0) "a task id that names nothing on disk reaches no record and no summary"
     Check ((Get-Content -LiteralPath $leakFile -Raw).IndexOf("LEAKED-PROMPT-TEXT-p11") -ge 0) "CONTROL: the planted text is in the transcript the summary was made from"
 
+
+    Write-Host ""
+    Write-Host "--- interim is the harness's note, not words in the result ---" -ForegroundColor Cyan
+    # Review of PR #50, F4. Measured 2026-10-02, read-only, on the orchestrator's transcript: <status> is
+    # "completed" on interim and final notifications alike (462 completed notifications carry interim
+    # wording), so status cannot tell them apart; the harness says it in <note>: "This agent stopped
+    # with background work of its own still running ... the result below may be interim."
+    $im = Join-Path $work "interim\44444444-5555-4666-8777-888888888888.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $im) -Force | Out-Null
+    $finalNote = "<task-notification>`n<task-id>a1</task-id>`n<status>completed</status>`n<summary>x</summary>`n<result>Done; CI is still running on main.</result>`n</task-notification>"
+    $interimNote = "<task-notification>`n<task-id>a1</task-id>`n<status>completed</status>`n<summary>x</summary>`n<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>`n<result>Started the suite.</result>`n</task-notification>"
+    $ilines = @(
+        @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T10:00:00.000Z"; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = $finalNote } },
+        @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = $interimNote } }
+    )
+    [System.IO.File]::WriteAllText($im, ((@($ilines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $inotes = @((Read-HordeTranscript -Path $im).value.records | Where-Object { $_.kind -eq "input" -and $_.source -eq "notification" })
+    Check ($inotes.Count -eq 2 -and $inotes[0].interim -eq $false) "a final notification whose result says still running is not interim"
+    Check ($inotes[1].interim -eq $true) "CONTROL: one whose note says the result may be interim is"
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is

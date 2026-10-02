@@ -59,5 +59,8 @@
         @{ Name = "unchecked-task-id-kept"
            Find = '                $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }'
            Replace = '                $keptTask = $n.taskId' }
+        @{ Name = "interim-from-whole-text"
+           Find = "interim = ((& `$get ""note"") -match 'may be interim|still running')"
+           Replace = "interim = (`$Text -match 'may be interim|still running')" }
     )
 }
