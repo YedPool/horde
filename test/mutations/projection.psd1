@@ -63,7 +63,7 @@
            Find = 'if (-not $Context.live.ContainsKey($f.handle)) { continue }'
            Replace = '' }
         @{ Name = "missing-transcript-trusted"
-           Find = 'if ($null -ne $S.x1 -and $S.x1.transcriptPath -ne "" -and (Test-Path -LiteralPath $S.x1.transcriptPath -PathType Leaf)) {'
+           Find = 'if ($null -ne $S.x1 -and $S.x1.transcriptPath -ne "" -and (Test-HordeSnapshotLeaf -C $C -Path $S.x1.transcriptPath)) {'
            Replace = 'if ($null -ne $S.x1 -and $S.x1.transcriptPath -ne "") {' }
         # The registry's handle.
         @{ Name = "retired-record-holds-pane"
@@ -214,6 +214,9 @@
         @{ Name = "scope-pane-file-ignored"
            Find = 'if ($C.paneVerdicts.bySession.ContainsKey($Id)) { return "a guarded pane-sessions file names it" }'
            Replace = 'if ($false) { return "a guarded pane-sessions file names it" }' }
+        @{ Name = "snapshot-write-time-reread"
+           Find = 'if (-not $C.snapshot.ContainsKey($k)) { $C.snapshot[$k] = Get-HordeWriteTime -Path $Path }'
+           Replace = '$C.snapshot[$k] = Get-HordeWriteTime -Path $Path' }
         @{ Name = "scope-live-handle-ignored"
            Find = 'if (-not $current -and -not (Test-HordeMayHoldLiveHandle -C $C -Id $sid)) { continue }'
            Replace = 'if (-not $current) { continue }' }

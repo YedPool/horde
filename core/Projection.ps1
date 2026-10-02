@@ -80,7 +80,9 @@
 #   - the faults that read the registry, the control files or the process table read them whole. Three
 #     faults iterate the projected sessions - run-ambiguous, running-but-retired, session-id-not-uuid -
 #     so under Current they speak for current sessions only;
-#   - what each store's completeness says (the view's complete map) is read once, whatever the scope.
+#   - what each store's completeness says (the view's complete map) is read once, whatever the scope;
+#   - the live-file facts a completion looks at (write times, a control file's status time, whether a
+#     transcript exists) are read once per reading, into its snapshot, whichever scope completes it.
 #
 # the roster groups sessions into runs: title, dependsOn, spawnedAt and the run itself still come
 # from it (YedPool/wezfleet 562f0e8 "GROUPING is the roster's proper job"); only identity and the
@@ -512,6 +514,35 @@ function Read-HordeControlExtras {
     try { return ((Read-HordeSharedText -Path $Record.source) | ConvertFrom-Json) } catch { return $null }
 }
 
+# ------------------------------------------------------------------------- the reading's snapshot
+# Completing a session looks at a few live files the reading phase cannot know in advance: a
+# transcript's and a loose command log's write times, the control file's own status time, whether a
+# pane file's transcript exists. Each is read ONCE PER READING and kept in the context's snapshot, so
+# completing one reading twice - All and Current, the reality check's comparison - sees one set of
+# facts. Found by that comparison on this machine, 2026-10-02: two live sessions' last activity
+# differed between the two completions, because their transcripts were written in between.
+
+function Get-HordeSnapshotWriteTime {
+    param($C, [string]$Path)
+    $k = "write-time|" + $Path
+    if (-not $C.snapshot.ContainsKey($k)) { $C.snapshot[$k] = Get-HordeWriteTime -Path $Path }
+    return $C.snapshot[$k]
+}
+
+function Read-HordeSnapshotControlExtras {
+    param($C, $Record)
+    $k = "control-file|" + $Record.source
+    if (-not $C.snapshot.ContainsKey($k)) { $C.snapshot[$k] = Read-HordeControlExtras -Record $Record }
+    return $C.snapshot[$k]
+}
+
+function Test-HordeSnapshotLeaf {
+    param($C, [string]$Path)
+    $k = "file-exists|" + $Path
+    if (-not $C.snapshot.ContainsKey($k)) { $C.snapshot[$k] = [bool](Test-Path -LiteralPath $Path -PathType Leaf) }
+    return $C.snapshot[$k]
+}
+
 function Get-HordeProcessIndex {
     # The process table read ONCE per projection: { resumes; unreadPids }. resumes maps a session id
     # (ignoring case) to the rows whose command line resumes it (--resume <id> or -r <id>), in the
@@ -832,12 +863,12 @@ function Get-HordeActivityAnswer {
     param($S, $C)
     $srcs = New-Object System.Collections.ArrayList
     if ($null -ne $S.runFolder) { [void]$srcs.Add(@("W6", "cmdlog.txt", $S.runFolder.cmdlogAt)) }
-    [void]$srcs.Add(@("W6", "loose cmdlog", (Get-HordeWriteTime -Path (Join-Path $C.wf.looseDir ($S.id + ".cmdlog.txt")))))
+    [void]$srcs.Add(@("W6", "loose cmdlog", (Get-HordeSnapshotWriteTime -C $C -Path (Join-Path $C.wf.looseDir ($S.id + ".cmdlog.txt")))))
     if ($S.fields.Contains("transcriptPath") -and $S.fields["transcriptPath"].answer.state -eq "known") {
-        [void]$srcs.Add(@("X3", "write time", (Get-HordeWriteTime -Path "$($S.fields['transcriptPath'].answer.value)")))
+        [void]$srcs.Add(@("X3", "write time", (Get-HordeSnapshotWriteTime -C $C -Path "$($S.fields['transcriptPath'].answer.value)")))
     }
     if ($null -ne $S.rec) {
-        $extra = Read-HordeControlExtras -Record $S.rec
+        $extra = Read-HordeSnapshotControlExtras -C $C -Record $S.rec
         $isCodex = ($S.rec.fields.agent.state -eq "known" -and "$($S.rec.fields.agent.value)" -ceq "codex")
         $name = "updatedAt"; $store = "X2"
         if ($isCodex) { $name = "statusUpdatedAt"; $store = "W8" }
@@ -988,7 +1019,7 @@ function Complete-HordeSession {
     $isCodexRec = ($null -ne $S.rec -and $S.rec.fields.agent.state -eq "known" -and "$($S.rec.fields.agent.value)" -ceq "codex")
     if ($isCodexRec) {
         # A file identity read a moment ago and cannot read again is not a missing file.
-        $codexExtra = Read-HordeControlExtras -Record $S.rec
+        $codexExtra = Read-HordeSnapshotControlExtras -C $C -Record $S.rec
         if ($null -eq $codexExtra) { [void]$fl.Add((New-HordeUnsure -Store "W8" -Field "wezfleetSessionId" -Reason "the codex control file could not be read again")) }
         else { [void]$fl.Add((New-HordeCandidate -Store "W8" -Field "wezfleetSessionId" -Answer (Get-HordeStoredField -Record $codexExtra -Name "wezfleetSessionId" -What "the codex file"))) }
     }
@@ -1083,7 +1114,7 @@ function Complete-HordeSession {
     elseif (-not $C.transcripts.index.ContainsKey($id)) { [void]$tc.Add((New-HordeCandidate -Store "X3" -Field "file name" -Skip "no project folder holds a transcript for this id")) }
     elseif (@($C.transcripts.index[$id]).Count -eq 1) { [void]$tc.Add((New-HordeCandidate -Store "X3" -Field "file name" -Answer (New-HordeKnown -Value @($C.transcripts.index[$id])[0]))) }
     else { [void]$tc.Add((New-HordeCandidate -Store "X3" -Field "file name" -Skip ("" + @($C.transcripts.index[$id]).Count + " project folders hold a transcript for this id, so none is taken"))) }
-    if ($null -ne $S.x1 -and $S.x1.transcriptPath -ne "" -and (Test-Path -LiteralPath $S.x1.transcriptPath -PathType Leaf)) { [void]$tc.Add((New-HordeCandidate -Store "X1" -Field "transcript_path" -Answer (New-HordeKnown -Value $S.x1.transcriptPath))) }
+    if ($null -ne $S.x1 -and $S.x1.transcriptPath -ne "" -and (Test-HordeSnapshotLeaf -C $C -Path $S.x1.transcriptPath)) { [void]$tc.Add((New-HordeCandidate -Store "X1" -Field "transcript_path" -Answer (New-HordeKnown -Value $S.x1.transcriptPath))) }
     else { [void]$tc.Add((New-HordeCandidate -Store "X1" -Field "transcript_path" -Skip "no guarded pane-sessions file names a transcript that exists")) }
     [void]$tc.Add((Get-HordeLastReportField $S "transcriptPath" "session.transcriptPath"))
     $tExtra = ""
@@ -1246,6 +1277,7 @@ function Get-HordeProjection {
         host = $null; paneVerdicts = $null; transcripts = (Get-HordeTranscriptIndex -ProjectsDir $ProjectsDir)
         layout = (Read-HordeLayoutSaves -LayoutPort $LayoutPort); links = $null; idSources = $null
         procIndex = (Get-HordeProcessIndex -Processes $Processes)
+        snapshot = (New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase))
     }
     $C.host = Get-HordeHostContext -HandlesAnswer (Read-HordeHostHandles -Port $HostPort -Platform $Platform) -InstanceAnswer (Read-HordeHostInstance -Port $HostPort) -Port $HostPort
     $C.paneVerdicts = Get-HordePaneFileVerdicts -PaneRead $C.paneRead -Context $C.host -Registry $C.wf.registry -VerifiedLive $C.identity.verifiedLive
@@ -1257,7 +1289,8 @@ function Get-HordeProjection {
 
 function Complete-HordeProjection {
     # The view from one reading of the stores (Get-HordeProjection's context), in a scope (the header's
-    # SCOPE). Reads nothing.
+    # SCOPE). Reads no store anew: the few live-file facts a completion needs come from the reading's
+    # snapshot, read once.
     param($C, [ValidateSet("All", "Current")][string]$Scope = "All")
     $Processes = $C.processes
     $Now = $C.now

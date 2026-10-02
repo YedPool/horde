@@ -779,6 +779,12 @@ if (Section "scope" "the current scope (core/Projection.ps1 header, SCOPE)") {
     $sg = New-Fleet "scope-live-handle"; AddReportOnly $sg -Pane 30
     $psg = Project $sg; $psgC = Project $sg -Scope Current
     Check ((Val (Ans $psg 35 "pane")) -eq "30" -and (Has $psgC 35) -and @(ScopeDiff (ScopeDoc $psg) (ScopeDoc $psgC)).Count -eq 0) "signal 5: a stored handle live in this instance makes a finished session current, and both scopes agree on it"
+    # One reading completed twice sees one set of live-file facts: its snapshot (the header's SCOPE).
+    $snf = New-Fleet "scope-snapshot"
+    $psn = Project $snf
+    [System.IO.File]::SetLastWriteTimeUtc((Join-Path $snf ("agent\projects\C--work-gamma\" + (Sid 3) + ".jsonl")), $now.AddSeconds(-5))
+    $psn2 = Get-HordeProjection -From $psn.inputs -Scope Current
+    Check ((Val (Ans $psn 3 "lastActivity")) -like "2026-06-01T11:59:40*" -and (Val (Ans $psn2 3 "lastActivity")) -like "2026-06-01T11:59:40*" -and (Val (Ans (Project $snf) 3 "lastActivity")) -like "2026-06-01T11:59:55*") "one reading completed twice sees one set of live-file facts, and a fresh reading sees the new one"
 }
 
 if (Section "schema" "schema/session-view.v1") {
