@@ -86,21 +86,49 @@ function Get-CodexContentChars {
 }
 
 function Read-CodexTranscript {
-    # The port's records for one rollout: { records; parseSkipped; tornTail; sessionId }.
-    param([string]$Path)
-    $st = @{ sessionId = ""; sawRecord = $false; turn = "" }
+    # The port's records for one rollout, handed to $Sink.Add in file order; returns
+    # { records; parseSkipped; tornTail; sessionId }, records empty when a sink was given.
+    #
+    # ONE FACT IS NEEDED BEFORE THE FIRST RECORD: whether the rollout has any token_usage_record, which
+    # decides whether its token_count lines are calls. M1 held every record until the end to know it
+    # (plan step M2 must not), so a first read looks for one and stops at the first it finds - early in
+    # every rollout that has them. When it reads to the end without finding one, the second read stops
+    # where it did (Read-HordeJsonLines -Upto), so a rollout still being written gives one snapshot.
+    param([string]$Path, $Sink = $null)
+    $kept = $null
+    if ($null -eq $Sink) { $kept = New-Object System.Collections.ArrayList; $Sink = $kept }
+    # When there is none, M1 priced each token_count call with the model its turn had at the END of the
+    # file; that read is this one, so it keeps the same map.
+    $look = @{ stop = $false; turn = "" }
+    $finalModel = @{}
+    $scan = Read-HordeJsonLines -Path $Path -Control $look -Each {
+        param($ln, $v)
+        if ($null -eq (ConvertTo-HordeUtcTime $v["timestamp"])) { return }
+        $type = "$($v["type"])"
+        if ($type -eq "token_usage_record") { $look.stop = $true; return }
+        $p = $v["payload"]
+        if ($p -isnot [System.Collections.IDictionary]) { $p = @{} }
+        $turn = "$($p["turn_id"])"
+        if ($turn -ne "" -and ("$($p["type"])" -eq "task_started" -or $type -eq "turn_context")) { $look.turn = $turn }
+        if ($turn -eq "") { $turn = $look.turn }
+        if ($type -eq "turn_context" -and $turn -ne "" -and $p["model"] -is [string]) { $finalModel[$turn] = $p["model"] }
+    }
+    $sawRecord = $scan.stopped
+    $upto = $null
+    if (-not $sawRecord) { $upto = $scan }
+
+    $st = @{ sessionId = ""; turn = ""; prevTotal = "" }
     $turnModel = @{}
-    # Items waiting for the response they belong to: tool calls and assistant text, per turn.
+    # Items waiting for the response they belong to: how many tool calls, and the assistant text, per turn.
     $pendingTools = @{}
     $pendingText = @{}
-    $out = New-Object System.Collections.ArrayList
     $userAbsent = New-HordeAbsent -Note "a user message"
     $notWorker = New-HordeAbsent -Note "this harness's tools do not launch workers that Horde can see"
     $errorUnsaid = New-HordeUnknown -Reason "the output line does not say whether the tool failed"
 
     # STREAMED one line at a time (core/Transcript.ps1, Read-HordeJsonLines -Each); "return" moves to
     # the next line.
-    $parsed = Read-HordeJsonLines -Path $Path -Each {
+    $parsed = Read-HordeJsonLines -Path $Path -Upto $upto -Each {
         param($ln, $v)
         $ts = ConvertTo-HordeUtcTime $v["timestamp"]
         if ($null -eq $ts) { return }
@@ -116,65 +144,77 @@ function Read-CodexTranscript {
 
         if ($type -eq "session_meta") {
             if ($st.sessionId -eq "" -and $p["id"] -is [string]) { $st.sessionId = $p["id"] }
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
             return
         }
         if ($type -eq "turn_context") {
             if ($turn -ne "" -and $p["model"] -is [string]) { $turnModel[$turn] = $p["model"] }
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
             return
         }
         if ($type -eq "token_usage_record") {
-            $st.sawRecord = $true
             $id = "$($p["response_id"])"
             if ($id -eq "") { $id = "line-" + $ln }
             $model = New-HordeUnknown -Reason ("no turn_context names the model of turn " + $turn)
             if ($turnModel.ContainsKey($turn)) { $model = New-HordeKnown -Value $turnModel[$turn] }
-            $tools = @(); if ($pendingTools.ContainsKey($turn)) { $tools = @($pendingTools[$turn]); $pendingTools.Remove($turn) }
+            $tools = 0; if ($pendingTools.ContainsKey($turn)) { $tools = $pendingTools[$turn]; $pendingTools.Remove($turn) }
             $chars = 0; if ($pendingText.ContainsKey($turn)) { $chars = $pendingText[$turn]; $pendingText.Remove($turn) }
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $ts -Line $ln -Fields @{
-                id = $id; model = $model; usage = (Get-CodexUsage $p["usage"]); textChars = $chars; toolCallCount = $tools.Count; speed = ""; inferenceGeo = "" }))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $ts -Line $ln -Fields @{
+                id = $id; model = $model; usage = (Get-CodexUsage $p["usage"]); textChars = $chars; toolCallCount = $tools; speed = ""; inferenceGeo = "" }))
             if ($p["thread_token_usage"] -is [System.Collections.IDictionary]) {
-                [void]$out.Add((New-HordeTranscriptRecord -Kind "usageTotal" -Role "system" -Ts $ts -Line $ln -Fields @{ usage = (Get-CodexUsage $p["thread_token_usage"]) }))
+                $Sink.Add((New-HordeTranscriptRecord -Kind "usageTotal" -Role "system" -Ts $ts -Line $ln -Fields @{ usage = (Get-CodexUsage $p["thread_token_usage"]) }))
             }
             return
         }
         if ($type -eq "event_msg" -and $ptype -eq "token_count") {
-            # Kept aside: used only when the rollout has no token_usage_record at all.
-            # Its place in the file is kept as a slot, so the fallback's records land where the line was.
+            # An event always; a call too only when the rollout has no token_usage_record at all.
+            $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
+            if ($sawRecord) { return }
             $info = $p["info"]
             $last = $null; $total = $null
             if ($info -is [System.Collections.IDictionary]) { $last = $info["last_token_usage"]; $total = $info["total_token_usage"] }
-            [void]$out.Add([pscustomobject]@{ PSTypeName = "Codex.TokenCountSlot"; ts = $ts; line = $ln; turn = $turn; last = $last; total = $total })
+            # A token_count with no usage (info:null, a rate-limit-only event) is not a response (review of
+            # PR #50, F8): made a call, its unknown usage made the whole rollout's tokens unknown.
+            if ($last -isnot [System.Collections.IDictionary]) { return }
+            # 0.159.2: no token_usage_record. One call per change in the cumulative total; a token_count
+            # whose total did not move is a repeat of the last one, not a new response.
+            $key = ""
+            if ($total -is [System.Collections.IDictionary]) { $key = "" + $total["total_tokens"] + "/" + $total["input_tokens"] + "/" + $total["output_tokens"] }
+            if ($key -ne "" -and $key -eq $st.prevTotal) { return }
+            $st.prevTotal = $key
+            $model = New-HordeUnknown -Reason ("no turn_context names the model of turn " + $turn)
+            if ($finalModel.ContainsKey($turn)) { $model = New-HordeKnown -Value $finalModel[$turn] }
+            $Sink.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $ts -Line $ln -Fields @{
+                id = ("token-count-" + $ln); model = $model; usage = (Get-CodexUsage $last); textChars = 0; toolCallCount = 0; speed = ""; inferenceGeo = "" }))
+            if ($total -is [System.Collections.IDictionary]) { $Sink.Add((New-HordeTranscriptRecord -Kind "usageTotal" -Role "system" -Ts $ts -Line $ln -Fields @{ usage = (Get-CodexUsage $total) })) }
             return
         }
         if ($type -eq "event_msg" -and ($ptype -eq "task_complete" -or $ptype -eq "turn_aborted")) {
             $dur = New-HordeUnknown -Reason ("the " + $ptype + " line has no duration_ms")
             if ($null -ne $p["duration_ms"]) { $dur = New-HordeKnown -Value ([long]$p["duration_ms"]) }
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $ts -Line $ln -Fields @{ durationMs = $dur }))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $ts -Line $ln -Fields @{ durationMs = $dur }))
             return
         }
         if ($type -eq "event_msg" -and $ptype -eq "item_completed" -and $p["item"] -is [System.Collections.IDictionary] -and $p["item"]["type"] -eq "UserMessage") {
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $ts -Line $ln -Fields @{ source = "user"; chars = (Get-CodexContentChars $p["item"]["content"]); taskId = ""; toolCallId = ""; interim = $false; worker = $userAbsent }))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $ts -Line $ln -Fields @{ source = "user"; chars = (Get-CodexContentChars $p["item"]["content"]); taskId = ""; toolCallId = ""; interim = $false; worker = $userAbsent }))
             return
         }
         if ($type -eq "compacted") {
-            [void]$out.Add((New-HordeTranscriptRecord -Kind "compaction" -Role "system" -Ts $ts -Line $ln))
+            $Sink.Add((New-HordeTranscriptRecord -Kind "compaction" -Role "system" -Ts $ts -Line $ln))
             return
         }
         if ($type -eq "response_item") {
             if ($ptype -like "*_call" -and "$($p["call_id"])" -ne "") {
-                $tc = New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts $ts -Line $ln -Fields @{ id = "$($p["call_id"])"; name = "$($p["name"])"; callId = ""; launchesWorker = $false }
-                if (-not $pendingTools.ContainsKey($turn)) { $pendingTools[$turn] = New-Object System.Collections.ArrayList }
-                [void]$pendingTools[$turn].Add($tc)
-                [void]$out.Add($tc)
+                if (-not $pendingTools.ContainsKey($turn)) { $pendingTools[$turn] = 0 }
+                $pendingTools[$turn]++
+                $Sink.Add((New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts $ts -Line $ln -Fields @{ id = "$($p["call_id"])"; name = "$($p["name"])"; callId = ""; launchesWorker = $false }))
                 return
             }
             if ($ptype -like "*_call_output" -and "$($p["call_id"])" -ne "") {
                 $o = $p["output"]
                 $chars = 0
                 if ($o -is [string]) { $chars = $o.Length } else { $chars = Get-CodexContentChars $o }
-                [void]$out.Add((New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts $ts -Line $ln -Fields @{ toolCallId = "$($p["call_id"])"; isError = $errorUnsaid; chars = $chars; worker = $notWorker }))
+                $Sink.Add((New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts $ts -Line $ln -Fields @{ toolCallId = "$($p["call_id"])"; isError = $errorUnsaid; chars = $chars; worker = $notWorker }))
                 return
             }
             if ($ptype -eq "message" -and $p["role"] -eq "assistant") {
@@ -182,33 +222,12 @@ function Read-CodexTranscript {
                 $pendingText[$turn] += (Get-CodexContentChars $p["content"])
             }
         }
-        [void]$out.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
-    }
-
-    $records = New-Object System.Collections.ArrayList
-    $prevTotal = ""
-    foreach ($r in $out) {
-        if (@($r.PSObject.TypeNames) -notcontains "Codex.TokenCountSlot") { [void]$records.Add($r); continue }
-        [void]$records.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $r.ts -Line $r.line))
-        if ($st.sawRecord) { continue }
-        # A token_count with no usage (info:null, a rate-limit-only event) is not a response (review of
-        # PR #50, F8): made a call, its unknown usage made the whole rollout's tokens unknown.
-        if ($r.last -isnot [System.Collections.IDictionary]) { continue }
-        # 0.159.2: no token_usage_record. One call per change in the cumulative total; a token_count
-        # whose total did not move is a repeat of the last one, not a new response.
-        $key = ""
-        if ($r.total -is [System.Collections.IDictionary]) { $key = "" + $r.total["total_tokens"] + "/" + $r.total["input_tokens"] + "/" + $r.total["output_tokens"] }
-        if ($key -ne "" -and $key -eq $prevTotal) { continue }
-        $prevTotal = $key
-        $model = New-HordeUnknown -Reason ("no turn_context names the model of turn " + $r.turn)
-        if ($turnModel.ContainsKey($r.turn)) { $model = New-HordeKnown -Value $turnModel[$r.turn] }
-        [void]$records.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $r.ts -Line $r.line -Fields @{
-            id = ("token-count-" + $r.line); model = $model; usage = (Get-CodexUsage $r.last); textChars = 0; toolCallCount = 0; speed = ""; inferenceGeo = "" }))
-        if ($r.total -is [System.Collections.IDictionary]) { [void]$records.Add((New-HordeTranscriptRecord -Kind "usageTotal" -Role "system" -Ts $r.ts -Line $r.line -Fields @{ usage = (Get-CodexUsage $r.total) })) }
+        $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
     }
     $sessionId = $st.sessionId
     if ($sessionId -eq "") { $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
-    return [pscustomobject]@{ records = $records.ToArray(); parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
+    $records = @(); if ($null -ne $kept) { $records = $kept.ToArray() }
+    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
 }
 
-Register-HordeTranscriptAdapter -Name "codex" -Claim { param($p) Test-CodexTranscript -Path $p } -Read { param($p) Read-CodexTranscript -Path $p }
+Register-HordeTranscriptAdapter -Name "codex" -Claim { param($p) Test-CodexTranscript -Path $p } -Read { param($p, $s) Read-CodexTranscript -Path $p -Sink $s }
