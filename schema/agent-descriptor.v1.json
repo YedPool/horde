@@ -70,7 +70,7 @@
     },
     "permissionLevels": {
       "type": "array",
-      "description": "Every level of Horde's permission vocabulary (core/permission-levels.json, remote R0), each exactly once: with the argv fragment that gives it on this harness and the evidence that the flag was read off its help, or as inexpressible with the reason. A node refuses a level its harness cannot express; it never lowers it to the nearest level the harness has (remote R9, engines E2). One of argv and inexpressible per row, and evidence only beside argv: core/AgentDescriptor.ps1 checks both, and the coverage.",
+      "description": "Every level of Horde's permission vocabulary (core/permission-levels.json, remote R0), each exactly once: with the argv fragment that gives it on this harness and the evidence that the flag was read off its help, or as inexpressible with the reason. A node refuses a level its harness cannot express; it never lowers it to the nearest level the harness has (remote R9, engines E2). A harness's real permission depends on its environment as well as its flags (review of PR #60): so a fragment also names the entry points it is for, what reading the started harness's effective mode back showed, and the preconditions it holds under. A precondition the caller has not verified makes the level unknown, and the caller refuses. One of argv and inexpressible per row; evidence, entryPoints and readback are required beside argv, and they and preconditions are refused beside inexpressible: core/AgentDescriptor.ps1 checks these, and the coverage.",
       "items": {
         "type": "object",
         "required": ["level"],
@@ -79,6 +79,21 @@
           "level": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
           "argv": { "type": "array", "items": { "type": "string", "pattern": "^\\S+$" } },
           "evidence": { "$ref": "#/definitions/evidence" },
+          "entryPoints": { "type": "array", "description": "How the harness is started for this fragment to apply: interactive (its own screen) or headless (one prompt, no screen). A fragment one entry point rejects is not offered for it.", "items": { "type": "string", "enum": ["interactive", "headless"] } },
+          "readback": { "$ref": "#/definitions/evidence", "description": "What the started harness reported as its effective mode under this fragment, how it was read, and when." },
+          "preconditions": {
+            "type": "array",
+            "description": "Conditions of the environment this fragment gives its level only under, each named once with the evidence of what happens without it. The caller verifies each by name before it may use the fragment.",
+            "items": {
+              "type": "object",
+              "required": ["name", "evidence"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$" },
+                "evidence": { "$ref": "#/definitions/evidence" }
+              }
+            }
+          },
           "inexpressible": { "type": "string", "pattern": "\\S", "description": "Why this harness has no way to give the level." }
         }
       }
