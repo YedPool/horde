@@ -34,6 +34,16 @@
         @{ Name = "tilde-allowed-in-paths"
            Find = '''[^A-Za-z0-9 \\/:._-]'''
            Replace = '''[^A-Za-z0-9 \\/:._~-]''' }
+        # --- round 3 (F2): local, absolute paths; the endpoint re-checked
+        @{ Name = "unc-path-allowed"
+           Find = "if (-not [regex]::IsMatch(`$Path, '\A[A-Za-z]:[\\/]')) {"
+           Replace = 'if ($false) {' }
+        @{ Name = "doubled-separator-allowed"
+           Find = 'if ($Path.Contains("\\") -or $Path.Contains("//")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "endpoint-not-rechecked"
+           Find = 'if ($whyEp -ne "") { throw'
+           Replace = 'if ($false) { throw' }
         @{ Name = "user-config-read"
            Find = '"-F", $Paths.config,'
            Replace = '' }
@@ -74,7 +84,7 @@
            Find = "'\A(?:[A-Za-z0-9](?:"
            Replace = "'\A(?:[-A-Za-z0-9](?:" }
         @{ Name = "port-unbounded"
-           Find = 'if ($port -lt 1 -or $port -gt 65535) {'
+           Find = 'if (-not ($Port -is [int]) -or $Port -lt 1 -or $Port -gt 65535) {'
            Replace = 'if ($false) {' }
         @{ Name = "hub-id-too-long"
            Find = "'\A[a-z0-9][a-z0-9-]{0,62}\z'"

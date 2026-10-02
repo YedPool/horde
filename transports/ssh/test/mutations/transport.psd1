@@ -7,7 +7,7 @@
     Suite  = "transports\ssh\test\test-ssh.ps1"
     Mutations = @(
         @{ Name = "exe-found-through-path"
-           Find = '$p = Join-Path "$env:SystemRoot" $script:HordeSshExeRelative'
+           Find = '$p = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe")'
            Replace = '$p = "" + (Get-Command ssh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source' }
         @{ Name = "key-absent-accepted"
            Find = 'if (-not (Test-Path -LiteralPath $Paths.identity -PathType Leaf)) {'
@@ -67,8 +67,11 @@
            Replace = 'return (& Test-HordeSshBanner -Endpoint $Endpoint)' }
         # --- no orphan: Open hands ssh.exe to the link or stops it (F7)
         @{ Name = "process-left-on-failure"
-           Find = 'if (-not $handed) { Stop-HordeSshUnowned -Process $proc -StartedAt $startedAt }'
+           Find = 'if ($null -ne $job) { $job.Dispose() }'
            Replace = '' }
+        @{ Name = "process-not-put-in-the-job"
+           Find = 'try { [HordeSshNative]::Assign($Job, $started.Handle) }'
+           Replace = 'try { }' }
         @{ Name = "process-counted-handed-too-early"
            Find = '$handed = $false'
            Replace = '$handed = $true' }
@@ -95,15 +98,34 @@
         @{ Name = "round2-arguments-assigned"
            Find = '$psi.UseShellExecute = $false'
            Replace = '$psi.Arguments = $psi.Arguments; $psi.UseShellExecute = $false' }
-        @{ Name = "round2-exe-constant-reassigned"
+        # --- round 3 (F4): the broad classes, each harmless if it runs
+        @{ Name = "round3-nested-function"
+           Find = '$psi = [System.Diagnostics.ProcessStartInfo]::new('
+           Replace = 'function Get-HordeSshInner { 1 }; $psi = [System.Diagnostics.ProcessStartInfo]::new(' }
+        @{ Name = "round3-function-not-hordessh-named"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
-           Replace = '$script:HordeSshFolder = $PSScriptRoot; $script:HordeSshExeRelative = $script:HordeSshExeRelative' }
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Get-Probe { 1 }' }
+        @{ Name = "round3-function-defined-twice"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function New-HordeSshResult { param([bool]$Ok, $Channel = $null, $Peer = $null, [string]$Reason = "") return [pscustomobject]@{ ok = $Ok; channel = $Channel; peer = $Peer; listener = $null; reason = $Reason } }' }
+        @{ Name = "round3-function-drive"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; ${function:Get-HordeSshPaths} = ${function:Get-HordeSshPaths}' }
+        @{ Name = "round3-alias-drive"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; ${alias:Zz-HordeSshProbe} = "Get-Date"' }
+        @{ Name = "round3-variable-drive"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; ${variable:hordeSshProbe} = 1' }
+        @{ Name = "round3-add-type-outside-native"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; Add-Type -TypeDefinition "public class HordeSshProbeZz {}"' }
         @{ Name = "round2-environment-assigned"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
            Replace = '$script:HordeSshFolder = $PSScriptRoot; $env:HORDE_GUARD_PROBE = "x"' }
         @{ Name = "round2-setup-not-canonical"
-           Find = '$psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), $Arguments)'
-           Replace = '$psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), ($Arguments))' }
+           Find = '$psi = [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe"), $Arguments)'
+           Replace = '$psi = [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe"), ($Arguments))' }
         # --- the review's 12 forms that passed the first guard (F4), each appended where nothing runs it
         @{ Name = "review-bare-ssh-exe"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
