@@ -162,7 +162,8 @@ $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "agent-raise" @{} @
 Check ($s.answer.value -ceq "ask" -and @($s.refused | Where-Object { $_.rule -ceq "agent-raise" -and $_.why -like "*lower-only*" }).Count -eq 1) "a live rule that raises a lower-only key above the owner's value is refused, recorded, and the owner's value stands"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "agent-lower" @{} @{ "fixture.ceiling" = "plan" } "cli"))))
 Check ($s.answer.value -ceq "plan" -and @($s.refused).Count -eq 0) "CONTROL: one that lowers it resolves"
-$s = Get-Ceiling @($own, (New-Layer "L3" (New-Doc @(New-Rule "spec-lower" @{} @{ "fixture.ceiling" = "plan" }))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-raise" @{} @{ "fixture.ceiling" = "edits" }))))
+$ownHigh = New-Layer "L1" (New-Doc @(New-Rule "owner-high" @{} @{ "fixture.ceiling" = "bypass" })) -Source "owner"
+$s = Get-Ceiling @($ownHigh, (New-Layer "L3" (New-Doc @(New-Rule "spec-lower" @{} @{ "fixture.ceiling" = "plan" }))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-raise" @{} @{ "fixture.ceiling" = "edits" }))))
 Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "spawn-raise" }).Count -eq 1) "each layer may only lower what the layers below it left: a spawn cannot raise back what a run spec lowered"
 $s = Get-Ceiling @((New-Layer "L1" (New-Doc @(New-Rule "owner-raise" @{} @{ "fixture.ceiling" = "bypass" })) -Source "owner"))
 Check ($s.answer.value -ceq "bypass") "the owner's own layer may set it anywhere: direction binds only the layers above L1"
