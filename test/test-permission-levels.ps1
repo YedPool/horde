@@ -108,6 +108,9 @@ Check (@(Problems '{ "levels": [ { "name": "plan", "meaning": "Reads and/or prop
 
 Write-Host ""
 Write-Host "--- a key written twice is refused, not read as its last copy ---" -ForegroundColor Cyan
+$longKey = ('{ "levels": [ { "name": "plan", "meaning": "x", "' + ('k' * 300) + '": 1, "' + ('k' * 300) + '": 2 } ] }')
+$longMsg = ""; try { $null = Read-HordePermissionLevelText -Text $longKey } catch { $longMsg = "$($_.Exception.Message)" }
+Check ($longMsg -clike "*twice*" -and $longMsg.IndexOf(('k' * 41)) -lt 0 -and $longMsg.Length -lt 400) "a long repeated key is refused without being copied into the reason"
 # ConvertFrom-Json in PowerShell 5.1 keeps the last of two equal keys and says nothing (review of this
 # PR), so a reader would see one vocabulary and Horde would use another.
 Check (Throws { Read-HordePermissionLevelText -Text '{ "levels": [ { "name": "plan", "meaning": "x" } ], "levels": [ { "name": "plan", "meaning": "x" }, { "name": "bypass", "meaning": "x" } ] }' } "twice") "a second levels key is refused"

@@ -1,0 +1,53 @@
+# Mutations of core/JsonText.ps1, the one duplicate-key scanner. Run:
+# powershell -File tools\Mutate.ps1 -Spec test\mutations\json-text.psd1
+# Each breaks one rule of the scanner; test\test-json-text.ps1 must fail for every one of them.
+@{
+    Target = "core\JsonText.ps1"
+    Suite  = "test\test-json-text.ps1"
+    Mutations = @(
+        @{ Name = "keys-compared-by-case"
+           Find = '$low = $key.ToLowerInvariant()'
+           Replace = '$low = $key'
+           Expect = "survives"
+           Reason = "each frame's keys are a plain @{}, which already ignores case, so the lower-casing is a second statement of the rule; kept as it was moved from core/Ownership.ps1, and the suite's case check passes through the table either way" }
+        @{ Name = "escaped-key-not-decoded"
+           Find = 'if ($key.Contains(''\'')) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "escaped-quote-ends-the-string"
+           Find = '{ if ($Text[$i] -eq ''\'') { $i++ }; $i++ }'
+           Replace = '{ $i++ }' }
+        @{ Name = "keys-shared-with-enclosing-objects"
+           Find = '$top.keys[$low] = $true'
+           Replace = 'foreach ($fr in $stack) { $fr.keys[$low] = $true }' }
+        @{ Name = "comma-does-not-start-a-key"
+           Find = 'if ($top.kind -eq "object") { $top.expectKey = $true }'
+           Replace = 'if ($false) { $top.expectKey = $true }' }
+        @{ Name = "values-read-as-keys"
+           Find = 'if ($top.kind -ne "object" -or -not $top.expectKey) { continue }'
+           Replace = 'if ($top.kind -ne "object") { continue }' }
+        @{ Name = "array-path-without-index"
+           Find = 'else { $path = $parent.path + "[" + $parent.index + "]" }'
+           Replace = 'else { $path = $parent.path }' }
+        @{ Name = "array-index-not-counted"
+           Find = 'else { $top.index++ }'
+           Replace = 'else { }' }
+        @{ Name = "closing-bracket-keeps-the-frame"
+           Find = '{ if ($stack.Count -gt 0) { $stack.RemoveAt($stack.Count - 1) } }'
+           Replace = '{ }' }
+        @{ Name = "duplicate-not-reported"
+           Find = '[void]$out.Add("key ''" + $key + "'' appears more than once in one object (" + $top.path + ")")'
+           Replace = '$null = $key' }
+        @{ Name = "unterminated-string-read-past-the-end"
+           Find = 'if ($i -ge $n) { break }'
+           Replace = '' }
+        @{ Name = "bad-escape-throws"
+           Find = 'catch { } }'
+           Replace = 'catch { throw } }' }
+        @{ Name = "stray-closing-bracket-unguarded"
+           Find = '{ if ($stack.Count -gt 0) { $stack.RemoveAt($stack.Count - 1) } }'
+           Replace = '{ $stack.RemoveAt($stack.Count - 1) }' }
+        @{ Name = "stray-comma-unguarded"
+           Find = 'elseif ($c -eq '','' -and $stack.Count -gt 0) {'
+           Replace = 'elseif ($c -eq '','') {' }
+    )
+}

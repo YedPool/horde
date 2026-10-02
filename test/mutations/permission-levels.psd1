@@ -117,17 +117,8 @@
            Find = 'if ($cap.state -cne "known") { return (New-HordeUnknown -Reason ("the permission ceiling is not known: " + $cap.reason)) }'
            Replace = 'if ($cap.state -cne "known") { return (New-HordeKnown -Value $true) }' }
         @{ Name = "duplicate-key-accepted"
-           Find = 'if ($null -ne $dup) { throw'
-           Replace = 'if ($false) { throw' }
-        @{ Name = "duplicate-key-escapes-not-decoded"
-           Find = 'if ($e -ceq ''u'' -and $i + 5 -lt $n) {'
+           Find = 'if ($dups.Count -gt 0) {'
            Replace = 'if ($false) {' }
-        @{ Name = "duplicate-key-escaped-quote-ends-string"
-           Find = 'if ($Text[$i] -ceq ''\'' -and $i + 1 -lt $n) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "duplicate-key-not-scoped-to-its-object"
-           Find = '$top = $stack[$stack.Count - 1]'
-           Replace = '$top = $stack[0]' }
         @{ Name = "bom-not-named"
            Find = 'if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF'
            Replace = 'if ($false -and $bytes[0] -eq 0xEF' }
@@ -161,5 +152,8 @@
         @{ Name = "coverage-ok-ignores-duplicates"
            Find = '$ok = ($missing.Count -eq 0 -and $unknown.Count -eq 0 -and $duplicate.Count -eq 0)'
            Replace = '$ok = ($missing.Count -eq 0 -and $unknown.Count -eq 0)' }
+        @{ Name = "repeated-key-echoed-into-the-reason"
+           Find = '$first = "a finding of " + $first.Length + " characters, not shown"'
+           Replace = '$first = $first' }
     )
 }
