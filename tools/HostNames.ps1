@@ -1,10 +1,11 @@
 # HostNames.ps1 - the ratchet for decision D12: nothing outside a port's own folder names that port.
 #
 # Development tooling, not part of the engine. It answers one question: does any file outside a
-# port's own folder name that port - a terminal in hosts/<name>/, an agent harness in agents/<name>/ -
-# where the port's allowlist does not say it may?
+# port's own folder name that port - a terminal in hosts/<name>/, an agent harness in agents/<name>/,
+# a transport in transports/<name>/ - where the port's allowlist does not say it may?
 #
-# TWO FAMILIES OF PORT, ONE RULE. D12 was written for terminals. The engine-settings design of
+# THREE FAMILIES OF PORT, ONE RULE. (The third, transports/, came with remote plan step R5; see
+# $script:HordePortFamilies.) D12 was written for terminals. The engine-settings design of
 # 2026-09-30 (section 9, build step E1) applies the same seam to the agent harness - the CLI process a
 # session runs - and the founder's decision of the same day says core never names an engine. A harness
 # is therefore a port exactly as a host is: its folder is agents/<name>/, with the same names.txt,
@@ -145,7 +146,11 @@
 $script:HordeHostNamesProseFolder = "planning"
 # The families of port, each a top-level folder holding one folder per port. A third family is a line
 # here, not a copy of the scan. Order is only the order findings are reported in.
-$script:HordePortFamilies = @("hosts", "agents")
+# THE THIRD FAMILY (remote plan step R5; the remote design's founder decision 10): nothing outside
+# transports/<name>/ names a transport program or its options, so the second transport is a new folder
+# and not an engine change. transports/Port.ps1, beside the transport folders, belongs to no transport
+# and is scanned like core.
+$script:HordePortFamilies = @("hosts", "agents", "transports")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 # The cross-host import (header, THE ONE CROSS-HOST IMPORT): the count cell that marks it, matched
@@ -641,6 +646,19 @@ function Test-HordeHostNames {
     return $found
 }
 
+function Get-HordePortFolders {
+    # Every port's folder that exists, as "<family>/<name>", forward slashes. Returned UNROLLED, so a
+    # caller writes @(Get-HordePortFolders): a list returned as one object and wrapped in @() is one
+    # element, and the image rule then skipped no port at all (measured on this step's first try).
+    param([string]$RepoRoot)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($fam in $script:HordePortFamilies) {
+        $famDir = Join-Path $RepoRoot $fam
+        if (Test-Path -LiteralPath $famDir -PathType Container) { foreach ($d in @(Get-ChildItem -LiteralPath $famDir -Directory)) { [void]$out.Add($fam + "/" + $d.Name) } }
+    }
+    return @($out)
+}
+
 function Get-HordePortNamesOfKind {
     # Every usable name of one kind that any port declares, as { own; name }, own being the port's
     # folder ("agents/<name>"). A malformed line is Test-HordeHostNames's to report, not this one's.
@@ -724,7 +742,9 @@ function Test-HordeProcessImages {
         foreach ($x in $read.problems) { [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = ($lf + ":" + $x.line); problem = $x.problem }) }
     }
     $matched = @{}
-    foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt)))) {
+    # PORT FOLDERS, NOT FAMILIES (step R5): a file directly under a family folder - transports/Port.ps1
+    # - belongs to no port, so it is held to this rule like core.
+    foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip (@(Get-HordePortFolders -RepoRoot $RepoRoot) + @($script:HordeProcessImageExempt)))) {
         $m = Get-HordeImageMatches -Text ([System.IO.File]::ReadAllText($f.full)) -Rel $f.rel -Images $images
         if ($m.count -eq 0) { continue }
         $key = $f.rel.ToLowerInvariant()
