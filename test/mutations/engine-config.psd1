@@ -15,12 +15,66 @@
         @{ Name = "secret-scan-skipped"
            Find = 'foreach ($p in @(Find-HordeSecretPaths -Value $parsed)) {'
            Replace = 'foreach ($p in @()) {' }
-        @{ Name = "secret-entropy-shape-dropped"
-           Find = "if (`$tok -cmatch '[A-Z]' -and `$tok -cmatch '[a-z]' -and `$tok -cmatch '[0-9]') { return `$true }"
+        @{ Name = "secret-mixed-token-dropped"
+           Find = "if (`$Token -cmatch '[A-Z]' -and `$Token -cmatch '[a-z]' -and `$Token -cmatch '[0-9]') { return `$true }"
+           Replace = "if (`$false) { return `$true }" }
+        @{ Name = "secret-lower-token-dropped"
+           Find = "if (`$Token.Length -ge 40 -and `$Token -cmatch '^[a-z0-9]+`$' -and `$Token -cmatch '[a-z]' -and `$Token -cmatch '[0-9]') { return `$true }"
            Replace = "if (`$false) { return `$true }" }
         @{ Name = "secret-patterns-dropped"
-           Find = 'foreach ($p in $script:HordeSecretPatterns) { if ($Text -cmatch $p) { return $true } }'
+           Find = 'foreach ($pt in $script:HordeSecretPatterns) { $t = [regex]::Replace($t, $pt, $script:HordeRedacted) }'
            Replace = '' }
+        @{ Name = "secret-zai-shape-dropped"
+           Find = "'[0-9a-fA-F]{32}\.[A-Za-z0-9]{16,}',"
+           Replace = "" }
+        @{ Name = "secret-hex-shape-dropped"
+           Find = "'(?<![0-9A-Za-z])[0-9a-fA-F]{40,}(?![0-9A-Za-z])'"
+           Replace = "'(?!)'" }
+        @{ Name = "secret-gitlab-shape-dropped"
+           Find = "'glpat-[A-Za-z0-9_-]{20,}',"
+           Replace = "" }
+        @{ Name = "secret-google-oauth-shape-dropped"
+           Find = "'ya29\.[A-Za-z0-9_-]{20,}',"
+           Replace = "" }
+        @{ Name = "secret-key-names-not-scanned"
+           Find = 'if (Test-HordeSecretShape -Text $p.Name) { [void]$out.Add($Path + "." + $p.Name) }'
+           Replace = '' }
+        @{ Name = "findings-not-redacted"
+           Find = 'source = (Protect-HordeText $Source); path = (Protect-HordeText $Path); detail = (Protect-HordeText $Detail)'
+           Replace = 'source = $Source; path = $Path; detail = $Detail' }
+        @{ Name = "finding-detail-not-redacted"
+           Find = 'detail = (Protect-HordeText $Detail)'
+           Replace = 'detail = $Detail' }
+        @{ Name = "layer-label-not-redacted"
+           Find = 'throw (Protect-HordeText ("'
+           Replace = 'throw (("' }
+        @{ Name = "login-endpoint-accepted"
+           Find = 'if ($cred.kind -ceq "harness-login" -and $null -ne (Get-HordeAgentProp $pv "endpoint")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "keys-matched-ignoring-case"
+           Find = "`$keyByName = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)"
+           Replace = "`$keyByName = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)" }
+        @{ Name = "non-ascii-accepted"
+           Find = "elseif (`$txt -cmatch '[^\x00-\x7F]') {"
+           Replace = "elseif (`$false) {" }
+        @{ Name = "bom-not-named"
+           Find = 'if ($txt.Length -gt 0 -and [int]$txt[0] -eq 0xFEFF) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "registry-unknown-field-ignored"
+           Find = 'if ($script:HordeConfigKeyFields -cnotcontains $f) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "registry-layers-text-accepted"
+           Find = 'if ($lyRaw -isnot [System.Array]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "registry-enum-repeat-accepted"
+           Find = 'foreach ($x in $vals) { if (-not $seenV.Add("" + $x))'
+           Replace = 'foreach ($x in @()) { if (-not $seenV.Add("" + $x))' }
+        @{ Name = "registry-direction-unchecked"
+           Find = 'if ($script:HordeConfigDirections -cnotcontains ("" + $dir)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "registry-direction-off-an-enum"
+           Find = 'elseif ("" + $dir -cne "any" -and $kind -cne "enum") {'
+           Replace = 'elseif ($false) {' }
         @{ Name = "schema-findings-dropped"
            Find = 'foreach ($p in $bad) { Add-Finding "schema"'
            Replace = 'foreach ($p in @()) { Add-Finding "schema"' }
@@ -120,7 +174,7 @@
            Find = 'if (-not $seen.Add($n)) { [void]$problems.Add("the key " + $n + " is listed twice") }'
            Replace = '$null = $seen.Add($n)' }
         @{ Name = "registry-empty-enum-accepted"
-           Find = 'if (@(Get-HordeConfigItems $v "values").Count -eq 0) {'
+           Find = 'if ($vals.Count -eq 0) {'
            Replace = 'if ($false) {' }
     )
 }
