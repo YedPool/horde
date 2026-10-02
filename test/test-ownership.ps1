@@ -99,10 +99,10 @@ Check ($unaccounted.Count -eq 0) "every claude control file key is kept or dropp
 Check ("$(Get-HordeOwnershipSurveyedVersion -Doc $doc -Store 'X2')" -ceq "2.1.285") "the table records the claude version its control-file keys were surveyed against"
 # Two exceptions, and neither is a copy. updatedAt: lastActivity, the engine's derived "newest sign
 # of life", takes it as one of its inputs. cwd, read by projectCwd: the launch directory is a fact
-# the engine must still hold after the session exits and Claude removes its control file - a
-# stopped session's transcript and resume need it - so the engine owns it and reads it from the
-# control file while the session runs (ledger L-054). schema/session-record.v1 stores it for that
-# reason: "fixed at start and never revised".
+# an engine must still hold after the session exits and Claude removes its control file - a
+# stopped session's transcript and resume need it - so an engine owns it (the node's, since remote
+# plan R10) and reads it from the control file while the session runs (ledger L-054).
+# schema/session-binding.v1 stores it for that reason: "fixed at start and never revised".
 $notAgent = @($x2Reads | Where-Object { $_.owner -cne "agent" -and $_.key -cne "updatedAt" -and -not ($_.key -ceq "cwd" -and $_.name -ceq "projectCwd") } | ForEach-Object { $_.name })
 Check ($notAgent.Count -eq 0) ("a field kept from the claude control file is owned by the agent (" + ($notAgent -join ", ") + ")")
 $resumeStores = @((Get-HordeOwnershipField -Doc $doc -Name "resumeCommand").read | ForEach-Object { "$($_.store)" })
@@ -130,7 +130,10 @@ Check ((Get-HordeOwnershipField -Doc $doc -Name "transcriptPath").derived -like 
 # cwd (ledger L-050). So the control file is read first, and the hook's cwd only when the folder
 # of the transcript it names in the same file says it is the launch directory.
 $projectCwd = Get-HordeOwnershipField -Doc $doc -Name "projectCwd"
-Check ("$($projectCwd.owner)" -ceq "engine") "the project directory stays the engine's, because it must outlive the control file"
+# OWNER node SINCE REMOTE R10: the engine on the device that runs the session, which writes the
+# binding record. Still an engine, so the launch directory still outlives the control file; it is the
+# node's because only the machine the session runs on knows the directory (planning/execution-plan-remote.md R10).
+Check ("$($projectCwd.owner)" -ceq "node") "the project directory is the node engine's, because it must outlive the control file"
 $pcFirst = @($projectCwd.read)[0]
 Check ("$($pcFirst.store)" -ceq "X2" -and "$($pcFirst.field)" -ceq "cwd" -and "$($pcFirst.when)" -like "*running*") "the project directory is read first from the running session's control file"
 $pcX1 = @($projectCwd.read | Where-Object { "$($_.store)" -ceq "X1" })

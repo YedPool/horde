@@ -1,7 +1,9 @@
-# DOES schema/session-record.v1 DESCRIBE EXACTLY THE RECORD HORDE'S ENGINE STORES?
+# DOES schema/session-record.v1 DESCRIBE EXACTLY THE FLEET RECORD HORDE'S HUB ENGINE STORES?
 #
-# Step 1.2. The stored record holds the fields core/ownership.json gives to the engine and does not
-# mark derived - nothing else. A field another owner holds lives in that owner's store, and a
+# Step 1.2, split by remote plan step R10. The fleet record holds the fields core/ownership.json gives
+# to the engine (the hub's) and does not mark derived - nothing else - plus its two keys, sessionId
+# and device. The node's own fields (owner node) are the binding record's, schema/session-binding.v1,
+# held to the same rule by test/test-schema-session-binding.ps1. A field another owner holds lives in that owner's store, and a
 # derived field is computed; a stored copy of either would be the second writer step 0.6 forbids.
 # So the field list is not written here: it is computed from the ownership table on every run, and
 # this suite fails when the schema and the table disagree in either direction.
@@ -16,6 +18,7 @@ trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "core\Schema.ps1")
 . (Join-Path $root "core\Ownership.ps1")
 . (Join-Path $root "core\ReadShared.ps1")
+. (Join-Path $root "test\lib\RecordDrift.ps1")
 
 $schemaPath = Join-Path $root "schema\session-record.v1.json"
 $schemaText = Get-Content -LiteralPath $schemaPath -Raw
@@ -24,71 +27,26 @@ $own = Get-HordeOwnership
 
 function Copy-HordeJson { param($Value) return (($Value | ConvertTo-Json -Depth 30) | ConvertFrom-Json) }
 
-function Get-HordeReadOrder {
-    # The ownership table's read precedence for one field, in the form the schema documents it: store
-    # and field only. A store's guard and a read's `when` clause are left out on purpose - the schema
-    # says so, and core/ownership.json is where they are read - so a changed guard or when is not
-    # drift here; test/test-ownership.ps1 owns those.
-    param($Field)
-    return ((@($Field.read) | ForEach-Object { "$($_.store) $($_.field)" }) -join ", then ")
-}
-
-function Get-HordeRecordDrift {
-    # Every way the schema and the ownership table disagree about what the engine stores. Empty
-    # means they agree. Takes both as arguments so the controls below can hand it a changed copy.
-    param($Own, $Schema)
-    $out = New-Object System.Collections.ArrayList
-    $props = @{}
-    foreach ($p in @($Schema.properties.PSObject.Properties)) { $props[$p.Name] = $p.Value }
-    # WHAT BELONGS IN THE STORED RECORD, computed and never listed: owner engine, and no derived
-    # mark. sessionId is the key whatever its owner, so it is compared separately below.
-    $expected = @($Own.fields | Where-Object { "$($_.owner)" -ceq "engine" -and $null -eq $_.PSObject.Properties["derived"] -and "$($_.name)" -cne "sessionId" } | ForEach-Object { "$($_.name)" })
-    $stored = @($props.Keys | Where-Object { $_ -cne "schemaVersion" -and $_ -cne "sessionId" })
-    foreach ($n in $expected) { if ($stored -cnotcontains $n) { [void]$out.Add("'" + $n + "' is owned by the engine and not derived, but the schema does not store it") } }
-    foreach ($n in $stored) {
-        if ($expected -ccontains $n) { continue }
-        $f = Get-HordeOwnershipField -Doc $Own -Name $n
-        if ($null -eq $f) { [void]$out.Add("'" + $n + "' is stored, but the ownership table has no such field") }
-        elseif ("$($f.owner)" -cne "engine") { [void]$out.Add("'" + $n + "' is stored, but its owner is " + $f.owner + ", not the engine") }
-        else { [void]$out.Add("'" + $n + "' is stored, but it is derived: " + $f.derived) }
-    }
-    # A DROPPED FIELD IS NOT CARRIED. Read from the table, so a field dropped later is covered too.
-    foreach ($d in @($Own.dropped | Where-Object { $null -ne $_ })) {
-        if ($props.ContainsKey("$($d.name)")) { [void]$out.Add("'" + $d.name + "' is dropped by the ownership table but stored by the schema") }
-    }
-    # A STORED FIELD IS NEVER PROVISIONAL. The table marks a rule provisional when it rests on
-    # something unmeasured; the record stores a plain value and has nowhere to carry that mark, so a
-    # stored provisional value would read as fact. No stored field has the mark today (checked by this
-    # line on every run); if one gains it, the field needs the session-view (step 2.3), not this record.
-    foreach ($n in $expected) {
-        $f = Get-HordeOwnershipField -Doc $Own -Name $n
-        if ($null -ne $f.PSObject.Properties["provisional"]) { [void]$out.Add("'" + $n + "' is provisional in the ownership table (" + $f.provisional + "), and the stored record has no way to mark it") }
-    }
-    # EACH STORED FIELD SAYS WHO WRITES IT AND HOW IT IS READ UNTIL THE SWITCH, as the table does.
-    foreach ($n in $stored) {
-        $f = Get-HordeOwnershipField -Doc $Own -Name $n
-        if ("$($props[$n].'x-horde-owner')" -cne "engine") { [void]$out.Add("'" + $n + "' does not carry x-horde-owner engine") }
-        if ($null -ne $f -and "$($props[$n].'x-horde-read')" -cne (Get-HordeReadOrder $f)) { [void]$out.Add("'" + $n + "' documents a read order that is not the ownership table's (" + (Get-HordeReadOrder $f) + ")") }
-    }
-    # THE KEY: its owner in the schema is the table's, and the table's is the agent.
-    $sid = Get-HordeOwnershipField -Doc $Own -Name "sessionId"
-    if ($null -eq $sid) { [void]$out.Add("the ownership table has no sessionId") }
-    elseif ("$($sid.owner)" -cne "agent") { [void]$out.Add("sessionId's owner in the ownership table is " + $sid.owner + ", not the agent") }
-    if (-not $props.ContainsKey("sessionId")) { [void]$out.Add("the schema has no sessionId") }
-    elseif ($null -ne $sid -and "$($props['sessionId'].'x-horde-owner')" -cne "$($sid.owner)") { [void]$out.Add("sessionId's x-horde-owner is not the ownership table's owner (" + $sid.owner + ")") }
-    return @($out)
-}
+# The fleet record's fields the table does not own: the session id, and the device it runs on.
+$fleetKeys = $script:HordeFleetRecordKeys
 
 Write-Host ""
 Write-Host "--- the schema stores exactly the engine's own, non-derived fields ---" -ForegroundColor Cyan
 $expectedNames = @($own.fields | Where-Object { "$($_.owner)" -ceq "engine" -and $null -eq $_.PSObject.Properties["derived"] } | ForEach-Object { "$($_.name)" })
 Check (@($own.fields).Count -ge 30) ("CONTROL: the ownership table was read (" + @($own.fields).Count + " fields)")
 Check ($expectedNames.Count -ge 10) ("CONTROL: the table gives the engine fields to store (" + $expectedNames.Count + ": " + ($expectedNames -join ", ") + ")")
-$drift = @(Get-HordeRecordDrift -Own $own -Schema $schema)
+$drift = @(Get-HordeRecordDrift -Own $own -Schema $schema -Owner "engine" -Keys $fleetKeys)
 Check ($drift.Count -eq 0) ("the schema and the ownership table agree (" + ($drift -join "; ") + ")")
 $dups = @(Find-HordeJsonDuplicateKey -Text $schemaText)
 Check ($dups.Count -eq 0) ("the schema's text repeats no key in one object (" + ($dups -join "; ") + ")")
-Check (@($schema.required).Count -eq 2 -and @($schema.required) -ccontains "schemaVersion" -and @($schema.required) -ccontains "sessionId") "only schemaVersion and sessionId are required: a field not set is absent"
+$wantRequired = (@(@("schemaVersion") + @($fleetKeys.Keys)) | Sort-Object) -join ","
+Check (((@($schema.required) | Sort-Object) -join ",") -ceq $wantRequired) ("only schemaVersion and the record's keys are required (" + $wantRequired + "): a field not set is absent")
+Check ("$($schema.'$id')" -ceq "horde/schema/session-record.v1") "the schema's id is its own name"
+# ONE SHAPE FOR A DEVICE ID EVERYWHERE: the record's device is the node manifest's deviceId.
+$manifest = Get-HordeSchema -Name "node-manifest.v1"
+Check ("$($schema.properties.device.pattern)" -ceq ("^" + "$($manifest.properties.deviceId.pattern)".TrimStart("^").TrimEnd("$") + "$") -and "$($schema.properties.device.type)" -ceq "string") "device has node-manifest.v1's deviceId shape"
+$nodeHere = @("projectCwd", "lastSeen", "lastTool", "spawnedAt" | Where-Object { $null -ne $schema.properties.PSObject.Properties[$_] })
+Check ($nodeHere.Count -eq 0) ("what only the session's own machine observes is not in the fleet record (" + ($nodeHere -join ", ") + "): the node writes it (R10)")
 Check ($schema.additionalProperties -is [bool] -and $schema.additionalProperties -eq $false) "the schema allows no field it does not name"
 Check ((@($schema.properties.schemaVersion.enum) -join ",") -ceq "1" -and $schema.properties.schemaVersion.type -ceq "integer") "schemaVersion is the integer 1"
 Check ((@($schema.properties.role.enum) -join ",") -ceq ((@((Get-Content -LiteralPath (Join-Path $root "core\roles.json") -Raw | ConvertFrom-Json).native)) -join ",")) "role takes exactly core/roles.json's native roles"
@@ -97,7 +55,7 @@ Write-Host ""
 Write-Host "--- the drift check notices each way the two can part ---" -ForegroundColor Cyan
 # CONTROLS: the check above is only evidence if it goes red when the table or the schema changes.
 # Each change is made to a copy in memory; nothing on disk is touched.
-function Drifts { param($O, $S, [string]$Like) return (@(Get-HordeRecordDrift -Own $O -Schema $S | Where-Object { $_ -like $Like }).Count -gt 0) }
+function Drifts { param($O, $S, [string]$Like) return (@(Get-HordeRecordDrift -Own $O -Schema $S -Owner "engine" -Keys $fleetKeys | Where-Object { $_ -like $Like }).Count -gt 0) }
 $o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "label").owner = "agent"
 Check (Drifts $o $schema "'label' is stored, but its owner is agent*") "a field whose owner leaves the engine must leave the record"
 $o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "role") | Add-Member -NotePropertyName derived -NotePropertyValue "from somewhere"
@@ -118,14 +76,22 @@ $o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "role") | Add-M
 Check (Drifts $o $schema "'role' is provisional in the ownership table*") "a stored field that becomes provisional is noticed: the record cannot carry the mark"
 $s = Copy-HordeJson $schema; $s.properties | Add-Member -NotePropertyName pid -NotePropertyValue ([pscustomobject]@{ type = "integer"; "x-horde-owner" = "agent" })
 Check (Drifts $own $s "'pid' is stored, but its owner is agent*") "a field added to the schema that the engine does not own is noticed"
-$s = Copy-HordeJson $schema; $s.properties.PSObject.Properties.Remove("spawnedAt")
-Check (Drifts $own $s "'spawnedAt' is owned by the engine*") "a field removed from the schema is noticed"
+$s = Copy-HordeJson $schema; $s.properties.PSObject.Properties.Remove("retiredAt")
+Check (Drifts $own $s "'retiredAt' is owned by the engine*") "a field removed from the schema is noticed"
 $droppedName = "$(@($own.dropped)[0].name)"
 Check ($droppedName -ne "") ("CONTROL: the table drops a field (" + $droppedName + ")")
 $s = Copy-HordeJson $schema; $s.properties | Add-Member -NotePropertyName $droppedName -NotePropertyValue ([pscustomobject]@{ type = "string"; "x-horde-owner" = "engine" })
 Check (Drifts $own $s ("'" + $droppedName + "' is dropped*")) "a dropped field stored by the schema is noticed"
 $s = Copy-HordeJson $schema; $s.properties.label.'x-horde-owner' = "agent"
 Check (Drifts $own $s "'label' does not carry x-horde-owner engine") "a stored field that names another owner is noticed"
+$s = Copy-HordeJson $schema; $s.properties | Add-Member -NotePropertyName projectCwd -NotePropertyValue ([pscustomobject]@{ type = "string"; "x-horde-owner" = "engine" })
+Check (Drifts $own $s "'projectCwd' is stored, but its owner is node*") "a node field in the fleet record is noticed"
+$o = Copy-HordeJson $own; (Get-HordeOwnershipField -Doc $o -Name "projectCwd").owner = "engine"
+Check (Drifts $o $schema "'projectCwd' is owned by the engine*") "a node field whose owner becomes the engine must enter the fleet record"
+$s = Copy-HordeJson $schema; $s.properties.PSObject.Properties.Remove("device")
+Check (Drifts $own $s "the schema has no device") "a fleet record without device is noticed"
+$s = Copy-HordeJson $schema; $s.properties.device.'x-horde-owner' = "node"
+Check (Drifts $own $s "device's x-horde-owner is not engine") "a device written by anyone but the hub's engine is noticed"
 $dupText = $schemaText.Replace('"properties": {', '"properties": { "label": { "type": "string" },')
 Check ($dupText -ne $schemaText -and @(Find-HordeJsonDuplicateKey -Text $dupText | Where-Object { $_ -like "*'label'*" }).Count -gt 0) "CONTROL: a key repeated in the schema's text is found"
 
@@ -168,8 +134,6 @@ $invalid = [ordered]@{
     "depends-on-string"          = '$.dependsOn should be array'
     "depends-on-item-not-string" = '$.dependsOn`[0`] should be string'
     "retired-at-no-zone"         = '$.retiredAt does not match *'
-    "last-seen-local-time"       = '$.lastSeen does not match *'
-    "spawned-at-no-zone"         = '$.spawnedAt does not match *'
     "agent-field-pid"            = "$ has 'pid', which the schema does not allow"
     "host-field-pane"            = "$ has 'pane', which the schema does not allow"
     "derived-field-owner"        = "$ has 'owner', which the schema does not allow"
@@ -183,8 +147,10 @@ $invalid = [ordered]@{
     "label-cycle-negative"       = '$.labelCycle is -1, below the minimum 0'
     "run-id-malformed"           = '$.runId does not match *'
     "fleet-session-id-empty"     = '$.fleetSessionId does not match *'
-    "project-cwd-empty"          = '$.projectCwd does not match *'
-    "last-tool-empty"            = '$.lastTool does not match *'
+    "no-device"                  = "$ has no 'device'"
+    "device-upper-case"          = '$.device does not match *'
+    "device-not-uuid"            = '$.device does not match *'
+    "node-field-project-cwd"     = "$ has 'projectCwd', which the schema does not allow"
     "title-not-string"           = '$.title should be string'
 }
 $onDisk = @(Get-ChildItem -LiteralPath (Join-Path $fx "invalid") -Filter *.json -File | ForEach-Object { $_.BaseName })
