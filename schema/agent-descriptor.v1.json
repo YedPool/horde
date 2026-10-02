@@ -13,7 +13,7 @@
       "type": "object",
       "required": ["cliVersion", "on"],
       "additionalProperties": false,
-      "description": "Which installed version the flags and hooks below were read from, and when. A later version is a new measurement, not an assumption.",
+      "description": "Which installed version this descriptor was last checked against, and when. Evidence measured on an earlier version says so in its own text.",
       "properties": {
         "cliVersion": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$" },
         "on": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
