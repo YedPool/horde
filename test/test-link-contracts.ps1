@@ -60,7 +60,7 @@ Check ($f.Count -eq 0) "schema/link-verbs.v1 passes every static rule"; Show $f
 Check ($contract.rows.Count -eq 13) "the v1 table has the 13 verbs this step defines (the rest are named as deferred in its description)"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
-Check ($golden.Count -eq 14) "there are 14 golden frames, one per kind and verb shape this step covers"
+Check ($golden.Count -eq 15) "there are 15 golden frames, one per kind and verb shape covered so far"
 foreach ($g in $golden) {
     $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
@@ -276,6 +276,13 @@ FrameRefuses "ping.json" { param($x) $x.id = $x.id.ToUpperInvariant() } "$.id do
 FrameRefuses "ping.json" { param($x) $x.ts = "2026-09-30T12:00:10" } "$.ts does not match" "a time with no zone is refused"
 FrameRefuses "ping.json" { param($x) $x.seq = 0 } "below the minimum" "a sequence number below 1 is refused"
 FrameRefuses "ping.json" { param($x) $x | Add-Member -NotePropertyName shell -NotePropertyValue "cmd" } "has 'shell', which the schema does not allow" "an envelope member that does not exist is refused"
+# EVERY PID THAT LEAVES A NODE CARRIES ITS NAMESPACE (R11): session.close's expect names the device
+# and the process space its pid and procStart belong to, so the node never checks them in a table
+# they do not come from.
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.PSObject.Properties.Remove("ns") } "has no 'ns'" "a session.close whose expected pid names no namespace is refused"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.device = "DESKTOP-01" } "ns.device does not match" "an expected pid's device is a device id, never a host name"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.space = "win32" } "ns.space does not match" "an expected pid's space is one core/Platform.ps1 knows"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns | Add-Member -NotePropertyName pidDomain -NotePropertyValue "win32:tester" } "has 'pidDomain'" "an agent's pidDomain cannot ride in a namespace: it never stands in for the device"
 FrameRefuses "req-node-info.json" { param($x) $x.PSObject.Properties.Remove("requestId") } "a req frame has no 'requestId'" "a req without a requestId is refused"
 # issuedAt: when the hub first recorded the request (plan step R3's replay window). Required on a req,
 # a UTC time in ASCII digits, carried by no other kind, and the same on every resend - unlike ts.
@@ -422,6 +429,14 @@ DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.profiles[0].resolve
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("C:\code\horde") } "$.repos[0] does not match" "a manifest names repositories by id, never by path"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("github.com/../..") } "$.repos[0] does not match" "a manifest repository id cannot climb out with .. segments, as the verb table's cannot"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.spaces = @("wsl") } "$.spaces[0] does not match" "a wsl space names its distro"
+# ONE VOCABULARY OF SPACES (R11): the manifest offers the spaces a node's pids live in, and those are
+# core/Platform.ps1's names. The manifest said win32 where the platform says windows until R11.
+DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.spaces = @("win32") } "$.spaces[0] does not match" "win32 is not a space: core/Platform.ps1 names it windows"
+$platformSpaces = & { . (Join-Path $root "core\Platform.ps1"); $script:HordeProcessSpacePattern }
+$manifestSpaces = "$((Get-HordeSchema -Name 'node-manifest.v1').properties.spaces.items.pattern)"
+Check ($manifestSpaces -ceq $platformSpaces) ("the manifest's spaces are core/Platform.ps1's, pattern for pattern (" + $manifestSpaces + ")")
+$linkSpaces = "$((Get-HordeSchema -Name 'link-verbs.v1').definitions.ns.properties.space.pattern)"
+Check ($linkSpaces -ceq $platformSpaces) ("the link's ns.space is core/Platform.ps1's pattern too (" + $linkSpaces + ")")
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.PSObject.Properties.Remove("encrypt") } "has no 'encrypt'" "a transport declares every capability"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.encrypt.support = "n/a" } "is 'n/a', not one of" "a capability is yes, no, declined or unverified, nothing else"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.encrypt.evidence = "" } "evidence does not match" "a capability without evidence is refused"
