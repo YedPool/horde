@@ -352,6 +352,45 @@ try {
         Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
         Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
     } "an entry may not be added" "a growth line already on origin/main permits nothing again - a removed mention cannot come back unreviewed"
+
+    Write-Host ""
+    Write-Host "--- a port declares the kind of each name: name, processImage or path (lifecycle plan step 5) ---" -ForegroundColor Cyan
+
+    # The lifecycle plan (planning/execution-plan-lifecycle.md, step 5 and section 2.6) brings engine
+    # knowledge core must never hold: each harness's process images and the path fragments of its
+    # transcripts, rollouts, control files and task output. They are declared in the harness's own
+    # names.txt, as names of a kind, so the ratchet catches them anywhere else. The invented image and
+    # fragment below do not contain the harness's name, so only their own declaration can catch them.
+    $zcImage = "zcrunner.exe | processImage | the invented harness's own process image, which does not contain its name"
+    $zcPath = "zc-chatlog- | path | the invented harness's chat log file name prefix, which does not contain its name"
+    function Add-ZorbcodeName { param([string]$Line) Add-Content -LiteralPath (Join-Path $script:repo "agents/zorbcode/names.txt") -Value $Line }
+    Passes "kind-lines" { Add-ZorbcodeName $zcImage; Add-ZorbcodeName $zcPath } "CONTROL: a processImage line and a path line that nothing outside the folder uses pass"
+    Passes "kind-name-explicit" { Add-ZorbcodeName "zorbcli | name | the invented harness's second command name, its kind written out" } "a line whose kind is written as name is read like a two-part line"
+    Refuses "image-leak" { Add-ZorbcodeName $zcImage; Write-FakeFile "core/tree.ps1" "if (`$p.Name -eq 'ZCRUNNER.EXE') { }`n" } "is not in agents/zorbcode/allowlist.txt" "a planted process image name in core is caught, whatever its case"
+    Refuses "path-leak" { Add-ZorbcodeName $zcPath; Write-FakeFile "core/follow.ps1" "Join-Path `$d 'zc-chatlog-*.jsonl'`n" } "is not in agents/zorbcode/allowlist.txt" "a planted transcript path fragment in core is caught"
+    Refuses "bad-kind" { Add-ZorbcodeName "zcrunner.exe | image | the invented harness's own process image, which does not contain its name" } "is not one of name, processImage, path" "a kind outside the closed list is refused"
+    Refuses "kind-case" { Add-ZorbcodeName "zcrunner.exe | processimage | the invented harness's own process image, which does not contain its name" } "is not one of name, processImage, path" "a kind is matched exactly, so a miscased kind is refused rather than guessed at"
+    Refuses "kind-no-reason" { Add-ZorbcodeName "zcrunner.exe | processImage | zcrunner" } "needs a reason" "a kind line with no real reason is refused"
+    Refuses "kind-short" { Add-ZorbcodeName "zc- | path | a fragment far too short to identify the invented harness" } "shorter than 4" "a kind line whose name is shorter than four characters is refused"
+    Refuses "kind-bad-shape" { Add-ZorbcodeName "zcrunner.exe | processImage | its own image | an extra part" } "a name line is" "a name line with four parts is refused"
+    # ONE MENTION, ONE COUNT. An image named after its harness - zorbcode.exe for zorbcode - holds the
+    # harness's name inside it. Counted once per name it would be two mentions, and declaring an image
+    # would raise every allowlist count that already covers it, with no new mention made.
+    $exe = "zorbcode.exe | processImage | the invented harness's process image, which contains its name"
+    Passes "contained-once" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start a zorbcode.exe process.`nNothing else here.`n" } "a declared name inside a longer declared name is one mention, not two"
+    Refuses "contained-apart" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start a zorbcode.exe process, the zorbcode.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "the shorter name on its own beside the longer one is still a second mention"
+    Refuses "contained-repeated" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start zorbcode.exe or zorbcode.exe.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "each occurrence of the longer name is a mention of its own"
+    # At one starting point the LONGEST name is taken. Which one wins only shows with a third name that
+    # starts where the shortest ends: taken shortest-first, zorbcode and .exe.log would be two.
+    Passes "contained-longest-first" { Add-ZorbcodeName $exe; Add-ZorbcodeName ".exe.log | path | an invented log file suffix that overlaps the invented image"; Write-FakeFile "docs/agents.md" "Sessions write zorbcode.exe.log.`nNothing else here.`n" } "at one starting point the longest declared name is the mention, and a name inside it is not counted again"
+    Refuses "contained-inner" { Add-ZorbcodeName "bcode-ctl | path | an invented fragment that starts inside the harness's name"; Write-FakeFile "docs/agents.md" "Sessions start zorbcode-ctl and zorbcode.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "two declared names that overlap without one containing the other are one mention there, and the next is counted"
+    ShrinkRefuses "sh-image-removed" {
+        Add-ZorbcodeName $zcImage; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" "zorbcode | the invented agent harness this suite polices in place of a real one`n"
+    } "'zcrunner.exe'" "a processImage name on origin/main that is deleted here is refused, and named - a kind line is a name"
+    ShrinkPasses "sh-kind-written-out" {
+        Write-FakeFile "agents/zorbcode/names.txt" "zorbcode | name | the invented agent harness this suite polices in place of a real one`n"
+    } "a two-part name line rewritten with its kind written out is the same name, not a removal"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }
