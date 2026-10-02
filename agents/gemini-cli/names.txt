@@ -4,9 +4,14 @@
 # (CONTRIBUTING rule 14). Each is matched as a case-insensitive substring, on every line and on the
 # file's path.
 #
-# name | why it identifies this harness
+# name | why it identifies this harness, or name | kind | why (kinds: tools/HostNames.ps1, KINDS OF NAME)
 gemini | the harness's command and product name - as a substring it also catches the .gemini folder that holds its settings and chats, and its GEMINI_ environment variables
 #
 # CONSIDERED AND LEFT OUT, measured 2026-10-02 on the tree outside agents/ and planning/ (0 files):
 #   google - the harness's native PROVIDER, not the harness; a provider is data that more than one
 #     harness can use.
+#
+# NO PROCESS IMAGE OF ITS OWN (lifecycle plan step 5), measured 2026-10-02: the npm launcher runs node
+# on the package's bundled gemini.js, so the process is the generic runtime, which identifies no
+# harness and cannot be declared here. Telling it apart needs its command line, which is the adapter's
+# to read (lifecycle section 2.6) and unmeasured. Its chats sit under .gemini/, which the name catches.

@@ -4,14 +4,20 @@
 # engine-settings design, 2026-09-30, section 9). Each is matched as a case-insensitive substring, on
 # every line and on the file's path.
 #
-# name | why it identifies this harness
+# name | why it identifies this harness, or name | kind | why (kinds: tools/HostNames.ps1, KINDS OF NAME)
 codex | the harness's command and product name - as a substring it also catches the .codex folder that holds its configuration and rollouts, CODEX_HOME, and the codex-resume kind of a restore plan
+#
+# THE HARNESS'S PROCESS IMAGE AND PATH FRAGMENTS (lifecycle plan step 5 and section 2.6). Core matches
+# no image name, and tools/HostNames.ps1 refuses the image anywhere outside this folder and test/,
+# allowlist or not (Test-HordeProcessImages).
+codex.exe | processImage | the harness's native binary on Windows - measured 2026-10-02 on disk only: the npm launcher runs node on the package's codex.js, which ships the binary under its vendor folder; no running instance was seen
+rollout- | path | the prefix of the harness's transcript file names, rollout-<time>-<id>.jsonl under its sessions folder by date - measured 2026-10-02 on this machine's rollouts; the hyphen keeps the English word itself free
 #
 # CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside agents/ and planning/:
 #   openai - the harness's native PROVIDER, not the harness (0 files). The engine-settings design
 #     names wire protocols after their vendor (openai-responses, openai-chat), and a provider is data
 #     that more than one harness can use.
-#   rollout - the name of the harness's transcript files, but an ordinary English word that a
-#     host-neutral release or migration text would use (0 files today).
+#   rollout - the bare English word, which a host-neutral release or migration text would use (0 files
+#     today). Its file-name prefix, rollout- with the hyphen, is declared above as a path (2026-10-02).
 #   gpt-, sol - model ids and aliases, which live in the user's own engine file; sol is also shorter
 #     than the four characters the scan requires of a name.

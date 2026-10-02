@@ -4,8 +4,18 @@
 # (CONTRIBUTING rule 14; engine-settings design, 2026-09-30, section 9). Each is matched as a
 # case-insensitive substring, on every line and on the file's path.
 #
-# name | why it identifies this harness
+# name | why it identifies this harness, or name | kind | why (kinds: tools/HostNames.ps1, KINDS OF NAME)
 claude | the harness's command and product name - as a substring it also catches the session rules file named after it, its CLAUDE_CODE_ environment variables, the .claude folder that holds its control files and transcripts, and the claudeSessionId key of the old system's records
+#
+# THE HARNESS'S PROCESS IMAGE (lifecycle plan step 5 and section 2.6). Core matches no image name;
+# which processes are this harness's is this adapter's to answer, and tools/HostNames.ps1 refuses the
+# image anywhere outside this folder and test/, allowlist or not (Test-HordeProcessImages).
+claude.exe | processImage | the harness's own process image on Windows - measured 2026-10-02: 10 running processes, each with its executable under the harness's npm package bin folder, which the npm launcher starts directly
+#
+# ITS LOCATIONS need no line of their own: each sits under a folder named after the harness, which the
+# name above already catches - transcripts under .claude/projects/, control files under
+# .claude/sessions/<pid>.json, and background-task output under claude/ in the temporary folder
+# (measured 2026-10-02 on this machine).
 #
 # CONSIDERED AND LEFT OUT, measured 2026-09-30 on the tree outside agents/ and planning/:
 #   anthropic - the harness's native PROVIDER, not the harness (0 files). Decision 2 of 2026-09-30 runs

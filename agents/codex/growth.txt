@@ -4,3 +4,4 @@ schema/session-view.v1.json | 0 -> 1 | 2026-09-30 | core/projection reads this h
 test/test-projection.ps1 | 0 -> 37 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 test/fixtures/projection/fleet/wezfleet/codex-sessions/codex-thread-1.json | 0 -> 5 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 test/mutations/projection.psd1 | 0 -> 4 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
+test/test-link-contracts.ps1 | 0 -> 1 | 2026-10-02 | lifecycle step 5 declares the rollout file-name prefix as a path, and this suite already accepts a session id shaped like one
