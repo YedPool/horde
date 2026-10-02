@@ -41,7 +41,7 @@
 #
 # -Changed <base-ref> RUNS ONLY THE MUTANTS A CHANGE COULD HAVE MADE THE SUITES MISS: those whose find
 # string lies on a line the diff from merge-base(<base-ref>, HEAD) to the working tree added or
-# modified, plus every mutant that cannot be placed (fail safe) and every mutant new in its spec. The
+# modified, plus every mutant that cannot be placed (fail safe) and every mutant of a spec whose file changed. The
 # rules, and why each leans towards running, are in tools\MutateChanged.ps1. Every spec is read unless
 # -Spec names one. Each spec with a selected mutant then runs as an ordinary -Spec -Only run, so it
 # keeps its own Environment - its suite's section filter - and its baselines. The output lists every
@@ -78,9 +78,7 @@ if ($Changed) {
         $text = $null
         if (Test-Path -LiteralPath $tFull -PathType Leaf) { $text = [System.IO.File]::ReadAllText($tFull) }
         $relKey = ConvertTo-HordeDiffKey ([System.IO.Path]::GetFullPath($full).Substring([System.IO.Path]::GetFullPath($repo).TrimEnd('\').Length + 1))
-        $baseKeys = $null
-        if ($diff.changed.ContainsKey($relKey)) { $baseKeys = Get-HordeBaseMutantKeys -Repo $repo -Commit $diff.mergeBase -SpecRel $relKey }
-        $specObjs += [pscustomobject]@{ spec = $rel; data = $data; text = $text; baseKeys = $baseKeys }
+        $specObjs += [pscustomobject]@{ spec = $rel; data = $data; text = $text; specChanged = $diff.changed.ContainsKey($relKey) }
     }
     $rows = @(Select-HordeChangedMutants -Specs $specObjs -Changed $diff.changed)
     $verdict = Get-HordeSelectionVerdict -Rows $rows -Changed $diff.changed
@@ -103,7 +101,7 @@ if ($Changed) {
     Write-Host ("changed: " + $verdict.message + "; skipped " + ($rows.Count - $selRows.Count) + " as unchanged")
     if (-not $verdict.ok) { Write-Host ("  -Changed: " + $verdict.message) -ForegroundColor Red; exit 2 }
     if ($Plan) { Write-Host "changed: plan only - nothing was run"; exit 0 }
-    if ($selRows.Count -eq 0) { Write-Host ("mutations: 0 - " + $verdict.message); exit 0 }
+    if ($selRows.Count -eq 0) { Write-Host ("mutations: none selected - " + $verdict.message); exit 0 }
 
     # Each spec with a selected mutant runs as an ordinary -Spec -Only run of this same tool, in this
     # process: its own Environment (section filter), its own baselines before and after.

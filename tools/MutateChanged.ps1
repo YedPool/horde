@@ -16,9 +16,19 @@
 #   - FAIL SAFE: a mutant whose find string is not in its target, or is there more than once, or whose
 #     target file is missing, is RUN, whatever the diff. It cannot be placed, so it cannot be shown to
 #     be unchanged; and running it makes tools\Mutate.ps1 report it as "did not apply", which fails.
-#   - A mutant that is new in its spec since the base - or whose Find, Replace or Expect changed, or
-#     whose spec's Target or Suite changed - is run once, even on an unchanged line: a mutant nobody
-#     has run yet proves nothing.
+#   - A multi-line find string is run too: tools\Mutate.ps1 refuses it, so it fails the run, as it
+#     would fail the full one (review of PR #63).
+#   - EVERY MUTANT OF A SPEC WHOSE FILE CHANGED is run: a new or edited entry has never run in that
+#     form, and an edited Environment or PassCodes changes what every run of the spec means - a
+#     narrowed HORDE_SECTIONS reselected nothing when only entries were compared (review of PR #63,
+#     probe P4).
+#
+# THE DIFF IS READ THE SAME WAY WHATEVER THE USER'S GIT CONFIG SAYS. diff.noprefix, diff.mnemonicPrefix
+# and diff.srcPrefix/dstPrefix change the a/ and b/ this parser reads; with the first two set, every
+# header failed to parse, an edited mutant line read as "0 files changed" and was skipped with exit 0
+# (review of PR #63, probes P9 and P10). So git diff is given its prefixes, colour, external-diff and
+# relative settings explicitly, and a diff that is not empty but does not parse whole is an error
+# (Get-HordeDiffParseProblem), never "the diff is empty".
 # NOT SELECTED: a change to a suite alone, or to test\lib, does not reselect the mutants of the code
 # it tests. A suite edited to catch less is found by the full specs run once per PR on the merge
 # result (CONTRIBUTING, "Test levels and merging"); that run, not this selection, is the merge gate.
@@ -78,6 +88,18 @@ function ConvertFrom-HordeDiffZero {
     return $files
 }
 
+function Get-HordeDiffParseProblem {
+    # "" when every file the diff text names was parsed; otherwise why not. A diff that is not empty
+    # but parses to less than it names must never read as "unchanged".
+    param([AllowEmptyString()][string]$Text, [hashtable]$Changed)
+    if (-not $Text.Trim()) { return "" }
+    $headers = @(($Text -split "`r?`n") | Where-Object { $_.StartsWith("diff --git ") }).Count
+    if ($headers -eq 0) { return "the diff is not empty, yet has no 'diff --git' header: parsed 0 files" }
+    $parsed = @(($Text -split "`r?`n") | Where-Object { $_ -match '^diff --git "?a/.*?"? "?b/(.*?)"?$' }).Count
+    if ($parsed -ne $headers -or $Changed.Count -eq 0) { return ("the diff names " + $headers + " file(s) but only " + $parsed + " parsed with a/ and b/ prefixes - refusing to read it as unchanged") }
+    return ""
+}
+
 function Add-HordeWholeFile {
     # An untracked file: every one of its lines is new.
     param([hashtable]$Changed, [string]$Path, [int]$LineCount)
@@ -91,6 +113,7 @@ function Find-HordeMutantLine {
     # (exactly once, line is 1-based), "missing" (no target text, or not found) or "ambiguous".
     # A find string never spans lines (tools\Mutate.ps1 refuses one that does), so one line holds it.
     param($Text, [string]$Find)
+    if ($Find -match "[\r\n]") { return [pscustomobject]@{ status = "multiline"; line = 0; count = 0 } }
     if ($null -eq $Text) { return [pscustomobject]@{ status = "missing"; line = 0; count = 0 } }
     $n = 0; $first = -1; $i = 0
     if ($Find.Length -gt 0) {
@@ -106,20 +129,11 @@ function Find-HordeMutantLine {
     return [pscustomobject]@{ status = "located"; line = $line; count = 1 }
 }
 
-function Get-HordeMutantKey {
-    # What makes a mutant the same mutant as at the base: its name, what it does, what it expects,
-    # and where its spec points it.
-    param($Mutant, [string]$Target, [string]$Suite)
-    $expect = "caught"
-    if ($Mutant.ContainsKey("Expect")) { $expect = "$($Mutant.Expect)" }
-    return (@("$($Mutant.Name)", "$($Mutant.Find)", "$($Mutant.Replace)", $expect, (ConvertTo-HordeDiffKey $Target), (ConvertTo-HordeDiffKey $Suite)) -join "`0")
-}
-
 function Select-HordeChangedMutants {
     # One row per mutant of every spec: { spec; name; target; line; selected; reason }.
     # -Specs: objects { spec (repo-relative path); data (the spec hashtable); text (the target's text,
-    # or $null when the file is missing); baseKeys (HashSet[string] of Get-HordeMutantKey at the base,
-    # or $null when the spec file is unchanged) }. -Changed: from ConvertFrom-HordeDiffZero.
+    # or $null when the file is missing); specChanged (the diff touched the spec file itself) }.
+    # -Changed: from ConvertFrom-HordeDiffZero.
     param([object[]]$Specs, [hashtable]$Changed)
     $rows = New-Object System.Collections.ArrayList
     foreach ($sp in @($Specs)) {
@@ -130,12 +144,14 @@ function Select-HordeChangedMutants {
             $sel = $false; $why = ""
             if ($loc.status -eq "missing") {
                 $sel = $true; $why = "find string not found in " + $sp.data.Target + " - run, because it cannot be placed (fail safe)"
+            } elseif ($loc.status -eq "multiline") {
+                $sel = $true; $why = "find string spans lines, which tools\Mutate.ps1 refuses - run, so the refusal is reported (fail safe)"
             } elseif ($loc.status -eq "ambiguous") {
                 $sel = $true; $why = "find string occurs " + $loc.count + " times in " + $sp.data.Target + " - run, because it cannot be placed (fail safe)"
             } elseif ($touched -and $Changed[$tk].Contains([int]$loc.line)) {
                 $sel = $true; $why = "line " + $loc.line + " of " + $sp.data.Target + " is added or modified"
-            } elseif ($null -ne $sp.baseKeys -and -not $sp.baseKeys.Contains((Get-HordeMutantKey -Mutant $m -Target "$($sp.data.Target)" -Suite "$($sp.data.Suite)"))) {
-                $sel = $true; $why = "new or changed in its spec since the base - never run in this form"
+            } elseif ($sp.specChanged) {
+                $sel = $true; $why = "its spec file changed - every mutant of it runs (entries, Environment or PassCodes may differ)"
             } elseif ($touched) {
                 $why = "line " + $loc.line + " of " + $sp.data.Target + " is unchanged"
             } else {
@@ -205,9 +221,14 @@ function Get-HordeChangedLines {
     $mb = Invoke-HordeGit -Repo $Repo -GitArgs @("merge-base", $Base, "HEAD")
     if ($mb.code -ne 0 -or -not $mb.out.Trim()) { return [pscustomobject]@{ ok = $false; error = ("cannot find the merge-base of '" + $Base + "' and HEAD"); mergeBase = ""; changed = @{} } }
     $sha = $mb.out.Trim()
-    $d = Invoke-HordeGit -Repo $Repo -GitArgs @("diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", $sha, "--")
+    # Prefixes, colour, external diff and relative paths are given explicitly, and the config that sets
+    # them is overridden too, so no user or repository setting changes what is parsed (header above).
+    $d = Invoke-HordeGit -Repo $Repo -GitArgs @("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c", "color.ui=false", "-c", "color.diff=false", "-c", "diff.relative=false",
+        "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", $sha, "--")
     if ($d.code -ne 0) { return [pscustomobject]@{ ok = $false; error = ("git diff against " + $sha + " failed"); mergeBase = $sha; changed = @{} } }
     $changed = ConvertFrom-HordeDiffZero -Text $d.out
+    $why = Get-HordeDiffParseProblem -Text $d.out -Changed $changed
+    if ($why) { return [pscustomobject]@{ ok = $false; error = $why; mergeBase = $sha; changed = @{} } }
     $u = Invoke-HordeGit -Repo $Repo -GitArgs @("ls-files", "--others", "--exclude-standard")
     if ($u.code -ne 0) { return [pscustomobject]@{ ok = $false; error = "git ls-files failed"; mergeBase = $sha; changed = @{} } }
     foreach ($rel in @($u.out -split "`n" | Where-Object { $_.Trim() })) {
@@ -217,23 +238,4 @@ function Get-HordeChangedLines {
         Add-HordeWholeFile -Changed $changed -Path $rel -LineCount $n
     }
     return [pscustomobject]@{ ok = $true; error = ""; mergeBase = $sha; changed = $changed }
-}
-
-function Get-HordeBaseMutantKeys {
-    # The mutant keys a spec had at <Commit>, or an empty set when the spec did not exist there.
-    param([string]$Repo, [string]$Commit, [string]$SpecRel)
-    $keys = New-Object 'System.Collections.Generic.HashSet[string]'
-    $gitPath = $SpecRel -replace '\\', '/'
-    $ls = Invoke-HordeGit -Repo $Repo -GitArgs @("ls-tree", "--name-only", $Commit, "--", $gitPath)
-    if ($ls.code -ne 0 -or -not $ls.out.Trim()) { return ,$keys }
-    $show = Invoke-HordeGit -Repo $Repo -GitArgs @("show", ($Commit + ":" + $gitPath))
-    if ($show.code -ne 0) { return ,$keys }
-    $tmp = Join-Path $env:TEMP ("horde-mutate-base-" + [guid]::NewGuid().ToString("N") + ".psd1")
-    try {
-        [System.IO.File]::WriteAllText($tmp, $show.out)
-        # A base spec that no longer parses gives no keys, so every mutant of it counts as new: run.
-        try { $old = Import-PowerShellDataFile -LiteralPath $tmp } catch { return ,$keys }
-        foreach ($m in @($old.Mutations)) { [void]$keys.Add((Get-HordeMutantKey -Mutant $m -Target "$($old.Target)" -Suite "$($old.Suite)")) }
-    } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
-    return ,$keys
 }
