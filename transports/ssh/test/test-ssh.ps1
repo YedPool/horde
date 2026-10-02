@@ -252,9 +252,61 @@ try {
             Check ($null -ne $read -and $read.kind -ceq "error" -and "$($read.reason)" -like "*exit 255*" -and "$($read.reason)" -like "*Connection refused*") ("ssh's exit 255 reads as an error naming the exit and stderr's first line (" + $read.reason + ")")
             & $o.channel.close $o.channel
         }
+
+        Write-Host ""
+        Write-Host "--- a process Open starts is handed to the link or killed, never left behind (review F7) ---" -ForegroundColor Cyan
+        # THE FOUNDER'S RULE: orphans are prevented structurally. Every way out of Open after ssh.exe has
+        # started either hands the process to the link or kills it, by pid and start time, in a finally.
+        # To see it, ssh.exe must still be running when Open fails: it dials a listener of this suite's
+        # that takes the TCP connection and never says a word, so ssh waits for a banner. Each step
+        # after the start is made to throw in turn, and every ssh.exe Open started is then checked by
+        # its pid and its start time, so a pid reused by another program is never mistaken for ours.
+        $silent = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+        $silent.Start()
+        $quietEp = "horde-link@127.0.0.1:" + $silent.LocalEndpoint.Port + "/test-hub"
+        $script:openStarted = New-Object System.Collections.ArrayList
+        $realStart = ${function:Start-HordeSshProcess}
+        function Start-HordeSshProcess {
+            param([string]$FilePath, [string]$Arguments)
+            $sp = & $realStart -FilePath $FilePath -Arguments $Arguments
+            [void]$script:openStarted.Add([pscustomobject]@{ process = $sp; id = $sp.Id; at = $sp.StartTime })
+            [void]$children.Add($sp)
+            return $sp
+        }
+        function Test-OursAlive { param($Rec)
+            try { $q = [System.Diagnostics.Process]::GetProcessById($Rec.id); return ($q.StartTime -eq $Rec.at -and -not $q.HasExited) } catch { return $false } }
+        try {
+            $o = Open-Raw $quietEp
+            Check ($o.ok -and $script:openStarted.Count -eq 1) "CONTROL: an Open that succeeds starts one ssh.exe"
+            if ($script:openStarted.Count -ge 1) { Check (Test-OursAlive $script:openStarted[-1]) "CONTROL: and it is alive, waiting on the silent listener, so a dead one below means it was killed" }
+            if ($o.ok) { & $o.channel.close $o.channel }
+            foreach ($step in @("New-HordeSshChannel", "New-HordeSshResult")) {
+                $before = $script:openStarted.Count
+                $saved = (Get-Item -LiteralPath ("function:" + $step)).ScriptBlock
+                Set-Item -LiteralPath ("function:script:" + $step) -Value { throw "injected failure after the start" }
+                try { $o = Open-Raw $quietEp } finally { Set-Item -LiteralPath ("function:script:" + $step) -Value $saved }
+                Check (-not $o.ok -and "$($o.reason)" -like "*injected failure*") ("a throw in " + $step + ", after ssh.exe started, fails Open (" + $o.reason + ")")
+                Check ($script:openStarted.Count -eq $before + 1) ("CONTROL: Open had started ssh.exe before " + $step + " threw")
+                if ($script:openStarted.Count -eq $before + 1) {
+                    Check (-not (Test-OursAlive $script:openStarted[-1])) ("no ssh.exe of ours survives a throw in " + $step + ": checked by pid " + $script:openStarted[-1].id + " and its start time")
+                }
+            }
+        } finally {
+            Set-Item -LiteralPath "function:script:Start-HordeSshProcess" -Value $realStart
+            $silent.Stop()
+        }
     } else {
-        Write-Host "  [SKIP] ssh.exe is not in System32 on this machine: the -G and closed-port cases did not run" -ForegroundColor Yellow
+        Write-Host "  [SKIP] ssh.exe is not in System32 on this machine: the -G, closed-port and F7 cases did not run" -ForegroundColor Yellow
     }
+
+    Write-Host ""
+    Write-Host "--- the kill is by pid AND start time: a wrong start time kills nothing ---" -ForegroundColor Cyan
+    $victim = Start-HordeSshProcess -FilePath $psExe -Arguments "-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60"
+    [void]$children.Add($victim)
+    Stop-HordeSshUnowned -Process $victim -StartedAt $victim.StartTime.AddSeconds(-1)
+    Check (-not $victim.HasExited) "a process whose start time is not the one recorded is left alone: the pid may now name another program"
+    Stop-HordeSshUnowned -Process $victim -StartedAt $victim.StartTime
+    Check ($victim.HasExited) "the same process, with the start time recorded, is stopped"
 
     Write-Host ""
     Write-Host "--- the byte channel over a child's stdio, with stand-in children ---" -ForegroundColor Cyan
