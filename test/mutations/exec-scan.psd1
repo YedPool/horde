@@ -1,11 +1,11 @@
 # Mutations of the no-exec scan. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\exec-scan.psd1
-# Each mutation switches off or widens one allowlist of tools\ExecScan.ps1, and test\test-link-contracts.ps1
+# Each mutation switches off or widens one allowlist of tools\ExecScan.ps1, and test\test-exec-scan.ps1
 # must fail for every one: its control file names, line by line, the finding each form must get, so a
 # rule that stops firing is seen even where another rule still catches the form. Every find string
 # occurs once, on one line.
 @{
     Target = "tools\ExecScan.ps1"
-    Suite  = "test\test-link-contracts.ps1"
+    Suite  = "test\test-exec-scan.ps1"
     Mutations = @(
         @{ Name = "command-allowlist-off"
            Find = 'if ($script:HordeExecCmdlets -cnotcontains $name -and -not $funcs.Contains($name))'
