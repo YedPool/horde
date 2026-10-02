@@ -27,7 +27,8 @@ function Get-SpecFiles {
             }
             $dirs = $next
         }
-        foreach ($d in $dirs) { foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "*.psd1" -File | Where-Object { $_.Extension -ceq ".psd1" })) { [void]$out.Add($f) } }
+        # -Recurse: a spec in a subfolder of mutations/ is still a spec (review of PR #62, probe Q1).
+        foreach ($d in $dirs) { foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "*.psd1" -File -Recurse | Where-Object { $_.Extension -ceq ".psd1" })) { [void]$out.Add($f) } }
     }
     return @($out)
 }
@@ -52,6 +53,9 @@ function Get-SpecProblems {
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { [void]$out.Add($rel + ": its target " + $s.Target + " does not exist"); continue }
         $text = [System.IO.File]::ReadAllText($target)
         foreach ($m in @($s.Mutations)) {
+            # tools\Mutate.ps1 refuses a find that spans lines, since line endings differ by checkout;
+            # it would occur once here and still not apply (review of PR #62, probe Q4).
+            if ("$($m.Find)" -match "[\r\n]") { [void]$out.Add($rel + " :: " + $m.Name + ": its find string spans lines, which tools\Mutate.ps1 refuses"); continue }
             $n = Get-FindCount -Text $text -Find "$($m.Find)"
             if ($n -ne 1) { [void]$out.Add($rel + " :: " + $m.Name + ": its find string occurs " + $n + " times in " + $s.Target + ", not once") }
         }
