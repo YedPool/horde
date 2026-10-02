@@ -17,5 +17,8 @@
         @{ Name = "second-protocol"
            Find = '"protocols": ["google-genai"]'
            Replace = '"protocols": ["google-genai", "openai-chat"]' }
+        @{ Name = "edits-mapped-to-yolo"
+           Find = '"argv": ["--approval-mode", "auto_edit"]'
+           Replace = '"argv": ["--approval-mode", "yolo"]' }
     )
 }

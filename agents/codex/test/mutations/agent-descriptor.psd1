@@ -20,5 +20,11 @@
         @{ Name = "native-provider-changed"
            Find = '"nativeProvider": "openai"'
            Replace = '"nativeProvider": "anthropic"' }
+        @{ Name = "bypass-spelt-as-another-harness"
+           Find = '"argv": ["--dangerously-bypass-approvals-and-sandbox"]'
+           Replace = '"argv": ["--dangerously-skip-permissions"]' }
+        @{ Name = "plan-may-escalate"
+           Find = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "never"]'
+           Replace = '"argv": ["--sandbox", "read-only", "--ask-for-approval", "on-request"]' }
     )
 }

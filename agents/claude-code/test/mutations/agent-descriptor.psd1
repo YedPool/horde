@@ -20,5 +20,8 @@
         @{ Name = "pattern-unanchored-at-start"
            Find = '"sessionIdPattern": "^[0-9a-fA-F]{8}'
            Replace = '"sessionIdPattern": "[0-9a-fA-F]{8}' }
+        @{ Name = "edits-mapped-to-plan"
+           Find = '"argv": ["--permission-mode", "acceptEdits"]'
+           Replace = '"argv": ["--permission-mode", "plan"]' }
     )
 }
