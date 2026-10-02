@@ -1,0 +1,2 @@
+{"ts":"2026-06-01T10:25:00.0000000Z","seq":1,"event":"started","summary":"","session":{"id":"eps","claudeSessionId":"","transcriptPath":"","idSource":"","pane":21,"cwd":"C:\\work","pid":1},"question":"","resumeCommand":"","extra":null}
+{"ts":"2026-06-01T11:25:00.0000000Z","seq":1,"event":"progress","summary":"","session":{"id":"eps","claudeSessionId":"","transcriptPath":"","idSource":"","pane":21,"cwd":"C:\\work","pid":1},"question":"","resumeCommand":"","extra":null}

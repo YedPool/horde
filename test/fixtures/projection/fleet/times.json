@@ -1,0 +1,20 @@
+{
+  "now": "2026-06-01T12:00:00.0000000Z",
+  "offsetsSeconds": {
+    "wezfleet/proj/runs/20260601-100000-alpha/sessions/alpha/cmdlog.txt": -20,
+    "wezfleet/proj/runs/20260601-100000-alpha/sessions/eps/cmdlog.txt": -1800,
+    "wezfleet/proj/runs/20260601-100000-alpha/sessions/zeta/cmdlog.txt": -10,
+    "agent/pane-sessions/10.json": -3600,
+    "agent/pane-sessions/17.json": -3000,
+    "agent/pane-sessions/18.json": -2700,
+    "agent/pane-sessions/19.json": -2400,
+    "agent/pane-sessions/20.json": -2400,
+    "agent/pane-sessions/24.json": -10800,
+    "agent/projects/C--work-alpha/aaaaaaaa-0000-4000-8000-000000000001.jsonl": -30,
+    "agent/projects/C--work-gamma/aaaaaaaa-0000-4000-8000-000000000003.jsonl": -300,
+    "agent/projects/C--work-delta/aaaaaaaa-0000-4000-8000-000000000010.jsonl": -180,
+    "agent/projects/C--work-x/aaaaaaaa-0000-4000-8000-000000000004.jsonl": -1860,
+    "agent/projects/C--work-y/aaaaaaaa-0000-4000-8000-000000000004.jsonl": -1860,
+    "agent/projects/C--work-x/aaaaaaaa-0000-4000-8000-000000000021.jsonl": -360
+  }
+}

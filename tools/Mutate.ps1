@@ -35,8 +35,10 @@
 # run left behind cannot go by "new since I started" - another run's folder is new too
 # (test/test-mutate.ps1 blamed itself for two foreign runs on 2026-09-30). A tag only that caller
 # knows makes its folders its own. Lowercase letters and digits, 1 to 16.
-
-param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag)
+#
+# -Only runs just the named mutants of the spec - to rerun one after a fix without the rest - and
+# refuses a name the spec does not have (second review of PR #31, finding 9).
+param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @())
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -95,9 +97,32 @@ if (-not [System.IO.Path]::IsPathRooted($specPath)) { $specPath = Join-Path $rep
 $s = Import-PowerShellDataFile -LiteralPath $specPath
 foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $s.ContainsKey($k)) { throw ("spec has no " + $k) } }
 
+# A SPEC MAY SET ITS SUITE'S ENVIRONMENT, for its runs only: Environment = @{ HORDE_X = "1" }. Each
+# variable is set before the first run (so the suites inherit it) and put back as it was in the
+# finally below, so a run never depends on - or leaks into - the shell that started it (review of
+# PR #31, finding 5: test-projection's HORDE_SKIP_REALITY was set by hand and stayed set). Only
+# HORDE_ names: PATH or TEMP would change what every run means.
+# THE EXIT CODES THAT MEAN "THE SUITE PASSED". 0, unless the spec declares its own: test-projection
+# passes with 3 when it skipped its reality check, so that no gate expecting 0 reads a partial run as
+# whole, and only a spec that sets PassCodes = @(3) accepts it (second review of PR #31, finding 4).
+$passCodes = @(0)
+if ($s.ContainsKey("PassCodes")) { $passCodes = @($s.PassCodes | ForEach-Object { [int]$_ }) }
+$unknownOnly = @($Only | Where-Object { @($s.Mutations | ForEach-Object { "$($_.Name)" }) -cnotcontains $_ })
+if ($unknownOnly.Count -gt 0) { Write-Host ("  -Only names mutants the spec does not have: " + ($unknownOnly -join ", ")) -ForegroundColor Red; exit 2 }
+$script:envSaved = @{}
+$specEnv = @{}
+if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
+foreach ($name in @($specEnv.Keys)) {
+    if ("$name" -cnotmatch '^HORDE_[A-Z0-9_]+$') { Write-Host ("  spec Environment may set only HORDE_ variables, not '" + $name + "'") -ForegroundColor Red; exit 2 }
+}
+
 $tagPart = ""
 if ($RunTag) { $tagPart = $RunTag + "-" }
 $work = Join-Path $env:TEMP ("horde-mutate-" + $tagPart + [guid]::NewGuid().ToString("N"))
+foreach ($name in @($specEnv.Keys)) {
+    $script:envSaved[$name] = [System.Environment]::GetEnvironmentVariable($name, "Process")
+    [System.Environment]::SetEnvironmentVariable($name, "$($specEnv[$name])", "Process")
+}
 New-Item -ItemType Directory -Path $work | Out-Null
 $results = New-Object System.Collections.ArrayList
 try {
@@ -115,7 +140,7 @@ try {
     $original = [System.IO.File]::ReadAllText($target)
 
     $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-    if ($base.timedOut -or $base.code -ne 0) {
+    if ($base.timedOut -or $passCodes -notcontains $base.code) {
         $why = "exited " + $base.code
         if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
         Write-Host ("  the UNMUTATED suite does not pass in the copy (" + $why + "), so no mutation result would mean anything:") -ForegroundColor Red
@@ -125,7 +150,10 @@ try {
     }
 
     $script:toRun = @()
-    if (-not $script:baselineFailed) { $script:toRun = @($s.Mutations) }
+    if (-not $script:baselineFailed) {
+        $script:toRun = @($s.Mutations)
+        if ($Only.Count -gt 0) { $script:toRun = @($s.Mutations | Where-Object { $Only -ccontains "$($_.Name)" }) }
+    }
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
@@ -155,7 +183,7 @@ try {
                 $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
                 $row.failures = @(Get-HordeFailLines -Out $run.out)
                 if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
-                elseif ($run.code -eq 0) { $row.outcome = "survived" }
+                elseif ($passCodes -contains $run.code) { $row.outcome = "survived" }
                 elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
                 else { $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch") }
             }
@@ -169,7 +197,7 @@ try {
     # afterwards, the environment changed under the run and its catches are not evidence.
     if (-not $script:baselineFailed -and $script:toRun.Count -gt 0) {
         $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-        if ($after.timedOut -or $after.code -ne 0) {
+        if ($after.timedOut -or $passCodes -notcontains $after.code) {
             Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
             foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
             $script:baselineFailed = $true
@@ -177,6 +205,7 @@ try {
     }
 }
 finally {
+    foreach ($name in @($script:envSaved.Keys)) { [System.Environment]::SetEnvironmentVariable($name, $script:envSaved[$name], "Process") }
     # Only the folder this run created: a fresh guid name, with this run's tag if it has one, directly in TEMP.
     if ((Split-Path -Leaf $work) -match '^horde-mutate-([a-z0-9]{1,16}-)?[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

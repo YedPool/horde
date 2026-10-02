@@ -36,6 +36,10 @@
 $script:HordeAnswerStates = @("known", "absent", "unknown")
 # How far in the future an observation time may be before Limit-HordeAge stops believing it.
 $script:HordeClockSkewSeconds = 5
+# New-HordeKnown's "no -Value given" marker: one private object no caller can pass by accident. It
+# replaces a $PSBoundParameters lookup, which measured 0.18 ms a call on its own (PR #31, 2026-10-02),
+# and the constructors are called about 45,000 times in a projection of 333 real sessions.
+$script:HordeNoValue = New-Object System.Object
 
 function New-HordeAnswer {
     param([string]$State, $Value, [string]$Reason, $ObservedAt)
@@ -54,18 +58,28 @@ function New-HordeKnown {
     #
     # -Value is NOT mandatory on purpose. A mandatory parameter refuses an empty collection and an
     # empty string at binding, and both are legitimate known answers.
-    param($Value, $ObservedAt = $null)
+    param($Value = $script:HordeNoValue, $ObservedAt = $null)
     # [DBNull]::Value is not $null to PowerShell, but it means nothing just the same.
-    if (-not $PSBoundParameters.ContainsKey("Value") -or $null -eq $Value -or $Value -is [System.DBNull]) {
+    if ([object]::ReferenceEquals($Value, $script:HordeNoValue) -or $null -eq $Value -or $Value -is [System.DBNull]) {
         throw "a known answer needs a value; a known nothing is New-HordeAbsent"
     }
-    return (New-HordeAnswer -State "known" -Value $Value -Reason "" -ObservedAt $ObservedAt)
+    # The answer is built here, not through New-HordeAnswer: a second call doubled the constructor's
+    # cost (0.19 ms against 0.07 ms inline, measured PR #31, 2026-10-02). New-HordeAnswer's one refusal
+    # is made here in the same words, and test/test-tristate.ps1 holds every constructor to it.
+    if ($null -ne $ObservedAt -and $ObservedAt -isnot [datetime]) {
+        throw ("an observation time must be a [datetime] or nothing, not '" + $ObservedAt + "'")
+    }
+    return [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "known"; value = $Value; reason = ""; observedAt = $ObservedAt }
 }
 
 function New-HordeAbsent {
     # Known to be none: the source was read, and what was asked for is not there.
     param([string]$Note = "", $ObservedAt = $null)
-    return (New-HordeAnswer -State "absent" -Value $null -Reason $Note -ObservedAt $ObservedAt)
+    # Built here, with New-HordeAnswer's refusal in its words (see New-HordeKnown).
+    if ($null -ne $ObservedAt -and $ObservedAt -isnot [datetime]) {
+        throw ("an observation time must be a [datetime] or nothing, not '" + $ObservedAt + "'")
+    }
+    return [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "absent"; value = $null; reason = $Note; observedAt = $ObservedAt }
 }
 
 function New-HordeUnknown {
@@ -83,7 +97,8 @@ function New-HordeUnknown {
         if ($null -ne $exProp -and $null -ne $exProp.Value) { $msg = $exProp.Value.Message }
         $why = $Reason + ": " + $msg
     }
-    return (New-HordeAnswer -State "unknown" -Value $null -Reason $why -ObservedAt $null)
+    # Built here (see New-HordeKnown); an unknown carries no observation time, so nothing to refuse.
+    return [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "unknown"; value = $null; reason = $why; observedAt = $null }
 }
 
 function Test-HordeAnswer {
@@ -194,7 +209,11 @@ function Get-HordeField {
     # A field of a record, as an answer. A field that is not there is UNKNOWN - never the happy
     # default. In the old system, 94 of 369 roster entries predated a field; defaulting them to
     # "fresh" was rejected, because unknown is not fresh.
-    param($Record, [Parameter(Mandatory = $true)][string]$Name)
+    param($Record, [string]$Name)
+    # The name is checked here, not by a Mandatory attribute: that made this an advanced function,
+    # 0.25 ms a call against 0.03 ms (measured PR #31, 2026-10-02), and a projection of 333 real
+    # sessions calls it about 15,500 times. Same refusal, same words; only the exception type differs.
+    if ($Name -eq "") { throw "Cannot bind argument to parameter 'Name' because it is an empty string." }
     if ($null -eq $Record) { return (New-HordeUnknown -Reason ("no record to read '" + $Name + "' from")) }
     $prop = $Record.PSObject.Properties[$Name]
     if ($Record -is [System.Collections.IDictionary]) {

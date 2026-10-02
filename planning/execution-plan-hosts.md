@@ -73,8 +73,17 @@ is `yes`. A request for anything else is unknown, with a reason.
 
 **The window and tab levels:** a multiplexer's session maps onto `window`, and its window onto `tab`.
 
+**Stored handles:** `New-HordeHostPort` takes a mandatory `-StoredHandles`, the stores (of `W1`, `W2`,
+`W4`, `W5`, `X1`) whose bare handle text the host wrote. A handle from any other store is unknown to
+it. Each store has exactly one writer host: a second host declaring a store is refused, and a record
+that carries no host belongs to that one writer alone - which today is WezTerm, for all five. The
+adapter reads its list from `hosts/<name>/capabilities.json`, key `storedHandles`; tmux and psmux
+declare none, and anything they write into Horde's own stores carries its host and instance.
+
 **Namespaces:** a pid or cwd names its space: `windows`, `wsl:<distro>`, `posix` or `synthetic`.
-Core's process table is `windows`, so a pid or cwd from any other space is unknown, with the reason.
+Core's process table and its space come from the platform (`core/Platform.ps1`); on this machine that
+is `windows`, so a pid or cwd from any other space is unknown, with the reason. A node on another
+system supplies its own platform.
 
 ## When each step can start
 

@@ -13,6 +13,7 @@
 # --- core: the agent control-file key named after the multiplexer.
 core/ownership.json | 6 | the agent control file surveyed at version 2.1.285 has a key called tmux, holding the tmux pane the agent ran in; the ownership table must name the key to drop it, and says a tmux host adapter reads it
 
+schema/session-view.v1.json | 2 | the view lists every field the ownership table names, and drops the control-file key called tmux as not carried; the schema must name the key to require its dropped answer
 # --- tests that list every control-file key, which must quote that key.
 test/test-identity.ps1 | 1 | lists every key the agent's control file can carry, and one of them is literally named tmux
 test/test-ownership.ps1 | 1 | lists every key the agent's control file can carry, and one of them is literally named tmux

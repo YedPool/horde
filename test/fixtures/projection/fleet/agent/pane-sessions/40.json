@@ -1,0 +1,7 @@
+{
+  "session_id": "not-a-uuid",
+  "transcript_path": "x",
+  "cwd": "x",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

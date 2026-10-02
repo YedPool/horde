@@ -1,0 +1,17 @@
+{
+  "claudeSessionId": "aaaaaaaa-0000-4000-8000-000000000002",
+  "origin": "user",
+  "fleetSessionId": "",
+  "pane": "11",
+  "instance": "inst-1",
+  "cwd": "C:\\work\\beta",
+  "firstCwd": "C:\\work\\beta",
+  "owner": "",
+  "firstSeen": "2026-06-01T10:55:00.0000000Z",
+  "lastSeen": "2026-06-01T11:55:00.0000000Z",
+  "lastTool": "Bash",
+  "role": "orchestrator",
+  "label": "A",
+  "labelCycle": 0,
+  "parent": "aaaaaaaa-0000-4000-8000-000000000001"
+}

@@ -1,0 +1,67 @@
+{
+  "runId": "20260601-100000-alpha",
+  "name": "alpha",
+  "repoKey": "proj",
+  "createdAt": "2026-06-01T07:00:00.0000000Z",
+  "closedAt": null,
+  "orchestratorPane": "11",
+  "sessions": [
+    {
+      "id": "alpha",
+      "title": "the alpha lane",
+      "prompt": "synthetic",
+      "cwd": "C:\\work\\gamma",
+      "dependsOn": [],
+      "exe": "harness-a",
+      "args": []
+    },
+    {
+      "id": "kappa",
+      "title": "kappa",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "harness-a",
+      "args": []
+    },
+    {
+      "id": "delta",
+      "title": "waits for alpha",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [
+        "alpha"
+      ],
+      "exe": "harness-a",
+      "args": []
+    },
+    {
+      "id": "eps",
+      "title": "eps",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "harness-a",
+      "args": []
+    },
+    {
+      "id": "zeta",
+      "title": "zeta",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "harness-a",
+      "args": []
+    },
+    {
+      "id": "eta",
+      "title": "eta",
+      "prompt": "synthetic",
+      "cwd": "C:\\work",
+      "dependsOn": [],
+      "exe": "harness-a",
+      "args": []
+    }
+  ],
+  "windowId": 1
+}

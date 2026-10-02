@@ -1,0 +1,15 @@
+{
+  "claudeSessionId": "aaaaaaaa-0000-4000-8000-000000000001",
+  "origin": "user",
+  "fleetSessionId": "",
+  "pane": "10",
+  "instance": "inst-1",
+  "cwd": "C:\\work\\alpha",
+  "firstCwd": "C:\\work\\alpha",
+  "owner": "",
+  "firstSeen": "2026-06-01T10:59:00.0000000Z",
+  "lastSeen": "2026-06-01T11:59:00.0000000Z",
+  "lastTool": "Bash",
+  "role": "master",
+  "label": "M"
+}

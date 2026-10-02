@@ -114,11 +114,19 @@ B. Groundwork (decision 1). Nothing in C to G starts until step 3 merges.
    - Control: `horde status` output is unchanged while no host is declared.
 3. **`hosts/wezterm/HostRead.ps1`**, built on the HostPort at `feature/core-projection` `4eec8d9`.
    - The contract:
-     - `New-HordeHostPort -Name -Capabilities -Handles -Instance`, where `-Capabilities` is
-       mandatory and core relies on a capability only when it is `yes`.
+     - `New-HordeHostPort -Name -Capabilities -StoredHandles -Handles -Instance`, where
+       `-Capabilities` is mandatory and core relies on a capability only when it is `yes`.
+     - `-StoredHandles` is mandatory too: the stores (of `W1`, `W2`, `W4`, `W5`, `X1`) whose bare
+       handle text this host wrote. The adapter reads it from its `capabilities.json` (key
+       `storedHandles`), never from code. Each store has exactly one writer host: a second host
+       declaring a store is refused, and a record that carries no host belongs to that one writer
+       alone. For WezTerm that is all five, because wezfleet and Claude's hook wrote them from
+       WezTerm panes.
      - Rows are `{ handle; window; tab; hostTitle }`, plus `{ pid; cwd; space }` when they are
        offered. A pid or cwd is tagged with its namespace (`windows`, `wsl:<distro>`, `posix`,
-       `synthetic`), and core treats any space other than `windows` as unknown.
+       `synthetic`), and core treats any space other than the platform's own as unknown. The
+       platform (`core/Platform.ps1`) names that space; on this machine it is `windows`, but it is
+       not fixed in core.
      - The instance is `{ id; startedAt; running; ambiguous }`.
    - Its `capabilities.json` declares:
      - `yes` for `list`, `cwd`, `title.read`, `selfHandle` and `instance.startedAt`, each measured in

@@ -1,0 +1,2617 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/session-view.v1",
+  "title": "session-view v1",
+  "description": "The read model's answer about the whole Horde, as core/projection produces it (step 2.2) and 'horde status --json' will print it (step 2.3). One session per sessionId any store knows, and for each one answer for every field in core/ownership.json's required, over every owner. Every answer is in core/tristate's form: a state (known, absent or unknown) and a reason; a known answer carries its value, typed per field - for a field the engine stores, exactly the value schema of schema/session-record.v1, which test/test-projection.ps1 compares. source names the store and field the answer was read from, by core/ownership.json's store ids; observedAt is when the source says the value was true; provisional is the ownership table's provisional mark for that field; shadow is what a shadow-only store (the layout saves) said without being trusted. A field the table drops is present and always unknown, its reason naming the drop. handles lists every live host handle, including handles no session answers, so a pane-first command's parity is read from this output; faults are the cardinality checks, one per kind, each known true with what was found, known false, or unknown with the reason; complete gives each store's completeness. WHAT THIS SCHEMA CANNOT SAY, because core/Schema.ps1 implements no oneOf, anyOf, if/then or dependencies: that value is present exactly when state is known, that reason is non-blank when state is unknown, and that a fault's found list is empty unless its answer is known true. Those rules are checked by Test-HordeSessionViewRules in core/Projection.ps1, and the schema is not weakened to pretend otherwise.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "observedAt",
+    "host",
+    "sessions",
+    "handles",
+    "faults",
+    "complete"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "current"
+      ],
+      "description": "Present only in a current view (core/Projection.ps1 -Scope Current): it holds the sessions a live signal names, not every session a store knows. A whole view has no scope."
+    },
+    "observedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "host": {
+      "type": "object",
+      "required": [
+        "name",
+        "instance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "instance": {
+          "$ref": "#/definitions/answer-instance"
+        }
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/session"
+      }
+    },
+    "handles": {
+      "$ref": "#/definitions/answer-handles"
+    },
+    "faults": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/fault"
+      }
+    },
+    "complete": {
+      "type": "object",
+      "required": [
+        "R1",
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6",
+        "W8",
+        "X1",
+        "X2",
+        "X3",
+        "X4",
+        "X5",
+        "X6"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "R1": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W1": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W2": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W3": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W4": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W5": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W6": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "W8": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X1": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X2": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X3": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X4": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X5": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "X6": {
+          "$ref": "#/definitions/answer-bool"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "source": {
+      "type": "object",
+      "required": [
+        "store",
+        "field"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "store": {
+          "type": "string",
+          "enum": [
+            "R1",
+            "W1",
+            "W2",
+            "W3",
+            "W4",
+            "W5",
+            "W6",
+            "W8",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6"
+          ]
+        },
+        "field": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "required": [
+        "store",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "store": {
+          "type": "string",
+          "enum": [
+            "R1",
+            "W1",
+            "W2",
+            "W3",
+            "W4",
+            "W5",
+            "W6",
+            "W8",
+            "X1",
+            "X2",
+            "X3",
+            "X4",
+            "X5",
+            "X6"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "answer-bool": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "boolean"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-sessionId": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-agent": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-pid": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-cwd": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-projectCwd": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-transcriptPath": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-resumeCommand": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-pane": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-window": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-hostInstance": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-role": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "enum": [
+            "warchief",
+            "orc",
+            "goblin"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-parent": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-owner": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-label": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[A-Z]{1,2}([1-9][0-9]{0,3})?$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-name": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-origin": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "enum": [
+            "fleet",
+            "user"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-fleetSessionId": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-liveStatus": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "busy",
+            "waiting",
+            "ended"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-workState": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "running",
+            "blocked",
+            "done",
+            "failed",
+            "orphaned",
+            "pending"
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-report": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "object",
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+            }
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-lastActivity": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-startedAt": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-retired": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "boolean"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-messagingAddress": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-lastSeen": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-runId": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-labelCycle": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-nameSource": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-dropped": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-retiredAt": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-lastTool": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-title": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-dependsOn": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-spawnedAt": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-procStart": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-bridgeSessionId": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-formerNames": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-agentVersion": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-peerProtocol": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-peerFeatures": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-sessionKind": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-entrypoint": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-pidDomain": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-nameSince": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-waitingFor": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "fields"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "fields": {
+          "type": "object",
+          "required": [
+            "sessionId",
+            "agent",
+            "pid",
+            "cwd",
+            "projectCwd",
+            "transcriptPath",
+            "resumeCommand",
+            "pane",
+            "window",
+            "hostInstance",
+            "role",
+            "parent",
+            "owner",
+            "label",
+            "name",
+            "origin",
+            "fleetSessionId",
+            "liveStatus",
+            "workState",
+            "report",
+            "lastActivity",
+            "startedAt",
+            "retired",
+            "messagingAddress",
+            "lastSeen",
+            "runId",
+            "labelCycle",
+            "nameSource",
+            "remoteControl",
+            "retiredAt",
+            "lastTool",
+            "title",
+            "dependsOn",
+            "spawnedAt",
+            "procStart",
+            "bridgeSessionId",
+            "formerNames",
+            "agentVersion",
+            "peerProtocol",
+            "peerFeatures",
+            "sessionKind",
+            "entrypoint",
+            "pidDomain",
+            "nameSince",
+            "statusUpdatedAt",
+            "waitingFor",
+            "jobId",
+            "parkedJobId",
+            "spare",
+            "logPath",
+            "hostSessionId",
+            "agentTemplate",
+            "reportedState",
+            "reportedDetail",
+            "tempo",
+            "needs",
+            "tmux"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "sessionId": {
+              "$ref": "#/definitions/answer-sessionId"
+            },
+            "agent": {
+              "$ref": "#/definitions/answer-agent"
+            },
+            "pid": {
+              "$ref": "#/definitions/answer-pid"
+            },
+            "cwd": {
+              "$ref": "#/definitions/answer-cwd"
+            },
+            "projectCwd": {
+              "$ref": "#/definitions/answer-projectCwd"
+            },
+            "transcriptPath": {
+              "$ref": "#/definitions/answer-transcriptPath"
+            },
+            "resumeCommand": {
+              "$ref": "#/definitions/answer-resumeCommand"
+            },
+            "pane": {
+              "$ref": "#/definitions/answer-pane"
+            },
+            "window": {
+              "$ref": "#/definitions/answer-window"
+            },
+            "hostInstance": {
+              "$ref": "#/definitions/answer-hostInstance"
+            },
+            "role": {
+              "$ref": "#/definitions/answer-role"
+            },
+            "parent": {
+              "$ref": "#/definitions/answer-parent"
+            },
+            "owner": {
+              "$ref": "#/definitions/answer-owner"
+            },
+            "label": {
+              "$ref": "#/definitions/answer-label"
+            },
+            "name": {
+              "$ref": "#/definitions/answer-name"
+            },
+            "origin": {
+              "$ref": "#/definitions/answer-origin"
+            },
+            "fleetSessionId": {
+              "$ref": "#/definitions/answer-fleetSessionId"
+            },
+            "liveStatus": {
+              "$ref": "#/definitions/answer-liveStatus"
+            },
+            "workState": {
+              "$ref": "#/definitions/answer-workState"
+            },
+            "report": {
+              "$ref": "#/definitions/answer-report"
+            },
+            "lastActivity": {
+              "$ref": "#/definitions/answer-lastActivity"
+            },
+            "startedAt": {
+              "$ref": "#/definitions/answer-startedAt"
+            },
+            "retired": {
+              "$ref": "#/definitions/answer-retired"
+            },
+            "messagingAddress": {
+              "$ref": "#/definitions/answer-messagingAddress"
+            },
+            "lastSeen": {
+              "$ref": "#/definitions/answer-lastSeen"
+            },
+            "runId": {
+              "$ref": "#/definitions/answer-runId"
+            },
+            "labelCycle": {
+              "$ref": "#/definitions/answer-labelCycle"
+            },
+            "nameSource": {
+              "$ref": "#/definitions/answer-nameSource"
+            },
+            "remoteControl": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "retiredAt": {
+              "$ref": "#/definitions/answer-retiredAt"
+            },
+            "lastTool": {
+              "$ref": "#/definitions/answer-lastTool"
+            },
+            "title": {
+              "$ref": "#/definitions/answer-title"
+            },
+            "dependsOn": {
+              "$ref": "#/definitions/answer-dependsOn"
+            },
+            "spawnedAt": {
+              "$ref": "#/definitions/answer-spawnedAt"
+            },
+            "procStart": {
+              "$ref": "#/definitions/answer-procStart"
+            },
+            "bridgeSessionId": {
+              "$ref": "#/definitions/answer-bridgeSessionId"
+            },
+            "formerNames": {
+              "$ref": "#/definitions/answer-formerNames"
+            },
+            "agentVersion": {
+              "$ref": "#/definitions/answer-agentVersion"
+            },
+            "peerProtocol": {
+              "$ref": "#/definitions/answer-peerProtocol"
+            },
+            "peerFeatures": {
+              "$ref": "#/definitions/answer-peerFeatures"
+            },
+            "sessionKind": {
+              "$ref": "#/definitions/answer-sessionKind"
+            },
+            "entrypoint": {
+              "$ref": "#/definitions/answer-entrypoint"
+            },
+            "pidDomain": {
+              "$ref": "#/definitions/answer-pidDomain"
+            },
+            "nameSince": {
+              "$ref": "#/definitions/answer-nameSince"
+            },
+            "statusUpdatedAt": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "waitingFor": {
+              "$ref": "#/definitions/answer-waitingFor"
+            },
+            "jobId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "parkedJobId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "spare": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "logPath": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "hostSessionId": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "agentTemplate": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "reportedState": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "reportedDetail": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "tempo": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "needs": {
+              "$ref": "#/definitions/answer-dropped"
+            },
+            "tmux": {
+              "$ref": "#/definitions/answer-dropped"
+            }
+          }
+        }
+      }
+    },
+    "handle": {
+      "type": "object",
+      "required": [
+        "handle",
+        "sessions",
+        "claimants"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "handle": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "window": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "tab": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+        },
+        "hostTitle": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          }
+        },
+        "claimants": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          }
+        }
+      }
+    },
+    "answer-handles": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/handle"
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "answer-instance": {
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "known",
+            "absent",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "value": {
+          "type": "object",
+          "required": [
+            "running",
+            "ambiguous"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            },
+            "startedAt": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+            },
+            "running": {
+              "type": "integer"
+            },
+            "ambiguous": {
+              "type": "boolean"
+            }
+          }
+        },
+        "observedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+        },
+        "source": {
+          "$ref": "#/definitions/source"
+        },
+        "provisional": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadow"
+          }
+        }
+      }
+    },
+    "fault": {
+      "type": "object",
+      "required": [
+        "kind",
+        "answer",
+        "found"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "no-warchief",
+            "two-warchiefs",
+            "orc-not-under-warchief",
+            "parent-missing",
+            "parent-retired",
+            "parent-cycle",
+            "conversation-in-two-processes",
+            "registry-hook-silent",
+            "session-in-two-handles",
+            "handle-claimed-twice",
+            "pane-sessions-hijack",
+            "run-ambiguous",
+            "roster-entry-twice",
+            "warchief-claim-pending",
+            "running-but-retired",
+            "orphan-process",
+            "fleet-id-on-two-records",
+            "label-held-twice",
+            "session-id-not-uuid"
+          ]
+        },
+        "answer": {
+          "$ref": "#/definitions/answer-bool"
+        },
+        "found": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "subjects",
+              "detail"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "subjects": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "detail": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

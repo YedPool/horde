@@ -172,6 +172,39 @@ Check (Throws { New-HordeAbsent -ObservedAt "yesterday" } "observation time") "a
 $textTime = [pscustomobject]@{ PSTypeName = "Horde.Answer"; state = "known"; value = 1; reason = ""; observedAt = "yesterday" }
 Check ((Test-HordeAnswer $textTime) -eq $false) "an answer whose observation time is text is not an answer"
 Check ((Test-HordeAnswer (New-HordeKnown -Value 1 -ObservedAt (Get-Date))) -eq $true) "CONTROL: an answer observed at a real date is an answer"
+# THE CONSTRUCTORS BUILD THE ANSWER THEMSELVES (PR #31, 2026-10-02: a call through New-HordeAnswer
+# doubled their cost), so each must still refuse exactly what New-HordeAnswer refuses, in its words,
+# and build exactly what it builds. Same bad inputs, message for message.
+function ErrorOf { param([scriptblock]$Block) try { $null = & $Block; return "(no error)" } catch { return "$($_.Exception.Message)" } }
+$badTimes = @("yesterday", 5, @(1, 2), [pscustomobject]@{ when = "now" }, "2026-01-01T00:00:00Z")
+$timeDiffs = @()
+foreach ($t in $badTimes) {
+    $want = ErrorOf { New-HordeAnswer -State "known" -Value 1 -Reason "" -ObservedAt $t }
+    $gotK = ErrorOf { New-HordeKnown -Value 1 -ObservedAt $t }
+    $gotA = ErrorOf { New-HordeAbsent -ObservedAt $t }
+    if ($want -eq "(no error)" -or $gotK -cne $want -or $gotA -cne $want) { $timeDiffs += ("'" + $t + "': New-HordeAnswer [" + $want + "], known [" + $gotK + "], absent [" + $gotA + "]") }
+}
+foreach ($x in $timeDiffs) { Write-Host ("  " + $x) -ForegroundColor Red }
+Check ($timeDiffs.Count -eq 0) "known and absent refuse every observation time New-HordeAnswer refuses, in its words"
+$goodTime = Get-Date
+$shapeDiffs = @()
+foreach ($pair in @(
+    @((New-HordeKnown -Value 7 -ObservedAt $goodTime), (New-HordeAnswer -State "known" -Value 7 -Reason "" -ObservedAt $goodTime)),
+    @((New-HordeKnown -Value ""), (New-HordeAnswer -State "known" -Value "" -Reason "" -ObservedAt $null)),
+    @((New-HordeAbsent -Note "none here" -ObservedAt $goodTime), (New-HordeAnswer -State "absent" -Value $null -Reason "none here" -ObservedAt $goodTime)),
+    @((New-HordeAbsent), (New-HordeAnswer -State "absent" -Value $null -Reason "" -ObservedAt $null)),
+    @((New-HordeUnknown -Reason "gone"), (New-HordeAnswer -State "unknown" -Value $null -Reason "gone" -ObservedAt $null)))) {
+    $a = $pair[0]; $b = $pair[1]
+    $ta = (@($a.PSObject.TypeNames) -join ","); $tb = (@($b.PSObject.TypeNames) -join ",")
+    $pa = (@($a.PSObject.Properties | ForEach-Object { $_.Name + "=" + $_.Value }) -join ";"); $pb = (@($b.PSObject.Properties | ForEach-Object { $_.Name + "=" + $_.Value }) -join ";")
+    if ($ta -cne $tb -or $pa -cne $pb) { $shapeDiffs += ($pa + " [" + $ta + "] against " + $pb + " [" + $tb + "]") }
+}
+foreach ($x in $shapeDiffs) { Write-Host ("  " + $x) -ForegroundColor Red }
+Check ($shapeDiffs.Count -eq 0) "each constructor builds exactly the answer New-HordeAnswer builds"
+Check ((ErrorOf { New-HordeKnown }) -ceq "a known answer needs a value; a known nothing is New-HordeAbsent" -and (Test-HordeAnswer (New-HordeKnown -Value @())) -and (Test-HordeAnswer (New-HordeKnown -Value $false))) "a known answer given no value at all is refused, and an empty list or false is still a value"
+# Get-HordeField checks its name by hand since PR #31 (a Mandatory attribute cost 0.25 ms a call): an
+# empty or missing name is still refused, in the words the attribute used.
+Check ((Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) -Name "" } "because it is an empty string") -and (Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) -Name $null } "because it is an empty string") -and (Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) } "because it is an empty string")) "a field read with no name is refused"
 
 Write-Host ""
 Write-Host "--- stored answers and missing fields ---" -ForegroundColor Cyan

@@ -1,0 +1,88 @@
+{
+  "instance": {
+    "id": "inst-1",
+    "startedAt": "2026-06-01T10:00:00.0000000Z",
+    "running": 1,
+    "ambiguous": false
+  },
+  "handles": [
+    {
+      "handle": "10",
+      "window": "1",
+      "tab": "110",
+      "hostTitle": "tab 10"
+    },
+    {
+      "handle": "11",
+      "window": "1",
+      "tab": "111",
+      "hostTitle": "tab 11"
+    },
+    {
+      "handle": "12",
+      "window": "1",
+      "tab": "112",
+      "hostTitle": "tab 12"
+    },
+    {
+      "handle": "14",
+      "window": "1",
+      "tab": "114",
+      "hostTitle": "tab 14"
+    },
+    {
+      "handle": "15",
+      "window": "1",
+      "tab": "115",
+      "hostTitle": "tab 15"
+    },
+    {
+      "handle": "16",
+      "window": "1",
+      "tab": "116",
+      "hostTitle": "tab 16"
+    },
+    {
+      "handle": "17",
+      "window": "1",
+      "tab": "117",
+      "hostTitle": "tab 17"
+    },
+    {
+      "handle": "18",
+      "window": "1",
+      "tab": "118",
+      "hostTitle": "tab 18"
+    },
+    {
+      "handle": "19",
+      "window": "1",
+      "tab": "119",
+      "hostTitle": "tab 19"
+    },
+    {
+      "handle": "20",
+      "window": "1",
+      "tab": "120",
+      "hostTitle": "tab 20"
+    },
+    {
+      "handle": "23",
+      "window": "1",
+      "tab": "123",
+      "hostTitle": "tab 23"
+    },
+    {
+      "handle": "24",
+      "window": "1",
+      "tab": "124",
+      "hostTitle": "tab 24"
+    },
+    {
+      "handle": "30",
+      "window": "1",
+      "tab": "130",
+      "hostTitle": "pwsh"
+    }
+  ]
+}

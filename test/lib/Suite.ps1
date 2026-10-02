@@ -51,7 +51,13 @@ function Check {
         [void]$script:fails.Add($What); return
     }
     if ($Cond) { Write-Host "  [PASS] $What" -ForegroundColor DarkGray }
-    else { Write-Host "  [FAIL] $What" -ForegroundColor Red; [void]$script:fails.Add($What) }
+    else {
+        Write-Host "  [FAIL] $What" -ForegroundColor Red; [void]$script:fails.Add($What)
+        # FAIL FAST, for mutation runs only: a mutant is caught at its first failed check, and the rest
+        # of a slow suite proves nothing more about it. Set by a spec's Environment (second review of
+        # PR #31, finding 9); an ordinary run reports every check.
+        if ($env:HORDE_FAIL_FAST -eq "1") { Write-Host "  [FAIL-FAST] stopping at the first failed check (HORDE_FAIL_FAST=1)" -ForegroundColor Red; exit 1 }
+    }
 }
 
 function Throws {
@@ -71,8 +77,11 @@ function Register-HordeSuiteError {
 }
 
 function Complete-HordeSuite {
-    # End the suite: exit 1 if any check failed or any unexpected error was recorded, else exit 0.
-    param([string]$Success = "every check passed")
+    # End the suite: exit 1 if any check failed or any unexpected error was recorded, else exit
+    # -PassCode (0 unless given). A suite that skipped part of itself on purpose passes with a code of
+    # its own, so a gate that expects 0 fails loudly instead of reading a partial run as a whole one;
+    # tools\Mutate.ps1 accepts it only from a spec that declares it (PassCodes).
+    param([string]$Success = "every check passed", [ValidateRange(0, 255)][int]$PassCode = 0)
     Write-Host ""
     $n = $script:fails.Count + $script:suiteErrors.Count
     if ($n -gt 0) {
@@ -82,5 +91,5 @@ function Complete-HordeSuite {
         exit 1
     }
     Write-Host ("==== " + $Success + " ====") -ForegroundColor Green
-    exit 0
+    exit $PassCode
 }

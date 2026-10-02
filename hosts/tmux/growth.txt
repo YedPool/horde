@@ -1,0 +1,1 @@
+schema/session-view.v1.json | 0 -> 2 | 2026-10-02 | the core-projection branch (PR #31) adds the view schema, which names every field of core/ownership.json, the control-file key tmux among the dropped ones; hosts/tmux reached this branch on rebase
