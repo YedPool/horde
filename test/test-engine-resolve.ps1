@@ -108,7 +108,7 @@ Check ($res.binding.state -eq "known" -and $res.binding.value.harness -ceq "harn
 $res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ model = "small"; profile = "alpha-big" })))) -Target @{ role = "orc" }
 Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*small*provider-a*") "an alias with no entry for the resolved provider is unknown, naming both; the alias is never passed through"
 $res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ harness = "harness-b" })))) -Target @{ role = "orc" }
-Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*harness-b*provider-a*protocol*") "layers that combine into a harness and a provider it does not speak are refused (the wire-format rule)"
+Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*harness-b*protocol*provider-a*") "layers that combine into a harness and a provider it does not speak are refused (the wire-format rule)"
 $u = Read-Fixture "user.json"
 $u.providers = @($u.providers) + @([pscustomobject]@{ name = "provider-d"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "harness-login" } })
 $res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json")), (New-Layer "L1" $u), (New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ provider = "provider-d"; model = "x-1" })))) -Target @{ role = "orc" }
@@ -148,5 +148,31 @@ Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $lower))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.state -eq "known" -and $s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "tuned" -and $_.why -like "*only raise*" }).Count -eq 1) "one that lowers it is refused, recorded as refused, and the value below stands"
 Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $byCli))) -Registry $reg) "fixture.reserve") -ceq "low") "CONTROL: a person's live rule may lower it"
+
+Write-Host ""
+Write-Host "--- the registry, the role requirements and the built-in layer that resolution reads ---" -ForegroundColor Cyan
+function Get-RegRefusal { param([string]$Text) try { $null = Read-HordeConfigKeysText -Text $Text; return "" } catch { return "$($_.Exception.Message)" } }
+$regText = [System.IO.File]::ReadAllText((Join-Path $root "core\config-keys.json"))
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model" }, "tuner": "raise-only"'))) -like "*tuner*only on an enum*") "the registry refuses tuner raise-only on a key that is not an enum: there is no order to raise in"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["a", "b"] }, "tuner": "free"'))) -like "*tuner 'free'*") "and a tuner rule other than raise-only"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["a", "b"] }, "tuner": "raise-only"'))) -eq "") "CONTROL: raise-only on an enum loads"
+$reqReal = Get-HordeRoleRequirements
+Check (@($reqReal.goblin).Count -ge 1 -and @($reqReal.warchief).Count -ge @($reqReal.goblin).Count) "the role requirements load, and the warchief needs at least what a goblin needs"
+$tmpReq = Join-Path $env:TEMP ("horde-role-req-" + [guid]::NewGuid().ToString("N") + ".json")
+try {
+    [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": ["telepathy"], "orc": [], "goblin": [] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "telepathy") "a requirement the capability vocabulary does not have is refused, so a typo cannot require nothing"
+    [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": [], "orc": [] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin") "a role with no requirement list is refused"
+} finally { Remove-Item -LiteralPath $tmpReq -Force -ErrorAction SilentlyContinue }
+$l0 = @(Get-HordeBuiltinLayer -Root $root)
+$realDesc = (Get-HordeAgentDescriptors -Root $root).value
+Check ($l0.Count -ge 1) ("the repository's built-in layer is read from the harness folders (" + $l0.Count + " files)")
+$f = @(Test-HordeEngineConfig -Documents $l0 -Descriptors $realDesc)
+Check ($f.Count -eq 0) ("the built-in layer passes its own checker" + $(if ($f.Count) { " (" + (@($f | ForEach-Object { $_.code + " " + $_.detail }) -join " | ") + ")" } else { "" }))
+foreach ($role in @("warchief", "orc", "goblin")) {
+    $res = Resolve-HordeEngine -Layers $l0 -Target @{ role = $role } -Descriptors $realDesc -Now $now
+    Check ($res.binding.state -eq "known" -and $null -eq $res.binding.value.model) ("with no user file, a " + $role + " resolves to a whole binding with the harness's own model (zero configuration)")
+}
 
 Complete-HordeSuite -Success "every target resolves exactly as the layers and selectors say, and the binding and capabilities are checked whole"
