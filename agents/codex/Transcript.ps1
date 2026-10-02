@@ -36,14 +36,6 @@
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/ReadShared.ps1 and core/Transcript.ps1.
 
-function Get-CodexStoreRoots {
-    # CODEX_HOME moves the store; both it and the default folder are protected.
-    $roots = @()
-    if ("$env:CODEX_HOME".Trim() -ne "") { $roots += "$env:CODEX_HOME" }
-    if ("$env:USERPROFILE".Trim() -ne "") { $roots += (Join-Path "$env:USERPROFILE" ".codex") }
-    return $roots
-}
-
 function Test-CodexTranscript {
     # Is this a rollout? A .jsonl whose first parseable line has timestamp, type and payload, and whose
     # first line is a session_meta (the measurement: line 0 is always session_meta).
@@ -216,4 +208,4 @@ function Read-CodexTranscript {
     return [pscustomobject]@{ records = $records.ToArray(); parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
 }
 
-Register-HordeTranscriptAdapter -Name "codex" -Claim { param($p) Test-CodexTranscript -Path $p } -Read { param($p) Read-CodexTranscript -Path $p } -StoreRoots { Get-CodexStoreRoots }
+Register-HordeTranscriptAdapter -Name "codex" -Claim { param($p) Test-CodexTranscript -Path $p } -Read { param($p) Read-CodexTranscript -Path $p }

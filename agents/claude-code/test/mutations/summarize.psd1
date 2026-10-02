@@ -12,10 +12,7 @@
            Find = '        if ($decision.write) {'
            Replace = '        if ($true) {' }
         @{ Name = "window-recorded"
-           Find = '-StoreRoots $roots -Windowed:$windowed'
-           Replace = '-StoreRoots $roots -Windowed:$false' }
-        @{ Name = "store-roots-not-collected"
-           Find = 'foreach ($a in (Get-HordeTranscriptAdapters)) { $roots += @(& $a.storeRoots) }'
-           Replace = '' }
+           Find = '-FirstEventAt $worker.firstEventAt -Windowed:$windowed'
+           Replace = '-FirstEventAt $worker.firstEventAt -Windowed:$false' }
     )
 }

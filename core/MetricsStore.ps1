@@ -20,8 +20,8 @@
 # never sees half a record). It holds counts, times, ids and the transcript's file NAME - never a path
 # into anyone's home and never text (design section 8). A summary of a time window is never written.
 #
-# NEVER INSIDE A HARNESS'S OWN FOLDERS. Each adapter declares its store roots; a metrics folder inside
-# one of them is refused, so a misdirected HORDE_HOME cannot write into a harness's files.
+# NEVER INSIDE ANY ENGINE'S OWN FOLDERS. Every agents/<name>/stores.json declares its engine's store
+# folders, adapter or none (Get-HordeAgentStoreRoots); a metrics folder inside one is refused.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/ReadShared.ps1, core/Home.ps1 and core/Transcript.ps1.
@@ -60,17 +60,59 @@ function Test-HordePathInside {
     return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-HordeAgentStoreRoots {
+    # The folders every engine keeps its own files in, as an answer: known list of full paths, or
+    # unknown when any engine folder does not say. Read as DATA from agents/<name>/stores.json, found by
+    # folder and never named, so an engine with no transcript adapter is protected too (review of PR
+    # #50, F7: a guard built from the loaded adapters left one engine's folder open, and a probe wrote
+    # two summaries into a fake profile's copy of it).
+    #
+    # stores.json: { "schemaVersion": 1, "roots": [ { "profile": ".name" } | { "env": "VARIABLE" } ] }.
+    # "profile" is a folder in the user profile; "env" names a variable that can move the store, and
+    # counts only when set. An engine folder with no stores.json, or one that cannot be read, makes the
+    # whole answer unknown, and the writer refuses: an engine nobody described is not left unguarded.
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+    $agents = Join-Path $Root "agents"
+    $out = New-Object System.Collections.ArrayList
+    if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return (New-HordeKnown -Value @()) }
+    Add-Type -AssemblyName System.Web.Extensions
+    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    foreach ($d in @(Get-ChildItem -LiteralPath $agents -Directory | Sort-Object Name)) {
+        $file = Join-Path $d.FullName "stores.json"
+        $where = "agents/" + $d.Name + "/stores.json"
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return (New-HordeUnknown -Reason ($where + " does not exist, so where that engine keeps its files is not known")) }
+        $s = $null
+        try { $s = $ser.DeserializeObject((Read-HordeSharedText -Path $file)) } catch { return (New-HordeUnknown -Reason ($where + " cannot be read") -ErrorRecord $_) }
+        if ($s -isnot [System.Collections.IDictionary] -or $s["schemaVersion"] -ne 1 -or $s["roots"] -isnot [System.Collections.IEnumerable] -or @($s["roots"]).Count -eq 0) { return (New-HordeUnknown -Reason ($where + " is not a stores file with at least one root")) }
+        foreach ($r in @($s["roots"])) {
+            if ($r -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a root that is not an object")) }
+            if ($r["profile"] -is [string] -and $r["profile"] -ne "") {
+                if ("$env:USERPROFILE".Trim() -ne "") { [void]$out.Add((Join-Path "$env:USERPROFILE" $r["profile"])) }
+            }
+            elseif ($r["env"] -is [string] -and $r["env"] -ne "") {
+                $v = [Environment]::GetEnvironmentVariable($r["env"])
+                if ("$v".Trim() -ne "") { [void]$out.Add("$v") }
+            }
+            else { return (New-HordeUnknown -Reason ($where + " has a root with neither profile nor env")) }
+        }
+    }
+    return (New-HordeKnown -Value $out.ToArray())
+}
+
 function Get-HordeMetricsWriteDecision {
     # May this summary be recorded? Returns { write; reason }. -FirstEventAt is the summary's answer.
-    param([Parameter(Mandatory = $true)]$Gate, [Parameter(Mandatory = $true)]$FirstEventAt, [string[]]$StoreRoots = @(), [switch]$Windowed)
+    # -RepoRoot is where the engine folders are read from (Get-HordeAgentStoreRoots).
+    param([Parameter(Mandatory = $true)]$Gate, [Parameter(Mandatory = $true)]$FirstEventAt, [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot), [switch]$Windowed)
     if ($Gate.state -eq "absent") { return [pscustomobject]@{ write = $false; reason = "metrics are off (no gate file); nothing was recorded" } }
     if ($Gate.state -eq "unknown") { return [pscustomobject]@{ write = $false; reason = ("the gate is refused, so nothing was recorded: " + $Gate.reason) } }
     if ($Gate.value.level -cne "usage") { return [pscustomobject]@{ write = $false; reason = "metrics are off (gate level off); nothing was recorded" } }
     if ($Windowed) { return [pscustomobject]@{ write = $false; reason = "a summary of a time window is shown, never recorded" } }
     if ($FirstEventAt.state -ne "known") { return [pscustomobject]@{ write = $false; reason = "the transcript has no first event, so whether it began after consent cannot be told" } }
     if ($FirstEventAt.value -lt $Gate.value.enabledAt) { return [pscustomobject]@{ write = $false; reason = ("the transcript began " + $FirstEventAt.value.ToString("o") + ", before metrics were enabled at " + $Gate.value.enabledAt.ToString("o") + "; nothing from before consent is recorded") } }
+    $roots = Get-HordeAgentStoreRoots -Root $RepoRoot
+    if ($roots.state -ne "known") { return [pscustomobject]@{ write = $false; reason = ("where the engines keep their files is not known, so nothing was recorded: " + $roots.reason) } }
     $dir = Get-HordeMetricsDir
-    foreach ($root in @($StoreRoots)) {
+    foreach ($root in @($roots.value)) {
         if (Test-HordePathInside -Path $dir -Root $root) { return [pscustomobject]@{ write = $false; reason = ("the metrics folder " + $dir + " is inside a harness's own folder " + $root + "; Horde never writes there") } }
     }
     return [pscustomobject]@{ write = $true; reason = "" }

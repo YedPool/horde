@@ -1,0 +1,12 @@
+# What identifies the gemini-cli agent harness. tools/HostNames.ps1 fails test/test-host-names.ps1
+# when any of these appears in a file outside agents/gemini-cli/ (and outside the prose under
+# planning/, by rule) that agents/gemini-cli/allowlist.txt does not list, exactly as often as it lists
+# (CONTRIBUTING rule 14). Each is matched as a case-insensitive substring, on every line and on the
+# file's path.
+#
+# name | why it identifies this harness
+gemini | the harness's command and product name - as a substring it also catches the .gemini folder that holds its settings and chats, and its GEMINI_ environment variables
+#
+# CONSIDERED AND LEFT OUT, measured 2026-10-02 on the tree outside agents/ and planning/ (0 files):
+#   google - the harness's native PROVIDER, not the harness; a provider is data that more than one
+#     harness can use.

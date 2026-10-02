@@ -38,8 +38,6 @@ function Invoke-HordeMetricsSummarize {
     $windowed = ($null -ne $From -or $null -ne $To)
     $table = Read-HordePriceBook
     $gate = Read-HordeMetricsGate
-    $roots = @()
-    foreach ($a in (Get-HordeTranscriptAdapters)) { $roots += @(& $a.storeRoots) }
     $rows = New-Object System.Collections.ArrayList
     $unread = New-Object System.Collections.ArrayList
     foreach ($file in (Get-HordeTranscriptFiles -Path $Path)) {
@@ -54,7 +52,7 @@ function Invoke-HordeMetricsSummarize {
         if ($windowed) {
             $record["window"] = [ordered]@{ from = (ConvertTo-HordeJsonSafe $From); to = (ConvertTo-HordeJsonSafe $To) }
         }
-        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $worker.firstEventAt -StoreRoots $roots -Windowed:$windowed
+        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $worker.firstEventAt -Windowed:$windowed
         $written = ""
         if ($decision.write) {
             $name = [System.IO.Path]::GetFileNameWithoutExtension($file)

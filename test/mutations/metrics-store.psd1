@@ -34,5 +34,14 @@
         @{ Name = "dates-in-powershell-form"
            Find = 'if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [System.Globalization.CultureInfo]::InvariantCulture) }'
            Replace = '' }
+        @{ Name = "engine-without-stores-unguarded"
+           Find = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return (New-HordeUnknown'
+           Replace = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue; return (New-HordeUnknown' }
+        @{ Name = "moved-store-unguarded"
+           Find = '                if ("$v".Trim() -ne "") { [void]$out.Add("$v") }'
+           Replace = '                $null = $v' }
+        @{ Name = "unknown-roots-allow-writing"
+           Find = '    if ($roots.state -ne "known") { return [pscustomobject]@{ write = $false;'
+           Replace = '    if ($roots.state -ne "known") { $roots = New-HordeKnown -Value @(); } if ($false) { return [pscustomobject]@{ write = $false;' }
     )
 }

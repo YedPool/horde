@@ -164,17 +164,16 @@ function Get-HordeJsonPath {
 function Register-HordeTranscriptAdapter {
     # Called by an adapter file when it is dot-sourced. -Claim answers whether a path is this harness's
     # transcript ($true/$false), reading as little as it can. -Read returns
-    # { records; parseSkipped; tornTail; sessionId } for a claimed path. -StoreRoots returns the
-    # folders the harness owns, where Horde must never write.
+    # { records; parseSkipped; tornTail; sessionId } for a claimed path. Where a harness keeps its
+    # files is not the adapter's to say: it is data, in agents/<name>/stores.json (core/MetricsStore.ps1).
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Claim,
-        [Parameter(Mandatory = $true)][scriptblock]$Read,
-        [Parameter(Mandatory = $true)][scriptblock]$StoreRoots
+        [Parameter(Mandatory = $true)][scriptblock]$Read
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in $script:HordeTranscriptAdapters) { if ($a.name -ceq $Name) { $script:HordeTranscriptAdapters.Remove($a); break } }
-    [void]$script:HordeTranscriptAdapters.Add([pscustomobject]@{ name = $Name; claim = $Claim; read = $Read; storeRoots = $StoreRoots })
+    [void]$script:HordeTranscriptAdapters.Add([pscustomobject]@{ name = $Name; claim = $Claim; read = $Read })
 }
 
 function Get-HordeTranscriptAdapters { return @($script:HordeTranscriptAdapters) }

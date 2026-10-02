@@ -92,18 +92,18 @@ try {
     Write-Host "--- adapters ---" -ForegroundColor Cyan
     $script:HordeTranscriptAdapters.Clear()
     $tsA = $t
-    Register-HordeTranscriptAdapter -Name "harness-a" -StoreRoots { @() } -Claim { param($p) $p -like "*.a.jsonl" } -Read {
+    Register-HordeTranscriptAdapter -Name "harness-a" -Claim { param($p) $p -like "*.a.jsonl" } -Read {
         param($p)
         [pscustomobject]@{ sessionId = "s-a"; parseSkipped = 0; tornTail = 0; records = @(
             (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $tsA -Line 1)
         ) }
     }
-    Register-HordeTranscriptAdapter -Name "harness-b" -StoreRoots { @() } -Claim { param($p) $p -like "*.b.jsonl" -or $p -like "*.both.jsonl" } -Read {
+    Register-HordeTranscriptAdapter -Name "harness-b" -Claim { param($p) $p -like "*.b.jsonl" -or $p -like "*.both.jsonl" } -Read {
         param($p)
         [pscustomobject]@{ sessionId = "s-b"; parseSkipped = 0; tornTail = 0; records = @([pscustomobject]@{ kind = "call" }) }
     }
-    Register-HordeTranscriptAdapter -Name "harness-c" -StoreRoots { @() } -Claim { param($p) $p -like "*.both.jsonl" } -Read { param($p) $null }
-    Check (Throws { Register-HordeTranscriptAdapter -Name "Bad Name" -StoreRoots { @() } -Claim { $true } -Read { $null } } "lowercase") "an adapter name that is not lowercase letters, digits and hyphens is refused"
+    Register-HordeTranscriptAdapter -Name "harness-c" -Claim { param($p) $p -like "*.both.jsonl" } -Read { param($p) $null }
+    Check (Throws { Register-HordeTranscriptAdapter -Name "Bad Name" -Claim { $true } -Read { $null } } "lowercase") "an adapter name that is not lowercase letters, digits and hyphens is refused"
 
     $a = Read-HordeTranscript -Path (Join-Path $work "x.a.jsonl")
     Check ($a.state -eq "known" -and $a.value.adapter -eq "harness-a" -and @($a.value.records).Count -eq 1) "CONTROL: a file one adapter claims is read through it"
@@ -114,7 +114,7 @@ try {
     $b = Read-HordeTranscript -Path (Join-Path $work "x.b.jsonl")
     Check ($b.state -eq "unknown" -and $b.reason -like "*broke the record contract*") "an adapter whose records were not made by the port is refused"
 
-    Register-HordeTranscriptAdapter -Name "harness-d" -StoreRoots { @() } -Claim { param($p) $p -like "*.d.jsonl" } -Read {
+    Register-HordeTranscriptAdapter -Name "harness-d" -Claim { param($p) $p -like "*.d.jsonl" } -Read {
         param($p)
         [pscustomobject]@{ sessionId = "s-d"; parseSkipped = 0; tornTail = 0; records = @(
             (New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $tsA -Line 2 -Fields @{ id = "c1"; model = "not an answer"; usage = (New-HordeUnknown -Reason "x") })
@@ -122,7 +122,7 @@ try {
     }
     $d = Read-HordeTranscript -Path (Join-Path $work "x.d.jsonl")
     Check ($d.state -eq "unknown" -and $d.reason -like "*model*not an answer*") "a call whose model is a bare value, not an answer, breaks the contract"
-    Register-HordeTranscriptAdapter -Name "harness-e" -StoreRoots { @() } -Claim { param($p) $p -like "*.e.jsonl" } -Read {
+    Register-HordeTranscriptAdapter -Name "harness-e" -Claim { param($p) $p -like "*.e.jsonl" } -Read {
         param($p)
         [pscustomobject]@{ sessionId = "s-e"; parseSkipped = 0; tornTail = 0; records = @(
             (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $tsA -Line 5),
@@ -131,7 +131,7 @@ try {
     }
     $e = Read-HordeTranscript -Path (Join-Path $work "x.e.jsonl")
     Check ($e.state -eq "unknown" -and $e.reason -like "*out of file order*") "records out of file order break the contract"
-    Register-HordeTranscriptAdapter -Name "harness-f" -StoreRoots { @() } -Claim { param($p) $p -like "*.f.jsonl" } -Read { param($p) throw "disk on fire" }
+    Register-HordeTranscriptAdapter -Name "harness-f" -Claim { param($p) $p -like "*.f.jsonl" } -Read { param($p) throw "disk on fire" }
     $ff = Read-HordeTranscript -Path (Join-Path $work "x.f.jsonl")
     Check ($ff.state -eq "unknown" -and $ff.reason -like "*disk on fire*") "an adapter that throws gives unknown carrying its message"
 

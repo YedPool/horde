@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "why": "Where this harness keeps its control files and transcripts. Horde never writes inside them (core/MetricsStore.ps1, Get-HordeAgentStoreRoots). CLAUDE_CONFIG_DIR moves the store (metrics design 2.1), so both it and the default folder are protected.",
+  "roots": [
+    { "profile": ".claude" },
+    { "env": "CLAUDE_CONFIG_DIR" }
+  ]
+}

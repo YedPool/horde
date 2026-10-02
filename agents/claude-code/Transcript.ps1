@@ -53,15 +53,6 @@
 
 $script:ClaudeCodeWorkerTools = @("Agent", "Task")
 
-function Get-ClaudeCodeStoreRoots {
-    # Where the harness keeps its own files. CLAUDE_CONFIG_DIR moves the store (design 2.1); both the
-    # moved and the default folder are protected, since either may hold transcripts.
-    $roots = @()
-    if ("$env:CLAUDE_CONFIG_DIR".Trim() -ne "") { $roots += "$env:CLAUDE_CONFIG_DIR" }
-    if ("$env:USERPROFILE".Trim() -ne "") { $roots += (Join-Path "$env:USERPROFILE" ".claude") }
-    return $roots
-}
-
 function Test-ClaudeCodeTranscript {
     # Is this file one of the harness's session transcripts? A .jsonl whose first parseable lines
     # carry a sessionId and a top-level type, and none a payload (the shape of other harnesses' files).
@@ -380,4 +371,4 @@ function Read-ClaudeCodeTranscript {
     return [pscustomobject]@{ records = $records.ToArray(); parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
 }
 
-Register-HordeTranscriptAdapter -Name "claude-code" -Claim { param($p) Test-ClaudeCodeTranscript -Path $p } -Read { param($p) Read-ClaudeCodeTranscript -Path $p } -StoreRoots { Get-ClaudeCodeStoreRoots }
+Register-HordeTranscriptAdapter -Name "claude-code" -Claim { param($p) Test-ClaudeCodeTranscript -Path $p } -Read { param($p) Read-ClaudeCodeTranscript -Path $p }

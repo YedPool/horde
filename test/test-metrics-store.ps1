@@ -68,13 +68,38 @@ try {
     Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -Windowed).write -eq $false) "a summary of a time window is never recorded"
 
     Write-Host ""
-    Write-Host "--- never inside a harness's own folders ---" -ForegroundColor Cyan
-    $storeRoot = Join-Path $work "harness-store"
-    $env:HORDE_HOME = Join-Path $storeRoot "nested\home"
-    $dp = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -StoreRoots @($storeRoot)
-    Check ($dp.write -eq $false -and $dp.reason -like "*inside a harness*") "a metrics folder inside an adapter's store root is refused"
-    $env:HORDE_HOME = Join-Path $work "home"
-    Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -StoreRoots @($storeRoot)).write -eq $true) "CONTROL: one outside it is allowed"
+    Write-Host "--- never inside any engine's own folders, whether or not it has an adapter ---" -ForegroundColor Cyan
+    # Review of PR #50, F7: the guard was built from the loaded adapters, so an engine with no adapter
+    # had no protection - a probe wrote two summaries into a fake profile's folder for one. Every
+    # agents/<name>/ folder now declares its store folders in stores.json, read as data.
+    $fakeRepo = Join-Path $work "repo"
+    foreach ($h in @("harness-x", "harness-y")) { New-Item -ItemType Directory -Path (Join-Path $fakeRepo ("agents\" + $h)) -Force | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HARNESS_X_HOME_TEST" } ] }')
+    [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-y\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-y" } ] }')
+    $origProfile = $env:USERPROFILE
+    $origXHome = $env:HARNESS_X_HOME_TEST
+    try {
+        $env:USERPROFILE = Join-Path $work "profile"
+        $env:HARNESS_X_HOME_TEST = Join-Path $work "x-moved"
+        $roots = Get-HordeAgentStoreRoots -Root $fakeRepo
+        Check ($roots.state -eq "known" -and @($roots.value) -contains (Join-Path $env:USERPROFILE ".harness-y") -and @($roots.value) -contains $env:HARNESS_X_HOME_TEST) "every engine folder's stores.json is read: profile folders and folders named by a variable"
+        $env:HORDE_HOME = Join-Path $env:USERPROFILE ".harness-y\home"
+        $dy = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo
+        Check ($dy.write -eq $false -and $dy.reason -like "*inside a harness*") "a metrics folder inside an engine's folder is refused, adapter or none"
+        $env:HORDE_HOME = Join-Path $env:HARNESS_X_HOME_TEST "home"
+        Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo).write -eq $false) "and so is one inside a folder an engine's variable moved its store to"
+        $env:HORDE_HOME = Join-Path $work "home"
+        Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo).write -eq $true) "CONTROL: one outside them all is allowed"
+        New-Item -ItemType Directory -Path (Join-Path $fakeRepo "agents\harness-z") -Force | Out-Null
+        $dz = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo
+        Check ($dz.write -eq $false -and $dz.reason -like "*harness-z*stores.json*") "an engine folder with no stores.json makes the guard refuse, rather than leave that engine unprotected"
+        [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-z\stores.json"), '{ not json')
+        Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo).write -eq $false) "and so does one that cannot be read"
+    } finally {
+        $env:USERPROFILE = $origProfile
+        $env:HARNESS_X_HOME_TEST = $origXHome
+        $env:HORDE_HOME = Join-Path $work "home"
+    }
     Check ((Test-HordePathInside -Path "C:\x\abc" -Root "C:\x\ab") -eq $false) "a folder whose name merely begins with the root's is not inside it"
     Check ((Test-HordePathInside -Path "C:\X\AB\c" -Root "c:\x\ab") -eq $true) "paths are compared without regard to case, as Windows does"
 
