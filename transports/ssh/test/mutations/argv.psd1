@@ -5,6 +5,28 @@
     Target = "transports\ssh\Argv.ps1"
     Suite  = "transports\ssh\test\test-ssh.ps1"
     Mutations = @(
+        # --- the review of PR #68: F1 the key by IdentityFile, F2 paths ssh reads as written, F5 pins
+        @{ Name = "key-by-i"
+           Find = '"-o", (''IdentityFile="'' + $Paths.identity + ''"''),'
+           Replace = '"-i", $Paths.identity,' }
+        @{ Name = "every-path-safe"
+           Find = '$m = [regex]::Match($Path,'
+           Replace = 'return ""; $m = [regex]::Match($Path,' }
+        @{ Name = "argv-skips-the-path-check"
+           Find = 'if ($why -ne "") { throw $why }'
+           Replace = '' }
+        @{ Name = "proxy-command-unpinned"
+           Find = '"-o", "ProxyCommand=none",'
+           Replace = '' }
+        @{ Name = "known-hosts-command-unpinned"
+           Find = '"-o", "KnownHostsCommand=none",'
+           Replace = '' }
+        @{ Name = "local-command-unpinned"
+           Find = '"-o", "LocalCommand=none",'
+           Replace = '' }
+        @{ Name = "pkcs11-unpinned"
+           Find = '"-o", "PKCS11Provider=none",'
+           Replace = '' }
         @{ Name = "user-config-read"
            Find = '"-F", $Paths.config,'
            Replace = '' }
@@ -15,7 +37,7 @@
            Find = '"-o", "IdentitiesOnly=yes",'
            Replace = '' }
         @{ Name = "user-known-hosts-read"
-           Find = '"-o", ("UserKnownHostsFile=" + $Paths.knownHosts),'
+           Find = '"-o", (''UserKnownHostsFile="'' + $Paths.knownHosts + ''"''),'
            Replace = '' }
         @{ Name = "global-known-hosts-read"
            Find = '"-o", "GlobalKnownHostsFile=none",'

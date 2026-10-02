@@ -27,9 +27,23 @@
         @{ Name = "every-exit-a-transport-error"
            Find = '$st.process.ExitCode -eq $script:HordeSshExitTransportError'
            Replace = '$true' }
-        @{ Name = "all-of-stderr-as-the-reason"
-           Find = 'if ($l.Trim() -ne "") { return $l.Trim() }'
-           Replace = 'if ($l.Trim() -ne "") { return ($State.errTask.Result -replace "\s+", " ") }' }
+        # --- stderr is bounded (review of PR #68, F3)
+        @{ Name = "reason-not-capped"
+           Find = 'if ($clean.Length -gt $script:HordeSshReasonChars) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "control-characters-kept"
+           Find = "`$clean = (`$l -replace '[^\x20-\x7E]', '?').Trim()"
+           Replace = '$clean = $l.Trim()' }
+        @{ Name = "all-of-stderr-kept"
+           Find = '$take = [Math]::Min($script:HordeSshStderrKeepBytes - $State.errKept.Count, $n)'
+           Replace = '$take = $n' }
+        @{ Name = "stderr-not-drained-while-waiting"
+           Find = 'if ($null -ne $st.errTask) { $waitOn += $st.errTask }'
+           Replace = '' }
+        # --- paths ssh would read differently (F2)
+        @{ Name = "open-takes-an-unsafe-path"
+           Find = 'if ($why -ne "") { return (New-HordeSshResult -Ok $false -Reason $why) }'
+           Replace = '' }
         @{ Name = "stdin-buffered"
            Find = '[System.IO.FileAccess]::Write, 1, $false)'
            Replace = '[System.IO.FileAccess]::Write, 4096, $false)' }
@@ -51,5 +65,45 @@
         @{ Name = "a-call-with-ampersand"
            Find = 'return (Test-HordeSshBanner -Endpoint $Endpoint)'
            Replace = 'return (& Test-HordeSshBanner -Endpoint $Endpoint)' }
+        # --- the review's 12 forms that passed the first guard (F4), each appended where nothing runs it
+        @{ Name = "review-bare-ssh-exe"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { ssh.exe -o ProxyCommand=calc.exe h }' }
+        @{ Name = "review-alias-start"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { start ssh.exe }' }
+        @{ Name = "review-alias-saps"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { saps ssh.exe }' }
+        @{ Name = "review-quoted-member"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { $p = New-Object System.Diagnostics.Process; $p."Start"() }' }
+        @{ Name = "review-variable-member"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { $m = "Start"; $p = New-Object System.Diagnostics.Process; $p.$m() }' }
+        @{ Name = "review-com-run"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { (New-Object -ComObject WScript.Shell).Run("calc") }' }
+        @{ Name = "review-dot-invoked-block"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { . ([scriptblock]::Create("calc")) }' }
+        @{ Name = "review-scriptblock-invoke"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { [scriptblock]::Create("calc").Invoke() }' }
+        @{ Name = "review-invoke-command"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { Invoke-Command -ScriptBlock { calc } }' }
+        @{ Name = "review-alias-to-start-function"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; Set-Alias Zz Start-HordeSshProcess; function Yy { Zz -FilePath "C:\x\ssh.exe" -Arguments "" }' }
+        @{ Name = "review-cmd-exe"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { cmd.exe /c calc }' }
+        @{ Name = "review-execution-context"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { $ExecutionContext.InvokeCommand.InvokeScript("calc") }' }
+        @{ Name = "review-control-second-start"
+           Find = '$script:HordeSshFolder = $PSScriptRoot'
+           Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { [System.Diagnostics.Process]::Start("ssh.exe") }' }
     )
 }
