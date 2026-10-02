@@ -109,6 +109,26 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   the measures fold each line into running totals (calls, tokens, gaps, open tool calls, the
   still-waiting state) instead. Target: peak working set under 200 MB on the 133 MB file, measured
   the same way, with the probe kept as a suite so a regression fails the gate.
+  **Built (PR for M2 part 1):** the adapters read twice - facts per id, then records in M1's order -
+  and hand each record to a sink; `core/Metrics.ps1` folds them into running totals. Output pinned
+  byte for byte to M1's by golden files written by M1's own command; `test/test-metrics-memory.ps1`
+  is the probe as a suite.
+- **`horde metrics collect`** (founder, 2026-10-02: "I want the metrics collector on until we have a
+  clear initial method for when to use a real session, when an agent etc."). Finds every transcript in
+  the folders each `agents/<name>/stores.json` declares under `transcripts`, and records what is new
+  or changed since its last run, keyed in `<HordeHome>\metrics\collect-index.json` by path, size and
+  modification time. The gate exactly as summarize; a file last written before consent is not read; a
+  transcript written within the last 10 minutes is recorded as provisional and collected again once
+  still; one run at a time; never writes in an engine's folder.
+- **`horde metrics schedule install|remove|status`**: one job, "Horde metrics collect", every 30
+  minutes as the current user, priority 7, stopped after 20 minutes, installed only while the gate
+  says usage. `core/Schedule.ps1` defines the job; `core/schedule/WindowsTaskScheduler.ps1` is the
+  first scheduler; cron or a systemd timer is a new file there.
+- **Found while keeping M1's output (for its own pull request):** M1 sorted records with Sort-Object,
+  which is not stable on PowerShell 5.1 (measured 2026-10-02: 17,773 of 50,000 tied records
+  reordered), so the kind it reports before the longest silence, when several records share that
+  time and line, is whatever the sort did. M2 replays the same sort to stay byte for byte M1; a stable
+  rule is an intended change of output, with new golden files.
 - Each `subagents/agent-<id>.jsonl` becomes an `agent` span linked to the orchestrator's launch call
   through its `meta.json` `toolUseId`; a session's total is the parent plus its spans, deduplicated
   across files.
