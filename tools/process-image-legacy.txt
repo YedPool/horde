@@ -1,0 +1,16 @@
+# The old readers that may still match a harness's process image, and exactly how often
+# (tools/HostNames.ps1, CORE MATCHES NO PROCESS IMAGE; lifecycle plan section 2.6). A match is one
+# occurrence of a declared processImage, as written or as an escaped regular expression, plus one if
+# the file's path names one. test/test-host-names.ps1 fails on a file outside every port's folder and
+# test/ that matches an image and is not listed here, on a listed file with more matches than listed,
+# and on an entry that allows more than its file needs. Against origin/main it fails on any entry
+# origin/main lacks and any count above its count: this list has no growth record, and only shrinks.
+#
+# MEASURED, NOT WRITTEN BY HAND: each count is what Get-HordeImageMatches returned on 2026-10-02, on
+# main at 1d18c39 with this branch's declared images. Engines A4 moves these reads behind the
+# AgentPort, and each entry goes with its read.
+#
+# path | process image matches | why this old reader may still match one
+core/Faults.ps1 | 1 | the duplicate-conversation fault reads command lines only of the old fleet's harness processes, picked by image
+core/Identity.ps1 | 4 | the Phase 0 to 2 identity reader looks for orphaned sessions under the old fleet's harness image, and says so in its provisional note
+core/ownership.json | 1 | the ownership table describes the process-table store of the old fleet by the harness image it lists
