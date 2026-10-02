@@ -94,6 +94,25 @@ try {
     Check ($sws.calls.value -eq 1 -and $sws.tokens.value.output -eq 500) ("a response whose output grows across its lines counts its final output, 500, not its first line's 1 (" + $sws.tokens.value.output + ")")
     Check ($sws.tokens.value.input -eq 3 -and $sws.tokens.value.cacheRead -eq 100) "CONTROL: fields that do not grow are counted once, not summed across the lines"
 
+    # AN ID CAN COME BACK AFTER ANOTHER HAS STARTED (plan step M2): measured 2026-10-02, read-only, 73
+    # times in one of this machine's 692 transcripts. The adapter reads twice so that such a call is
+    # still one call, at its first line, with everything its later lines add.
+    $split = Join-Path $work "split\agent-a0000000000000002.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $split) -Force | Out-Null
+    $slines = @(
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; message = @{ id = "m1"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "abc" }); stop_reason = $null; usage = (& $u 5) } },
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:02.000Z"; message = @{ id = "m2"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "x" }); stop_reason = "end_turn"; usage = (& $u 7) } },
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:03.000Z"; message = @{ id = "m1"; model = "claude-opus-5-5"; content = @(@{ type = "tool_use"; id = "tu1"; name = "Bash"; input = @{} }); stop_reason = "tool_use"; usage = (& $u 50) } }
+    )
+    [System.IO.File]::WriteAllText($split, ((@($slines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $spr = @((Read-HordeTranscript -Path $split).value.records)
+    $spCalls = @($spr | Where-Object { $_.kind -eq "call" })
+    Check ($spCalls.Count -eq 2 -and $spCalls[0].id -eq "m1" -and $spCalls[0].line -eq 1) "an id that comes back after another is still one call, at its first line"
+    Check ($spCalls[0].usage.value.output -eq 50 -and $spCalls[0].toolCallCount -eq 1 -and $spCalls[0].textChars -eq 3) "with the usage, tool calls and text of its later lines (output 50, 1 tool call, 3 characters)"
+    $spTool = @($spr | Where-Object { $_.kind -eq "toolCall" })
+    Check ($spTool.Count -eq 1 -and $spTool[0].line -eq 3 -and $spTool[0].callId -eq "m1") "and the tool call stays on its own line, linked to that call"
+    Check (@($spr | Where-Object { $_.kind -eq "turnEnd" }).Count -eq 1) "CONTROL: the other call's end_turn is still the file's one turn end"
+
 
     Write-Host ""
     Write-Host "--- a notification is what the harness says it is, not text that looks like one ---" -ForegroundColor Cyan
