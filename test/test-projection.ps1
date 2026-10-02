@@ -258,7 +258,7 @@ if (Section "scope" "the current scope (core/Projection.ps1 header, SCOPE)") {
     $snf = New-Fleet "scope-snapshot"
     $psn = Project $snf
     [System.IO.File]::SetLastWriteTimeUtc((Join-Path $snf ("agent\projects\C--work-gamma\" + (Sid 3) + ".jsonl")), $now.AddSeconds(-5))
-    $psn2 = Get-HordeProjection -From $psn.inputs -Scope Current
+    $psn2 = Complete-HordeProjection -C $psn.inputs -Scope Current
     Check ((Val (Ans $psn 3 "lastActivity")) -like "2026-06-01T11:59:40*" -and (Val (Ans $psn2 3 "lastActivity")) -like "2026-06-01T11:59:40*" -and (Val (Ans (Project $snf) 3 "lastActivity")) -like "2026-06-01T11:59:55*") "one reading completed twice sees one set of live-file facts, and a fresh reading sees the new one"
 }
 

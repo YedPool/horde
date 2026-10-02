@@ -1256,13 +1256,8 @@ function Get-HordeProjection {
         [datetime]$Now = (Get-Date),
         # Which sessions to project: All, every session any store knows (the default), or Current, the
         # sessions a live signal names (the header's SCOPE).
-        [ValidateSet("All", "Current")][string]$Scope = "All",
-        # A reading of the stores an earlier projection made (its .inputs), completed again in -Scope
-        # without reading anything: one reading completed both ways compares exactly (the header's
-        # SCOPE; the reality check does it).
-        $From = $null
+        [ValidateSet("All", "Current")][string]$Scope = "All"
     )
-    if ($null -ne $From) { return (Complete-HordeProjection -C $From -Scope $Scope) }
     Assert-HordePlatform $Platform
     if ($null -eq $Processes) { $Processes = Read-HordePlatformProcessTable -Platform $Platform }
     Assert-HordeProcessTable $Processes
@@ -1288,9 +1283,10 @@ function Get-HordeProjection {
 }
 
 function Complete-HordeProjection {
-    # The view from one reading of the stores (Get-HordeProjection's context), in a scope (the header's
-    # SCOPE). Reads no store anew: the few live-file facts a completion needs come from the reading's
-    # snapshot, read once.
+    # The view from one reading of the stores, in a scope (the header's SCOPE). Reads no store anew:
+    # the few live-file facts a completion needs come from the reading's snapshot, read once. To
+    # complete one reading again - the other scope, compared exactly - pass a projection's .inputs:
+    # Complete-HordeProjection -C $p.inputs -Scope Current.
     param($C, [ValidateSet("All", "Current")][string]$Scope = "All")
     $Processes = $C.processes
     $Now = $C.now
