@@ -111,9 +111,10 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    checks (every level mapped exactly once per harness) and R9's ceiling both read this file, so
    neither waits on the other. Tests first: the list is non-empty, ordered, and has no duplicate; a
    level added or removed fails a fixture descriptor that maps the old list, so E2's check sees the
-   change; the file names no harness (the ratchet). **Follow-up owed:** the engines plan's E2 says
-   "the remote plan owns the closed, ordered vocabulary"; it needs a one-line reference to R0 and
-   `core/permission-levels.json`.
+   change; the file names no harness (the ratchet). The follow-up this step owed is done: the engines
+   plan's E2 names R0 and `core/permission-levels.json`. R0 also carries R9's one comparison,
+   `Test-HordePermissionLevelAllowed` (known false above the ceiling, never clamped; unknown when
+   either side is not a level), so R9 and R19 compare no levels of their own.
 1. **R1. Contracts** (NOW). `schema/link-frame.v1`, `link-verbs.v1`, `node-manifest.v1`,
    `transport-capabilities.v1`, `overlay-endpoint.v1`, with golden fixtures (D4). Every verb row has
    `additionalProperties: false`, an effect class (`read`, `write`, `spawn`, `kill`
