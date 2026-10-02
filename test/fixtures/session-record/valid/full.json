@@ -1,19 +1,15 @@
 {
   "schemaVersion": 1,
-  "sessionId": "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0",
-  "projectCwd": "C:\\Users\\example\\code\\app",
+  "device": "3c2d1e0f-9a8b-4c7d-8e6f-5a4b3c2d1e0f", "sessionId": "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0",
   "role": "goblin",
   "parent": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
   "label": "A12",
   "origin": "fleet",
   "fleetSessionId": "fix-login-form",
   "retired": true,
-  "lastSeen": "2026-09-29T10:15:42.1234567Z",
   "runId": "20260929-091500-login-wave",
   "labelCycle": 0,
   "retiredAt": "2026-09-29T11:02:07.7654321Z",
-  "lastTool": "PowerShell",
   "title": "Fix the login form",
-  "dependsOn": ["schema-first", "api-shape"],
-  "spawnedAt": "2026-09-29T09:15:03.0000000Z"
+  "dependsOn": ["schema-first", "api-shape"]
 }

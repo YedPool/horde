@@ -806,13 +806,15 @@ if (Section "schema" "schema/session-view.v1") {
     $broken.sessions[0].fields.role.state = "known"
     Check (@(Test-HordeSessionViewRules -Document $broken | Where-Object { $_ -like "*fields.pid is known and has no value*" }).Count -eq 1) "CONTROL: a known answer with no value breaks the view's rules"
     Check (@(Test-HordeSchema -Value $broken -Schema $viewSchema | Where-Object { $_ -like "*role.value*" }).Count -ge 1) "CONTROL: a role outside the native vocabulary fails the schema"
-    # Engine-stored fields: the view's value type is exactly the stored record's.
-    $rec = Get-HordeSchema -Name "session-record.v1"
+    # Stored fields: the view's value type is exactly the stored record's, for both records since remote
+    # plan R10 split the record into the hub's fleet record and the node's binding record. The fleet
+    # record's device is where the session runs, not one of its fields; it enters the view at R13.
+    $recProps = @(@((Get-HordeSchema -Name "session-record.v1"), (Get-HordeSchema -Name "session-binding.v1")) | ForEach-Object { @($_.properties.PSObject.Properties) } | Where-Object { $_.Name -ne "schemaVersion" -and $_.Name -ne "sessionId" -and $_.Name -ne "device" })
     $vals = Get-HordeViewValueSchemas -ViewSchema $viewSchema
     function Strip { param($N) $o = [ordered]@{}; foreach ($q in $N.PSObject.Properties) { if ($q.Name -ne "description" -and $q.Name -notlike "x-*") { $o[$q.Name] = $q.Value } }; return ($o | ConvertTo-Json -Depth 10 -Compress) }
-    $differ = @($rec.properties.PSObject.Properties | Where-Object { $_.Name -ne "schemaVersion" -and $_.Name -ne "sessionId" } | Where-Object { -not $vals.ContainsKey($_.Name) -or (Strip $_.Value) -cne (Strip $vals[$_.Name]) } | ForEach-Object { $_.Name })
+    $differ = @($recProps | Where-Object { -not $vals.ContainsKey($_.Name) -or (Strip $_.Value) -cne (Strip $vals[$_.Name]) } | ForEach-Object { $_.Name })
     foreach ($x in $differ) { Write-Host ("  value type differs from the stored record: " + $x) -ForegroundColor Red }
-    Check (@($rec.properties.PSObject.Properties).Count -ge 16 -and $differ.Count -eq 0) "an engine-stored field's value type is the stored record's"
+    Check ($recProps.Count -ge 14 -and $differ.Count -eq 0) ("a stored field's value type, in either record, is the view's (" + $recProps.Count + " fields)")
     $viewFields = @($viewSchema.definitions.session.properties.fields.required)
     Check (($viewFields -join ",") -ceq ($required -join ",")) "the view schema requires exactly the ownership table's fields"
     # Provisional marks: wherever the table has one, and nowhere else it has none.
