@@ -33,6 +33,11 @@
 #   passes horde's code through as it is.
 
 $ErrorActionPreference = "Stop"
+# OUT OF POWER THROTTLING FIRST (core/Platform.ps1). A busy background process on Windows slows about
+# 3 s in, measured 2026-10-02: an empty call 23 us to 165 us. horde status and metrics collect run that
+# long. Off Windows this does nothing. It costs one type compile, about 0.2 s, measured the same day.
+. (Join-Path $PSScriptRoot "core\Platform.ps1")
+$null = Set-HordeThrottlingOptOut
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")
 . (Join-Path $PSScriptRoot "cli\Arguments.ps1")
 
