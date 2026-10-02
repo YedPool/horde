@@ -268,6 +268,12 @@ B. Identity and the session record (PROJ; must merge before migration step 3.8)
     - Claude's `pidDomain` (`win32:<user>`, M-01) is carried as the agent's claim under its own name
       and never stands in for `ns.device`: a fixture with two devices sharing one `pidDomain` stays
       two devices.
+    Built as `core/Namespace.ps1` (the four rules as tristate answers), a guard in core/identity's
+    process check, `ns` on `session.close`'s expected pid, and one space vocabulary for the manifest,
+    the link and `core/Platform.ps1`. Two parts wait for the first remote pid to reach them, and are
+    owed there: `ns` on the session view's pid, procStart, cwd and transcriptPath answers, which leave
+    a node in `sessions.list` (R12); and a process table that carries the namespace it was read in, so
+    the guard checks the table and not the caller's word, with the hub-side path refusals (R13).
 
 C. The node and the hub, read path (PROJ)
 
@@ -338,7 +344,7 @@ E. Acting over the link
     `worktree.create`, `worktree.remove`, each journaled (R3) and admitted by the node's own gate
     (lifecycle step 32, on the node's own counters). R9's policy is enforced here, the
     permission ceiling first. Labels are allocated only by the hub before the request leaves.
-    `session.close` carries the pid and procStart the hub last saw, and the node refuses if its view
+    `session.close` carries the pid and procStart the hub last saw, with their ns (R11), and the node refuses if its view
     differs. The node's audit log
     records every act request with its outcome. Then the hub's own CLI switches to reach its own node
     over `local`, so there is one actuation path. Tests first: one refusal per policy rule, each
