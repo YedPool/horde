@@ -31,8 +31,8 @@ function Call {
 function Tool { param([string]$Id, [double]$Min, [string]$Name = "tool-x") New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts (At $Min) -Line (Next) -Fields @{ id = $Id; name = $Name; callId = ""; launchesWorker = $false } }
 function Result { param([string]$Id, [double]$Min, [int]$Chars = 100, $Worker = (New-HordeAbsent -Note "not a worker launch")) New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts (At $Min) -Line (Next) -Fields @{ toolCallId = $Id; isError = (New-HordeKnown -Value $false); chars = $Chars; worker = $Worker } }
 function Note {
-    param([double]$Min, $Worker, [int]$Chars = 500, [switch]$Interim)
-    New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts (At $Min) -Line (Next) -Fields @{ source = "notification"; chars = $Chars; taskId = "t"; toolCallId = "u"; interim = [bool]$Interim; worker = $Worker }
+    param([double]$Min, $Worker, [int]$Chars = 500, [switch]$Interim, [string]$NoteKind = "")
+    New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts (At $Min) -Line (Next) -Fields @{ source = "notification"; chars = $Chars; taskId = "t"; toolCallId = "u"; interim = [bool]$Interim; noteKind = $(if ($NoteKind -ne "") { $NoteKind } elseif ($Interim) { "interim" } else { "final" }); worker = $Worker }
 }
 function UserSays { param([double]$Min, [int]$Chars = 40) New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts (At $Min) -Line (Next) -Fields @{ source = "user"; chars = $Chars; taskId = ""; toolCallId = ""; interim = $false; worker = (New-HordeAbsent -Note "a user message") } }
 function TurnEnd { param([double]$Min) New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts (At $Min) -Line (Next) -Fields @{ durationMs = (New-HordeKnown -Value 1000) } }
@@ -89,6 +89,10 @@ $final = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1")), (Call "f1" 2 -C
 $interimOne = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1") -Interim), (Call "f2" 2 -Chars 10))
 Check ($final.stillWaiting.calls -eq 0) "a short reply to a final notification is a report, never still-waiting"
 Check ($interimOne.stillWaiting.calls -eq 1) "CONTROL: a short reply to an interim notification is still-waiting"
+$script:line = 0
+$unknownNote = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1") -NoteKind "unrecognised"), (Call "u1" 2 -Chars 10))
+Check ($unknownNote.unrecognisedNotes -eq 1 -and $unknownNote.stillWaiting.calls -eq 0 -and $unknownNote.stillWaiting.afterUnrecognisedNote -eq 1) "a note in unknown wording is counted, and a short reply to it is counted apart, not read as answering a final notification"
+Check ($interimOne.unrecognisedNotes -eq 0 -and $interimOne.stillWaiting.afterUnrecognisedNote -eq 0) "CONTROL: a recognised interim note is not counted as unrecognised"
 
 Write-Host ""
 Write-Host "--- still waiting: attribution is never guessed ---" -ForegroundColor Cyan

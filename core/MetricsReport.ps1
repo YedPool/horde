@@ -124,11 +124,11 @@ function Format-HordeMetricsSummary {
     if ($orcRows.Count -gt 0) {
         [void]$lines.Add("")
         [void]$lines.Add("orchestrator measures (attributed only where the transcript proves the worker)")
-        $o = @(, @("transcript", "notifications (interim)", "still-waiting calls", "their context tokens", "worker results landed: chars (~tokens ESTIMATE)", "unattributed: chars", "job notifications"))
+        $o = @(, @("transcript", "notifications (interim, unrecognised note)", "still-waiting calls", "their context tokens", "worker results landed: chars (~tokens ESTIMATE)", "unattributed: chars", "job notifications"))
         foreach ($row in $orcRows) {
             $m = $row.orc
             $inv = [System.Globalization.CultureInfo]::InvariantCulture
-            $o += , @($row.file, ("" + $m.notifications + " (" + $m.interimNotifications + ")"),
+            $o += , @($row.file, ("" + $m.notifications + " (" + $m.interimNotifications + ", " + $m.unrecognisedNotes + ")"),
                 ("" + $m.stillWaiting.calls + " (workers " + @($m.stillWaiting.byWorker.Values | Measure-Object -Sum).Sum + ", jobs " + $m.stillWaiting.jobs + ", unattributed " + $m.stillWaiting.unattributed + $(if ($m.stillWaiting.callsWithoutUsage -gt 0) { ", without usage " + $m.stillWaiting.callsWithoutUsage } else { "" }) + ")"),
                 (Format-HordeCount $m.stillWaiting.contextTokens),
                 ($m.landed.workerChars.ToString("N0", $inv) + " (~" + $m.landed.workerTokensEstimated.ToString("N0", $inv) + ") from " + @($m.landed.byWorker.Keys).Count + " workers"),
@@ -140,6 +140,7 @@ function Format-HordeMetricsSummary {
 
     [void]$lines.Add("")
     foreach ($u in $Result.unread) { [void]$lines.Add("not read: " + $u.file + ": " + $u.reason) }
+    foreach ($row in @($Result.rows | Where-Object { $_.orc.unrecognisedNotes -gt 0 })) { [void]$lines.Add("notes not recognised: " + $row.file + ": " + $row.orc.unrecognisedNotes + " notification notes in wording the adapter does not know, so whether they are interim is not known; " + $row.orc.stillWaiting.afterUnrecognisedNote + " short replies to them are not counted as still-waiting") }
     $skipped = @($Result.rows | Where-Object { $_.read.parseSkipped -gt 0 -or $_.read.tornTail -gt 0 })
     foreach ($row in $skipped) { [void]$lines.Add("lines not parsed: " + $row.file + ": " + $row.read.parseSkipped + " skipped, " + $row.read.tornTail + " still being written") }
     if ($Result.priceTable.state -eq "known") { [void]$lines.Add("cost: notional list price from " + ($Result.priceTable.value["sources"] -join ", ") + "; an ESTIMATE, never money spent on a subscription") }

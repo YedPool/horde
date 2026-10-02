@@ -66,5 +66,11 @@
         @{ Name = "final-notification-waited-on"
            Find = ' -and $trigger.interim -eq $true -and -not $personSpoke)'
            Replace = ' -and -not $personSpoke)' }
+        @{ Name = "unrecognised-note-not-counted"
+           Find = '$o.unrecognisedNotes = @($notifications | Where-Object { $null -ne $_.PSObject.Properties["noteKind"] -and $_.noteKind -ceq "unrecognised" }).Count'
+           Replace = '$o.unrecognisedNotes = 0' }
+        @{ Name = "reply-to-unrecognised-not-counted"
+           Find = '$trig.noteKind -ceq "unrecognised") { $wait.afterUnrecognisedNote++ }'
+           Replace = '$trig.noteKind -ceq "unrecognised") { }' }
     )
 }

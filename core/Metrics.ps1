@@ -192,8 +192,11 @@ function Get-HordeOrcMeasures {
     $o = [ordered]@{}
     $o.notifications = $notifications.Count
     $o.interimNotifications = @($notifications | Where-Object { $_.interim -eq $true }).Count
+    # A note the adapter could not classify (its harness changed the wording) is counted, never read
+    # as final (verification of PR #50, 2026-10-02). An adapter that gives no noteKind gives none.
+    $o.unrecognisedNotes = @($notifications | Where-Object { $null -ne $_.PSObject.Properties["noteKind"] -and $_.noteKind -ceq "unrecognised" }).Count
 
-    $wait = [ordered]@{ calls = 0; contextTokens = [long]0; outputTokens = [long]0; callsWithoutUsage = 0; byWorker = [ordered]@{}; jobs = 0; unattributed = 0; lines = New-Object System.Collections.ArrayList }
+    $wait = [ordered]@{ calls = 0; contextTokens = [long]0; outputTokens = [long]0; callsWithoutUsage = 0; afterUnrecognisedNote = 0; byWorker = [ordered]@{}; jobs = 0; unattributed = 0; lines = New-Object System.Collections.ArrayList }
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $trigger = $null
     $personSpoke = $false
@@ -204,8 +207,11 @@ function Get-HordeOrcMeasures {
         if (-not $seen.Add("$($r.id)")) { continue }
         $isWait = ($r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trigger -and $trigger.kind -eq "input" -and $trigger.source -eq "notification" -and $trigger.interim -eq $true -and -not $personSpoke)
         $trig = $trigger
+        $personSpokeThen = $personSpoke
         $trigger = $null
         $personSpoke = $false
+        # A reply that would be still-waiting but for a note in unknown wording is counted apart.
+        if (-not $isWait -and $r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trig -and $trig.kind -eq "input" -and $trig.source -eq "notification" -and -not $personSpokeThen -and $null -ne $trig.PSObject.Properties["noteKind"] -and $trig.noteKind -ceq "unrecognised") { $wait.afterUnrecognisedNote++ }
         if (-not $isWait) { continue }
         $wait.calls++
         [void]$wait.lines.Add($r.line)

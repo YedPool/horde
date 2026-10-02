@@ -60,13 +60,16 @@
            Find = '                $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }'
            Replace = '                $keptTask = $n.taskId' }
         @{ Name = "interim-from-whole-text"
-           Find = "interim = ((& `$get ""note"") -match 'may be interim|still running')"
-           Replace = "interim = (`$Text -match 'may be interim|still running')" }
+           Find = '    $noteKind = Get-ClaudeCodeNoteKind -Note (& $get "note")'
+           Replace = '    $noteKind = Get-ClaudeCodeNoteKind -Note $Text' }
         @{ Name = "missing-usage-field-is-zero"
            Find = '        if ($null -eq $Max[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
            Replace = '        if ($false) { }' }
         @{ Name = "session-side-chain-counted"
            Find = '        if ($isSessionFile -and $v["isSidechain"] -eq $true) {'
            Replace = '        if ($false) {' }
+        @{ Name = "unknown-note-read-as-final"
+           Find = '    return "unrecognised"'
+           Replace = '    return "final"' }
     )
 }

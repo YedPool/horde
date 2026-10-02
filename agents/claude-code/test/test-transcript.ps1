@@ -163,7 +163,7 @@ try {
     )
     [System.IO.File]::WriteAllText($im, ((@($ilines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
     $inotes = @((Read-HordeTranscript -Path $im).value.records | Where-Object { $_.kind -eq "input" -and $_.source -eq "notification" })
-    Check ($inotes.Count -eq 2 -and $inotes[0].interim -eq $false) "a final notification whose result says still running is not interim"
+    Check ($inotes.Count -eq 2 -and $inotes[0].interim -eq $false -and $inotes[0].noteKind -eq "none") "a final notification whose result says still running is not interim, and has no note to read"
     Check ($inotes[1].interim -eq $true) "CONTROL: one whose note says the result may be interim is"
 
 
@@ -196,6 +196,30 @@ try {
     $sidew = Get-HordeWorkerSummary -Records (Read-HordeTranscript -Path $side).value.records -PriceTable $noTable
     Check ($sidew.calls.value -eq 1 -and $sidew.toolCalls.value -eq 0) ("side-chain lines in a session file are not the session's calls or tool calls (" + $sidew.calls.value + " calls)")
     Check ($sws.calls.value -eq 1) "CONTROL: in a subagent file, whose every line is side chain, the calls count"
+
+
+    Write-Host ""
+    Write-Host "--- a note in wording the adapter does not know is counted, not read as final ---" -ForegroundColor Cyan
+    # Verification of PR #50's fixes, 2026-10-02: interim is read by matching the harness's phrases in
+    # <note>, so a change of wording would silently make every interim notification final.
+    $wordFile = Join-Path $work "wording\77777777-8888-4999-8000-111111111111.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $wordFile) -Force | Out-Null
+    $newWording = "<task-notification>`n<task-id>a1</task-id>`n<status>completed</status>`n<summary>x</summary>`n<note>Background work continues; this report is provisional.</note>`n</task-notification>"
+    $knownFinal = "<task-notification>`n<task-id>a1</task-id>`n<status>completed</status>`n<summary>x</summary>`n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>`n</task-notification>"
+    $wu = @{ input_tokens = 1; cache_read_input_tokens = 10; cache_creation_input_tokens = 0; output_tokens = 2 }
+    $wlines = @(
+        @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T10:00:00.000Z"; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = $newWording } },
+        @{ type = "assistant"; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; message = @{ id = "w1"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "Waiting." }); stop_reason = "end_turn"; usage = $wu } },
+        @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T10:00:02.000Z"; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = $knownFinal } }
+    )
+    [System.IO.File]::WriteAllText($wordFile, ((@($wlines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $wr = Read-HordeTranscript -Path $wordFile
+    $wm = Get-HordeOrcMeasures -Records $wr.value.records
+    Check ($wm.unrecognisedNotes -eq 1) ("a note in wording the adapter does not know is counted as unrecognised (" + $wm.unrecognisedNotes + ")")
+    Check ($wm.stillWaiting.calls -eq 0 -and $wm.stillWaiting.afterUnrecognisedNote -eq 1) "and a short reply to it is counted apart, neither still-waiting nor silently a report"
+    Check ($wm.notifications -eq 2 -and $wm.interimNotifications -eq 0) "CONTROL: the harness's known final wording is recognised, not counted as unrecognised"
+    $wcli = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $wordFile) -Env @{ HORDE_HOME = (Join-Path $work "wording-home") }
+    Check ($wcli.code -eq 0 -and $wcli.out -match 'jsonl\s+2 \(0, 1\)' -and $wcli.out -like "*notes not recognised*1 notification notes*") "horde metrics summarize shows the unrecognised note in its table and says so beneath it"
 
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
@@ -276,7 +300,7 @@ try {
     $off = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
     Check ($off.code -eq 0) ("horde metrics summarize exits 0 (" + $off.code + ")")
     Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+claude-code\s+claude-opus-5-5\s+329\.0m\s+8\s+3\s+28\s+466,000\s+600\s+429\s+300\.0m \(2026-09-30 10:24\)\s+300\.0m Bash') "its table row for the planted transcript shows the counts the instruments found"
-    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+4 \(3\)\s+3 \(workers 1, jobs 1, unattributed 1\)\s+275,306') "and the orchestrator row shows the three still-waiting replies and their context"
+    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+4 \(3, 0\)\s+3 \(workers 1, jobs 1, unattributed 1\)\s+275,306') "and the orchestrator row shows the three still-waiting replies and their context"
     Check ($off.out -like "*metrics are off (no gate file)*") "with no gate it says metrics are off"
     Check (-not (Test-Path -LiteralPath (Join-Path $homeDir "metrics\summaries"))) "and records nothing"
     New-Item -ItemType Directory -Path (Join-Path $homeDir "metrics") -Force | Out-Null

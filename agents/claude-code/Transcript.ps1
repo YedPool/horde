@@ -168,12 +168,36 @@ function Get-ClaudeCodeNotification {
     # harness marked as a notification (Test-ClaudeCodeNotificationOrigin).
     param([string]$Text)
     $get = { param($tag) $m = [regex]::Match($Text, "<" + $tag + ">([^<]*)</" + $tag + ">"); if ($m.Success) { $m.Groups[1].Value.Trim() } else { "" } }
+    $noteKind = Get-ClaudeCodeNoteKind -Note (& $get "note")
     return [pscustomobject]@{
         taskId = (& $get "task-id"); toolCallId = (& $get "tool-use-id"); status = (& $get "status")
         # Read from <note> only, never the whole text: a result can say "still running" (review of PR
         # #50, F4). <status> cannot tell: measured 2026-10-02, interim notifications carry "completed".
-        interim = ((& $get "note") -match 'may be interim|still running')
+        interim = ($noteKind -ceq "interim"); noteKind = $noteKind
     }
+}
+
+function Get-ClaudeCodeNoteKind {
+    # What a notification's <note> says: "interim", "final", "none" (no note), or "unrecognised".
+    #
+    # THE PHRASES ARE THE HARNESS'S OWN, AND ITS WORDING CAN CHANGE (verification of PR #50's fixes,
+    # 2026-10-02): if it did, every interim note would silently read as final. So a note matching
+    # neither list is "unrecognised", counted and shown, never assumed. Every distinct note on this
+    # machine on 2026-10-02 (measured, read-only, over all transcripts) is one of these:
+    #   interim (537): "This agent stopped with background work of its own still running ... the result
+    #     below may be interim."
+    #   final (898): "A task-notification fires each time this agent stops with no live background
+    #     children of its own ..."
+    #   final, a job stopped or lost (67, 3, 2, 1): "...stopped it because the system was critically
+    #     low on memory...", "...start it again with `run_in_background`...", "No completion record was
+    #     found for it/them in the previous session..."
+    param([string]$Note)
+    if ("$Note".Trim() -eq "") { return "none" }
+    if ($Note -match 'may be interim') { return "interim" }
+    foreach ($p in @('fires each time this agent stops with no live background children', 'stopped it because the system was critically low on memory', 'start it again with `run_in_background`', 'No completion record was found for')) {
+        if ($Note.Contains($p)) { return "final" }
+    }
+    return "unrecognised"
 }
 
 function Read-ClaudeCodeSubagentLinks {
@@ -369,7 +393,7 @@ function Read-ClaudeCodeTranscript {
                 else { $worker = New-HordeUnknown -Reason "its task and call resolve to nothing in this transcript or its subagents folder" }
                 $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }
                 $keptCall = ""; if ($null -ne $tc) { $keptCall = $tc.id }
-                [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "notification"; chars = $s.text.Length; taskId = $keptTask; toolCallId = $keptCall; interim = [bool]$n.interim; worker = $worker }))
+                [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "notification"; chars = $s.text.Length; taskId = $keptTask; toolCallId = $keptCall; interim = [bool]$n.interim; noteKind = $n.noteKind; worker = $worker }))
             }
         }
     }
