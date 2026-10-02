@@ -87,3 +87,16 @@ folder removed it, and the result had to be rerun. A missing log is an unknown r
 
 **Rule:** every run writes its log under a name no other run uses, and a result is read from the
 log it came from - never inferred from a command's exit code alone.
+
+## A PR green on its branch can break main when main moved under it
+
+On 2026-10-02 PRs #40 and #45 merged green and left main red: 86 checks of test-link-contracts and
+100 of test-link-protocol failed. Main had moved under both branches. PR #39 had added
+remote/Journal.ps1, which the new exec scan had never seen. The schema cache work had removed
+core/Schema.ps1's Get-HordeObjectProps, and made Read-HordeSchemaFile refuse anything that is not a
+schema, which the link suites used to read frames. Each branch passed against the main it started
+from; none was tested against the main it merged into.
+
+**Rule:** a PR green on its branch can break main when main moved under it. Before merging, run the
+touched suites on the merge result (git merge-tree, or a throwaway merge commit), not only on the
+branch.
