@@ -1,0 +1,13 @@
+# What identifies the local transport. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of
+# these appears in a file outside transports/local/ (and outside the prose under planning/, by rule)
+# that transports/local/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule
+# 14; remote design, founder decision 10; remote plan step R5). Each is matched as a case-insensitive
+# substring, on every line and on the file's path.
+#
+# name | why it identifies this transport, or name | kind | why (kinds: tools/HostNames.ps1, KINDS OF NAME)
+horde-node- | path | the prefix of the named pipe this transport serves, the pipe root followed by horde-node- and a device id
+NamedPipe | the Windows named-pipe API this transport is built on - as a substring it catches the NamedPipeServerStream and NamedPipeClientStream types and the native calls named after them
+#
+# CONSIDERED AND LEFT OUT, measured 2026-10-02 on the tree outside transports/ and planning/:
+#   local - an ordinary English word, in 100+ files that mean nothing by it.
+#   pipe - the word for any byte pipe, a PowerShell pipeline included.
