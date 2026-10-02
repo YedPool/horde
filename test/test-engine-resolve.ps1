@@ -152,6 +152,28 @@ Check ($s.answer.state -eq "known" -and $s.answer.value -ceq "mid" -and @($s.ref
 Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $byCli))) -Registry $reg) "fixture.reserve") -ceq "low") "CONTROL: a person's live rule may lower it"
 
 Write-Host ""
+Write-Host "--- a key's direction: what a layer above the owner's may do to its value (review of PR #73, F3) ---" -ForegroundColor Cyan
+# The shape of remote R9's ceiling: the owner's layers (L0, L1) set it freely; a run spec, a live rule
+# or a spawn may only lower it, never raise it - an agent can write live rules.
+$regD = @(Get-HordeConfigKeys) + @([pscustomobject]@{ name = "fixture.ceiling"; layers = @("L0", "L1", "L3", "L4", "L5"); value = [pscustomobject]@{ kind = "enum"; values = @("plan", "ask", "edits", "bypass") }; direction = "lower-only" }, [pscustomobject]@{ name = "fixture.floor"; layers = @("L0", "L1", "L4"); value = [pscustomobject]@{ kind = "enum"; values = @("low", "mid", "high") }; direction = "raise-only" })
+function Get-Ceiling { param([object[]]$Extra, [string]$Key = "fixture.ceiling") return (Get-HordeEngineSetting -Resolution (Resolve ($base + $Extra) -Registry $regD) -Key $Key) }
+$own = New-Layer "L1" (New-Doc @(New-Rule "owner" @{} @{ "fixture.ceiling" = "ask"; "fixture.floor" = "mid" })) -Source "owner"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "agent-raise" @{} @{ "fixture.ceiling" = "bypass" } "cli"))))
+Check ($s.answer.value -ceq "ask" -and @($s.refused | Where-Object { $_.rule -ceq "agent-raise" -and $_.why -like "*lower-only*" }).Count -eq 1) "a live rule that raises a lower-only key above the owner's value is refused, recorded, and the owner's value stands"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "agent-lower" @{} @{ "fixture.ceiling" = "plan" } "cli"))))
+Check ($s.answer.value -ceq "plan" -and @($s.refused).Count -eq 0) "CONTROL: one that lowers it resolves"
+$s = Get-Ceiling @($own, (New-Layer "L3" (New-Doc @(New-Rule "spec-lower" @{} @{ "fixture.ceiling" = "plan" }))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-raise" @{} @{ "fixture.ceiling" = "edits" }))))
+Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "spawn-raise" }).Count -eq 1) "each layer may only lower what the layers below it left: a spawn cannot raise back what a run spec lowered"
+$s = Get-Ceiling @((New-Layer "L1" (New-Doc @(New-Rule "owner-raise" @{} @{ "fixture.ceiling" = "bypass" })) -Source "owner"))
+Check ($s.answer.value -ceq "bypass") "the owner's own layer may set it anywhere: direction binds only the layers above L1"
+$s = Get-HordeEngineSetting -Resolution (Resolve @((New-Layer "L4" (New-Doc @(New-Rule "alone" @{} @{ "fixture.ceiling" = "edits" } "cli")))) -Registry $regD) -Key "fixture.ceiling"
+Check ($s.answer.state -ne "known" -and @($s.refused | Where-Object { $_.rule -ceq "alone" -and $_.why -like "*nothing below*" }).Count -eq 1) "with no owner's value to lower from, a higher layer's value is refused, never taken as the base"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "lower-floor" @{} @{ "fixture.floor" = "low" } "cli")))) "fixture.floor"
+Check ($s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "lower-floor" -and $_.why -like "*raise-only*" }).Count -eq 1) "a raise-only key cannot be lowered from a layer above the owner's"
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "raise-floor" @{} @{ "fixture.floor" = "high" } "cli")))) "fixture.floor"
+Check ($s.answer.value -ceq "high") "CONTROL: and can be raised"
+
+Write-Host ""
 Write-Host "--- the registry, the role requirements and the built-in layer that resolution reads ---" -ForegroundColor Cyan
 function Get-RegRefusal { param([string]$Text) try { $null = Read-HordeConfigKeysText -Text $Text; return "" } catch { return "$($_.Exception.Message)" } }
 $regText = [System.IO.File]::ReadAllText((Join-Path $root "core\config-keys.json"))
