@@ -103,7 +103,22 @@
            Find = 'if ($dir -ceq "lower-only") { $current = $values[$idx[0]] } else { $current = $values[$idx[$idx.Count - 1]] }'
            Replace = 'if ($dir -ceq "lower-only") { $current = $values[$idx[$idx.Count - 1]] } else { $current = $values[$idx[0]] }' }
         @{ Name = "tuner-checks-the-winner-only"
-           Find = '$low = @($mine | Where-Object { $_.by -ceq "tuner" -and'
-           Replace = '$low = @(@((Select-HordeWinner -List $mine).top) | Where-Object { $_.by -ceq "tuner" -and' }
+           Find = '$low = @($mine | Where-Object { -not (& $byPerson $_) -and'
+           Replace = '$low = @(@((Select-HordeWinner -List $mine).top) | Where-Object { -not (& $byPerson $_) -and' }
+        @{ Name = "value-outside-enum-ranked"
+           Find = 'if ($c.value -isnot [string] -or $enumVals -cnotcontains $c.value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "enum-value-matched-ignoring-case"
+           Find = 'if ($c.value -isnot [string] -or $enumVals -cnotcontains $c.value) {'
+           Replace = 'if ($c.value -isnot [string] -or $enumVals -notcontains $c.value) {' }
+        @{ Name = "tuner-check-skipped-on-a-tie"
+           Find = 'if ($agreed.Count -ge 1) {'
+           Replace = 'if ($agreed.Count -eq 1) {' }
+        @{ Name = "tuner-held-to-the-lowest-of-a-tie"
+           Find = '$floor = $floorIdx[$floorIdx.Count - 1]'
+           Replace = '$floor = $floorIdx[0]' }
+        @{ Name = "writer-other-than-tuner-trusted"
+           Find = '$byPerson = { param($c) ($c.by -ceq "user" -or $c.by -ceq "cli") }'
+           Replace = '$byPerson = { param($c) ($c.by -cne "tuner") }' }
     )
 }

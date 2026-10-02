@@ -157,6 +157,10 @@ Check ($s.answer.value -ceq "mid" -and @($s.refused).Count -eq 2) "every tuner r
 $tieUser = New-Doc @((New-Rule "person-mid" @{} @{ "fixture.reserve" = "mid" }), (New-Rule "person-high" @{} @{ "fixture.reserve" = "high" }))
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $tieUser -Source "u2"), (New-Layer "L4" $lower))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.value -cne "low" -and @($s.refused | Where-Object { $_.rule -ceq "tuned" }).Count -eq 1) "a tuner that lowers below a tie of a person's rules is refused, tie or not"
+$tieLowHigh = New-Doc @((New-Rule "person-low" @{} @{ "fixture.reserve" = "low" }), (New-Rule "person-high2" @{} @{ "fixture.reserve" = "high" }))
+$midTuner = New-Doc @(New-Rule "tuned-mid" @{} @{ "fixture.reserve" = "mid" } "tuner" "2026-10-09T00:00:00Z")
+$s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $tieLowHigh -Source "u2"), (New-Layer "L4" $midTuner))) -Registry $reg) -Key "fixture.reserve"
+Check (@($s.refused | Where-Object { $_.rule -ceq "tuned-mid" }).Count -eq 1) "held to the HIGHEST of the tied values: a tuner value between them is still a lowering of one, and refused"
 $oddCase = New-Doc @(New-Rule "tuned-case" @{} @{ "fixture.reserve" = "low" } "Tuner" "2026-10-09T00:00:00Z")
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $oddCase))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.value -ceq "mid") "a writer that is not exactly user or cli is held to the tuner's rule (fail closed): Tuner lowers nothing"

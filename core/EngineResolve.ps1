@@ -198,18 +198,37 @@ function Resolve-HordeEngine {
         $key = "" + $entry.name
         $mine = @($cands | Where-Object { $_.key -ceq $key })
         $refused = @()
+        # A VALUE OUTSIDE AN ENUM IS REFUSED HERE, whether or not the checker ran (review of PR #74,
+        # round 3, NEW-A): ranked, it was -1, which counted as a lowering and then stood as the most
+        # permissive level. Compared exactly, so Bypass is not bypass. Fail closed: it is recorded and
+        # takes no part - not as a value, not as a base, not in a tie.
+        if (("" + $entry.value.kind) -ceq "enum") {
+            $enumVals = @(Get-HordeConfigItems $entry.value "values")
+            foreach ($c in @($mine)) {
+                if ($c.value -isnot [string] -or $enumVals -cnotcontains $c.value) {
+                    $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = ("refused: '" + $c.value + "' is not a value of " + $key + " (" + ($enumVals -join ", ") + ")") }
+                    $mine = @($mine | Where-Object { $_ -ne $c })
+                }
+            }
+        }
         $pick = Select-HordeWinner -List $mine
         $raiseOnly = ("" + (Get-HordeAgentProp $entry "tuner")) -ceq "raise-only"
         # EVERY tuner rule is checked, not only the winning one: a refused winner must not let a less
         # specific tuner rule that lowers just as far through (the same hole as the review of PR #74
         # found in direction).
-        if ($raiseOnly -and @($mine | Where-Object { $_.by -ceq "tuner" }).Count -gt 0) {
+        # A WRITER THAT IS NOT EXACTLY user OR cli IS HELD TO THE TUNER'S RULE (fail closed; the review
+        # of PR #74, round 3, T9: "Tuner" skipped the check). When the person's rules tie, the tuner is
+        # held to the highest of them (NEW-B: the check used to be skipped on a tie).
+        $byPerson = { param($c) ($c.by -ceq "user" -or $c.by -ceq "cli") }
+        if ($raiseOnly -and @($mine | Where-Object { -not (& $byPerson $_) }).Count -gt 0) {
             $values = @(Get-HordeConfigItems $entry.value "values")
-            $without = Select-HordeWinner -List @($mine | Where-Object { $_.by -cne "tuner" })
+            $without = Select-HordeWinner -List @($mine | Where-Object { & $byPerson $_ })
             $agreed = @($without.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
-            if ($agreed.Count -eq 1) {
-                $floor = [array]::IndexOf($values, $agreed[0])
-                $low = @($mine | Where-Object { $_.by -ceq "tuner" -and [array]::IndexOf($values, ("" + $_.value)) -lt $floor })
+            if ($agreed.Count -ge 1) {
+                $floorIdx = @($agreed | ForEach-Object { [array]::IndexOf($values, $_) } | Sort-Object)
+                $floor = $floorIdx[$floorIdx.Count - 1]
+                $agreed = @($values[$floor])
+                $low = @($mine | Where-Object { -not (& $byPerson $_) -and [array]::IndexOf($values, ("" + $_.value)) -lt $floor })
                 if ($low.Count -gt 0) {
                     foreach ($c in $low) { $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = "refused: a tuner may only raise this setting, and " + $c.value + " is below " + $agreed[0] } }
                     $mine = @($mine | Where-Object { $low -notcontains $_ })
