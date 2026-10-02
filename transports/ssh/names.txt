@@ -1,0 +1,25 @@
+# What identifies the ssh transport. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of
+# these appears in a file outside transports/ssh/ (and outside the prose under planning/, by rule)
+# that transports/ssh/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule 14;
+# remote design, founder decision 10: nothing outside transports/<name>/ names a transport program or
+# its options; remote plan step R5). Each is matched as a case-insensitive substring, on every line
+# and on the file's path.
+#
+# name | why it identifies this transport, or name | kind | why (kinds: tools/HostNames.ps1, KINDS OF NAME)
+ssh.exe | processImage | the OpenSSH client this transport starts, the System32 copy, and so a process image core must never match
+sshd | the OpenSSH server the hub runs while horde listen runs, and the throwaway one its tests will start
+ssh- | the prefix of the OpenSSH tools and key types: ssh-keygen, ssh-agent, ssh-ed25519 and the rest
+openssh | the product's own name, and the System32 folder it is installed in
+known_hosts | the file of pinned host keys, Horde's own under the node folder
+authorized_keys | the file of keys an sshd admits, which the hub's enrollment writes
+StrictHostKeyChecking | an ssh option this transport sets, and only this transport may
+HostKeyAlias | an ssh option this transport sets to pin a hub by identity rather than address
+IdentitiesOnly | an ssh option this transport sets so that only Horde's key is offered
+ControlMaster | an ssh option this transport sets so that no connection is shared
+/ssh/ | path | a path into this transport's folder written with forward slashes
+\ssh\ | path | a path into this transport's folder written with backslashes
+#
+# CONSIDERED AND LEFT OUT, measured 2026-10-02 on the tree outside transports/ and planning/:
+#   ssh - three letters, shorter than the four the scan requires of a name; ssh.exe, sshd, ssh- and
+#     the option names above catch the program, the server, its tools and its configuration.
+#   ed25519 - a key algorithm, used by more than ssh.

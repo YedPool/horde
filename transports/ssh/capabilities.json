@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "transport": "ssh",
+  "maxFrameBytes": 1048576,
+  "capabilities": {
+    "auth.peer": {
+      "support": "unverified",
+      "evidence": "Argv pins the hub's host key (StrictHostKeyChecking=yes, HostKeyAlias=horde-hub-<hubId>, Horde's own known_hosts only, no global file) and offers only Horde's key, as ssh.exe -G reports in transports/ssh/test/test-ssh.ps1 (2026-10-02, OpenSSH_for_Windows 9.5p2). No live sshd has demonstrated a verified peer: that is remote plan R16 and R17."
+    },
+    "encrypt": {
+      "support": "unverified",
+      "evidence": "ssh encrypts the session by design, but no session to a live sshd has been run here (remote plan R16)."
+    },
+    "dial.out": {
+      "support": "unverified",
+      "evidence": "Open starts the System32 ssh.exe with the design's argv, and the byte channel round-trips a mebibyte frame through a stand-in child (transports/ssh/test/test-ssh.ps1); a link to a live sshd has not been run here (remote plan R16)."
+    },
+    "dial.in": {
+      "support": "no",
+      "evidence": "The hub never dials a node (remote design 1.2, founder decision 1): nodes dial out, and only the hub runs sshd."
+    },
+    "accept": {
+      "support": "no",
+      "evidence": "The accepting end is the hub's sshd with a forced command, run by horde listen (remote plan R16), not this process; the adapter's Listen refuses naming R16."
+    },
+    "keepalive": {
+      "support": "unverified",
+      "evidence": "Argv sets ServerAliveInterval=15 and ServerAliveCountMax=4, as ssh.exe -G reports; a dead hub noticed without a frame has not been shown against a live sshd (remote plan R16)."
+    },
+    "survives.peer.restart": {
+      "support": "no",
+      "evidence": "An ssh session ends when sshd restarts; a new link must be opened (remote design 2.1)."
+    }
+  }
+}
