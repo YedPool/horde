@@ -291,16 +291,22 @@
            Replace = 'if ($false) {' }
         # --- the one cross-host import (hosts plan step 5)
         @{ Name = "import-of-any-file"
-           Find = "'[\\/]' + [regex]::Escape(`$script:HordeDialectFile) + '\b'"
+           Find = "'[\\/]' + [regex]::Escape(`$script:HordeDialectFile) + '`$'"
            Replace = "'[\\/]'" }
+        @{ Name = "import-path-unanchored"
+           Find = "[regex]::Escape(`$script:HordeDialectFile) + '`$'"
+           Replace = "[regex]::Escape(`$script:HordeDialectFile)" }
         @{ Name = "import-not-dot-sourced"
-           Find = "`$pattern = '^\s*\.\s+.*[\\/]'"
-           Replace = "`$pattern = '.*[\\/]'" }
+           Find = "`$line = '^\s*\.\s+(?:'"
+           Replace = "`$line = '^\s*[.&]\s+(?:'" }
+        @{ Name = "import-through-a-loader"
+           Find = "'|\(\s*Join-Path\s+\`$[A-Za-z_][A-Za-z0-9_:]*\s+'"
+           Replace = "'|\(\s*[A-Za-z-]+\s+(?:\S+\s+)?'" }
         @{ Name = "import-line-unchecked"
            Find = 'elseif ($a.import -and -not (Test-HordeDialectImport'
            Replace = 'elseif ($false -and -not (Test-HordeDialectImport' }
         @{ Name = "import-line-mention-unchecked"
-           Find = 'if ((Get-HordeMentionSpans -Text $line -Names $Names).Count -ge 1) { return $true }'
+           Find = 'if ((Get-HordeMentionSpans -Text $text -Names $Names).Count -ge 1) { return $true }'
            Replace = 'return $true' }
         @{ Name = "import-from-any-family"
            Find = 'if (-not $otherPort -or -not $otherPort.StartsWith($fam + "/")) {'
