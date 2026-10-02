@@ -11,7 +11,7 @@
            Find = '[System.IO.FileMode]::CreateNew'
            Replace = '[System.IO.FileMode]::OpenOrCreate' }
         @{ Name = "check-then-create"
-           Find = 'try { $made = New-HordeJournalFile -Path $recPath -Text $recText }'
+           Find = 'try { $made = New-HordeJournalFile -Root $Root -Name ($Id + ".json") -Text $recText }'
            Replace = 'try { if ([System.IO.File]::Exists($recPath)) { $made = "exists" } else { [System.IO.File]::WriteAllText($recPath, $recText); $made = "created" } }' }
     )
 }

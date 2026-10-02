@@ -96,7 +96,7 @@ $script:HordeExecTypes = @("string", "int", "long", "bool", "byte", "sbyte", "ch
     # DateTimeKind for UTC times; Int32 and Int64 are int and long by their CLR names.
     "io.file", "io.directory", "io.filemode", "io.fileaccess", "io.fileshare", "io.fileoptions", "io.ioexception",
     "io.filenotfoundexception", "io.directorynotfoundexception", "security.cryptography.sha256", "datetimekind",
-    "int32", "int64")
+    "int32", "int64", "io.fileattributes", "io.path")
 $script:HordeExecAttributes = @("Parameter", "CmdletBinding")
 
 # Rule 5. Per type (named as in $HordeExecTypes), the static members that may be read or called.
@@ -106,7 +106,12 @@ $script:HordeExecStatic = @{
     "double" = @("IsNaN", "IsInfinity")
     "datetimekind" = @("Utc", "Unspecified")
     # The journal's files (see $HordeExecTypes): delete one of its own files, create its own folder.
-    "io.file" = @("Delete")
+    # GetAttributes: the journal reads a path's attributes to refuse a junction or a symbolic link
+    # before it writes or deletes there (Resolve-HordeJournalPath).
+    "io.file" = @("Delete", "GetAttributes")
+    "io.fileattributes" = @("ReparsePoint")
+    # Path arithmetic only, to confine every journal path to its root: nothing here touches a file.
+    "io.path" = @("GetFullPath", "Combine", "GetDirectoryName", "IsPathRooted")
     "io.directory" = @("CreateDirectory")
     "io.filemode" = @("Open", "CreateNew")
     "io.fileaccess" = @("Read", "Write")
@@ -118,7 +123,8 @@ $script:HordeExecStatic = @{
     "string" = @("Equals")
     "globalization.cultureinfo" = @("InvariantCulture")
     "globalization.datetimestyles" = @("AdjustToUniversal", "AssumeUniversal", "RoundtripKind")
-    "stringcomparison" = @("Ordinal")
+    # OrdinalIgnoreCase: the journal compares a resolved folder with its root as Windows does, without case.
+    "stringcomparison" = @("Ordinal", "OrdinalIgnoreCase")
     "stringcomparer" = @("Ordinal")
     "array" = @("Copy", "IndexOf", "Sort")
     "char" = @("IsHighSurrogate", "IsLowSurrogate")
@@ -139,7 +145,7 @@ $script:HordeExecInstanceMethods = @("ToString", "Trim", "Split", "Contains", "S
     "Read",
     # The journal's own files: write and flush a record, read one back, close what was opened; trim a
     # number's trailing zeros; hash the canonical arguments.
-    "Write", "Flush", "ReadToEnd", "Dispose", "TrimEnd", "ComputeHash")
+    "Write", "Flush", "ReadToEnd", "Dispose", "TrimEnd", "ComputeHash", "IndexOfAny")
 
 # Rule 7. Variables refused whatever their scope.
 $script:HordeExecVariables = @("ExecutionContext", "Host", "MyInvocation", "PSCmdlet")

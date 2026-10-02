@@ -212,10 +212,14 @@ function Set-HordeJournalHighWater {
     # the highest one. Throws if the mark cannot be written.
     param([string]$Root, [datetime]$Time)
     $name = "hw-" + $Time.ToUniversalTime().Ticks.ToString("D19", [System.Globalization.CultureInfo]::InvariantCulture)
-    $null = New-HordeJournalFile -Path (Join-Path $Root $name) -Text ""
+    $null = New-HordeJournalFile -Root $Root -Name $name -Text ""
     $top = Get-HordeJournalHighWater -Root $Root
     foreach ($f in @(Get-ChildItem -LiteralPath $Root -File -Filter "hw-*" -ErrorAction SilentlyContinue)) {
-        if ($f.Name -cmatch '\Ahw-([0-9]{19})\z' -and [long]$Matches[1] -lt $top.Ticks) { try { [System.IO.File]::Delete($f.FullName) } catch { } }
+        if ($f.Name -cmatch '\Ahw-([0-9]{19})\z' -and [long]$Matches[1] -lt $top.Ticks) {
+            # Resolved outside the try: a refused path throws, and is never swallowed as a busy file.
+            $old = Resolve-HordeJournalPath -Root $Root -Name $f.Name
+            try { [System.IO.File]::Delete($old) } catch { }
+        }
     }
 }
 
@@ -232,12 +236,53 @@ function Get-HordeJournalArgsHash {
     return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
 }
 
+function Test-HordeJournalReparse {
+    # Is Path a junction or a symbolic link? False when it does not exist.
+    param([string]$Path)
+    $attrs = $null
+    try { $attrs = [System.IO.File]::GetAttributes($Path) } catch { return $false }
+    return (($attrs -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Resolve-HordeJournalPath {
+    # The full path of the journal file Name, directly in Root, or a throw saying why not.
+    #
+    # EVERY PATH THE JOURNAL WRITES OR DELETES COMES THROUGH HERE (review of the fix for main,
+    # 2026-10-02). The journal opens FileStreams and deletes files, and nothing else in remote/ may;
+    # a write that left the root could put a file anywhere the node's user can, a startup folder
+    # included. So Name must be a plain file name: no "..", no separator, no colon (a drive, or an
+    # alternate stream), not rooted. Its normalised full path must sit directly in the normalised
+    # root. And neither the root, nor any folder above it, nor the file itself may be a junction or a
+    # symbolic link, because a path that normalises inside the root can still land outside it through
+    # one. Refused, never repaired.
+    param([string]$Root, [string]$Name)
+    if ("$Root".Trim() -eq "") { throw "no journal root was given, so no journal path can be made" }
+    if ("$Name" -eq "" -or $Name.Contains("..") -or $Name.IndexOfAny([char[]]@([char]92, [char]47, [char]58)) -ge 0 -or [System.IO.Path]::IsPathRooted($Name)) {
+        throw ("refused: '" + $Name + "' is not a plain file name in the journal root (.., separators, drives and absolute paths are refused)")
+    }
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char]92)
+    $full = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($rootFull, $Name))
+    $parent = [System.IO.Path]::GetDirectoryName($full).TrimEnd([char]92)
+    if (-not [string]::Equals($parent, $rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("refused: '" + $Name + "' resolves to '" + $full + "', outside the journal root '" + $rootFull + "'")
+    }
+    $walk = $rootFull
+    while ("$walk" -ne "") {
+        if (Test-HordeJournalReparse $walk) { throw ("refused: '" + $walk + "' is a junction or a symbolic link; the journal never writes or deletes through one") }
+        $walk = [System.IO.Path]::GetDirectoryName($walk)
+    }
+    if (Test-HordeJournalReparse $full) { throw ("refused: '" + $full + "' is a junction or a symbolic link; the journal never writes or deletes through one") }
+    return $full
+}
+
 function New-HordeJournalFile {
-    # Create a file that must not exist yet, write it through to disk, and close it. Returns
-    # "created", "exists", or throws. The file is held with FileShare.None while it is written, so a
-    # reader never sees it half-written by a LIVE writer: it gets a sharing violation instead, which
-    # Read-HordeJournalFile reports as busy.
-    param([string]$Path, [string]$Text)
+    # Create the journal file Name in Root, which must not exist yet, write it through to disk, and
+    # close it. Returns "created", "exists", or throws - and throws before anything is opened when
+    # Resolve-HordeJournalPath refuses the path. The file is held with FileShare.None while it is
+    # written, so a reader never sees it half-written by a LIVE writer: it gets a sharing violation
+    # instead, which Read-HordeJournalFile reports as busy.
+    param([string]$Root, [string]$Name, [string]$Text)
+    $Path = Resolve-HordeJournalPath -Root $Root -Name $Name
     try {
         $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
     } catch {
@@ -323,10 +368,13 @@ function Initialize-HordeJournal {
         throw ("the admission window (" + $AdmitDays + " days plus " + $MaxFutureMinutes + " minutes ahead) must be shorter than retention (" + $RetentionDays +
             " days), or a pruned id could be admitted again and act twice")
     }
+    # The marker's path is checked before the folder is made, so a root that is or sits under a junction
+    # is refused before anything is created through it.
+    $null = Resolve-HordeJournalPath -Root $Root -Name $script:HordeJournalMarker
     [void][System.IO.Directory]::CreateDirectory($Root)
     $text = ([ordered]@{ v = 1; kind = $Kind; retentionDays = $RetentionDays; admitDays = $AdmitDays; maxFutureMinutes = $MaxFutureMinutes;
         createdAt = (ConvertTo-HordeJournalTime -Time ([datetime]::UtcNow) -What "now") } | ConvertTo-Json -Compress)
-    $made = New-HordeJournalFile -Path (Join-Path $Root $script:HordeJournalMarker) -Text $text
+    $made = New-HordeJournalFile -Root $Root -Name $script:HordeJournalMarker -Text $text
     if ($made -eq "exists") {
         $m = Read-HordeJournalMarker -Root $Root
         if (-not $m.ok) { throw $m.reason }
@@ -423,11 +471,13 @@ function Open-HordeJournalEntry {
     if ($null -ne $hw -and $hw -gt $ref) { $ref = $hw }
     $tooOld = ($ref - $issuedUtc) -gt (New-TimeSpan -Days $cfg.admitDays)
     $tooNew = ($issuedUtc - $nowUtc) -gt (New-TimeSpan -Minutes $cfg.maxFutureMinutes)
+    # The record's path, kept for test/mutations/journal-race.psd1's check-then-create mutant,
+    # which writes it directly to prove the race suite catches a non-atomic create.
     $recPath = Join-Path $Root ($Id + ".json")
     if (-not $tooOld -and -not $tooNew) {
         $recText = ([ordered]@{ v = 1; id = $Id; verb = $Verb; argsHash = $hash; issuedAt = (ConvertTo-HordeJournalTime -Time $IssuedAt -What "the issue time")
             receivedAt = (ConvertTo-HordeJournalTime -Time $Now -What "now") } | ConvertTo-Json -Compress)
-        try { $made = New-HordeJournalFile -Path $recPath -Text $recText }
+        try { $made = New-HordeJournalFile -Root $Root -Name ($Id + ".json") -Text $recText }
         catch {
             $why = "request " + $Id + " could not be recorded, so it was not acted on: " + $_.Exception.Message
             return (New-HordeJournalDecision -Decision "unknown" -Reason $why -Result (New-HordeUnknown -Reason $why))
@@ -476,7 +526,7 @@ function Complete-HordeJournalEntry {
     if ($rec.kind -ne "ok") { throw ("request " + $Id + " has no record to complete (" + $rec.kind + ")") }
     $text = ([ordered]@{ v = 1; id = $Id; state = $State; result = (ConvertTo-HordeAnswerRecord -Answer $Result)
         doneAt = (ConvertTo-HordeJournalTime -Time $Now -What "now") } | ConvertTo-Json -Compress -Depth 64)
-    $made = New-HordeJournalFile -Path (Join-Path $Root ($Id + ".outcome.json")) -Text $text
+    $made = New-HordeJournalFile -Root $Root -Name ($Id + ".outcome.json") -Text $text
     if ($made -eq "exists") { throw ("request " + $Id + " already has an outcome; the first one stands") }
     return $State
 }
@@ -533,9 +583,9 @@ function Remove-HordeJournalExpired {
         # No outcome: never pruned, however old; reported once it is past retention.
         if ($e.state -ceq "accepted") { if (($nowUtc - $e.receivedAt) -gt $retention) { [void]$kept.Add([pscustomobject]@{ id = $id; reason = ("never pruned: no outcome recorded since " + $e.receivedAt.ToString("o") + "; forgetting it would let a resend act again") }) }; continue }
         if (($nowUtc - $e.doneAt) -le $retention -or ($nowUtc - $e.issuedAt) -le $window) { continue }
-        try { [System.IO.File]::Delete((Join-Path $Root ($id + ".json"))) }
+        try { [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name ($id + ".json"))) }
         catch { [void]$kept.Add([pscustomobject]@{ id = $id; reason = ("the record could not be deleted, so the entry was left whole: " + $_.Exception.Message) }); continue }
-        try { [System.IO.File]::Delete((Join-Path $Root ($id + ".outcome.json"))) }
+        try { [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name ($id + ".outcome.json"))) }
         catch { [void]$kept.Add([pscustomobject]@{ id = $id; reason = ("the record was deleted and the outcome could not be; the next prune removes it: " + $_.Exception.Message) }); continue }
         [void]$removed.Add($id)
     }
@@ -549,7 +599,7 @@ function Remove-HordeJournalExpired {
         $done = $null
         if ($out.kind -eq "ok") { $done = ConvertFrom-HordeJournalTime (Get-HordeJournalProp $out.data "doneAt") }
         if ($null -eq $done -or ($nowUtc - $done) -le $retention) { continue }
-        try { [System.IO.File]::Delete((Join-Path $Root $name)); [void]$removed.Add($id) }
+        try { [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name $name)); [void]$removed.Add($id) }
         catch { [void]$kept.Add([pscustomobject]@{ id = $id; reason = ("an outcome with no record could not be deleted: " + $_.Exception.Message) }) }
     }
     return (New-HordeKnown -Value ([pscustomobject]@{ removed = @($removed); kept = @($kept) }) -ObservedAt ([datetime]::UtcNow))

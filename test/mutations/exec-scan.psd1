@@ -32,8 +32,8 @@
            Find = 'return ($script:HordeExecCoreFiles -ccontains $leaf.Value.Substring(5))'
            Replace = 'return $true' }
         @{ Name = "journal-file-any-static"
-           Find = '"io.file" = @("Delete")'
-           Replace = '"io.file" = @("Delete", "Copy")' }
+           Find = '"io.file" = @("Delete", "GetAttributes")'
+           Replace = '"io.file" = @("Delete", "GetAttributes", "Copy")' }
         @{ Name = "core-function-that-runs-a-block-callable"
            Find = '"Test-HordeSchema", "Read-HordeSchemaFile",'
            Replace = '"Test-HordeSchema", "Read-HordeSchemaFile", "Invoke-HordeRead",' }
@@ -86,8 +86,8 @@
            Find = 'if ($script:HordeExecTypes -notcontains (ConvertTo-HordeExecTypeKey $t.TypeName.FullName))'
            Replace = 'if ($false)' }
         @{ Name = "scriptblock-type-allowed"
-           Find = '    "int32", "int64")'
-           Replace = '    "int32", "int64", "scriptblock")' }
+           Find = '    "int32", "int64", "io.fileattributes", "io.path")'
+           Replace = '    "int32", "int64", "io.fileattributes", "io.path", "scriptblock")' }
         @{ Name = "type-key-keeps-system-prefix"
            Find = 'if ($n.StartsWith("system.")) { $n = $n.Substring(7) }'
            Replace = '' }
