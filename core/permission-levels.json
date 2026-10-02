@@ -1,0 +1,8 @@
+{
+  "levels": [
+    { "name": "plan", "meaning": "Reads and proposes. Changes no file and runs nothing that changes anything." },
+    { "name": "ask", "meaning": "May change files and run commands, each only after a person approves it." },
+    { "name": "edits", "meaning": "Changes files in its working tree without asking, and asks before anything else." },
+    { "name": "bypass", "meaning": "Acts without asking anyone: every approval prompt is skipped." }
+  ]
+}
