@@ -1064,7 +1064,11 @@ function Complete-HordeSession {
     # owner: derived - the parent's label, else founder. The stored owner name is display only;
     # wezfleet printed it, and "(unowned)" when empty (commands/census.ps1:17; parity difference P-11).
     $par = $S.fields["parent"]
-    if ($par.answer.state -eq "absent") { Set-HordeField $S $C "owner" (New-HordeResolved -Answer (New-HordeKnown -Value "founder") -Store $par.source.store -Field "parent (none, so founder)") }
+    # The founder answer names the store that said "no parent". Read null-safe: an absent answer with
+    # no source (a -WhenNone resolution) must give a sourceless answer the suite reports, not a throw
+    # that ends the whole projection (mutation run of PR #31, 2026-10-01: source-dropped).
+    $parStore = ""; if ($null -ne $par.source) { $parStore = "$($par.source.store)" }
+    if ($par.answer.state -eq "absent") { Set-HordeField $S $C "owner" (New-HordeResolved -Answer (New-HordeKnown -Value "founder") -Store $parStore -Field "parent (none, so founder)") }
     elseif ($par.answer.state -ne "known") { Set-HordeField $S $C "owner" (New-HordeResolved -Answer (New-HordeUnknown -Reason ("the parent is unknown: " + $par.answer.reason))) }
     elseif (-not $C.wf.registry.records.ContainsKey("$($par.answer.value)")) { Set-HordeField $S $C "owner" (New-HordeResolved -Answer (New-HordeUnknown -Reason ("the parent " + $par.answer.value + " has no readable registry record, so its label is unknown"))) }
     else {
