@@ -1,0 +1,9 @@
+{
+  "name": "fixture-harness",
+  "permissionLevels": [
+    { "level": "plan",   "argv": ["--fixture-mode", "plan"] },
+    { "level": "ask",    "argv": ["--fixture-mode", "ask"] },
+    { "level": "edits",  "argv": ["--fixture-mode", "edits"] },
+    { "level": "bypass", "inexpressible": "the fixture harness has no way to skip every prompt" }
+  ]
+}
