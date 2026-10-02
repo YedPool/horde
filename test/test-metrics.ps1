@@ -76,13 +76,19 @@ $viaTool = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1") -Interim), (Too
 $direct = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1") -Interim), (Call "v2" 2 -Chars 10))
 Check ($viaTool.stillWaiting.calls -eq 0 -and $direct.stillWaiting.calls -eq 1) "a tool result between the notification and the reply means the reply answers the tool, not the notification"
 Check ($mc.notifications -eq 4) "CONTROL: the clean transcript does contain notifications, so the zero is not for want of any"
-# A rule decided by the coordinator on 2026-10-02, to be calibrated by experiment program 3.4's
-# hand-labelling: a person speaking since the last call takes the reply.
+# Two rules decided by the coordinator on 2026-10-02, to be calibrated by experiment program 3.4's
+# hand-labelling: a person speaking since the last call takes the reply, and only an INTERIM
+# notification can be waited on.
 $script:line = 0
 $humanBetween = Get-HordeOrcMeasures -Records @((UserSays 0), (Note 1 (Worker "w1") -Interim), (Call "h1" 2 -Chars 10))
 $noHuman = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1") -Interim), (Call "h2" 2 -Chars 10))
 Check ($humanBetween.stillWaiting.calls -eq 0) "a reply after a person spoke since the last call answers the person, not the notification"
 Check ($noHuman.stillWaiting.calls -eq 1) "CONTROL: the same reply with no person speaking is still-waiting"
+$script:line = 0
+$final = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1")), (Call "f1" 2 -Chars 10))
+$interimOne = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1") -Interim), (Call "f2" 2 -Chars 10))
+Check ($final.stillWaiting.calls -eq 0) "a short reply to a final notification is a report, never still-waiting"
+Check ($interimOne.stillWaiting.calls -eq 1) "CONTROL: a short reply to an interim notification is still-waiting"
 
 Write-Host ""
 Write-Host "--- still waiting: attribution is never guessed ---" -ForegroundColor Cyan
@@ -93,7 +99,7 @@ $mixed = @(
 $mm = Get-HordeOrcMeasures -Records $mixed
 Check ($mm.stillWaiting.calls -eq 3) "three still-waiting calls; the repeated id is counted once"
 Check ($mm.stillWaiting.jobs -eq 1 -and $mm.stillWaiting.unattributed -eq 1 -and $mm.stillWaiting.byWorker["w9"] -eq 1) "one about a job, one unattributed, one on the proved worker"
-Check ($mm.interimNotifications -eq 3) "interim notifications are counted as interim"
+Check ($mm.interimNotifications -eq 3 -and $final.interimNotifications -eq 0) "interim notifications are counted as interim, and a final one is not"
 $m200 = Get-HordeOrcMeasures -Records $planted -MaxChars 20
 Check ($m200.stillWaiting.calls -eq 0) "the character limit is a parameter: at 20 characters the 25-character call is not counted"
 

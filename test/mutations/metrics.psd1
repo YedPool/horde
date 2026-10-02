@@ -17,8 +17,10 @@
            Find = 'if ($r.kind -eq "input" -or $r.kind -eq "toolResult") { $trigger = $r; continue }'
            Replace = 'if ($r.kind -eq "input") { $trigger = $r; continue }; if ($r.kind -eq "toolResult") { continue }' }
         @{ Name = "wait-any-input-triggers"
-           Find = '$trigger.kind -eq "input" -and $trigger.source -eq "notification")'
-           Replace = '$trigger.kind -eq "input")' }
+           Find = '$trigger.kind -eq "input" -and $trigger.source -eq "notification" -and'
+           Replace = '$trigger.kind -eq "input" -and'
+           Expect = "survives"
+           Reason = "Redundant since the two rules of 2026-10-02: a user input both sets personSpoke and carries interim false, so dropping the source check changes no outcome; kept to say so where a reader can disagree." }
         @{ Name = "wait-context-omits-cache-read"
            Find = '$wait.contextTokens += ($uv.input + $uv.cacheRead + $uv.cacheWrite)'
            Replace = '$wait.contextTokens += ($uv.input + $uv.cacheWrite)' }
@@ -58,5 +60,11 @@
         @{ Name = "negative-duration-counted"
            Find = '        if ($sec -lt 0) { $backwards++; continue }'
            Replace = ''  }
+        @{ Name = "person-speaking-ignored"
+           Find = '        if ($r.kind -eq "input" -and $r.source -eq "user") { $personSpoke = $true }'
+           Replace = '' }
+        @{ Name = "final-notification-waited-on"
+           Find = ' -and $trigger.interim -eq $true -and -not $personSpoke)'
+           Replace = ' -and -not $personSpoke)' }
     )
 }

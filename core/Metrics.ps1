@@ -202,7 +202,7 @@ function Get-HordeOrcMeasures {
         if ($r.kind -eq "input" -or $r.kind -eq "toolResult") { $trigger = $r; continue }
         if ($r.kind -ne "call") { continue }
         if (-not $seen.Add("$($r.id)")) { continue }
-        $isWait = ($r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trigger -and $trigger.kind -eq "input" -and $trigger.source -eq "notification" -and -not $personSpoke)
+        $isWait = ($r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trigger -and $trigger.kind -eq "input" -and $trigger.source -eq "notification" -and $trigger.interim -eq $true -and -not $personSpoke)
         $trig = $trigger
         $trigger = $null
         $personSpoke = $false

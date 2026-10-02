@@ -103,7 +103,7 @@ try {
     # "task-notification" (1,016). 252 user lines CONTAIN the notification text with no such origin.
     $pasted = Join-Path $work "pasted\33333333-4444-4555-8666-777777777777.jsonl"
     New-Item -ItemType Directory -Path (Split-Path -Parent $pasted) -Force | Out-Null
-    $nt = "<task-notification>`n<task-id>zz0000001</task-id>`n<status>completed</status>`n<summary>x</summary>`n</task-notification>"
+    $nt = "<task-notification>`n<task-id>zz0000001</task-id>`n<status>completed</status>`n<summary>x</summary>`n<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>`n</task-notification>"
     $au = @{ input_tokens = 1; cache_read_input_tokens = 10; cache_creation_input_tokens = 0; output_tokens = 2 }
     $reply = { param($id, $s) @{ type = "assistant"; sessionId = "s"; timestamp = ("2026-09-30T10:00:0" + $s + ".000Z"); message = @{ id = $id; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "Noted." }); stop_reason = "end_turn"; usage = $au } } }
     $plines = @(
@@ -276,7 +276,7 @@ try {
     $off = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
     Check ($off.code -eq 0) ("horde metrics summarize exits 0 (" + $off.code + ")")
     Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+claude-code\s+claude-opus-5-5\s+329\.0m\s+8\s+3\s+28\s+466,000\s+600\s+429\s+300\.0m \(2026-09-30 10:24\)\s+300\.0m Bash') "its table row for the planted transcript shows the counts the instruments found"
-    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+4 \(0\)\s+3 \(workers 1, jobs 1, unattributed 1\)\s+275,306') "and the orchestrator row shows the three still-waiting replies and their context"
+    Check ($off.out -match '11111111-2222-4333-8444-555555555555\.jsonl\s+4 \(3\)\s+3 \(workers 1, jobs 1, unattributed 1\)\s+275,306') "and the orchestrator row shows the three still-waiting replies and their context"
     Check ($off.out -like "*metrics are off (no gate file)*") "with no gate it says metrics are off"
     Check (-not (Test-Path -LiteralPath (Join-Path $homeDir "metrics\summaries"))) "and records nothing"
     New-Item -ItemType Directory -Path (Join-Path $homeDir "metrics") -Force | Out-Null
