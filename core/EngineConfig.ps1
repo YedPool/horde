@@ -59,23 +59,51 @@
 
 $script:HordeConfigLayers = @("L0", "L1", "L2", "L3", "L4", "L5")
 $script:HordeConfigDefinitionLayers = @("L0", "L1")
+$script:HordeConfigKeyFields = @("name", "layers", "value", "direction")
+$script:HordeConfigDirections = @("any", "lower-only", "raise-only")
 $script:HordeConfigValueKinds = @{
     name = '^[a-z][a-z0-9-]{0,39}$'
     model = '^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$'
 }
-# Shapes of a secret. Measured against the golden fixtures and every descriptor in agents/ (no hit),
-# and each has a planted case in test-engine-config. The last is a long token mixing upper case, lower
-# case and digits, the shape of most generated keys; ids, names and model ids are shorter or lack one
-# of the three.
+# SHAPES OF A SECRET, each a pattern whose MATCH is the secret, so the same list both finds and
+# redacts. Each has a planted case in test-engine-config, and near misses (39 hex digits, the bare
+# prefixes, a UUID, a model id, an endpoint, a variable name, a run id, a sentence) are controls.
+# Widened in the review of PR #73 (F4): Z.ai keys, long hex, GitLab and Google OAuth tokens.
 $script:HordeSecretPatterns = @(
-    '(?i)(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}',
+    '(?i)(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}',
     'AKIA[0-9A-Z]{16}',
     'AIza[0-9A-Za-z_-]{30,}',
     'gh[pousr]_[A-Za-z0-9]{20,}',
+    'glpat-[A-Za-z0-9_-]{20,}',
+    'ya29\.[A-Za-z0-9_-]{20,}',
     'xox[abpr]-[A-Za-z0-9-]{10,}',
-    '-----BEGIN',
-    '(?i)bearer\s+[A-Za-z0-9._-]{16,}'
+    '-----BEGIN[^\r\n]*',
+    '(?i)bearer\s+[A-Za-z0-9._-]{16,}',
+    '[0-9a-fA-F]{32}\.[A-Za-z0-9]{16,}',
+    '(?<![0-9A-Za-z])[0-9a-fA-F]{40,}(?![0-9A-Za-z])'
 )
+# A long token is a secret when it mixes upper case, lower case and digits (most generated keys), or
+# is 40 or more lower-case letters and digits with both in it. Ids, names and model ids are shorter.
+$script:HordeSecretTokenPattern = '[A-Za-z0-9+/=_-]{32,}'
+$script:HordeRedacted = "<redacted>"
+
+function Test-HordeSecretToken {
+    param([string]$Token)
+    if ($Token -cmatch '[A-Z]' -and $Token -cmatch '[a-z]' -and $Token -cmatch '[0-9]') { return $true }
+    if ($Token.Length -ge 40 -and $Token -cmatch '^[a-z0-9]+$' -and $Token -cmatch '[a-z]' -and $Token -cmatch '[0-9]') { return $true }
+    return $false
+}
+
+function Protect-HordeText {
+    # The text with every secret-shaped part replaced by <redacted>. Every message this file builds
+    # passes through it (review of PR #73, F1: a second finding on a secret printed it whole), so a
+    # finding may quote any value it likes and still never carries a key.
+    param([string]$Text)
+    if ($null -eq $Text -or $Text -eq "") { return $Text }
+    $t = $Text
+    foreach ($pt in $script:HordeSecretPatterns) { $t = [regex]::Replace($t, $pt, $script:HordeRedacted) }
+    return [regex]::Replace($t, $script:HordeSecretTokenPattern, { param($m) if (Test-HordeSecretToken -Token $m.Value) { $script:HordeRedacted } else { $m.Value } })
+}
 
 function Get-HordeConfigItems {
     # The items of a list property, enumerated, so @(Get-HordeConfigItems ...) is the flat list and an
@@ -100,12 +128,28 @@ function Read-HordeConfigKeysText {
         $n = Get-HordeAgentProp $r "name"
         if ($n -isnot [string] -or $n -cnotmatch '^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$') { [void]$problems.Add("a key has the name '" + $n + "'"); continue }
         if (-not $seen.Add($n)) { [void]$problems.Add("the key " + $n + " is listed twice") }
+        # A FIELD NOBODY READS IS REFUSED (review of PR #73, F3): a direction the reader did not know
+        # would otherwise be ignored, and a lower-only key would silently be any.
+        foreach ($f in @($r.PSObject.Properties | ForEach-Object { $_.Name })) { if ($script:HordeConfigKeyFields -cnotcontains $f) { [void]$problems.Add("the key " + $n + " has the field '" + $f + "', which the registry does not have") } }
+        $lyRaw = Get-HordeAgentProp $r "layers"
+        if ($lyRaw -isnot [System.Array]) { [void]$problems.Add("the key " + $n + "'s layers must be a list") }
         $ly = @(Get-HordeConfigItems $r "layers")
         if ($ly.Count -eq 0 -or @($ly | Where-Object { $script:HordeConfigLayers -cnotcontains $_ }).Count -gt 0) { [void]$problems.Add("the key " + $n + " has layers outside L0 to L5") }
         $v = Get-HordeAgentProp $r "value"
         $kind = Get-HordeAgentProp $v "kind"
-        if ($kind -ceq "enum") { if (@(Get-HordeConfigItems $v "values").Count -eq 0) { [void]$problems.Add("the key " + $n + " is an enum with no values") } }
+        if ($kind -ceq "enum") {
+            $vals = @(Get-HordeConfigItems $v "values")
+            if ($vals.Count -eq 0) { [void]$problems.Add("the key " + $n + " is an enum with no values") }
+            $seenV = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($x in $vals) { if (-not $seenV.Add("" + $x)) { [void]$problems.Add("the key " + $n + " lists the value " + $x + " twice, ignoring case") } }
+        }
         elseif (-not $script:HordeConfigValueKinds.ContainsKey("" + $kind)) { [void]$problems.Add("the key " + $n + " has the value kind '" + $kind + "'") }
+        # DIRECTION (review of PR #73, F3; the coordinator's decision): which way a layer above the
+        # first one that sets the key may move its value. lower-only is remote R9's ceiling, which an
+        # agent-writable live rule must never raise. Meaningful only for an enum, written lowest first.
+        $dir = Get-HordeAgentProp $r "direction"
+        if ($script:HordeConfigDirections -cnotcontains ("" + $dir)) { [void]$problems.Add("the key " + $n + " has the direction '" + $dir + "'; one of " + ($script:HordeConfigDirections -join ", ")) }
+        elseif ("" + $dir -cne "any" -and $kind -cne "enum") { [void]$problems.Add("the key " + $n + " has the direction " + $dir + ", which needs an enum: only an enum's values are ordered") }
     }
     if ($problems.Count -gt 0) { throw ("the settings registry is malformed: " + ($problems -join "; ")) }
     return @($rows)
@@ -130,12 +174,7 @@ function Test-HordeConfigValue {
 function Test-HordeSecretShape {
     # Is this string shaped like a credential? Never returns or prints the string.
     param([string]$Text)
-    foreach ($p in $script:HordeSecretPatterns) { if ($Text -cmatch $p) { return $true } }
-    foreach ($m in [regex]::Matches($Text, '[A-Za-z0-9+/=_-]{32,}')) {
-        $tok = $m.Value
-        if ($tok -cmatch '[A-Z]' -and $tok -cmatch '[a-z]' -and $tok -cmatch '[0-9]') { return $true }
-    }
-    return $false
+    return [bool]((Protect-HordeText -Text $Text) -cne $Text)
 }
 
 function Find-HordeSecretPaths {
@@ -143,7 +182,13 @@ function Find-HordeSecretPaths {
     param($Value, [string]$Path = '$')
     $out = New-Object System.Collections.ArrayList
     if ($Value -is [string]) { if (Test-HordeSecretShape -Text $Value) { [void]$out.Add($Path) } }
-    elseif ($Value -is [System.Management.Automation.PSCustomObject]) { foreach ($p in @($Value.PSObject.Properties)) { foreach ($x in @(Find-HordeSecretPaths -Value $p.Value -Path ($Path + "." + $p.Name))) { [void]$out.Add($x) } } }
+    elseif ($Value -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($p in @($Value.PSObject.Properties)) {
+            # A KEY can be the secret too (a key pasted where a setting's name goes), so names are scanned.
+            if (Test-HordeSecretShape -Text $p.Name) { [void]$out.Add($Path + "." + $p.Name) }
+            foreach ($x in @(Find-HordeSecretPaths -Value $p.Value -Path ($Path + "." + $p.Name))) { [void]$out.Add($x) }
+        }
+    }
     elseif ($Value -is [System.Collections.IList]) { $i = 0; foreach ($item in $Value) { foreach ($x in @(Find-HordeSecretPaths -Value $item -Path ($Path + "[" + $i + "]"))) { [void]$out.Add($x) }; $i++ } }
     return $out.ToArray()
 }
@@ -160,10 +205,13 @@ function Test-HordeEngineConfig {
     if ($null -eq $Registry) { $Registry = @(Get-HordeConfigKeys) }
     if ($null -eq $Vocabulary) { $Vocabulary = @(Get-HordeCapabilityVocabulary) }
     $capNames = @($Vocabulary | ForEach-Object { $_.name })
-    $keyByName = @{}
+    # Matched exactly, as the resolver matches them (review of PR #73, F5): Model is not model.
+    $keyByName = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
     foreach ($k in @($Registry)) { $keyByName["" + $k.name] = $k }
     $out = New-Object System.Collections.ArrayList
-    function Add-Finding { param([string]$Code, [string]$Source, [string]$Path, [string]$Detail, [string]$Severity = "error") [void]$out.Add([pscustomobject]@{ severity = $Severity; code = $Code; source = $Source; path = $Path; detail = $Detail }) }
+    # EVERY FINDING IS REDACTED HERE, whatever built its text - this file, the schema's own messages, a
+    # code added later - so no path to output can carry a secret (review of PR #73, F1).
+    function Add-Finding { param([string]$Code, [string]$Source, [string]$Path, [string]$Detail, [string]$Severity = "error") [void]$out.Add([pscustomobject]@{ severity = $Severity; code = $Code; source = (Protect-HordeText $Source); path = (Protect-HordeText $Path); detail = (Protect-HordeText $Detail) }) }
     $schema = Get-HordeSchema -Name "engine-config.v1"
 
     # Parse every document; keep the ones that parse and fit.
@@ -171,8 +219,13 @@ function Test-HordeEngineConfig {
     foreach ($doc in @($Documents)) {
         $layer = "" + $doc.layer
         $src = "" + $doc.source
-        if ($script:HordeConfigLayers -cnotcontains $layer) { throw ("'" + $layer + "' is not a configuration layer; one of " + ($script:HordeConfigLayers -join ", ")) }
+        if ($script:HordeConfigLayers -cnotcontains $layer) { throw (Protect-HordeText ("'" + $layer + "' is not a configuration layer; one of " + ($script:HordeConfigLayers -join ", "))) }
         if ($layer -ceq "L2") { Add-Finding "layer-not-built" $src '$' "the project layer (L2) is not built yet: it waits until a repo needs one (engine-settings decision 3), so nothing in a project file is read"; continue }
+        # PLAIN ASCII (CONTRIBUTING 13; review of PR #73, F7). A byte-order mark is named, because it
+        # otherwise surfaces only as "not JSON", the right refusal for the wrong reason.
+        $txt = "" + $doc.text
+        if ($txt.Length -gt 0 -and [int]$txt[0] -eq 0xFEFF) { Add-Finding "not-ascii" $src '$' "the text starts with a byte-order mark; save it as plain ASCII" }
+        elseif ($txt -cmatch '[^\x00-\x7F]') { Add-Finding "not-ascii" $src '$' "the text holds a character that is not ASCII (CONTRIBUTING 13)" }
         foreach ($d in @(Find-HordeJsonDuplicateKey -Text ("" + $doc.text))) { if ($null -ne $d) { Add-Finding "duplicate-key" $src '$' ("" + $d) } }
         $parsed = $null
         try { $parsed = ("" + $doc.text) | ConvertFrom-Json } catch { Add-Finding "not-json" $src '$' "the text is not JSON"; continue }
@@ -210,6 +263,9 @@ function Test-HordeEngineConfig {
         $cred = $pv.credential
         $ref = Get-HordeAgentProp $cred "ref"
         if ($cred.kind -ceq "env" -and $null -eq $ref) { Add-Finding "credential-ref" $e.source ('$.providers.' + $pv.name) ("the provider " + $pv.name + " reads its key from an environment variable but names none") }
+        # A SUBSCRIPTION GOES ONLY TO ITS VENDOR (review of PR #73, F2). The vendor's own program sends
+        # its login to the provider's endpoint, so a harness-login provider may not name one.
+        if ($cred.kind -ceq "harness-login" -and $null -ne (Get-HordeAgentProp $pv "endpoint")) { Add-Finding "login-endpoint" $e.source ('$.providers.' + $pv.name) ("the provider " + $pv.name + " uses the harness's own login and names an endpoint; a subscription's login goes only to its vendor's own endpoint") }
         if ($cred.kind -ceq "harness-login" -and $null -ne $ref) { Add-Finding "credential-ref" $e.source ('$.providers.' + $pv.name) ("the provider " + $pv.name + " uses the harness's own login, so it names no variable") }
         foreach ($l in @(Get-HordeConfigItems $pv "lacks")) { if ($null -ne $l -and $capNames -cnotcontains $l) { Add-Finding "unknown-capability" $e.source ('$.providers.' + $pv.name + '.lacks') ("the provider " + $pv.name + " lacks " + $l + ", which core/capabilities.json does not have") } }
         if ($spoken -cnotcontains $pv.protocol) { Add-Finding "protocol-unspoken" $e.source ('$.providers.' + $pv.name) ("no harness speaks " + $pv.protocol + ", the protocol of the provider " + $pv.name) "warning" }
