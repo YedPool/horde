@@ -38,6 +38,18 @@
 # The kind is what lets a later rule ask for one kind alone: core matches no processImage at all
 # (Test-HordeProcessImages). A kind outside the list is refused, matched exactly, never guessed at.
 #
+# CORE MATCHES NO PROCESS IMAGE (Test-HordeProcessImages). The lifecycle plan, section 2.6: core
+# matches no image name; the orphan classes are defined by structure, and which processes are a
+# harness's is its adapter's to answer. The ratchet cannot hold that alone - a file its allowlist
+# covers may name the harness any way it likes, an image included - so a processImage has a rule of
+# its own, with no allowlist and no growth record: outside every port's folder and outside test/, no
+# file may match one, by its text or its path. test/ is exempt because tests of the old readers carry
+# process tables as data (on 2026-10-02 one projection fixture held 13 image mentions and the identity
+# suite 34). The rule was measured against main at c3938b8, where three legacy readers of Phases 0 to 2
+# already matched an image: they are listed in $script:HordeProcessImageLegacy, and that list only
+# shrinks - an entry whose file matches no image any more is itself a finding. It shrinks as engines A4
+# moves those reads behind the AgentPort.
+#
 # WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
 # names the host. Mentions, not lines: a second mention added to a line that already had one is a new
@@ -117,6 +129,11 @@ $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 # The closed list of kinds a name line may give (header, KINDS OF NAME). Matched exactly.
 $script:HordePortNameKinds = @("name", "processImage", "path")
+# The image rule's exemptions (header, CORE MATCHES NO PROCESS IMAGE). Folders skipped besides every
+# port's own; and the legacy readers measured at c3938b8, which may still match an image until their
+# reads move behind the AgentPort. Neither list may grow.
+$script:HordeProcessImageExempt = @("test")
+$script:HordeProcessImageLegacy = @("core/Faults.ps1", "core/Identity.ps1", "core/ownership.json")
 
 function Read-HordeHostTable {
     # The non-comment lines of names.txt or allowlist.txt, split on "|" and trimmed, with their line
@@ -495,6 +512,59 @@ function Test-HordeHostNames {
         foreach ($k in @($allowed.Keys)) {
             if (-not $seen.ContainsKey($k)) { Add-Finding $hn $allowed[$k].path ("is listed in " + $own + "/allowlist.txt but does not exist - remove the entry") }
             elseif ($seen[$k] -eq 0) { Add-Finding $hn $allowed[$k].path ("no longer names the host - remove its entry from " + $own + "/allowlist.txt") }
+        }
+    }
+    return $found
+}
+
+function Get-HordePortNamesOfKind {
+    # Every usable name of one kind that any port declares, as { own; name }, own being the port's
+    # folder ("agents/<name>"). A malformed line is Test-HordeHostNames's to report, not this one's.
+    param([string]$RepoRoot, [string]$Kind)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($fam in $script:HordePortFamilies) {
+        $famDir = Join-Path $RepoRoot $fam
+        if (-not (Test-Path -LiteralPath $famDir -PathType Container)) { continue }
+        foreach ($d in @(Get-ChildItem -LiteralPath $famDir -Directory)) {
+            $np = Join-Path $d.FullName "names.txt"
+            if (-not (Test-Path -LiteralPath $np -PathType Leaf)) { continue }
+            foreach ($r in (Read-HordeHostTable -Path $np)) {
+                $pn = ConvertTo-HordePortName $r
+                if (-not $pn.problem -and $pn.kind -ceq $Kind) { [void]$out.Add([pscustomobject]@{ own = ($fam + "/" + $d.Name); name = $pn.name }) }
+            }
+        }
+    }
+    return , $out
+}
+
+function Test-HordeProcessImages {
+    # Does any file outside every port's folder and outside test/ match a process image a port
+    # declares? Returns one object per problem, { host; path; problem }, unrolled as
+    # Test-HordeHostNames's are, so wrap the call in @(). The header says why the rule exists and why
+    # it has no allowlist. -Legacy is the list of old readers still excused; the suite passes its own.
+    param([string]$RepoRoot, [string[]]$Legacy = $script:HordeProcessImageLegacy)
+    $found = New-Object System.Collections.ArrayList
+    $images = Get-HordePortNamesOfKind -RepoRoot $RepoRoot -Kind "processImage"
+    $legacyPaths = @{}
+    foreach ($l in @($Legacy)) { $lp = ConvertTo-HordeAllowPath $l; $legacyPaths[$lp.ToLowerInvariant()] = $lp }
+    $stillMatching = @{}
+    foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt)))) {
+        $hits = New-Object System.Collections.ArrayList
+        $text = [System.IO.File]::ReadAllText($f.full)
+        foreach ($img in $images) {
+            if ($f.rel.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $text.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { [void]$hits.Add($img) }
+        }
+        if ($hits.Count -eq 0) { continue }
+        $key = $f.rel.ToLowerInvariant()
+        if ($legacyPaths.ContainsKey($key)) { $stillMatching[$key] = $true; continue }
+        $what = @($hits | ForEach-Object { "'" + $_.name + "' of " + $_.own }) -join ", "
+        [void]$found.Add([pscustomobject]@{ host = $hits[0].own; path = $f.rel; problem = ("matches the process image " + $what + " - core matches no image name (lifecycle plan section 2.6): which processes are a harness's is its adapter's to answer, and no allowlist admits an image") })
+    }
+    # THE LEGACY LIST ONLY SHRINKS: an entry that excuses nothing is removed, so a later file at that
+    # path cannot inherit an excuse it was never measured for.
+    foreach ($k in @($legacyPaths.Keys | Sort-Object)) {
+        if (-not $stillMatching.ContainsKey($k)) {
+            [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $legacyPaths[$k]; problem = "is a legacy reader in tools/HostNames.ps1 but matches no process image - remove it from the list, which only shrinks" })
         }
     }
     return $found
