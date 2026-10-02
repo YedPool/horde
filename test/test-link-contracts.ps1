@@ -93,7 +93,10 @@ function Test-VerbsWith {
         if ($i -ge $realRowText.Count -or $text -cne $realRowText[$i] -or $Keep -ccontains "$($rows[$i].name)") { [void]$kept.Add($rows[$i]) }
     }
     $v.'x-horde-verbs' = @($kept)
-    return @(Test-HordeLinkVerbTable -Verbs $v)
+    # -Frame: the frame schema this suite already holds. Without it the checker reads and re-checks
+    # schema/link-frame.v1 from disk on every one of the hundred-odd cases (Get-HordeSchema does not
+    # cache), the same file each time (measured 2026-10-02 on the always-on box).
+    return @(Test-HordeLinkVerbTable -Verbs $v -Frame $realFrame)
 }
 function Add-Row {
     # A new row on a table copy, with node.info's harmless args and a result that is certainly valid.
