@@ -54,7 +54,7 @@ function Reg {
     param([string]$Name, [scriptblock]$Open = { param($e, $t) $script:opened++; [pscustomobject]@{ ok = $true; channel = (New-ScriptedChannel); peer = $null; reason = "" } },
           [scriptblock]$Probe = { param($e) New-HordeKnown -Value $true })
     return (Register-HordeTransport -Folder (Join-Path $fx $Name) -Open $Open -Probe $Probe `
-        -Listen { param($e) [pscustomobject]@{ ok = $true; listener = @{}; reason = "" } } `
+        -Listen { param($e) $script:listened++; [pscustomobject]@{ ok = $true; listener = @{}; reason = "" } } `
         -Accept { param($s, $t) [pscustomobject]@{ ok = $false; channel = $null; peer = $null; reason = "fixture accepts nothing" } } `
         -Stop { param($s) })
 }
@@ -119,6 +119,17 @@ $o = Open-HordeTransportLink -Transport $boom -Endpoint "e" -Role "node"
 Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*adapter exploded*") "an adapter that throws while opening gives unknown with its message, not a crash"
 $p = Test-HordeTransportReachable -Transport $boom -Endpoint "e"
 Check ((Test-HordeAnswer $p) -and $p.state -ceq "unknown") "a probe that answers with a bare value is unknown, not believed"
+# LISTENING NEEDS accept (remote plan step R5): a transport whose hub side is served out of this
+# process - the ssh transport's is a server program with a forced command, steps R16 and R17 - may not be asked to listen here.
+$script:listened = 0
+$noAccept = Reg "fixture-noaccept"
+$word = try { Get-HordeTransportSupport -Transport $noAccept -Capability "accept" } catch { "threw: " + $_.Exception.Message }
+Check ($word -ceq "no") ("accept is one of the port's capabilities, read as the word the transport declares (" + $word + ")")
+$la = Start-HordeTransportListener -Transport $noAccept -Endpoint "e"
+Check ($la.state -ceq "unknown" -and "$($la.reason)" -like "*accept*no*") "a transport whose accept is not yes may not listen, naming the word"
+Check ($script:listened -eq 0) "and the transport's listen was never called"
+$la = Start-HordeTransportListener -Transport $good -Endpoint "e"
+Check ($la.state -ceq "known" -and $script:listened -eq 1) "a transport with accept yes listens"
 
 Write-Host ""
 Write-Host "--- receiving: a frame is known only when its LF arrived ---" -ForegroundColor Cyan

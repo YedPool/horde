@@ -79,6 +79,14 @@ function Open-To {
     return (Get-HordeValue $o)
 }
 
+# WHICH TRANSPORTS RAN THE FAR-END CASES (remote plan step R5). The far end of every case below is
+# the transport's own listener, in this process. A transport whose accept is not yes - ssh's hub side
+# is a server program with a forced command, steps R16 and R17 - has no far end here, so those cases do not run for
+# it, and the suite says so by name at the end: a partial run must not read as a full one. Its yes
+# claims still have to be shown, so a transport that skips them can claim nothing they would prove.
+$script:farEndRan = New-Object System.Collections.ArrayList
+$script:farEndSkipped = New-Object System.Collections.ArrayList
+
 $names = @(Get-HordeTransportNames)
 $folders = @(Get-HordeTransportFiles)
 Write-Host ""
@@ -111,6 +119,29 @@ foreach ($n in $names) {
     $lp = Resolve-HordeLinkTransport -Name $n
     if (Yes "auth.peer") { Check ($lp.state -ceq "known") "[$n] the production link path may pick it: auth.peer is yes" }
     else { Check ($lp.state -ceq "unknown") "[$n] the production link path refuses it: auth.peer is not yes" }
+
+    if (-not (Yes "accept")) {
+        $why = "accept is " + (Get-HordeTransportSupport -Transport $t -Capability "accept") + " (" + $t.capabilities.capabilities.accept.evidence + ")"
+        $la = Start-HordeTransportListener -Transport $t -Endpoint (New-Endpoint)
+        Check ($la.state -ceq "unknown" -and "$($la.reason)" -like "*accept*") "[$n] accept not yes: this end may not listen, and the refusal names accept"
+        foreach ($pair in @(@{ role = "node"; cap = "dial.out" }, @{ role = "hub"; cap = "dial.in" })) {
+            if (-not (Yes $pair.cap)) {
+                $o = Open-HordeTransportLink -Transport $t -Endpoint (New-Endpoint) -Role $pair.role -TimeoutMs 500
+                Check ($o.state -ceq "unknown" -and "$($o.reason)" -like "*$($pair.cap)*") "[$n] a $($pair.role) may not dial: $($pair.cap) is not yes"
+            }
+        }
+        foreach ($bad in @("..\x", "a b", "A")) {
+            Check ((Test-HordeTransportReachable -Transport $t -Endpoint $bad).state -ceq "unknown") "[$n] probing '$bad' is unknown"
+        }
+        Write-Host ("  [SKIP] [" + $n + "] the far-end cases did not run: " + $why) -ForegroundColor Yellow
+        [void]$script:farEndSkipped.Add($n + " (" + $why + ")")
+        Write-Host "--- every yes was shown ---" -ForegroundColor Cyan
+        foreach ($c in $caps) {
+            if (Yes $c) { Check $false "[$n] $c is declared yes, and with no far end in this process no case here can demonstrate it" }
+        }
+        continue
+    }
+    [void]$script:farEndRan.Add($n)
 
     Write-Host "--- dialling, as a node and as a hub ---" -ForegroundColor Cyan
     foreach ($pair in @(@{ role = "node"; cap = "dial.out" }, @{ role = "hub"; cap = "dial.in" })) {
@@ -166,6 +197,7 @@ foreach ($n in $names) {
     Check-Peer $peer "echo for the cap"
 
     Write-Host "--- accepting: the far end dials in ---" -ForegroundColor Cyan
+    $ka = $null
     $ep = New-Endpoint
     $la = Start-HordeTransportListener -Transport $t -Endpoint $ep
     Check ($la.state -ceq "known") "[$n] this end listens"
@@ -307,6 +339,8 @@ foreach ($n in $names) {
 
     Write-Host "--- every yes was shown ---" -ForegroundColor Cyan
     if ($shown.ContainsKey("auth.peer.dial") -and $shown.ContainsKey("auth.peer.accept")) { $shown["auth.peer"] = $true }
+    # accept yes is shown by "the far end's dial is accepted" above, and every far-end case rests on it.
+    if ($null -ne $ka -and $ka.state -eq "known") { $shown["accept"] = $true }
     foreach ($c in $caps) {
         if (Yes $c) { Check ($shown.ContainsKey($c)) "[$n] $c is declared yes, and a case above demonstrated it" }
     }
@@ -314,5 +348,10 @@ foreach ($n in $names) {
 } finally {
     foreach ($p in @($script:peers)) { if (-not $p.stopped) { $null = Stop-Peer $p } }
 }
+
+Write-Host ""
+Write-Host ("  far-end cases RAN for: " + ((@($script:farEndRan) | ForEach-Object { $_ }) -join ", ")) -ForegroundColor Cyan
+if ($script:farEndSkipped.Count -gt 0) { Write-Host ("  far-end cases DID NOT RUN for: " + (@($script:farEndSkipped) -join "; ")) -ForegroundColor Yellow }
+Check ($script:farEndRan.Count -ge 1) ("CONTROL: the far-end cases ran for at least one transport (" + $script:farEndRan.Count + ")")
 
 Complete-HordeSuite -Success "every transport does what its capabilities say, and nothing is guessed"

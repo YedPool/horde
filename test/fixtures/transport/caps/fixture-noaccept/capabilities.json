@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "transport": "fixture-noaccept",
+  "maxFrameBytes": 16,
+  "capabilities": {
+    "auth.peer": { "support": "yes", "evidence": "fixture" },
+    "encrypt": { "support": "no", "evidence": "fixture" },
+    "dial.out": { "support": "yes", "evidence": "fixture" },
+    "dial.in": { "support": "unverified", "evidence": "fixture: never run" },
+    "accept": { "support": "no", "evidence": "fixture: its far end is served out of this process" },
+    "keepalive": { "support": "yes", "evidence": "fixture" },
+    "survives.peer.restart": { "support": "declined", "evidence": "fixture" }
+  }
+}
