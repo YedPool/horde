@@ -12,9 +12,11 @@
            Find = '$script:HordePortFamilies = @("hosts", "agents")'
            Replace = '$script:HordePortFamilies = @("hosts")' }
         # --- a port is its family AND its name, never its name alone
+        # The whole Add: since 56e99a7 (PR #57) the same own = (...) expression also builds the list of
+        # declared names, so the expression alone matched twice and the mutant did not apply.
         @{ Name = "port-own-folder-assumed-hosts"
-           Find = 'own = ($fam + "/" + $d.Name)'
-           Replace = 'own = ("hosts/" + $d.Name)' }
+           Find = '[void]$hostDirs.Add([pscustomobject]@{ own = ($fam + "/" + $d.Name); dir = $d })'
+           Replace = '[void]$hostDirs.Add([pscustomobject]@{ own = ("hosts/" + $d.Name); dir = $d })' }
         @{ Name = "same-name-folders-exempt-across-families"
            Find = '$skip = @($own)'
            Replace = '$skip = @($script:HordePortFamilies | ForEach-Object { $_ + "/" + $h.Name })' }
