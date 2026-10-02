@@ -95,6 +95,22 @@ try {
         Check ($dz.write -eq $false -and $dz.reason -like "*harness-z*stores.json*") "an engine folder with no stores.json makes the guard refuse, rather than leave that engine unprotected"
         [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-z\stores.json"), '{ not json')
         Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo).write -eq $false) "and so does one that cannot be read"
+        Remove-Item -LiteralPath (Join-Path $fakeRepo "agents\harness-z") -Recurse -Force
+
+        # Plan step M2: a stores.json also names the folders under each root that hold transcripts.
+        [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HARNESS_X_HOME_TEST" } ], "transcripts": [ "logs" ] }')
+        $st = Get-HordeAgentStores -Root $fakeRepo
+        $x = @($st.value | Where-Object { $_.agent -eq "harness-x" })[0]
+        $y = @($st.value | Where-Object { $_.agent -eq "harness-y" })[0]
+        Check ($st.state -eq "known" -and @($x.transcripts) -contains (Join-Path $env:USERPROFILE ".harness-x\logs") -and @($x.transcripts) -contains (Join-Path $env:HARNESS_X_HOME_TEST "logs")) "transcript folders are found under every root of the engine, the moved one too"
+        Check (@($y.transcripts).Count -eq 0) "an engine that names none has none"
+        foreach ($bad in @('"..\\up"', '".."', '"a/b"', '""')) {
+            [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), ('{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" } ], "transcripts": [ ' + $bad + ' ] }'))
+            Check ((Get-HordeAgentStores -Root $fakeRepo).state -eq "unknown") ("a transcripts folder that is not one plain folder name is refused: " + $bad)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" } ], "transcripts": "logs" }')
+        Check ((Get-HordeAgentStores -Root $fakeRepo).state -eq "unknown") "and so is a transcripts entry that is not a list"
+        Check ((Get-HordeAgentStoreRoots -Root $fakeRepo).state -eq "unknown") "and the write guard refuses with it, rather than guess the rest"
     } finally {
         $env:USERPROFILE = $origProfile
         $env:HARNESS_X_HOME_TEST = $origXHome

@@ -29,7 +29,7 @@
            Find = '$r = [System.IO.Path]::GetFullPath($Root).TrimEnd(''\'') + ''\'''
            Replace = '$r = [System.IO.Path]::GetFullPath($Root).TrimEnd(''\'')' }
         @{ Name = "record-name-unchecked"
-           Find = 'if ($Name -cnotmatch ''\A[A-Za-z0-9][A-Za-z0-9._-]{0,200}\z'' -or $Name -match ''\.\.'') {'
+           Find = '    if (-not (Test-HordeMetricsRecordName $Name)) {'
            Replace = 'if ($false) {' }
         @{ Name = "dates-in-powershell-form"
            Find = 'if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [System.Globalization.CultureInfo]::InvariantCulture) }'
@@ -38,10 +38,13 @@
            Find = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return (New-HordeUnknown'
            Replace = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue; return (New-HordeUnknown' }
         @{ Name = "moved-store-unguarded"
-           Find = '                if ("$v".Trim() -ne "") { [void]$out.Add("$v") }'
+           Find = '                if ("$v".Trim() -ne "") { [void]$roots.Add("$v") }'
            Replace = '                $null = $v' }
         @{ Name = "unknown-roots-allow-writing"
            Find = '    if ($roots.state -ne "known") { return [pscustomobject]@{ write = $false;'
            Replace = '    if ($roots.state -ne "known") { $roots = New-HordeKnown -Value @(); } if ($false) { return [pscustomobject]@{ write = $false;' }
+        @{ Name = "transcript-folder-may-climb"
+           Find = 'if ($t -isnot [string] -or $t -notmatch ''\A[A-Za-z0-9._-]+\z'' -or $t -match ''\A\.+\z'') {'
+           Replace = 'if ($t -isnot [string]) {' }
     )
 }
