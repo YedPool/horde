@@ -57,7 +57,7 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 
 if ($null -eq (Get-Variable -Name HordeTransports -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeTransports = @{} }
-$script:HordeTransportCapabilityNames = @("auth.peer", "encrypt", "dial.out", "dial.in", "keepalive", "survives.peer.restart")
+$script:HordeTransportCapabilityNames = @("auth.peer", "encrypt", "dial.out", "dial.in", "accept", "keepalive", "survives.peer.restart")
 # What a link between a hub and a node must have. A transport without it is never picked there.
 $script:HordeLinkRequires = @("auth.peer")
 # Strict ASCII both ways: a non-ASCII character or byte throws instead of turning into '?'.
@@ -217,7 +217,13 @@ function Open-HordeTransportLink {
 
 function Start-HordeTransportListener {
     # Listen on -Endpoint. A tristate answer: known listener, or unknown (the endpoint is taken, ...).
+    # Only a transport whose accept is yes is asked (plan step R5): the ssh transport's accepting end is a server program with a
+    # forced command, not this process, so asking its adapter to listen here would mean nothing.
     param([Parameter(Mandatory = $true)]$Transport, [Parameter(Mandatory = $true)][string]$Endpoint)
+    if (-not (Test-HordeTransportCapability -Transport $Transport -Capability "accept")) {
+        $cap = $Transport.capabilities.capabilities.accept
+        return (New-HordeUnknown -Reason ("transport " + $Transport.name + " does not accept links in this process: accept is " + $cap.support + " (" + $cap.evidence + ")"))
+    }
     $r = Invoke-HordeTransportOp -Op $Transport.listen -ArgList @($Endpoint) -What ("listening on " + $Transport.name + " endpoint '" + $Endpoint + "'")
     if (-not $r.ok) { return (New-HordeUnknown -Reason ("cannot listen on " + $Transport.name + " endpoint '" + $Endpoint + "': " + $r.reason)) }
     return (New-HordeKnown -Value ([pscustomobject]@{ PSTypeName = "Horde.Listener"; transport = $Transport; endpoint = $Endpoint; state = $r.listener; stopped = $false }))
