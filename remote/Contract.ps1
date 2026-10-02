@@ -70,6 +70,8 @@ $script:HordeLinkResultWords = @("transcript", "transcripts", "tool", "tools", "
 $script:HordeLinkVerbAllow = @{
     "node.info"       = @{ effect = "read";  args = @() }
     "request.status"  = @{ effect = "read";  args = @("requestId") }
+    "sessions.list"   = @{ effect = "read";  args = @() }
+    "session.get"     = @{ effect = "read";  args = @("sessionId", "agent") }
     "handoff.get"     = @{ effect = "read";  args = @("sessionId", "handoffId") }
     "clone.status"    = @{ effect = "read";  args = @("repoId", "worktree") }
     "delivery.status" = @{ effect = "read";  args = @("messageId") }

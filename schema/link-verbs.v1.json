@@ -2,11 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "horde/schema/link-verbs.v1",
   "title": "link-verbs v1",
-  "description": "Every verb of the Horde link protocol, version 1: the complete list of what one end may ask of the other. It is never a remote shell: there is no verb that takes a command line, a script, a program path, an environment map or a file path, and none that returns a transcript, tool output or any other raw worker context; remote/Contract.ps1 refuses a table that has one, and test/test-link-contracts.ps1 proves it refuses each. THE TABLE is x-horde-verbs, one row per verb: its name, which way it travels, its effect class (read, write, spawn or kill, lifecycle H13, and drive: input typed into a running session, which the node's permission ceiling gates exactly like spawn, plan step R9), since (the protocol version that introduced it), its args (a definition below, always a closed object) and its result (the value a KNOWN answer carries; a definition below or a whole schema by name). The table lives under an x- key because core/Schema.ps1 cannot say 'these arguments go with that verb'; remote/Contract.ps1 reads it, checks every row against definitions/verb-row, and checks each verb's arguments and result. EVERY STRING AND EVERY ARRAY NAMES ITS CAP with x-horde-cap, a key of schema/link-frame.v1's x-horde-limits: core/Schema.ps1 has no size keywords, so the caps are data here and remote/Protocol.ps1 enforces them (step R2). A result string may use nameBytes, reasonBytes or summaryBytes, never textBytes: the most one string in a result can hold is a distilled summary. A nested answer (answer-* below) follows core/tristate as schema/link-frame.v1's answer does: value present exactly when state is known, which remote/Contract.ps1 checks. DEFERRED, each to the step that builds it, because its shape rests on work not yet merged: sessions.list and session.get (the node projection, plan step R12 after step 2.2), binding.get (the binding record, R10), observe.since and metrics.since and the evt frames they stream (R12, R15), session.park and session.route (lifecycle H16, R19). Each is added to this file by its step, and passes the same checks. A change is a new file, link-verbs.v2, once any node could hold this one; until the first node ships (plan step R12) v1 may still be edited.",
+  "description": "Every verb of the Horde link protocol, version 1: the complete list of what one end may ask of the other. It is never a remote shell: there is no verb that takes a command line, a script, a program path, an environment map or a file path, and none that returns a transcript, tool output or any other raw worker context; remote/Contract.ps1 refuses a table that has one, and test/test-link-contracts.ps1 proves it refuses each. THE TABLE is x-horde-verbs, one row per verb: its name, which way it travels, its effect class (read, write, spawn or kill, lifecycle H13, and drive: input typed into a running session, which the node's permission ceiling gates exactly like spawn, plan step R9), since (the protocol version that introduced it), its args (a definition below, always a closed object) and its result (the value a KNOWN answer carries; a definition below or a whole schema by name). The table lives under an x- key because core/Schema.ps1 cannot say 'these arguments go with that verb'; remote/Contract.ps1 reads it, checks every row against definitions/verb-row, and checks each verb's arguments and result. EVERY STRING AND EVERY ARRAY NAMES ITS CAP with x-horde-cap, a key of schema/link-frame.v1's x-horde-limits: core/Schema.ps1 has no size keywords, so the caps are data here and remote/Protocol.ps1 enforces them (step R2). A result string may use nameBytes, reasonBytes or summaryBytes, never textBytes: the most one string in a result can hold is a distilled summary. A nested answer (answer-* below) follows core/tristate as schema/link-frame.v1's answer does: value present exactly when state is known, which remote/Contract.ps1 checks. DEFERRED, each to the step that builds it, because its shape rests on work not yet merged: binding.get (the binding record, R10), observe.since and metrics.since and the evt frames they stream (R12, R15), session.park and session.route (lifecycle H16, R19). Each is added to this file by its step, and passes the same checks. sessions.list and session.get were added by plan step R12a: a fixed summary of each session from the node's own projection, each field a tristate answer, and the pid, procStart and project directory carrying their namespace (R11). The summary is a curated set on purpose: no transcript path, resume command or other raw worker context crosses. A change is a new file, link-verbs.v2, once a node on ANOTHER machine could hold this one - the first enrolment, plan step R17. Until then every node is the hub's own checkout serving its own machine (R12a serves the local link only), hub and node always update together, and v1 may still be edited: R12b adds observe.since and binding.get here, and the session summary may still grow. From R17 on, any change is v2.",
   "x-horde-protocol": 1,
   "x-horde-verbs": [
     { "name": "node.info",        "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/no-args",            "result": "node-manifest.v1" },
     { "name": "request.status",   "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/request-status-args", "result": "#/definitions/request-entry" },
+    { "name": "sessions.list",    "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/no-args",            "result": "#/definitions/session-list" },
+    { "name": "session.get",      "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/session-get-args",   "result": "#/definitions/session-summary" },
     { "name": "handoff.get",      "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/handoff-get-args",    "result": "#/definitions/handoff" },
     { "name": "clone.status",     "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/clone-status-args",   "result": "#/definitions/clone-status" },
     { "name": "delivery.status",  "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/delivery-status-args", "result": "#/definitions/delivery" },
@@ -213,6 +215,65 @@
       }
     },
 
+    "session-get-args": {
+      "type": "object", "required": ["sessionId"], "additionalProperties": false,
+      "description": "agent names the harness when two harnesses hold the same id: the projection keeps one record per (harness, id), so the id alone can name two sessions.",
+      "properties": { "sessionId": { "$ref": "#/definitions/session-id" }, "agent": { "$ref": "#/definitions/token" } }
+    },
+    "answer-bool": {
+      "type": "object", "required": ["state", "reason"], "additionalProperties": false,
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "boolean" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-time": {
+      "type": "object", "required": ["state", "reason"], "additionalProperties": false,
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "$ref": "#/definitions/time" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-pid": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A process id, placed: ns says which device's table and which space it belongs to (R11), so the hub never looks it up in its own.",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "integer", "minimum": 1 }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-proc-start": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A process's start, in file-time ticks, placed as the pid is (R11).",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "integer", "minimum": 0 }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-place": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A directory on the node, placed (R11): displayed by the hub, never opened there.",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "string", "pattern": "^[\\x20-\\x7E]{1,255}$", "x-horde-cap": "nameBytes" }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "session-summary": {
+      "type": "object",
+      "required": ["sessionId", "agent", "fleetSessionId", "role", "label", "parent", "liveStatus", "workState", "startedAt", "lastActivity", "retired", "pid", "procStart", "projectCwd"],
+      "additionalProperties": false,
+      "description": "One session as the node's own projection sees it (plan step R12a). A fixed, curated set of fields, each a tristate answer: an unknown is carried with its reason, never dropped and never guessed. The session is (agent, sessionId): the same id under two harnesses is two sessions (core/Projection.ps1). fleetSessionId, startedAt and retired are what the hub's mirror (R13) keys and ages by.",
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "agent": { "$ref": "#/definitions/answer-token" },
+        "fleetSessionId": { "$ref": "#/definitions/answer-token" },
+        "role": { "$ref": "#/definitions/answer-token" },
+        "label": { "$ref": "#/definitions/answer-token" },
+        "parent": { "$ref": "#/definitions/answer-token" },
+        "liveStatus": { "$ref": "#/definitions/answer-token" },
+        "workState": { "$ref": "#/definitions/answer-token" },
+        "startedAt": { "$ref": "#/definitions/answer-time" },
+        "lastActivity": { "$ref": "#/definitions/answer-time" },
+        "retired": { "$ref": "#/definitions/answer-bool" },
+        "pid": { "$ref": "#/definitions/answer-pid" },
+        "procStart": { "$ref": "#/definitions/answer-proc-start" },
+        "projectCwd": { "$ref": "#/definitions/answer-place" }
+      }
+    },
+    "session-list": {
+      "type": "object", "required": ["complete", "sessions", "observedAt"], "additionalProperties": false,
+      "description": "Every session the node's projection sees. complete is known true only when every store the projection reads was readable; otherwise it is known false and its reason names the stores that were not, so a session missing from a partial list is never read as gone.",
+      "properties": {
+        "complete": { "$ref": "#/definitions/answer-bool" },
+        "sessions": { "type": "array", "x-horde-cap": "listItems", "items": { "$ref": "#/definitions/session-summary" } },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
     "request-entry": {
       "type": "object", "required": ["requestId", "verb", "state", "receivedAt"], "additionalProperties": false,
       "description": "The node's journal entry for one request (plan step R3). A resend of the same requestId returns it and acts nothing.",
