@@ -1,9 +1,9 @@
 # Mutations of core/EngineConfig.ps1's secret scanner and redaction (engines E3, review of PR #73).
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\engine-config-secrets.psd1
-# test	est-engine-config.ps1 must fail for every one; only its golden and secret sections run here.
+# test\test-engine-config.ps1 must fail for every one; only its golden and secret sections run here.
 @{
     Target = "core\EngineConfig.ps1"
-    Suite  = "test	est-engine-config.ps1"
+    Suite  = "test\test-engine-config.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "golden,secrets,secret-matrix" }
     PassCodes = @(3)
     Mutations = @(
