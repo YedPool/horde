@@ -24,6 +24,7 @@ function Get-HordeCommandGroups {
     return [ordered]@{
         about = "about horde"
         metrics = "measuring the work"
+        node = "serving this machine to the hub"
     }
 }
 
