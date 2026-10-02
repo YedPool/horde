@@ -15,10 +15,10 @@ entries below cite its lines. Docs: the study (goblin-vs-agent-study-20260930.md
 Codex rollout measurement. Tests: the scripts had none; their positive controls are the study's
 section 1.3 table, and each is carried below or dropped with its reason.
 
-### L-001 One API response is many lines, each repeating the whole usage; count it once
-- source: study/worker-extract.js `msgs` keyed by `message.id`; study 1.4 "a message spans several JSONL lines that repeat the same usage; counting lines would double-count"; metrics design 2.1 (1.6x to 1.9x inflation)
+### L-001 One API response is many lines; count it once, with the usage of its last (largest) line
+- source: study/worker-extract.js `msgs` keyed by `message.id`, with `rec.usage=m.usage` on every line, so the LAST line's usage stood; study 1.4; metrics design 2.1 (1.6x to 1.9x inflation when lines are summed); review of PR #50, F1 (the first-line rule undercounted subagent output by 88.9 percent)
 - disposition: comment
-- where: agents/claude-code/Transcript.ps1 :: "ONE CALL PER message.id"
+- where: agents/claude-code/Transcript.ps1 :: "usage is the PER-FIELD MAXIMUM across them"
 
 ### L-002 A repeated call id is never summed twice, whatever the adapter does
 - source: metrics design 2.1, "dedupe globally by requestId"; study/join.js counts orc calls per unique id

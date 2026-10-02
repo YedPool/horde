@@ -71,6 +71,27 @@ try {
     $sub = Read-HordeTranscript -Path $subPath
     Check ($sub.state -eq "known" -and @($sub.value.records | Where-Object { $_.kind -eq "turnEnd" }).Count -eq 1) "a subagent transcript, which has no turn_duration lines, ends its turn at end_turn"
 
+
+    Write-Host ""
+    Write-Host "--- a streamed response: usage grows across its lines ---" -ForegroundColor Cyan
+    # Measured 2026-10-02 (review of PR #50, F1), read-only, on the 125 subagent files of one session:
+    # 6,981 message ids span several lines, each line one content block, and on 6,319 of them
+    # output_tokens grows from line to line (a first block "out=5", the last "out=244") while input and
+    # cache never differ. Keeping the first line undercounted worker output by 88.9 percent.
+    $streamed = Join-Path $work "streamed\agent-a0000000000000001.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $streamed) -Force | Out-Null
+    $u = { param($out) @{ input_tokens = 3; cache_read_input_tokens = 100; cache_creation_input_tokens = 0; output_tokens = $out; cache_creation = @{ ephemeral_5m_input_tokens = 0; ephemeral_1h_input_tokens = 0 } } }
+    $lines = @(
+        @{ type = "user"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:00.000Z"; message = @{ role = "user"; content = "go" } },
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; requestId = "r1"; message = @{ id = "m1"; model = "claude-opus-5-5"; content = @(@{ type = "thinking"; thinking = "" }); stop_reason = $null; usage = (& $u 1) } },
+        @{ type = "assistant"; isSidechain = $true; sessionId = "s"; timestamp = "2026-09-30T10:00:02.000Z"; requestId = "r1"; message = @{ id = "m1"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "done" }); stop_reason = "end_turn"; usage = (& $u 500) } }
+    )
+    [System.IO.File]::WriteAllText($streamed, ((@($lines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $sr = Read-HordeTranscript -Path $streamed
+    $sws = Get-HordeWorkerSummary -Records $sr.value.records -PriceTable $noTable
+    Check ($sws.calls.value -eq 1 -and $sws.tokens.value.output -eq 500) ("a response whose output grows across its lines counts its final output, 500, not its first line's 1 (" + $sws.tokens.value.output + ")")
+    Check ($sws.tokens.value.input -eq 3 -and $sws.tokens.value.cacheRead -eq 100) "CONTROL: fields that do not grow are counted once, not summed across the lines"
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is

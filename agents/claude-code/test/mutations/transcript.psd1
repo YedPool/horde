@@ -41,5 +41,11 @@
         @{ Name = "tool-input-text-counted"
            Find = 'if ($b["type"] -eq "text" -and $b["text"] -is [string]) { $slot.textChars += $b["text"].Length }'
            Replace = 'if ($b["type"] -eq "text" -and $b["text"] -is [string]) { $slot.textChars += $b["text"].Length + 400 }' }
+        @{ Name = "first-line-usage-only"
+           Find = '        if ($null -ne $v -and ($null -eq $Max[$k] -or [long]$v -gt $Max[$k])) { $Max[$k] = [long]$v }'
+           Replace = '        if ($null -ne $v -and $null -eq $Max[$k]) { $Max[$k] = [long]$v }' }
+        @{ Name = "usage-summed-across-lines"
+           Find = '        if ($null -ne $v -and ($null -eq $Max[$k] -or [long]$v -gt $Max[$k])) { $Max[$k] = [long]$v }'
+           Replace = '        if ($null -ne $v) { $Max[$k] = [long]$Max[$k] + [long]$v }' }
     )
 }

@@ -14,9 +14,10 @@
 #
 # THE RULES, each one a test in agents/claude-code/test/test-transcript.ps1:
 #   - ONE CALL PER message.id. One API response is written as one line per content block, and every
-#     line repeats the whole usage object (design 2.1: summing lines inflated totals 1.6x to 1.9x; the
-#     study summed "per unique assistant message.id", study 1.4). Text lengths and tool uses are
-#     gathered across the lines; usage is taken once.
+#     line carries a usage object (design 2.1: summing lines inflated totals 1.6x to 1.9x; the study
+#     summed "per unique assistant message.id", study 1.4). Text lengths and tool uses are gathered
+#     across the lines; usage is the PER-FIELD MAXIMUM across them, because in a streamed response
+#     output_tokens grows line by line (Add-ClaudeCodeUsageMax; review of PR #50, F1).
 #   - A "<synthetic>" message, or one marked isApiErrorMessage, is the harness reporting an API error,
 #     not a model call. It is an event, not a call. (The study counted it as a call; 14 such lines
 #     in the orchestrator's transcript.)
@@ -105,17 +106,48 @@ function Get-ClaudeCodeTextChars {
     return (Get-ClaudeCodeText $Content).Length
 }
 
-function Get-ClaudeCodeUsage {
-    # The port's usage answer from a message's usage object.
-    param($Usage)
-    if ($Usage -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason "the message carries no usage") }
-    $num = { param($v) if ($null -eq $v) { [long]0 } else { [long]$v } }
-    $split = New-HordeUnknown -Reason "the usage does not split cache writes by lifetime"
+function New-ClaudeCodeUsageMax {
+    # The running per-field maximum of one message id's usage, across all its lines; $null until a
+    # line gives the field.
+    return @{ lines = 0; input_tokens = $null; cache_read_input_tokens = $null; cache_creation_input_tokens = $null; output_tokens = $null; m5 = $null; h1 = $null }
+}
+
+function Add-ClaudeCodeUsageMax {
+    # Fold one line's usage into the maximum.
+    #
+    # THE MAXIMUM, NOT THE FIRST LINE AND NOT THE SUM (review of PR #50, F1). A response streamed in
+    # blocks is written one line per block, and in subagent transcripts output_tokens GROWS from line
+    # to line: measured 2026-10-02, read-only, on one session's 125 subagent files, 6,319 of 6,981
+    # multi-line ids had growing output and none ever decreased; input and cache never differed.
+    # The first line undercounted output by 88.9 percent; summing would overcount (design 2.1). The
+    # study's worker-extract.js kept the LAST line; the maximum equals it on every id measured and
+    # does not depend on line order.
+    param($Max, $Usage)
+    if ($Usage -isnot [System.Collections.IDictionary]) { return }
+    $Max.lines++
+    foreach ($k in @("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")) {
+        $v = $Usage[$k]
+        if ($null -ne $v -and ($null -eq $Max[$k] -or [long]$v -gt $Max[$k])) { $Max[$k] = [long]$v }
+    }
     $cc = $Usage["cache_creation"]
     if ($cc -is [System.Collections.IDictionary]) {
-        $split = New-HordeKnown -Value ([pscustomobject]@{ m5 = (& $num $cc["ephemeral_5m_input_tokens"]); h1 = (& $num $cc["ephemeral_1h_input_tokens"]) })
+        foreach ($pair in @(@("m5", "ephemeral_5m_input_tokens"), @("h1", "ephemeral_1h_input_tokens"))) {
+            $v = $cc[$pair[1]]
+            if ($null -ne $v -and ($null -eq $Max[$pair[0]] -or [long]$v -gt $Max[$pair[0]])) { $Max[$pair[0]] = [long]$v }
+        }
     }
-    return (New-HordeUsage -Uncached (& $num $Usage["input_tokens"]) -CacheRead (& $num $Usage["cache_read_input_tokens"]) -CacheWrite (& $num $Usage["cache_creation_input_tokens"]) -Output (& $num $Usage["output_tokens"]) -Split $split)
+}
+
+function Get-ClaudeCodeUsage {
+    # The port's usage answer from a message id's per-field maximum.
+    param($Max)
+    if ($Max.lines -eq 0) { return (New-HordeUnknown -Reason "the message carries no usage") }
+    $num = { param($v) if ($null -eq $v) { [long]0 } else { [long]$v } }
+    $split = New-HordeUnknown -Reason "the usage does not split cache writes by lifetime"
+    if ($null -ne $Max.m5 -or $null -ne $Max.h1) {
+        $split = New-HordeKnown -Value ([pscustomobject]@{ m5 = (& $num $Max.m5); h1 = (& $num $Max.h1) })
+    }
+    return (New-HordeUsage -Uncached (& $num $Max.input_tokens) -CacheRead (& $num $Max.cache_read_input_tokens) -CacheWrite (& $num $Max.cache_creation_input_tokens) -Output (& $num $Max.output_tokens) -Split $split)
 }
 
 function Get-ClaudeCodeNotification {
@@ -196,11 +228,12 @@ function Read-ClaudeCodeTranscript {
                 if ($mu -is [System.Collections.IDictionary]) { $speed = "$($mu["speed"])"; $geo = "$($mu["inference_geo"])" }
                 $modelAnswer = New-HordeUnknown -Reason "the message names no model"
                 if ($model -ne "") { $modelAnswer = New-HordeKnown -Value $model }
-                $slot = [pscustomobject]@{ kind = "call"; id = $id; ts = $ts; line = $ln; model = $modelAnswer; usage = (Get-ClaudeCodeUsage $msg["usage"])
+                $slot = [pscustomobject]@{ kind = "call"; id = $id; ts = $ts; line = $ln; model = $modelAnswer; usage = (New-ClaudeCodeUsageMax)
                     textChars = 0; toolCallCount = 0; speed = $speed; inferenceGeo = $geo; endTurn = $false }
                 $callAt[$id] = $slot
                 [void]$slots.Add($slot)
             }
+            Add-ClaudeCodeUsageMax -Max $slot.usage -Usage $msg["usage"]
             if ($msg["stop_reason"] -eq "end_turn") { $slot.endTurn = $true }
             if ($msg["content"] -is [string]) { $slot.textChars += $msg["content"].Length }
             foreach ($b in @($msg["content"])) {
@@ -272,7 +305,7 @@ function Read-ClaudeCodeTranscript {
             "record" { [void]$records.Add($s.record) }
             "call" {
                 [void]$records.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $s.ts -Line $s.line -Fields @{
-                    id = $s.id; model = $s.model; usage = $s.usage; textChars = $s.textChars; toolCallCount = $s.toolCallCount; speed = $s.speed; inferenceGeo = $s.inferenceGeo }))
+                    id = $s.id; model = $s.model; usage = (Get-ClaudeCodeUsage $s.usage); textChars = $s.textChars; toolCallCount = $s.toolCallCount; speed = $s.speed; inferenceGeo = $s.inferenceGeo }))
                 if ($st.turnDurations -eq 0 -and $s.endTurn) {
                     [void]$records.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $s.ts -Line $s.line -Fields @{ durationMs = (New-HordeUnknown -Reason "this transcript writes no turn durations; the end is the call's end_turn") }))
                 }
