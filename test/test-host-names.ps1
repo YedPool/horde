@@ -456,6 +456,14 @@ try {
     DialectRefuses "dialect-spells-env" { Write-FakeFile "hosts/zorbplex/Scrub.ps1" "Remove-Item Env:ZORBMUX_PANE`n" } "is not in hosts/zorbmux/allowlist.txt" "a file of the importing host that spells the dialect's variable itself is refused"
     DialectRefuses "dialect-other-file" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". (Join-Path `$PSScriptRoot '..\zorbmux\Transport.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "an import of a file other than Dialect.ps1 is refused"
     DialectRefuses "dialect-not-dot-sourced" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" "# the language is in ..\zorbmux\Dialect.ps1`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a mention that only names the dialect, in a comment, is not an import and is refused"
+    # THE PATH IS THE DIALECT, AND THE LINE DOT-SOURCES IT DIRECTLY (review of PR #58, B1 and B2): a
+    # longer file name that only begins with Dialect.ps1 is another file, and a dialect path handed to
+    # a loader as an argument lets the loader open any file of the host.
+    DialectRefuses "dialect-longer-name" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". (Join-Path `$PSScriptRoot '..\zorbmux\Dialect.ps1.private.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a file whose name only begins with Dialect.ps1 is not the dialect"
+    DialectRefuses "dialect-as-argument" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". (Invoke-Loader '..\zorbmux\Dialect.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a dialect path passed to a loader is not an import"
+    DialectRefuses "dialect-after-other-file" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". '..\zorbplex\Other.ps1' '..\zorbmux\Dialect.ps1'`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a line that dot-sources another file, with the dialect path as its argument, is not an import"
+    DialectPasses "dialect-quoted-direct" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" (". `"`$PSScriptRoot\..\zorbmux\Dialect.ps1`"`n") } "the dialect dot-sourced as one quoted path passes"
+    DialectPasses "dialect-trailing-comment" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + " # the shared command language`n") } "an import line may end in a comment"
     DialectRefuses "dialect-called" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" "& (Join-Path `$PSScriptRoot '..\zorbmux\Dialect.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a dialect run with & instead of dot-sourced is refused"
     DialectRefusesEntry "dialect-numbered-entry" {
         Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`n`$p = `$env:ZORBMUX_PANE`n")
