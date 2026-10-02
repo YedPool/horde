@@ -1,5 +1,5 @@
 module: core/metrics-transcript (core/Transcript.ps1, core/Metrics.ps1, core/MetricsReport.ps1, agents/claude-code/Transcript.ps1, agents/codex/Transcript.ps1)
-replaces: the 2026-09-30 goblin-versus-agent study's throwaway extractors (scratchpad study/: worker-extract.js, orc-extract.js, join.js, orccat.js, window.js, reaps.js, rows.js, summ.js), and carries what YedPool/wezfleet lib/CodexStatus.ps1 and the 2026-09-30 Codex rollout measurement learned about Codex's files; CodexStatus.ps1 itself stays in wezfleet, read-only, and nothing here calls it
+replaces: the 2026-09-30 goblin-versus-agent study's throwaway extractors (scratchpad study/: worker-extract.js, orc-extract.js, join.js, orccat.js, window.js, reaps.js, rows.js, summ.js, atttypes.js, peek.js, peek2.js), and carries what YedPool/wezfleet lib/CodexStatus.ps1 and the 2026-09-30 Codex rollout measurement learned about Codex's files; CodexStatus.ps1 itself stays in wezfleet, read-only, and nothing here calls it
 sources:
 - comments: searched
 - history: searched
@@ -7,7 +7,8 @@ sources:
 - docs: searched
 - tests: searched
 
-How the five sources were searched, 2026-10-01. Comments: every line of the eight scripts and of
+How the five sources were searched, 2026-10-01 (the last three scripts on 2026-10-02, after review of
+PR #50 found them missing). Comments: every line of the eleven scripts and of
 lib/CodexStatus.ps1. History and pull requests: the scripts were never committed anywhere, so they
 have none; lib/CodexStatus.ps1's own history is covered by planning/ledger/core-tristate.md, and the
 entries below cite its lines. Docs: the study (goblin-vs-agent-study-20260930.md, sections 1.3, 1.4,
@@ -239,3 +240,28 @@ section 1.3 table, and each is carried below or dropped with its reason.
 - source: study/join.js `DAY` and the 15:36:39 UTC cutoff
 - disposition: comment
 - where: core/MetricsReport.ps1 :: "The records whose time is inside"
+
+### L-046 A notification was told from other input by its text
+- source: study/atttypes.js (counts user strings and attachments by whether they contain task-notification) and orc-extract.js; review of PR #50, F2 (a person's pasted notification was counted)
+- disposition: comment
+- where: agents/claude-code/Transcript.ps1 :: "that the HARNESS marks as one"
+
+### L-047 The ids in a notification's text are not to be trusted as written
+- source: study/join.js (the agent id read from `<task-id>` text); review of PR #50, F3 (planted text became a key in a written summary)
+- disposition: comment
+- where: agents/claude-code/Transcript.ps1 :: "THE IDS IN A NOTIFICATION'S TEXT ARE CHECKED, NEVER COPIED"
+
+### L-048 Whether a notification is interim is in its note, not its status or its result
+- source: study/join.js matched the words anywhere; review of PR #50, F4; measured 2026-10-02, `<status>` is "completed" on interim notifications too
+- disposition: comment
+- where: agents/claude-code/Transcript.ps1 :: "Read from <note> only, never the whole text"
+
+### L-049 A survey of the record types in one transcript
+- source: study/peek.js (counts types, prints the first lines)
+- disposition: dropped
+- reason: an exploratory view used once to learn the format; the adapter's own rule is that a timestamped line of a type it does not read becomes an event, and the formats are documented in each adapter's header.
+
+### L-050 Printing the lines that match a pattern
+- source: study/peek2.js
+- disposition: dropped
+- reason: a debugging grep with a length cap, which carries no rule; any line it printed is now reached through the adapter's records or read by a person directly.
