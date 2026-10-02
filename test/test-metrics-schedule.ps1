@@ -118,7 +118,8 @@ try {
             Unregister-ScheduledTask -TaskName $testName -TaskPath "\HordeTest\" -Confirm:$false
             # A task of the same name outside Horde's folder is never seen.
             & $foreignTask $testName "\"
-            $i1 = @(Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde)
+            $i1 = "installed"; try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Folder "HordeTest" -Disabled -HordeScript $horde } catch { $i1 = $_.Exception.Message }
+            Check ($i1 -eq "installed") ("install succeeds and sees its own job afterwards (" + $i1 + ")")
             $st = & $sch.status $testName "HordeTest"
             Check ($st.state -eq "known" -and $st.value.marked -and $st.value.author -eq "Horde" -and $st.value.enabled -eq $false -and $st.value.home -eq $env:HORDE_HOME) "install makes the job in Horde's folder, marked as Horde's, for this home, disabled"
             Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M" -and $st.value.logonType -eq "S4U") "every 30 minutes, priority 7, stopped after 20 minutes, as the current user with no window"

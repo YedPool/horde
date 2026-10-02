@@ -1,4 +1,4 @@
-# DOES `horde metrics summarize` STAY FLAT IN MEMORY, HOWEVER LARGE THE TRANSCRIPT?
+# HOW DOES `horde metrics summarize` USE MEMORY AS TRANSCRIPTS GROW?
 #
 # Plan step M2's first item. Measured 2026-10-02 on the always-on box (review of PR #50): M1's
 # summarize peaked at 593 MB on a 33 MB transcript and 1,734 MB on a 133 MB one, about 11 MB of memory
@@ -15,6 +15,15 @@
 # the shipped command run as its own process, its peak working set sampled every 100 ms.
 #
 # IT LIVES HERE because its transcripts are in this harness's format (CONTRIBUTING 14).
+#
+# MEMORY IS O(RESPONSES), NOT FLAT (review of PR #70, F5). Measured 2026-10-02 on the always-on box at
+# be487ae, private bytes: 204 MB for 20,000 short responses (0.4 KB lines), 228 MB for 120,000 - about
+# 252 bytes per response, for what must be kept to stay byte for byte M1: per call its id and the ten
+# numbers of its usage (an id can come back after another; 73 times in one of 692 real transcripts),
+# per record its time, line and kind (the longest silence, with M1's tie order), per tool result its
+# time. The working set stays at 256 MB because the collector trims it. Keeping only the current id
+# would make it flat and change M1's output on that real file. So the second target is: at most 1 KB
+# of private memory per response, measured on the same box in the same run.
 #
 # HEAVY: it writes about 170 MB to TEMP and runs for minutes. It is in the gate so that a change that
 # brings back a list of records fails it; run it where there is memory to spare.
@@ -90,6 +99,8 @@ try {
     $f = $rows[0]; $s = $rows[1]; $l = $rows[2]; $sf = $rows[3]; $sm = $rows[4]
     $perPair = [math]::Round((($sm.privateMB - $sf.privateMB) * 1MB) / ($sm.pairs - $sf.pairs))
     Write-Host ("MEMORY per response with short lines: " + $perPair + " bytes of private memory per assistant response and its tool result (" + $sf.privateMB + " MB at " + $sf.pairs + ", " + $sm.privateMB + " MB at " + $sm.pairs + ")")
+    Check ($perPair -lt 1024) ("private memory grows by at most 1 KB per response (" + $perPair + " bytes): O(responses), with a small constant")
+    Check ($sm.pairs -ge 5 * $sf.pairs) "CONTROL: the second short file has at least five times the responses of the first"
     Check ($l.MB -ge 120) ("CONTROL: the large file is the size the target names (" + $l.MB + " MB)")
     Check (($l.peakMB - $f.peakMB) -lt $overFloorMB) ("the peak on the large file is within " + $overFloorMB + " MB of the floor (" + $l.peakMB + " MB against " + $f.peakMB + " MB; M1 measured 1,734 MB)")
     Check (($l.peakMB - $s.peakMB) -lt 50) ("the peak does not grow with the file: +" + ($l.peakMB - $s.peakMB) + " MB for " + ($l.MB - $s.MB) + " MB more transcript")
@@ -97,4 +108,4 @@ try {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "summarize's peak on a 133 MB transcript is within 120 MB of the bare command's, and does not grow with the file"
+Complete-HordeSuite -Success "summarize stays within 120 MB of the bare command on long lines, and grows by at most 1 KB of private memory per response"

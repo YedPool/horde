@@ -97,7 +97,9 @@ try {
     Check ($null -ne $ix -and @($ix["entries"].Keys).Count -eq $filled) "and the index holds one entry per transcript"
     # The record is summarize's record, plus how it was collected.
     $sum = Measure-HordeTranscriptFile -Path $planted -PriceTable (Read-HordePriceBook)
-    $rec = $ser.DeserializeObject([System.IO.File]::ReadAllText((Get-HordeMetricsRecordPath -Adapter $sum.value.read.adapter -Name ([System.IO.Path]::GetFileNameWithoutExtension($planted)))))
+    $plantedRec = Get-HordeMetricsRecordPath -Adapter $sum.value.read.adapter -Name $sum.value.read.recordKey
+    Check (Test-Path -LiteralPath $plantedRec -PathType Leaf) "the record is named by the transcript's own identity, its session id"
+    $rec = @{ worker = $null; orc = $null; collection = @{} }; if (Test-Path -LiteralPath $plantedRec) { $rec = $ser.DeserializeObject([System.IO.File]::ReadAllText($plantedRec)) }
     $sumRec = $ser.DeserializeObject((ConvertTo-Json -InputObject $sum.value.record -Depth 30))
     Check ((ConvertTo-Json $rec["worker"] -Depth 30 -Compress) -eq (ConvertTo-Json $sumRec["worker"] -Depth 30 -Compress) -and (ConvertTo-Json $rec["orc"] -Depth 30 -Compress) -eq (ConvertTo-Json $sumRec["orc"] -Depth 30 -Compress)) "a collected record measures what summarize measures"
     Check ($rec["collection"]["provisional"] -eq $false -and $rec["collection"]["sourceBytes"] -eq (Get-Item -LiteralPath $planted).Length) "and says it is final, and how big its transcript was"
