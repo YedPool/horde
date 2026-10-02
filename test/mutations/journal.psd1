@@ -11,6 +11,20 @@
     Target = "remote\Journal.ps1"
     Suite  = "test\test-journal.ps1"
     Mutations = @(
+        @{ Name = "journal-path-name-unchecked"
+           Find = 'if ("$Name" -eq "" -or $Name.Contains("..") -or $Name.IndexOfAny([char[]]@([char]92, [char]47, [char]58)) -ge 0 -or [System.IO.Path]::IsPathRooted($Name)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "journal-path-containment-unchecked"
+           Find = 'if (-not [string]::Equals($parent, $rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {'
+           Expect = "survives"
+           Reason = "a second line: no name that passes the plain-name check (no .., separator, colon or root) can resolve outside the root, so no test can reach this check alone" }
+        @{ Name = "journal-path-junction-unchecked"
+           Find = 'if (Test-HordeJournalReparse $walk) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "journal-path-check-dropped"
+           Find = '    $Path = Resolve-HordeJournalPath -Root $Root -Name $Name'
+           Replace = '    $Path = Join-Path $Root $Name' }
         @{ Name = "create-overwrites"
            Find = '[System.IO.FileMode]::CreateNew'
            Replace = '[System.IO.FileMode]::OpenOrCreate' }
@@ -63,7 +77,7 @@
            Find = 'elseif ($c -lt 0x20 -or $c -gt 0x7E) {'
            Replace = 'elseif ($c -lt 0x20) {' }
         @{ Name = "date-stringified"
-           Find = 'throw ("a value of type " + $Value.GetType().FullName + " cannot be hashed: only JSON data can")'
+           Find = 'throw ("a value of type " + $Value.PSObject.TypeNames[0] + " cannot be hashed: only JSON data can")'
            Replace = 'return (ConvertTo-HordeJournalCanonical -Value ("" + $Value) -Depth ($Depth + 1))' }
         @{ Name = "unhashable-arguments-throw"
            Find = 'catch { return (New-HordeJournalDecision -Decision "refuse" -Reason ("request " + $Id + " cannot be recorded: "'
@@ -96,8 +110,8 @@
            Find = 'if (($nowUtc - $e.doneAt) -le $retention -or ($nowUtc - $e.issuedAt) -le $window) { continue }'
            Replace = 'if ($false) { continue }' }
         @{ Name = "prune-outcome-first"
-           Find = 'try { [System.IO.File]::Delete((Join-Path $Root ($id + ".json"))) }'
-           Replace = 'try { [System.IO.File]::Delete((Join-Path $Root ($id + ".outcome.json"))); [System.IO.File]::Delete((Join-Path $Root ($id + ".json"))) }' }
+           Find = 'try { [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name ($id + ".json"))) }'
+           Replace = 'try { [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name ($id + ".outcome.json"))); [System.IO.File]::Delete((Resolve-HordeJournalPath -Root $Root -Name ($id + ".json"))) }' }
         @{ Name = "admission-ignores-high-water"
            Find = 'if ($null -ne $hw -and $hw -gt $ref) { $ref = $hw }'
            Replace = '' }

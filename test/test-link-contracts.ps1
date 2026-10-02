@@ -24,7 +24,10 @@ trap { Register-HordeSuiteError $_; continue }
 
 $fx = Join-Path $here "fixtures\link"
 
-function Read-Fx { param([string]$Name) return (Read-HordeSchemaFile -Path (Join-Path $fx $Name)) }
+# A FIXTURE IS DATA, NOT A SCHEMA: read as UTF-8 JSON. Read-HordeSchemaFile checks that what it reads
+# is a schema (review of PR #27), so a frame read through it is refused for its member v.
+function Read-Data { param([string]$Path) return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json) }
+function Read-Fx { param([string]$Name) return (Read-Data (Join-Path $fx $Name)) }
 function Copy-Json { param($Value) return (($Value | ConvertTo-Json -Depth 40) | ConvertFrom-Json) }
 function Says {
     # Is there a finding containing Text? A boolean, never the matching items.
@@ -57,10 +60,10 @@ Check ($contract.rows.Count -eq 13) "the v1 table has the 13 verbs this step def
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
 Check ($golden.Count -eq 14) "there are 14 golden frames, one per kind and verb shape this step covers"
 foreach ($g in $golden) {
-    $f = @(Test-HordeLinkFrame -Frame (Read-HordeSchemaFile -Path $g.FullName) -Contract $contract)
+    $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
 }
-$kinds = @($golden | ForEach-Object { "$((Read-HordeSchemaFile -Path $_.FullName).kind)" } | Sort-Object -Unique)
+$kinds = @($golden | ForEach-Object { "$((Read-Data $_.FullName).kind)" } | Sort-Object -Unique)
 Check ((@($kinds) -join ",") -ceq "ack,bye,hello,ping,pong,req,res") "the golden frames cover every kind but evt, which no v1 verb has"
 $f = @(Test-HordeContractDocument -Value (Read-Fx "manifest.json") -SchemaName "node-manifest.v1")
 Check ($f.Count -eq 0) "the golden node manifest is valid"; Show $f
@@ -444,7 +447,7 @@ $ctlPath = Join-Path $fx "shell-control.ps1"
 $ctl = @(Get-HordeExecFindings -Path $ctlPath -Known $known)
 $ctlAst = [System.Management.Automation.Language.Parser]::ParseFile($ctlPath, [ref]$null, [ref]$null)
 $forms = @($ctlAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))
-Check ($forms.Count -eq 92) ("CONTROL: the control file holds 92 forms - the review's 27, the first scan's 9, the verification's 13, 42 that each isolate one rule, and a class method (found " + $forms.Count + ")")
+Check ($forms.Count -eq 94) ("CONTROL: the control file holds 94 forms - the review's 27, the first scan's 9, the verification's 13, 44 that each isolate one rule, and a class method (found " + $forms.Count + ")")
 foreach ($form in $forms) {
     $hits = @(Get-LineFindings $ctl $form.Extent.StartLineNumber)
     Check ($hits.Count -ge 1) ("CONTROL: the form " + $form.Name + " is refused")
@@ -462,7 +465,7 @@ foreach ($text in [System.IO.File]::ReadAllLines($ctlPath)) {
     Check (@($hits | Where-Object { "$_".Contains($want) }).Count -ge 1) ("CONTROL: line " + $lineNo + " is refused because: " + $want)
     if (@($hits | Where-Object { "$_".Contains($want) }).Count -eq 0) { Show $hits }
 }
-Check ($expectCount -eq 96) ("CONTROL: 96 lines of the control file name their reason (found " + $expectCount + ")")
+Check ($expectCount -eq 99) ("CONTROL: 99 lines of the control file name their reason (found " + $expectCount + ")")
 $clean = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-clean.ps1") -Known $known)
 Check ($clean.Count -eq 0) "CONTROL: a file written the way remote/ is written - its loader lines, allowlisted cmdlets, core functions, .NET types that start nothing - has no finding"; Show $clean
 $broken = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-unparsed.ps1") -Known $known)

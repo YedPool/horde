@@ -23,7 +23,10 @@ $fx = Join-Path $here "fixtures\link"
 $contract = Get-HordeLinkContract
 $ascii = [System.Text.Encoding]::ASCII
 
-function Read-Fx { param([string]$Name) return (Read-HordeSchemaFile -Path (Join-Path $fx $Name)) }
+# A FIXTURE IS DATA, NOT A SCHEMA: read as UTF-8 JSON. Read-HordeSchemaFile checks that what it reads
+# is a schema (review of PR #27), so a frame read through it is refused for its member v.
+function Read-Data { param([string]$Path) return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json) }
+function Read-Fx { param([string]$Name) return (Read-Data (Join-Path $fx $Name)) }
 function Copy-Json { param($Value) return (($Value | ConvertTo-Json -Depth 40) | ConvertFrom-Json) }
 function Says { param($Text, [string]$Part) return ("$Text".Contains($Part)) }
 function Bytes { param([string]$Text) return ,([byte[]]$ascii.GetBytes($Text)) }

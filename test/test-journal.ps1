@@ -250,6 +250,41 @@ Check ($late.decision -ceq "replay") "an id past the window that IS recorded sti
 Check (@(Names $w).Count -eq 5) "the marker, three records and one outcome: the two refused ids wrote nothing"
 
 Write-Host ""
+Write-Host "--- every path the journal writes or deletes stays in its root ---" -ForegroundColor Cyan
+
+# A write that left the root could put a file anywhere the node's user can (review of the fix for main,
+# 2026-10-02). One test per way out: .., an absolute path, another drive, a junction.
+$jr = New-TestRoot -Init
+Check (Throws { Resolve-HordeJournalPath -Root $jr -Name "..\escape.json" } "not a plain file name") "a name with .. is refused"
+Check (Throws { Resolve-HordeJournalPath -Root $jr -Name (Join-Path $env:TEMP "escape.json") } "not a plain file name") "an absolute path is refused"
+Check (Throws { Resolve-HordeJournalPath -Root $jr -Name "D:escape.json" } "not a plain file name") "a path on another drive is refused"
+Check (Throws { Resolve-HordeJournalPath -Root $jr -Name "sub/escape.json" } "not a plain file name") "a name with a separator is refused"
+Check (Throws { New-HordeJournalFile -Root $jr -Name "..\escape.json" -Text "x" } "not a plain file name") "and New-HordeJournalFile refuses it before opening anything"
+Check (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $jr) "escape.json"))) "and nothing was written beside the root"
+$okPath = Resolve-HordeJournalPath -Root $jr -Name "hw-0000000000000000001"
+Check ($okPath -ceq (Join-Path ([System.IO.Path]::GetFullPath($jr)) "hw-0000000000000000001")) "CONTROL: a plain name resolves to that file directly in the root"
+# A JUNCTION: the root is a junction to a folder elsewhere, so every path normalises "inside" the root
+# and lands outside it. The junction's own link is removed by Directory.Delete without recursing, so
+# cleaning up never follows it into its target.
+$jOuter = Split-Path -Parent (New-TestRoot)
+$jTarget = Join-Path $jOuter "elsewhere"
+New-Item -ItemType Directory -Path $jTarget | Out-Null
+$jLink = Join-Path $jOuter "journal-link"
+New-Item -ItemType Junction -Path $jLink -Value $jTarget | Out-Null
+try {
+    Check (Test-HordeJournalReparse $jLink) "CONTROL: the test's junction is seen as a reparse point"
+    Check (Throws { Initialize-HordeJournal -Root $jLink -Kind "request" } "junction or a symbolic link") "a journal root that is a junction pointing out is refused"
+    Check (@(Get-ChildItem -LiteralPath $jTarget -Force).Count -eq 0) "and nothing was written through it"
+    $under = Join-Path $jLink "j"
+    Check (Throws { Resolve-HordeJournalPath -Root $under -Name "x.json" } "junction or a symbolic link") "a root under a junction is refused too"
+    $inside = Join-Path $jr "aaaaaaaa-0000-4000-8000-000000000001.outcome.json"
+    New-Item -ItemType Junction -Path $inside -Value $jTarget | Out-Null
+    try { Check (Throws { Resolve-HordeJournalPath -Root $jr -Name "aaaaaaaa-0000-4000-8000-000000000001.outcome.json" } "junction or a symbolic link") "a journal file that is a junction pointing out is refused" }
+    finally { [System.IO.Directory]::Delete($inside, $false) }
+} finally { if (Test-Path -LiteralPath $jLink) { [System.IO.Directory]::Delete($jLink, $false) } }
+Check (Test-Path -LiteralPath $jTarget) "the junctions were removed without touching their target"
+
+Write-Host ""
 Write-Host "--- request.status ---" -ForegroundColor Cyan
 
 $s = New-TestRoot -Init

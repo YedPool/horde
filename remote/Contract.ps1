@@ -101,6 +101,17 @@ function Get-HordeLinkProp {
     return $p.Value
 }
 
+function Get-HordeLinkPairs {
+    # A parsed object's members as name/value pairs, whether it came from JSON or is a hashtable. This
+    # file's own, not core's: it used core/Schema.ps1's Get-HordeObjectProps, which the schema cache work
+    # removed (34b581b) while this branch was open, and remote/ failed on main once both merged.
+    param($Value)
+    $out = New-Object System.Collections.ArrayList
+    if ($Value -is [System.Collections.IDictionary]) { foreach ($k in @($Value.Keys)) { [void]$out.Add([pscustomobject]@{ Name = "$k"; Value = $Value[$k] }) } }
+    else { foreach ($p in @($Value.PSObject.Properties)) { [void]$out.Add([pscustomobject]@{ Name = $p.Name; Value = $p.Value }) } }
+    return @($out)
+}
+
 function Test-HordeLinkHasProp {
     param($Object, [string]$Name)
     if ($null -eq $Object) { return $false }
@@ -418,7 +429,7 @@ function Get-HordeLinkNodes {
     $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
     $props = Get-HordeLinkProp $n "properties"
     if ($isObject -and $null -ne $props) {
-        foreach ($p in (Get-HordeObjectProps $Value)) {
+        foreach ($p in (Get-HordeLinkPairs $Value)) {
             $child = Get-HordeLinkProp $props $p.Name
             if ($null -ne $child) { foreach ($x in @(Get-HordeLinkNodes -Value $p.Value -Node $child -Root $Root -Path ($Path + "." + $p.Name))) { [void]$out.Add($x) } }
         }
@@ -500,7 +511,7 @@ function Test-HordeLinkFrame {
     $out = New-Object System.Collections.ArrayList
     $kind = "$($Frame.kind)"
     $rule = Get-HordeLinkProp (Get-HordeLinkProp $Contract.frame "x-horde-kinds") $kind
-    $members = @((Get-HordeObjectProps $Frame) | ForEach-Object { $_.Name } | Where-Object { @("v", "kind", "id", "seq", "ts") -cnotcontains $_ })
+    $members = @((Get-HordeLinkPairs $Frame) | ForEach-Object { $_.Name } | Where-Object { @("v", "kind", "id", "seq", "ts") -cnotcontains $_ })
     foreach ($m in @(Get-HordeLinkProp $rule "required")) { if ($null -ne $m -and $members -cnotcontains $m) { [void]$out.Add("a $kind frame has no '$m'") } }
     foreach ($m in $members) { if (@(Get-HordeLinkProp $rule "allowed") -cnotcontains $m) { [void]$out.Add("a $kind frame may not carry '$m'") } }
     $one = @(Get-HordeLinkProp $rule "oneOf" | Where-Object { $null -ne $_ })
