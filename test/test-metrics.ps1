@@ -49,8 +49,8 @@ $planted = @(
     (Note 10 (Worker "w1")), (Call "c3" 11 -Chars 25 -In 5 -Read 90000 -Write 300 -Out 12), (TurnEnd 11)
 )
 $m = Get-HordeOrcMeasures -Records $planted
-Check ($m.stillWaiting.calls -eq 1) ("the planted still-waiting call is found (" + $m.stillWaiting.calls + ")")
-Check ($m.stillWaiting.contextTokens -eq 90305) ("with the context it processed: input + cache read + cache write = 90305 (" + $m.stillWaiting.contextTokens + ")")
+Check ($m.stillWaiting.calls -eq 1) "the planted still-waiting call is found"
+Check ($m.stillWaiting.contextTokens -eq 90305) "with the context it processed: input + cache read + cache write = 90305"
 Check ($m.stillWaiting.outputTokens -eq 12) "and the output it wrote"
 Check ($m.stillWaiting.byWorker["w1"] -eq 1 -and $m.stillWaiting.unattributed -eq 0) "it is attributed to the worker its notification proves"
 Check (@($m.stillWaiting.lines) -contains 8) "and the line it is on is reported, so a person can look"
@@ -66,7 +66,11 @@ $clean = @(
     (Note 11 (Worker "w4")), (Call "d6" 12 -Tools 1), (Call "d7" 13 -Chars 10)
 )
 $mc = Get-HordeOrcMeasures -Records $clean
-Check ($mc.stillWaiting.calls -eq 0) ("none in a transcript with none (" + $mc.stillWaiting.calls + "): a tool call, 400 characters, a user's message, a tool result after the notification, and a second call after the one that answered it each disqualify")
+Check ($mc.stillWaiting.calls -eq 0) "none in a transcript with none"
+$script:line = 0
+$viaTool = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Tool "k" 0.5), (Result "k" 1), (Call "v1" 2 -Chars 10))
+$direct = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Call "v2" 2 -Chars 10))
+Check ($viaTool.stillWaiting.calls -eq 0 -and $direct.stillWaiting.calls -eq 1) "a tool result between the notification and the reply means the reply answers the tool, not the notification"
 Check ($mc.notifications -eq 4) "CONTROL: the clean transcript does contain notifications, so the zero is not for want of any"
 
 Write-Host ""
