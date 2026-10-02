@@ -209,7 +209,11 @@ function Get-HordeField {
     # A field of a record, as an answer. A field that is not there is UNKNOWN - never the happy
     # default. In the old system, 94 of 369 roster entries predated a field; defaulting them to
     # "fresh" was rejected, because unknown is not fresh.
-    param($Record, [Parameter(Mandatory = $true)][string]$Name)
+    param($Record, [string]$Name)
+    # The name is checked here, not by a Mandatory attribute: that made this an advanced function,
+    # 0.25 ms a call against 0.03 ms (measured PR #31, 2026-10-02), and a projection of 333 real
+    # sessions calls it about 15,500 times. Same refusal, same words; only the exception type differs.
+    if ($Name -eq "") { throw "Cannot bind argument to parameter 'Name' because it is an empty string." }
     if ($null -eq $Record) { return (New-HordeUnknown -Reason ("no record to read '" + $Name + "' from")) }
     $prop = $Record.PSObject.Properties[$Name]
     if ($Record -is [System.Collections.IDictionary]) {

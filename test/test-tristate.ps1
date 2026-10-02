@@ -202,6 +202,9 @@ foreach ($pair in @(
 foreach ($x in $shapeDiffs) { Write-Host ("  " + $x) -ForegroundColor Red }
 Check ($shapeDiffs.Count -eq 0) "each constructor builds exactly the answer New-HordeAnswer builds"
 Check ((ErrorOf { New-HordeKnown }) -ceq "a known answer needs a value; a known nothing is New-HordeAbsent" -and (Test-HordeAnswer (New-HordeKnown -Value @())) -and (Test-HordeAnswer (New-HordeKnown -Value $false))) "a known answer given no value at all is refused, and an empty list or false is still a value"
+# Get-HordeField checks its name by hand since PR #31 (a Mandatory attribute cost 0.25 ms a call): an
+# empty or missing name is still refused, in the words the attribute used.
+Check ((Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) -Name "" } "because it is an empty string") -and (Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) -Name $null } "because it is an empty string") -and (Throws { Get-HordeField -Record ([pscustomobject]@{ a = 1 }) } "because it is an empty string")) "a field read with no name is refused"
 
 Write-Host ""
 Write-Host "--- stored answers and missing fields ---" -ForegroundColor Cyan
