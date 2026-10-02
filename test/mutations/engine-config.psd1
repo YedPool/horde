@@ -176,5 +176,8 @@
         @{ Name = "registry-empty-enum-accepted"
            Find = 'if ($vals.Count -eq 0) {'
            Replace = 'if ($false) {' }
+        @{ Name = "registry-value-fields-open"
+           Find = 'if ($f -cne "kind" -and -not ($f -ceq "values" -and $kind -ceq "enum")) {'
+           Replace = 'if ($false) {' }
     )
 }

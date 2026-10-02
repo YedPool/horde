@@ -85,16 +85,25 @@
            Find = 'if (($dir -ceq "lower-only" -or $dir -ceq "raise-only") -and @($mine | Where-Object { $_.rank -gt 1 }).Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "lower-only-may-raise"
-           Find = 'if ($dir -ceq "lower-only" -and $iNew -gt $iCur) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($dir -ceq "lower-only" -and $iNew -gt $iCur) { $why'
+           Replace = 'if ($false) { $why' }
         @{ Name = "raise-only-may-lower"
-           Find = 'if ($dir -ceq "raise-only" -and $iNew -lt $iCur) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($dir -ceq "raise-only" -and $iNew -lt $iCur) { $why'
+           Replace = 'if ($false) { $why' }
         @{ Name = "no-base-taken-as-base"
            Find = 'if ($null -eq $current) { $why = "refused: "'
            Replace = 'if ($false) { $why = "refused: "' }
         @{ Name = "compared-with-the-owner-only"
-           Find = '} else { $current = $lv[0] }'
-           Replace = '} else { }' }
+           Find = '$lv = @($lp.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)'
+           Replace = '$lv = @(); continue' }
+        @{ Name = "direction-checks-the-winner-only"
+           Find = '                foreach ($c in $inLayer) {'
+           Replace = 'foreach ($c in @((Select-HordeWinner -List $inLayer).top)) {' }
+        @{ Name = "tie-held-to-the-most-permissive"
+           Find = 'if ($dir -ceq "lower-only") { $current = $values[$idx[0]] } else { $current = $values[$idx[$idx.Count - 1]] }'
+           Replace = 'if ($dir -ceq "lower-only") { $current = $values[$idx[$idx.Count - 1]] } else { $current = $values[$idx[0]] }' }
+        @{ Name = "tuner-checks-the-winner-only"
+           Find = '$low = @($mine | Where-Object { $_.by -ceq "tuner" -and'
+           Replace = '$low = @(@((Select-HordeWinner -List $mine).top) | Where-Object { $_.by -ceq "tuner" -and' }
     )
 }
