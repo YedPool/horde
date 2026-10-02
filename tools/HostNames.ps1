@@ -428,13 +428,22 @@ function Test-HordePortListFile {
 function Test-HordeDialectImport {
     # Does the file have a line that dot-sources <Folder>/Dialect.ps1 and holds a mention of the port?
     # The caller has already seen the file name the port exactly once, so the one mention is that line.
-    # Dot-sourced: the line begins with "." and a space; a comment, an & call or a string that merely
-    # names the file is not an import.
+    # THE WHOLE LINE IS THE IMPORT (review of PR #58, B1 and B2): "." and a space, then the dialect's
+    # path as the one thing dot-sourced - a quoted path, or (Join-Path <variable> <quoted path>) - and
+    # nothing after it but an optional comment. The path ends at Dialect.ps1, so a longer file name is
+    # another file; and a path handed to a loader, or passed as an argument to another dot-sourced
+    # file, is refused, because the loader could open any file of the host. A comment, an & call or a
+    # string that merely names the file is not an import either.
     param([string]$Full, [string]$Folder, [string[]]$Names)
-    $pattern = '^\s*\.\s+.*[\\/]' + [regex]::Escape($Folder) + '[\\/]' + [regex]::Escape($script:HordeDialectFile) + '\b'
-    foreach ($line in ([System.IO.File]::ReadAllText($Full) -split "`n")) {
-        if (-not [regex]::IsMatch($line, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { continue }
-        if ((Get-HordeMentionSpans -Text $line -Names $Names).Count -ge 1) { return $true }
+    $quoted = '(?:"(?<p>[^"]*)"|''(?<p>[^'']*)'')'
+    $line = '^\s*\.\s+(?:' + $quoted + '|\(\s*Join-Path\s+\$[A-Za-z_][A-Za-z0-9_:]*\s+' + $quoted + '\s*\))\s*(?:#.*)?$'
+    $path = '(?:^|[\\/])' + [regex]::Escape($Folder) + '[\\/]' + [regex]::Escape($script:HordeDialectFile) + '$'
+    $ic = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    foreach ($text in ([System.IO.File]::ReadAllText($Full) -split "`n")) {
+        $m = [regex]::Match($text.TrimEnd("`r"), $line, $ic)
+        if (-not $m.Success) { continue }
+        if (-not [regex]::IsMatch($m.Groups["p"].Value, $path, $ic)) { continue }
+        if ((Get-HordeMentionSpans -Text $text -Names $Names).Count -ge 1) { return $true }
     }
     return $false
 }
