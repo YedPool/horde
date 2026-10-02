@@ -482,17 +482,17 @@ function Read-HordeControlExtras {
 }
 
 function Get-HordeProcessIndex {
-    # The process table read ONCE per projection: { resumes; unreadClaude }. resumes maps a session id
+    # The process table read ONCE per projection: { resumes; unreadPids }. resumes maps a session id
     # (ignoring case) to the rows whose command line resumes it (--resume <id> or -r <id>), in the
     # table's order - the X5 read for pid, procStart and startedAt when "its --resume id matches".
-    # unreadClaude lists the pids of claude processes whose command line cannot be read, any of which
+    # unreadPids lists the pids of the agent's processes whose command line cannot be read, any of which
     # may be resuming any session. Both used to be found by scanning the whole table for every
     # session: 333 sessions x 341 processes, 9.4 s of a real projection (block profile, PR #31,
     # 2026-10-02). A row is keyed by its FIRST --resume id, the one the per-session scan compared.
     param($Processes)
     $resumes = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.ArrayList]' ([System.StringComparer]::OrdinalIgnoreCase)
     $unread = New-Object System.Collections.ArrayList
-    if ($Processes.state -ne "known") { return [pscustomobject]@{ resumes = $resumes; unreadClaude = @() } }
+    if ($Processes.state -ne "known") { return [pscustomobject]@{ resumes = $resumes; unreadPids = @() } }
     foreach ($p in $Processes.value.Values) {
         $cl = $p.PSObject.Properties["commandLine"]
         if ($null -eq $cl -or $null -eq $cl.Value) {
@@ -505,7 +505,7 @@ function Get-HordeProcessIndex {
         if (-not $resumes.ContainsKey($k)) { $resumes[$k] = New-Object System.Collections.ArrayList }
         [void]$resumes[$k].Add($p)
     }
-    return [pscustomobject]@{ resumes = $resumes; unreadClaude = $unread.ToArray() }
+    return [pscustomobject]@{ resumes = $resumes; unreadPids = $unread.ToArray() }
 }
 
 function Resolve-HordeField {
@@ -1016,7 +1016,7 @@ function Complete-HordeSession {
     # (second review of PR #31, finding 1).
     $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Skip "no process's command line resumes this session"
     $unreadLines = @()
-    if ($C.processes.state -eq "known") { $unreadLines = @($C.procIndex.unreadClaude) }
+    if ($C.processes.state -eq "known") { $unreadLines = @($C.procIndex.unreadPids) }
     if ($C.processes.state -ne "known") { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the process table could not be read (" + $C.processes.reason + ")") }
     elseif ($unreadLines.Count -gt 0) { $pidX5 = New-HordeUnsure -Store "X5" -Field "pid" -Reason ("the command line of claude process " + (@($unreadLines | Sort-Object) -join ", ") + " cannot be read, so it may resume this session") }
     if ($null -ne $x5) { $pidX5 = New-HordeCandidate -Store "X5" -Field "pid" -Answer (New-HordeKnown -Value ([int]$x5.pid)) }
