@@ -1,0 +1,7 @@
+{
+  "requires": {
+    "warchief": ["message-inject", "delivery-receipt", "resume", "report-hook"],
+    "orc": ["message-inject", "delivery-receipt", "resume", "report-hook"],
+    "goblin": ["resume", "report-hook"]
+  }
+}
