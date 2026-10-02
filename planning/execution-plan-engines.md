@@ -304,6 +304,16 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    `schema/host-capabilities.v1.json`. So this step starts after that schema merges, and not before:
    a shape guessed now would be a second definition. Reading the real
    `hosts/<name>/capabilities.json` files is step 20.
+
+   **As built (2026-10-02).** Host capabilities come in as the host port's own table
+   (`core/HostPort.ps1`: capability name to yes, no, declined or unverified), which exists today, so
+   nothing guesses the Phase 3 file's shape; step 20 still reads the files. The role requirements are
+   `core/role-requirements.json` (the design's 4.3). The built-in layer (L0) is each harness's own
+   `agents/<name>/engine.json` - its native provider and profile, and in exactly one of them the
+   fleet's default rule - read by `Get-HordeBuiltinLayer`, so core names no harness. Measured on the
+   descriptors of E2: codex can run goblins today and not orcs (delivery-receipt is unverified);
+   gemini-cli cannot yet run goblins either, because resume and report-hook are unverified until G1
+   and G3 measure them, and `agents/gemini-cli/test/test-engine-builtin.ps1` pins that refusal.
 6. **E5. `core/Secrets.ps1`.** It resolves `env` and `harness-login` references, and nothing else. It
    answers `set`, `missing` or `unknown (why)`, and it gives the value only to the launch stub. The
    test finds no fake secret in any output, with a positive control.
