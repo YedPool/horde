@@ -30,6 +30,7 @@ $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "transports\Port.ps1")
 . (Join-Path $root "transports\ssh\Transport.ps1")
+. (Join-Path $here "ExecGuard.ps1")
 
 function Ord { param([string]$A, [string]$B) return [string]::Equals($A, $B, [System.StringComparison]::Ordinal) }
 
@@ -67,17 +68,31 @@ try {
     $paths = Get-HordeSshPaths -HordeHome "C:\h h"
     Check ((Ord $paths.identity "C:\h h\node\link_ed25519") -and (Ord $paths.knownHosts "C:\h h\node\known_hosts") -and (Ord $paths.config "C:\h h\node\ssh_config")) "Horde's key, known_hosts and config live under <HordeHome>\node"
     $argv = @(Get-HordeSshArgv -Endpoint $ok -Paths $paths)
-    $want = @("-F", "C:\h h\node\ssh_config", "-T", "-i", "C:\h h\node\link_ed25519",
-        "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-        "-o", "UserKnownHostsFile=C:\h h\node\known_hosts", "-o", "GlobalKnownHostsFile=none",
+    # -o IdentityFile, never -i (review of PR #68, F1): measured 2026-10-02, a -i file that is gone when
+    # ssh starts adds nothing, and ssh then offers the user's default ~/.ssh keys; -o IdentityFile adds
+    # the path without looking at it, so a vanished key is a failed login and never the user's key.
+    $want = @("-F", "C:\h h\node\ssh_config", "-T",
+        "-o", 'IdentityFile="C:\h h\node\link_ed25519"', "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+        "-o", 'UserKnownHostsFile="C:\h h\node\known_hosts"', "-o", "GlobalKnownHostsFile=none", "-o", "KnownHostsCommand=none",
         "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=horde-hub-hub-01", "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
         "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
-        "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "ForwardX11=no",
-        "-o", "PermitLocalCommand=no", "-o", "LogLevel=INFO",
+        "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
+        "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ForwardX11Trusted=no", "-o", "ClearAllForwardings=yes", "-o", "GatewayPorts=no", "-o", "Tunnel=no",
+        "-o", "PermitLocalCommand=no", "-o", "LocalCommand=none", "-o", "RemoteCommand=none", "-o", "RequestTTY=no",
+        "-o", "PKCS11Provider=none", "-o", "SecurityKeyProvider=internal", "-o", "LogLevel=INFO",
         "-p", "2222", "horde-link@hub.example.net", "attach")
     Check ((@($argv) -join "|") -ceq ($want -join "|")) "argv is exactly the design's list, in order, from the endpoint and Horde's own paths"
     if ((@($argv) -join "|") -cne ($want -join "|")) { Write-Host ("         got: " + (@($argv) -join " ")) -ForegroundColor Red }
     Check (@($argv | Where-Object { $_ -like "*%*" -or $_ -like "*$*" }).Count -eq 0) "no argument holds a % or $ for anything to expand"
+    # PATHS SSH WOULD READ AS SOMETHING ELSE (review of PR #68, F2): inside a -o value ssh expands %d and
+    # %h, cuts at #, and fails on a quote (measured with ssh -G). A path holding any of them, or anything
+    # but printable ASCII, is refused, so the file Open checked is the file ssh reads.
+    foreach ($bad in @("C:\x%d\h", "C:\x%h", "C:\a #b", "C:\o'brien", 'C:\q"q', ("C:\t" + [char]9 + "t"), ("C:\caf" + [char]0xE9), ("C:\n" + [char]10 + "l"))) {
+        Check ((Test-HordeSshSafePath -Path $bad) -ne "") ("the path '" + ($bad -replace '[^\x20-\x7E]', '?') + "' is refused for ssh's argv")
+        Check (Throws { $null = Get-HordeSshArgv -Endpoint $ok -Paths (Get-HordeSshPaths -HordeHome $bad) } "ssh would") ("and argv is not built under a Horde home of '" + ($bad -replace '[^\x20-\x7E]', '?') + "'")
+    }
+    Check ((Test-HordeSshSafePath -Path "C:\ends\") -ne "") "a path ending in a backslash is refused: it would escape the quote argv puts around it"
+    Check ((Test-HordeSshSafePath -Path "C:\Users\Jo Smith\x~y\.horde") -eq "") "a path with spaces, a tilde and dots is accepted: ssh reads those as written (measured)"
 
     Write-Host ""
     Write-Host "--- the command line ssh.exe receives is the argv, one argument each ---" -ForegroundColor Cyan
@@ -142,6 +157,10 @@ try {
     $o = Open-Raw $ep
     Check (-not $o.ok -and "$($o.reason)" -like "*holds a directive on line 3*") "a config file holding any directive is refused - Horde's argv is the whole configuration"
     [System.IO.File]::WriteAllText((Join-Path $node "ssh_config"), "# Horde's own ssh_config: empty on purpose`r`n`r`n")
+    $env:HORDE_HOME = Join-Path $tmp "pct%d"
+    $o = Open-Raw $ep
+    Check (-not $o.ok -and "$($o.reason)" -like "*ssh would*%*") ("a Horde home ssh would read differently is refused before anything starts (" + $o.reason + ")")
+    $env:HORDE_HOME = $hh
     $o = Open-Raw "not an endpoint"
     Check (-not $o.ok -and "$($o.reason)" -like "*endpoint*") "a malformed endpoint is refused before anything starts"
 
@@ -165,8 +184,8 @@ try {
         }
         function One { param([string]$Key) if (-not $cfg.ContainsKey($Key)) { return "<absent>" }; return (@($cfg[$Key]) -join " ; ") }
         Check ($g.ExitCode -eq 0 -and $cfg.Count -gt 10) ("ssh.exe -G answered with the configuration (" + $cfg.Count + " keys)")
-        Check ((One "identityfile") -ceq $paths.identity) ("the only identity offered is Horde's key (" + (One "identityfile") + ")")
-        Check ((One "userknownhostsfile") -ceq $paths.knownHosts) ("the only known_hosts read is Horde's (" + (One "userknownhostsfile") + ")")
+        Check ((One "identityfile") -ceq $paths.identity) ("the only identity offered is Horde's key, byte for byte (" + (One "identityfile") + ")")
+        Check ((One "userknownhostsfile") -ceq $paths.knownHosts) ("the only known_hosts read is Horde's, byte for byte the path Open checked (" + (One "userknownhostsfile") + ")")
         Check ((One "globalknownhostsfile") -ceq "none") "no global known_hosts is read"
         Check ((One "identityagent") -ceq "none") "no agent is asked for keys"
         Check ((One "identitiesonly") -ceq "yes") "only the given identity is tried"
@@ -178,7 +197,34 @@ try {
         Check ((One "forwardagent") -ceq "no" -and (One "clearallforwardings") -ceq "yes" -and (One "forwardx11") -ceq "no") "nothing is forwarded"
         Check ((One "requesttty") -ceq "false") "no pseudo-terminal is asked for"
         Check ((One "permitlocalcommand") -ceq "no") "no local command runs"
-        Check ((One "proxycommand") -ceq "<absent>" -and (One "proxyjump") -ceq "<absent>") "no proxy command or jump host comes from anywhere"
+        Check (@("<absent>", "none") -ccontains (One "proxycommand") -and @("<absent>", "none") -ccontains (One "proxyjump")) "no proxy command or jump host comes from anywhere"
+        Check ((One "knownhostscommand") -ceq "<absent>" -and (One "remotecommand") -ceq "<absent>" -and (One "localcommand") -ceq "<absent>" -and (One "pkcs11provider") -ceq "<absent>") "no known-hosts command, remote command, local command or PKCS#11 provider is set"
+        Check ((One "securitykeyprovider") -ceq "internal" -and (One "tunnel") -ceq "false" -and (One "forwardx11trusted") -ceq "no" -and (One "gatewayports") -ceq "no") "the security-key provider is the built-in one, and no tunnel, trusted X11 or gateway port is open"
+        function Get-SshG { param([string[]]$Argv)
+            $gp = Start-HordeSshProcess -FilePath $sys -Arguments (Join-HordeSshCommandLine -Argv (@("-G") + $Argv))
+            [void]$children.Add($gp)
+            $txt = $gp.StandardOutput.ReadToEnd()
+            $null = $gp.WaitForExit(30000)
+            $h = @{}
+            foreach ($line in ($txt -split "`r?`n")) { if ($line -match '^(\S+) (.*)$') { $k = $Matches[1].ToLowerInvariant(); if (-not $h.ContainsKey($k)) { $h[$k] = New-Object System.Collections.ArrayList }; [void]$h[$k].Add($Matches[2]) } }
+            return $h }
+        # F1, PROVED BY SSH: with Horde's key absent, ssh still offers only that path - no default key.
+        # ssh -G needs the -F file to exist (it exits 255 otherwise), so each home gets Horde's empty
+        # config and known_hosts; the absent-key home has no key.
+        function New-GHome { param([string]$Name)
+            $hp = Get-HordeSshPaths -HordeHome (Join-Path $tmp $Name)
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $hp.config) | Out-Null
+            [System.IO.File]::WriteAllText($hp.config, "# Horde's own, empty`r`n")
+            [System.IO.File]::WriteAllText($hp.knownHosts, "")
+            return $hp }
+        $gone = New-GHome "no key here"
+        Check (-not (Test-Path -LiteralPath $gone.identity)) "CONTROL: the absent-key home really has no key file"
+        $gk = Get-SshG -Argv (Get-HordeSshArgv -Endpoint $parsed -Paths $gone)
+        Check ((@($gk["identityfile"]) -join " ; ") -ceq $gone.identity) ("with Horde's key file absent, ssh offers only that path and none of the user's default keys (" + (@($gk["identityfile"]) -join " ; ") + ")")
+        # F2, PROVED BY SSH: under a home with a space and a tilde, the paths ssh resolves are the paths given.
+        $odd = New-GHome "Jo Smith~x\.horde"
+        $go = Get-SshG -Argv (Get-HordeSshArgv -Endpoint $parsed -Paths $odd)
+        Check ((@($go["userknownhostsfile"]) -join " ; ") -ceq $odd.knownHosts -and (@($go["identityfile"]) -join " ; ") -ceq $odd.identity) "under a home holding a space and a tilde, ssh resolves known_hosts and the key to exactly the paths given"
         Check ((One "port") -ceq "1" -and (One "user") -ceq "horde-link" -and (One "hostname") -ceq "127.0.0.1") "port, user and host are the endpoint's"
         # CONTROL: the same question without Horde's config and known_hosts options. ssh.exe ignores
         # USERPROFILE and resolves ~ to the real profile (measured 2026-10-02), so this shows the
@@ -238,6 +284,20 @@ if ($Mode -eq "echo") {
 if ($Mode -eq "fail") { $err.WriteLine("banner exchange: Connection to UNKNOWN port -1: Connection refused"); $err.WriteLine("second line"); exit 255 }
 if ($Mode -eq "frame-then-exit") { $b = [Text.Encoding]::ASCII.GetBytes("last`n"); $out.Write($b, 0, $b.Length); $out.Flush(); exit 0 }
 if ($Mode -eq "exit1") { $err.WriteLine("remote command failed"); exit 1 }
+if ($Mode -eq "hostile") {
+    $e = [Console]::OpenStandardError()
+    $b = [Text.Encoding]::ASCII.GetBytes([string][char]27 + "]0;PWNED" + [char]7 + [char]27 + "[2J" + ("A" * 200000) + "`n")
+    $e.Write($b, 0, $b.Length); $e.Flush(); exit 255
+}
+if ($Mode -eq "flood") {
+    # 20 MiB on stderr before a frame on stdout: the frame comes only if stderr is being drained.
+    $e = [Console]::OpenStandardError()
+    $chunk = New-Object byte[] 65536
+    for ($i = 0; $i -lt $chunk.Length; $i++) { $chunk[$i] = 66 }
+    for ($i = 0; $i -lt 320; $i++) { $e.Write($chunk, 0, $chunk.Length) }
+    $e.Flush()
+    $b = [Text.Encoding]::ASCII.GetBytes("done`n"); $out.Write($b, 0, $b.Length); $out.Flush(); exit 0
+}
 '@)
     function Start-Stand { param([string]$Mode)
         $sp = Start-HordeSshProcess -FilePath $psExe -Arguments ("-NoProfile -NonInteractive -File " + (Join-HordeSshCommandLine -Argv @($stand, $Mode)))
@@ -270,6 +330,33 @@ if ($Mode -eq "exit1") { $err.WriteLine("remote command failed"); exit 1 }
     Check ($a.state -ceq "known" -and $a.value -ceq "last") "a frame written before a clean exit still arrives"
     Check ($a2.state -ceq "unknown" -and "$($a2.reason)" -like "*closed*" -and "$($a2.reason)" -notlike "*255*") "and the clean exit after it is a close, unknown, never a transport error"
     Close-HordeLink -Link $l4
+
+    # STDERR IS BOUNDED (review of PR #68, F3): the reason is at most 200 printable characters, and only
+    # the first 4096 bytes of stderr are kept however much arrives; it is drained while the link reads,
+    # so a far side writing it endlessly neither stalls the link nor grows this process.
+    $lh = Stand-Link "hostile"
+    $a = Receive-HordeLinkFrame -Link $lh -TimeoutMs 30000
+    $r = "$($a.reason)"
+    # The part stderr gave: after "transport error: ", without the link's own closing parentheses.
+    $tail = [regex]::Match($r, 'transport error: (.*?)\)(;|\z)').Groups[1].Value
+    Check ($a.state -ceq "unknown" -and $r -like "*exit 255*") ("a hostile stderr still gives exit 255 as unknown (" + $r.Length + " characters of reason)")
+    Check ($tail.Length -ge 1 -and $tail.Length -le 203) ("the reason from stderr is at most 200 characters and an ellipsis (" + $tail.Length + ")")
+    Check (-not [regex]::IsMatch($r, '[^\x20-\x7E]')) "the reason holds only printable ASCII: the escape and bell characters are gone"
+    Close-HordeLink -Link $lh
+    $lf = Stand-Link "flood"
+    $a = Receive-HordeLinkFrame -Link $lf -TimeoutMs 120000
+    Check ($a.state -ceq "known" -and $a.value -ceq "done") ("a frame sent after 20 MiB of stderr arrives: stderr is drained while the link reads (" + $a.reason + ")")
+    $st = $lf.channel.state
+    Check ($st.errKept.Count -le 4096 -and $st.errDropped -ge (20 * 1048576 - 4096)) ("only the first 4096 bytes of stderr are kept (" + $st.errKept.Count + " kept, " + $st.errDropped + " dropped)")
+    Close-HordeLink -Link $lf
+    # ONE LONG READ DRAINS TOO: the port reads in slices, but a caller that hands the channel one long
+    # wait must not stall a far side that is writing stderr - the read waits on stderr as well as stdout.
+    $ch = New-HordeSshChannel -Process (Start-Stand "flood")
+    $t0 = Get-Date
+    $rd = & $ch.read $ch 90000
+    $el = ((Get-Date) - $t0).TotalSeconds
+    Check ($rd.kind -ceq "data" -and [System.Text.Encoding]::ASCII.GetString($rd.bytes) -ceq "done`n" -and $el -lt 60) ("a single read given 90 s drains stderr while it waits, and returns the frame well inside it (" + [int]$el + " s, " + $rd.kind + ")")
+    & $ch.close $ch
 
     $l5 = Stand-Link "exit1"
     $a = Receive-HordeLinkFrame -Link $l5 -TimeoutMs 20000
@@ -324,36 +411,36 @@ if ($Mode -eq "exit1") { $err.WriteLine("remote command failed"); exit 1 }
     Check ($la.state -ceq "unknown" -and "$($la.reason)" -like "*accept*") "and the port never asks it: accept is not yes"
 
     Write-Host ""
-    Write-Host "--- the adapter starts one program, at one call site (until Horde #53) ---" -ForegroundColor Cyan
-    # tools/ExecScan.ps1 scans remote/ only; transports/ has no scan policy yet (Horde #53). Until it
-    # has, this holds the one property the policy would: the adapter's code (not its tests) starts a
-    # program in exactly one place, Start-HordeSshProcess, through ProcessStartInfo; it calls nothing
-    # with &; and the only caller of that function is Open, with the System32 path.
-    $srcFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "transports\ssh") -Filter "*.ps1" -File)
-    Check ($srcFiles.Count -ge 2) ("CONTROL: the adapter's source files are read (" + $srcFiles.Count + ")")
-    $starts = New-Object System.Collections.ArrayList
-    $amp = 0
-    $callers = New-Object System.Collections.ArrayList
-    foreach ($sf in $srcFiles) {
-        $tokens = $null; $errs = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile($sf.FullName, [ref]$tokens, [ref]$errs)
-        foreach ($n in @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and "$($x.Member)" -ieq "Start" }, $true))) {
-            $fn = $n; while ($null -ne $fn -and -not ($fn -is [System.Management.Automation.Language.FunctionDefinitionAst])) { $fn = $fn.Parent }
-            [void]$starts.Add($sf.Name + ":" + $(if ($fn) { $fn.Name } else { "<script>" }))
-        }
-        foreach ($n in @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true))) {
-            $cn = $n.GetCommandName()
-            if ($n.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand) { $amp++ }
-            if (@("Start-Process", "Invoke-Expression", "iex", "Invoke-Item", "Start-Job", "Invoke-WmiMethod", "Invoke-CimMethod") -contains "$cn") { [void]$starts.Add($sf.Name + ":" + $cn) }
-            if ("$cn" -ceq "Start-HordeSshProcess") {
-                $fn = $n; while ($null -ne $fn -and -not ($fn -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and -not ($fn -is [System.Management.Automation.Language.ScriptBlockExpressionAst])) { $fn = $fn.Parent }
-                [void]$callers.Add($n.Extent.Text)
-            }
-        }
+    Write-Host "--- the adapter runs only what an allowlist says, and starts one program, the sanctioned way ---" -ForegroundColor Cyan
+    # transports/ssh/test/ExecGuard.ps1 says why an allowlist and not a list of forbidden forms: the
+    # review of PR #68 passed 12 of 12 such forms through the first guard.
+    $found = @(Get-HordeSshExecFindings -Dir (Join-Path $root "transports\ssh"))
+    Check ($found.Count -eq 0) ("the adapter's code calls only allowlisted commands, methods and types, and starts exactly one program, in Start-HordeSshProcess, called once by Open with the System32 path (" + $found.Count + " finding(s))")
+    foreach ($x in $found) { Write-Host ("         finding: " + $x) -ForegroundColor DarkYellow }
+    # EVERY ONE OF THE REVIEW'S FORMS IS REFUSED: each is appended to a copy of Transport.ps1 and the
+    # guard must find it. None is run: they sit in function bodies nothing calls, or define an alias.
+    $forms = [ordered]@{
+        "a second [Process]::Start" = 'function Zz { [System.Diagnostics.Process]::Start("ssh.exe") }'
+        "a bare ssh.exe command" = 'function Zz { ssh.exe -o ProxyCommand=calc.exe h }'
+        "the alias start" = 'function Zz { start ssh.exe }'
+        "the alias saps" = 'function Zz { saps ssh.exe }'
+        "a quoted member name" = 'function Zz { $p = New-Object System.Diagnostics.Process; $p."Start"() }'
+        "a variable member name" = 'function Zz { $m = "Start"; $p = New-Object System.Diagnostics.Process; $p.$m() }'
+        "a COM Run" = 'function Zz { (New-Object -ComObject WScript.Shell).Run("calc") }'
+        "a dot-invoked script block" = 'function Zz { . ([scriptblock]::Create("calc")) }'
+        "ScriptBlock.Invoke" = 'function Zz { [scriptblock]::Create("calc").Invoke() }'
+        "Invoke-Command" = 'function Zz { Invoke-Command -ScriptBlock { calc } }'
+        "an alias to the start function" = 'Set-Alias Zz Start-HordeSshProcess; function Yy { Zz -FilePath "C:\x\ssh.exe" -Arguments "" }'
+        "cmd.exe /c" = 'function Zz { cmd.exe /c calc }'
+        "ExecutionContext.InvokeCommand" = 'function Zz { $ExecutionContext.InvokeCommand.InvokeScript("calc") }'
     }
-    Check (($starts -join ",") -ceq "Transport.ps1:Start-HordeSshProcess") ("the only .Start() or process cmdlet in the adapter is in Start-HordeSshProcess (found: " + ($starts -join ", ") + ")")
-    Check ($amp -eq 0) ("nothing in the adapter is called with & (" + $amp + ")")
-    Check ($callers.Count -eq 1 -and "$($callers[0])" -like "*-FilePath `$exe.path*") ("Start-HordeSshProcess is called once, by Open, with the resolved System32 path (" + ($callers -join " | ") + ")")
+    foreach ($k in $forms.Keys) {
+        $md = Join-Path $tmp ("guard-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+        New-Item -ItemType Directory -Path $md | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root "transports\ssh\Argv.ps1") -Destination $md
+        [System.IO.File]::WriteAllText((Join-Path $md "Transport.ps1"), ([System.IO.File]::ReadAllText((Join-Path $root "transports\ssh\Transport.ps1")) + "`r`n" + $forms[$k] + "`r`n"))
+        Check (@(Get-HordeSshExecFindings -Dir $md).Count -ge 1) ("the guard refuses " + $k)
+    }
 } finally {
     $env:HORDE_HOME = $savedHome
     foreach ($c in @($children)) {
