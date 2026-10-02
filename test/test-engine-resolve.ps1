@@ -52,7 +52,7 @@ for ($i = 0; $i -lt $order.Count; $i++) {
 }
 $s = Get-HordeEngineSetting -Resolution (Resolve @($all.Values)) -Key "model"
 Check ($s.layer -ceq "L5" -and $s.rule -ceq "m-l5" -and @($s.beaten).Count -eq 4 -and @($s.beaten | Where-Object { $_.why -like "*lower layer*" }).Count -eq 4) "the winner records its layer and rule, and the four rules it beat, each as a lower layer"
-Check (Throws { Resolve @((New-Layer "L2" (New-Doc))) } "L2") "a project layer (L2) is refused: it is not built"
+Check (Throws { Resolve @((New-Layer "L2" (New-Doc))) } "project layer (L2) is not built") "a project layer (L2) is refused: it is not built"
 
 Write-Host ""
 Write-Host "--- fields resolve independently ---" -ForegroundColor Cyan
@@ -165,11 +165,11 @@ try {
     [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": ["telepathy"], "orc": [], "goblin": [] } }')
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "telepathy") "a requirement the capability vocabulary does not have is refused, so a typo cannot require nothing"
     [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": [], "orc": [] } }')
-    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin") "a role with no requirement list is refused"
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin has no requirement list") "a role with no requirement list is refused"
 } finally { Remove-Item -LiteralPath $tmpReq -Force -ErrorAction SilentlyContinue }
 $l0 = @(Get-HordeBuiltinLayer -Root $root)
 $realDesc = (Get-HordeAgentDescriptors -Root $root).value
-Check ($l0.Count -ge 1) ("the repository's built-in layer is read from the harness folders (" + $l0.Count + " files)")
+Check ($l0.Count -ge 1 -and @($l0 | Where-Object { $_.layer -cne "L0" }).Count -eq 0) ("the repository's built-in layer is read from the harness folders, every file as L0 (" + $l0.Count + " files)")
 $f = @(Test-HordeEngineConfig -Documents $l0 -Descriptors $realDesc)
 Check ($f.Count -eq 0) ("the built-in layer passes its own checker" + $(if ($f.Count) { " (" + (@($f | ForEach-Object { $_.code + " " + $_.detail }) -join " | ") + ")" } else { "" }))
 foreach ($role in @("warchief", "orc", "goblin")) {
