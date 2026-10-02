@@ -204,6 +204,12 @@ function Get-HordeOrcMeasures {
         elseif ($w.state -eq "absent") { $wait.jobs++ }
         else { $wait.unattributed++ }
     }
+    # A TOTAL MISSING SOME CALLS IS NOT A TOTAL (review of PR #50, F6): the sums become answers, unknown
+    # when any still-waiting call has no usage, naming how many and the part that is known.
+    foreach ($k in @("contextTokens", "outputTokens")) {
+        if ($wait.callsWithoutUsage -gt 0) { $wait[$k] = New-HordeUnknown -Reason ("" + $wait.callsWithoutUsage + " of " + $wait.calls + " still-waiting calls have no usage; the known part is " + $wait[$k]) }
+        else { $wait[$k] = New-HordeKnown -Value $wait[$k] }
+    }
     $o.stillWaiting = [pscustomobject]$wait
 
     $landed = [ordered]@{ byWorker = [ordered]@{}; workerChars = [long]0; unattributedChars = [long]0; unattributedCount = 0; jobChars = [long]0; jobCount = 0; charsPerToken = $script:HordeCharsPerToken; confidence = "estimated"; tag = "ESTIMATE" }

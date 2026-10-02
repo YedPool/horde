@@ -52,5 +52,8 @@
         @{ Name = "model-is-the-first-not-the-most"
            Find = '@($knownModels | Sort-Object -Property @{ Expression = { $models[$_] }; Descending = $true }, @{ Expression = { $_ } })[0]'
            Replace = '@($knownModels)[@($knownModels).Count - 1]' }
+        @{ Name = "partial-wait-total-is-known"
+           Find = '        if ($wait.callsWithoutUsage -gt 0) { $wait[$k] = New-HordeUnknown'
+           Replace = '        if ($false) { $wait[$k] = New-HordeUnknown' }
     )
 }

@@ -197,7 +197,7 @@ try {
     $om = Get-HordeOrcMeasures -Records $recs
     Check ($om.stillWaiting.calls -eq 3) ("the three planted still-waiting replies are found (" + $om.stillWaiting.calls + ")")
     Check ($om.stillWaiting.byWorker["a1b2c3d4e5f6a7b8c"] -eq 1 -and $om.stillWaiting.jobs -eq 1 -and $om.stillWaiting.unattributed -eq 1) "one answers the worker, one the job, one an unresolved notification"
-    Check ($om.stillWaiting.contextTokens -eq 275306) ("with the context they processed, 90303 + 91002 + 94001 = 275306 (" + $om.stillWaiting.contextTokens + ")")
+    Check ($om.stillWaiting.contextTokens.value -eq 275306) ("with the context they processed, 90303 + 91002 + 94001 = 275306 (" + $om.stillWaiting.contextTokens.value + ")")
     $workerNote = $byCall["toolu_L1"].chars + $byCall["task:a1b2c3d4e5f6a7b8c"].chars
     Check ($om.landed.byWorker["a1b2c3d4e5f6a7b8c"].chars -eq ($workerNote + $launch.chars) -and $om.landed.byWorker["a1b2c3d4e5f6a7b8c"].notifications -eq 2) "the worker's two notifications and its launch result land on it"
     Check ($om.landed.unattributedChars -eq $byCall["unresolved"].chars -and $om.landed.jobCount -eq 1) "the unresolved notification is unattributed and the job's is a job"

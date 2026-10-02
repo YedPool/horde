@@ -131,8 +131,8 @@ function Format-HordeMetricsSummary {
             $m = $row.orc
             $inv = [System.Globalization.CultureInfo]::InvariantCulture
             $o += , @($row.file, ("" + $m.notifications + " (" + $m.interimNotifications + ")"),
-                ("" + $m.stillWaiting.calls + " (workers " + @($m.stillWaiting.byWorker.Values | Measure-Object -Sum).Sum + ", jobs " + $m.stillWaiting.jobs + ", unattributed " + $m.stillWaiting.unattributed + ")"),
-                $m.stillWaiting.contextTokens.ToString("N0", $inv),
+                ("" + $m.stillWaiting.calls + " (workers " + @($m.stillWaiting.byWorker.Values | Measure-Object -Sum).Sum + ", jobs " + $m.stillWaiting.jobs + ", unattributed " + $m.stillWaiting.unattributed + $(if ($m.stillWaiting.callsWithoutUsage -gt 0) { ", without usage " + $m.stillWaiting.callsWithoutUsage } else { "" }) + ")"),
+                (Format-HordeCount $m.stillWaiting.contextTokens),
                 ($m.landed.workerChars.ToString("N0", $inv) + " (~" + $m.landed.workerTokensEstimated.ToString("N0", $inv) + ") from " + @($m.landed.byWorker.Keys).Count + " workers"),
                 ($m.landed.unattributedChars.ToString("N0", $inv) + " in " + $m.landed.unattributedCount),
                 ("" + $m.landed.jobCount))

@@ -50,8 +50,12 @@ $planted = @(
 )
 $m = Get-HordeOrcMeasures -Records $planted
 Check ($m.stillWaiting.calls -eq 1) "the planted still-waiting call is found"
-Check ($m.stillWaiting.contextTokens -eq 90305) "with the context it processed: input + cache read + cache write = 90305"
-Check ($m.stillWaiting.outputTokens -eq 12) "and the output it wrote"
+Check ($m.stillWaiting.contextTokens.value -eq 90305) "with the context it processed: input + cache read + cache write = 90305"
+Check ($m.stillWaiting.outputTokens.value -eq 12) "and the output it wrote"
+$script:line = 0
+$noUse = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Call "nu1" 1 -Chars 10), (Note 2 (Worker "w1")), (Call "nu2" 3 -Chars 10 -NoUsage))
+Check ($noUse.stillWaiting.contextTokens.state -eq "unknown" -and $noUse.stillWaiting.contextTokens.reason -like "*1 of 2*") "a still-waiting total missing a call's usage is unknown, saying how many calls it lacks, not a smaller number"
+Check ($noUse.stillWaiting.outputTokens.state -eq "unknown") "and so is the output total"
 Check ($m.stillWaiting.byWorker["w1"] -eq 1 -and $m.stillWaiting.unattributed -eq 0) "it is attributed to the worker its notification proves"
 Check (@($m.stillWaiting.lines) -contains 8) "and the line it is on is reported, so a person can look"
 
