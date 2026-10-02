@@ -262,3 +262,63 @@ matches no current difference is history, not a failure. There is no growth reco
 a declared name is never removed. The `.md`
 and `.html` files under `planning/` are not scanned, because plans and ledgers record the system
 being replaced and cannot be accurate without naming it; any other file under `planning/` fails.
+
+## 15. Test levels and merging
+
+Verification is cheap in a review round and thorough once per pull request, and the thorough run is
+on the tree that will actually exist after the merge. The founder set these levels on 2026-10-02,
+after rounds that reran every suite and every mutation spec on lines nobody had touched, while two
+pull requests that were green on their branches left `main` red (`tasks/lessons.md`, "A PR green on
+its branch can break main when main moved under it").
+
+1. **Each review round tests only what changed:** the suites that cover the changed files, plus
+   `tools\Mutate.ps1 -Changed <base-ref>`, which runs only the mutants whose find string lies on a
+   line the diff added or modified. It lists every mutant it selects and every one it skips, with
+   the reason; it runs every mutant it cannot place; and on a diff that touches a mutation target it
+   treats a selection of zero as an error, not a pass. On the hosts-5 change (`f30b5b4` against its
+   first parent) it selects 20 of the repository's 1064 mutants.
+2. **The full suite and the full mutation specs run once per pull request**, on its final head, and
+   on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
+   on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
+   the merged tree is green. The full specs are also what catches a suite edited to catch less,
+   which `-Changed` by design does not reselect. Why once and not never: a spec on `main` can break
+   without anyone running it. `test\mutations\port-names.psd1` had a mutant whose find string
+   occurred twice from PR #57 on, so the mutant could not apply, and nothing reported it until the
+   `-Changed` selector placed every mutant.
+3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
+   the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
+   author did not think of, run against the shipped command (rule 6). Rerunning the same suites
+   adds time and finds what the author already found (`tasks/lessons.md`, "Tests I wrote and
+   mutated myself are not an adversarial review").
+4. **A suite that takes more than 2 minutes on fixtures is a defect.** File an issue to profile it.
+   A slow suite is rerun less, and a mutation spec multiplies its time by its number of mutants.
+5. **Heavy runs go to the remote test box, through the remote gate.** The box is whichever machine
+   the local configuration names; nothing in this repository names it. The remote gate ships the
+   exact commit, runs each suite in a contained environment, and decides the verdict from the logs
+   it copies back. Anything that needs a real terminal, a local pipe, integrity levels, an
+   interactive logon or the founder's real stores runs **locally, one run at a time, through the
+   local gate**, which holds one lock across every agent on the machine. Several agents that each
+   waited for free memory all started together when it freed, and were reaped for low memory four
+   times in one hour (2026-10-01).
+6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
+   A few times a day the ready pull requests are merged together:
+   - build the combined tree: `main` plus every ready pull request, in order;
+   - run the touched suites, and the full suite once, on that tree;
+   - merge in order, with merge commits only (rule 4).
+
+   A batch member that turns red is dropped from the batch and goes back to its author; the rest
+   proceed. Between batches, authors do not rebase on every merge: the batch tests the combination,
+   which a rebase onto each new `main` only approximated.
+7. **A suite with no checks, or with no closing banner, was NOT RUN.** A runner never reports it
+   as green. A killed run and a clean one can leave the same exit code: the local gate's first
+   version reported a child killed by the harness as exit 0, and its third read a suite's exit 5 as
+   0 (2026-10-01). Every run must end in its own closing line (`Complete-HordeSuite`'s banner, a
+   gate's `released exit=<n>`, the remote gate's `complete` line), and a log without it proves
+   nothing.
+8. **Infrastructure that verifies - gates, runners, test tools - gets a failure-case test matrix
+   before it is rolled out.** For each way a run can end (pass, fail, crash, timeout, killed, no
+   output, no checks, a suite that skipped part of itself), the matrix says what the tool must
+   report, and each row is run once and checked. A gate is trusted with every result that passes
+   through it, so a gate that is wrong is wrong everywhere at once: the remote gate's first pruning
+   rule, keep the newest 10 runs, deleted other agents' finished runs from the shared folder
+   (2026-10-01).

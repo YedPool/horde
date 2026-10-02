@@ -41,6 +41,20 @@ reason.
 - A search that finds nothing proves nothing until the same instrument finds something known to be
   present. A line that prints "done" must have checked that it is.
 
+## Test levels and merging (CONTRIBUTING 15)
+
+- Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
+- Once per PR, on the final head merged with current `main`: the full suite and the full mutation
+  specs. "Mergeable" is not "green".
+- Reviewers read the code and write targeted probes; they do not rerun the author's suites.
+- A suite over 2 minutes on fixtures is a defect: file an issue to profile it.
+- Heavy runs go to the remote test box through the remote gate. A real terminal, a local pipe,
+  integrity levels, an interactive logon or the real stores: locally, one run at a time, through
+  the local gate.
+- Ready PRs are merged in batches: test main plus every ready PR once, merge in order, drop a red one.
+- No checks, or no closing banner, means NOT RUN. Gates and runners get a failure-case matrix
+  before rollout.
+
 ## Code (CONTRIBUTING 8 to 14)
 
 - ASCII only. Glyphs as escape sequences.
