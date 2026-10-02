@@ -24,15 +24,29 @@
 # ratchet does not have to except itself, and a new host brings its own names without touching it.
 #
 #   names.txt, one per line:      <name> | <why it identifies this host>
+#                             or: <name> | <kind> | <why it identifies this host>
 #   allowlist.txt, one per line:  <path> | <mentions> | <why this file may name the host>
 #   growth.txt, one per line:     <path> | <old> -> <new> | <YYYY-MM-DD> | <why the list must grow>
 #   Blank lines and lines beginning with # are ignored in all three.
+#
+# KINDS OF NAME. A name line may say what kind of knowledge the name is, from a closed list: name (the
+# default, and what a two-part line is), processImage, or path. The lifecycle plan
+# (planning/execution-plan-lifecycle.md, step 5 and section 2.6) brings engine knowledge core must
+# never hold - each harness's process images, and the path fragments of its transcripts, rollouts,
+# control files and task output - and declares it here, in the harness's own names.txt, so this scan
+# catches it anywhere else. Every kind is a name to the scan and counts as a mention like any other.
+# The kind is what lets a later rule ask for one kind alone: core matches no processImage at all
+# (Test-HordeProcessImages). A kind outside the list is refused, matched exactly, never guessed at.
 #
 # WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
 # names the host. Mentions, not lines: a second mention added to a line that already had one is a new
 # mention (review of PR 21). An allowlisted count must be EXACT: more mentions than listed is a new
 # mention; fewer is an entry that allows more than is needed, and it must be lowered.
+# ONE PLACE IN THE TEXT, ONE MENTION. Where two declared names overlap - an image named after its
+# harness holds the harness's name - the longer one is counted and the shorter is not counted again
+# inside it. Counted once per name, declaring a harness's image that holds its name (lifecycle step 5)
+# would have raised the count of every file that already names that image, with no new mention.
 #
 # SHRINK-ONLY NEEDS AN OLD LIST TO COMPARE WITH. An exact count keeps a file in step with its own
 # entry, but both are edited in the same tree, so the review of PR 21 raised a count together with
@@ -101,6 +115,8 @@ $script:HordeHostNamesProseFolder = "planning"
 $script:HordePortFamilies = @("hosts", "agents")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
+# The closed list of kinds a name line may give (header, KINDS OF NAME). Matched exactly.
+$script:HordePortNameKinds = @("name", "processImage", "path")
 
 function Read-HordeHostTable {
     # The non-comment lines of names.txt or allowlist.txt, split on "|" and trimmed, with their line
@@ -131,8 +147,28 @@ function Get-HordeHostNameSet {
     # formed lines. A malformed line is Test-HordeHostNames's to report, not this one's.
     param([string]$Text)
     $set = @{}
-    foreach ($r in (Split-HordeHostTable -Text $Text)) { if ($r.cells.Count -eq 2) { $set[$r.cells[0].ToLowerInvariant()] = $r.cells[0] } }
+    # Two parts, or three with a kind: a kind line on origin/main is a name like any other, so deleting
+    # one here is a removal the shrink check must see.
+    foreach ($r in (Split-HordeHostTable -Text $Text)) { if ($r.cells.Count -eq 2 -or $r.cells.Count -eq 3) { $set[$r.cells[0].ToLowerInvariant()] = $r.cells[0] } }
     return $set
+}
+
+function ConvertTo-HordePortName {
+    # One names.txt row as { name; kind; why; problem }. problem is empty for a usable name, and
+    # otherwise says what is wrong, in the words the suite looks for. A two-part row is a name of kind
+    # name; a three-part row gives its kind in the middle.
+    param($Row)
+    $out = [pscustomobject]@{ name = ""; kind = "name"; why = ""; problem = "" }
+    if ($Row.cells.Count -eq 2) { $out.name = $Row.cells[0]; $out.why = $Row.cells[1] }
+    elseif ($Row.cells.Count -eq 3) { $out.name = $Row.cells[0]; $out.kind = $Row.cells[1]; $out.why = $Row.cells[2] }
+    else { $out.problem = "a name line is <name> | <why it identifies this host>, or <name> | <kind> | <why>"; return $out }
+    # A SHORT NAME MATCHES EVERYWHERE, and a ratchet that fires on every file gets allowlisted
+    # into meaning nothing.
+    if ($out.name.Length -lt $script:HordeHostNameMinLength) { $out.problem = "the name '" + $out.name + "' is shorter than " + $script:HordeHostNameMinLength + " characters and would match almost anything"; return $out }
+    # -cnotcontains: a miscased kind is refused, not read as the kind it resembles.
+    if ($script:HordePortNameKinds -cnotcontains $out.kind) { $out.problem = "the kind '" + $out.kind + "' of the name '" + $out.name + "' is not one of " + ($script:HordePortNameKinds -join ", "); return $out }
+    if ((Get-HordeDistinctWordCount $out.why) -lt 4) { $out.problem = "the name '" + $out.name + "' needs a reason of at least a sentence" }
+    return $out
 }
 
 function ConvertTo-HordeAllowPath {
@@ -332,24 +368,42 @@ function Get-HordeRepoFiles {
 }
 
 function Get-HordeNameMentionCount {
-    # How many times the file names the host: every occurrence of every name in its text, plus one if
-    # its path names the host. Occurrences, not lines - the review of PR 21 appended a second mention
-    # to a line that already had one, and a count of lines did not move. Occurrences of one name do
-    # not overlap ("aa" is in "aaa" once), and a name inside another name is counted for each.
+    # How many times the file names the host: every place in its text where one of its names occurs,
+    # plus one if its path names the host. Occurrences, not lines - the review of PR 21 appended a
+    # second mention to a line that already had one, and a count of lines did not move. Occurrences of
+    # one name do not overlap ("aa" is in "aaa" once), and where two names overlap the longer is
+    # counted once (header, ONE PLACE IN THE TEXT, ONE MENTION).
     # Every file is read as text. Any file that is not printable ASCII is refused on its own by
     # Test-HordeHostNames, so the text read here is the bytes on disk, one character each.
     param([string]$Full, [string]$Rel, [string[]]$Names)
     $count = 0
     foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }
     $text = [System.IO.File]::ReadAllText($Full)
+    return ($count + (Get-HordeMentionSpans -Text $text -Names $Names).Count)
+}
+
+function Get-HordeMentionSpans {
+    # The places in the text the names occupy, as { start; end; name }, none overlapping another.
+    # Every occurrence of every name is found first; then, from the start of the text, each place is
+    # taken unless it begins inside one already taken, and at one starting point the longest name is
+    # taken. So an image named after its harness is one place, not the image and the name inside it.
+    param([string]$Text, [string[]]$Names)
+    $all = New-Object System.Collections.ArrayList
     foreach ($nm in $Names) {
-        $at = $text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)
+        $at = $Text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)
         while ($at -ge 0) {
-            $count++
-            $at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)
+            [void]$all.Add([pscustomobject]@{ start = $at; end = $at + $nm.Length; name = $nm })
+            $at = $Text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)
         }
     }
-    return $count
+    $kept = New-Object System.Collections.ArrayList
+    $taken = 0
+    foreach ($s in @($all | Sort-Object -Property @{ Expression = { $_.start }; Ascending = $true }, @{ Expression = { $_.end }; Descending = $true })) {
+        if ($s.start -lt $taken) { continue }
+        [void]$kept.Add($s)
+        $taken = $s.end
+    }
+    return , $kept
 }
 
 function Test-HordeHostNames {
@@ -401,13 +455,9 @@ function Test-HordeHostNames {
         $names = New-Object System.Collections.ArrayList
         foreach ($r in (Read-HordeHostTable -Path $namesPath)) {
             $where = $own + "/names.txt:" + $r.line
-            if ($r.cells.Count -ne 2) { Add-Finding $hn $where "a name line is <name> | <why it identifies this host>"; continue }
-            $nm = $r.cells[0]
-            # A SHORT NAME MATCHES EVERYWHERE, and a ratchet that fires on every file gets allowlisted
-            # into meaning nothing.
-            if ($nm.Length -lt $script:HordeHostNameMinLength) { Add-Finding $hn $where ("the name '" + $nm + "' is shorter than " + $script:HordeHostNameMinLength + " characters and would match almost anything"); continue }
-            if ((Get-HordeDistinctWordCount $r.cells[1]) -lt 4) { Add-Finding $hn $where ("the name '" + $nm + "' needs a reason of at least a sentence"); continue }
-            [void]$names.Add($nm)
+            $pn = ConvertTo-HordePortName $r
+            if ($pn.problem) { Add-Finding $hn $where $pn.problem; continue }
+            [void]$names.Add($pn.name)
         }
         if ($names.Count -eq 0) { Add-Finding $hn ($own + "/names.txt") "lists no usable name, so nothing is checked"; continue }
 
