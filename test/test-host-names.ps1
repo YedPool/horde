@@ -352,6 +352,143 @@ try {
         Write-FakeFile "core/engine.ps1" "function Start-Pane { zorbterm cli spawn }`n"
         Add-Content -LiteralPath (Join-Path $script:repo $allow) -Value "core/engine.ps1 | 1 | the engine spawns panes in the invented terminal directly"
     } "an entry may not be added" "a growth line already on origin/main permits nothing again - a removed mention cannot come back unreviewed"
+
+    Write-Host ""
+    Write-Host "--- a port declares the kind of each name: name, processImage or path (lifecycle plan step 5) ---" -ForegroundColor Cyan
+
+    # The lifecycle plan (planning/execution-plan-lifecycle.md, step 5 and section 2.6) brings engine
+    # knowledge core must never hold: each harness's process images and the path fragments of its
+    # transcripts, rollouts, control files and task output. They are declared in the harness's own
+    # names.txt, as names of a kind, so the ratchet catches them anywhere else. The invented image and
+    # fragment below do not contain the harness's name, so only their own declaration can catch them.
+    $zcImage = "zcrunner.exe | processImage | the invented harness's own process image, which does not contain its name"
+    $zcPath = "zc-chatlog- | path | the invented harness's chat log file name prefix, which does not contain its name"
+    function Add-ZorbcodeName { param([string]$Line) Add-Content -LiteralPath (Join-Path $script:repo "agents/zorbcode/names.txt") -Value $Line }
+    Passes "kind-lines" { Add-ZorbcodeName $zcImage; Add-ZorbcodeName $zcPath } "CONTROL: a processImage line and a path line that nothing outside the folder uses pass"
+    Passes "kind-name-explicit" { Add-ZorbcodeName "zorbcli | name | the invented harness's second command name, its kind written out" } "a line whose kind is written as name is read like a two-part line"
+    Refuses "image-leak" { Add-ZorbcodeName $zcImage; Write-FakeFile "core/tree.ps1" "if (`$p.Name -eq 'ZCRUNNER.EXE') { }`n" } "is not in agents/zorbcode/allowlist.txt" "a planted process image name in core is caught, whatever its case"
+    Refuses "path-leak" { Add-ZorbcodeName $zcPath; Write-FakeFile "core/follow.ps1" "Join-Path `$d 'zc-chatlog-*.jsonl'`n" } "is not in agents/zorbcode/allowlist.txt" "a planted transcript path fragment in core is caught"
+    Refuses "bad-kind" { Add-ZorbcodeName "zcrunner.exe | image | the invented harness's own process image, which does not contain its name" } "is not one of name, processImage, path" "a kind outside the closed list is refused"
+    Refuses "kind-case" { Add-ZorbcodeName "zcrunner.exe | processimage | the invented harness's own process image, which does not contain its name" } "is not one of name, processImage, path" "a kind is matched exactly, so a miscased kind is refused rather than guessed at"
+    Refuses "kind-no-reason" { Add-ZorbcodeName "zcrunner.exe | processImage | zcrunner" } "needs a reason" "a kind line with no real reason is refused"
+    Refuses "kind-short" { Add-ZorbcodeName "zc- | path | a fragment far too short to identify the invented harness" } "shorter than 4" "a kind line whose name is shorter than four characters is refused"
+    Refuses "kind-bad-shape" { Add-ZorbcodeName "zcrunner.exe | processImage | its own image | an extra part" } "a name line is" "a name line with four parts is refused"
+    # ONE MENTION, ONE COUNT. An image named after its harness - zorbcode.exe for zorbcode - holds the
+    # harness's name inside it. Counted once per name it would be two mentions, and declaring an image
+    # would raise every allowlist count that already covers it, with no new mention made.
+    $exe = "zorbcode.exe | processImage | the invented harness's process image, which contains its name"
+    Passes "contained-once" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start a zorbcode.exe process.`nNothing else here.`n" } "a declared name inside a longer declared name is one mention, not two"
+    Refuses "contained-apart" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start a zorbcode.exe process, the zorbcode.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "the shorter name on its own beside the longer one is still a second mention"
+    Refuses "contained-repeated" { Add-ZorbcodeName $exe; Write-FakeFile "docs/agents.md" "Sessions start zorbcode.exe or zorbcode.exe.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "each occurrence of the longer name is a mention of its own"
+    # At one starting point the LONGEST name is taken. Which one wins only shows with a third name that
+    # starts where the shortest ends: taken shortest-first, zorbcode and .exe.log would be two.
+    Passes "contained-longest-first" { Add-ZorbcodeName $exe; Add-ZorbcodeName ".exe.log | path | an invented log file suffix that overlaps the invented image"; Write-FakeFile "docs/agents.md" "Sessions write zorbcode.exe.log.`nNothing else here.`n" } "at one starting point the longest declared name is the mention, and a name inside it is not counted again"
+    Refuses "contained-inner" { Add-ZorbcodeName "bcode-ctl | path | an invented fragment that starts inside the harness's name"; Write-FakeFile "docs/agents.md" "Sessions start zorbcode-ctl and zorbcode.`nNothing else here.`n" } "2 mention(s); the allowlist allows 1 - a new mention" "two declared names that overlap without one containing the other are one mention there, and the next is counted"
+    ShrinkRefuses "sh-image-removed" {
+        Add-ZorbcodeName $zcImage; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" "zorbcode | the invented agent harness this suite polices in place of a real one`n"
+    } "'zcrunner.exe'" "a processImage name on origin/main that is deleted here is refused, and named - a kind line is a name"
+    ShrinkPasses "sh-kind-written-out" {
+        Write-FakeFile "agents/zorbcode/names.txt" "zorbcode | name | the invented agent harness this suite polices in place of a real one`n"
+    } "a two-part name line rewritten with its kind written out is the same name, not a removal"
+
+    Write-Host ""
+    Write-Host "--- core matches no process image, not even where an allowlist lets a file name the harness ---" -ForegroundColor Cyan
+
+    # Lifecycle plan section 2.6: "Core matches no image name"; which processes are a harness's is its
+    # adapter's to answer. The ratchet alone cannot hold that: a file allowlisted for a harness may name
+    # it any way it likes, an image included. So a processImage has a rule of its own with no allowlist:
+    # outside every port's folder and outside test/, a file that matches one is refused, unless it is
+    # one of the legacy readers the rule was measured against, listed with its exact number of matches
+    # in tools/process-image-legacy.txt - a list that can only shrink (review of PR #57, A1 and A3).
+    $legacyFile = "tools/process-image-legacy.txt"
+    function Write-Legacy { param([string]$Lines) Write-FakeFile $legacyFile ("# legacy readers`n" + $Lines + "`n") }
+    $oldEntry = "core/old.ps1 | 1 | an old reader that matched the invented image before the rule existed"
+    function Images {
+        param([string]$Name, [scriptblock]$Change)
+        $null = New-FakeRepo $Name
+        Add-ZorbcodeName $zcImage
+        & $Change
+        return @(Test-HordeProcessImages -RepoRoot $script:repo)
+    }
+    function ImagesRefuse {
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(Images $Name $Change)
+        $ok = ((Says $f $Text) -and $f.Count -eq 1)
+        Check $ok $What
+        if (-not $ok) { Show $f }
+    }
+    function ImagesRefuseBoth {
+        # A refused legacy entry excuses nothing, so its file is then reported too: both, and nothing else.
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(Images $Name $Change)
+        $ok = ((Says $f $Text) -and (Says $f "matches the process image") -and $f.Count -eq 2)
+        Check $ok $What
+        if (-not $ok) { Show $f }
+    }
+    function ImagesPass {
+        param([string]$Name, [scriptblock]$Change, [string]$What)
+        $f = @(Images $Name $Change)
+        Check ($f.Count -eq 0) $What
+        if ($f.Count -gt 0) { Show $f }
+    }
+    ImagesPass "img-clean" { } "CONTROL: a repository whose process images stay in their harness's folder passes"
+    ImagesRefuse "img-core" { Write-FakeFile "core/tree.ps1" "if (`$p.Name -eq 'ZCRUNNER.EXE') { }`n" } "matches the process image 'zcrunner.exe'" "a process image matched in core is refused, whatever its case"
+    ImagesRefuse "img-engine" { Write-FakeFile "remote/node.ps1" "# zcrunner.exe`n" } "matches the process image" "an image matched in any engine folder, not only core/, is refused"
+    ImagesRefuse "img-path" { Write-FakeFile "core/zcrunner.exe.json" "{}`n" } "matches the process image" "a file whose path names an image is refused, though its content does not"
+    $allowImage = "core/tree.ps1 | 1 | the engine's process walk once named the invented harness's image"
+    function Write-AllowlistedImage {
+        Write-FakeFile "core/tree.ps1" "if (`$p.Name -eq 'zcrunner.exe') { }`n"
+        Add-Content -LiteralPath (Join-Path $script:repo "agents/zorbcode/allowlist.txt") -Value $allowImage
+    }
+    ImagesRefuse "img-allowlisted" { Write-AllowlistedImage } "matches the process image" "an image in a file the harness's allowlist covers is still refused - an allowlist admits a mention, never an image"
+    $null = New-FakeRepo "img-allowlisted-ratchet"; Add-ZorbcodeName $zcImage; Write-AllowlistedImage
+    $ratchetOnly = @(Test-HordeHostNames -RepoRoot $script:repo)
+    Check ($ratchetOnly.Count -eq 0) "CONTROL: the ratchet alone passes that allowlisted image, which is why images need a rule of their own"
+    if ($ratchetOnly.Count -gt 0) { Show $ratchetOnly }
+    ImagesPass "img-test" { Write-FakeFile "test/fixtures/processes.json" "[ { `"name`": `"zcrunner.exe`" } ]`n" } "a test's process table is not core: test/ is not checked by this rule"
+    ImagesPass "img-own-folder" { Write-FakeFile "agents/zorbcode/Claims.ps1" "@('zcrunner.exe')`n" } "the harness's own folder may match its image - that is where the answer lives"
+    ImagesPass "img-name-kind" { Write-FakeFile "core/spawn.ps1" "& zorbcode`n" } "a name of kind name is the ratchet's to judge, not this rule's"
+    ImagesPass "img-path-kind" { Add-ZorbcodeName $zcPath; Write-FakeFile "core/follow.ps1" "'zc-chatlog-'`n" } "a name of kind path is the ratchet's to judge, not this rule's"
+    ImagesPass "img-planning" { Write-FakeFile "planning/ledger/tree.md" "zcrunner.exe was matched by name`n" } "prose under planning/ is not scanned"
+    # THE REGEX-ESCAPED FORM is the same image (review of PR #57, A4): a match written as a pattern.
+    ImagesRefuse "img-escaped" { Write-FakeFile "core/tree.ps1" "if (`$p.Name -match '^zcrunner\.exe$') { }`n" } "matches the process image" "an image written as an escaped regular expression is matched too"
+    ImagesPass "img-legacy" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy $oldEntry } "a listed legacy reader may still match an image, exactly as often as listed"
+    ImagesPass "img-legacy-form" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "Core\Old.ps1 | 1 | an old reader that matched the invented image before the rule existed" } "a legacy path is read as an allowlist path is: backslashes, any case"
+    ImagesRefuse "img-legacy-other" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-FakeFile "core/new.ps1" "@('zcrunner.exe')`n"; Write-Legacy $oldEntry } "matches the process image" "a legacy entry excuses its own file and no other"
+    # A COUNT, NOT A FILE (A3): the excuse covers the matches the file had, and no new one.
+    ImagesRefuse "img-legacy-gains" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe', 'ZCRUNNER.EXE')`n"; Write-Legacy $oldEntry } "2 process image match(es); tools/process-image-legacy.txt allows 1 - a new match" "a legacy reader that gains an image match is refused - the excuse is a count, not a file"
+    ImagesRefuse "img-legacy-gains-escaped" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n`$re = 'zcrunner\.exe'`n"; Write-Legacy $oldEntry } "a new match" "an escaped form added to a legacy reader is a new match"
+    ImagesRefuse "img-legacy-over" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed" } "lower it to 1" "a legacy count above the file's matches must be lowered - it only shrinks"
+    ImagesRefuse "img-legacy-stale" { Write-FakeFile "core/old.ps1" "# sessions`n"; Write-Legacy $oldEntry } "matches no process image" "a legacy reader that no longer matches an image must leave the list - it only shrinks"
+    ImagesRefuse "img-legacy-gone" { Write-Legacy "core/gone.ps1 | 1 | a reader that has since been deleted from the tree" } "matches no process image" "a legacy reader that is gone must leave the list"
+    ImagesRefuse "img-legacy-twice" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy ($oldEntry + "`n" + $oldEntry) } "listed twice" "a legacy entry listed twice is refused"
+    ImagesRefuseBoth "img-legacy-bad-count" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | one | an old reader that matched the invented image before the rule existed" } "must be a whole number" "a legacy count that is not a whole number is refused, and its file is then reported"
+    ImagesRefuseBoth "img-legacy-no-reason" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 1 | old old old old" } "needs a reason" "a legacy entry without a real reason is refused, and its file is then reported"
+    ImagesRefuseBoth "img-legacy-shape" { Write-FakeFile "core/old.ps1" "@('zcrunner.exe')`n"; Write-Legacy "core/old.ps1 | 1" } "a legacy line is" "a legacy line without its three parts is refused, and its file is then reported"
+
+    # THE LEGACY LIST AGAINST origin/main (A1): an entry not there, or a count above its count, is
+    # refused outright. There is no growth record for this list: it exists only to shrink to nothing.
+    $legacyMore = "core/new.ps1 | 1 | a second reader added after the rule existed"
+    ShrinkRefuses "sh-legacy-added" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy ($oldEntry + "`n" + $legacyMore) } "not on origin/main" "a legacy entry added since origin/main is refused - the list only shrinks"
+    ShrinkRefuses "sh-legacy-raised" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed" } "may not rise" "a legacy count raised since origin/main is refused"
+    ShrinkRefuses "sh-legacy-growth-line" {
+        Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy ($oldEntry + "`n" + $legacyMore)
+        Write-FakeFile "agents/zorbcode/growth.txt" "core/new.ps1 | 0 -> 1 | 2026-10-02 | a second reader added after the rule existed`n"
+    } "not on origin/main" "a growth line admits no legacy entry"
+    ShrinkPasses "sh-legacy-lowered" { Write-Legacy "core/old.ps1 | 2 | an old reader that matched the invented image before the rule existed"; Save-FakeMain; Write-Legacy $oldEntry } "a legacy count lowered since origin/main passes"
+    ShrinkPasses "sh-legacy-emptied" { Write-Legacy $oldEntry; Save-FakeMain; Write-Legacy "# empty now" } "a legacy list emptied since origin/main passes"
+    $nl = Shrink "sh-legacy-new" { Write-Legacy $oldEntry }
+    Check ($nl.skip -eq "" -and @($nl.findings).Count -eq 0 -and (@($nl.newHosts) -join ",") -eq $legacyFile) "a legacy list that origin/main does not have is reported as new, not compared - its pull request sets its baseline"
+    # A KIND MAY NOT BE DEMOTED (A2): an image turned into a path or a name leaves the image rule.
+    ShrinkRefuses "sh-kind-demoted" {
+        Add-ZorbcodeName $zcImage; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" ("zorbcode | the invented agent harness this suite polices in place of a real one`n" + "zcrunner.exe | path | the invented harness's own process image, now said to be a path`n")
+    } "processImage on origin/main" "a processImage on origin/main that is another kind here is refused - demoting it would take it out of the image rule"
+    ShrinkPasses "sh-kind-promoted" {
+        Add-ZorbcodeName $zcPath; Save-FakeMain
+        Write-FakeFile "agents/zorbcode/names.txt" ("zorbcode | the invented agent harness this suite polices in place of a real one`n" + "zc-chatlog- | processImage | the invented fragment, now held to the stricter rule`n")
+    } "a name promoted to processImage passes - the stricter rule only gains"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }
@@ -388,6 +525,27 @@ foreach ($h in @($realHosts + $realAgents)) {
         }
     }
 }
+
+# EVERY DECLARED PROCESS IMAGE IS ARMED for the image rule too: planted in core/ of a throwaway
+# repository holding only its port's names.txt, with no legacy reader listed, it must be refused.
+# NOT WRAPPED IN @(): the list comes back as one object, as Read-HordeHostTable's does (see above).
+$realImages = Get-HordePortNamesOfKind -RepoRoot $root -Kind "processImage"
+Check ($realImages.Count -ge 1) ("CONTROL: at least one port declares a processImage, so the image rule below has something to look for (" + $realImages.Count + ")")
+foreach ($img in $realImages) {
+    $script:repo = Join-Path $env:TEMP ("horde-hostnames-img-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        Write-FakeFile ($img.own + "/names.txt") ([System.IO.File]::ReadAllText((Join-Path $root ($img.own + "/names.txt"))))
+        Write-FakeFile "core/planted.ps1" ("# " + $img.name + "`n")
+        $armed = @(Test-HordeProcessImages -RepoRoot $script:repo)
+        Check ((Says $armed ("matches the process image '" + $img.name + "'")) -and $armed.Count -eq 1) ("CONTROL: " + $img.own + " - its declared process image '" + $img.name + "', planted in core/, is refused by the image rule")
+        if ($armed.Count -ne 1) { Show $armed }
+    } finally {
+        Remove-Item -Recurse -Force -LiteralPath $script:repo -ErrorAction SilentlyContinue
+    }
+}
+$realImageFindings = @(Test-HordeProcessImages -RepoRoot $root)
+Check ($realImageFindings.Count -eq 0) "core matches no process image name, beyond the exact counts tools/process-image-legacy.txt lists"
+Show $realImageFindings
 
 $real = @(Test-HordeHostNames -RepoRoot $root)
 Check ($real.Count -eq 0) "no file outside a port's folder names that port, beyond what its allowlist lists exactly"

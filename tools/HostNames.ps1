@@ -24,15 +24,48 @@
 # ratchet does not have to except itself, and a new host brings its own names without touching it.
 #
 #   names.txt, one per line:      <name> | <why it identifies this host>
+#                             or: <name> | <kind> | <why it identifies this host>
 #   allowlist.txt, one per line:  <path> | <mentions> | <why this file may name the host>
 #   growth.txt, one per line:     <path> | <old> -> <new> | <YYYY-MM-DD> | <why the list must grow>
 #   Blank lines and lines beginning with # are ignored in all three.
+#
+# KINDS OF NAME. A name line may say what kind of knowledge the name is, from a closed list: name (the
+# default, and what a two-part line is), processImage, or path. The lifecycle plan
+# (planning/execution-plan-lifecycle.md, step 5 and section 2.6) brings engine knowledge core must
+# never hold - each harness's process images, and the path fragments of its transcripts, rollouts,
+# control files and task output - and declares it here, in the harness's own names.txt, so this scan
+# catches it anywhere else. Every kind is a name to the scan and counts as a mention like any other.
+# The kind is what lets a later rule ask for one kind alone: core matches no processImage at all
+# (Test-HordeProcessImages). A kind outside the list is refused, matched exactly, never guessed at.
+#
+# CORE MATCHES NO PROCESS IMAGE (Test-HordeProcessImages). The lifecycle plan, section 2.6: core
+# matches no image name; the orphan classes are defined by structure, and which processes are a
+# harness's is its adapter's to answer. The ratchet cannot hold that alone - a file its allowlist
+# covers may name the harness any way it likes, an image included - so a processImage has a rule of
+# its own, with no allowlist and no growth record: outside every port's folder and outside test/, no
+# file may match one, by its text or its path. test/ is exempt because tests of the old readers carry
+# process tables as data (on 2026-10-02 one projection fixture held 13 image mentions and the identity
+# suite 34). The rule was measured against main at c3938b8, where three legacy readers of Phases 0 to 2
+# already matched an image. They are listed in tools/process-image-legacy.txt, each with its EXACT
+# number of matches (review of PR #57, A1 and A3): a file that gains a match is refused, one with
+# fewer than listed must lower its count, and one with none must leave. Against origin/main a new
+# entry or a raised count is refused outright - there is no growth record for this list, which exists
+# only to shrink to nothing as engines A4 moves those reads behind the AgentPort. A name whose kind is
+# processImage on origin/main may not become another kind (A2), which would take it out of this rule.
+# WHAT IS MATCHED: each image as written and as an escaped regular expression ("x\.exe", A4).
+# WHAT A TEXT SCAN CANNOT SEE, so a pass is not read as more: an image built from pieces ('x' + '.exe',
+# "$name.exe"), a looser pattern ("x.\.exe", "x.*"), and the harness's process name without its
+# extension, which is the harness's name and so the ratchet's to count, not this rule's (A4, A5).
 #
 # WHAT COUNTS. A name is matched as a case-insensitive substring. A file's count is the number of
 # MENTIONS - every occurrence of every one of the host's names in its text - plus one if its path
 # names the host. Mentions, not lines: a second mention added to a line that already had one is a new
 # mention (review of PR 21). An allowlisted count must be EXACT: more mentions than listed is a new
 # mention; fewer is an entry that allows more than is needed, and it must be lowered.
+# ONE PLACE IN THE TEXT, ONE MENTION. Where two declared names overlap - an image named after its
+# harness holds the harness's name - the longer one is counted and the shorter is not counted again
+# inside it. Counted once per name, declaring a harness's image that holds its name (lifecycle step 5)
+# would have raised the count of every file that already names that image, with no new mention.
 #
 # SHRINK-ONLY NEEDS AN OLD LIST TO COMPARE WITH. An exact count keeps a file in step with its own
 # entry, but both are edited in the same tree, so the review of PR 21 raised a count together with
@@ -101,6 +134,13 @@ $script:HordeHostNamesProseFolder = "planning"
 $script:HordePortFamilies = @("hosts", "agents")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
+# The closed list of kinds a name line may give (header, KINDS OF NAME). Matched exactly.
+$script:HordePortNameKinds = @("name", "processImage", "path")
+# The image rule's exemptions (header, CORE MATCHES NO PROCESS IMAGE). Folders skipped besides every
+# port's own; and the file listing the legacy readers measured at c3938b8, which may still match an
+# image, each exactly as often as listed, until their reads move behind the AgentPort. Neither may grow.
+$script:HordeProcessImageExempt = @("test")
+$script:HordeProcessImageLegacyFile = "tools/process-image-legacy.txt"
 
 function Read-HordeHostTable {
     # The non-comment lines of names.txt or allowlist.txt, split on "|" and trimmed, with their line
@@ -131,8 +171,40 @@ function Get-HordeHostNameSet {
     # formed lines. A malformed line is Test-HordeHostNames's to report, not this one's.
     param([string]$Text)
     $set = @{}
-    foreach ($r in (Split-HordeHostTable -Text $Text)) { if ($r.cells.Count -eq 2) { $set[$r.cells[0].ToLowerInvariant()] = $r.cells[0] } }
+    # Two parts, or three with a kind: a kind line on origin/main is a name like any other, so deleting
+    # one here is a removal the shrink check must see.
+    foreach ($r in (Split-HordeHostTable -Text $Text)) { if ($r.cells.Count -eq 2 -or $r.cells.Count -eq 3) { $set[$r.cells[0].ToLowerInvariant()] = $r.cells[0] } }
     return $set
+}
+
+function Get-HordeHostNameKinds {
+    # name (lower-cased) -> kind, from a names.txt text's well-formed lines: two parts is a name of kind
+    # name, three gives its kind. The shrink check uses it to refuse a processImage demoted (header).
+    param([string]$Text)
+    $kinds = @{}
+    foreach ($r in (Split-HordeHostTable -Text $Text)) {
+        if ($r.cells.Count -eq 2) { $kinds[$r.cells[0].ToLowerInvariant()] = "name" }
+        elseif ($r.cells.Count -eq 3) { $kinds[$r.cells[0].ToLowerInvariant()] = $r.cells[1] }
+    }
+    return $kinds
+}
+
+function ConvertTo-HordePortName {
+    # One names.txt row as { name; kind; why; problem }. problem is empty for a usable name, and
+    # otherwise says what is wrong, in the words the suite looks for. A two-part row is a name of kind
+    # name; a three-part row gives its kind in the middle.
+    param($Row)
+    $out = [pscustomobject]@{ name = ""; kind = "name"; why = ""; problem = "" }
+    if ($Row.cells.Count -eq 2) { $out.name = $Row.cells[0]; $out.why = $Row.cells[1] }
+    elseif ($Row.cells.Count -eq 3) { $out.name = $Row.cells[0]; $out.kind = $Row.cells[1]; $out.why = $Row.cells[2] }
+    else { $out.problem = "a name line is <name> | <why it identifies this host>, or <name> | <kind> | <why>"; return $out }
+    # A SHORT NAME MATCHES EVERYWHERE, and a ratchet that fires on every file gets allowlisted
+    # into meaning nothing.
+    if ($out.name.Length -lt $script:HordeHostNameMinLength) { $out.problem = "the name '" + $out.name + "' is shorter than " + $script:HordeHostNameMinLength + " characters and would match almost anything"; return $out }
+    # -cnotcontains: a miscased kind is refused, not read as the kind it resembles.
+    if ($script:HordePortNameKinds -cnotcontains $out.kind) { $out.problem = "the kind '" + $out.kind + "' of the name '" + $out.name + "' is not one of " + ($script:HordePortNameKinds -join ", "); return $out }
+    if ((Get-HordeDistinctWordCount $out.why) -lt 4) { $out.problem = "the name '" + $out.name + "' needs a reason of at least a sentence" }
+    return $out
 }
 
 function ConvertTo-HordeAllowPath {
@@ -211,6 +283,17 @@ function Test-HordeHostShrink {
         foreach ($k in @($oldNames.Keys | Sort-Object)) {
             if (-not $newNames.ContainsKey($k)) { Add-Finding $hn ($own + "/names.txt") ("the name '" + $oldNames[$k] + "' is declared on " + $Ref + " and missing here - a name may not be removed") }
         }
+        # A PROCESS IMAGE STAYS ONE (review of PR #57, A2): demoted to a path or a name it would leave
+        # the image rule while the shrink check, keyed by name alone, saw nothing removed.
+        if (Test-Path -LiteralPath $np -PathType Leaf) {
+            $oldKinds = Get-HordeHostNameKinds -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $own + "/names.txt"))) -join "`n")
+            $newKinds = Get-HordeHostNameKinds -Text ([System.IO.File]::ReadAllText($np))
+            foreach ($k in @($oldKinds.Keys | Sort-Object)) {
+                if ($oldKinds[$k] -ceq "processImage" -and $newKinds.ContainsKey($k) -and $newKinds[$k] -cne "processImage") {
+                    Add-Finding $hn ($own + "/names.txt") ("the name '" + $oldNames[$k] + "' is a processImage on origin/main and a " + $newKinds[$k] + " here - a process image may not be demoted, which would take it out of the image rule")
+                }
+            }
+        }
         $growth = Get-HordeGrowthPermits -RepoRoot $RepoRoot -Ref $Ref -Own $own -HostDir $here[$own] -OnRef $onRef
         foreach ($g in $growth.problems) { Add-Finding $hn $g.path $g.problem }
         $oldAllow = @{}
@@ -227,6 +310,24 @@ function Test-HordeHostShrink {
             $record = " without a line added to " + $own + "/growth.txt recording '" + $e.path + " | " + $was + " -> " + $e.count + " | <date> | <reason>'"
             if ($was -eq 0) { Add-Finding $hn $e.path ("is in " + $own + "/allowlist.txt but not on " + $Ref + " - an entry may not be added" + $record) }
             else { Add-Finding $hn $e.path ("is allowed " + $e.count + " mention(s) here and " + $was + " on " + $Ref + " - a count may not rise" + $record) }
+        }
+    }
+    # THE LEGACY IMAGE LIST ONLY SHRINKS (review of PR #57, A1): against the ref, no new entry and no
+    # higher count, and no growth record admits either. A list the ref does not have is new on this
+    # branch: reported, not compared, as a new port is.
+    $lf = $script:HordeProcessImageLegacyFile
+    $lp = Join-Path $RepoRoot $lf
+    if (Test-Path -LiteralPath $lp -PathType Leaf) {
+        # ls-tree prints nothing for a missing path and exits 0, so no stderr needs redirecting.
+        if (@(& git -C $RepoRoot ls-tree --name-only $Ref -- $lf).Count -eq 0) { [void]$out.newHosts.Add($lf) }
+        else {
+            $oldLegacy = (Read-HordeImageLegacy -Text ((@(& git -C $RepoRoot show ($Ref + ":" + $lf))) -join "`n")).entries
+            $newLegacy = (Read-HordeImageLegacy -Text ([System.IO.File]::ReadAllText($lp))).entries
+            foreach ($k in @($newLegacy.Keys | Sort-Object)) {
+                $e = $newLegacy[$k]
+                if (-not $oldLegacy.ContainsKey($k)) { Add-Finding "(repository)" $e.path ("is in " + $lf + " but not on " + $Ref + " - the legacy list only shrinks, and no growth line admits an entry") }
+                elseif ($e.count -gt $oldLegacy[$k].count) { Add-Finding "(repository)" $e.path ("is allowed " + $e.count + " process image match(es) here and " + $oldLegacy[$k].count + " on " + $Ref + " - a legacy count may not rise") }
+            }
         }
     }
     return $out
@@ -332,24 +433,42 @@ function Get-HordeRepoFiles {
 }
 
 function Get-HordeNameMentionCount {
-    # How many times the file names the host: every occurrence of every name in its text, plus one if
-    # its path names the host. Occurrences, not lines - the review of PR 21 appended a second mention
-    # to a line that already had one, and a count of lines did not move. Occurrences of one name do
-    # not overlap ("aa" is in "aaa" once), and a name inside another name is counted for each.
+    # How many times the file names the host: every place in its text where one of its names occurs,
+    # plus one if its path names the host. Occurrences, not lines - the review of PR 21 appended a
+    # second mention to a line that already had one, and a count of lines did not move. Occurrences of
+    # one name do not overlap ("aa" is in "aaa" once), and where two names overlap the longer is
+    # counted once (header, ONE PLACE IN THE TEXT, ONE MENTION).
     # Every file is read as text. Any file that is not printable ASCII is refused on its own by
     # Test-HordeHostNames, so the text read here is the bytes on disk, one character each.
     param([string]$Full, [string]$Rel, [string[]]$Names)
     $count = 0
     foreach ($nm in $Names) { if ($Rel.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $count = 1; break } }
     $text = [System.IO.File]::ReadAllText($Full)
+    return ($count + (Get-HordeMentionSpans -Text $text -Names $Names).Count)
+}
+
+function Get-HordeMentionSpans {
+    # The places in the text the names occupy, as { start; end; name }, none overlapping another.
+    # Every occurrence of every name is found first; then, from the start of the text, each place is
+    # taken unless it begins inside one already taken, and at one starting point the longest name is
+    # taken. So an image named after its harness is one place, not the image and the name inside it.
+    param([string]$Text, [string[]]$Names)
+    $all = New-Object System.Collections.ArrayList
     foreach ($nm in $Names) {
-        $at = $text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)
+        $at = $Text.IndexOf($nm, [System.StringComparison]::OrdinalIgnoreCase)
         while ($at -ge 0) {
-            $count++
-            $at = $text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)
+            [void]$all.Add([pscustomobject]@{ start = $at; end = $at + $nm.Length; name = $nm })
+            $at = $Text.IndexOf($nm, $at + $nm.Length, [System.StringComparison]::OrdinalIgnoreCase)
         }
     }
-    return $count
+    $kept = New-Object System.Collections.ArrayList
+    $taken = 0
+    foreach ($s in @($all | Sort-Object -Property @{ Expression = { $_.start }; Ascending = $true }, @{ Expression = { $_.end }; Descending = $true })) {
+        if ($s.start -lt $taken) { continue }
+        [void]$kept.Add($s)
+        $taken = $s.end
+    }
+    return , $kept
 }
 
 function Test-HordeHostNames {
@@ -401,13 +520,9 @@ function Test-HordeHostNames {
         $names = New-Object System.Collections.ArrayList
         foreach ($r in (Read-HordeHostTable -Path $namesPath)) {
             $where = $own + "/names.txt:" + $r.line
-            if ($r.cells.Count -ne 2) { Add-Finding $hn $where "a name line is <name> | <why it identifies this host>"; continue }
-            $nm = $r.cells[0]
-            # A SHORT NAME MATCHES EVERYWHERE, and a ratchet that fires on every file gets allowlisted
-            # into meaning nothing.
-            if ($nm.Length -lt $script:HordeHostNameMinLength) { Add-Finding $hn $where ("the name '" + $nm + "' is shorter than " + $script:HordeHostNameMinLength + " characters and would match almost anything"); continue }
-            if ((Get-HordeDistinctWordCount $r.cells[1]) -lt 4) { Add-Finding $hn $where ("the name '" + $nm + "' needs a reason of at least a sentence"); continue }
-            [void]$names.Add($nm)
+            $pn = ConvertTo-HordePortName $r
+            if ($pn.problem) { Add-Finding $hn $where $pn.problem; continue }
+            [void]$names.Add($pn.name)
         }
         if ($names.Count -eq 0) { Add-Finding $hn ($own + "/names.txt") "lists no usable name, so nothing is checked"; continue }
 
@@ -445,6 +560,113 @@ function Test-HordeHostNames {
         foreach ($k in @($allowed.Keys)) {
             if (-not $seen.ContainsKey($k)) { Add-Finding $hn $allowed[$k].path ("is listed in " + $own + "/allowlist.txt but does not exist - remove the entry") }
             elseif ($seen[$k] -eq 0) { Add-Finding $hn $allowed[$k].path ("no longer names the host - remove its entry from " + $own + "/allowlist.txt") }
+        }
+    }
+    return $found
+}
+
+function Get-HordePortNamesOfKind {
+    # Every usable name of one kind that any port declares, as { own; name }, own being the port's
+    # folder ("agents/<name>"). A malformed line is Test-HordeHostNames's to report, not this one's.
+    param([string]$RepoRoot, [string]$Kind)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($fam in $script:HordePortFamilies) {
+        $famDir = Join-Path $RepoRoot $fam
+        if (-not (Test-Path -LiteralPath $famDir -PathType Container)) { continue }
+        foreach ($d in @(Get-ChildItem -LiteralPath $famDir -Directory)) {
+            $np = Join-Path $d.FullName "names.txt"
+            if (-not (Test-Path -LiteralPath $np -PathType Leaf)) { continue }
+            foreach ($r in (Read-HordeHostTable -Path $np)) {
+                $pn = ConvertTo-HordePortName $r
+                if (-not $pn.problem -and $pn.kind -ceq $Kind) { [void]$out.Add([pscustomobject]@{ own = ($fam + "/" + $d.Name); name = $pn.name }) }
+            }
+        }
+    }
+    return , $out
+}
+
+function Read-HordeImageLegacy {
+    # tools/process-image-legacy.txt as { entries; problems }: entries maps a path (forward slashes,
+    # lower-cased) to { path; count }; problems lists { line; problem } for a line that is malformed,
+    # whose count is not a whole number of at least 1, whose reason is not a sentence, or that repeats
+    # a path. A refused line excuses nothing.
+    param([string]$Text)
+    $out = [pscustomobject]@{ entries = @{}; problems = (New-Object System.Collections.ArrayList) }
+    foreach ($r in (Split-HordeHostTable -Text $Text)) {
+        $bad = ""
+        $c = 0
+        if ($r.cells.Count -ne 3) { $bad = "a legacy line is <path> | <process image matches> | <why this old reader may still match one>" }
+        elseif (-not [int]::TryParse($r.cells[1], [ref]$c) -or $c -lt 1) { $bad = "the match count for " + $r.cells[0] + " must be a whole number of at least 1" }
+        elseif ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { $bad = $r.cells[0] + " needs a reason of at least a sentence" }
+        else {
+            $p = ConvertTo-HordeAllowPath $r.cells[0]
+            $key = $p.ToLowerInvariant()
+            if ($out.entries.ContainsKey($key)) { $bad = $p + " is listed twice" }
+            else { $out.entries[$key] = [pscustomobject]@{ path = $p; count = $c } }
+        }
+        if ($bad) { [void]$out.problems.Add([pscustomobject]@{ line = $r.line; problem = $bad }) }
+    }
+    return $out
+}
+
+function Get-HordeImageMatches {
+    # How many times a file matches the declared process images, and which: every occurrence of each
+    # image in its text, as written and as an escaped regular expression (header, WHAT IS MATCHED),
+    # plus one if its path names one. Returns { count; images }.
+    param([string]$Text, [string]$Rel, $Images)
+    $count = 0
+    $hit = New-Object System.Collections.ArrayList
+    foreach ($img in $Images) {
+        $n = 0
+        foreach ($form in @(@($img.name, [regex]::Escape($img.name)) | Select-Object -Unique)) {
+            if ($Rel.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $n++ }
+            $at = $Text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase)
+            while ($at -ge 0) {
+                $n++
+                $at = $Text.IndexOf($form, $at + $form.Length, [System.StringComparison]::OrdinalIgnoreCase)
+            }
+        }
+        if ($n -gt 0) { $count += $n; [void]$hit.Add($img) }
+    }
+    return [pscustomobject]@{ count = $count; images = $hit }
+}
+
+function Test-HordeProcessImages {
+    # Does any file outside every port's folder and outside test/ match a process image a port
+    # declares, beyond the exact counts tools/process-image-legacy.txt lists? Returns one object per
+    # problem, { host; path; problem }, unrolled as Test-HordeHostNames's are, so wrap the call in @().
+    # The header says why the rule exists and why it has no allowlist.
+    param([string]$RepoRoot)
+    $found = New-Object System.Collections.ArrayList
+    $images = Get-HordePortNamesOfKind -RepoRoot $RepoRoot -Kind "processImage"
+    $lf = $script:HordeProcessImageLegacyFile
+    $legacy = @{}
+    $lp = Join-Path $RepoRoot $lf
+    if (Test-Path -LiteralPath $lp -PathType Leaf) {
+        $read = Read-HordeImageLegacy -Text ([System.IO.File]::ReadAllText($lp))
+        $legacy = $read.entries
+        foreach ($x in $read.problems) { [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = ($lf + ":" + $x.line); problem = $x.problem }) }
+    }
+    $matched = @{}
+    foreach ($f in (Get-HordeRepoFiles -RepoRoot $RepoRoot -Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt)))) {
+        $m = Get-HordeImageMatches -Text ([System.IO.File]::ReadAllText($f.full)) -Rel $f.rel -Images $images
+        if ($m.count -eq 0) { continue }
+        $key = $f.rel.ToLowerInvariant()
+        if ($legacy.ContainsKey($key)) {
+            $matched[$key] = $m.count
+            $allowedCount = $legacy[$key].count
+            if ($m.count -gt $allowedCount) { [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $f.rel; problem = ("has " + $m.count + " process image match(es); " + $lf + " allows " + $allowedCount + " - a new match") }) }
+            elseif ($m.count -lt $allowedCount) { [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $f.rel; problem = ("has only " + $m.count + " process image match(es); " + $lf + " allows " + $allowedCount + " - lower it to " + $m.count) }) }
+            continue
+        }
+        $what = @($m.images | ForEach-Object { "'" + $_.name + "' of " + $_.own }) -join ", "
+        [void]$found.Add([pscustomobject]@{ host = $m.images[0].own; path = $f.rel; problem = ("matches the process image " + $what + " - core matches no image name (lifecycle plan section 2.6): which processes are a harness's is its adapter's to answer, and no allowlist admits an image") })
+    }
+    # THE LEGACY LIST ONLY SHRINKS: an entry that excuses nothing is removed, so a later file at that
+    # path cannot inherit an excuse it was never measured for.
+    foreach ($k in @($legacy.Keys | Sort-Object)) {
+        if (-not $matched.ContainsKey($k)) {
+            [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $legacy[$k].path; problem = ("is listed in " + $lf + " but matches no process image - remove it from the list, which only shrinks") })
         }
     }
     return $found

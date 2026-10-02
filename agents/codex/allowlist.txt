@@ -28,6 +28,7 @@ core/RestorePlan.ps1 | 1 | checks each resume kind's argv for the restore plan, 
 schema/restore-plan.v1.json | 3 | the restore plan's resume kinds and agent field name the harness that produced each argv, until the engines plan's step K1 makes the kind the harness field
 test/mutations/identity.psd1 | 7 | mutations of core code that names the harness must quote that code exactly to apply
 test/test-identity.ps1 | 91 | tests core/Identity.ps1, which reads the harness's control files and processes, and must name what it builds and reads
+test/test-link-contracts.ps1 | 1 | a session id shaped like one of the harness's rollout file names is a control the link contract must accept
 test/test-roles.ps1 | 1 | creates the old system's store folders, one of which is named for this harness, to test the role reader
 test/test-schema-restore-plan.ps1 | 5 | tests the restore plan's per-harness resume kinds and quotes them
 
