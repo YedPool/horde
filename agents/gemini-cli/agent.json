@@ -35,5 +35,11 @@
     "provider-select": { "support": "unverified", "evidence": "its own login is the only route used; the API-key and Vertex routes are phase 2 and unmeasured" },
     "session-id-preset": { "support": "yes", "evidence": "--session-id in --help 0.62.0 (2026-10-02): start a new session with a manually provided UUID" },
     "session.remoteName": { "support": "unverified", "evidence": "no remote view of a session has been measured (engines plan group I)" }
-  }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--approval-mode", "plan"], "evidence": "--approval-mode in --help 0.62.0 (2026-10-02), choice plan: read-only mode" },
+    { "level": "ask", "argv": ["--approval-mode", "default"], "evidence": "--approval-mode in --help 0.62.0 (2026-10-02), choice default: prompt for approval" },
+    { "level": "edits", "argv": ["--approval-mode", "auto_edit"], "evidence": "--approval-mode in --help 0.62.0 (2026-10-02), choice auto_edit: auto-approve edit tools" },
+    { "level": "bypass", "argv": ["--approval-mode", "yolo"], "evidence": "--approval-mode in --help 0.62.0 (2026-10-02), choice yolo: auto-approve all tools" }
+  ]
 }

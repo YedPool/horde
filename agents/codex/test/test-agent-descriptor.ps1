@@ -30,4 +30,14 @@ Check ($d.events."turn-ended".hook -ceq "Stop" -and $d.events."turn-ended".evide
 Check ([regex]::IsMatch("01a0cccc-1111-7222-8333-444455556666", $d.sessionIdPattern)) "CONTROL: the id of a rollout fixture in this folder matches its pattern"
 Check (-not [regex]::IsMatch("rollout-01a0cccc-1111-7222-8333-444455556666", $d.sessionIdPattern)) "a rollout file name, with its prefix, does not"
 
+Write-Host ""
+Write-Host "--- every permission level is a flag this harness has (remote R9) ---" -ForegroundColor Cyan
+$frag = @{}
+foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name }
+Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here"
+Check ((@($frag["bypass"].value) -join " ") -ceq "--dangerously-bypass-approvals-and-sandbox") "bypass is this harness's own skip flag, spelt differently from other harnesses' (engines E0's lesson)"
+Check ((@($frag["plan"].value) -join " ") -ceq "--sandbox read-only --ask-for-approval never") "plan is a read-only sandbox that never escalates"
+Check ((@($frag["ask"].value) -join " ") -ceq "--sandbox read-only --ask-for-approval on-request") "ask is a read-only sandbox whose escalations a person approves"
+Check ((@($frag["edits"].value) -join " ") -ceq "--sandbox workspace-write --ask-for-approval on-request") "edits writes inside the working tree and asks for anything else"
+
 Complete-HordeSuite -Success "this harness's descriptor loads and says what the plan relies on"

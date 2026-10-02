@@ -36,5 +36,11 @@
     "provider-select": { "support": "unverified", "evidence": "the endpoint and token come from ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN, both in the 2.1.287 executable; no session on another provider has been run yet (engines P3)" },
     "session-id-preset": { "support": "yes", "evidence": "--session-id <uuid> in --help 2.1.287 (2026-10-02): use a specific session ID for the conversation, which must be a valid UUID" },
     "session.remoteName": { "support": "yes", "evidence": "--remote-control [name] in --help 2.1.286 (2026-09-30) and 2.1.287 (2026-10-02); a session named at Remote Control start kept its web title, measured 2026-10-01 and confirmed on claude.ai/code (technique brief TECHNIQUE-web-session-names-2026-10-01.md, engines plan group I)" }
-  }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--permission-mode", "plan"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice plan" },
+    { "level": "ask", "argv": ["--permission-mode", "manual"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice manual: the mode that asks before each action, listed where the 2.1.287 SDK types (sdk-tools.d.ts:795) list default; that it prompts for every change is not measured" },
+    { "level": "edits", "argv": ["--permission-mode", "acceptEdits"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice acceptEdits" },
+    { "level": "bypass", "argv": ["--dangerously-skip-permissions"], "evidence": "--dangerously-skip-permissions in --help 2.1.287 (2026-10-02): bypass all permission checks; the flag the fleet spawns with today (YedPool/wezfleet lib/Agents.ps1:18-19)" }
+  ]
 }

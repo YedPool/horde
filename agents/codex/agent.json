@@ -28,5 +28,11 @@
     "provider-select": { "support": "unverified", "evidence": "-c overrides and -p, --profile in --help 0.159.2 (2026-10-02) could select another provider; none has been run, and the API-key routes are phase 2" },
     "session-id-preset": { "support": "no", "evidence": "--help and resume --help 0.159.2 (2026-10-02) list no flag that starts a session with a chosen id; the id is learned from the SessionStart hook or the rollout file name (agent-engines research 6.3)" },
     "session.remoteName": { "support": "unverified", "evidence": "remote-control in --help 0.159.2 (2026-10-02) is experimental and manages a daemon; no remote view's session name has been measured (engines plan group I)" }
-  }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--sandbox", "read-only", "--ask-for-approval", "never"], "evidence": "-s, --sandbox read-only and -a, --ask-for-approval never in --help 0.159.2 (2026-10-02): commands run only inside a read-only sandbox and nothing is ever escalated, so nothing it runs can change anything - read off the help, not run" },
+    { "level": "ask", "argv": ["--sandbox", "read-only", "--ask-for-approval", "on-request"], "evidence": "-s read-only and -a on-request in --help 0.159.2 (2026-10-02): every write needs an escalation a person approves; a command that only reads runs unasked, which is plan-level activity and so within ask - read off the help, not run" },
+    { "level": "edits", "argv": ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"], "evidence": "-s workspace-write and -a on-request in --help 0.159.2 (2026-10-02): writes inside the working tree run unasked, anything outside it needs an approved escalation - read off the help, not run" },
+    { "level": "bypass", "argv": ["--dangerously-bypass-approvals-and-sandbox"], "evidence": "--dangerously-bypass-approvals-and-sandbox in --help 0.159.2 (2026-10-02): skip all confirmation prompts and run without a sandbox; measured the same on 2026-09-29 (YedPool/wezfleet lib/Agents.ps1:33-36)" }
+  ]
 }

@@ -34,4 +34,12 @@ Check ($d.events."turn-ended".hook -ceq "AfterAgent" -and $d.events."turn-starte
 Check (@($d.events.PSObject.Properties | Where-Object { $_.Value.support -ceq "yes" }).Count -eq 0) "no hook is claimed to fire before one has been seen firing"
 Check ([regex]::IsMatch("2b0f2c5e-6a1d-4c3b-9e8f-0a1b2c3d4e5f", $d.sessionIdPattern)) "CONTROL: a UUID matches its pattern"
 
+Write-Host ""
+Write-Host "--- every permission level is a flag this harness has (remote R9) ---" -ForegroundColor Cyan
+$frag = @{}
+foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name }
+Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here"
+Check ((@($frag["plan"].value) -join " ") -ceq "--approval-mode plan" -and (@($frag["ask"].value) -join " ") -ceq "--approval-mode default") "plan and ask are its plan and default approval modes"
+Check ((@($frag["edits"].value) -join " ") -ceq "--approval-mode auto_edit" -and (@($frag["bypass"].value) -join " ") -ceq "--approval-mode yolo") "edits and bypass are its auto_edit and yolo approval modes"
+
 Complete-HordeSuite -Success "this harness's descriptor loads and says what the plan relies on"
