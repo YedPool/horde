@@ -1,13 +1,16 @@
-# DOES `horde metrics summarize` STAY UNDER 200 MB, HOWEVER LARGE THE TRANSCRIPT?
+# DOES `horde metrics summarize` STAY FLAT IN MEMORY, HOWEVER LARGE THE TRANSCRIPT?
 #
 # Plan step M2's first item. Measured 2026-10-02 on the always-on box (review of PR #50): M1's
 # summarize peaked at 593 MB on a 33 MB transcript and 1,734 MB on a 133 MB one, about 11 MB of memory
-# per MB of transcript, because it held a record per line and an answer object for each. The target is
-# a peak working set under 200 MB on the 133 MB file, measured the same way: two synthetic transcripts
-# of the same shape as that probe's (an assistant response with a tool call and its result, each line
-# about 1.6 KB, every value invented), the shipped command run as its own process, its peak working
-# set sampled every 100 ms. And the peak must not grow with the file: the control is that the larger
-# file is four times the smaller.
+# per MB of transcript, because it held a record per line and an answer object for each. The target
+# set then was a peak working set under 200 MB on the 133 MB file. It was below PowerShell's own floor
+# there: the same command on a ONE-response transcript peaked at 256 MB on that box and 143 MB on this
+# one (2026-10-02), while M2 peaked at 256 MB on both the 33 MB and the 133 MB files there, and 155 MB
+# on the 33 MB file here; a forced collection every 1,000 lines did not lower it (176 MB). So the
+# target is restated (coordinator, 2026-10-02): FLAT, and within 60 MB of the floor, measured on the
+# same box in the same run - the floor first, then the 33 MB and 133 MB transcripts of the review's
+# shape (an assistant response with a tool call and its result, each line about 1.6 KB, every value
+# invented), the shipped command run as its own process, its peak working set sampled every 100 ms.
 #
 # HEAVY: it writes about 170 MB to TEMP and runs for minutes. It is in the gate so that a change that
 # brings back a list of records fails it; run it where there is memory to spare.
@@ -19,7 +22,7 @@ trap { Register-HordeSuiteError $_; continue }
 
 $work = Join-Path $env:TEMP ("horde-memory-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
-$limitMB = 200
+$overFloorMB = 60
 
 function New-BigTranscript {
     param([string]$Path, [int]$Pairs)
@@ -59,7 +62,7 @@ function Measure-Peak {
 
 try {
     $rows = @()
-    foreach ($size in @(@{ name = "small"; pairs = 10000 }, @{ name = "large"; pairs = 40000 })) {
+    foreach ($size in @(@{ name = "floor"; pairs = 1 }, @{ name = "small"; pairs = 10000 }, @{ name = "large"; pairs = 40000 })) {
         $file = Join-Path $work ($size.name + "\66666666-7777-4888-8999-000000000000.jsonl")
         New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
         New-BigTranscript -Path $file -Pairs $size.pairs
@@ -72,12 +75,12 @@ try {
         $rows += [pscustomobject]@{ name = $size.name; MB = $mb; peakMB = $r.peakMB }
         Remove-Item -LiteralPath $file -Force
     }
-    $s = $rows[0]; $l = $rows[1]
+    $f = $rows[0]; $s = $rows[1]; $l = $rows[2]
     Check ($l.MB -ge 120) ("CONTROL: the large file is the size the target names (" + $l.MB + " MB)")
-    Check ($l.peakMB -lt $limitMB) ("the peak on the large file is under " + $limitMB + " MB (" + $l.peakMB + " MB; M1 measured 1,734 MB)")
+    Check (($l.peakMB - $f.peakMB) -lt $overFloorMB) ("the peak on the large file is within " + $overFloorMB + " MB of the floor (" + $l.peakMB + " MB against " + $f.peakMB + " MB; M1 measured 1,734 MB)")
     Check (($l.peakMB - $s.peakMB) -lt 50) ("the peak does not grow with the file: +" + ($l.peakMB - $s.peakMB) + " MB for " + ($l.MB - $s.MB) + " MB more transcript")
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "summarize stays under 200 MB on a 133 MB transcript, and its peak does not grow with the file"
+Complete-HordeSuite -Success "summarize's peak on a 133 MB transcript is within 60 MB of the bare command's, and does not grow with the file"
