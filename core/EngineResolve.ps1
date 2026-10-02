@@ -214,6 +214,38 @@ function Resolve-HordeEngine {
                 }
             }
         }
+        # DIRECTION (review of PR #73, F3). The owner's layers (L0, L1) set a directed key freely; each
+        # layer above may only move what the layers below it left, the way the key allows - lower-only
+        # is remote R9's ceiling, which a live rule, writable by any orc, must never raise. Walked layer
+        # by layer, so a spawn cannot raise back what a run spec lowered. With nothing below to move
+        # from, a higher layer's value is refused rather than taken as the base.
+        $dir = "" + (Get-HordeAgentProp $entry "direction")
+        if (($dir -ceq "lower-only" -or $dir -ceq "raise-only") -and @($mine | Where-Object { $_.rank -gt 1 }).Count -gt 0) {
+            $values = @(Get-HordeConfigItems $entry.value "values")
+            $basePick = Select-HordeWinner -List @($mine | Where-Object { $_.rank -le 1 })
+            $current = $null
+            $baseVals = @($basePick.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
+            if ($baseVals.Count -eq 1) { $current = $baseVals[0] }
+            foreach ($rk in @(3, 4, 5)) {
+                $inLayer = @($mine | Where-Object { $_.rank -eq $rk })
+                if ($inLayer.Count -eq 0) { continue }
+                $lp = Select-HordeWinner -List $inLayer
+                $lv = @($lp.top | ForEach-Object { "" + $_.value } | Select-Object -Unique)
+                if ($lv.Count -ne 1) { continue }
+                $why = $null
+                if ($null -eq $current) { $why = "refused: " + $key + " is " + $dir + " above the owner's layers, and there is nothing below to move from" }
+                else {
+                    $iNew = [array]::IndexOf($values, $lv[0]); $iCur = [array]::IndexOf($values, $current)
+                    if ($dir -ceq "lower-only" -and $iNew -gt $iCur) { $why = "refused: " + $key + " is lower-only above the owner's layers, and " + $lv[0] + " is above " + $current }
+                    if ($dir -ceq "raise-only" -and $iNew -lt $iCur) { $why = "refused: " + $key + " is raise-only above the owner's layers, and " + $lv[0] + " is below " + $current }
+                }
+                if ($null -ne $why) {
+                    foreach ($c in $lp.top) { $refused += [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = $why } }
+                    $mine = @($mine | Where-Object { $lp.top -notcontains $_ })
+                } else { $current = $lv[0] }
+            }
+            $pick = Select-HordeWinner -List $mine
+        }
         $beaten = @(foreach ($c in $pick.rest) { [pscustomobject]@{ rule = $c.rule; layer = $c.layer; source = $c.source; value = $c.value; why = $(if ($c.rank -lt $pick.top[0].rank) { "lower layer" } else { "less specific" }) } })
         $answer = $null; $win = $null
         if ($pick.top.Count -eq 0) { $answer = New-HordeAbsent -Note ("no rule sets " + $key + " for this target") }

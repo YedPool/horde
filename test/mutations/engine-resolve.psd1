@@ -81,5 +81,20 @@
         @{ Name = "beaten-all-called-less-specific"
            Find = '$(if ($c.rank -lt $pick.top[0].rank) { "lower layer" } else { "less specific" })'
            Replace = '"less specific"' }
+        @{ Name = "direction-ignored"
+           Find = 'if (($dir -ceq "lower-only" -or $dir -ceq "raise-only") -and @($mine | Where-Object { $_.rank -gt 1 }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "lower-only-may-raise"
+           Find = 'if ($dir -ceq "lower-only" -and $iNew -gt $iCur) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "raise-only-may-lower"
+           Find = 'if ($dir -ceq "raise-only" -and $iNew -lt $iCur) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-base-taken-as-base"
+           Find = 'if ($null -eq $current) { $why = "refused: "'
+           Replace = 'if ($false) { $why = "refused: "' }
+        @{ Name = "compared-with-the-owner-only"
+           Find = '} else { $current = $lv[0] }'
+           Replace = '} else { }' }
     )
 }
