@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "name": "codex",
+  "measured": { "cliVersion": "0.159.2", "on": "2026-10-02" },
+  "protocols": ["openai-responses"],
+  "nativeProvider": "openai",
+  "sessionIdPattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+  "ownedEnv": [
+    { "name": "OPENAI_API_KEY", "evidence": "an API key; 24 occurrences in the installed 0.159.2 codex.exe, 2026-10-02" },
+    { "name": "OPENAI_BASE_URL", "evidence": "an endpoint; 1 occurrence in the installed 0.159.2 codex.exe, 2026-10-02 - that it is read from the environment is not measured, and scrubbing a variable it ignores costs nothing" },
+    { "name": "OPENAI_ORGANIZATION", "evidence": "an account selector; 1 occurrence in the installed 0.159.2 codex.exe, 2026-10-02" },
+    { "name": "CODEX_API_KEY", "evidence": "an API key; 5 occurrences in the installed 0.159.2 codex.exe, beside OPENAI_API_KEY in its credential lookup, 2026-10-02" },
+    { "name": "CODEX_ACCESS_TOKEN", "evidence": "an access token; 9 occurrences in the installed 0.159.2 codex.exe, 2026-10-02" }
+  ],
+  "events": {
+    "session-started": { "hook": "SessionStart", "support": "yes", "evidence": "measured firing with its payload, on the FIRST TURN and not when the thread is created (YedPool/wezfleet lib/CodexStatus.ps1:17-20, on the version installed 2026-09-29); 53 occurrences in the 0.159.2 executable, 2026-10-02" },
+    "turn-started": { "hook": "UserPromptSubmit", "support": "yes", "evidence": "measured firing once per turn, before the model (YedPool/wezfleet lib/CodexStatus.ps1:21, on the version installed 2026-09-29); 37 occurrences in the 0.159.2 executable, 2026-10-02" },
+    "turn-ended": { "hook": "Stop", "support": "yes", "evidence": "measured firing only on a turn that completes - not on a failed or an interrupted one, so nothing may wait on it (YedPool/wezfleet lib/CodexStatus.ps1:22 and 33-36, on the version installed 2026-09-29)" },
+    "session-ended": { "hook": "SessionEnd", "support": "yes", "evidence": "measured firing on graceful shutdown only, so nothing may depend on it arriving (YedPool/wezfleet lib/CodexStatus.ps1:23 and 44, on the version installed 2026-09-29); 34 occurrences in the 0.159.2 executable, 2026-10-02" }
+  },
+  "capabilities": {
+    "message-inject": { "support": "unverified", "evidence": "queue in --help 0.159.2 (2026-10-02): queue a message for an existing session; delivery into a running interactive session is not measured (agent-engines research 6.3)" },
+    "delivery-receipt": { "support": "unverified", "evidence": "nothing has been measured confirming that a delivered message reached a running session" },
+    "resume": { "support": "yes", "evidence": "resume [SESSION_ID] in resume --help 0.159.2 (2026-10-02): a session id (UUID) or session name; a run on this machine is not measured" },
+    "report-hook": { "support": "yes", "evidence": "its four session hooks ran the fleet's status hook with their payloads (YedPool/wezfleet hooks/wf-codex-status.ps1, lib/CodexStatus.ps1, measured 2026-09-29)" },
+    "name-at-spawn": { "support": "no", "evidence": "--help 0.159.2 (2026-10-02) lists no flag that names a session at start; measured the same from --help on 2026-09-29 (YedPool/wezfleet lib/Agents.ps1). A name is still how a session is addressed later, by queue" },
+    "model-select": { "support": "yes", "evidence": "-m, --model <MODEL> in --help 0.159.2 (2026-10-02)" },
+    "provider-select": { "support": "unverified", "evidence": "-c overrides and -p, --profile in --help 0.159.2 (2026-10-02) could select another provider; none has been run, and the API-key routes are phase 2" },
+    "session-id-preset": { "support": "no", "evidence": "--help and resume --help 0.159.2 (2026-10-02) list no flag that starts a session with a chosen id; the id is learned from the SessionStart hook or the rollout file name (agent-engines research 6.3)" },
+    "session.remoteName": { "support": "unverified", "evidence": "remote-control in --help 0.159.2 (2026-10-02) is experimental and manages a daemon; no remote view's session name has been measured (engines plan group I)" }
+  }
+}
