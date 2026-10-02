@@ -153,6 +153,13 @@ Check ((Get-Val (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New
 $twoLow = New-Doc @((New-Rule "tuned-goblins" @{ role = "goblin" } @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"), (New-Rule "tuned-all" @{} @{ "fixture.reserve" = "low" } "tuner" "2026-10-09T00:00:00Z"))
 $s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $twoLow))) -Registry $reg) -Key "fixture.reserve"
 Check ($s.answer.value -ceq "mid" -and @($s.refused).Count -eq 2) "every tuner rule that lowers is refused, not only the most specific - a general one does not get through behind it"
+# NEW-B: when the rules a person wrote tie, the tuner is held to the strictest of them, not let through.
+$tieUser = New-Doc @((New-Rule "person-mid" @{} @{ "fixture.reserve" = "mid" }), (New-Rule "person-high" @{} @{ "fixture.reserve" = "high" }))
+$s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $tieUser -Source "u2"), (New-Layer "L4" $lower))) -Registry $reg) -Key "fixture.reserve"
+Check ($s.answer.value -cne "low" -and @($s.refused | Where-Object { $_.rule -ceq "tuned" }).Count -eq 1) "a tuner that lowers below a tie of a person's rules is refused, tie or not"
+$oddCase = New-Doc @(New-Rule "tuned-case" @{} @{ "fixture.reserve" = "low" } "Tuner" "2026-10-09T00:00:00Z")
+$s = Get-HordeEngineSetting -Resolution (Resolve ($base + @((New-Layer "L1" $userDoc -Source "u2"), (New-Layer "L4" $oddCase))) -Registry $reg) -Key "fixture.reserve"
+Check ($s.answer.value -ceq "mid") "a writer that is not exactly user or cli is held to the tuner's rule (fail closed): Tuner lowers nothing"
 
 Write-Host ""
 Write-Host "--- a key's direction: what a layer above the owner's may do to its value (review of PR #73, F3) ---" -ForegroundColor Cyan
@@ -186,6 +193,20 @@ Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -c
 $tieSpec = New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "goblin" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-edits" @{ role = "goblin" } @{ "fixture.ceiling" = "edits" })))
 $s = Get-Ceiling @($ownHigh, $tieSpec, (New-Layer "L5" (New-Doc @(New-Rule "after-tie" @{} @{ "fixture.ceiling" = "edits" }))))
 Check (@($s.refused | Where-Object { $_.rule -ceq "after-tie" }).Count -eq 1) "after a tie in a lower layer, the next layer is held to the strictest of the tied values, never the most permissive"
+# REVIEW OF PR #74, round 3, NEW-A (HIGH): a value outside the enum ranked as -1, which counted as a
+# lowering and then stood as the MOST permissive level. The resolver must not rely on the checker
+# having run: an unrankable value is refused and recorded, never ranked, and fails closed.
+foreach ($bad in @("zzz", "Bypass", 3)) {
+    $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "bad-value" @{} @{ "fixture.ceiling" = $bad } "cli"))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-bypass" @{} @{ "fixture.ceiling" = "bypass" }))))
+    Check ($s.answer.value -ceq "ask" -and @($s.refused | Where-Object { $_.rule -ceq "bad-value" -and $_.why -like "*not a value*" }).Count -eq 1 -and @($s.refused | Where-Object { $_.rule -ceq "spawn-bypass" }).Count -eq 1) ("an L4 value outside the enum (" + $bad + ") is refused, and does not open the way for an L5 bypass")
+}
+$s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "only-bad" @{} @{ "fixture.ceiling" = "zzz" } "cli"))))
+Check ($s.answer.value -ceq "ask") "a layer whose only rule is outside the enum contributes nothing"
+$s = Get-Ceiling @($own, (New-Layer "L3" (New-Doc @((New-Rule "tie-plan" @{ role = "goblin" } @{ "fixture.ceiling" = "plan" }), (New-Rule "tie-bad" @{ role = "goblin" } @{ "fixture.ceiling" = "zzz" })))), (New-Layer "L5" (New-Doc @(New-Rule "spawn-bypass" @{} @{ "fixture.ceiling" = "bypass" }))))
+Check ($s.answer.value -ceq "plan" -and @($s.refused | Where-Object { $_.rule -ceq "spawn-bypass" }).Count -eq 1) "a tie with a value outside the enum is no tie: the bad value is refused, and the good one holds the layers above"
+$badBase = New-Layer "L1" (New-Doc @(New-Rule "owner-bad" @{} @{ "fixture.ceiling" = "zzz" })) -Source "owner"
+$s = Get-Ceiling @($badBase, (New-Layer "L4" (New-Doc @(New-Rule "agent-any" @{} @{ "fixture.ceiling" = "edits" } "cli"))))
+Check ($s.answer.state -ne "known" -and @($s.refused | Where-Object { $_.rule -ceq "owner-bad" }).Count -eq 1 -and @($s.refused | Where-Object { $_.rule -ceq "agent-any" }).Count -eq 1) "an owner's value outside the enum is no base: nothing above may stand on it"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "lower-floor" @{} @{ "fixture.floor" = "low" } "cli")))) "fixture.floor"
 Check ($s.answer.value -ceq "mid" -and @($s.refused | Where-Object { $_.rule -ceq "lower-floor" -and $_.why -like "*raise-only*" }).Count -eq 1) "a raise-only key cannot be lowered from a layer above the owner's"
 $s = Get-Ceiling @($own, (New-Layer "L4" (New-Doc @(New-Rule "raise-floor" @{} @{ "fixture.floor" = "high" } "cli")))) "fixture.floor"
