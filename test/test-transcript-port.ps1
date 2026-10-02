@@ -47,6 +47,10 @@ try {
     [System.IO.File]::WriteAllText($g, "{""a"":1}`n{bad`n")
     $r2 = Read-HordeJsonLines -Path $g
     Check ($r2.parseSkipped -eq 1 -and $r2.tornTail -eq 0) "a bad last line that ends with a newline is skipped, not torn"
+    $seenLines = New-Object System.Collections.ArrayList
+    $streamed = Read-HordeJsonLines -Path $f -Each { param($n, $v) [void]$seenLines.Add($n); "stray output" }
+    Check ((@($seenLines) -join ",") -eq "1,4") "with -Each, every good line is handed to the block with its line number"
+    Check (@($streamed.lines).Count -eq 0 -and $streamed.parseSkipped -eq 1 -and $streamed.tornTail -eq 1) "and none is kept, while bad and torn lines are still counted"
     $arr = Join-Path $work "array.jsonl"
     [System.IO.File]::WriteAllText($arr, "[1,2]`n""text""`n")
     Check ((Read-HordeJsonLines -Path $arr).parseSkipped -eq 2) "a line that parses but is not an object is skipped, not read"

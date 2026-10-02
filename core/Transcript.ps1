@@ -13,7 +13,8 @@
 #               length of the text the model wrote); toolCallCount; speed; inferenceGeo. role "assistant".
 #   toolCall    one tool invocation. id; name; callId (the call that made it, "" when not known);
 #               launchesWorker (whether this tool starts a worker). role "assistant".
-#   toolResult  the result of a tool invocation. toolCallId; isError; chars; worker (an answer: known
+#   toolResult  the result of a tool invocation. toolCallId; isError (an answer: some harnesses do not
+#               say); chars; worker (an answer: known
 #               worker id, absent when the tool is not a worker launch, unknown when it is one whose
 #               worker cannot be proved). role "tool".
 #   input       text that entered the session from outside the model. source "user" or "notification";
@@ -58,14 +59,17 @@ function ConvertTo-HordeUtcTime {
 function New-HordeTranscriptRecord {
     # The one constructor. Refuses a record with an unknown kind or no UTC time, so an adapter cannot
     # emit a shape core does not read.
-    param([Parameter(Mandatory = $true)][string]$Kind, [Parameter(Mandatory = $true)][string]$Role, $Ts, [int]$Line, [hashtable]$Fields = @{})
+    #
+    # NO [Parameter(Mandatory)] HERE, ON PURPOSE: it is called once per transcript line, and measured
+    # 2026-10-01 on PowerShell 5.1, 20,000 calls took 6,883 ms with mandatory parameters and 811 ms
+    # without (a 46 MB transcript took 63 s to read). The checks below do the refusing instead.
+    param([string]$Kind, [string]$Role, $Ts, [int]$Line, $Fields)
     if ($script:HordeTranscriptKinds -cnotcontains $Kind) { throw ("not a transcript record kind: '" + $Kind + "'") }
+    if ("$Role" -eq "") { throw ("a transcript record needs a role (kind " + $Kind + ", line " + $Line + ")") }
     if ($Ts -isnot [datetime] -or $Ts.Kind -ne [System.DateTimeKind]::Utc) { throw ("a transcript record needs a UTC time (kind " + $Kind + ", line " + $Line + ")") }
-    $r = [ordered]@{ kind = $Kind; role = $Role; ts = $Ts; line = $Line }
-    foreach ($k in $Fields.Keys) { $r[$k] = $Fields[$k] }
-    $o = [pscustomobject]$r
-    $o.PSObject.TypeNames.Insert(0, "Horde.TranscriptRecord")
-    return $o
+    $r = [ordered]@{ PSTypeName = "Horde.TranscriptRecord"; kind = $Kind; role = $Role; ts = $Ts; line = $Line }
+    if ($null -ne $Fields) { foreach ($k in $Fields.Keys) { $r[$k] = $Fields[$k] } }
+    return [pscustomobject]$r
 }
 
 function New-HordeUsage {
@@ -95,7 +99,12 @@ function Read-HordeJsonLines {
     # arrays without building a PowerShell object per field. Measured 2026-10-01 on PowerShell 5.1: a
     # 46 MB, 31,204-line transcript parsed in 925 ms. A missing key reads as $null on its dictionaries
     # (measured the same day), and integers arrive as Int32 or Int64, fractions as Decimal.
-    param([Parameter(Mandatory = $true)][string]$Path)
+    #
+    # -Each STREAMS: with it, each parsed line is handed to the block (line number, value) and not kept,
+    # so the file is never held in memory whole. Measured 2026-10-01 on PowerShell 5.1: with all 31,204
+    # lines of a 46 MB transcript held as dictionaries, every later allocation slowed about tenfold (a
+    # record constructor went from 0.04 to 0.4 ms), and reading took 56 s; an adapter streams.
+    param([Parameter(Mandatory = $true)][string]$Path, [scriptblock]$Each)
     Add-Type -AssemblyName System.Web.Extensions
     $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $ser.MaxJsonLength = [int]::MaxValue
@@ -120,7 +129,8 @@ function Read-HordeJsonLines {
                 $value = $null
                 try { $value = $ser.DeserializeObject($text) } catch { $value = $null }
                 if ($value -isnot [System.Collections.Generic.Dictionary[string, object]]) { $pendingBad = $true; continue }
-                [void]$out.Add([pscustomobject]@{ line = $n; value = $value })
+                # The block's output is discarded, so a stray value in an adapter can never become a line.
+                if ($null -ne $Each) { $null = & $Each $n $value } else { [void]$out.Add([pscustomobject]@{ line = $n; value = $value }) }
             }
             if ($pendingBad) { if ($endsWithNewline) { $skipped++ } else { $torn++ } }
         } finally { $reader.Dispose() }
@@ -204,7 +214,10 @@ function Test-HordeTranscriptRecords {
                 foreach ($f in @("model", "usage")) { if (-not (Test-HordeAnswer $r.$f)) { [void]$problems.Add("a call's " + $f + " at line " + $r.line + " is not an answer") } }
             }
             "toolCall" { if ("$($r.id)" -eq "") { [void]$problems.Add("a tool call at line " + $r.line + " has no id") } }
-            "toolResult" { if (-not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a tool result's worker at line " + $r.line + " is not an answer") } }
+            "toolResult" {
+                if (-not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a tool result's worker at line " + $r.line + " is not an answer") }
+                if (-not (Test-HordeAnswer $r.isError)) { [void]$problems.Add("a tool result's isError at line " + $r.line + " is not an answer") }
+            }
             "input" {
                 if (@("user", "notification") -cnotcontains $r.source) { [void]$problems.Add("an input at line " + $r.line + " has source '" + $r.source + "'") }
                 if ($r.source -ceq "notification" -and -not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a notification's worker at line " + $r.line + " is not an answer") }

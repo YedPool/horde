@@ -29,7 +29,7 @@ function Call {
     New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts (At $Min) -Line (Next) -Fields @{ id = $Id; model = (New-HordeKnown -Value $Model); usage = $usage; textChars = $Chars; toolCallCount = $Tools; speed = ""; inferenceGeo = "" }
 }
 function Tool { param([string]$Id, [double]$Min, [string]$Name = "tool-x") New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts (At $Min) -Line (Next) -Fields @{ id = $Id; name = $Name; callId = ""; launchesWorker = $false } }
-function Result { param([string]$Id, [double]$Min, [int]$Chars = 100, $Worker = (New-HordeAbsent -Note "not a worker launch")) New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts (At $Min) -Line (Next) -Fields @{ toolCallId = $Id; isError = $false; chars = $Chars; worker = $Worker } }
+function Result { param([string]$Id, [double]$Min, [int]$Chars = 100, $Worker = (New-HordeAbsent -Note "not a worker launch")) New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts (At $Min) -Line (Next) -Fields @{ toolCallId = $Id; isError = (New-HordeKnown -Value $false); chars = $Chars; worker = $Worker } }
 function Note {
     param([double]$Min, $Worker, [int]$Chars = 500, [switch]$Interim)
     New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts (At $Min) -Line (Next) -Fields @{ source = "notification"; chars = $Chars; taskId = "t"; toolCallId = "u"; interim = [bool]$Interim; worker = $Worker }
