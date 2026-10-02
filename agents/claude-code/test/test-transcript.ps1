@@ -137,6 +137,14 @@ try {
     $lkJson = (ConvertTo-Json -InputObject (New-HordeTranscriptSummaryRecord -Read $lk.value -Worker (Get-HordeWorkerSummary -Records $lk.value.records -PriceTable $noTable) -Orc (Get-HordeOrcMeasures -Records $lk.value.records)) -Depth 30) + (ConvertTo-Json -InputObject (ConvertTo-HordeJsonSafe $lk.value.records) -Depth 30)
     Check ($lkJson.IndexOf("LEAKED-PROMPT-TEXT-p11") -lt 0) "a task id that names nothing on disk reaches no record and no summary"
     Check ((Get-Content -LiteralPath $leakFile -Raw).IndexOf("LEAKED-PROMPT-TEXT-p11") -ge 0) "CONTROL: the planted text is in the transcript the summary was made from"
+    # The same notification when the launch call has no meta.json: found by the mutation run of
+    # 2026-10-02 (task-id-text-trusted survived), because the case above resolved through meta.json first.
+    Remove-Item -LiteralPath (Join-Path $leakDir "11111111-2222-4333-8444-555555555555\subagents\agent-a1b2c3d4e5f6a7b8c.meta.json")
+    $lk2 = Read-HordeTranscript -Path $leakFile
+    $lk2Note = @($lk2.value.records | Where-Object { $_.kind -eq "input" -and $_.source -eq "notification" } | Select-Object -Last 1)[0]
+    Check ($lk2Note.worker.state -eq "known" -and $lk2Note.worker.value -eq "toolu_L1") "with no meta.json, the worker is named by its launch call's id, never by the text's task id"
+    $lk2Json = (ConvertTo-Json -InputObject (New-HordeTranscriptSummaryRecord -Read $lk2.value -Worker (Get-HordeWorkerSummary -Records $lk2.value.records -PriceTable $noTable) -Orc (Get-HordeOrcMeasures -Records $lk2.value.records)) -Depth 30)
+    Check ($lk2Json.IndexOf("LEAKED-PROMPT-TEXT-p11") -lt 0) "and the planted text still reaches no summary"
 
 
     Write-Host ""
