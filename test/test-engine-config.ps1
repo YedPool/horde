@@ -140,6 +140,78 @@ $docs = New-Docs
 (Get-Rule $docs.L1 "one-session").note = "rotate the key every quarter, see the runbook"
 Check (@(Get-Findings (ConvertTo-DocList $docs) | Where-Object { $_.code -ceq "secret" }).Count -eq 0) "CONTROL: an ordinary sentence is not a secret"
 
+# REVIEW OF PR #73, F1: the secret finding hid a planted value, but a SECOND finding on the same value
+# printed it whole. So every field a finding can quote gets a planted value of every shape, and the
+# value - or any long part of it - must appear in no finding at all.
+$shapes = [ordered]@{
+    "sk"      = "sk-ant-api03-Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI"
+    "aws"     = "AKIAZQ9XYW8VU7TS6RR5"
+    "google"  = "AIzaSyZq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI"
+    "mixed"   = "Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iIhH"
+    "zai"     = "0123456789abcdef0123456789abcdef.AbCdEfGhIjKlMnOp"
+    "hex40"   = "0123456789abcdef0123456789abcdef01234567"
+    "gitlab"  = "glpat-Zq9XyW8vU7tS6rR5qP4o"
+    "goauth"  = "ya29.Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI"
+    "lower52" = "zq9xyw8vu7ts6rr5qp4on3mm2lk1jj0iihhgg7ff6ee5dd4cc3bb"
+}
+$plants = [ordered]@{
+    "set.model (allowlisted provider)" = { param($d, $v) $r = Get-Rule $d.L4 "live-1"; $r.set.model = $v }
+    "set.model alone"                  = { param($d, $v) (Get-Rule $d.L1 "one-session").set.model = $v }
+    "set.profile"                      = { param($d, $v) (Get-Rule $d.L1 "goblins-gamma").set.profile = $v }
+    "set.harness"                      = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set "harness" $v }
+    "set.provider"                     = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set "provider" $v }
+    "a set key"                        = { param($d, $v) Add-Prop (Get-Rule $d.L1 "user-default").set $v "x" }
+    "credential.kind"                  = { param($d, $v) $d.L1.providers[0].credential.kind = $v }
+    "a lacks entry"                    = { param($d, $v) $d.L1.providers[0].lacks = @($v) }
+    "an alias entry's provider"        = { param($d, $v) $d.L1.aliases[1].map[0].provider = $v }
+    "a profile's harness"              = { param($d, $v) (Get-Profile $d.L1 "gamma").harness = $v }
+    "a profile's model"                = { param($d, $v) (Get-Profile $d.L1 "gamma").model = $v }
+    "a match value"                    = { param($d, $v) (Get-Rule $d.L1 "one-session").match.fleetId = $v }
+    "a rule id"                        = { param($d, $v) (Get-Rule $d.L1 "user-default").id = $v }
+    "a top-level key"                  = { param($d, $v) Add-Prop $d.L1 $v 1 }
+    "writtenBy"                        = { param($d, $v) (Get-Rule $d.L1 "user-default").writtenBy = $v }
+}
+$leaks = New-Object System.Collections.ArrayList
+$secretMissed = New-Object System.Collections.ArrayList
+foreach ($sn in @($shapes.Keys)) {
+    $v = $shapes[$sn]
+    foreach ($pn in @($plants.Keys)) {
+        $docs = New-Docs
+        & $plants[$pn] $docs $v
+        $list = ConvertTo-DocList $docs
+        if (((@($list | ForEach-Object { $_.text }) -join "")) -notlike ("*" + $v + "*")) { [void]$leaks.Add("PLANT MISSED " + $sn + " in " + $pn); continue }
+        $f = @(Get-Findings $list)
+        $all = (@($f | ForEach-Object { $_.code + " " + $_.source + " " + $_.path + " " + $_.detail }) -join "`n")
+        if ($all -like ("*" + $v + "*") -or $all -like ("*" + $v.Substring(6, 12) + "*")) { [void]$leaks.Add($sn + " in " + $pn + " -> " + (@($f | ForEach-Object { $_.code }) -join ",")) }
+        if (@($f | Where-Object { $_.code -ceq "secret" }).Count -eq 0) { [void]$secretMissed.Add($sn + " in " + $pn) }
+    }
+}
+Check ($leaks.Count -eq 0) ("a secret of any shape planted in any field a finding can quote appears in no finding (" + $shapes.Count + " shapes x " + $plants.Count + " fields)" + $(if ($leaks.Count) { ": " + ($leaks -join " | ") } else { "" }))
+Check ($secretMissed.Count -eq 0) ("and each is refused as a secret" + $(if ($secretMissed.Count) { ": " + ($secretMissed -join " | ") } else { "" }))
+# NEAR MISSES (review F4): what a configuration legitimately holds is not a secret.
+$near = @("0123456789abcdef0123456789abcdef0123456", "glpat", "ya29", "the quick brown fox jumps over the lazy dog again and again", "11111111-2222-4333-8444-555555555555", "model-c1", "https://api.example.test/anthropic", "PROVIDER_C_TOKEN", "20261002-101500-audit")
+foreach ($n in $near) {
+    $docs = New-Docs
+    (Get-Rule $docs.L1 "one-session").note = $n
+    Check (@(Get-Findings (ConvertTo-DocList $docs) | Where-Object { $_.code -ceq "secret" }).Count -eq 0) ("CONTROL: '" + $n + "' is not a secret")
+}
+$f = @(Test-HordeEngineConfig -Documents @([pscustomobject]@{ layer = "L1"; source = "user"; text = '{ "schemaVersion": 1, "rules": [ { "id": "r", "match": {}, "set": { "model": "x" }, "writtenBy": "user", "note": "' + $shapes["sk"] + '" } ] }' }) -Descriptors $descriptors)
+Check ((@($f | ForEach-Object { $_.detail + $_.path }) -join "") -notlike ("*" + $shapes["sk"] + "*")) "CONTROL: the same holds for a document given as text, not built by this suite"
+Check (Throws { Test-HordeEngineConfig -Documents @([pscustomobject]@{ layer = $shapes["sk"]; source = "x"; text = "{}" }) -Descriptors $descriptors } "redacted") "a secret-shaped layer label is not repeated by the refusal that names it"
+
+Write-Host ""
+Write-Host "--- the review of PR #73: endpoints, case, and text ---" -ForegroundColor Cyan
+# F2: a subscription runs on the vendor's own program; an endpoint would send its login elsewhere.
+Test-Finding "a harness-login provider with an endpoint of its own" { param($d) Add-Prop $d.L0.providers[0] "endpoint" "https://collector.example.test" } "login-endpoint" "provider-a"
+Test-Finding "the user file naming the native provider with an endpoint" { param($d) Add-Prop $d.L1.providers[0] "endpoint" "https://ok.example.test"; $d.L1.providers[0].credential = [pscustomobject]@{ kind = "harness-login" } } "login-endpoint" "provider-c"
+# F5: keys are matched exactly, as the resolver matches them.
+Test-Finding "a setting key in another case" { param($d) Add-Prop (Get-Rule $d.L1 "user-default").set "Model" "model-a" } "unknown-key" "Model"
+# F7: the text is plain ASCII, and a BOM is named as such.
+$f = @(Get-Findings @([pscustomobject]@{ layer = "L1"; source = "user"; text = $texts.L1.Replace('"a fixture rule"', ('"a fixture r' + [char]0x00FC + 'le"')) }))
+Check (@($f | Where-Object { $_.code -ceq "not-ascii" }).Count -eq 1) "a document holding a character that is not ASCII -> not-ascii (CONTRIBUTING 13)"
+$f = @(Get-Findings @([pscustomobject]@{ layer = "L1"; source = "user"; text = ([string][char]0xFEFF + $texts.L1) }))
+Check (@($f | Where-Object { $_.code -ceq "not-ascii" -and $_.detail -like "*byte-order mark*" }).Count -eq 1) "a document starting with a byte-order mark -> not-ascii, naming the mark"
+
 Write-Host ""
 Write-Host "--- the settings registry is the seam for keys beyond the binding (metrics.level, remote.*) ---" -ForegroundColor Cyan
 $reg = @(Get-HordeConfigKeys)
@@ -165,5 +237,13 @@ Check ((Get-RegRefusal ($regText.Replace('"layers": ["L0", "L1", "L3", "L4", "L5
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "colour" }'))) -like "*colour*") "the registry refuses a value kind it does not know"
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": [] }'))) -like "*enum with no values*") "the registry refuses an enum with no values"
 Check ((Get-RegRefusal ($regText.Replace('{ "name": "model",', '{ "name": "model", "name": "model",'))) -like "*more than once*") "the registry refuses a key repeated in one object"
+
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model" }, "colour": "red"'))) -like "*colour*") "the registry refuses a field it does not know, rather than ignoring it (review F3)"
+Check ((Get-RegRefusal ($regText.Replace('"layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "model" }', '"layers": "L1", "value": { "kind": "model" }'))) -like "*model*layers*list*") "the registry refuses layers given as text instead of a list"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["a", "A"] }'))) -like "*model*twice*") "the registry refuses an enum whose values repeat, ignoring case"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["low", "high"] }, "direction": "lower-only"'))) -eq "") "CONTROL: direction lower-only on an enum loads (the shape of remote R9's ceiling)"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "enum", "values": ["low", "high"] }, "direction": "sideways"'))) -like "*direction*sideways*") "the registry refuses a direction other than any, lower-only and raise-only"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model" }, "direction": "lower-only"'))) -like "*direction*enum*") "and a lower-only or raise-only direction on a key that is not an enum: there is no order"
+Check (@($reg | Where-Object { "" + $_.direction -cne "any" }).Count -eq 0 -and @($reg | Where-Object { $null -eq $_.direction }).Count -eq 0) "every binding key in the registry states its direction, any"
 
 Complete-HordeSuite -Success "an engine configuration is refused for each listed finding, and the golden one for none"
