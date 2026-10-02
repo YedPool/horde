@@ -187,6 +187,9 @@ Check (-not (Test-Path -LiteralPath $malformed)) "the malformed-name folder was 
 $tmp = Join-Path $env:TEMP ("horde-cli-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path (Join-Path $tmp "cli\commands") | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "horde.ps1") -Destination $tmp
+# horde.ps1 loads core\Platform.ps1 first, to opt out of power throttling, and it loads core\Tristate.ps1.
+New-Item -ItemType Directory -Path (Join-Path $tmp "core") | Out-Null
+foreach ($c in @("Platform.ps1", "Tristate.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("core\" + $c)) -Destination (Join-Path $tmp "core") }
 Copy-Item -LiteralPath (Join-Path $root "VERSION") -Destination $tmp
 Copy-Item -Path (Join-Path $root "cli\*.ps1") -Destination (Join-Path $tmp "cli")
 Copy-Item -LiteralPath (Join-Path $root "cli\commands\help.ps1") -Destination (Join-Path $tmp "cli\commands")
