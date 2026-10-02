@@ -390,7 +390,11 @@ function Read-ClaudeCodeTranscript {
     $sessionId = $st.sessionId
     if ($sessionId -eq "") { $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
     $records = @(); if ($null -ne $kept) { $records = $kept.ToArray() }
-    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
+    # THE RECORD KEY IS THE TRANSCRIPT'S OWN IDENTITY, not its path (review of PR #70, F4): a session file is
+    # its session id; a subagent file, which carries its parent's session id, is its own agent-<id> name.
+    $recordKey = $sessionId
+    if (-not $isSessionFile) { $recordKey = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
+    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId; recordKey = $recordKey }
 }
 
 function New-ClaudeCodeInputRecord {

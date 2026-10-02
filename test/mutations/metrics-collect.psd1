@@ -26,28 +26,49 @@
            Find = 'if ($old.outcome -ne "provisional" -or -not $settled) { $res.unchanged++; continue }'
            Replace = '$res.unchanged++; continue' }
         @{ Name = "provisional-not-said"
-           Find = '                provisional = (-not $settled)'
-           Replace = '                provisional = $false' }
+           Find = '                    provisional = (-not $final)'
+           Replace = '                    provisional = $false' }
         @{ Name = "settle-ignored"
            Find = '$settled = (($Now.Ticks - $mod) -ge $settleTicks)'
            Replace = '$settled = $true' }
+        @{ Name = "change-while-read-ignored"
+           Find = '$changedWhileRead = ($null -eq $after -or $after.Length -ne $size -or $after.LastWriteTimeUtc.Ticks -ne $mod)'
+           Replace = '$changedWhileRead = $false' }
         @{ Name = "written-before-consent-read-anyway"
-           Find = 'if ($mod -lt $enabledTicks) {'
+           Find = 'if ($mod -lt $enabledTicks -and ($null -eq $old -or $old.record -eq "")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "recorded-file-dropped-as-pre-consent"
+           Find = 'if ($mod -lt $enabledTicks -and ($null -eq $old -or $old.record -eq "")) {'
+           Replace = 'if ($mod -lt $enabledTicks) {' }
         @{ Name = "grown-before-consent-read-again"
            Find = 'if ($null -ne $old -and $old.outcome -eq "beforeConsent" -and'
            Replace = 'if ($false -and $null -ne $old -and $old.outcome -eq "beforeConsent" -and' }
+        @{ Name = "pre-consent-path-kept"
+           Find = '                        $entries[$hashKey] = $entry; $dirty = $true; continue'
+           Replace = '                        $entries[$plainKey] = $entry; $dirty = $true; continue' }
+        @{ Name = "bad-name-aborts-the-run"
+           Find = '                if (-not (Test-HordeMetricsRecordName $name)) {'
+           Replace = '                if ($false) {' }
+        @{ Name = "write-failure-aborts-the-run"
+           Find = '$entry.outcome = "failed"; $entry.reason = ("collecting it failed: "'
+           Replace = 'throw; $entry.outcome = "failed"; $entry.reason = ("collecting it failed: "' }
+        @{ Name = "record-named-by-file"
+           Find = '                $name = $mv.read.recordKey'
+           Replace = '                $name = [System.IO.Path]::GetFileNameWithoutExtension($path) + "-" + $plainKey.Length' }
         @{ Name = "deleted-kept-in-index"
-           Find = 'if (-not $present.Contains($k)) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "same-name-overwrites"
-           Find = '            return ($name + "." + $hash)'
-           Replace = '            return $name' }
+           Find = '            if ($present.Contains($k)) { continue }'
+           Replace = '            continue' }
+        @{ Name = "gone-provisional-not-flagged"
+           Find = '                try { Set-HordeRecordSourceGone -Record $gone.record } catch { $res.failed++ }'
+           Replace = '' }
         @{ Name = "index-written-every-run"
            Find = 'if ($dirty) { Write-HordeCollectIndex'
            Replace = 'if ($true) { Write-HordeCollectIndex' }
         @{ Name = "lock-ignored"
-           Find = 'catch { $res.state = "busy";'
-           Replace = 'catch { $lock = New-Object System.IO.MemoryStream }; if ($false) { $res.state = "busy";' }
+           Find = '        if ($inner -is [System.IO.IOException] -and $inner.HResult -eq $script:HordeSharingViolation) { $res.state = "busy";'
+           Replace = '        $lock = New-Object System.IO.MemoryStream; if ($false) { $res.state = "busy";' }
+        @{ Name = "broken-lock-is-busy"
+           Find = '$inner -is [System.IO.IOException] -and $inner.HResult -eq $script:HordeSharingViolation'
+           Replace = '$true' }
     )
 }

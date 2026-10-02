@@ -13,13 +13,17 @@
 # core/MetricsStore.ps1, and the adapters loaded.
 
 function Get-HordeTranscriptFiles {
-    # The .jsonl files a path names: the file itself, or every .jsonl under a folder, in name order.
+    # The transcript files a path names: the file itself, or every file under a folder whose extension
+    # an engine declares for its transcripts (agents/<name>/stores.json; CONTRIBUTING 14), in name order.
     # Extension compared here, not with -Filter, which also matches 8.3 short names (cli/Commands.ps1,
     # measured 2026-09-29).
     param([Parameter(Mandatory = $true)][string]$Path)
     if (Test-Path -LiteralPath $Path -PathType Leaf) { return @((Get-Item -LiteralPath $Path).FullName) }
     if (Test-Path -LiteralPath $Path -PathType Container) {
-        return @(Get-ChildItem -LiteralPath $Path -File -Recurse | Where-Object { $_.Extension -ieq ".jsonl" } | Sort-Object FullName | ForEach-Object { $_.FullName })
+        $stores = Get-HordeAgentStores
+        if ($stores.state -ne "known") { throw ("which files are transcripts is not known: " + $stores.reason) }
+        $exts = @($stores.value | ForEach-Object { @($_.extensions) } | Sort-Object -Unique)
+        return @(Get-ChildItem -LiteralPath $Path -File -Recurse | Where-Object { $exts -contains $_.Extension } | Sort-Object FullName | ForEach-Object { $_.FullName })
     }
     throw ("no file or folder at " + $Path)
 }
@@ -58,11 +62,10 @@ function Invoke-HordeMetricsSummarize {
         $mv = $measured.value
         $r = $mv.read
         $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $mv.worker.firstEventAt -Windowed:$windowed
+        # The record is named by the transcript's identity, as collect names it (review of PR #70, F4).
+        if ($decision.write -and -not (Test-HordeMetricsRecordName $r.recordKey)) { $decision = [pscustomobject]@{ write = $false; reason = ("the transcript's identity is not a record name Horde will write") } }
         $written = ""
-        if ($decision.write) {
-            $name = [System.IO.Path]::GetFileNameWithoutExtension($file)
-            $written = Write-HordeMetricsRecord -Record $mv.record -Adapter $r.adapter -Name $name
-        }
+        if ($decision.write) { $written = Write-HordeMetricsRecord -Record $mv.record -Adapter $r.adapter -Name $r.recordKey }
         [void]$rows.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); adapter = $r.adapter; read = $r; worker = $mv.worker; orc = $mv.orc; record = $mv.record; decision = $decision; written = $written })
     }
     return [pscustomobject]@{ rows = $rows.ToArray(); unread = $unread.ToArray(); priceTable = $table; gate = $gate }

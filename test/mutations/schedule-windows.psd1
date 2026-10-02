@@ -1,6 +1,6 @@
 # Mutations of core/schedule/WindowsTaskScheduler.ps1. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\schedule-windows.psd1
 # Each breaks one property of the task; test\test-metrics-schedule.ps1 must fail for every one. The
-# suite's job is disabled and test-named, and is removed whatever happens (see the suite's header).
+# suite's jobs are disabled, test-named and in the HordeTest folder, and are removed whatever happens.
 @{
     Target = "core\schedule\WindowsTaskScheduler.ps1"
     Suite  = "test\test-metrics-schedule.ps1"
@@ -15,10 +15,28 @@
            Find = '-LogonType S4U -RunLevel Limited'
            Replace = '-LogonType Interactive -RunLevel Limited' }
         @{ Name = "second-install-fails"
-           Find = '-Description $Job.description -Force -ErrorAction Stop'
-           Replace = '-Description $Job.description -ErrorAction Stop' }
-        @{ Name = "remove-is-a-no-op"
-           Find = '    Unregister-ScheduledTask -TaskName $Name -TaskPath "\" -Confirm:$false -ErrorAction Stop'
+           Find = '-TaskPath ("\" + $Job.folder + "\") -Force -ErrorAction Stop'
+           Replace = '-TaskPath ("\" + $Job.folder + "\") -ErrorAction Stop' }
+        @{ Name = "foreign-task-overwritten"
+           Find = '        if (-not (Test-HordeTaskMarked $old)) { throw'
+           Replace = '        if ($false) { throw' }
+        @{ Name = "foreign-task-removed"
+           Find = '    if (-not (Test-HordeTaskMarked $t)) { throw ("the task '''
+           Replace = '    if ($false) { throw ("the task ''' }
+        @{ Name = "other-home-taken-over"
+           Find = 'if ($oldHome -cne $Job.hordeHome) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "author-not-set"
+           Find = '    $task.Author = $script:HordeTaskAuthor'
            Replace = '' }
+        @{ Name = "remove-is-a-no-op"
+           Find = '    Unregister-ScheduledTask -TaskName $Name -TaskPath ("\" + $Folder + "\") -Confirm:$false -ErrorAction Stop'
+           Replace = '' }
+        @{ Name = "folder-left-behind"
+           Find = '    Remove-HordeTaskFolderIfEmpty -Folder $Folder'
+           Replace = '' }
+        @{ Name = "home-quoted-into-the-command"
+           Find = '[void]$sb.Append(''[System.Environment]::SetEnvironmentVariable('''''' + $k + '''''', (& $d '''''' + (ConvertTo-HordeBase64Text "$($Job.environment[$k])") + ''''''), ''''Process''''); '')'
+           Replace = '[void]$sb.Append(''$env:'' + $k + '' = '''''' + "$($Job.environment[$k])" + ''''''; '')' }
     )
 }

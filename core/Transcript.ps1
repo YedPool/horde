@@ -324,8 +324,12 @@ function Read-HordeTranscript {
     }
     $records = @()
     if ($null -ne $kept) { $records = $kept.ToArray() }
+    # recordKey: the transcript's own identity, which names its record (review of PR #70, F4). An
+    # adapter that gives none is named by its file.
+    $recordKey = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+    if ($null -ne $got.PSObject.Properties["recordKey"] -and "$($got.recordKey)" -ne "") { $recordKey = "$($got.recordKey)" }
     return (New-HordeKnown -Value ([pscustomobject]@{
-        adapter = $adapter.name; path = $Path; sessionId = $got.sessionId
+        adapter = $adapter.name; path = $Path; sessionId = $got.sessionId; recordKey = $recordKey
         records = $records; parseSkipped = [int]$got.parseSkipped; tornTail = [int]$got.tornTail
     }))
 }

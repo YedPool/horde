@@ -38,13 +38,16 @@
            Find = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return (New-HordeUnknown'
            Replace = '        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue; return (New-HordeUnknown' }
         @{ Name = "moved-store-unguarded"
-           Find = '                if ("$v".Trim() -ne "") { [void]$roots.Add("$v") }'
-           Replace = '                $null = $v' }
+           Find = '                if ("$v".Trim() -ne "") { [void]$roots.Add("$v"); [void]$labelled.Add('
+           Replace = '                if ($false) { [void]$roots.Add("$v"); [void]$labelled.Add(' }
         @{ Name = "unknown-roots-allow-writing"
            Find = '    if ($roots.state -ne "known") { return [pscustomobject]@{ write = $false;'
            Replace = '    if ($roots.state -ne "known") { $roots = New-HordeKnown -Value @(); } if ($false) { return [pscustomobject]@{ write = $false;' }
         @{ Name = "transcript-folder-may-climb"
-           Find = 'if ($t -isnot [string] -or $t -notmatch ''\A[A-Za-z0-9._-]+\z'' -or $t -match ''\A\.+\z'') {'
-           Replace = 'if ($t -isnot [string]) {' }
+           Find = 'if ($fo -isnot [string] -or $fo -notmatch ''\A[A-Za-z0-9._-]+\z'' -or $fo -match ''\A\.+\z'') {'
+           Replace = 'if ($fo -isnot [string]) {' }
+        @{ Name = "transcript-extension-unchecked"
+           Find = 'if ($ex -isnot [string] -or $ex -notmatch ''\A\.[A-Za-z0-9]{1,10}\z'') {'
+           Replace = 'if ($false) {' }
     )
 }

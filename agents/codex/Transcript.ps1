@@ -227,7 +227,8 @@ function Read-CodexTranscript {
     $sessionId = $st.sessionId
     if ($sessionId -eq "") { $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
     $records = @(); if ($null -ne $kept) { $records = $kept.ToArray() }
-    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
+    # The record key is the rollout's own session id, not its path (review of PR #70, F4).
+    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId; recordKey = $sessionId }
 }
 
 Register-HordeTranscriptAdapter -Name "codex" -Claim { param($p) Test-CodexTranscript -Path $p } -Read { param($p, $s) Read-CodexTranscript -Path $p -Sink $s }

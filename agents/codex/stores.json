@@ -5,5 +5,5 @@
     { "profile": ".codex" },
     { "env": "CODEX_HOME" }
   ],
-  "transcripts": [ "sessions" ]
+  "transcripts": [ { "folder": "sessions", "extension": ".jsonl" } ]
 }

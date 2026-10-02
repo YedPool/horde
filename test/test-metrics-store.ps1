@@ -97,16 +97,20 @@ try {
         Check ((Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $after -RepoRoot $fakeRepo).write -eq $false) "and so does one that cannot be read"
         Remove-Item -LiteralPath (Join-Path $fakeRepo "agents\harness-z") -Recurse -Force
 
-        # Plan step M2: a stores.json also names the folders under each root that hold transcripts.
-        [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HARNESS_X_HOME_TEST" } ], "transcripts": [ "logs" ] }')
+        # Plan step M2: a stores.json also names the folders under each root that hold transcripts, and
+        # their extension, which only the engine's folder may say.
+        [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" }, { "env": "HARNESS_X_HOME_TEST" } ], "transcripts": [ { "folder": "logs", "extension": ".log" } ] }')
         $st = Get-HordeAgentStores -Root $fakeRepo
         $x = @($st.value | Where-Object { $_.agent -eq "harness-x" })[0]
         $y = @($st.value | Where-Object { $_.agent -eq "harness-y" })[0]
-        Check ($st.state -eq "known" -and @($x.transcripts) -contains (Join-Path $env:USERPROFILE ".harness-x\logs") -and @($x.transcripts) -contains (Join-Path $env:HARNESS_X_HOME_TEST "logs")) "transcript folders are found under every root of the engine, the moved one too"
+        $dirs = @($x.transcripts | ForEach-Object { $_.dir })
+        Check ($st.state -eq "known" -and $dirs -contains (Join-Path $env:USERPROFILE ".harness-x\logs") -and $dirs -contains (Join-Path $env:HARNESS_X_HOME_TEST "logs")) "transcript folders are found under every root of the engine, the moved one too"
+        Check (@($x.transcripts | Where-Object { $_.extension -ne ".log" }).Count -eq 0 -and @($x.extensions) -contains ".log") "with the extension the engine declares"
+        Check (@($x.transcripts | Where-Object { $_.label -like "*Users*" -or $_.label -like "*:*" }).Count -eq 0 -and @($x.transcripts | ForEach-Object { $_.label }) -contains "env-HARNESS_X_HOME_TEST/logs") "and a label for each that names its root and folder, never a home path"
         Check (@($y.transcripts).Count -eq 0) "an engine that names none has none"
-        foreach ($bad in @('"..\\up"', '".."', '"a/b"', '""')) {
+        foreach ($bad in @('{ "folder": "..\up", "extension": ".log" }', '{ "folder": "..", "extension": ".log" }', '{ "folder": "a/b", "extension": ".log" }', '{ "folder": "", "extension": ".log" }', '{ "folder": "logs", "extension": "log" }', '{ "folder": "logs", "extension": ".l;g" }', '{ "folder": "logs" }', '"logs"')) {
             [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), ('{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" } ], "transcripts": [ ' + $bad + ' ] }'))
-            Check ((Get-HordeAgentStores -Root $fakeRepo).state -eq "unknown") ("a transcripts folder that is not one plain folder name is refused: " + $bad)
+            Check ((Get-HordeAgentStores -Root $fakeRepo).state -eq "unknown") ("a transcripts entry that is not one plain folder and one extension is refused: " + $bad)
         }
         [System.IO.File]::WriteAllText((Join-Path $fakeRepo "agents\harness-x\stores.json"), '{ "schemaVersion": 1, "roots": [ { "profile": ".harness-x" } ], "transcripts": "logs" }')
         Check ((Get-HordeAgentStores -Root $fakeRepo).state -eq "unknown") "and so is a transcripts entry that is not a list"

@@ -5,5 +5,5 @@
     { "profile": ".claude" },
     { "env": "CLAUDE_CONFIG_DIR" }
   ],
-  "transcripts": [ "projects" ]
+  "transcripts": [ { "folder": "projects", "extension": ".jsonl" } ]
 }

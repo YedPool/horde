@@ -1,24 +1,31 @@
 # core/Schedule - one recurring job, defined once and handed to whichever scheduler this machine has.
 #
 # WHY A SEAM. `horde metrics collect` runs every 30 minutes (plan step M2). On Windows that is a Task
-# Scheduler task; a Linux host will want cron or a systemd timer. The job - what runs, how
-# often, at what priority, for how long at most - is defined here, and a SCHEDULER turns it into the
-# platform's own form. A scheduler is a file under core/schedule/ that registers itself with
-# Register-HordeScheduler: { name; available; install; remove; status }. A new platform is a new file.
+# Scheduler task; a Linux host will want cron or a systemd timer. The job is defined here as DATA - the
+# horde script, its arguments, the environment it needs, how often, how long at most - and a SCHEDULER
+# turns it into the platform's own form, including which program runs it and how its arguments are
+# passed. A scheduler is a file under core/schedule/ that registers itself with Register-HordeScheduler.
+# A new platform is a new file; nothing here names a shell or a quoting rule.
 #
-# ONE JOB, BY NAME. Every operation names the job, so a test acts only on the job it created under a
-# name of its own (CONTRIBUTING 9), never on the real one.
+# A JOB IS HORDE'S ONLY WHEN IT SAYS SO (review of PR #70, F1). A job lives in Horde's own folder of the
+# scheduler (Horde, or HordeTest for suites), carries a marker and the Horde home it serves, and a
+# scheduler installs over, or removes, only a job that carries the marker. A job of the same name that
+# Horde did not make is refused and left alone.
 #
-# No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1.
+# No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1 and
+# core/Home.ps1.
 
 $script:HordeSchedulers = New-Object System.Collections.ArrayList
 $script:HordeCollectJobName = "Horde metrics collect"
+$script:HordeJobFolders = @("Horde", "HordeTest")
+$script:HordeJobMarker = "horde-managed-job: 1"
 
 function Register-HordeScheduler {
     # -Available answers whether this scheduler works on this machine. -Install takes a job
-    # (New-HordeScheduledJob) and returns nothing; -Remove takes a name and returns whether a job was
-    # removed; -Status takes a name and returns an answer: known { installed; enabled; state; everyMinutes;
-    # lastRunAt; lastResult; nextRunAt; program; arguments }, absent when no such job exists.
+    # (New-HordeScheduledJob); -Remove takes (name, folder) and returns whether a job was removed;
+    # -Status takes (name, folder) and returns an answer: known { enabled; state; everyMinutes; marked;
+    # home; lastRunAt; lastResult; nextRunAt; runs }, absent when no such job exists. Install and remove
+    # throw rather than touch a job that does not carry Horde's marker.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][scriptblock]$Available,
@@ -46,35 +53,55 @@ function Get-HordeScheduler {
     return (New-HordeUnknown -Reason ("no scheduler works on this machine (registered: " + (@($script:HordeSchedulers | ForEach-Object { $_.name }) -join ", ") + ")"))
 }
 
+function Assert-HordeJobName {
+    # A job's name and folder: plain words, and one of Horde's own folders. Applied to every action,
+    # remove and status included, so no name reaches a scheduler that Horde would not have made.
+    param([string]$Name, [string]$Folder)
+    if ($Name -notmatch '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,100}\z') { throw ("not a job name Horde will use: '" + $Name + "'") }
+    if ($script:HordeJobFolders -cnotcontains $Folder) { throw ("not one of Horde's scheduler folders (" + ($script:HordeJobFolders -join ", ") + "): '" + $Folder + "'") }
+}
+
 function New-HordeScheduledJob {
-    # The job, as a platform-neutral definition. -Program and -Arguments are what runs; it runs as the
-    # current user, every -EveryMinutes, at low priority, stopped after -TimeLimitMinutes, never two at
-    # once, and not at all when -Disabled.
+    # The job, as data. It runs -Script with -Arguments and -Environment as the current user, every
+    # -EveryMinutes, at low priority, stopped after -TimeLimitMinutes, never two at once, and not at
+    # all when -Disabled. -HordeHome is the home it serves, written into its marker.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$Program,
-        [Parameter(Mandatory = $true)][string]$Arguments,
+        [string]$Folder = "Horde",
+        [Parameter(Mandatory = $true)][string]$Script,
+        [string[]]$Arguments = @(),
+        [hashtable]$Environment = @{},
+        [Parameter(Mandatory = $true)][string]$HordeHome,
         [string]$Description = "",
         [int]$EveryMinutes = 30,
         [int]$TimeLimitMinutes = 20,
         [switch]$Disabled
     )
-    if ($Name -notmatch '\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,100}\z') { throw ("not a job name Horde will use: '" + $Name + "'") }
+    Assert-HordeJobName -Name $Name -Folder $Folder
     if ($EveryMinutes -lt 1 -or $TimeLimitMinutes -lt 1 -or $TimeLimitMinutes -gt $EveryMinutes) { throw "a job runs at least every minute, and stops before its next run" }
-    return [pscustomobject]@{ name = $Name; program = $Program; arguments = $Arguments; description = $Description; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled }
+    foreach ($k in @($Environment.Keys)) { if ("$k" -cnotmatch '\A[A-Z_][A-Z0-9_]*\z') { throw ("not an environment variable name: '" + $k + "'") } }
+    foreach ($v in @(@($Script, $HordeHome) + @($Arguments) + @($Environment.Values))) { if ("$v" -match "[`r`n]") { throw "a job's script, arguments and environment cannot hold a line break" } }
+    $text = $Description + "`n" + $script:HordeJobMarker + "`nhorde-home: " + $HordeHome
+    return [pscustomobject]@{ name = $Name; folder = $Folder; script = $Script; arguments = @($Arguments); environment = $Environment; hordeHome = $HordeHome; description = $text; everyMinutes = $EveryMinutes; timeLimitMinutes = $TimeLimitMinutes; lowPriority = $true; disabled = [bool]$Disabled }
+}
+
+function Read-HordeJobMarker {
+    # From a job's description: { marked; home }. Marked only when the marker line is there exactly.
+    param([string]$Description)
+    $lines = @("$Description" -split "`r?`n")
+    $home2 = ""
+    foreach ($l in $lines) { if ($l.StartsWith("horde-home: ")) { $home2 = $l.Substring(12) } }
+    return [pscustomobject]@{ marked = ($lines -ccontains $script:HordeJobMarker); home = $home2 }
 }
 
 function New-HordeCollectJob {
     # The collect job: the shipped horde.ps1 of THIS checkout, `metrics collect`, every 30 minutes.
     #
-    # THE HOME TRAVELS WITH IT. A scheduler starts the job with the user's own environment, not this
-    # shell's, so a HORDE_HOME set here would not reach it and the job would collect into another home.
-    # When HORDE_HOME is set, the job sets it itself; a path that cannot be quoted safely is refused.
-    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeCollectJobName, [switch]$Disabled)
-    $setHome = "$env:HORDE_HOME".Trim()
-    foreach ($p in @($HordeScript, $setHome)) { if ($p -match "['""`r`n]") { throw ("a path with a quote or a line break cannot be given to the scheduler: " + $p) } }
-    $args2 = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden "
-    if ($setHome -ne "") { $args2 += "-Command ""`$env:HORDE_HOME = '" + $setHome + "'; & '" + $HordeScript + "' metrics collect; exit `$LASTEXITCODE""" }
-    else { $args2 += "-File """ + $HordeScript + """ metrics collect" }
-    return (New-HordeScheduledJob -Name $Name -Program "powershell.exe" -Arguments $args2 -Disabled:$Disabled -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
+    # THE HOME TRAVELS WITH IT, AS DATA. A scheduler starts the job with the user's own environment, not
+    # this shell's, so the job sets HORDE_HOME itself, to the home this shell resolves - which is also the
+    # home its marker names. How the value reaches the program is the scheduler's business, never a
+    # command string built here (review of PR #70, F2: a curly quote closed one).
+    param([Parameter(Mandatory = $true)][string]$HordeScript, [string]$Name = $script:HordeCollectJobName, [string]$Folder = "Horde", [switch]$Disabled)
+    $home2 = Get-HordeHome
+    return (New-HordeScheduledJob -Name $Name -Folder $Folder -Script $HordeScript -Arguments @("metrics", "collect") -Environment @{ HORDE_HOME = $home2 } -HordeHome $home2 -Disabled:$Disabled -Description "Horde: summarise new and changed agent transcripts into the metrics store when metrics are enabled. Managed by horde metrics schedule; remove it with horde metrics schedule remove.")
 }

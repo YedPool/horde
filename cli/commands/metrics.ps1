@@ -1,7 +1,7 @@
 $HordeCommand = @{
     name    = "metrics"
     group   = "metrics"
-    usage   = "metrics summarize <transcript-or-folder> [-From <UTC time>] [-To <UTC time>] [-Json] | metrics collect [-SettleMinutes <n>] | metrics schedule install|remove|status [-TaskName <name>] [-Disabled]"
+    usage   = "metrics summarize <transcript-or-folder> [-From <UTC time>] [-To <UTC time>] [-Json] | metrics collect [-SettleMinutes <n>] | metrics schedule install|remove|status [-TaskName <name>] [-TaskFolder Horde|HordeTest] [-Disabled]"
     summary = "summarize: read agent transcripts and print each worker's time, tokens, tool calls, silences and notional cost, and an orchestrator's still-waiting calls; collect: record every new or changed transcript; schedule: run collect every 30 minutes. Nothing is recorded unless metrics are enabled"
     run     = {
         [CmdletBinding()] param(
@@ -12,12 +12,13 @@ $HordeCommand = @{
             [switch]$Json,
             [int]$SettleMinutes = 10,
             [string]$TaskName = "Horde metrics collect",
+            [ValidateSet("Horde", "HordeTest")][string]$TaskFolder = "Horde",
             [switch]$Disabled
         )
         # Loaded here, in the command's own scope, so the adapters' and schedulers' functions stay
         # visible to the blocks they register (core/Transcript.ps1, Get-HordeTranscriptAdapterFiles).
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
-        $verbFlags = @{ summarize = @("From", "To", "Json"); collect = @("SettleMinutes"); schedule = @("TaskName", "Disabled") }
+        $verbFlags = @{ summarize = @("From", "To", "Json"); collect = @("SettleMinutes"); schedule = @("TaskName", "TaskFolder", "Disabled") }
         foreach ($k in @($verbFlags.Keys)) {
             if ($k -eq $Verb) { continue }
             foreach ($flag in $verbFlags[$k]) { if ($PSBoundParameters.ContainsKey($flag)) { throw ("-" + $flag + " belongs to metrics " + $k + ", not metrics " + $Verb) } }
@@ -37,7 +38,7 @@ $HordeCommand = @{
         }
         if ($Verb -eq "schedule") {
             if (@("install", "remove", "status") -cnotcontains $Target) { throw ("schedule takes install, remove or status, not '" + $Target + "'") }
-            Invoke-HordeMetricsSchedule -Action $Target -TaskName $TaskName -Disabled:$Disabled -HordeScript (Join-Path $root "horde.ps1") | ForEach-Object { Write-Output $_ }
+            Invoke-HordeMetricsSchedule -Action $Target -TaskName $TaskName -Folder $TaskFolder -Disabled:$Disabled -HordeScript (Join-Path $root "horde.ps1") | ForEach-Object { Write-Output $_ }
             return
         }
 

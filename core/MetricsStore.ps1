@@ -62,17 +62,19 @@ function Test-HordePathInside {
 
 function Get-HordeAgentStores {
     # Every engine's declared stores, as an answer: known list of { agent; roots; transcripts }, roots
-    # being full paths and transcripts the full paths of the folders under them that hold its
-    # transcripts; unknown when any engine folder does not say. Read as DATA from
+    # being full paths and transcripts { dir; extension; label } for each folder under them that holds
+    # its transcripts, label naming the root and folder without a home path ("profile.x/logs",
+    # "env-VAR/logs"); unknown when any engine folder does not say. Read as DATA from
     # agents/<name>/stores.json, found by folder and never named, so an engine with no transcript
     # adapter is protected too (review of PR #50, F7: a guard built from the loaded adapters left one
     # engine's folder open, and a probe wrote two summaries into a fake profile's copy of it).
     #
     # stores.json: { "schemaVersion": 1, "roots": [ { "profile": ".name" } | { "env": "VARIABLE" } ],
-    # "transcripts": [ "folder", ... ] }. "profile" is a folder in the user profile; "env" names a
-    # variable that can move the store, and counts only when set. "transcripts" names the folders,
-    # under each root, where `horde metrics collect` looks for transcripts (plan step M2); an engine
-    # Horde cannot read declares none. An engine folder with no stores.json, or one that cannot be
+    # "transcripts": [ { "folder": "name", "extension": ".ext" }, ... ] }. "profile" is a folder in the
+    # user profile; "env" names a variable that can move the store, and counts only when set.
+    # "transcripts" names the folders, under each root, where `horde metrics collect` looks for
+    # transcripts, and the extension of the engine's transcript files (plan step M2); an engine Horde
+    # cannot read declares none. An engine folder with no stores.json, or one that cannot be
     # read, makes the whole answer unknown, and the writer refuses: an engine nobody described is not
     # left unguarded.
     param([string]$Root = (Split-Path -Parent $PSScriptRoot))
@@ -89,27 +91,34 @@ function Get-HordeAgentStores {
         try { $s = $ser.DeserializeObject((Read-HordeSharedText -Path $file)) } catch { return (New-HordeUnknown -Reason ($where + " cannot be read") -ErrorRecord $_) }
         if ($s -isnot [System.Collections.IDictionary] -or $s["schemaVersion"] -ne 1 -or $s["roots"] -isnot [System.Collections.IEnumerable] -or @($s["roots"]).Count -eq 0) { return (New-HordeUnknown -Reason ($where + " is not a stores file with at least one root")) }
         $roots = New-Object System.Collections.ArrayList
+        $labelled = New-Object System.Collections.ArrayList
         foreach ($r in @($s["roots"])) {
             if ($r -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a root that is not an object")) }
             if ($r["profile"] -is [string] -and $r["profile"] -ne "") {
-                if ("$env:USERPROFILE".Trim() -ne "") { [void]$roots.Add((Join-Path "$env:USERPROFILE" $r["profile"])) }
+                if ("$env:USERPROFILE".Trim() -ne "") { $p = Join-Path "$env:USERPROFILE" $r["profile"]; [void]$roots.Add($p); [void]$labelled.Add([pscustomobject]@{ label = ("profile" + $r["profile"]); path = $p }) }
             }
             elseif ($r["env"] -is [string] -and $r["env"] -ne "") {
                 $v = [Environment]::GetEnvironmentVariable($r["env"])
-                if ("$v".Trim() -ne "") { [void]$roots.Add("$v") }
+                if ("$v".Trim() -ne "") { [void]$roots.Add("$v"); [void]$labelled.Add([pscustomobject]@{ label = ("env-" + $r["env"]); path = "$v" }) }
             }
             else { return (New-HordeUnknown -Reason ($where + " has a root with neither profile nor env")) }
         }
         $folders = New-Object System.Collections.ArrayList
+        $exts = New-Object System.Collections.ArrayList
         if ($s.ContainsKey("transcripts")) {
             if ($s["transcripts"] -is [string] -or $s["transcripts"] -isnot [System.Collections.IEnumerable]) { return (New-HordeUnknown -Reason ($where + " has a transcripts entry that is not a list")) }
             foreach ($t in @($s["transcripts"])) {
-                # A folder name under the root, never a path that climbs out of it.
-                if ($t -isnot [string] -or $t -notmatch '\A[A-Za-z0-9._-]+\z' -or $t -match '\A\.+\z') { return (New-HordeUnknown -Reason ($where + " has a transcripts folder that is not one plain folder name: '" + $t + "'")) }
-                foreach ($root in $roots) { [void]$folders.Add((Join-Path $root $t)) }
+                # A folder name under the root, never a path that climbs out of it, and the extension of the
+                # engine's transcript files, which only the engine's folder may say (CONTRIBUTING 14).
+                if ($t -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a transcripts entry that is not { folder; extension }")) }
+                $fo = $t["folder"]; $ex = $t["extension"]
+                if ($fo -isnot [string] -or $fo -notmatch '\A[A-Za-z0-9._-]+\z' -or $fo -match '\A\.+\z') { return (New-HordeUnknown -Reason ($where + " has a transcripts folder that is not one plain folder name: '" + $fo + "'")) }
+                if ($ex -isnot [string] -or $ex -notmatch '\A\.[A-Za-z0-9]{1,10}\z') { return (New-HordeUnknown -Reason ($where + " has a transcripts extension that is not a dot and up to ten letters or digits: '" + $ex + "'")) }
+                if ($exts -notcontains $ex) { [void]$exts.Add($ex) }
+                foreach ($lr in $labelled) { [void]$folders.Add([pscustomobject]@{ dir = (Join-Path $lr.path $fo); extension = $ex; label = ($lr.label + "/" + $fo) }) }
             }
         }
-        [void]$out.Add([pscustomobject]@{ agent = $d.Name; roots = $roots.ToArray(); transcripts = $folders.ToArray() })
+        [void]$out.Add([pscustomobject]@{ agent = $d.Name; roots = $roots.ToArray(); transcripts = $folders.ToArray(); extensions = $exts.ToArray() })
     }
     return (New-HordeKnown -Value $out.ToArray())
 }

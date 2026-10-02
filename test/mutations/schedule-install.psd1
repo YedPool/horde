@@ -8,7 +8,10 @@
            Find = 'if ($gate.state -ne "known" -or $gate.value.level -cne "usage") { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "install-not-checked"
-           Find = 'if ($st.state -ne "known") { throw ("the "'
-           Replace = 'if ($false) { throw ("the "' }
+           Find = 'if ($st.state -ne "known" -or -not $st.value.marked) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "name-rule-skipped"
+           Find = '    Assert-HordeJobName -Name $TaskName -Folder $Folder'
+           Replace = '' }
     )
 }

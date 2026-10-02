@@ -49,13 +49,14 @@ try {
     foreach ($s in @($stores.value)) {
         $fx = Join-Path $root ("agents\" + $s.agent + "\test\fixtures\metrics")
         if (@($s.transcripts).Count -eq 0 -or -not (Test-Path -LiteralPath $fx)) { continue }
-        $dest = Join-Path @($s.transcripts)[0] "fixtures"
+        $dest = Join-Path @($s.transcripts)[0].dir "fixtures"
         [void][System.IO.Directory]::CreateDirectory($dest)
         Copy-Item -Path (Join-Path $fx "*") -Destination $dest -Recurse
         foreach ($c in @(Get-ChildItem -LiteralPath $dest -File -Recurse)) { Set-Old $c.FullName $settledAt; if ($c.Extension -ieq ".jsonl") { [void]$copies.Add($c.FullName); $filled++ } }
     }
     Check ($filled -ge 4) ("CONTROL: the fake stores hold the engines' fixtures (" + $filled + " transcripts)")
     $planted = @($copies | Where-Object { $_ -like "*planted*" -and $_ -notlike "*subagents*" })[0]
+    $noBook = New-HordeAbsent -Note "not priced"
 
     Write-Host ""
     Write-Host "--- the gate: off, refused, before consent ---" -ForegroundColor Cyan
@@ -73,6 +74,8 @@ try {
     $bc = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
     Check ($bc.state -eq "done" -and $bc.recorded -eq 0 -and $bc.beforeConsent -eq $filled -and @(Get-Records).Count -eq 0) ("transcripts that began before consent are not recorded (" + $bc.beforeConsent + " of " + $filled + ")")
     Check ($bc.read -eq $filled) "they were read once, to learn when they began"
+    $bcKeys = @((Get-Index)["entries"].Keys)
+    Check ($bcKeys.Count -eq $filled -and @($bcKeys | Where-Object { $_ -notlike "hash:*" }).Count -eq 0) "and the index keeps nothing readable about them: each is a hash, no path and no name (review of PR #70, F6)"
     $bc2 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
     Check ($bc2.read -eq 0 -and -not $bc2.wroteIndex) "and are not read again while unchanged"
     [System.IO.File]::AppendAllText($planted, "`n")
@@ -82,6 +85,7 @@ try {
     Set-Gate ('{ "schemaVersion": 1, "level": "usage", "enabledAt": "' + $now.AddMinutes(-30).ToString("yyyy-MM-ddTHH:mm:ssZ") + '" }')
     $bm = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
     Check ($bm.read -eq 0 -and $bm.beforeConsent -eq $filled) "a transcript last written before consent is not read at all"
+    Check (@((Get-Index)["entries"].Keys).Count -eq 0) "nor indexed"
 
     Write-Host ""
     Write-Host "--- consent before every fixture: new files are recorded ---" -ForegroundColor Cyan
@@ -117,19 +121,39 @@ try {
     $r3 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
     Check ($r3.read -eq 1 -and $r3.recorded -eq 1 -and @(Get-Records).Count -eq $filled) "a changed transcript is read again, and replaces its record rather than adding one"
     Check ([System.IO.File]::ReadAllText($recPath) -ne $before) "CONTROL: the record did change (its transcript grew)"
-    $newCopy = Join-Path (Split-Path -Parent $planted) "elsewhere\$(Split-Path -Leaf $planted)"
-    [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $newCopy))
-    Copy-Item -LiteralPath $planted -Destination $newCopy
-    Set-Old $newCopy $settledAt
+    # A NEW transcript: a session of its own, made from the clean fixture with a new session id.
+    $cleanSrc = @($copies | Where-Object { $_ -like "*clean*" -and [System.IO.Path]::GetFileName($_) -match '\A[0-9a-f-]{36}\.jsonl\z' })[0]
+    $newId = "99999999-8888-4777-8666-555555555555"
+    $newFile = Join-Path (Split-Path -Parent $cleanSrc) ($newId + ".jsonl")
+    [System.IO.File]::WriteAllText($newFile, ([System.IO.File]::ReadAllText($cleanSrc) -replace [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($cleanSrc)), $newId))
+    Set-Old $newFile $settledAt
     $r4 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
-    Check ($r4.read -eq 1 -and $r4.recorded -eq 1 -and @(Get-Records).Count -eq ($filled + 1)) "a new transcript is recorded"
-    $hashed = @($r4.rows)[0].record
-    Check ($hashed -match '\.[0-9a-f]{8}\z') ("one with the same file name as another gets its own record, never the other's (" + $hashed + ")")
-    Remove-Item -LiteralPath $newCopy -Force
+    Check ($r4.read -eq 1 -and $r4.recorded -eq 1 -and @(Get-Records).Count -eq ($filled + 1) -and @($r4.rows)[0].record -like ("*/" + $newId)) "a new transcript is recorded, under its own session id"
+    # MOVED (review of PR #70, F4): the same session in a renamed folder is the same record.
+    $movedDir = Join-Path (Split-Path -Parent (Split-Path -Parent $newFile)) "renamed-project"
+    [void][System.IO.Directory]::CreateDirectory($movedDir)
+    $movedFile = Join-Path $movedDir (Split-Path -Leaf $newFile)
+    Move-Item -LiteralPath $newFile -Destination $movedFile
     $r5 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
+    Check ($r5.read -eq 1 -and $r5.removed -eq 1 -and @(Get-Records).Count -eq ($filled + 1) -and @($r5.rows)[0].record -like ("*/" + $newId)) "a moved transcript replaces its own record; it does not get a second one"
     $ix5 = Get-Index
-    Check ($r5.removed -eq 1 -and -not $ix5["entries"].ContainsKey($newCopy)) "a deleted transcript leaves the index"
+    Check (@($ix5["entries"].Keys | Where-Object { $_ -like "*renamed-project*" }).Count -eq 1 -and @($ix5["entries"].Keys).Count -eq ($filled + 1)) "and the index follows it: one entry, at its new place"
+    # A COPY of a session is the same session: one record.
+    $copyDir = Join-Path (Split-Path -Parent $planted) "elsewhere"
+    [void][System.IO.Directory]::CreateDirectory($copyDir)
+    $copyFile = Join-Path $copyDir (Split-Path -Leaf $planted)
+    Copy-Item -LiteralPath $planted -Destination $copyFile
+    Set-Old $copyFile $settledAt
+    $r6 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
+    Check ($r6.read -eq 1 -and @(Get-Records).Count -eq ($filled + 1)) "a copy of a session is the same session: it replaces that session's record, never adds one"
+    Remove-Item -LiteralPath $copyFile -Force
+    Remove-Item -LiteralPath $movedFile -Force
+    $r7 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
+    $ix7 = Get-Index
+    Check ($r7.removed -eq 2 -and @($ix7["entries"].Keys).Count -eq $filled) "a deleted transcript leaves the index"
     Check (@(Get-Records).Count -eq ($filled + 1)) "and its record stays: the work it measured was done"
+    $ixText = [System.IO.File]::ReadAllText((Get-HordeCollectIndexPath))
+    Check (-not $ixText.Contains($env:USERPROFILE) -and -not $ixText.Contains($work) -and -not $ixText.ToLowerInvariant().Contains(($env:USERPROFILE.Replace('\', '/')).ToLowerInvariant())) "the index holds no path into the home, only each transcript's place in its engine's folder (review of PR #70, F6)"
 
     Write-Host ""
     Write-Host "--- a transcript still being written is provisional ---" -ForegroundColor Cyan
@@ -165,6 +189,66 @@ try {
     Check ($inside.state -eq "refused" -and $inside.reason -like "*inside a harness*") "a home inside an engine's folder is refused"
     Check (((@(Get-ChildItem -LiteralPath $engineRoot -File -Recurse | ForEach-Object { $_.FullName })) -join "`n") -eq $snapIn) "and nothing but the gate file was written there"
     $env:HORDE_HOME = Join-Path $work "home"
+
+    Write-Host ""
+    Write-Host "--- one bad file never stops a run, and every failure is said (review of PR #70) ---" -ForegroundColor Cyan
+    $later = $now.AddMinutes(100)
+    # F3: a transcript whose identity cannot name a record.
+    $subCopy = @($copies | Where-Object { $_ -like "*subagents*" })[0]
+    $badName = Join-Path (Split-Path -Parent $subCopy) "agent-bad name.jsonl"
+    Copy-Item -LiteralPath $subCopy -Destination $badName
+    Set-Old $badName $settledAt
+    $b1 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b1.state -eq "done" -and $b1.notRecorded -eq 1 -and $b1.wroteIndex) "a transcript whose identity is not a record name is not recorded, and the run goes on to write its index"
+    $b2 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b2.state -eq "done" -and $b2.read -eq 0) "and the next run does not stumble on it again"
+    Remove-Item -LiteralPath $badName -Force
+    # F3: a record that cannot be written fails that file only.
+    $id2 = "77777777-6666-4555-8444-333333333333"
+    $file2 = Join-Path (Split-Path -Parent $cleanSrc) ($id2 + ".jsonl")
+    [System.IO.File]::WriteAllText($file2, ([System.IO.File]::ReadAllText($cleanSrc) -replace [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($cleanSrc)), $id2))
+    Set-Old $file2 $settledAt
+    $cleanAdapter = (Measure-HordeTranscriptFile -Path $cleanSrc -PriceTable $noBook).value.read.adapter
+    $blocker = Get-HordeMetricsRecordPath -Adapter $cleanAdapter -Name $id2
+    [void][System.IO.Directory]::CreateDirectory($blocker)
+    $b3 = $null; try { $b3 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root } catch { Write-Host ("    the run threw: " + $_.Exception.Message) }
+    Check ($null -ne $b3 -and $b3.state -eq "done" -and $b3.failed -eq 1 -and $b3.wroteIndex) "a record that cannot be written fails that one file; the run finishes and writes its index"
+    Remove-Item -LiteralPath $blocker -Force
+    Set-Old $file2 $settledAt.AddMinutes(5)
+    $b4 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b4.recorded -eq 1 -and (Test-Path -LiteralPath $blocker -PathType Leaf)) "CONTROL: once it can be written, it is"
+    # F7: a transcript that changes while it is read is provisional, whatever its time said.
+    $origMeasure = ${function:Measure-HordeTranscriptFile}
+    function Measure-HordeTranscriptFile { param($Path, $PriceTable, $From = $null, $To = $null) [System.IO.File]::AppendAllText($Path, "`n"); & $script:origMeasure -Path $Path -PriceTable $PriceTable }
+    try {
+        Set-Old $file2 $settledAt.AddMinutes(6)
+        $b5 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    } finally { Set-Item -Path function:Measure-HordeTranscriptFile -Value $origMeasure }
+    $r2rec = $ser.DeserializeObject([System.IO.File]::ReadAllText($blocker))
+    Check ($b5.provisional -eq 1 -and $r2rec["collection"]["provisional"] -eq $true -and "$($r2rec["collection"]["why"])" -like "*changed while it was read*") "a transcript that grew while it was read is recorded as provisional, and says why"
+    Set-Old $file2 $settledAt.AddMinutes(7)
+    $b6 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b6.read -eq 1 -and $b6.provisional -eq 0) "CONTROL: read again unchanged, it is final"
+    # F9: a provisional record whose transcript disappears is flagged, not left provisional forever.
+    Set-Old $file2 $later.AddMinutes(-1)
+    [System.IO.File]::AppendAllText($file2, "`n"); Set-Old $file2 $later.AddMinutes(-1)
+    $b7 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b7.provisional -eq 1) "CONTROL: the transcript is provisional now"
+    Remove-Item -LiteralPath $file2 -Force
+    $b8 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    $gone = $ser.DeserializeObject([System.IO.File]::ReadAllText($blocker))
+    Check ($b8.removed -eq 1 -and $gone["collection"]["sourceGone"] -eq $true -and "$($gone["collection"]["why"])" -like "*can never be made final*") "when its transcript is gone, the provisional record says it can never be made final"
+    # F9: a recorded transcript whose time moves to before consent is still read, not skipped.
+    Set-Old $planted ([datetime]::Parse("2026-08-01T00:00:00Z").ToUniversalTime())
+    $b9 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($b9.read -eq 1) "a recorded transcript whose time moved to before consent is read again, not dropped as pre-consent"
+    Set-Old $planted $settledAt.AddMinutes(8)
+    # F8: a lock that cannot be opened is a failure, said so, never a silent "busy".
+    Remove-Item -LiteralPath (Join-Path (Get-HordeMetricsDir) "collect.lock") -Force -ErrorAction SilentlyContinue
+    [void][System.IO.Directory]::CreateDirectory((Join-Path (Get-HordeMetricsDir) "collect.lock"))
+    $lk = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($lk.state -eq "refused" -and $lk.reason -like "*lock could not be opened*") "a lock that cannot be opened (here, a folder in its place) refuses the run and says why"
+    Remove-Item -LiteralPath (Join-Path (Get-HordeMetricsDir) "collect.lock") -Force
 
     Write-Host ""
     Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
