@@ -59,3 +59,27 @@ function Get-HordeStraySuiteFiles {
     $arr = [string[]]$stray.ToArray(); [Array]::Sort($arr, [System.StringComparer]::Ordinal)
     return @($arr)
 }
+
+# THE MUTATION SPECS: every *.psd1 under any folder named "mutations", at any depth, outside .git and
+# test/fixtures/. One rule, read by test/test-mutation-specs.ps1 (every find string applies) and by
+# tools/Mutate.ps1 -Changed (which mutants a change selects), so the two cannot disagree about what a
+# spec is. Each had its own search before, and -Changed missed specs the guard checked: a spec in a
+# subfolder of mutations/, and any mutations folder but the four suite folders' (review of PRs #62
+# and #63, 2026-10-02).
+function Get-HordeMutationSpecFiles {
+    # Every spec under -Root, as FileInfo, in ordinal order of its path relative to -Root.
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $specRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $found = New-Object System.Collections.ArrayList
+    foreach ($sf in @(Get-ChildItem -LiteralPath $specRoot -Filter "*.psd1" -File -Recurse -Force | Where-Object { $_.Extension -ceq ".psd1" })) {
+        $specRel = $sf.FullName.Substring($specRoot.Length + 1).Replace('\', '/')
+        if ($specRel.StartsWith(".git/") -or $specRel.StartsWith($script:HordeSuiteDataFolder + "/")) { continue }
+        # A folder named exactly "mutations" somewhere between -Root and the file.
+        $folders = @($specRel.Split('/') | Select-Object -SkipLast 1)
+        if ($folders -cnotcontains "mutations") { continue }
+        [void]$found.Add([pscustomobject]@{ rel = $specRel; file = $sf })
+    }
+    $sorted = @($found.ToArray())
+    [Array]::Sort([string[]]@($sorted | ForEach-Object { $_.rel }), [object[]]$sorted, [System.StringComparer]::Ordinal)
+    return @($sorted | ForEach-Object { $_.file })
+}

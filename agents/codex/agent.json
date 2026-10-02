@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "name": "codex",
+  "measured": { "cliVersion": "0.159.2", "on": "2026-10-02" },
+  "protocols": ["openai-responses"],
+  "nativeProvider": "openai",
+  "sessionIdPattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+  "ownedEnv": [
+    { "name": "OPENAI_API_KEY", "evidence": "an API key; 24 occurrences in the installed 0.159.2 codex.exe, 2026-10-02" },
+    { "name": "OPENAI_BASE_URL", "evidence": "an endpoint; 1 occurrence in the installed 0.159.2 codex.exe, 2026-10-02 - that it is read from the environment is not measured, and scrubbing a variable it ignores costs nothing" },
+    { "name": "OPENAI_ORGANIZATION", "evidence": "an account selector; 1 occurrence in the installed 0.159.2 codex.exe, 2026-10-02" },
+    { "name": "CODEX_API_KEY", "evidence": "an API key; 5 occurrences in the installed 0.159.2 codex.exe, beside OPENAI_API_KEY in its credential lookup, 2026-10-02" },
+    { "name": "CODEX_ACCESS_TOKEN", "evidence": "an access token; 9 occurrences in the installed 0.159.2 codex.exe, 2026-10-02" }
+  ],
+  "events": {
+    "session-started": { "hook": "SessionStart", "support": "yes", "evidence": "measured firing with its payload, on the FIRST TURN and not when the thread is created (YedPool/wezfleet lib/CodexStatus.ps1:17-20, on the version installed 2026-09-29); 53 occurrences in the 0.159.2 executable, 2026-10-02" },
+    "turn-started": { "hook": "UserPromptSubmit", "support": "yes", "evidence": "measured firing once per turn, before the model (YedPool/wezfleet lib/CodexStatus.ps1:21, on the version installed 2026-09-29); 37 occurrences in the 0.159.2 executable, 2026-10-02" },
+    "turn-ended": { "hook": "Stop", "support": "yes", "evidence": "measured firing only on a turn that completes - not on a failed or an interrupted one, so nothing may wait on it (YedPool/wezfleet lib/CodexStatus.ps1:22 and 33-36, on the version installed 2026-09-29)" },
+    "session-ended": { "hook": "SessionEnd", "support": "yes", "evidence": "measured firing on graceful shutdown only, so nothing may depend on it arriving (YedPool/wezfleet lib/CodexStatus.ps1:23 and 44, on the version installed 2026-09-29); 34 occurrences in the 0.159.2 executable, 2026-10-02" }
+  },
+  "capabilities": {
+    "message-inject": { "support": "unverified", "evidence": "queue in --help 0.159.2 (2026-10-02): queue a message for an existing session; delivery into a running interactive session is not measured (agent-engines research 6.3)" },
+    "delivery-receipt": { "support": "unverified", "evidence": "nothing has been measured confirming that a delivered message reached a running session" },
+    "resume": { "support": "yes", "evidence": "resume [SESSION_ID] in resume --help 0.159.2 (2026-10-02): a session id (UUID) or session name; a run on this machine is not measured" },
+    "report-hook": { "support": "yes", "evidence": "its four session hooks ran the fleet's status hook with their payloads (YedPool/wezfleet hooks/wf-codex-status.ps1, lib/CodexStatus.ps1, measured 2026-09-29)" },
+    "name-at-spawn": { "support": "no", "evidence": "--help 0.159.2 (2026-10-02) lists no flag that names a session at start; measured the same from --help on 2026-09-29 (YedPool/wezfleet lib/Agents.ps1). A name is still how a session is addressed later, by queue" },
+    "model-select": { "support": "yes", "evidence": "-m, --model <MODEL> in --help 0.159.2 (2026-10-02)" },
+    "provider-select": { "support": "unverified", "evidence": "-c overrides and -p, --profile in --help 0.159.2 (2026-10-02) could select another provider; none has been run, and the API-key routes are phase 2" },
+    "session-id-preset": { "support": "no", "evidence": "--help and resume --help 0.159.2 (2026-10-02) list no flag that starts a session with a chosen id; the id is learned from the SessionStart hook or the rollout file name (agent-engines research 6.3)" },
+    "session.remoteName": { "support": "unverified", "evidence": "remote-control in --help 0.159.2 (2026-10-02) is experimental and manages a daemon; no remote view's session name has been measured (engines plan group I)" }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--sandbox", "read-only", "--ask-for-approval", "never"], "entryPoints": ["interactive"], "evidence": "-s, --sandbox read-only and -a, --ask-for-approval never in --help 0.159.2 (2026-10-02); codex exec rejects --ask-for-approval with exit 2 (review r60), so the fragment is for the interactive start only", "readback": "sandbox read-only, approval never, and no escalation section, from codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1), with and without a [windows] sandbox setting" },
+    { "level": "ask", "argv": ["--sandbox", "read-only", "--ask-for-approval", "on-request"], "entryPoints": ["interactive"], "evidence": "-s read-only and -a on-request in --help 0.159.2 (2026-10-02): every write needs an escalation a person approves; a command that only reads runs unasked, which is plan-level activity and so within ask", "readback": "sandbox read-only with the escalation section that on-request adds, from codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1), with and without a [windows] sandbox setting" },
+    { "level": "edits", "argv": ["--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.exclude_slash_tmp=true"], "entryPoints": ["interactive"], "evidence": "-s workspace-write, -a on-request and -c in --help 0.159.2 (2026-10-02); the two exclude keys are in the installed codex.exe (27 occurrences each). Without them workspace-write also makes the TEMP folder and /tmp writable unasked (review r60, F2), which is more than edits allows", "readback": "sandbox workspace-write with exactly one writable root, the working folder, from codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1) with sandbox = \"elevated\"; the same start without the two -c settings read back the working folder, :slash_tmp and :tmpdir", "preconditions": [{"name": "windows-sandbox-configured", "evidence": "without a [windows] sandbox setting in CODEX_HOME's config.toml, workspace-write is silently read-only: codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1) read back sandbox read-only with a plain home, and workspace-write with sandbox = \"elevated\"; only elevated was measured"}] },
+    { "level": "bypass", "argv": ["--dangerously-bypass-approvals-and-sandbox"], "entryPoints": ["interactive"], "evidence": "--dangerously-bypass-approvals-and-sandbox in --help 0.159.2 (2026-10-02): skip all confirmation prompts and run without a sandbox; measured the same on 2026-09-29 (YedPool/wezfleet lib/Agents.ps1:33-36)", "readback": "sandbox danger-full-access, approval never, from codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1), with and without a [windows] sandbox setting" }
+  ]
+}

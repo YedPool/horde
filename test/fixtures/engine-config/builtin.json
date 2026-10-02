@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    { "name": "provider-a", "protocol": "anthropic-messages", "credential": { "kind": "harness-login" } },
+    { "name": "provider-b", "protocol": "openai-responses", "credential": { "kind": "harness-login" } }
+  ],
+  "profiles": [
+    { "name": "alpha", "harness": "harness-a", "provider": "provider-a" },
+    { "name": "beta", "harness": "harness-b", "provider": "provider-b" }
+  ],
+  "rules": [
+    { "id": "builtin-default", "match": {}, "set": { "profile": "alpha" }, "writtenBy": "user" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "keys": [
+    { "name": "profile", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "name" }, "direction": "any" },
+    { "name": "harness", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "name" }, "direction": "any" },
+    { "name": "provider", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "name" }, "direction": "any" },
+    { "name": "model", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "model" }, "direction": "any" }
+  ]
+}

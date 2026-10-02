@@ -69,7 +69,12 @@ $script:HordeExecCmdlets = @("Join-Path", "Split-Path", "New-Object", "Where-Obj
 $script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-HordeSchemaFile",
     # core/Tristate.ps1's constructors and converters, which the journal answers in. Each takes plain
     # values; Invoke-HordeRead, in the same file, takes a script block and is NOT here.
-    "New-HordeKnown", "New-HordeAbsent", "New-HordeUnknown", "ConvertTo-HordeAnswerRecord", "ConvertFrom-HordeAnswerRecord")
+    "New-HordeKnown", "New-HordeAbsent", "New-HordeUnknown", "ConvertTo-HordeAnswerRecord", "ConvertFrom-HordeAnswerRecord",
+    # Limit-HordeAge (remote plan R6, remote/Clock.ps1): ages a remote answer by the hub's receive time.
+    # It takes an answer, a TTL and a time - plain values - and returns an answer; it calls
+    # Assert-HordeAnswer and the constructors above, and runs nothing it is given. Its -Now defaults
+    # to Get-Date (already allowed); remote/Clock.ps1 always passes a UTC -Now. Added 2026-10-02.
+    "Limit-HordeAge")
 # Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
 $script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1")
 

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/engine-config.v1",
+  "title": "engine-config v1",
+  "description": "Which harness, provider and model each part of the Horde runs on, and later other settings, as one layer of rules (engines plan step E3; engine-settings design, sections 2 to 4). One schema for every layer that is a file: L0 built-in, L1 the user's, L4 live. L2, a project's own file, is not built until a repo needs one, and the checker refuses it. Providers, aliases and profiles are defined only in L0 and L1; revision belongs to L4 alone; a tuner's rule and an expiry only to L4. Never holds a secret: a credential is the NAME of an environment variable, or the harness's own login. Rules a draft-07 schema cannot say are core/EngineConfig.ps1's (Test-HordeEngineConfig), listed in its header.",
+  "type": "object",
+  "required": ["schemaVersion"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "revision": { "type": "integer", "minimum": 0, "description": "L4 only: compared and swapped by every writer of the live rules (engines E7)." },
+    "providers": { "type": "array", "items": { "$ref": "#/definitions/provider" } },
+    "aliases": { "type": "array", "items": { "$ref": "#/definitions/alias" } },
+    "profiles": { "type": "array", "items": { "$ref": "#/definitions/profile" } },
+    "rules": { "type": "array", "items": { "$ref": "#/definitions/rule" } }
+  },
+  "definitions": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" },
+    "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$", "description": "An alias name, or a concrete model id." },
+    "uuid": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "glob": { "type": "string", "pattern": "^[A-Za-z0-9*?._ -]{1,64}$" },
+    "credential": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "description": "harness-login: the harness's own login, which is the user's subscription, so Horde passes nothing; legal only on a harness whose descriptor names this provider as its nativeProvider (the subscription rule). env: the NAME of an environment variable holding the key, read at launch and never stored (agent-engines decision 9). The design's os-store kind is not built.",
+      "properties": {
+        "kind": { "type": "string", "enum": ["harness-login", "env"] },
+        "ref": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$", "description": "env only: the variable's name." }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "required": ["name", "protocol", "credential"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/name" },
+        "protocol": { "type": "string", "enum": ["anthropic-messages", "openai-responses", "openai-chat", "google-genai"], "description": "The wire format the endpoint speaks, named as schema/agent-descriptor.v1 names them. A harness may use the provider only if its descriptor lists this protocol (the wire-format rule)." },
+        "endpoint": { "type": "string", "pattern": "^https://[^\\s]+$", "description": "Absent: the harness's own default endpoint for the protocol." },
+        "credential": { "$ref": "#/definitions/credential" },
+        "models": { "type": "array", "items": { "$ref": "#/definitions/model" }, "description": "An allowlist of concrete ids. When present, a model outside it is a finding." },
+        "lacks": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]*([.-][a-z][a-zA-Z0-9]*)*$" }, "description": "Capabilities of core/capabilities.json this provider removes from any harness that uses it." }
+      }
+    },
+    "alias": {
+      "type": "object",
+      "required": ["name", "map"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/name" },
+        "map": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "model"],
+            "additionalProperties": false,
+            "properties": { "provider": { "$ref": "#/definitions/name" }, "model": { "$ref": "#/definitions/model" } }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["name", "harness", "provider"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/name" },
+        "harness": { "$ref": "#/definitions/name" },
+        "provider": { "$ref": "#/definitions/name" },
+        "model": { "$ref": "#/definitions/model", "description": "Absent: the harness's own default model, so no model flag is passed." }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every key must match (AND); an empty match matches every target. Ranks for specificity are engines E4's.",
+      "properties": {
+        "role": { "type": "string", "enum": ["warchief", "orc", "goblin"] },
+        "parent": { "$ref": "#/definitions/uuid" },
+        "run": { "type": "string", "pattern": "^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$" },
+        "fleetId": { "type": "string", "pattern": "\\S" },
+        "session": { "$ref": "#/definitions/uuid" },
+        "label": { "$ref": "#/definitions/glob" },
+        "title": { "$ref": "#/definitions/glob" }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "match", "set", "writtenBy"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "match": { "$ref": "#/definitions/match" },
+        "set": { "type": "object", "additionalProperties": true, "description": "Settings by key. The keys, their values and the layers each may be set in are core/config-keys.json's, checked by core/EngineConfig.ps1, so a new setting (metrics.level, admission.tier, remote.*) is one registry entry rather than a schema change. profile expands to its harness, provider and model at the rule's layer and specificity." },
+        "writtenBy": { "type": "string", "enum": ["user", "cli", "tuner"], "description": "Set by the program that writes the rule: user by hand, cli by horde config set, tuner by the admission tuner, which writes only live rules (engine-settings decision 9)." },
+        "until": { "type": "string", "pattern": "^(run-closed|session-retired|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z)$", "description": "L4 only: when the rule stops applying." },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}
