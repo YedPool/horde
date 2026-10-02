@@ -32,12 +32,22 @@
 # NO HARNESS IS NAMED HERE (CONTRIBUTING 14). Harnesses are found by folder, as core/Price.ps1 finds
 # price tables.
 #
+# PERMISSION LEVELS ARE REMOTE R0'S VOCABULARY (core/permission-levels.json), never this file's. A
+# descriptor maps every level to its harness's own flags, or says the harness cannot express it; the
+# coverage rule is R0's Test-HordePermissionLevelCoverage, so a vocabulary that gains or loses a level
+# fails every descriptor written against the old list.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). core/Ownership.ps1 is
-# loaded for Find-HordeJsonDuplicateKey, the repository's one duplicate-key scan; it sets strict mode
-# off for its caller, as it always has.
+# loaded for Find-HordeJsonDuplicateKey, the repository's duplicate-key scan; it sets strict mode off
+# for its caller, as it always has. It is loaded AFTER core/PermissionLevels.ps1, which defines a
+# second function of the same name that returns the first repeated key instead of every finding: the
+# last definition wins, and Ownership's shape satisfies both callers (R0's tests for a non-null
+# result, and an empty finding list is no result), while R0's would hand Test-HordeOwnership one
+# string where it expects a list.
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "Schema.ps1")
 . (Join-Path $PSScriptRoot "HostPort.ps1")
+. (Join-Path $PSScriptRoot "PermissionLevels.ps1")
 . (Join-Path $PSScriptRoot "Ownership.ps1")
 
 $script:HordeAgentCapabilityStates = @("yes", "no", "declined", "unverified")
@@ -133,7 +143,7 @@ function Get-HordeCapabilityVocabulary {
 function Test-HordeAgentDescriptorRules {
     # The rules a draft-07 schema cannot say, as problems. Runs on a value the schema has already
     # read; every field is looked up, so a shape the schema refused adds no strict-mode error here.
-    param($Descriptor, [string]$ExpectedName, [object[]]$Vocabulary)
+    param($Descriptor, [string]$ExpectedName, [object[]]$Vocabulary, [object[]]$Levels)
     $out = New-Object System.Collections.ArrayList
     $name = Get-HordeAgentProp $Descriptor "name"
     if ($ExpectedName -ne "" -and $name -is [string] -and $name -cne $ExpectedName) {
@@ -184,6 +194,27 @@ function Test-HordeAgentDescriptorRules {
         foreach ($w in $want) { if ($have -cnotcontains $w) { [void]$out.Add("the capability " + $w + " of core/capabilities.json is not declared") } }
         foreach ($h in $have) { if ($want -cnotcontains $h) { [void]$out.Add("the capability " + $h + " is not one an agent can satisfy in core/capabilities.json") } }
     }
+    # Each permission level once: a fragment with evidence, or a reason it is inexpressible.
+    $rows = Get-HordeAgentProp $Descriptor "permissionLevels"
+    if ($rows -is [System.Array] -and $null -ne $Levels) {
+        foreach ($row in @($rows)) {
+            $lvl = Get-HordeAgentProp $row "level"
+            $argv = Get-HordeAgentProp $row "argv"
+            $why = Get-HordeAgentProp $row "inexpressible"
+            $ev = Get-HordeAgentProp $row "evidence"
+            if ($null -ne $argv -and $null -ne $why) { [void]$out.Add("the permission level " + $lvl + " has both a fragment and a reason it cannot be expressed; it is one or the other") }
+            elseif ($null -eq $argv -and $null -eq $why) { [void]$out.Add("the permission level " + $lvl + " has neither a fragment nor a reason it cannot be expressed") }
+            elseif ($null -ne $argv) {
+                if ($argv -is [System.Array] -and @($argv).Count -eq 0) { [void]$out.Add("the permission level " + $lvl + " has an empty fragment; a level a harness gives by default is still named by its flags, or it is inexpressible") }
+                if ($null -eq $ev) { [void]$out.Add("the permission level " + $lvl + " has a fragment with no evidence that its flags were read off the harness's help") }
+            }
+            elseif ($null -ne $ev) { [void]$out.Add("the permission level " + $lvl + " is inexpressible, so it carries a reason and no evidence of a flag") }
+        }
+        $cov = Test-HordePermissionLevelCoverage -Mapped @(@($rows) | ForEach-Object { Get-HordeAgentProp $_ "level" }) -Levels $Levels
+        foreach ($m in @($cov.missing)) { [void]$out.Add("the permission level " + $m + " of core/permission-levels.json is not mapped") }
+        foreach ($u in @($cov.unknown)) { [void]$out.Add("the permission level '" + $u + "' is not in core/permission-levels.json") }
+        foreach ($t in @($cov.duplicate)) { [void]$out.Add("the permission level " + $t + " is mapped twice") }
+    }
     return $out.ToArray()
 }
 
@@ -191,26 +222,27 @@ function Read-HordeAgentDescriptorText {
     # A descriptor given as JSON text, checked whole. Returns the parsed descriptor; throws, naming
     # every problem, when it is not usable. -ExpectedName is the folder it came from ("" skips that
     # one rule, for a caller that has no folder).
-    param([Parameter(Mandatory = $true)][string]$Text, [string]$ExpectedName = "", [string]$What = "the agent descriptor", $Vocabulary = $null)
+    param([Parameter(Mandatory = $true)][string]$Text, [string]$ExpectedName = "", [string]$What = "the agent descriptor", $Vocabulary = $null, $Levels = $null)
     if ($null -eq $Vocabulary) { $Vocabulary = @(Get-HordeCapabilityVocabulary) }
+    if ($null -eq $Levels) { $Levels = @(Get-HordePermissionLevels) }
     $problems = New-Object System.Collections.ArrayList
     foreach ($p in (Get-HordeJsonDuplicateKeyProblems -Text $Text)) { [void]$problems.Add($p) }
     $d = $null
     try { $d = $Text | ConvertFrom-Json } catch { throw ($What + " is not JSON: " + $_.Exception.Message) }
     foreach ($p in @(Test-HordeSchema -Value $d -Schema (Get-HordeSchema -Name "agent-descriptor.v1"))) { [void]$problems.Add($p) }
-    foreach ($p in @(Test-HordeAgentDescriptorRules -Descriptor $d -ExpectedName $ExpectedName -Vocabulary $Vocabulary)) { [void]$problems.Add($p) }
+    foreach ($p in @(Test-HordeAgentDescriptorRules -Descriptor $d -ExpectedName $ExpectedName -Vocabulary $Vocabulary -Levels $Levels)) { [void]$problems.Add($p) }
     if ($problems.Count -gt 0) { throw ($What + " is not usable: " + ($problems -join "; ")) }
     return $d
 }
 
 function Read-HordeAgentDescriptor {
     # agents/<name>/agent.json from disk; the harness's name is the folder's.
-    param([Parameter(Mandatory = $true)][string]$Path, $Vocabulary = $null)
+    param([Parameter(Mandatory = $true)][string]$Path, $Vocabulary = $null, $Levels = $null)
     $folder = Split-Path -Leaf (Split-Path -Parent $Path)
     $what = "the agent descriptor of " + $folder
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     Assert-HordeAsciiBytes -Bytes $bytes -What $what
-    return (Read-HordeAgentDescriptorText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)) -ExpectedName $folder -What $what -Vocabulary $Vocabulary)
+    return (Read-HordeAgentDescriptorText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)) -ExpectedName $folder -What $what -Vocabulary $Vocabulary -Levels $Levels)
 }
 
 function Get-HordeAgentDescriptors {
@@ -223,11 +255,12 @@ function Get-HordeAgentDescriptors {
     $out = [ordered]@{}
     if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return $out }
     $vocab = @(Get-HordeCapabilityVocabulary)
+    $levelList = @(Get-HordePermissionLevels)
     $problems = New-Object System.Collections.ArrayList
     foreach ($dir in @(Get-ChildItem -LiteralPath $agents -Directory | Sort-Object Name)) {
         $file = Join-Path $dir.FullName "agent.json"
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { [void]$problems.Add("the harness folder " + $dir.Name + " has no agent.json"); continue }
-        try { $out[$dir.Name] = Read-HordeAgentDescriptor -Path $file -Vocabulary $vocab } catch { [void]$problems.Add($_.Exception.Message) }
+        try { $out[$dir.Name] = Read-HordeAgentDescriptor -Path $file -Vocabulary $vocab -Levels $levelList } catch { [void]$problems.Add($_.Exception.Message) }
     }
     if ($problems.Count -gt 0) { throw ("the agent descriptors are not all usable: " + ($problems -join " | ")) }
     return $out
@@ -263,4 +296,29 @@ function Test-HordeAgentCapability {
     param([Parameter(Mandatory = $true)]$Descriptor, [Parameter(Mandatory = $true)][string]$Name)
     $row = Get-HordeAgentCapabilityRow -Descriptor $Descriptor -Name $Name
     return [bool]("$($row.support)" -ceq "yes")
+}
+
+function Get-HordePermissionArgs {
+    # The argv fragment that gives one permission level on this harness, as a Horde answer: known with
+    # a fresh copy of the fragment, or unknown with the reason. Pure: the step R9's node takes before a
+    # spawn, so a refusal here is a refused spawn.
+    #
+    # NEVER THE NEAREST LEVEL. A level the harness cannot express is refused with the descriptor's own
+    # reason. It is not lowered to the next level down that the harness does have, because a silent
+    # lowering is a policy change nobody asked for (engines E2, remote R9). A name that is not a level
+    # - "Bypass" is not bypass - is refused by R0's Get-HordePermissionLevelRank.
+    param([Parameter(Mandatory = $true)]$Descriptor, $Level, $Levels = $null)
+    if ($null -eq $Levels) { $Levels = @(Get-HordePermissionLevels) }
+    $rank = Get-HordePermissionLevelRank -Name $Level -Levels $Levels
+    if ($rank.state -cne "known") { return (New-HordeUnknown -Reason $rank.reason) }
+    $who = "" + (Get-HordeAgentProp $Descriptor "name")
+    # Assigned before it is listed: Get-HordeAgentProp emits a list as ONE object, so @(Get-HordeAgentProp ...)
+    # would be a list holding the list.
+    $rows = Get-HordeAgentProp $Descriptor "permissionLevels"
+    $row = @(@($rows) | Where-Object { (Get-HordeAgentProp $_ "level") -ceq $Level })
+    if ($row.Count -ne 1) { return (New-HordeUnknown -Reason ("the descriptor of " + $who + " does not map the permission level " + $Level + " exactly once")) }
+    $why = Get-HordeAgentProp $row[0] "inexpressible"
+    if ($null -ne $why) { return (New-HordeUnknown -Reason ($who + " cannot express the permission level " + $Level + ": " + $why + ". It is refused, never lowered to a level the harness has")) }
+    $argv = Get-HordeAgentProp $row[0] "argv"
+    return (New-HordeKnown -Value ([string[]]@(@($argv) | ForEach-Object { "$_" })))
 }

@@ -4,7 +4,7 @@
   "title": "agent-descriptor v1",
   "description": "What one agent harness offers, as data: agents/<name>/agent.json (engines plan step E2). Every flag, hook and variable named here is read off the installed program and cited in its evidence. Each capability is declared in the one vocabulary the host and transport capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no and never satisfies a requirement. The capabilities are exactly those core/capabilities.json says an agent can satisfy, and every one is declared. Rules a draft-07 schema cannot say are core/AgentDescriptor.ps1's: name equals the folder name, protocols are distinct, sessionIdPattern compiles and is anchored at both ends, owned variable names are distinct ignoring case, an event the harness supports names its hook and one it lacks names none, and the file is plain ASCII with no key repeated in one object.",
   "type": "object",
-  "required": ["schemaVersion", "name", "measured", "protocols", "nativeProvider", "sessionIdPattern", "ownedEnv", "events", "capabilities"],
+  "required": ["schemaVersion", "name", "measured", "protocols", "nativeProvider", "sessionIdPattern", "ownedEnv", "events", "capabilities", "permissionLevels"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "type": "integer", "enum": [1] },
@@ -66,6 +66,21 @@
         "provider-select": { "$ref": "#/definitions/capability" },
         "session-id-preset": { "$ref": "#/definitions/capability" },
         "session.remoteName": { "$ref": "#/definitions/capability" }
+      }
+    },
+    "permissionLevels": {
+      "type": "array",
+      "description": "Every level of Horde's permission vocabulary (core/permission-levels.json, remote R0), each exactly once: with the argv fragment that gives it on this harness and the evidence that the flag was read off its help, or as inexpressible with the reason. A node refuses a level its harness cannot express; it never lowers it to the nearest level the harness has (remote R9, engines E2). One of argv and inexpressible per row, and evidence only beside argv: core/AgentDescriptor.ps1 checks both, and the coverage.",
+      "items": {
+        "type": "object",
+        "required": ["level"],
+        "additionalProperties": false,
+        "properties": {
+          "level": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+          "argv": { "type": "array", "items": { "type": "string", "pattern": "^\\S+$" } },
+          "evidence": { "$ref": "#/definitions/evidence" },
+          "inexpressible": { "type": "string", "pattern": "\\S", "description": "Why this harness has no way to give the level." }
+        }
       }
     }
   },
