@@ -9,8 +9,8 @@
     Mutations = @(
         # --- agents/ is scanned at all
         @{ Name = "agents-family-dropped"
-           Find = '$script:HordePortFamilies = @("hosts", "agents")'
-           Replace = '$script:HordePortFamilies = @("hosts")' }
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports")'
+           Replace = '$script:HordePortFamilies = @("hosts", "transports")' }
         # --- a port is its family AND its name, never its name alone
         @{ Name = "port-own-folder-assumed-hosts"
            Find = 'own = ($fam + "/" + $d.Name)'
