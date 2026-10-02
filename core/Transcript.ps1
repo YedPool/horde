@@ -105,6 +105,14 @@ function Read-HordeJsonLines {
     # lines of a 46 MB transcript held as dictionaries, every later allocation slowed about tenfold (a
     # record constructor went from 0.04 to 0.4 ms), and reading took 56 s; an adapter streams.
     param([Parameter(Mandatory = $true)][string]$Path, [scriptblock]$Each)
+    # EVERY LOCAL HERE IS PRIVATE. PowerShell scopes are dynamic: the -Each block runs below this
+    # function, so a name it reads that this function also uses resolves HERE, not in the adapter that
+    # wrote the block. Measured 2026-10-01: an adapter whose block added records to its own $out added
+    # them to this function's $out instead, and the adapter read nothing. Private variables are not
+    # visible to a child scope, so the block sees only its own and its author's.
+    foreach ($private:hordeParam in @("Path", "Each")) { (Get-Variable -Name $hordeParam -Scope Local).Options = "Private" }
+    $private:ser = $null; $private:out = $null; $private:skipped = 0; $private:torn = 0; $private:stream = $null
+    $private:endsWithNewline = $true; $private:reader = $null; $private:n = 0; $private:pendingBad = $false; $private:text = $null; $private:value = $null
     Add-Type -AssemblyName System.Web.Extensions
     $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $ser.MaxJsonLength = [int]::MaxValue

@@ -51,6 +51,11 @@ try {
     $streamed = Read-HordeJsonLines -Path $f -Each { param($n, $v) [void]$seenLines.Add($n); "stray output" }
     Check ((@($seenLines) -join ",") -eq "1,4") "with -Each, every good line is handed to the block with its line number"
     Check (@($streamed.lines).Count -eq 0 -and $streamed.parseSkipped -eq 1 -and $streamed.tornTail -eq 1) "and none is kept, while bad and torn lines are still counted"
+    # Dynamic scoping: a block that reads a name the reader also uses must still see its author's.
+    $out = "the author's"; $ser = "the author's"; $text = "the author's"
+    $sawNames = New-Object System.Collections.ArrayList
+    $null = Read-HordeJsonLines -Path $f -Each { param($n, $v) [void]$sawNames.Add($out + "|" + $ser + "|" + $text) }
+    Check (@($sawNames | Where-Object { $_ -ne "the author's|the author's|the author's" }).Count -eq 0 -and $sawNames.Count -eq 2) 'a block reading names the reader also uses ($out, $ser, $text) sees its author''s, not the reader''s'
     $arr = Join-Path $work "array.jsonl"
     [System.IO.File]::WriteAllText($arr, "[1,2]`n""text""`n")
     Check ((Read-HordeJsonLines -Path $arr).parseSkipped -eq 2) "a line that parses but is not an object is skipped, not read"
