@@ -81,6 +81,17 @@ try {
     Check (@($planted | Where-Object { $_ -match 'planted\.psd1 :: absent: its find string occurs 0 times' }).Count -eq 1) "CONTROL: a find string that does not occur is reported"
     Check (@($planted | Where-Object { $_ -match 'no-target\.psd1: its target gone\.ps1 does not exist' }).Count -eq 1) "CONTROL: a spec whose target is missing is reported"
     Check (@($planted | Where-Object { $_ -match ':: once:' }).Count -eq 0) "CONTROL: a find string that occurs once is not"
+    # A SPEC IN A SUBFOLDER OF mutations/ IS STILL A SPEC (review of PR #62, probe Q1: one in
+    # test\mutations\sub\ was not seen and the suite passed).
+    New-Item -ItemType Directory -Path (Join-Path $fx "test\mutations\sub") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\sub\nested.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'nested-twice'; Find = 'return 1'; Replace = 'return 2' }) }")
+    # A FIND STRING THAT SPANS LINES occurs once here, yet tools\Mutate.ps1 refuses it as invalid -
+    # line endings differ by checkout (probe Q4: it passed this guard).
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\multiline.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'spans'; Find = ""return 3 }``r``nfunction C""; Replace = 'x' }) }")
+    [System.IO.File]::WriteAllText((Join-Path $fx "t.ps1"), "function A { return 1 }`r`nfunction B { return 1 }`r`nfunction C { return 3 }`r`nfunction C2 { return 3 }`r`n")
+    $planted2 = @(Get-SpecProblems -Root $fx -Specs @(Get-SpecFiles -Root $fx))
+    Check (@($planted2 | Where-Object { $_ -match 'sub\\nested\.psd1 :: nested-twice: its find string occurs 2 times' }).Count -eq 1) "a spec in a subfolder of mutations is checked too"
+    Check (@($planted2 | Where-Object { $_ -match 'multiline\.psd1 :: spans: its find string spans lines' }).Count -eq 1) "a find string that spans lines is refused, as tools\Mutate.ps1 refuses it"
 } finally {
     if ((Split-Path -Leaf $fx) -match '^horde-specfind-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
 }
