@@ -35,7 +35,8 @@
 # comment - and a byte-level ASCII check, or passing the config's bytes to ssh rather than its path,
 # would close the gap. Left as it is by the coordinator's decision of 2026-10-02.
 #
-# ONE PROGRAM START, AT ONE CALL SITE: Start-HordeSshProcess, called by Open with the System32 path.
+# ONE PROGRAM START, AT ONE CALL SITE: Start-HordeSshProcess, called once by Open, starting the System32
+# ssh.exe named in its own one setup expression.
 # tools/ExecScan.ps1 has no policy for transports/ yet (Horde #53); until it has, test-ssh.ps1 holds
 # this property by parsing this folder.
 #
@@ -89,12 +90,13 @@ function Test-HordeSshFiles {
 }
 
 function Start-HordeSshProcess {
-    # THE ONE PLACE this transport starts a program. stdin, stdout and stderr are redirected; no window,
-    # no shell. The caller holds the returned process, and only it may stop it (CONTRIBUTING 9).
-    param([Parameter(Mandatory = $true)][string]$FilePath, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Arguments)
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $FilePath
-    $psi.Arguments = $Arguments
+    # THE ONE PLACE this transport starts a program, and the program is fixed here: the System32 ssh.exe,
+    # named in the one expression that sets the start up, never a path a caller passes or a variable
+    # anyone can reassign (review of PR #68, round 2, F4: a $exe or $psi.FileName reassigned before the
+    # start ran another program). stdin, stdout and stderr are redirected; no window, no shell. The
+    # caller holds the returned process, and only it may stop it (CONTRIBUTING 9).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Arguments)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), $Arguments)
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardInput = $true
@@ -290,7 +292,7 @@ $null = Register-HordeTransport -Folder $script:HordeSshFolder `
         }
         $ready = Test-HordeSshFiles -Paths $paths
         if (-not $ready.ok) { return (New-HordeSshResult -Ok $false -Reason $ready.reason) }
-        $proc = Start-HordeSshProcess -FilePath $exe.path -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))
+        $proc = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))
         # FROM HERE ssh.exe IS RUNNING, and every way out either hands it to the link or kills it (header,
         # NO ORPHAN). $handed is set only on the last line before the return.
         $startedAt = $proc.StartTime

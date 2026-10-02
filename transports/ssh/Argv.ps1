@@ -28,10 +28,12 @@
 #                         "extra arguments at end of line", exit 255 - and a profile folder with a
 #                         space in it is ordinary. So each path value is written in double quotes,
 #                         which ssh's own argument splitter removes (measured: spaces, a tilde, a UNC
-#                         path and doubled backslashes all come back byte for byte), and a path holding
-#                         %, #, a quote, anything but printable ASCII, or ending in a backslash (which
-#                         would escape the closing quote) is refused (Test-HordeSshSafePath). ssh -G is
-#                         held to resolving each path byte for byte (transports/ssh/test/test-ssh.ps1).
+#                         path and doubled backslashes all come back byte for byte). The second review
+#                         round then found ${VAR} expanded too, the third such surprise; so rather than
+#                         list what ssh treats specially, a path is held to an ALLOWLIST: letters,
+#                         digits, space and \ / : . _ - and nothing else, and not ending in a backslash
+#                         (which would escape the closing quote) (Test-HordeSshSafePath). ssh -G is held
+#                         to resolving each path byte for byte (transports/ssh/test/test-ssh.ps1).
 #   UserKnownHostsFile=<Horde's>, GlobalKnownHostsFile=none, StrictHostKeyChecking=yes,
 #   HostKeyAlias, UpdateHostKeys=no, CheckHostIP=no
 #                         the host key is checked against Horde's own file only, by hub identity,
@@ -90,7 +92,8 @@ function Test-HordeSshSafePath {
     # (header, PATHS, AS SSH READS THEM). The reason never repeats the path's unprintable characters.
     param([string]$Path)
     if ($Path -eq "") { return "the path is empty" }
-    $m = [regex]::Match($Path, "[%#'""]|[^\x20-\x7E]")
+    # The allowlist (header, PATHS, AS SSH READS THEM): anything outside it is refused.
+    $m = [regex]::Match($Path, '[^A-Za-z0-9 \\/:._-]')
     if (-not $m.Success) {
         if ($Path.EndsWith("\")) { return ("ssh would not read the path '" + $Path + "' as written: it ends in a backslash, which would escape the quote around it") }
         return ""
@@ -98,7 +101,7 @@ function Test-HordeSshSafePath {
     $shown = $Path -replace '[^\x20-\x7E]', '?'
     $what = "'" + $m.Value + "'"
     if ($m.Value -notmatch '[\x20-\x7E]') { $what = "a character that is not printable ASCII" }
-    return ("ssh would not read the path '" + $shown + "' as written: it holds " + $what + " (ssh expands %, cuts at #, and refuses quotes)")
+    return ("ssh would not read the path '" + $shown + "' as written: it holds " + $what + ", and a path ssh is given holds only letters, digits, space and \ / : . _ - (ssh expands %, `$ and `${}, cuts at #, refuses quotes)")
 }
 
 function Get-HordeSshPaths {
