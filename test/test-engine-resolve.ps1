@@ -113,6 +113,8 @@ $u = Read-Fixture "user.json"
 $u.providers = @($u.providers) + @([pscustomobject]@{ name = "provider-d"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "harness-login" } })
 $res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json")), (New-Layer "L1" $u), (New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ provider = "provider-d"; model = "x-1" })))) -Target @{ role = "orc" }
 Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*provider-d*own login*") "a harness-login provider under a harness whose native provider is another is refused (the subscription rule)"
+$res = Resolve ($base + @(New-Layer "L5" (New-Doc @(New-Rule "spawn" @{} @{ model = "model-c9" })))) -Target @{ role = "goblin" }
+Check ($res.binding.state -eq "unknown" -and $res.binding.reason -like "*model-c9*allowlist*provider-c*") "a model outside the resolved provider's allowlist is refused, though no single layer stated the pair"
 $res = Resolve @((New-Layer "L0" (Read-Fixture "builtin.json"))) -Target @{ role = "goblin" }
 Check ($res.binding.state -eq "known" -and $null -eq $res.binding.value.model) "with no model set, the binding carries none: the harness's own default"
 
