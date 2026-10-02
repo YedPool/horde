@@ -29,7 +29,9 @@
            Replace = 'if ($false) {' }
         @{ Name = "definition-names-compared-with-case"
            Find = '$key = ("" + $item.name).ToLowerInvariant()'
-           Replace = '$key = ("" + $item.name)' }
+           Replace = '$key = ("" + $item.name)'
+           Expect = "survives"
+           Reason = "schema/engine-config.v1 allows only lower-case names (^[a-z][a-z0-9-]{0,39}$), so two names that differ only in case never reach this comparison; it ignores case so that a later, looser name pattern cannot let one name be defined twice." }
         @{ Name = "definition-defined-twice-accepted"
            Find = 'if ($table.ContainsKey($key)) { Add-Finding "duplicate-name"'
            Replace = 'if ($false) { Add-Finding "duplicate-name"' }
@@ -109,7 +111,7 @@
            Find = 'if ($null -eq $prof) { Add-Finding "undefined-profile"'
            Replace = 'if ($false) { Add-Finding "undefined-profile"' }
         @{ Name = "rule-pair-not-checked"
-           Find = 'Test-Binding -Harness $h -Provider $pr -Model $mo -Where ("the rule " + $r.id)'
+           Find = 'Test-Binding -Harness $h -Provider $pr -Model $mo -Where ("the rule " + $r.id) -Source $d.source -Path $at'
            Replace = '$null = $h' }
         @{ Name = "profile-pair-not-checked"
            Find = 'foreach ($e in @($profiles.Values)) { Test-Binding'
