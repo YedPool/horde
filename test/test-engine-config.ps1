@@ -153,6 +153,11 @@ $shapes = [ordered]@{
     "gitlab"  = "glpat-Zq9XyW8vU7tS6rR5qP4o"
     "goauth"  = "ya29.Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI"
     "lower52" = "zq9xyw8vu7ts6rr5qp4on3mm2lk1jj0iihhgg7ff6ee5dd4cc3bb"
+    # Shapes only one pattern can catch, so a mutant that drops that pattern is seen (2026-10-02: the
+    # hex and Google OAuth patterns were redundant with the token rules for the two shapes above, and
+    # their mutants survived): upper-case hex has no lower-case letter, and this OAuth body no digit.
+    "hexupper" = "0123456789ABCDEF0123456789ABCDEF01234567"
+    "goauthlower" = "ya29.abcdefghijklmnopqrstuvwxyz"
 }
 $plants = [ordered]@{
     "set.model (allowlisted provider)" = { param($d, $v) $r = Get-Rule $d.L4 "live-1"; $r.set.model = $v }
