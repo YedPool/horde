@@ -36,7 +36,7 @@ function Invoke-HordeMetricsSummarize {
     # happened to it; unread lists files no adapter could read, with the reason.
     param([Parameter(Mandatory = $true)][string]$Path, $From = $null, $To = $null)
     $windowed = ($null -ne $From -or $null -ne $To)
-    $table = Read-HordePriceTable
+    $table = Read-HordePriceBook
     $gate = Read-HordeMetricsGate
     $roots = @()
     foreach ($a in (Get-HordeTranscriptAdapters)) { $roots += @(& $a.storeRoots) }
@@ -144,7 +144,7 @@ function Format-HordeMetricsSummary {
     foreach ($u in $Result.unread) { [void]$lines.Add("not read: " + $u.file + ": " + $u.reason) }
     $skipped = @($Result.rows | Where-Object { $_.read.parseSkipped -gt 0 -or $_.read.tornTail -gt 0 })
     foreach ($row in $skipped) { [void]$lines.Add("lines not parsed: " + $row.file + ": " + $row.read.parseSkipped + " skipped, " + $row.read.tornTail + " still being written") }
-    if ($Result.priceTable.state -eq "known") { [void]$lines.Add("cost: notional list price from price table " + $Result.priceTable.value["version"] + "; an ESTIMATE, never money spent on a subscription") }
+    if ($Result.priceTable.state -eq "known") { [void]$lines.Add("cost: notional list price from " + ($Result.priceTable.value["sources"] -join ", ") + "; an ESTIMATE, never money spent on a subscription") }
     else { [void]$lines.Add("cost: unknown - " + $Result.priceTable.reason) }
     $written = @($Result.rows | Where-Object { $_.written -ne "" })
     if ($written.Count -gt 0) { [void]$lines.Add("recorded " + $written.Count + " summaries under " + (Join-Path (Get-HordeMetricsDir) "summaries")) }

@@ -31,5 +31,20 @@
         @{ Name = "unknown-rate-name-accepted"
            Find = 'if ($script:HordeRateKeys -cnotcontains $k) {'
            Replace = 'if ($false) {' }
+        @{ Name = "override-ignored"
+           Find = 'if ($null -ne $Override) { foreach ($id in @($Override.value["models"].Keys)) { $models[$id] = $Override.value["models"][$id] } }'
+           Replace = '' }
+        @{ Name = "duplicate-repo-model-last-wins"
+           Find = 'if ($models.ContainsKey($id)) { return (New-HordeUnknown -Reason ("model '''
+           Replace = 'if ($false) { return (New-HordeUnknown -Reason ("model ''' }
+        @{ Name = "unreadable-override-skipped"
+           Find = 'foreach ($t in $tables) { if ($t.state -eq "unknown") { return $t } }'
+           Replace = 'foreach ($t in @($Base)) { if ($t.state -eq "unknown") { return $t } }; if ($null -ne $Override -and $Override.state -eq "unknown") { $Override = $null; $tables = @($Base) }' }
+        @{ Name = "table-level-per-tokens"
+           Find = 'return (New-HordeKnown -Value ($sum * $mult / [decimal]$entry["perTokens"]))'
+           Replace = 'return (New-HordeKnown -Value ($sum * $mult / [decimal]1000000))' }
+        @{ Name = "source-not-stamped"
+           Find = '$models[$id]["source"] = $Source;'
+           Replace = '$models[$id]["source"] = "a table";' }
     )
 }

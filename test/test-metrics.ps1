@@ -143,7 +143,7 @@ Check ($wt.cost.cost.state -eq "unknown" -and $wt.cost.confidence -eq "unknown")
 $tbl = ConvertFrom-HordePriceTableText -Text '{ "schemaVersion": 1, "version": "t.2", "perTokens": 1000000, "models": { "model-a": { "rates": { "input": 1, "cacheRead": 1, "cacheWrite5m": 1, "cacheWrite1h": 1, "output": 1 } }, "model-b": { "rates": { "input": 2, "cacheRead": 2, "cacheWrite5m": 2, "cacheWrite1h": 2, "output": 2 } } } }'
 $wp = Get-HordeWorkerSummary -Records $tok -PriceTable $tbl
 Check ($wp.cost.cost.state -eq "known" -and $wp.cost.cost.value -eq [decimal]0.012221) ("priced per call and summed once per id: 1111 + 2222 at rate 1 and 4444 at rate 2, per million = 0.012221 (" + $wp.cost.cost.value + ")")
-Check ($wp.cost.tag -eq "ESTIMATE" -and $wp.cost.unit -eq "notionalUsd" -and $wp.cost.priceTable -eq "t.2" -and $wp.cost.confidence -eq "derived") "a cost is derived, tagged ESTIMATE, labelled notional, and names its table"
+Check ($wp.cost.tag -eq "ESTIMATE" -and $wp.cost.unit -eq "notionalUsd" -and @($wp.cost.priceTables) -contains "a given table t.2" -and $wp.cost.confidence -eq "derived") "a cost is derived, tagged ESTIMATE, labelled notional, and names the table and version that priced it"
 $tblA = ConvertFrom-HordePriceTableText -Text '{ "schemaVersion": 1, "version": "t.3", "perTokens": 1000000, "models": { "model-a": { "rates": { "input": 1, "cacheRead": 1, "cacheWrite5m": 1, "cacheWrite1h": 1, "output": 1 } } } }'
 $wpa = Get-HordeWorkerSummary -Records $tok -PriceTable $tblA
 Check ($wpa.cost.cost.state -eq "unknown" -and $wpa.cost.cost.reason -like "*1 of 3 calls*model-b*") "one unpriced call makes the total unknown, naming how many and why"

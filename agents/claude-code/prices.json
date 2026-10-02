@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-09-30.1",
+  "observedAt": "2026-09-30",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-30 (metrics design 2.9)",
+  "currency": "USD",
+  "perTokens": 1000000,
+  "models": {
+    "claude-opus-5-5": { "provider": "anthropic", "rates": { "input": 4, "cacheWrite5m": 5, "cacheWrite1h": 8, "cacheRead": 0.2, "output": 20 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""], "speeds": { "fast": { "input": 8, "output": 40 } } },
+    "claude-opus-5": { "provider": "anthropic", "rates": { "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] },
+    "claude-sonnet-5-5": { "provider": "anthropic", "rates": { "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2, "output": 10 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] },
+    "claude-sonnet-5": { "provider": "anthropic", "rates": { "input": 2, "cacheWrite5m": 2.5, "cacheWrite1h": 4, "cacheRead": 0.2, "output": 10 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] },
+    "claude-haiku-4-5": { "provider": "anthropic", "rates": { "input": 1, "cacheWrite5m": 1.25, "cacheWrite1h": 2, "cacheRead": 0.1, "output": 5 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] }
+  }
+}

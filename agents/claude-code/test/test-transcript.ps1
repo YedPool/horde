@@ -116,6 +116,10 @@ try {
     Check ($wc.cost.cost.state -eq "known" -and $wc.cost.cost.value -eq [decimal]0.105192) ("28x4 + 466000x0.2 + 500x5 + 100x8 + 429x20 per million = 0.105192 (" + $wc.cost.cost.value + ")")
     $wsub = Get-HordeWorkerSummary -Records $sub.value.records -PriceTable $tbl
     Check ($wsub.cost.cost.state -eq "unknown" -and $wsub.cost.cost.reason -like "*claude-opus-5'*") "a model the table does not list leaves the cost unknown, naming it"
+    $repoBook = Read-HordePriceBook -OverridePath (Join-Path $work "no-override.json")
+    $wr = Get-HordeWorkerSummary -Records $recs -PriceTable $repoBook
+    Check ($repoBook.state -eq "known" -and $wr.cost.cost.value -eq [decimal]0.105192) "the repository's own table, agents/claude-code/prices.json, loads and prices this harness's models"
+    Check (@($wr.cost.priceTables) -contains "agents/claude-code/prices.json 2026-09-30.1") "and the cost names that file and its version as its source"
 
     Write-Host ""
     Write-Host "--- no text leaves the transcript ---" -ForegroundColor Cyan

@@ -61,31 +61,34 @@ function Get-HordeTokenTotals {
 }
 
 function Get-HordeCostTotal {
-    # The notional cost of the calls, as { cost (answer); unit; confidence; tag; priceTable }. Unknown
-    # when there is no table or any call cannot be priced: a partial total is not a total.
+    # The notional cost of the calls, as { cost (answer); unit; confidence; tag; priceTables }, where
+    # priceTables names each table - file and version - that priced one of the calls, so a figure from
+    # an override is never mistaken for one from the repository. Unknown when there is no table or any
+    # call cannot be priced: a partial total is not a total.
     param($Calls, $PriceTable)
-    $out = [ordered]@{ cost = $null; unit = "notionalUsd"; confidence = "derived"; tag = "ESTIMATE"; priceTable = $null }
+    $out = [ordered]@{ cost = $null; unit = "notionalUsd"; confidence = "derived"; tag = "ESTIMATE"; priceTables = @() }
     if ($PriceTable.state -ne "known") {
         $out.cost = New-HordeUnknown -Reason ("no usable price table: " + $PriceTable.reason)
         $out.confidence = "unknown"
         return [pscustomobject]$out
     }
-    $out.priceTable = "$($PriceTable.value["version"])"
-    $sum = [decimal]0; $bad = 0; $first = ""
+    $sum = [decimal]0; $bad = 0; $first = ""; $used = @()
     foreach ($c in @($Calls)) {
         $one = Get-HordeCallCost -Table $PriceTable.value -Call $c
-        if ($one.state -eq "known") { $sum += $one.value } else { $bad++; if ($first -eq "") { $first = $one.reason } }
+        if ($one.state -eq "known") { $sum += $one.value; $src = Get-HordePriceSource -Table $PriceTable.value -Model "$($c.model.value)"; if ($used -notcontains $src) { $used += $src } }
+        else { $bad++; if ($first -eq "") { $first = $one.reason } }
     }
     if ($bad -gt 0) {
         $out.cost = New-HordeUnknown -Reason ("" + $bad + " of " + @($Calls).Count + " calls cannot be priced; the first: " + $first)
         $out.confidence = "unknown"
     } else { $out.cost = New-HordeKnown -Value $sum }
+    $out.priceTables = @($used | Sort-Object)
     return [pscustomobject]$out
 }
 
 function Get-HordeWorkerSummary {
     # One transcript's summary. -Records are port records; -PriceTable an answer from
-    # Read-HordePriceTable. Times are UTC.
+    # Read-HordePriceBook. Times are UTC.
     param([Parameter(Mandatory = $true)]$Records, [Parameter(Mandatory = $true)]$PriceTable)
     $all = @($Records)
     $timed = @($all | Sort-Object -Property @{ Expression = { $_.ts } }, @{ Expression = { $_.line } })

@@ -33,12 +33,14 @@ From the design's "Decisions taken", binding on every step:
 
 Two placement decisions this plan takes, because CONTRIBUTING 14 forces them:
 
-- **The price table is user data, not repository data.** `agents/claude-code/names.txt` already
-  records that model ids "live in the user's own engine file and never in the repository", and the
-  provider's model ids contain the harness's product name as a substring, so a table in `core/` would
-  grow the ratchet. The table is `<HordeHome>\metrics\prices.json`, versioned by its own `version`
-  field; every cost carries that version. The observed table of 2026-09-30 (MD 2.9) is given below
-  for the founder to install, and the tests use fixture tables.
+- **The price tables live in the repository, one per engine, at `agents/<name>/prices.json`**
+  (coordinator's decision, 2026-10-01). `agents/<name>/` is where CONTRIBUTING 14 allows a harness's
+  and its models' names, and a price change becomes a reviewable commit. A user may add
+  `<HordeHome>\metrics\prices.json`, an override layered on top: a model it prices replaces the
+  repository's entry for that model. Every table carries a `version`, and every cost names the file
+  and version of each table that priced it. (M1's first draft kept the table only in HORDE_HOME,
+  because model ids contain the harness's name; the engine folder resolves that without the ratchet
+  growing.)
 - **Adapter tests live in `agents/<name>/test/`**, like a host's in `hosts/<name>/test/`, because their
   fixtures are the harness's own files. `test/test-suite.ps1` learns to find them (M1).
 
@@ -74,9 +76,10 @@ positive controls, so the study's headline measures come from code rather than b
   worker results landing in the orchestrator's context, with tokens ESTIMATED at the Study's measured
   2.38 characters per token. Both are attributed to a worker only where the transcript proves the
   link; the rest is counted as unattributed, never guessed.
-- **`core/Price.ps1`**: cost per call from the price table, `derived`, tagged ESTIMATE, labelled
-  `notionalUsd`, with the table's version. A call on a model the table does not price makes the total
-  unknown, with the model named.
+- **`core/Price.ps1`**: cost per call from the price book - every `agents/<name>/prices.json` with the
+  user's override on top - `derived`, tagged ESTIMATE, labelled `notionalUsd`, naming the file and
+  version that priced it. A call on a model no table prices makes the total unknown, with the model
+  named.
 - **`core/MetricsStore.ps1`** and **`core/Home.ps1`**: `Get-HordeHome` (`HORDE_HOME`, default
   `%USERPROFILE%\.horde`, as Phase 3 step 1 specifies; that step still renames `HORDE_ROOT`). The
   interim gate is `<HordeHome>\metrics\gate.json`, `{ schemaVersion, level, enabledAt }`, level `off`
@@ -151,24 +154,11 @@ guide (MD "Founder direction").
 
 MD 9 and MD 8's export allowlist with its planted-secret test.
 
-## The observed price table (2026-09-30), for the founder to install
+## The observed price tables (2026-09-30)
 
-Copy into `<HordeHome>\metrics\prices.json`. Rates are USD per million tokens. Source:
-https://platform.claude.com/docs/en/about-claude/pricing and https://developers.openai.com/api/docs/pricing ,
-read 2026-09-30 (MD 2.9). Only models observed on this machine are listed; anything else prices as
-unknown.
-
-```
-{
-  "schemaVersion": 1,
-  "version": "2026-09-30.1",
-  "observedAt": "2026-09-30",
-  "currency": "USD",
-  "perTokens": 1000000,
-  "models": {
-    "claude-opus-5-5": { "provider": "anthropic", "rates": { "input": 4, "cacheWrite5m": 5, "cacheWrite1h": 8, "cacheRead": 0.2, "output": 20 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] },
-    "claude-opus-5":   { "provider": "anthropic", "rates": { "input": 5, "cacheWrite5m": 6.25, "cacheWrite1h": 10, "cacheRead": 0.5, "output": 25 }, "geo": { "us": 1.1 }, "geoStandard": ["not_available", ""] },
-    "gpt-5.5":         { "provider": "openai", "rates": { "input": 5, "cacheRead": 0.5, "output": 30 } }
-  }
-}
-```
+In the repository: `agents/claude-code/prices.json` (Anthropic models; source
+https://platform.claude.com/docs/en/about-claude/pricing) and `agents/codex/prices.json` (OpenAI models;
+source https://developers.openai.com/api/docs/pricing), both version `2026-09-30.1`, read 2026-09-30
+(MD 2.9). Rates are USD per million tokens. A model neither table lists prices as unknown. A user who
+pays different rates puts only the models that differ in `<HordeHome>\metrics\prices.json`, with a
+version of their own.

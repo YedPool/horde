@@ -84,6 +84,9 @@ try {
     $tbl = ConvertFrom-HordePriceTableText -Text '{ "schemaVersion": 1, "version": "test-observed", "perTokens": 1000000, "models": { "gpt-5.5": { "provider": "openai", "rates": { "input": 5, "cacheRead": 0.5, "output": 30 } } } }'
     $wc = Get-HordeWorkerSummary -Records $recs -PriceTable $tbl
     Check ($wc.cost.cost.state -eq "known" -and $wc.cost.cost.value -eq [decimal]0.10675) ("16600x5 + 41500x0.5 + 100x30 per million = 0.10675 (" + $wc.cost.cost.value + ")")
+    $repoBook = Read-HordePriceBook -OverridePath (Join-Path $work "no-override.json")
+    $wr = Get-HordeWorkerSummary -Records $recs -PriceTable $repoBook
+    Check ($repoBook.state -eq "known" -and $wr.cost.cost.value -eq [decimal]0.10675 -and @($wr.cost.priceTables) -contains "agents/codex/prices.json 2026-09-30.1") "the repository's own table, agents/codex/prices.json, loads, prices this harness's model, and is named as the source"
 
     Write-Host ""
     Write-Host "--- no text leaves the rollout ---" -ForegroundColor Cyan
@@ -108,15 +111,16 @@ try {
     $homeDir = Join-Path $work "home"
     $envs = @{ HORDE_HOME = $homeDir; CODEX_HOME = (Join-Path $work "harness-store") }
     New-Item -ItemType Directory -Path (Join-Path $homeDir "metrics") -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\prices.json"), '{ "schemaVersion": 1, "version": "test-observed", "perTokens": 1000000, "models": { "gpt-5.5": { "provider": "openai", "rates": { "input": 5, "cacheRead": 0.5, "output": 30 } } } }')
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\prices.json"), '{ "schemaVersion": 1, "version": "test-observed", "perTokens": 1000000, "models": { "gpt-5.5": { "provider": "openai", "rates": { "input": 50, "cacheRead": 0.5, "output": 30 } } } }')
     [System.IO.File]::WriteAllText((Join-Path $homeDir "metrics\gate.json"), '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-09-30T00:00:00Z" }')
     $run = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $fixtures) -Env $envs
     Check ($run.code -eq 0) ("horde metrics summarize exits 0 on the rollouts (" + $run.code + ")")
-    Check ($run.out -match 'rollout-2026-09-30T06-00-00-01a0aaaa-1111-7222-8333-444455556666\.jsonl\s+codex\s+gpt-5\.5\s+\S+\s+3\s+2\s+16,600\s+41,500\s+0\s+100\s+299\.8m \(2026-09-30 10:01\)\s+300\.0m exec_command\s+0\.11') "its row for the planted rollout shows the counts, the 300-minute tool call and the priced cost"
-    Check ($run.out -like "*price table test-observed*" -and $run.out -like "*recorded 3 summaries*") "it names the price table, and with the gate on records the three rollouts"
+    Check ($run.out -match 'rollout-2026-09-30T06-00-00-01a0aaaa-1111-7222-8333-444455556666\.jsonl\s+codex\s+gpt-5\.5\s+\S+\s+3\s+2\s+16,600\s+41,500\s+0\s+100\s+299\.8m \(2026-09-30 10:01\)\s+300\.0m exec_command\s+0\.85') "its row shows the counts, the 300-minute tool call, and the cost at the override's rate (input 50, not the repository's 5)"
+    Check ($run.out -like "*the HORDE_HOME override test-observed*" -and $run.out -like "*recorded 3 summaries*") "it names the override among its tables, and with the gate on records the three rollouts"
     $files = @(Get-ChildItem -LiteralPath (Join-Path $homeDir "metrics\summaries\codex") -File -ErrorAction SilentlyContinue)
     $text = (@($files | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n")
     Check ($files.Count -eq 3 -and $text.IndexOf($secret) -lt 0) "the three records written hold no planted secret"
+    Check ($text -like "*the HORDE_HOME override test-observed*") "and each record names the override as the table that priced it"
     $changed = @($hashes.Keys | Where-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash -ne $hashes[$_] })
     Check ($changed.Count -eq 0 -and $hashes.Count -eq 3) ("every rollout read is byte for byte as it was (" + $hashes.Count + " files checked)")
 } finally {

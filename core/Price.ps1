@@ -9,9 +9,12 @@
 #     WOULD have cost at API list price, never money spent (decision 4). Nothing here sums it into a
 #     USD total.
 #
-# THE TABLE IS USER DATA, at <HordeHome>\metrics\prices.json, not a repository file. Model ids are the
-# provider's vocabulary and live in the user's own files (agents/<name>/names.txt, "considered and left
-# out"); planning/execution-plan-metrics.md carries the table observed on 2026-09-30 to install.
+# WHERE THE TABLES LIVE (coordinator's decision, 2026-10-01): in the repository, one per engine, at
+# agents/<name>/prices.json - the one place CONTRIBUTING 14 lets a harness's and its models' names
+# appear - so a price change is a reviewable commit. A user may add <HordeHome>\metrics\prices.json, an
+# OVERRIDE layered on top: a model it prices replaces the repository's entry for that model, and nothing
+# else changes. Every model entry remembers which file and which version it came from, and every cost
+# names the tables that priced it. Core finds the repository tables by folder and names none.
 #
 # WHAT A RATE DEPENDS ON, AND WHAT M1 LEAVES OUT. Observed 2026-09-30 (design 2.9): cache writes are
 # priced by lifetime (5 minutes and 1 hour differ), and a request's geography can multiply every rate
@@ -25,7 +28,6 @@
 
 $script:HordeRateKeys = @("input", "cacheRead", "cacheWrite", "cacheWrite5m", "cacheWrite1h", "output")
 
-function Get-HordePriceTablePath { return (Join-Path (Join-Path (Get-HordeHome) "metrics") "prices.json") }
 
 function Test-HordeRates {
     # Problems with a rates object, as strings.
@@ -43,7 +45,10 @@ function Test-HordeRates {
 function ConvertFrom-HordePriceTableText {
     # Parse and check a price table. Returns an answer: known table, or unknown with every problem
     # found, so a table that is wrong in two places says so once rather than twice over two runs.
-    param([Parameter(Mandatory = $true)][string]$Text, [string]$What = "the price table")
+    #
+    # -Source names where the table came from; every model entry is stamped with it, the table's
+    # version and its perTokens, so a cost can always say which file and version priced it.
+    param([Parameter(Mandatory = $true)][string]$Text, [string]$What = "the price table", [string]$Source = "a given table")
     Add-Type -AssemblyName System.Web.Extensions
     $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $t = $null
@@ -72,17 +77,66 @@ function ConvertFrom-HordePriceTableText {
         }
     }
     if ($p.Count -gt 0) { return (New-HordeUnknown -Reason ($What + " is not usable: " + ($p -join "; "))) }
+    foreach ($id in @($models.Keys)) { $models[$id]["source"] = $Source; $models[$id]["tableVersion"] = "$($t["version"])"; $models[$id]["perTokens"] = $per }
     return (New-HordeKnown -Value $t)
 }
 
-function Read-HordePriceTable {
-    # The installed table, as an answer: known, absent when there is no file (cost is then unknown,
-    # and says where the table goes), unknown when the file cannot be read or is not a usable table.
-    param([string]$Path = (Get-HordePriceTablePath))
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no price table at " + $Path)) }
+function Get-HordePriceOverridePath { return (Join-Path (Join-Path (Get-HordeHome) "metrics") "prices.json") }
+
+function Get-HordePriceTableFiles {
+    # The repository's tables, found by folder and never named: agents/<name>/prices.json.
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+    $agents = Join-Path $Root "agents"
+    if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $agents -Directory | Sort-Object Name | ForEach-Object { Join-Path $_.FullName "prices.json" } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+}
+
+function Read-HordePriceTableFile {
+    # One table file as an answer, its entries stamped with -Source.
+    param([string]$Path, [string]$Source)
     $text = $null
-    try { $text = Read-HordeSharedText -Path $Path } catch { return (New-HordeUnknown -Reason ("could not read the price table at " + $Path) -ErrorRecord $_) }
-    return (ConvertFrom-HordePriceTableText -Text $text -What ("the price table at " + $Path))
+    try { $text = Read-HordeSharedText -Path $Path } catch { return (New-HordeUnknown -Reason ("could not read the price table " + $Source) -ErrorRecord $_) }
+    return (ConvertFrom-HordePriceTableText -Text $text -What ("the price table " + $Source) -Source $Source)
+}
+
+function Merge-HordePriceTables {
+    # Layer tables into one book: -Base (the repository's, which may not price one model twice), then
+    # -Override, whose models replace the base's. Returns an answer: known book { version; models;
+    # sources }, absent when there is no table at all, unknown when any table is unusable - an override
+    # that cannot be read is never silently skipped, or the repository price would stand in for it.
+    param([object[]]$Base = @(), $Override = $null)
+    $tables = @($Base) + @($(if ($null -ne $Override) { $Override }))
+    foreach ($t in $tables) { if ($t.state -eq "unknown") { return $t } }
+    $models = @{}
+    $sources = New-Object System.Collections.ArrayList
+    foreach ($t in @($Base)) {
+        foreach ($id in @($t.value["models"].Keys)) {
+            if ($models.ContainsKey($id)) { return (New-HordeUnknown -Reason ("model '" + $id + "' is priced by both " + $models[$id]["source"] + " and " + $t.value["models"][$id]["source"] + "; the repository must price a model once")) }
+            $models[$id] = $t.value["models"][$id]
+        }
+    }
+    if ($null -ne $Override) { foreach ($id in @($Override.value["models"].Keys)) { $models[$id] = $Override.value["models"][$id] } }
+    if ($tables.Count -eq 0) { return (New-HordeAbsent -Note "no price table: none in the repository's agents folders and no override") }
+    foreach ($t in $tables) { $first = @($t.value["models"].Values)[0]; [void]$sources.Add("" + $first["source"] + " " + $first["tableVersion"]) }
+    return (New-HordeKnown -Value @{ version = ($sources -join "; "); models = $models; sources = $sources.ToArray() })
+}
+
+function Read-HordePriceBook {
+    # The repository's tables with the user's override on top, as an answer (Merge-HordePriceTables).
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot), [string]$OverridePath = (Get-HordePriceOverridePath))
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $base = @(foreach ($f in (Get-HordePriceTableFiles -Root $Root)) { Read-HordePriceTableFile -Path $f -Source ([System.IO.Path]::GetFullPath($f).Substring($rootFull.Length).Replace('\', '/')) })
+    $over = $null
+    if (Test-Path -LiteralPath $OverridePath -PathType Leaf) { $over = Read-HordePriceTableFile -Path $OverridePath -Source "the HORDE_HOME override" }
+    return (Merge-HordePriceTables -Base $base -Override $over)
+}
+
+function Get-HordePriceSource {
+    # "<file> <version>" of the table that prices a model in a book, or "" when none does.
+    param($Table, [string]$Model)
+    $e = $Table["models"][$Model]
+    if ($null -eq $e) { return "" }
+    return ("" + $e["source"] + " " + $e["tableVersion"])
 }
 
 function Get-HordeCallCost {
@@ -91,11 +145,13 @@ function Get-HordeCallCost {
     # carries no binary rounding.
     param([Parameter(Mandatory = $true)]$Table, [Parameter(Mandatory = $true)]$Call)
     $version = "$($Table["version"])"
+    # Each entry knows its own table: in a layered book the repository and the override differ.
     if ($Call.model.state -ne "known") { return (New-HordeUnknown -Reason ("a call's model is unknown, so it cannot be priced (line " + $Call.line + ")")) }
     $model = "$($Call.model.value)"
     $entry = $Table["models"][$model]
     if ($null -eq $entry) { return (New-HordeUnknown -Reason ("price table " + $version + " has no price for model '" + $model + "'")) }
     if ($Call.usage.state -ne "known") { return (New-HordeUnknown -Reason ("a call on " + $model + " has no usage (line " + $Call.line + ")")) }
+    $version = "" + $entry["source"] + " " + $entry["tableVersion"]
     $u = $Call.usage.value
 
     $rates = $entry["rates"]
@@ -139,5 +195,5 @@ function Get-HordeCallCost {
     } catch { return (New-HordeUnknown -Reason "$($_.Exception.Message)") }
     $sum = [decimal]0
     foreach ($x in $parts) { $sum += $x }
-    return (New-HordeKnown -Value ($sum * $mult / [decimal]$Table["perTokens"]))
+    return (New-HordeKnown -Value ($sum * $mult / [decimal]$entry["perTokens"]))
 }
