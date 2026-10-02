@@ -8,7 +8,7 @@
 # an edit here (the design's decision 10, extending CONTRIBUTING 14).
 #
 # WHY HERE AND NOT IN remote/. The port calls the script blocks each transport registers, and
-# test/test-link-contracts.ps1 (step R1) holds every file in remote/ to "starts no program and no
+# test/test-exec-scan.ps1 (step R1) holds every file in remote/ to "starts no program and no
 # shell", which counts any call with &. That rule is right for the protocol: remote/ must never run
 # code a frame names. The port runs only code a transports/<name>/ folder registered at load time,
 # so it lives with the transports it dispatches to, and remote/ keeps its tripwire unweakened.
