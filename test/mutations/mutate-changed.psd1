@@ -1,11 +1,11 @@
 # Mutations of the selector behind tools\Mutate.ps1 -Changed.
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\mutate-changed.psd1
 # Each breaks one rule of tools\MutateChanged.ps1 - which lines a diff changed, where a mutant sits,
-# what is selected, when zero is an error; test	est-mutate-changed.ps1 must fail for every one. A
+# what is selected, when zero is an error; test\test-mutate-changed.ps1 must fail for every one. A
 # selector that drops a mutant it should run makes a review round green for the wrong reason.
 @{
     Target = "tools\MutateChanged.ps1"
-    Suite  = "test	est-mutate-changed.ps1"
+    Suite  = "test\test-mutate-changed.ps1"
     # Stop at the first failed check: a caught mutant needs nothing more.
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(

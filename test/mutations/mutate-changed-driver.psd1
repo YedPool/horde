@@ -2,10 +2,10 @@
 # one result line a gate reads.
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\mutate-changed-driver.psd1
 # The copy that runs the mutants is the unmutated tool; the mutant is the copy the suite puts in its
-# fixture repository. test	est-mutate-changed.ps1 must fail for every one.
+# fixture repository. test\test-mutate-changed.ps1 must fail for every one.
 @{
     Target = "tools\Mutate.ps1"
-    Suite  = "test	est-mutate-changed.ps1"
+    Suite  = "test\test-mutate-changed.ps1"
     # Stop at the first failed check: a caught mutant needs nothing more.
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
