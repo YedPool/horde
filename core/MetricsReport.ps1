@@ -24,16 +24,28 @@ function Get-HordeTranscriptFiles {
     throw ("no file or folder at " + $Path)
 }
 
-function Select-HordeRecordsInWindow {
-    # The records whose time is inside [From, To]; either bound may be $null.
-    param($Records, $From, $To)
-    return @(@($Records) | Where-Object { ($null -eq $From -or $_.ts -ge $From) -and ($null -eq $To -or $_.ts -le $To) })
+function Measure-HordeTranscriptFile {
+    # Read one transcript and measure it, holding running totals and never its records (plan step M2;
+    # measured 2026-10-02, M1's list of records peaked at 1,734 MB on a 133 MB transcript). Returns an
+    # answer: known { read; worker; orc; record }, or the port's unknown when no adapter could read it.
+    # -From and -To window the measures; a windowed record says so.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$PriceTable, $From = $null, $To = $null)
+    $acc = New-HordeMetricsAccumulator -PriceTable $PriceTable -From $From -To $To
+    $read = Read-HordeTranscript -Path $Path -Into $acc
+    if ($read.state -ne "known") { return $read }
+    $m = Complete-HordeMetricsAccumulator -Accumulator $acc
+    $record = New-HordeTranscriptSummaryRecord -Read $read.value -Worker $m.worker -Orc $m.orc
+    if ($null -ne $From -or $null -ne $To) {
+        $record["window"] = [ordered]@{ from = (ConvertTo-HordeJsonSafe $From); to = (ConvertTo-HordeJsonSafe $To) }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ read = $read.value; worker = $m.worker; orc = $m.orc; record = $record }))
 }
 
 function Invoke-HordeMetricsSummarize {
     # Summarise every transcript under Path. Returns { rows; unread; priceTable; gate; recorded }:
     # rows hold each transcript's read, worker summary, orchestrator measures, the record and what
-    # happened to it; unread lists files no adapter could read, with the reason.
+    # happened to it; unread lists files no adapter could read, with the reason. One file is read at a
+    # time, and only its measures are kept.
     param([Parameter(Mandatory = $true)][string]$Path, $From = $null, $To = $null)
     $windowed = ($null -ne $From -or $null -ne $To)
     $table = Read-HordePriceBook
@@ -41,24 +53,17 @@ function Invoke-HordeMetricsSummarize {
     $rows = New-Object System.Collections.ArrayList
     $unread = New-Object System.Collections.ArrayList
     foreach ($file in (Get-HordeTranscriptFiles -Path $Path)) {
-        $read = Read-HordeTranscript -Path $file
-        if ($read.state -ne "known") { [void]$unread.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); reason = $read.reason }); continue }
-        $r = $read.value
-        $records = @($r.records)
-        if ($windowed) { $records = Select-HordeRecordsInWindow -Records $records -From $From -To $To }
-        $worker = Get-HordeWorkerSummary -Records $records -PriceTable $table
-        $orc = Get-HordeOrcMeasures -Records $records
-        $record = New-HordeTranscriptSummaryRecord -Read $r -Worker $worker -Orc $orc
-        if ($windowed) {
-            $record["window"] = [ordered]@{ from = (ConvertTo-HordeJsonSafe $From); to = (ConvertTo-HordeJsonSafe $To) }
-        }
-        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $worker.firstEventAt -Windowed:$windowed
+        $measured = Measure-HordeTranscriptFile -Path $file -PriceTable $table -From $From -To $To
+        if ($measured.state -ne "known") { [void]$unread.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); reason = $measured.reason }); continue }
+        $mv = $measured.value
+        $r = $mv.read
+        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $mv.worker.firstEventAt -Windowed:$windowed
         $written = ""
         if ($decision.write) {
             $name = [System.IO.Path]::GetFileNameWithoutExtension($file)
-            $written = Write-HordeMetricsRecord -Record $record -Adapter $r.adapter -Name $name
+            $written = Write-HordeMetricsRecord -Record $mv.record -Adapter $r.adapter -Name $name
         }
-        [void]$rows.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); adapter = $r.adapter; read = $r; worker = $worker; orc = $orc; record = $record; decision = $decision; written = $written })
+        [void]$rows.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); adapter = $r.adapter; read = $r; worker = $mv.worker; orc = $mv.orc; record = $mv.record; decision = $decision; written = $written })
     }
     return [pscustomobject]@{ rows = $rows.ToArray(); unread = $unread.ToArray(); priceTable = $table; gate = $gate }
 }
