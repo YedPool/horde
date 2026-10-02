@@ -1,7 +1,7 @@
 # ExecScan.ps1 - can a PowerShell file start a program, a shell or a script? An allowlist on every axis
 # of the file's syntax tree.
 #
-# Development tooling, not part of the engine. test/test-link-contracts.ps1 runs it over every file in
+# Development tooling, not part of the engine. test/test-exec-scan.ps1 runs it over every file in
 # remote/, because the link protocol is never a remote shell (remote-sessions design section 6): the
 # verb table cannot express one, and this proves the code beside the table does not hold one either.
 #
