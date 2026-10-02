@@ -67,7 +67,9 @@ if ($Changed) {
     if ($Spec) {
         $specRels = @($Spec)
     } else {
-        $specRels = @(Get-HordeMutationSpecFiles -Root $repo -Folders $script:HordeSuiteFolders)
+        # The one rule for what a spec is, shared with test\test-mutation-specs.ps1 (test\lib\SuiteFiles.ps1).
+        $repoLen = [System.IO.Path]::GetFullPath($repo).TrimEnd('\').Length + 1
+        $specRels = @(Get-HordeMutationSpecFiles -Root $repo | ForEach-Object { $_.FullName.Substring($repoLen) })
     }
     $specObjs = @()
     foreach ($rel in $specRels) {

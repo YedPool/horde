@@ -29,7 +29,7 @@
            Replace = 'specChanged = $false }' }
         @{ Name = "spec-argument-ignored"
            Find = '        $specRels = @($Spec)'
-           Replace = '        $specRels = @(Get-HordeMutationSpecFiles -Root $repo -Folders $script:HordeSuiteFolders)' }
+           Replace = '        $specRels = @(Get-HordeMutationSpecFiles -Root $repo | ForEach-Object { $_.FullName.Substring($repoLen) })' }
         @{ Name = "zero-line-carries-a-number"
            Find = 'Write-Host ("mutations: none selected - "'
            Replace = 'Write-Host ("mutations: 0 - "' }

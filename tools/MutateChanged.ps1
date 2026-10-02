@@ -181,31 +181,6 @@ function Get-HordeSelectionVerdict {
     return [pscustomobject]@{ ok = $true; message = ("selected none of " + @($Rows).Count + " mutants: the diff touches no mutation target") }
 }
 
-function Get-HordeMutationSpecFiles {
-    # Every mutation spec: <suite folder>/mutations/*.psd1, for each suite folder of
-    # test\lib\SuiteFiles.ps1 ($script:HordeSuiteFolders), as repo-relative paths with backslashes.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string[]]$Folders)
-    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
-    $out = New-Object System.Collections.ArrayList
-    foreach ($pattern in $Folders) {
-        $dirs = @(Get-Item -LiteralPath $rootFull)
-        foreach ($p in @(($pattern -split "/") + "mutations")) {
-            $next = @()
-            foreach ($d in $dirs) {
-                if ($p -eq "*") { $next += @(Get-ChildItem -LiteralPath $d.FullName -Directory -ErrorAction SilentlyContinue) }
-                else { $c = Join-Path $d.FullName $p; if (Test-Path -LiteralPath $c -PathType Container) { $next += @(Get-Item -LiteralPath $c) } }
-            }
-            $dirs = $next
-        }
-        foreach ($d in $dirs) {
-            foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "*.psd1" -File | Where-Object { $_.Extension -ceq ".psd1" })) {
-                [void]$out.Add($f.FullName.Substring($rootFull.Length).TrimStart('\', '/'))
-            }
-        }
-    }
-    return @($out)
-}
-
 function Invoke-HordeGit {
     # git's stdout as one string, and its exit code. Not 2>&1 (PowerShell 5.1); its stderr reaches the
     # console as it is.

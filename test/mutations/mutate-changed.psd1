@@ -79,9 +79,6 @@
         @{ Name = "partial-parse-accepted"
            Find = 'if ($parsed -ne $headers -or $Changed.Count -eq 0) {'
            Replace = 'if ($parsed -eq 0 -and $Changed.Count -eq 0) {' }
-        @{ Name = "no-spec-folders-searched"
-           Find = 'foreach ($p in @(($pattern -split "/") + "mutations")) {'
-           Replace = 'foreach ($p in @(($pattern -split "/"))) {' }
         # --- zero is not a pass
         @{ Name = "zero-on-a-touched-target-passes"
            Find = 'if ($hit.Count -gt 0) {'
