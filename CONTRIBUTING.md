@@ -139,10 +139,26 @@ A test of code that kills or deletes never lets that code choose the victim: it 
 acts only on what the test created and still holds (see `hosts/wezterm/test/test-isolation.ps1`).
 
 Every suite is built on `test/lib/Suite.ps1`, whether it lives in `test/` or, for a suite about one
-host, in that host's `hosts/<name>/test/` (D12): dot-source it, put its one `trap` line at the
-suite's top level, and end with `Complete-HordeSuite`. It makes a check's condition be exactly true or
-false, and it fails the suite when a check's own expression raises an error - which otherwise makes
-the check vanish while the suite exits 0.
+host, transport or agent harness, in that adapter's own `hosts/<name>/test/`,
+`transports/<name>/test/` or `agents/<name>/test/` (D12): dot-source it, put its one `trap` line at
+the suite's top level, and end with `Complete-HordeSuite`. It makes a check's condition be exactly
+true or false, and it fails the suite when a check's own expression raises an error - which otherwise
+makes the check vanish while the suite exits 0.
+
+**The gate runs every suite in those four places**, one at a time, from a fresh CRLF checkout:
+
+```
+test/test-*.ps1
+hosts/*/test/test-*.ps1
+transports/*/test/test-*.ps1
+agents/*/test/test-*.ps1
+```
+
+Every gate run includes `hosts/*/test/test-*.ps1`, so each host's isolation harness is exercised on
+every run, not only when its own folder changes. `test/lib/SuiteFiles.ps1` is that list. `test/test-suite.ps1` checks how every suite on it is built,
+and fails on any `test-*.ps1` anywhere else in the repository (`test/fixtures/` is data and is
+skipped). A suite outside the gate's folders is one nobody runs, and it reads as coverage: the first
+transport's own suite sat outside `test/test-*.ps1` until the review of PR #42 found it.
 
 ## 10. Code brought in from elsewhere keeps its licence notice
 

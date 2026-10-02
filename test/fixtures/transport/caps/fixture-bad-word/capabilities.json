@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "transport": "fixture-bad-word",
+  "maxFrameBytes": 16,
+  "capabilities": {
+    "auth.peer": { "support": "maybe", "evidence": "fixture" },
+    "encrypt": { "support": "no", "evidence": "fixture" },
+    "dial.out": { "support": "yes", "evidence": "fixture" },
+    "dial.in": { "support": "yes", "evidence": "fixture" },
+    "keepalive": { "support": "yes", "evidence": "fixture" },
+    "survives.peer.restart": { "support": "no", "evidence": "fixture" }
+  }
+}

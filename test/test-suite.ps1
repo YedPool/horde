@@ -8,6 +8,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "test\lib\SuiteFiles.ps1")
 
 function Invoke-Fixture {
     # Run one fixture suite; returns { code; out }. Streams read through the process API, not 2>&1.
@@ -45,33 +46,42 @@ Check (Throws { throw "expected text" } "expected") "CONTROL: a block that throw
 Write-Host ""
 Write-Host "--- every suite is built the same way ---" -ForegroundColor Cyan
 
-# Checked on the syntax tree of every test/test-*.ps1, every hosts/<name>/test/test-*.ps1 and every
-# agents/<name>/test/test-*.ps1: the
+# Checked on the syntax tree of every suite the gate runs - test/test-*.ps1 and each host's,
+# transport's and agent harness's <folder>/test/test-*.ps1, as test/lib/SuiteFiles.ps1 lists them: the
 # helper cannot protect a suite that forgets its trap line, forgets to end through
 # Complete-HordeSuite, or exits early. The review of this helper measured each of the three leaving a
-# failed check with exit 0. A host's suites live in its own folder (D12), and a suite this scan did
-# not reach would be one nobody checked.
-$suites = @(Get-ChildItem -LiteralPath (Join-Path $root "test") -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })
-Check ($suites.Count -ge 4) ("CONTROL: the scan finds the suites (" + $suites.Count + ")")
-$hostSuites = @()
-foreach ($h in @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory -ErrorAction SilentlyContinue)) {
-    $ht = Join-Path $h.FullName "test"
-    if (Test-Path -LiteralPath $ht -PathType Container) {
-        $hostSuites += @(Get-ChildItem -LiteralPath $ht -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })
-    }
+# failed check with exit 0. A suite this scan did not reach would be one nobody checked.
+$allSuites = @(Get-HordeSuiteFiles -Root $root)
+$inTest = @($allSuites | Where-Object { (Split-Path -Leaf (Split-Path -Parent $_.FullName)) -eq "test" -and (Split-Path -Parent (Split-Path -Parent $_.FullName)) -eq $root })
+Check ($inTest.Count -ge 4) ("CONTROL: the scan finds the suites in test/ (" + $inTest.Count + ")")
+$sep = [System.IO.Path]::DirectorySeparatorChar
+foreach ($family in @("hosts", "transports", "agents")) {
+    $mine = @($allSuites | Where-Object { $_.FullName.StartsWith((Join-Path $root $family) + $sep, [System.StringComparison]::OrdinalIgnoreCase) })
+    $folders = @(Get-ChildItem -LiteralPath (Join-Path $root $family) -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "test") -PathType Container })
+    # Where a family has a test folder, the scan must find its suites.
+    if ($folders.Count -gt 0) { Check ($mine.Count -ge 1) ("CONTROL: the scan finds the " + $family + "' suites too (" + $mine.Count + ")") }
+    else { Write-Host ("  no " + $family + "/<name>/test/ folder yet; nothing of it to scan") -ForegroundColor DarkGray }
 }
-Check ($hostSuites.Count -ge 1) ("CONTROL: the scan finds the hosts' suites too (" + $hostSuites.Count + ")")
-# An agent harness's suites live in its own folder for the same reason (CONTRIBUTING 14): their
-# fixtures are the harness's own files.
-$agentSuites = @()
-foreach ($h in @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory -ErrorAction SilentlyContinue)) {
-    $ht = Join-Path $h.FullName "test"
-    if (Test-Path -LiteralPath $ht -PathType Container) {
-        $agentSuites += @(Get-ChildItem -LiteralPath $ht -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })
+$suites = $allSuites
+
+# NO SUITE OUTSIDE THE GATE. Any test-*.ps1 in the repository that the list above does not cover is a
+# suite nobody runs (test/fixtures/ is data and is skipped).
+$stray = @(Get-HordeStraySuiteFiles -Root $root)
+Check ($stray.Count -eq 0) ("every test-*.ps1 in the repository is one the gate runs" + $(if ($stray.Count) { " (outside it: " + ($stray -join ", ") + ")" } else { "" }))
+# CONTROL: the same check on a planted tree finds what it should and nothing else.
+$plant = Join-Path $env:TEMP ("horde-suitefiles-" + [guid]::NewGuid().ToString("N"))
+try {
+    foreach ($rel in @("test/test-a.ps1", "hosts/h/test/test-b.ps1", "transports/t/test/test-c.ps1", "agents/g/test/test-d.ps1",
+                       "test/fixtures/x/test-data.ps1", "tools/test-stray.ps1", "transports/t/test/deep/test-deeper.ps1", "transports/t/test-beside.ps1", "test/lib/test-lib.ps1", "test/test-notes.txt")) {
+        $p = Join-Path $plant $rel
+        New-Item -ItemType Directory -Path (Split-Path -Parent $p) -Force | Out-Null
+        [System.IO.File]::WriteAllText($p, "# planted")
     }
-}
-Check ($agentSuites.Count -ge 1) ("CONTROL: the scan finds the agent harnesses' suites too (" + $agentSuites.Count + ")")
-$suites = @($suites) + @($hostSuites) + @($agentSuites)
+    $plantedSuites = @(Get-HordeSuiteFiles -Root $plant | ForEach-Object { $_.Name })
+    Check (($plantedSuites -join ",") -ceq "test-a.ps1,test-b.ps1,test-c.ps1,test-d.ps1") ("CONTROL: in a planted tree the gate list is exactly the four suite folders' files (" + ($plantedSuites -join ",") + ")")
+    $plantedStray = @(Get-HordeStraySuiteFiles -Root $plant)
+    Check (($plantedStray -join ",") -ceq "test/lib/test-lib.ps1,tools/test-stray.ps1,transports/t/test-beside.ps1,transports/t/test/deep/test-deeper.ps1") ("CONTROL: and the stray check names the four planted outside it, and not the fixture (" + ($plantedStray -join ",") + ")")
+} finally { if (Test-Path -LiteralPath $plant) { Remove-Item -LiteralPath $plant -Recurse -Force } }
 foreach ($s in $suites) {
     $tk = $null; $pe = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($s.FullName, [ref]$tk, [ref]$pe)

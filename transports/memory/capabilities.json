@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "transport": "memory",
+  "maxFrameBytes": 1048576,
+  "capabilities": {
+    "auth.peer": {
+      "support": "declined",
+      "evidence": "An in-process pair for tests: the far end is whoever holds the other object. Declined so that Resolve-HordeLinkTransport, which requires auth.peer, never picks it (test/test-transport-conformance.ps1)."
+    },
+    "encrypt": {
+      "support": "no",
+      "evidence": "Byte arrays passed between threads of one process."
+    },
+    "dial.out": {
+      "support": "yes",
+      "evidence": "A node-role Open round-trips frames in test/test-transport-conformance.ps1."
+    },
+    "dial.in": {
+      "support": "yes",
+      "evidence": "A hub-role Open round-trips frames in test/test-transport-conformance.ps1."
+    },
+    "keepalive": {
+      "support": "yes",
+      "evidence": "Closing one end marks the other's inbound direction closed at once, and health reads closed with no frame sent (test/test-transport-conformance.ps1)."
+    },
+    "survives.peer.restart": {
+      "support": "no",
+      "evidence": "A restarted listener hands out new pairs; the old link reads closed (test/test-transport-conformance.ps1)."
+    }
+  }
+}

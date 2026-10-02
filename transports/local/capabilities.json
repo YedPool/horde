@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "transport": "local",
+  "maxFrameBytes": 1048576,
+  "capabilities": {
+    "auth.peer": {
+      "support": "yes",
+      "evidence": "transports/local/test/test-local.ps1, measured 2026-09-30 on Windows PowerShell 5.1.26100.9444: the live pipe's ACL allows only the owning user's SID and denies NETWORK, protected; its label is No-Write-Up and No-Read-Up at Medium, and a low-integrity reader of the same user is denied; it rejects remote clients, and a connect over localhost is refused while an ordinary pipe's is not; the hub refuses a pipe served by a low-integrity process of the same user, and the node refuses a client below its own integrity; a pipe whose ACL denies the caller is refused, and the name stays held between links."
+    },
+    "encrypt": {
+      "support": "no",
+      "evidence": "A named pipe on one machine: the bytes never leave it, and nothing encrypts them."
+    },
+    "dial.out": {
+      "support": "yes",
+      "evidence": "A node-role Open round-trips frames in test/test-transport-conformance.ps1."
+    },
+    "dial.in": {
+      "support": "yes",
+      "evidence": "A hub-role Open round-trips frames in test/test-transport-conformance.ps1: on one machine the hub dials the node's pipe."
+    },
+    "keepalive": {
+      "support": "yes",
+      "evidence": "A read is always pending; when the far end closes, it completes with 0 bytes and health reads closed with no frame sent (test/test-transport-conformance.ps1)."
+    },
+    "survives.peer.restart": {
+      "support": "no",
+      "evidence": "A restarted node is a new pipe instance: the old link reads closed and a new link must be opened (test/test-transport-conformance.ps1)."
+    }
+  }
+}
