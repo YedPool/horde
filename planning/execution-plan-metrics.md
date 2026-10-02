@@ -133,7 +133,12 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   or changed since its last run, keyed in `<HordeHome>\metrics\collect-index.json` by path, size and
   modification time. The gate exactly as summarize; a file last written before consent is not read; a
   transcript written within the last 10 minutes is recorded as provisional and collected again once
-  still; one run at a time; never writes in an engine's folder.
+  still; one run at a time; never writes in an engine's folder. The index is committed after every
+  transcript, so a run killed by the task's time limit keeps its progress; a run ends on a budget
+  (default 900 s, 5 minutes under the task's 20-minute limit), checked inside a read every 500 lines;
+  a file the budget runs out inside is deferred and read last, and after three deferrals in a row is
+  `tooLarge` - skipped, and named by summarize - so the rest of the backlog always proceeds (review of
+  PR #70).
 - **`horde metrics schedule install|remove|status`**: one job, "Horde metrics collect", every 30
   minutes as the current user, priority 7, stopped after 20 minutes, installed only while the gate
   says usage. `core/Schedule.ps1` defines the job; `core/schedule/WindowsTaskScheduler.ps1` is the
