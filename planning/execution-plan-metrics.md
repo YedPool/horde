@@ -101,6 +101,14 @@ positive controls, so the study's headline measures come from code rather than b
 
 What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9).
 
+- **First: running totals instead of per-line records** (coordinator's decision, 2026-10-02). Measured
+  on the always-on box on 2026-10-02 (review of PR #50): the JSONL reader streams - its peak working
+  set stays at 124 MB from a 33 MB to a 133 MB transcript - but `horde metrics summarize` peaked at
+  593 MB and 1,734 MB (80 s and 477 s) on those files, because the adapter keeps one record per line
+  and core keeps answer objects for each; about 11 MB of memory per MB of transcript. The adapter and
+  the measures fold each line into running totals (calls, tokens, gaps, open tool calls, the
+  still-waiting state) instead. Target: peak working set under 200 MB on the 133 MB file, measured
+  the same way, with the probe kept as a suite so a regression fails the gate.
 - Each `subagents/agent-<id>.jsonl` becomes an `agent` span linked to the orchestrator's launch call
   through its `meta.json` `toolUseId`; a session's total is the parent plus its spans, deduplicated
   across files.
