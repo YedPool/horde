@@ -428,12 +428,13 @@ Write-Host "--- I. nothing in remote/ can start a program or a shell ---" -Foreg
 
 # The verb table cannot express a shell; this proves the code beside it does not hold one either.
 # remote/ calls core and the adapters, which run what they run; it never starts anything itself.
-# tools/ExecScan.ps1 reads each file's syntax tree against an ALLOWLIST - every command a reviewed cmdlet
-# or a function of core/ or remote/ - because the banned-name list it replaced caught 3 of the 27 ways
-# to run something that the review of PR #40 wrote (2026-10-01).
+# tools/ExecScan.ps1 reads each file's syntax tree against an ALLOWLIST on every axis, because the
+# banned-name list it replaced caught 3 of the 27 ways to run something that the review
+# of PR #40 wrote (2026-10-01), and its second version, which still kept lists of banned methods and
+# types, let 7 of the verification's forms through. Every axis is now an allowlist (tools/ExecScan.ps1).
 . (Join-Path $root "tools\ExecScan.ps1")
-$known = Get-HordeExecFunctionNames -Roots @((Join-Path $root "core"), (Join-Path $root "remote"))
-Check ($known.Contains("Get-HordeSchema") -and $known.Contains("Test-HordeLinkFrame")) "CONTROL: the functions of core/ and remote/ are read (Get-HordeSchema and Test-HordeLinkFrame are among them)"
+$known = Get-HordeExecFunctionNames -Roots @(Join-Path $root "remote")
+Check ($known.Contains("Test-HordeLinkFrame") -and -not $known.Contains("Invoke-HordeRead")) "CONTROL: the functions remote/ defines are read, and core's are not: only the listed core functions may be called, never Invoke-HordeRead, which runs the block it is given"
 
 function Get-LineFindings {
     param($Findings, [int]$Line)
@@ -443,7 +444,7 @@ $ctlPath = Join-Path $fx "shell-control.ps1"
 $ctl = @(Get-HordeExecFindings -Path $ctlPath -Known $known)
 $ctlAst = [System.Management.Automation.Language.Parser]::ParseFile($ctlPath, [ref]$null, [ref]$null)
 $forms = @($ctlAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))
-Check ($forms.Count -eq 51) ("CONTROL: the control file holds 51 forms - the review's 27, the first scan's 9 and 15 that each isolate one rule (found " + $forms.Count + ")")
+Check ($forms.Count -eq 92) ("CONTROL: the control file holds 92 forms - the review's 27, the first scan's 9, the verification's 13, 42 that each isolate one rule, and a class method (found " + $forms.Count + ")")
 foreach ($form in $forms) {
     $hits = @(Get-LineFindings $ctl $form.Extent.StartLineNumber)
     Check ($hits.Count -ge 1) ("CONTROL: the form " + $form.Name + " is refused")
@@ -461,7 +462,7 @@ foreach ($text in [System.IO.File]::ReadAllLines($ctlPath)) {
     Check (@($hits | Where-Object { "$_".Contains($want) }).Count -ge 1) ("CONTROL: line " + $lineNo + " is refused because: " + $want)
     if (@($hits | Where-Object { "$_".Contains($want) }).Count -eq 0) { Show $hits }
 }
-Check ($expectCount -eq 54) ("CONTROL: 54 lines of the control file name their reason (found " + $expectCount + ")")
+Check ($expectCount -eq 96) ("CONTROL: 96 lines of the control file name their reason (found " + $expectCount + ")")
 $clean = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-clean.ps1") -Known $known)
 Check ($clean.Count -eq 0) "CONTROL: a file written the way remote/ is written - its loader lines, allowlisted cmdlets, core functions, .NET types that start nothing - has no finding"; Show $clean
 $broken = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-unparsed.ps1") -Known $known)

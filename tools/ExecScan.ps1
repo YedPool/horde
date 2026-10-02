@@ -1,83 +1,127 @@
-# ExecScan.ps1 - does a PowerShell file start a program, a shell or a script? An allowlist, read from
-# the file's syntax tree.
+# ExecScan.ps1 - can a PowerShell file start a program, a shell or a script? An allowlist on every axis
+# of the file's syntax tree.
 #
 # Development tooling, not part of the engine. test/test-link-contracts.ps1 runs it over every file in
 # remote/, because the link protocol is never a remote shell (remote-sessions design section 6): the
 # verb table cannot express one, and this proves the code beside the table does not hold one either.
 #
-# WHY AN ALLOWLIST. The first version of this check was a list of banned command names. The review of
-# PR #40 (2026-10-01) wrote 27 ways to run something and the list caught 3: a module-qualified name, an
-# alias made on the spot, a COM object, a .NET process, a runspace, a WMI or CIM method, a background
-# job, compiled C#, a native program called by name, a member called through a variable. A name list
-# loses to every spelling it did not think of; an allowlist loses only to what it admits. So:
+# WHY EVERY AXIS IS AN ALLOWLIST. The first scan was a list of banned command names; the review of PR
+# #40 (2026-10-01) wrote 27 ways to run something and it caught 3. The second allowlisted commands but
+# kept lists of banned METHODS and TYPES, and the verification of the same day got past it seven more
+# ways: [Microsoft.VisualBasic.Interaction]::Shell, ([wmiclass]'Win32_Process').InvokeMethod,
+# $global:ExecutionContext...ExpandString, a script block made through GetType and CreateDelegate and
+# handed to ForEach-Object -Process:$sb, script blocks given to Select-Object, Sort-Object and an
+# Add-Member ScriptMethod, and core's Invoke-HordeRead, which runs the block it is given. A banned list
+# loses to every name it did not think of. So each axis below admits only what remote/ was measured to
+# need (its syntax trees, 2026-10-02), and everything else is a finding:
 #
-#   1. EVERY COMMAND IS ONE WE NAMED. A command's name must be a cmdlet in $HordeExecCmdlets or a
-#      function defined in core/ or remote/ (or in the file itself). Anything else - a native program
-#      (git, notepad.exe), a cmdlet nobody reviewed - is a finding. A module-qualified name
-#      (Module\Cmdlet) is a finding: it reaches past a function of the same name.
-#   2. A COMMAND WITH NO NAME IS A FINDING: `& $x`, `& { }`, `. $x`, `.("ie" + "x")`. The one form of
-#      dot-sourcing allowed is the one every file here uses to load its neighbours, at the top of the
-#      file: . (Join-Path $PSScriptRoot "<File>.ps1") or . (Join-Path (Split-Path -Parent $PSScriptRoot)
-#      "core\<File>.ps1"), the file name a literal.
-#   3. SOME CMDLETS ARE REFUSED EVEN IF SOMEONE ADDS THEM TO THE ALLOWLIST ($HordeExecDenied): aliases
-#      made at run time, jobs, compiled code, WMI and CIM methods, and the cmdlets that run a string.
-#      A function may not take one of their names either, or it would shadow the check.
-#   4. FOREACH-OBJECT AND WHERE-OBJECT TAKE A SCRIPT BLOCK AND NOTHING ELSE: `$sb | ForEach-Object
-#      Invoke` calls a method by name, so a bare word there is a finding.
-#   5. A METHOD CALLED BY ONE OF THE NAMES THAT RUN THINGS ($HordeExecMembers) is a finding, on any
-#      object; so is a method or property named by a variable or expression ([Process]::$m(...)), which
-#      no allowlist can read.
-#   6. A TYPE THAT RUNS THINGS ($HordeExecTypes) is a finding wherever it is named - [Diagnostics.Process]
-#      as a cast, a static call or a parameter type - and so is New-Object of it, New-Object -ComObject,
-#      and New-Object of a type that is not a literal.
-#   7. $ExecutionContext is a finding wherever it is read: it is the engine's own command invoker.
+#   1. COMMANDS: a cmdlet of $HordeExecCmdlets, a function defined in the scanned files, or one of the
+#      core/ functions of $HordeExecCoreFunctions - not every core function: Invoke-HordeRead runs the
+#      block it is given. A command with no literal name, a call with &, a module-qualified name, and
+#      any dot-sourcing but the loader line at the top of the file are findings. A function may not
+#      take the name of an allowlisted cmdlet or core function.
+#   2. ARGUMENTS of the cmdlets that would run a script block or a member name: ForEach-Object and
+#      Where-Object take a literal script block (positional, -Process or -FilterScript) and nothing
+#      else; Select-Object, Sort-Object and Measure-Object take parameters and literal names, never a
+#      script block, a hashtable (a calculated property is a script block) or a variable; Add-Member
+#      takes only -NotePropertyName, -NotePropertyValue, -InputObject, -Force and -PassThru; New-Object
+#      takes a literal type from $HordeExecNewTypes and -ArgumentList.
+#   3. SCRIPT BLOCKS: a { } may stand only as an argument of ForEach-Object or Where-Object, where its
+#      body is scanned like the rest. Anywhere else - a variable, an attribute, any other command - is a
+#      finding. With no literal block to hand on, no [scriptblock] type, no GetType and no
+#      $ExecutionContext, remote/ has no way to hold a script block at all.
+#   4. TYPES: every [type] - a literal, a cast, a parameter type, a static call - is one of
+#      $HordeExecTypes. Attributes are one of $HordeExecAttributes. Class definitions and using
+#      statements are findings.
+#   5. STATIC MEMBERS: [Type]::Member only as listed for that type in $HordeExecStatic.
+#   6. INSTANCE METHODS: the type of a value is not known from its syntax, so a method call on one may
+#      use only a name in $HordeExecInstanceMethods, each harmless on any type it could be. GetType,
+#      and every Invoke*, Create*, Start*, Run*, Exec* and Expand*, are not on it. A member named by an
+#      expression ($o.$m()) is a finding.
+#   7. VARIABLES: plain names, or the script: scope. Any other scope or drive (global:, using:, env:,
+#      function:, variable:), and $ExecutionContext, $Host, $MyInvocation and $PSCmdlet in any form,
+#      are findings.
+#   8. PROPERTY READS are data, and remote/ reads arbitrary field names of parsed JSON, so they cannot
+#      be a list of names. LEAVING THEM OPEN IS SAFE ONLY BECAUSE NO SCRIPT BLOCK CAN BE HELD: no
+#      literal script block outside ForEach-Object and Where-Object (rule 3), no [scriptblock] type
+#      (rule 4), no GetType (rule 6) and no $ExecutionContext (rule 7). Without a script block there is
+#      no ScriptProperty to add and no hostile getter to reach. If any of those four ever loosens, this
+#      rule must become a list too; test/mutations/exec-scan.psd1 re-allows [scriptblock] and the suite
+#      must fail, so the argument stays enforced. The properties that lead to the engine itself
+#      ($HordeExecProperties: InvokeCommand, Assembly, Runspace, SessionState, ScriptBlock, Module) are
+#      findings all the same, a second line behind rule 7.
 #
-# The control is test/fixtures/link/shell-control.ps1, one function per way to run something; every one
-# must be found, and test/fixtures/link/shell-clean.ps1, written the way remote/ is written, must not.
-# test/mutations/exec-scan.psd1 switches off each rule above and the suite must notice.
+# The control is test/fixtures/link/shell-control.ps1, one function per way to run something, each
+# line naming the finding it must get; test/fixtures/link/shell-clean.ps1, written the way remote/ is
+# written, must have none. test/mutations/exec-scan.psd1 switches off each rule.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
-# The cmdlets remote/ may call. It is what remote/Contract.ps1 and remote/Protocol.ps1 use, measured
-# from their syntax trees on 2026-10-01, plus the read-only pipeline cmdlets beside them. None starts
-# anything. A cmdlet is added here by review, with the reason in the pull request.
+# Rule 1. The cmdlets remote/ calls, measured, plus the read-only pipeline cmdlets beside them.
 $script:HordeExecCmdlets = @("Join-Path", "Split-Path", "New-Object", "Where-Object", "ForEach-Object", "Sort-Object",
     "Select-Object", "Measure-Object", "Add-Member", "ConvertTo-Json", "ConvertFrom-Json", "Get-Date")
+# Rule 1. The core/ functions remote/ calls, measured. None takes or runs a script block.
+$script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Get-HordeObjectProps", "Read-HordeSchemaFile")
 
-# Refused outright, allowlisted or not, and never a function's name. Lower case; matched without case.
-$script:HordeExecDenied = @("invoke-expression", "iex", "invoke-command", "icm", "invoke-item", "ii", "start-process",
-    "saps", "start", "start-job", "sajb", "start-threadjob", "receive-job", "add-type", "set-alias", "sal", "new-alias",
-    "nal", "import-alias", "invoke-cimmethod", "invoke-wmimethod", "register-objectevent", "register-wmievent",
-    "register-cimindicationevent", "register-engineevent", "new-pssession", "enter-pssession", "import-module",
-    "ipmo", "new-module", "nmo", "set-item", "si", "new-item", "ni", "get-command", "gcm", "invoke-restmethod",
-    "invoke-webrequest")
+# Rule 2. The types New-Object may make.
+$script:HordeExecNewTypes = @("System.Collections.ArrayList", "System.Collections.Stack", "System.Collections.Generic.List[string]",
+    "System.Text.StringBuilder", "byte[]")
 
-# A method called by one of these names runs code or starts a process, whatever the object.
-$script:HordeExecMembers = @("invoke", "invokereturnasis", "invokewithcontext", "invokescript", "invokecommand",
-    "begininvoke", "start", "run", "exec", "shellexecute", "create", "createinstance", "newscriptblock",
-    "addscript", "addcommand", "gettypefromprogid", "gettypefromclsid", "createprocess")
+# Rule 4. The types that may be named, lower case, without a leading "system.". An array of one is
+# allowed as the type itself is.
+$script:HordeExecTypes = @("string", "int", "long", "bool", "byte", "sbyte", "char", "int16", "uint16", "uint32", "uint64",
+    "decimal", "double", "single", "datetime", "guid", "regex", "math", "array", "hashtable", "ordered", "pscustomobject",
+    "management.automation.pscustomobject", "void", "switch", "ref", "collections.idictionary", "collections.ilist",
+    "globalization.cultureinfo", "globalization.datetimestyles", "stringcomparison", "stringcomparer", "text.encoding",
+    # io.stream: allowed only because the one stream remote/ holds is the link's own pipe, handed to
+    # New-HordeFrameReader by the transport; remote/ never opens a stream itself.
+    "io.stream")
+$script:HordeExecAttributes = @("Parameter", "CmdletBinding")
 
-# A type that runs code or starts a process. Matched without case against the type's name as written,
-# and against any name ending in one of these after a dot, so Process, Diagnostics.Process and
-# System.Diagnostics.Process are one type.
-$script:HordeExecTypes = @("diagnostics.process", "diagnostics.processstartinfo", "process", "processstartinfo",
-    "powershell", "management.automation.powershell", "scriptblock", "management.automation.scriptblock",
-    "activator", "runspacefactory", "management.automation.runspaces.runspacefactory", "wscript.shell",
-    "shell.application", "type")
+# Rule 5. Per type (named as in $HordeExecTypes), the static members that may be read or called.
+$script:HordeExecStatic = @{
+    "datetime" = @("TryParseExact", "MinValue")
+    "regex" = @("Match", "Replace", "Split", "IsMatch")
+    "string" = @("Equals")
+    "globalization.cultureinfo" = @("InvariantCulture")
+    "globalization.datetimestyles" = @("AdjustToUniversal", "AssumeUniversal")
+    "stringcomparison" = @("Ordinal")
+    "stringcomparer" = @("Ordinal")
+    "array" = @("Copy", "IndexOf", "Sort")
+    "char" = @("IsHighSurrogate", "IsLowSurrogate")
+    "guid" = @("NewGuid")
+    "math" = @("Min", "Max")
+    # GetEncoding: allowed only because it decodes the link's own pipe (Latin-1, one character per byte,
+    # to find a byte outside printable ASCII in a received frame); it names an encoding and opens nothing.
+    "text.encoding" = @("GetEncoding", "ASCII")
+}
 
-function Test-HordeExecTypeName {
-    # Is Name one of $HordeExecTypes? [type] is in the list for [type]::GetTypeFromProgID; a parameter
-    # typed [type] has no use in remote/ either.
+# Rule 6. Instance methods remote/ calls, measured, each one that reads, formats or adds to a
+# collection whatever type it lands on.
+$script:HordeExecInstanceMethods = @("ToString", "Trim", "Split", "Contains", "StartsWith", "EndsWith", "Substring", "IndexOf",
+    "Replace", "Add", "ContainsKey", "Pop", "Push", "ToArray", "ToLowerInvariant", "Append", "ToCharArray", "ToUniversalTime",
+    "GetBytes", "GetString",
+    # Read: allowed only because the stream it reads is the link's own pipe (Read-HordeFrameLine reads
+    # the transport's stream into a bounded buffer); remote/ holds no other stream to read.
+    "Read")
+
+# Rule 7. Variables refused whatever their scope.
+$script:HordeExecVariables = @("ExecutionContext", "Host", "MyInvocation", "PSCmdlet")
+# Rule 8.
+$script:HordeExecProperties = @("InvokeCommand", "Assembly", "Runspace", "SessionState", "ScriptBlock", "Module")
+
+function ConvertTo-HordeExecTypeKey {
+    # A type name as the lists above spell it: lower case, no leading "system.", no array brackets.
     param([string]$Name)
     $n = $Name.Trim().ToLowerInvariant()
-    foreach ($t in $script:HordeExecTypes) {
-        if ($n -ceq $t -or $n.EndsWith("." + $t)) { return $true }
-    }
-    return $false
+    while ($n.EndsWith("[]")) { $n = $n.Substring(0, $n.Length - 2) }
+    if ($n.StartsWith("system.")) { $n = $n.Substring(7) }
+    return $n
 }
 
 function Get-HordeExecFunctionNames {
-    # Every function defined in the .ps1 files under each folder in Roots, recursively.
+    # Every function defined in the .ps1 files under each folder in Roots, recursively: the functions
+    # remote/ defines for itself. core/ is NOT read this way; its callable functions are listed above.
     param([string[]]$Roots)
     $names = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($r in $Roots) {
@@ -91,7 +135,8 @@ function Get-HordeExecFunctionNames {
 }
 
 function Test-HordeExecLoaderDot {
-    # Is this dot-sourcing the one allowed form, at the top of the file? See rule 2 above.
+    # Is this dot-sourcing the one allowed form, at the top of the file?
+    #   . (Join-Path $PSScriptRoot "<File>.ps1")   or   . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\<File>.ps1")
     param($Command)
     if ($Command.Parent -isnot [System.Management.Automation.Language.PipelineAst]) { return $false }
     $p = $Command.Parent.Parent
@@ -111,10 +156,63 @@ function Test-HordeExecLoaderDot {
     return [regex]::IsMatch($leaf.Value, '\A((core|remote)\\)?[A-Za-z][A-Za-z0-9]*\.ps1\z')
 }
 
+function Get-HordeExecArgFindings {
+    # Rule 2: the arguments of the cmdlets that could run a script block or a member name.
+    param($Command, [string]$Name, [string]$At)
+    $out = New-Object System.Collections.ArrayList
+    $els = @($Command.CommandElements)
+    $blocksOnly = ($Name -ceq "ForEach-Object" -or $Name -ceq "Where-Object")
+    $namesOnly = ($Name -ceq "Select-Object" -or $Name -ceq "Sort-Object" -or $Name -ceq "Measure-Object")
+    for ($i = 1; $i -lt $els.Count; $i++) {
+        $el = $els[$i]
+        if ($el -is [System.Management.Automation.Language.CommandParameterAst]) {
+            $pn = $el.ParameterName
+            $bound = $el.Argument
+            if ($blocksOnly) {
+                if (@("Process", "FilterScript") -notcontains $pn) { [void]$out.Add($At + $Name + " -" + $pn + ": only a literal script block may be given") }
+                elseif ($null -ne $bound -and $bound -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]) { [void]$out.Add($At + $Name + " -" + $pn + ":" + $bound.Extent.Text + ": only a literal script block may be given") }
+            } elseif ($namesOnly) {
+                if ($null -ne $bound -and ($bound -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or $bound -is [System.Management.Automation.Language.HashtableAst])) { [void]$out.Add($At + $Name + " -" + $pn + " given a script block or a calculated property") }
+            } elseif ($Name -ceq "Add-Member") {
+                if (@("NotePropertyName", "NotePropertyValue", "InputObject", "Force", "PassThru") -notcontains $pn) { [void]$out.Add($At + "Add-Member -" + $pn + ": only a note property may be added") }
+            } elseif ($Name -ceq "New-Object") {
+                if (@("TypeName", "ArgumentList") -notcontains $pn) { [void]$out.Add($At + "New-Object -" + $pn + ": only -TypeName and -ArgumentList") }
+            }
+            continue
+        }
+        $prev = $null
+        if ($i -gt 1 -and $els[$i - 1] -is [System.Management.Automation.Language.CommandParameterAst] -and $null -eq $els[$i - 1].Argument) { $prev = $els[$i - 1].ParameterName }
+        if ($blocksOnly) {
+            if ($el -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]) { [void]$out.Add($At + $Name + " given " + $el.Extent.Text + ": only a literal script block may be given") }
+        } elseif ($namesOnly) {
+            $isCount = (@("First", "Last", "Skip") -contains $prev)
+            if ($el -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or $el -is [System.Management.Automation.Language.HashtableAst]) { [void]$out.Add($At + $Name + " given a script block or a calculated property") }
+            elseif (-not $isCount -and $el -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { [void]$out.Add($At + $Name + " given " + $el.Extent.Text + ": only literal property names") }
+        } elseif ($Name -ceq "Add-Member") {
+            if (@("NotePropertyName", "NotePropertyValue", "InputObject") -notcontains $prev) { [void]$out.Add($At + "Add-Member given " + $el.Extent.Text + " by position: only a named note property") }
+        }
+    }
+    if ($Name -ceq "New-Object") {
+        $typeArg = $null
+        for ($i = 1; $i -lt $els.Count; $i++) {
+            $el = $els[$i]
+            if ($el -is [System.Management.Automation.Language.CommandParameterAst]) {
+                if ($el.ParameterName -ceq "TypeName" -and $i + 1 -lt $els.Count) { $typeArg = $els[$i + 1]; $i++ }
+                elseif ($el.ParameterName -ceq "ArgumentList") { $i++ }
+                continue
+            }
+            if ($null -eq $typeArg) { $typeArg = $el }
+        }
+        if ($null -eq $typeArg -or $typeArg -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { [void]$out.Add($At + "New-Object of a type that is not a literal name") }
+        elseif ($script:HordeExecNewTypes -notcontains $typeArg.Value) { [void]$out.Add($At + "New-Object " + $typeArg.Value + " is not a type New-Object may make here") }
+    }
+    return @($out)
+}
+
 function Get-HordeExecFindings {
     # Every way Path could start a program, a shell or a script, as "line N: what". Empty means none.
-    # Known is the set of function names a command may call besides the allowlisted cmdlets
-    # (Get-HordeExecFunctionNames over core/ and remote/); the file's own functions are added to it.
+    # Known is the set of functions the scanned code defines for itself (Get-HordeExecFunctionNames
+    # over remote/); the file's own functions and $HordeExecCoreFunctions are added to it.
     param([Parameter(Mandatory = $true)][string]$Path, $Known = $null)
     $tokens = $null; $errs = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errs)
@@ -123,13 +221,21 @@ function Get-HordeExecFindings {
     foreach ($e in @($errs)) { if ($null -ne $e) { [void]$out.Add("line " + $e.Extent.StartLineNumber + ": does not parse: " + $e.Message) } }
     $funcs = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
     if ($null -ne $Known) { foreach ($k in $Known) { [void]$funcs.Add($k) } }
+    foreach ($k in $script:HordeExecCoreFunctions) { [void]$funcs.Add($k) }
     foreach ($d in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
-        [void]$funcs.Add($d.Name)
-        if ($script:HordeExecDenied -contains $d.Name.ToLowerInvariant() -or $script:HordeExecCmdlets -contains $d.Name) {
-            [void]$out.Add("line " + $d.Extent.StartLineNumber + ": a function named " + $d.Name + " would shadow a cmdlet this check judges")
+        if ($script:HordeExecCmdlets -contains $d.Name -or $script:HordeExecCoreFunctions -contains $d.Name) {
+            [void]$out.Add("line " + $d.Extent.StartLineNumber + ": a function named " + $d.Name + " would shadow a command this check allows")
         }
+        [void]$funcs.Add($d.Name)
     }
-    $allowed = $script:HordeExecCmdlets
+    # Rule 4: no classes, no using statements, attributes from the list.
+    foreach ($n in @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.TypeDefinitionAst] -or $x -is [System.Management.Automation.Language.UsingStatementAst] }, $true))) {
+        [void]$out.Add("line " + $n.Extent.StartLineNumber + ": a class or a using statement")
+    }
+    foreach ($a in @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.AttributeAst] }, $true))) {
+        if ($script:HordeExecAttributes -notcontains $a.TypeName.FullName) { [void]$out.Add("line " + $a.Extent.StartLineNumber + ": the attribute [" + $a.TypeName.FullName + "()] is not one of " + ($script:HordeExecAttributes -join ", ")) }
+    }
+    # Rule 1 and rule 2.
     foreach ($c in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))) {
         $at = "line " + $c.Extent.StartLineNumber + ": "
         $name = $c.GetCommandName()
@@ -140,46 +246,47 @@ function Get-HordeExecFindings {
         if ($c.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand) { [void]$out.Add($at + "a call with &, which runs whatever it is given"); continue }
         if ($null -eq $name) { [void]$out.Add($at + "a command with no literal name"); continue }
         if ($name.Contains("\") -or $name.Contains("/")) { [void]$out.Add($at + $name + " is module-qualified or a path"); continue }
-        if ($script:HordeExecDenied -contains $name.ToLowerInvariant()) { [void]$out.Add($at + $name + " is refused: it runs code, makes an alias, a job or a type, or calls a method of the system"); continue }
-        if ($allowed -cnotcontains $name -and -not $funcs.Contains($name)) { [void]$out.Add($at + $name + " is not an allowlisted cmdlet or a function of core/ or remote/ (a native program, or a cmdlet nobody reviewed)"); continue }
-        if ($name -ceq "ForEach-Object" -or $name -ceq "Where-Object") {
-            for ($i = 1; $i -lt $c.CommandElements.Count; $i++) {
-                $el = $c.CommandElements[$i]
-                if ($el -is [System.Management.Automation.Language.CommandParameterAst]) {
-                    if (@("Process", "Begin", "End", "FilterScript") -notcontains $el.ParameterName) { [void]$out.Add($at + $name + " -" + $el.ParameterName + ": only a script block may be given") }
-                } elseif ($el -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
-                    [void]$out.Add($at + $name + " given " + $el.Extent.Text + ": only a script block may be given, a name calls a method")
-                }
-            }
-        }
-        if ($name -ceq "New-Object") {
-            $typeArg = $null
-            for ($i = 1; $i -lt $c.CommandElements.Count; $i++) {
-                $el = $c.CommandElements[$i]
-                if ($el -is [System.Management.Automation.Language.CommandParameterAst]) {
-                    if ($el.ParameterName -like "Com*") { [void]$out.Add($at + "New-Object -ComObject: no COM object is needed here") }
-                    elseif ($el.ParameterName -like "T*" -and $i + 1 -lt $c.CommandElements.Count) { $typeArg = $c.CommandElements[$i + 1]; $i++ }
-                    elseif ($el.ParameterName -like "A*" -or $el.ParameterName -like "P*") { $i++ }
-                    continue
-                }
-                if ($null -eq $typeArg) { $typeArg = $el }
-            }
-            if ($null -eq $typeArg -or $typeArg -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { [void]$out.Add($at + "New-Object of a type that is not a literal name") }
-            elseif (Test-HordeExecTypeName $typeArg.Value) { [void]$out.Add($at + "New-Object " + $typeArg.Value + ", a type that runs things") }
-        }
+        if ($script:HordeExecCmdlets -cnotcontains $name -and -not $funcs.Contains($name)) { [void]$out.Add($at + $name + " is not an allowlisted cmdlet or a function this code may call"); continue }
+        foreach ($f in @(Get-HordeExecArgFindings -Command $c -Name $name -At $at)) { [void]$out.Add($f) }
     }
+    # Rule 3: a script block only as an argument of ForEach-Object or Where-Object.
+    foreach ($b in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }, $true))) {
+        $holder = $b.Parent
+        if ($holder -is [System.Management.Automation.Language.CommandParameterAst]) { $holder = $holder.Parent }
+        $ok = ($holder -is [System.Management.Automation.Language.CommandAst] -and @("ForEach-Object", "Where-Object") -ccontains $holder.GetCommandName() -and $holder.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Unknown)
+        if (-not $ok) { [void]$out.Add("line " + $b.Extent.StartLineNumber + ": a script block that is not the body of ForEach-Object or Where-Object") }
+    }
+    # Rule 4: every type named.
+    foreach ($t in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.TypeExpressionAst] -or $n -is [System.Management.Automation.Language.TypeConstraintAst] }, $true))) {
+        if ($script:HordeExecTypes -notcontains (ConvertTo-HordeExecTypeKey $t.TypeName.FullName)) { [void]$out.Add("line " + $t.Extent.StartLineNumber + ": the type [" + $t.TypeName.FullName + "] is not one this code may name") }
+    }
+    # Rules 5, 6 and 8: members.
     foreach ($m in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true))) {
         $at = "line " + $m.Extent.StartLineNumber + ": "
         if ($m.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { [void]$out.Add($at + "a member named by an expression (" + $m.Member.Extent.Text + "), which no allowlist can read"); continue }
-        if ($m -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $script:HordeExecMembers -contains "$($m.Member.Value)".ToLowerInvariant()) {
-            [void]$out.Add($at + "the method " + $m.Member.Value + ", which runs code or starts a process")
+        $member = $m.Member.Value
+        $isCall = ($m -is [System.Management.Automation.Language.InvokeMemberExpressionAst])
+        if ($m.Static) {
+            if ($m.Expression -isnot [System.Management.Automation.Language.TypeExpressionAst]) { [void]$out.Add($at + "a static member ::" + $member + " of something that is not a type literal"); continue }
+            $key = ConvertTo-HordeExecTypeKey $m.Expression.TypeName.FullName
+            $allowedStatic = @()
+            if ($script:HordeExecStatic.ContainsKey($key)) { $allowedStatic = @($script:HordeExecStatic[$key]) }
+            if ($allowedStatic -cnotcontains $member) { [void]$out.Add($at + "[" + $m.Expression.TypeName.FullName + "]::" + $member + " is not a static member this code may use") }
+        } elseif ($isCall) {
+            if ($script:HordeExecInstanceMethods -cnotcontains $member) { [void]$out.Add($at + "the method " + $member + " is not one this code may call") }
+        } elseif ($script:HordeExecProperties -contains $member) {
+            [void]$out.Add($at + "the property " + $member + ", which leads to the engine")
         }
     }
-    foreach ($t in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.TypeExpressionAst] -or $n -is [System.Management.Automation.Language.TypeConstraintAst] }, $true))) {
-        if (Test-HordeExecTypeName $t.TypeName.FullName) { [void]$out.Add("line " + $t.Extent.StartLineNumber + ": the type [" + $t.TypeName.FullName + "], which runs code or starts a process") }
-    }
+    # Rule 7: variables.
     foreach ($v in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true))) {
-        if ($v.VariablePath.UserPath -eq "ExecutionContext") { [void]$out.Add("line " + $v.Extent.StartLineNumber + ": `$ExecutionContext, the engine's own command invoker") }
+        $at = "line " + $v.Extent.StartLineNumber + ": "
+        $vp = $v.VariablePath
+        $bare = $vp.UserPath
+        $colon = $bare.IndexOf(":")
+        if ($colon -ge 0) { $bare = $bare.Substring($colon + 1) }
+        if ($script:HordeExecVariables -contains $bare) { [void]$out.Add($at + "`$" + $vp.UserPath + ", which reaches the engine"); continue }
+        if (-not ($vp.IsUnqualified -or $vp.IsScript)) { [void]$out.Add($at + "`$" + $vp.UserPath + ": only plain variables and the script: scope") }
     }
     return @($out)
 }

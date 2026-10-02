@@ -22,3 +22,4 @@ function Get-CleanWords {
 }
 
 function Get-CleanCount { param($Items) return (@(Get-CleanWords -Name "a b" -Frame $Items) | Measure-Object).Count }
+function Get-CleanVerdict { param($Frame) return @(Test-HordeLinkFrame -Frame $Frame).Count }
