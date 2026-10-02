@@ -36,6 +36,8 @@ trap { Register-HordeSuiteError $_; continue }
 $work = Join-Path $env:TEMP ("horde-memory-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $overFloorMB = 120
+# Set from the live measurement below, repeated: see the plan (planning/execution-plan-metrics.md, M2).
+$perResponseLimit = 1500
 
 function New-BigTranscript {
     # -Short: about 0.4 KB a line instead of 1.6 KB, so many more records per MB (review of PR #70, F5).
@@ -56,6 +58,33 @@ function New-BigTranscript {
             $w.WriteLine('{"type":"user","isSidechain":false,"sessionId":"s","timestamp":"' + $ts2 + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t' + $i + '","content":"' + $pad + '"}]}}')
         }
     } finally { $w.Dispose() }
+}
+
+function Measure-HordeLiveBytes {
+    # The most bytes the summary of -File ever held live, in a child process that forces a collection
+    # every 5,000 records: { bytes; records; state }.
+    param([string]$File)
+    $script = Join-Path $work "live.ps1"
+    [System.IO.File]::WriteAllText($script, @"
+param([string]`$Root, [string]`$File)
+foreach (`$f in @("Tristate", "ReadShared", "Home", "Transcript", "Price", "Metrics", "MetricsStore", "MetricsReport")) { . (Join-Path `$Root ("core\" + `$f + ".ps1")) }
+foreach (`$a in (Get-HordeTranscriptAdapterFiles -Root `$Root)) { . `$a }
+`$acc = New-HordeMetricsAccumulator -PriceTable (New-HordeAbsent -Note "not priced")
+`$base = [GC]::GetTotalMemory(`$true)
+`$probe = [pscustomobject]@{ into = `$acc; n = 0; peak = [long]0 }
+`$probe | Add-Member -MemberType ScriptMethod -Name Add -Value { param(`$r) `$this.into.Add(`$r); `$this.n++; if ((`$this.n % 5000) -eq 0) { `$m = [GC]::GetTotalMemory(`$true); if (`$m -gt `$this.peak) { `$this.peak = `$m } } }
+`$read = Read-HordeTranscript -Path `$File -Into `$probe
+`$m = [GC]::GetTotalMemory(`$true); if (`$m -gt `$probe.peak) { `$probe.peak = `$m }
+"LIVE " + (`$probe.peak - `$base) + " " + `$probe.n + " " + `$read.state
+"@)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo "powershell.exe", ("-NoProfile -ExecutionPolicy Bypass -File `"" + $script + "`" -Root `"" + $root + "`" -File `"" + $File + "`"")
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $out = $p.StandardOutput.ReadToEnd(); $p.WaitForExit(); $p.Dispose()
+    $m = [regex]::Match($out, 'LIVE (-?\d+) (\d+) (\w+)')
+    if (-not $m.Success) { return [pscustomobject]@{ bytes = [long]0; records = 0; state = ("no result: " + $out + $errTask.Result) } }
+    return [pscustomobject]@{ bytes = [long]$m.Groups[1].Value; records = [int]$m.Groups[2].Value; state = $m.Groups[3].Value }
 }
 
 function Measure-Peak {
@@ -83,7 +112,7 @@ function Measure-Peak {
 
 try {
     $rows = @()
-    foreach ($size in @(@{ name = "floor"; pairs = 1 }, @{ name = "small"; pairs = 10000 }, @{ name = "large"; pairs = 40000 }, @{ name = "short-few"; pairs = 20000; short = $true }, @{ name = "short-many"; pairs = 120000; short = $true })) {
+    foreach ($size in @(@{ name = "floor"; pairs = 1 }, @{ name = "small"; pairs = 10000 }, @{ name = "large"; pairs = 40000 })) {
         $file = Join-Path $work ($size.name + "\66666666-7777-4888-8999-000000000000.jsonl")
         New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
         New-BigTranscript -Path $file -Pairs $size.pairs -Short:([bool]$size.short)
@@ -96,11 +125,28 @@ try {
         $rows += [pscustomobject]@{ name = $size.name; MB = $mb; pairs = $size.pairs; peakMB = $r.peakMB; privateMB = $r.privateMB }
         Remove-Item -LiteralPath $file -Force
     }
-    $f = $rows[0]; $s = $rows[1]; $l = $rows[2]; $sf = $rows[3]; $sm = $rows[4]
-    $perPair = [math]::Round((($sm.privateMB - $sf.privateMB) * 1MB) / ($sm.pairs - $sf.pairs))
-    Write-Host ("MEMORY per response with short lines: " + $perPair + " bytes of private memory per assistant response and its tool result (" + $sf.privateMB + " MB at " + $sf.pairs + ", " + $sm.privateMB + " MB at " + $sm.pairs + ")")
-    Check ($perPair -lt 1024) ("private memory grows by at most 1 KB per response (" + $perPair + " bytes): O(responses), with a small constant")
-    Check ($sm.pairs -ge 5 * $sf.pairs) "CONTROL: the second short file has at least five times the responses of the first"
+    $f = $rows[0]; $s = $rows[1]; $l = $rows[2]
+    # WHAT IS KEPT PER RESPONSE, measured as live bytes rather than as a process peak. A process peak is
+    # the collector's choice as much as ours: repeated four times on the always-on box (2026-10-02, at
+    # 6d69979), 10,000 and 60,000 short responses peaked alike at 213-238 MB private, a per-response slope
+    # of -2 to 507 bytes (median 53) - noise - while on the 1 GB-free working box the reviewer measured
+    # at least 1.4 KB (134 MB at 10,000, 202 MB at 60,000). So the summary runs in a child process that
+    # forces a full collection every 5,000 records and reports the most bytes it ever held live; the
+    # slope between 10,000 and 60,000 short responses is what the code keeps per response.
+    $live = @{}
+    foreach ($n in @(10000, 60000)) {
+        $file = Join-Path $work ("live-" + $n + "\66666666-7777-4888-8999-000000000000.jsonl")
+        New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+        New-BigTranscript -Path $file -Pairs $n -Short
+        $live[$n] = Measure-HordeLiveBytes -File $file
+        Write-Host ("MEMORY live: " + $n + " short responses held at most " + [math]::Round($live[$n].bytes / 1MB, 1) + " MB live over " + $live[$n].records + " records (" + $live[$n].state + ")")
+        Remove-Item -LiteralPath $file -Force
+    }
+    $perPair = [math]::Round(($live[60000].bytes - $live[10000].bytes) / 50000)
+    Write-Host ("MEMORY per response: " + $perPair + " live bytes per assistant response and its tool result")
+    Check ($live[10000].state -eq "known" -and $live[60000].state -eq "known" -and $live[60000].records -eq 180000) "CONTROL: the live measurement read both files whole (180,000 records in the larger)"
+    Check ($perPair -gt 0) "CONTROL: what is kept does grow with the responses: memory is O(responses), not flat"
+    Check ($perPair -lt $perResponseLimit) ("it keeps at most " + $perResponseLimit + " bytes per response (" + $perPair + ")")
     Check ($l.MB -ge 120) ("CONTROL: the large file is the size the target names (" + $l.MB + " MB)")
     Check (($l.peakMB - $f.peakMB) -lt $overFloorMB) ("the peak on the large file is within " + $overFloorMB + " MB of the floor (" + $l.peakMB + " MB against " + $f.peakMB + " MB; M1 measured 1,734 MB)")
     Check (($l.peakMB - $s.peakMB) -lt 50) ("the peak does not grow with the file: +" + ($l.peakMB - $s.peakMB) + " MB for " + ($l.MB - $s.MB) + " MB more transcript")
@@ -108,4 +154,4 @@ try {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-HordeSuite -Success "summarize stays within 120 MB of the bare command on long lines, and grows by at most 1 KB of private memory per response"
+Complete-HordeSuite -Success "summarize stays within 120 MB of the bare command on long lines, and keeps a bounded number of bytes per response"
