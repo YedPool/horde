@@ -36,8 +36,9 @@ trap { Register-HordeSuiteError $_; continue }
 $work = Join-Path $env:TEMP ("horde-memory-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $overFloorMB = 120
-# Set from the live measurement below, repeated: see the plan (planning/execution-plan-metrics.md, M2).
-$perResponseLimit = 1500
+# Set from the live measurement below: 359 bytes per response on the always-on box and 383 on the
+# working box (2026-10-02, 67095c8); about twice the larger, so a real change is caught and noise is not.
+$perResponseLimit = 800
 
 function New-BigTranscript {
     # -Short: about 0.4 KB a line instead of 1.6 KB, so many more records per MB (review of PR #70, F5).

@@ -118,12 +118,15 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   164 MB on that box and 143 MB on the working box (where the 33 MB file peaks at 155 MB); a forced
   collection every 1,000 lines did not lower the peak. The 200 MB target is restated (coordinator,
   2026-10-02): flat with file size, and within 120 MB of the floor on the same box (measured +92 MB
-  and +12 MB). **That is not flat by construction (review of PR #70, F5):** measured in private bytes
-  with short lines, memory grows about 252 bytes per response (204 MB at 20,000 responses, 228 MB at
-  120,000, always-on box, be487ae) - per call its id and usage, per record its time, line and kind,
-  per tool result its time, all needed to stay byte for byte M1 (an id comes back after another 73
-  times in one of 692 real transcripts, and M1's tie order needs every time). Memory is O(responses)
-  with a small constant; the suite checks at most 1 KB of private memory per response.
+  and +12 MB). **That is not flat by construction (review of PR #70, F5):** the code keeps, per call,
+  its id and usage, per record its time, line and kind, and per tool result its time, all needed to
+  stay byte for byte M1 (an id comes back after another 73 times in one of 692 real transcripts, and
+  M1's tie order needs every time). Memory is O(responses). A process peak cannot say how much: four
+  repeated runs on the always-on box gave per-response slopes of -2 to 507 bytes (median 53) for
+  10,000 against 60,000 short responses, the collector's noise. Measured instead as live bytes, in a
+  child process forcing a full collection every 5,000 records: **359 bytes per response** on the
+  always-on box (9.7 MB live at 10,000 responses, 26.8 MB at 60,000) and 383 on the working box. The
+  suite's limit is 800 bytes per response, about twice the larger measurement.
 - **`horde metrics collect`** (founder, 2026-10-02: "I want the metrics collector on until we have a
   clear initial method for when to use a real session, when an agent etc."). Finds every transcript in
   the folders each `agents/<name>/stores.json` declares under `transcripts`, and records what is new
