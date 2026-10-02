@@ -42,6 +42,22 @@ try {
     $s = Get-HordeThrottlingState -Process $child
     Check ($s.state -eq "known" -and $s.value.controlMask -eq 1 -and $s.value.stateMask -eq 0 -and $s.value.optedOut -eq $true) "and the child reads back opted out: ControlMask 1, StateMask 0"
 } finally { if (-not $child.HasExited) { $child.Kill() }; $child.Dispose() }
+# CONTROL for the readback's own rule: a process that decides throttling ON (ControlMask 1, StateMask
+# 1) is not opted out, though its ControlMask is set. Set by a helper of this suite's own.
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+public static class ThrottleOnForTest {
+    [StructLayout(LayoutKind.Sequential)] public struct S { public uint V; public uint C; public uint M; }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetProcessInformation(IntPtr h, int c, ref S i, uint n);
+    public static bool On(IntPtr h) { var s = new S { V = 1, C = 1, M = 1 }; return SetProcessInformation(h, 4, ref s, (uint)Marshal.SizeOf(s)); }
+}
+"@
+$child2 = [System.Diagnostics.Process]::Start($psi)
+try {
+    Check ([ThrottleOnForTest]::On($child2.Handle)) "CONTROL: a child can be set to throttling on"
+    $s = Get-HordeThrottlingState -Process $child2
+    Check ($s.state -eq "known" -and $s.value.controlMask -eq 1 -and $s.value.stateMask -eq 1 -and $s.value.optedOut -eq $false) "a child set to throttling on reads back as NOT opted out, though its ControlMask is set"
+} finally { if (-not $child2.HasExited) { $child2.Kill() }; $child2.Dispose() }
 $r = Set-HordeThrottlingOptOut
 Check ($r.state -eq "known" -and (Get-HordeThrottlingState).value.optedOut -eq $true) "a process opts itself out, and reads back opted out"
 
