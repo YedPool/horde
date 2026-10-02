@@ -16,11 +16,8 @@
            Find = 'if ($b -gt 0x7F) { throw'
            Replace = 'if ($b -gt 0xFF) { throw' }
         @{ Name = "duplicate-key-ignored"
-           Find = 'return @(@(& $script:HordeAgentDuplicateKeyScan -Text $Text) |'
+           Find = 'return @(@(Find-HordeJsonDuplicateKey -Text $Text) |'
            Replace = 'return @(@() |' }
-        @{ Name = "duplicate-scan-looked-up-by-name"
-           Find = 'return @(@(& $script:HordeAgentDuplicateKeyScan -Text $Text) |'
-           Replace = 'return @(@(Find-HordeJsonDuplicateKey -Text $Text) |' }
         @{ Name = "permission-precondition-ignored"
            Find = 'if (@($Verified) -cnotcontains "$($c.name)") {'
            Replace = 'if ($false) {' }
