@@ -241,8 +241,18 @@
            Find = '$script:HordeProcessImageExempt = @("test")'
            Replace = '$script:HordeProcessImageExempt = @()' }
         @{ Name = "image-port-folders-checked"
-           Find = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))'
+           Find = '-Skip (@(Get-HordePortFolders -RepoRoot $RepoRoot) + @($script:HordeProcessImageExempt))'
            Replace = '-Skip @($script:HordeProcessImageExempt)' }
+        # --- transports/ is the third family (remote plan step R5)
+        @{ Name = "transports-not-a-family"
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents")' }
+        @{ Name = "image-rule-skips-whole-families"
+           Find = '-Skip (@(Get-HordePortFolders -RepoRoot $RepoRoot) + @($script:HordeProcessImageExempt))'
+           Replace = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))' }
+        @{ Name = "port-folders-returned-as-one-object"
+           Find = 'return @($out)'
+           Replace = 'return , $out' }
         # --- the legacy list: exact counts, and only shrinking (review of this PR, A1 to A3)
         @{ Name = "legacy-excuses-any-file"
            Find = 'if ($legacy.ContainsKey($key)) {'
