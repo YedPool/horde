@@ -275,22 +275,31 @@ its branch can break main when main moved under it").
    `tools\Mutate.ps1 -Changed <base-ref>`, which runs only the mutants whose find string lies on a
    line the diff added or modified. It lists every mutant it selects and every one it skips, with
    the reason; it runs every mutant it cannot place; and on a diff that touches a mutation target it
-   treats a selection of zero as an error, not a pass. On the hosts-5 change (`f30b5b4` against its
-   first parent) it selects 20 of the repository's 1064 mutants.
+   treats a selection of zero as an error, not a pass. A change to a spec file reruns every mutant
+   of that spec.
+
+   **`-Changed` is a review-round accelerator only.** It selects by line, so it is blind to a
+   change anywhere but on a mutant's own line: an edited helper that a target dot-sources; an
+   edited config, schema or data file that is not itself a target; a guard inserted above a mutant
+   whose own line did not change; and a suite edited to catch less. The review of its pull request
+   (#63) probed the first three, and each time the affected mutants were skipped and the run
+   exited 0. It proves only the mutants on touched lines and never stands in for the full specs:
+   **a pull request may not merge on `-Changed` results alone.**
 2. **The full suite and the full mutation specs run once per pull request**, on its final head, and
    on the **merge result** with current `main` (`git merge-tree`, or a throwaway merge commit) - not
    on the branch alone. "Mergeable" on GitHub means the text merges; it says nothing about whether
-   the merged tree is green. The full specs are also what catches a suite edited to catch less,
-   which `-Changed` by design does not reselect. Why once and not never: a spec on `main` can break
-   without anyone running it. `test\mutations\port-names.psd1` had a mutant whose find string
-   occurred twice from PR #57 on, so the mutant could not apply, and nothing reported it until the
-   `-Changed` selector placed every mutant.
+   the merged tree is green. Why once and not never: first, `-Changed` is blind to every change
+   that is not on a mutant's own line (rule 1), and only the full specs see those. Second, a spec
+   on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
+   whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
+   reported it until the `-Changed` selector placed every mutant.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites
    adds time and finds what the author already found (`tasks/lessons.md`, "Tests I wrote and
    mutated myself are not an adversarial review").
-4. **A suite that takes more than 2 minutes on fixtures is a defect.** File an issue to profile it.
+4. **A suite that takes more than 2 minutes on fixtures is a defect**, measured as its wall time
+   in the remote gate's log, alone on the remote test box (rule 5). File an issue to profile it.
    A slow suite is rerun less, and a mutation spec multiplies its time by its number of mutants.
 5. **Heavy runs go to the remote test box, through the remote gate.** The box is whichever machine
    the local configuration names; nothing in this repository names it. The remote gate ships the
@@ -303,12 +312,15 @@ its branch can break main when main moved under it").
 6. **Merges go in batches.** A pull request that is green and reviewed is **ready**, and is held.
    A few times a day the ready pull requests are merged together:
    - build the combined tree: `main` plus every ready pull request, in order;
-   - run the touched suites, and the full suite once, on that tree;
+   - run the touched suites, the full suite once, and the full mutation specs once for the pull
+     requests in the batch, on that tree;
    - merge in order, with merge commits only (rule 4).
 
-   A batch member that turns red is dropped from the batch and goes back to its author; the rest
-   proceed. Between batches, authors do not rebase on every merge: the batch tests the combination,
-   which a rebase onto each new `main` only approximated.
+   The combined tree is the true merge result, so this run is the once-per-pull-request run of
+   rule 2 for every member of the batch. A batch member that turns red is dropped from the batch
+   and goes back to its author; the rest are rebuilt without it and run again before they merge.
+   Between batches, authors do not rebase on every merge: the batch tests the combination, which a
+   rebase onto each new `main` only approximated.
 7. **A suite with no checks, or with no closing banner, was NOT RUN.** A runner never reports it
    as green. A killed run and a clean one can leave the same exit code: the local gate's first
    version reported a child killed by the harness as exit 0, and its third read a suite's exit 5 as

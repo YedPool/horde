@@ -44,6 +44,8 @@ reason.
 ## Test levels and merging (CONTRIBUTING 15)
 
 - Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
+  `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
+  and to a guard added above a mutant. Never merge on it alone.
 - Once per PR, on the final head merged with current `main`: the full suite and the full mutation
   specs. "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.
@@ -51,7 +53,8 @@ reason.
 - Heavy runs go to the remote test box through the remote gate. A real terminal, a local pipe,
   integrity levels, an interactive logon or the real stores: locally, one run at a time, through
   the local gate.
-- Ready PRs are merged in batches: test main plus every ready PR once, merge in order, drop a red one.
+- Ready PRs are merged in batches: on main plus every ready PR, run the touched suites, the full
+  suite and the full mutation specs once; merge in order; drop a red one and rerun the rest.
 - No checks, or no closing banner, means NOT RUN. Gates and runners get a failure-case matrix
   before rollout.
 

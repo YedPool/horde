@@ -104,13 +104,13 @@ branch.
 ## A review round that reruns everything spends its time on lines nobody touched
 
 Review rounds reran every suite and every mutation spec. The hosts-5 change touched two mutation
-targets; `tools\Mutate.ps1 -Changed` places 20 of the repository's 1064 mutants on the lines it
-changed. The other 1044 were rerun on code the round had not touched, and each run made the next
-round wait.
+targets, and one full run of the three specs on them took 5556 s on the remote test box
+(2026-10-02) - for each round, most of it on lines the round had not touched.
 
 **Rule:** each review round runs the suites covering the changed files and `Mutate.ps1 -Changed`.
-The full suite and the full specs run once per pull request, on the final head merged with current
-`main` (CONTRIBUTING 15).
+That selection is blind to anything off a mutant's own line, so the full suite and the full specs
+still run once per pull request, on the final head merged with current `main`, and nothing merges
+on `-Changed` alone (CONTRIBUTING 15).
 
 ## A spec that is never run can be broken on main for days
 
