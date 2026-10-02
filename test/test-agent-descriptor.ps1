@@ -121,9 +121,11 @@ try {
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
-$real = Get-HordeAgentDescriptors -Root $root
+$realWhy = ""
+$real = [ordered]@{}
+try { $real = Get-HordeAgentDescriptors -Root $root } catch { $realWhy = ": " + $_.Exception.Message }
 $realFolders = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory | ForEach-Object { $_.Name })
-Check ($realFolders.Count -ge 1 -and @($realFolders | Where-Object { @($real.Keys) -cnotcontains $_ }).Count -eq 0) ("every harness folder in this repository has a descriptor that loads (" + $realFolders.Count + " folders)")
+Check ($realWhy -eq "" -and $realFolders.Count -ge 1 -and @($realFolders | Where-Object { @($real.Keys) -cnotcontains $_ }).Count -eq 0) ("every harness folder in this repository has a descriptor that loads (" + $realFolders.Count + " folders)" + $realWhy)
 
 Write-Host ""
 Write-Host "--- a capability counts only when it is yes ---" -ForegroundColor Cyan
