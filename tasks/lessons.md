@@ -138,3 +138,18 @@ Each was found in use, by the runs it damaged.
 
 **Rule:** gates, runners and test tools get a failure-case matrix - pass, fail, crash, timeout,
 killed, no output, no checks, partial - each row run once and checked, before anyone relies on them.
+
+## A native tool's idea of home is measured, not assumed
+
+On 2026-10-02, building the ssh transport, the plan was to prove independence from the user's
+~/.ssh/config by planting a hostile one in a temporary profile. Win32 OpenSSH (9.5p2) ignores
+USERPROFILE and HOME and resolves ~ to the real profile, so the planted file would never have been
+read and the test would have passed for the wrong reason - or, done the obvious way, written into the
+user's real ~/.ssh. The same tool, given an -i key file that does not exist, silently offered the
+user's default ~/.ssh keys instead, even with -F none and IdentitiesOnly=yes.
+
+**Rule:** before isolating a native tool by redirecting its home, measure that it follows the
+redirection. If it does not, prove isolation with the tool's own report of its configuration (ssh
+-G), with a control that shows the hazard, never by writing into the real profile. And refuse to
+start when a file the isolation depends on is missing, because a native tool's fallback is the
+user's own files.

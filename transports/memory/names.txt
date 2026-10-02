@@ -1,0 +1,11 @@
+# What identifies the in-process test transport, memory. tools/HostNames.ps1 fails
+# test/test-host-names.ps1 when any of these appears in a file outside transports/memory/ (and outside
+# the prose under planning/, by rule) that transports/memory/allowlist.txt does not list, exactly as
+# often as it lists (CONTRIBUTING rule 14; remote design, founder decision 10; remote plan step R5).
+# Each is matched as a case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this transport
+Transport.Memory | the key under which this transport keeps its listeners in the process, the one thing nothing else names
+#
+# CONSIDERED AND LEFT OUT, measured 2026-10-02 on the tree outside transports/ and planning/:
+#   memory - an ordinary word, in 15 files outside transports/memory/ that mean RAM or recall by it.

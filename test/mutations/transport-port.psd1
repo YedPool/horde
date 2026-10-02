@@ -93,5 +93,15 @@
         @{ Name = "missing-peer-trusted"
            Find = '$peerRec = [pscustomobject]@{ verified = $false; identity = ""; how = "the transport reported no peer" }'
            Replace = '$peerRec = [pscustomobject]@{ verified = $true; identity = "?"; how = "assumed" }' }
+        # --- listening needs accept (remote plan step R5)
+        @{ Name = "listen-without-accept"
+           Find = 'if (-not (Test-HordeTransportCapability -Transport $Transport -Capability "accept")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "channel-dropped-when-the-link-fails"
+           Find = 'try { & $r.channel.close $r.channel } catch { }'
+           Replace = '' }
+        @{ Name = "accept-not-a-capability"
+           Find = '"dial.in", "accept", "keepalive"'
+           Replace = '"dial.in", "keepalive"' }
     )
 }

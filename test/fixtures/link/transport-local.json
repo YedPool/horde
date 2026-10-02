@@ -19,6 +19,10 @@
       "support": "unverified",
       "evidence": "fixture: not run"
     },
+    "accept": {
+      "support": "yes",
+      "evidence": "A node dials in and the link is accepted, in test/test-transport-conformance.ps1."
+    },
     "keepalive": {
       "support": "declined",
       "evidence": "fixture: the pipe closing is the signal"
