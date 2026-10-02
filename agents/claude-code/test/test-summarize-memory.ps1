@@ -12,11 +12,13 @@
 # shape (an assistant response with a tool call and its result, each line about 1.6 KB, every value
 # invented), the shipped command run as its own process, its peak working set sampled every 100 ms.
 #
+# IT LIVES HERE because its transcripts are in this harness's format (CONTRIBUTING 14).
+#
 # HEAVY: it writes about 170 MB to TEMP and runs for minutes. It is in the gate so that a change that
 # brings back a list of records fails it; run it where there is memory to spare.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent $here
+$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 

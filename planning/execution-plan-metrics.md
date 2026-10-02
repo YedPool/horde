@@ -111,7 +111,7 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   the same way, with the probe kept as a suite so a regression fails the gate.
   **Built (PR for M2 part 1):** the adapters read twice - facts per id, then records in M1's order -
   and hand each record to a sink; `core/Metrics.ps1` folds them into running totals. Output pinned
-  byte for byte to M1's by golden files written by M1's own command; `test/test-metrics-memory.ps1`
+  byte for byte to M1's by golden files written by M1's own command; `agents/claude-code/test/test-summarize-memory.ps1`
   is the probe as a suite. Measured 2026-10-02 on the always-on box: 256 MB on both the 33 MB and the
   133 MB transcripts (M1: 599 and 1,734 MB), and byte for byte M1's output on 13 runs over large
   varied transcripts. The 200 MB target was below PowerShell's own floor there - the same command on
