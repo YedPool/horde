@@ -23,10 +23,13 @@
 # the reason): it is drained whenever the link reads or waits, only its first 4096 bytes are kept and
 # the rest is counted and dropped, and the reason is at most 200 printable characters.
 #
-# NO ORPHAN (review of PR #68, F7; the founder's rule that orphans are prevented structurally): from
-# the moment Open has started ssh.exe, every way out of Open hands the process to the link's channel,
-# which stops it on close, or stops it in a finally - checked by pid and start time, through the handle
-# held since the start. test-ssh.ps1 makes each later step throw and finds no ssh.exe of ours alive.
+# NO ORPHAN (review of PR #68, F7 and round 3; the founder's rule that orphans are prevented
+# structurally). ssh.exe runs in a job object that kills it when its last handle closes (Native.ps1),
+# and the only handle is held by the link's channel. So when the channel closes, when a caller drops
+# the link, or when the Horde process dies, the OS ends ssh.exe; no PowerShell has to run. Open's try
+# begins before the start, so any failure up to the handoff closes the job too, and also stops the
+# process by pid and start time through the handle held since the start. test-ssh.ps1 makes each step
+# throw, and kills a whole driver process mid-link, and finds no ssh.exe of ours alive.
 #
 # KNOWN AND LEFT (review of PR #68, F6, LOW): Test-HordeSshFiles reads Horde's ssh_config as decoded
 # text, while ssh reads bytes, and reads it before the spawn, so a writer with access to <HordeHome>
@@ -43,10 +46,10 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced.
 
 . (Join-Path $PSScriptRoot "Argv.ps1")
+. (Join-Path $PSScriptRoot "Native.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
 
 $script:HordeSshFolder = $PSScriptRoot
-$script:HordeSshExeRelative = "System32\OpenSSH\ssh.exe"
 $script:HordeSshBufferBytes = 65536
 $script:HordeSshExitTransportError = 255
 $script:HordeSshProbeTimeoutMs = 5000
@@ -58,8 +61,10 @@ $script:HordeSshHubSide = "the ssh transport's accepting end is the hub's sshd w
 function Resolve-HordeSshExe {
     # The System32 ssh.exe, by its path - never through PATH, where Git's copy (remote design M-03) or
     # anything else can come first. { ok; path; reason }.
-    $p = Join-Path "$env:SystemRoot" $script:HordeSshExeRelative
-    if ("$env:SystemRoot" -eq "" -or -not (Test-Path -LiteralPath $p -PathType Leaf)) {
+    # Named by .NET, with no command resolved and no environment variable read (review of PR #68,
+    # round 3): the same expression Start-HordeSshProcess starts.
+    $p = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe")
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
         return [pscustomobject]@{ ok = $false; path = ""; reason = ("no ssh.exe at " + $p + ": the OpenSSH client in System32 is the only one this transport runs") }
     }
     return [pscustomobject]@{ ok = $true; path = $p; reason = "" }
@@ -95,14 +100,24 @@ function Start-HordeSshProcess {
     # anyone can reassign (review of PR #68, round 2, F4: a $exe or $psi.FileName reassigned before the
     # start ran another program). stdin, stdout and stderr are redirected; no window, no shell. The
     # caller holds the returned process, and only it may stop it (CONTRIBUTING 9).
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Arguments)
-    $psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList @((Join-Path $env:SystemRoot $script:HordeSshExeRelative), $Arguments)
+    # -Job is the kill-on-close job the process goes into on the next statement (Native.ps1), so no
+    # caller ever holds an ssh.exe outside one; if Windows refuses the assignment, the process is stopped
+    # through its handle before the error goes on (review of PR #68, round 3: a throw after the start
+    # returned, before the caller had assigned it, left ssh.exe running).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Arguments, [Parameter(Mandatory = $true)][HordeSshJob]$Job)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh.exe"), $Arguments)
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    return [System.Diagnostics.Process]::Start($psi)
+    $started = [System.Diagnostics.Process]::Start($psi)
+    try { [HordeSshNative]::Assign($Job, $started.Handle) }
+    catch {
+        try { $started.Kill() } catch { }
+        throw
+    }
+    return $started
 }
 
 function Update-HordeSshStderr {
@@ -156,10 +171,12 @@ function New-HordeSshChannel {
     # is a transport error with stderr's first line as the reason; anything else is the far side
     # closing. Writes go through an unbuffered stream on the stdin handle: the redirected writer's own
     # stream buffers 4096 bytes, and a small frame could sit in it unsent.
-    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+    # -Job is the kill-on-close job ssh.exe runs in (Native.ps1); the channel holds its only handle, so
+    # closing the channel - or losing it with this process - ends ssh.exe. A stand-in child has none.
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process, $Job = $null)
     $in = New-Object System.IO.FileStream($Process.StandardInput.BaseStream.SafeFileHandle, [System.IO.FileAccess]::Write, 1, $false)
     $state = @{
-        process = $Process; out = $Process.StandardOutput.BaseStream; in = $in
+        process = $Process; job = $Job; out = $Process.StandardOutput.BaseStream; in = $in
         buf = (New-Object byte[] $script:HordeSshBufferBytes); pending = $null
         err = $Process.StandardError.BaseStream; errChunk = (New-Object byte[] $script:HordeSshBufferBytes); errTask = $null; errEof = $false
         errKept = (New-Object System.Collections.Generic.List[byte]); errDropped = [long]0
@@ -212,6 +229,7 @@ function New-HordeSshChannel {
             # this channel's own child, held by its handle, and is stopped through it.
             try { $st.in.Dispose() } catch { }
             try { if (-not $st.process.WaitForExit(2000)) { $st.process.Kill(); $null = $st.process.WaitForExit(5000) } } catch { }
+            if ($null -ne $st.job) { try { $st.job.Dispose() } catch { } }
         }
     }
 }
@@ -292,22 +310,30 @@ $null = Register-HordeTransport -Folder $script:HordeSshFolder `
         }
         $ready = Test-HordeSshFiles -Paths $paths
         if (-not $ready.ok) { return (New-HordeSshResult -Ok $false -Reason $ready.reason) }
-        $proc = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))
-        # FROM HERE ssh.exe IS RUNNING, and every way out either hands it to the link or kills it (header,
-        # NO ORPHAN). $handed is set only on the last line before the return.
-        $startedAt = $proc.StartTime
+        # NO ORPHAN (header): the try begins before the start, the job exists before ssh.exe does, and the
+        # start function puts the process in the job on its next statement. $handed is set only on the last line before the
+        # return; until then the finally ends ssh.exe, by closing the job and by pid and start time.
+        $proc = $null
+        $job = $null
+        $startedAt = $null
         $handed = $false
         try {
+            $job = [HordeSshNative]::NewKillOnCloseJob()
+            $proc = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths)) -Job $job
+            $startedAt = $proc.StartTime
             $peer = [pscustomobject]@{
                 verified = $false
                 identity = ($script:HordeSshHostKeyAliasPrefix + $ep.hubId)
                 how = "the hub's host key is pinned by StrictHostKeyChecking=yes against Horde's own known_hosts under this alias; no live sshd has demonstrated it yet (remote plan R16, R17)"
             }
-            $result = New-HordeSshResult -Ok $true -Channel (New-HordeSshChannel -Process $proc) -Peer $peer
+            $result = New-HordeSshResult -Ok $true -Channel (New-HordeSshChannel -Process $proc -Job $job) -Peer $peer
             $handed = $true
             return $result
         } finally {
-            if (-not $handed) { Stop-HordeSshUnowned -Process $proc -StartedAt $startedAt }
+            if (-not $handed) {
+                if ($null -ne $job) { $job.Dispose() }
+                if ($null -ne $proc -and $null -ne $startedAt) { Stop-HordeSshUnowned -Process $proc -StartedAt $startedAt }
+            }
         }
     } `
     -Probe {
