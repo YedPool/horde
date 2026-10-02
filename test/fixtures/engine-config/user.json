@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    { "name": "provider-c", "protocol": "anthropic-messages", "endpoint": "https://api.example.test/anthropic", "credential": { "kind": "env", "ref": "PROVIDER_C_TOKEN" }, "models": ["model-c1", "model-c2"], "lacks": ["delivery-receipt"] }
+  ],
+  "aliases": [
+    { "name": "big", "map": [ { "provider": "provider-a", "model": "model-a-big" }, { "provider": "provider-c", "model": "model-c1" } ] },
+    { "name": "small", "map": [ { "provider": "provider-c", "model": "model-c2" } ] }
+  ],
+  "profiles": [
+    { "name": "alpha-big", "harness": "harness-a", "provider": "provider-a", "model": "big" },
+    { "name": "gamma", "harness": "harness-a", "provider": "provider-c", "model": "small" }
+  ],
+  "rules": [
+    { "id": "user-default", "match": {}, "set": { "profile": "alpha-big" }, "writtenBy": "user" },
+    { "id": "goblins-gamma", "match": { "role": "goblin" }, "set": { "profile": "gamma" }, "writtenBy": "cli" },
+    { "id": "one-session", "match": { "run": "20261002-101500-audit", "fleetId": "f1" }, "set": { "model": "big" }, "writtenBy": "user", "note": "a fixture rule" }
+  ]
+}
