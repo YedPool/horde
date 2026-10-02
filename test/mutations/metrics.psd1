@@ -55,5 +55,8 @@
         @{ Name = "partial-wait-total-is-known"
            Find = '        if ($wait.callsWithoutUsage -gt 0) { $wait[$k] = New-HordeUnknown'
            Replace = '        if ($false) { $wait[$k] = New-HordeUnknown' }
+        @{ Name = "negative-duration-counted"
+           Find = '        if ($sec -lt 0) { $backwards++; continue }'
+           Replace = ''  }
     )
 }

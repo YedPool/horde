@@ -140,15 +140,21 @@ function Get-HordeWorkerSummary {
     $results = @{}
     foreach ($r in @($all | Where-Object { $_.kind -eq "toolResult" })) { if (-not $results.ContainsKey("$($r.toolCallId)")) { $results["$($r.toolCallId)"] = $r } }
     $s.toolCalls = New-HordeKnown -Value $tools.Count
-    $open = 0; $longest = $null
+    $open = 0; $longest = $null; $backwards = 0
     foreach ($tc in $tools) {
         $res = $results["$($tc.id)"]
         if ($null -ne $res) { $sec = ($res.ts - $tc.ts).TotalSeconds; $returned = $true }
         else { $open++; $sec = ($timed[$timed.Count - 1].ts - $tc.ts).TotalSeconds; $returned = $false }
+        # A result timed before its call means the clock went back between them (review of PR #50, F9):
+        # the duration is not a measurement, so it is counted apart and never reported as the longest.
+        if ($sec -lt 0) { $backwards++; continue }
         if ($null -eq $longest -or $sec -gt $longest.seconds) { $longest = [pscustomobject]@{ seconds = [decimal]$sec; name = $tc.name; startedAt = $tc.ts; returned = $returned; line = $tc.line } }
     }
     $s.toolCallsWithoutResult = $open
-    if ($tools.Count -eq 0) { $s.longestToolCall = New-HordeAbsent -Note "no tool calls" } else { $s.longestToolCall = New-HordeKnown -Value $longest }
+    $s.toolCallsWithNegativeDuration = $backwards
+    if ($tools.Count -eq 0) { $s.longestToolCall = New-HordeAbsent -Note "no tool calls" }
+    elseif ($null -eq $longest) { $s.longestToolCall = New-HordeUnknown -Reason "every tool call's result is timed before it" }
+    else { $s.longestToolCall = New-HordeKnown -Value $longest }
     $s.turns = New-HordeKnown -Value @($all | Where-Object { $_.kind -eq "turnEnd" }).Count
     $s.compactions = @($all | Where-Object { $_.kind -eq "compaction" }).Count
     $s.cost = Get-HordeCostTotal -Calls $calls -PriceTable $PriceTable

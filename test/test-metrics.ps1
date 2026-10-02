@@ -130,6 +130,9 @@ $frozen = @((UserSays 0), (Call "h1" 1 -Tools 1), (Tool "stuck" 2 -Name "tool-st
 $wf = Get-HordeWorkerSummary -Records $frozen -PriceTable $noTable
 Check ($wf.longestToolCall.value.returned -eq $false -and $wf.longestToolCall.value.seconds -eq 3600) "a tool call with no result is counted to the last event (60 minutes) and flagged as not returned"
 Check ($wf.toolCallsWithoutResult -eq 1) "and counted as a call without a result"
+$script:line = 0
+$back = Get-HordeWorkerSummary -Records @((UserSays 0), (Call "b1" 10 -Tools 1), (Tool "tb" 10 -Name "tool-back"), (Result "tb" 4), (Call "b2" 11 -Tools 1), (Tool "tc" 11), (Result "tc" 11.5)) -PriceTable $noTable
+Check ($back.longestToolCall.value.seconds -eq 30 -and $back.toolCallsWithNegativeDuration -eq 1) "a tool call whose result is timed before it (the clock went back) is never the longest; it is counted apart"
 
 Write-Host ""
 Write-Host "--- the worker summary: tokens, model and cost ---" -ForegroundColor Cyan
