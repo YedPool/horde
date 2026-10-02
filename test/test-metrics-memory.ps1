@@ -1,0 +1,83 @@
+# DOES `horde metrics summarize` STAY UNDER 200 MB, HOWEVER LARGE THE TRANSCRIPT?
+#
+# Plan step M2's first item. Measured 2026-10-02 on the always-on box (review of PR #50): M1's
+# summarize peaked at 593 MB on a 33 MB transcript and 1,734 MB on a 133 MB one, about 11 MB of memory
+# per MB of transcript, because it held a record per line and an answer object for each. The target is
+# a peak working set under 200 MB on the 133 MB file, measured the same way: two synthetic transcripts
+# of the same shape as that probe's (an assistant response with a tool call and its result, each line
+# about 1.6 KB, every value invented), the shipped command run as its own process, its peak working
+# set sampled every 100 ms. And the peak must not grow with the file: the control is that the larger
+# file is four times the smaller.
+#
+# HEAVY: it writes about 170 MB to TEMP and runs for minutes. It is in the gate so that a change that
+# brings back a list of records fails it; run it where there is memory to spare.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+
+$work = Join-Path $env:TEMP ("horde-memory-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $work | Out-Null
+$limitMB = 200
+
+function New-BigTranscript {
+    param([string]$Path, [int]$Pairs)
+    $w = New-Object System.IO.StreamWriter($Path, $false, (New-Object System.Text.UTF8Encoding($false)))
+    try {
+        $pad = "x" * 1400
+        $t0 = [datetime]::Parse("2026-09-30T00:00:00Z").ToUniversalTime()
+        for ($i = 0; $i -lt $Pairs; $i++) {
+            $ts = $t0.AddSeconds($i * 2).ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+            $ts2 = $t0.AddSeconds($i * 2 + 1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+            $w.WriteLine('{"type":"assistant","isSidechain":false,"sessionId":"s","timestamp":"' + $ts + '","requestId":"r' + $i + '","message":{"id":"m' + $i + '","model":"claude-opus-5-5","content":[{"type":"text","text":"' + $pad + '"},{"type":"tool_use","id":"t' + $i + '","name":"Bash","input":{"command":"echo"}}],"stop_reason":"tool_use","usage":{"input_tokens":3,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"output_tokens":50,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":0}}}}')
+            $w.WriteLine('{"type":"user","isSidechain":false,"sessionId":"s","timestamp":"' + $ts2 + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t' + $i + '","content":"' + $pad + '"}]}}')
+        }
+    } finally { $w.Dispose() }
+}
+
+function Measure-Peak {
+    # Run the shipped command as its own process; returns { code; peakMB; seconds; out }.
+    param([string[]]$HordeArgs)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" " + (($HordeArgs | ForEach-Object { '"' + $_ + '"' }) -join " ")
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = (Join-Path $work "home")
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $p.StandardOutput.ReadToEndAsync(); $errTask = $p.StandardError.ReadToEndAsync()
+    $peak = 0
+    while (-not $p.HasExited) {
+        try { $p.Refresh(); if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 } } catch { }
+        Start-Sleep -Milliseconds 100
+    }
+    $p.WaitForExit()
+    $code = $p.ExitCode; $p.Dispose()
+    return [pscustomobject]@{ code = $code; peakMB = [math]::Round($peak / 1MB); seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1); out = ($outTask.Result + $errTask.Result) }
+}
+
+try {
+    $rows = @()
+    foreach ($size in @(@{ name = "small"; pairs = 10000 }, @{ name = "large"; pairs = 40000 })) {
+        $file = Join-Path $work ($size.name + "\66666666-7777-4888-8999-000000000000.jsonl")
+        New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+        New-BigTranscript -Path $file -Pairs $size.pairs
+        $mb = [math]::Round((Get-Item -LiteralPath $file).Length / 1MB)
+        $r = Measure-Peak -HordeArgs @("metrics", "summarize", $file)
+        Write-Host ("MEMORY " + $size.name + ": file " + $mb + " MB, " + ($size.pairs * 2) + " lines; summarize peak working set " + $r.peakMB + " MB in " + $r.seconds + " s; exit " + $r.code)
+        Check ($r.code -eq 0) ("summarize of the " + $size.name + " file exits 0")
+        $calls = $size.pairs.ToString("N0", [System.Globalization.CultureInfo]::InvariantCulture)
+        Check ($r.out -match ("claude-opus-5-5\s.*\s" + [regex]::Escape($calls) + "\s+" + [regex]::Escape($calls) + "\s")) ("CONTROL: it read the whole file (" + $calls + " calls and tool calls)")
+        $rows += [pscustomobject]@{ name = $size.name; MB = $mb; peakMB = $r.peakMB }
+        Remove-Item -LiteralPath $file -Force
+    }
+    $s = $rows[0]; $l = $rows[1]
+    Check ($l.MB -ge 120) ("CONTROL: the large file is the size the target names (" + $l.MB + " MB)")
+    Check ($l.peakMB -lt $limitMB) ("the peak on the large file is under " + $limitMB + " MB (" + $l.peakMB + " MB; M1 measured 1,734 MB)")
+    Check (($l.peakMB - $s.peakMB) -lt 50) ("the peak does not grow with the file: +" + ($l.peakMB - $s.peakMB) + " MB for " + ($l.MB - $s.MB) + " MB more transcript")
+} finally {
+    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Complete-HordeSuite -Success "summarize stays under 200 MB on a 133 MB transcript, and its peak does not grow with the file"
