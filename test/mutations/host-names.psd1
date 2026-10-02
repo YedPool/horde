@@ -95,8 +95,8 @@
            Find = '-or $allowCount -lt 1)'
            Replace = ')' }
         @{ Name = "entry-reason-unchecked"
-           Find = 'if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { Add-Finding'
+           Replace = 'if ($false) { Add-Finding' }
         @{ Name = "entry-shape-unchecked"
            Find = 'if ($r.cells.Count -ne 3) { Add-Finding'
            Replace = 'if ($false) { Add-Finding' }
@@ -220,14 +220,20 @@
            Replace = 'if ($r.cells.Count -eq 2) {' }
         # --- core matches no process image (Test-HordeProcessImages)
         @{ Name = "image-finding-dropped"
-           Find = '[void]$found.Add([pscustomobject]@{ host = $hits[0].own;'
-           Replace = 'continue; [void]$found.Add([pscustomobject]@{ host = $hits[0].own;' }
+           Find = '[void]$found.Add([pscustomobject]@{ host = $m.images[0].own;'
+           Replace = 'continue; [void]$found.Add([pscustomobject]@{ host = $m.images[0].own;' }
         @{ Name = "image-path-not-checked"
-           Find = 'if ($f.rel.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or '
-           Replace = 'if (' }
+           Find = 'if ($Rel.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $n++ }'
+           Replace = '' }
         @{ Name = "image-matched-with-case"
-           Find = '$text.IndexOf($img.name, [System.StringComparison]::OrdinalIgnoreCase)'
-           Replace = '$text.IndexOf($img.name, [System.StringComparison]::Ordinal)' }
+           Find = '$at = $Text.IndexOf($form, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = $Text.IndexOf($form, [System.StringComparison]::Ordinal)' }
+        @{ Name = "image-escaped-form-ignored"
+           Find = '@(@($img.name, [regex]::Escape($img.name)) | Select-Object -Unique)'
+           Replace = '@($img.name)' }
+        @{ Name = "image-one-match-per-form"
+           Find = '$at = $Text.IndexOf($form, $at + $form.Length, [System.StringComparison]::OrdinalIgnoreCase)'
+           Replace = '$at = -1' }
         @{ Name = "image-any-kind"
            Find = 'if (-not $pn.problem -and $pn.kind -ceq $Kind) {'
            Replace = 'if (-not $pn.problem) {' }
@@ -237,17 +243,51 @@
         @{ Name = "image-port-folders-checked"
            Find = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))'
            Replace = '-Skip @($script:HordeProcessImageExempt)' }
-        @{ Name = "image-legacy-excuses-any-file"
-           Find = 'if ($legacyPaths.ContainsKey($key)) {'
-           Replace = 'if ($legacyPaths.Count) {' }
-        @{ Name = "image-legacy-stale-kept"
-           Find = 'if (-not $stillMatching.ContainsKey($k)) {'
+        # --- the legacy list: exact counts, and only shrinking (review of this PR, A1 to A3)
+        @{ Name = "legacy-excuses-any-file"
+           Find = 'if ($legacy.ContainsKey($key)) {'
+           Replace = 'if ($legacy.Count) {' }
+        @{ Name = "legacy-gain-accepted"
+           Find = 'if ($m.count -gt $allowedCount) {'
            Replace = 'if ($false) {' }
-        @{ Name = "image-legacy-not-normalised"
-           Find = '$lp = ConvertTo-HordeAllowPath $l; $legacyPaths[$lp.ToLowerInvariant()] = $lp'
-           Replace = '$legacyPaths[$l] = $l' }
-        @{ Name = "image-legacy-entry-dropped"
-           Find = '"core/Faults.ps1", "core/Identity.ps1", "core/ownership.json")'
-           Replace = '"core/Faults.ps1", "core/Identity.ps1")' }
+        @{ Name = "legacy-over-count-accepted"
+           Find = 'elseif ($m.count -lt $allowedCount) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "legacy-stale-kept"
+           Find = 'if (-not $matched.ContainsKey($k)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "legacy-not-normalised"
+           Find = '$out.entries[$key] = [pscustomobject]@{ path = $p; count = $c }'
+           Replace = '$out.entries[$r.cells[0]] = [pscustomobject]@{ path = $p; count = $c }' }
+        @{ Name = "legacy-problems-dropped"
+           Find = 'foreach ($x in $read.problems) {'
+           Replace = 'foreach ($x in @()) {' }
+        @{ Name = "legacy-count-unchecked"
+           Find = 'elseif (-not [int]::TryParse($r.cells[1], [ref]$c) -or $c -lt 1) { $bad = "the match count'
+           Replace = 'elseif ($false) { $bad = "the match count' }
+        @{ Name = "legacy-reason-unchecked"
+           Find = 'elseif ((Get-HordeDistinctWordCount $r.cells[2]) -lt 4) { $bad = $r.cells[0] + " needs a reason'
+           Replace = 'elseif ($false) { $bad = $r.cells[0] + " needs a reason' }
+        @{ Name = "legacy-shape-unchecked"
+           Find = 'if ($r.cells.Count -ne 3) { $bad = "a legacy line is'
+           Replace = 'if ($false) { $bad = "a legacy line is' }
+        @{ Name = "legacy-duplicate-kept"
+           Find = 'if ($out.entries.ContainsKey($key)) { $bad = $p + " is listed twice" }'
+           Replace = 'if ($false) { $bad = $p + " is listed twice" }' }
+        @{ Name = "legacy-shrink-new-entry-accepted"
+           Find = 'if (-not $oldLegacy.ContainsKey($k)) { Add-Finding'
+           Replace = 'if ($false) { Add-Finding' }
+        @{ Name = "legacy-shrink-raised-count-accepted"
+           Find = 'elseif ($e.count -gt $oldLegacy[$k].count) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "legacy-shrink-always-new"
+           Find = 'if (@(& git -C $RepoRoot ls-tree --name-only $Ref -- $lf).Count -eq 0) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "legacy-shrink-never-new"
+           Find = 'if (@(& git -C $RepoRoot ls-tree --name-only $Ref -- $lf).Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "kind-demotion-accepted"
+           Find = 'if ($oldKinds[$k] -ceq "processImage" -and $newKinds.ContainsKey($k) -and $newKinds[$k] -cne "processImage") {'
+           Replace = 'if ($false) {' }
     )
 }
