@@ -84,8 +84,8 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $fx "test\fixtures\mutations") | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $fx "test\fixtures\mutations\data.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'fixture-data'; Find = 'return 9'; Replace = 'return 8' }) }")
     $planted2 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
-    Check (@($planted2 | Where-Object { $_ -match 'agents\demo\test\mutations\deep\deeper\port\.psd1 :: port-deep:' }).Count -eq 1) "a spec two folders deep in a port's own mutations folder is checked"
-    Check (@($planted2 | Where-Object { $_ -match 'tools\mutations\elsewhere\.psd1 :: elsewhere:' }).Count -eq 1) "a spec in a mutations folder outside the suite folders is checked"
+    Check (@($planted2 | Where-Object { $_.StartsWith('agents\demo\test\mutations\deep\deeper\port.psd1 :: port-deep:') }).Count -eq 1) "a spec two folders deep in a port's own mutations folder is checked"
+    Check (@($planted2 | Where-Object { $_.StartsWith('tools\mutations\elsewhere.psd1 :: elsewhere:') }).Count -eq 1) "a spec in a mutations folder outside the suite folders is checked"
     Check (@($planted2 | Where-Object { $_ -match 'fixture-data' }).Count -eq 0) "CONTROL: a mutations folder under test\fixtures is data, not a spec"
     Check (@($planted2 | Where-Object { $_ -match 'sub\\nested\.psd1 :: nested-twice: its find string occurs 2 times' }).Count -eq 1) "a spec in a subfolder of mutations is checked too"
     Check (@($planted2 | Where-Object { $_ -match 'multiline\.psd1 :: spans: its find string spans lines' }).Count -eq 1) "a find string that spans lines is refused, as tools\Mutate.ps1 refuses it"
