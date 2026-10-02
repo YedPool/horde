@@ -51,3 +51,5 @@ reason.
 - Nothing outside `hosts/<name>/` names a terminal, and nothing outside `agents/<name>/` names an agent
   harness. Each port's `allowlist.txt` lists the exceptions and only shrinks;
   `test/test-host-names.ps1` fails on anything new.
+- Core matches no process image name. A harness declares its image as a `processImage` line in its
+  `names.txt`; which processes are its own is its adapter's to answer.
