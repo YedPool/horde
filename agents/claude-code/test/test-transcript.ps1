@@ -158,6 +158,18 @@ try {
     Check ($inotes.Count -eq 2 -and $inotes[0].interim -eq $false) "a final notification whose result says still running is not interim"
     Check ($inotes[1].interim -eq $true) "CONTROL: one whose note says the result may be interim is"
 
+
+    Write-Host ""
+    Write-Host "--- a usage field the line does not give is unknown, not zero ---" -ForegroundColor Cyan
+    # Review of PR #50, F5: a usage object missing a field read that field as a known 0.
+    $partialU = Join-Path $work "partial-usage\agent-a0000000000000002.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $partialU) -Force | Out-Null
+    $pl = @{ type = "assistant"; sessionId = "s"; timestamp = "2026-09-30T10:00:01.000Z"; message = @{ id = "m1"; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "hi" }); stop_reason = "end_turn"; usage = @{ input_tokens = 7; cache_read_input_tokens = 0; cache_creation_input_tokens = 0 } } }
+    [System.IO.File]::WriteAllText($partialU, (ConvertTo-Json -InputObject $pl -Compress -Depth 10) + "`n")
+    $pu = @((Read-HordeTranscript -Path $partialU).value.records | Where-Object { $_.kind -eq "call" })[0]
+    Check ($pu.usage.state -eq "unknown" -and $pu.usage.reason -like "*output_tokens*") "a usage object with no output_tokens is unknown, naming the missing field"
+    Check ($calls[0].usage.state -eq "known") "CONTROL: a complete usage object is known"
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is

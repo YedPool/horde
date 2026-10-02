@@ -57,6 +57,21 @@ try {
     Check (@($recs | Where-Object { $_.kind -eq "input" }).Count -eq 2) "user input is the UserMessage items, not the user messages re-emitted after compaction"
     Check (@($recs | Where-Object { $_.kind -eq "compaction" }).Count -eq 1) "the compaction is recorded"
 
+
+    Write-Host ""
+    Write-Host "--- a usage field the line does not give is unknown, not zero ---" -ForegroundColor Cyan
+    # Review of PR #50, F5.
+    $pu = Join-Path $work "partial-usage.jsonl"
+    $plines = @(
+        '{"timestamp":"2026-09-30T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"s1"}}',
+        '{"timestamp":"2026-09-30T10:00:01.000Z","ordinal":1,"type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}',
+        '{"timestamp":"2026-09-30T10:00:02.000Z","ordinal":2,"type":"token_usage_record","payload":{"turn_id":"t1","response_id":"r1","usage":{"input_tokens":100,"cached_input_tokens":10,"cache_write_input_tokens":0}}}'
+    )
+    [System.IO.File]::WriteAllText($pu, ($plines -join "`n") + "`n")
+    $puc = @((Read-HordeTranscript -Path $pu).value.records | Where-Object { $_.kind -eq "call" })[0]
+    Check ($puc.usage.state -eq "unknown" -and $puc.usage.reason -like "*output_tokens*") "a usage object with no output_tokens is unknown, naming the missing field"
+    Check ($calls[0].usage.state -eq "known") "CONTROL: a complete usage object is known"
+
     Write-Host ""
     Write-Host "--- totals and their control ---" -ForegroundColor Cyan
     $ws = Get-HordeWorkerSummary -Records $recs -PriceTable $noTable

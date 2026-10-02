@@ -36,5 +36,8 @@
         @{ Name = "no-split-read-as-unknown"
            Find = '-Split (New-HordeAbsent -Note "this harness does not split cache writes by lifetime"))'
            Replace = '-Split (New-HordeUnknown -Reason "not split"))' }
+        @{ Name = "missing-usage-field-is-zero"
+           Find = '        if ($null -eq $U[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
+           Replace = '        if ($false) { }' }
     )
 }

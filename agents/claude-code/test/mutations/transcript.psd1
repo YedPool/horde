@@ -62,5 +62,8 @@
         @{ Name = "interim-from-whole-text"
            Find = "interim = ((& `$get ""note"") -match 'may be interim|still running')"
            Replace = "interim = (`$Text -match 'may be interim|still running')" }
+        @{ Name = "missing-usage-field-is-zero"
+           Find = '        if ($null -eq $Max[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
+           Replace = '        if ($false) { }' }
     )
 }

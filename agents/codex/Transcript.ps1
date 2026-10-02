@@ -72,6 +72,10 @@ function Get-CodexUsage {
     # The port's usage answer from a usage object of this harness.
     param($U)
     if ($U -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason "the line carries no usage") }
+    # A field the line does not give is unknown, never a known 0 (review of PR #50, F5).
+    foreach ($k in @("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")) {
+        if ($null -eq $U[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }
+    }
     $num = { param($v) if ($null -eq $v) { [long]0 } else { [long]$v } }
     $inTok = & $num $U["input_tokens"]
     $cached = & $num $U["cached_input_tokens"]

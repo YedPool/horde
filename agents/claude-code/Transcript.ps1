@@ -145,6 +145,11 @@ function Get-ClaudeCodeUsage {
     # The port's usage answer from a message id's per-field maximum.
     param($Max)
     if ($Max.lines -eq 0) { return (New-HordeUnknown -Reason "the message carries no usage") }
+    # A field no line gave is unknown, never a known 0 (review of PR #50, F5): the whole usage is then
+    # unknown, naming the field, and the summary's totals say how many calls lack usage.
+    foreach ($k in @("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")) {
+        if ($null -eq $Max[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }
+    }
     $num = { param($v) if ($null -eq $v) { [long]0 } else { [long]$v } }
     $split = New-HordeUnknown -Reason "the usage does not split cache writes by lifetime"
     if ($null -ne $Max.m5 -or $null -ne $Max.h1) {
