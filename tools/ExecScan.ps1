@@ -61,7 +61,7 @@
 $script:HordeExecCmdlets = @("Join-Path", "Split-Path", "New-Object", "Where-Object", "ForEach-Object", "Sort-Object",
     "Select-Object", "Measure-Object", "Add-Member", "ConvertTo-Json", "ConvertFrom-Json", "Get-Date")
 # Rule 1. The core/ functions remote/ calls, measured. None takes or runs a script block.
-$script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Get-HordeObjectProps", "Read-HordeSchemaFile")
+$script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-HordeSchemaFile")
 
 # Rule 2. The types New-Object may make.
 $script:HordeExecNewTypes = @("System.Collections.ArrayList", "System.Collections.Stack", "System.Collections.Generic.List[string]",

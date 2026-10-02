@@ -29,8 +29,8 @@
            Find = '''\A((core|remote)\\)?[A-Za-z][A-Za-z0-9]*\.ps1\z'''
            Replace = '''\A.*\z''' }
         @{ Name = "core-function-that-runs-a-block-callable"
-           Find = '"Get-HordeObjectProps", "Read-HordeSchemaFile")'
-           Replace = '"Get-HordeObjectProps", "Read-HordeSchemaFile", "Invoke-HordeRead")' }
+           Find = '"Test-HordeSchema", "Read-HordeSchemaFile")'
+           Replace = '"Test-HordeSchema", "Read-HordeSchemaFile", "Invoke-HordeRead")' }
         @{ Name = "shadowing-function-allowed"
            Find = 'if ($script:HordeExecCmdlets -contains $d.Name -or $script:HordeExecCoreFunctions -contains $d.Name) {'
            Replace = 'if ($false) {' }
