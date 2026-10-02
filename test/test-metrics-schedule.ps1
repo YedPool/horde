@@ -81,7 +81,9 @@ try {
             Check ($st.value.everyMinutes -eq 30 -and "$($st.value.priority)" -eq "7" -and $st.value.timeLimit -eq "PT20M") "every 30 minutes, priority 7 (below normal), stopped after 20 minutes"
             Check ($st.value.logonType -eq "S4U") "as the current user, whether or not logged on, with no window"
             Check ($st.value.arguments -like ("*" + $env:HORDE_HOME + "*") -and $st.value.arguments -like "*metrics collect*") "and its action runs collect into this suite's home"
-            $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Disabled -HordeScript $horde
+            $again = "installed"
+            try { $null = Invoke-HordeMetricsSchedule -Action install -TaskName $testName -Disabled -HordeScript $horde } catch { $again = $_.Exception.Message }
+            Check ($again -eq "installed") ("installing again succeeds (" + $again + ")")
             Check (@(Get-ScheduledTask -TaskPath "\" -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -ceq $testName }).Count -eq 1) "installing again replaces it: one job, not two"
             $sl = @(Invoke-HordeMetricsSchedule -Action status -TaskName $testName -HordeScript $horde)
             Check ($sl[1] -like ("'" + $testName + "'*DISABLED*every 30 minutes*")) "status shows it"

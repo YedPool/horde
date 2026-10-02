@@ -7,7 +7,7 @@
     Mutations = @(
         @{ Name = "second-read-not-bounded"
            Find = 'while (($null -eq $Upto -or $n -lt $limit) -and'
-           Replace = 'while (('
+           Replace = 'while (($true) -and'
            }
         @{ Name = "torn-line-reparsed-on-second-read"
            Find = 'if ($null -ne $Upto -and $n -eq $limit -and $Upto.lastBad) { $pendingBad = $true; continue }'

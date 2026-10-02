@@ -7,9 +7,9 @@
         @{ Name = "gate-off-is-not-off"
            Find = 'if ($gate.state -eq "absent" -or ($gate.state -eq "known" -and $gate.value.level -cne "usage")) {'
            Replace = 'if ($gate.state -eq "absent") {' }
-        @{ Name = "refused-gate-collects"
-           Find = 'if ($gate.state -ne "known") { $res.state = "refused";'
-           Replace = 'if ($false) { $res.state = "refused";' }
+        @{ Name = "refused-gate-read-as-off"
+           Find = 'if ($gate.state -ne "known") { $res.state = "refused"; $res.reason = ("the gate is refused'
+           Replace = 'if ($gate.state -ne "known") { $res.state = "off"; $res.reason = ("the gate is refused' }
         @{ Name = "home-in-engine-folder-not-checked"
            Find = 'if (-not $probe.write) {'
            Replace = 'if ($false) {' }
