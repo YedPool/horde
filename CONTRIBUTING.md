@@ -225,8 +225,12 @@ each harness's process image and the path fragments of its transcripts and contr
 so the scan catches them outside the adapter. Where two declared names overlap, the place counts
 once, as the longer name. A **process image is held to more than a name**: core matches no image
 (lifecycle plan section 2.6), so outside every port's folder and `test/`, no file may match one,
-whatever its allowlist says. The Phase 0 to 2 readers that already did when the rule came in are
-listed in `tools/HostNames.ps1` and can only leave that list.
+whatever its allowlist says, written as is or as an escaped regular expression. The Phase 0 to 2
+readers that already did when the rule came in are listed in `tools/process-image-legacy.txt` with
+their exact number of matches; compared with `origin/main`, an entry may only be lowered or removed,
+never added or raised, and no growth line changes that. A name that is a `processImage` on
+`origin/main` stays one. What a text scan cannot see - an image assembled at run time, a looser
+pattern - is written in the header of `tools/HostNames.ps1`.
 
 `test/test-host-names.ps1` enforces it. Each host lists what identifies it in
 `hosts/<name>/names.txt`, and every file elsewhere that still names it in
