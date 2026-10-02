@@ -131,6 +131,11 @@ try {
     Write-Fx "test\mutations\clean.psd1" @('@{ Target = "target.ps1"; Suite = "test\fixture-suite.ps1"; Mutations = @(', '  @{ Name = "f-clean"; Find = "Get-F { return 6 }"; Replace = "Get-F { return 0 }" }', ') }')
     Write-Fx "test\mutations\other.psd1" @('@{ Target = "other.ps1"; Suite = "test\other-suite.ps1"; Mutations = @(', '  @{ Name = "other-one"; Find = "return 7"; Replace = "return 8" }', ') }')
     Write-Fx "test\mutations\untracked.psd1" @('@{ Target = "untracked.ps1"; Suite = "test\other-suite.ps1"; Mutations = @(', '  @{ Name = "u-whole"; Find = "return 11"; Replace = "return 12" }', ') }')
+    # A PORT'S OWN SPEC, TWO FOLDERS BELOW ITS mutations FOLDER. -Changed finds specs by the rule the
+    # spec guard uses (Get-HordeMutationSpecFiles); before, it searched four fixed folders one level
+    # deep and never selected a spec the guard checked (review of PRs #62 and #63, 2026-10-02).
+    Write-Fx "agents\demo\Code.ps1" @('function Get-Port { return 21 }', 'function Get-Other { return 22 }')
+    Write-Fx "agents\demo\test\mutations\deep\deeper\demo.psd1" @('@{ Target = "agents\demo\Code.ps1"; Suite = "test\other-suite.ps1"; Mutations = @(', '  @{ Name = "port-line"; Find = "function Get-Port {"; Replace = "function Get-Port { return 0 }; function Old-Port {" }', '  @{ Name = "port-unchanged"; Find = "return 22"; Replace = "return 20" }', ') }')
     $c1 = (Invoke-Fx @("add", "-A")) + (Invoke-Fx @("commit", "-q", "-m", "one"))
     # Commit 2: line 3 modified, a line added after line 4, line 6 deleted, and a mutant added to its
     # spec on a line the diff does not touch.
@@ -146,6 +151,7 @@ try {
     # A spec whose only change is its Environment: what its suite runs changed, so every mutant of it
     # runs again (review of PR #63, probe P4: a narrowed HORDE_SECTIONS reselected nothing).
     Write-Fx "test\mutations\extra.psd1" @('@{ Target = "target.ps1"; Suite = "test\fixture-suite.ps1"; Environment = @{ HORDE_FIXTURE_LEVEL = "2" }; Mutations = @(', '  @{ Name = "x-env"; Find = "function Get-C {"; Replace = "function Get-C { return 0 }; function Old-C {" }', ') }')
+    Write-Fx "agents\demo\Code.ps1" @('function Get-Port { return (20 + 1) }', 'function Get-Other { return 22 }')
     $c2 = (Invoke-Fx @("add", "-A")) + (Invoke-Fx @("commit", "-q", "-m", "two"))
     Check ($c1 -eq 0 -and $c2 -eq 0) "CONTROL: the fixture repository has its two commits"
 
@@ -161,8 +167,8 @@ try {
 
     # THE SELECTION, EXACTLY: every mutant expected in, every mutant expected out.
     $plan = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
-    $wantIn = @("b-modified", "new-added", "d-before-gap", "e-after-gap", "missing", "ambiguous", "x-env", "u-whole")
-    $wantOut = @("a-unchanged", "c-unchanged", "f-unchanged", "f-clean")
+    $wantIn = @("b-modified", "new-added", "d-before-gap", "e-after-gap", "missing", "ambiguous", "x-env", "u-whole", "port-line")
+    $wantOut = @("a-unchanged", "c-unchanged", "f-unchanged", "f-clean", "port-unchanged")
     Check ($plan.code -eq 0) "the plan of a two-commit diff exits 0"
     Check (Test-SameSet (Get-Picked $plan.lines "SELECT") $wantIn) ("the selected mutants are exactly " + ($wantIn -join ", ") + " (got " + ((Get-Picked $plan.lines "SELECT") -join ", ") + ")")
     Check (Test-SameSet (Get-Picked $plan.lines "SKIP") $wantOut) ("the mutants skipped one by one are exactly " + ($wantOut -join ", ") + " (got " + ((Get-Picked $plan.lines "SKIP") -join ", ") + ")")
@@ -172,7 +178,9 @@ try {
     Check (@($plan.lines | Where-Object { $_ -match ':: ambiguous - find string occurs \d+ times .*fail safe' }).Count -eq 1) "a mutant found more than once says it runs to be safe"
     Check (@($plan.lines | Where-Object { $_ -match ':: x-env - its spec file changed' }).Count -eq 1) "every mutant of a spec whose file changed runs, and says why"
     Check (@($plan.lines | Where-Object { $_ -match ':: c-unchanged - line 4 of target\.ps1 is unchanged' }).Count -eq 1) "a skipped mutant says its line is unchanged"
-    Check (@($plan.lines | Where-Object { $_ -match '^changed: selected 8 of 13 mutants; skipped 5 as unchanged' }).Count -eq 1) "the totals are stated"
+    Check (@($plan.lines | Where-Object { $_.Contains(":: port-line - line 1 of agents\demo\Code.ps1 is added or modified") }).Count -eq 1) "a changed line in a port's own code selects the mutant in that port's spec, two folders below its mutations folder"
+    Check (@($plan.lines | Where-Object { $_.Contains("agents\demo\test\mutations\deep\deeper\demo.psd1 :: port-unchanged - line 2 of agents\demo\Code.ps1 is unchanged") }).Count -eq 1) "and that spec's mutant on an unchanged line is listed as skipped, so the spec was found"
+    Check (@($plan.lines | Where-Object { $_ -match '^changed: selected 9 of 15 mutants; skipped 6 as unchanged' }).Count -eq 1) "the totals are stated"
     Check (@($plan.lines | Where-Object { $_ -match '^mutations: ' }).Count -eq 0) "a plan prints no result line a gate could read as a run"
 
     # HOSTILE GIT CONFIGURATION CHANGES NOTHING. Each of these changes what `git diff` prints by default
