@@ -37,8 +37,14 @@ Check ([regex]::IsMatch("2b0f2c5e-6a1d-4c3b-9e8f-0a1b2c3d4e5f", $d.sessionIdPatt
 Write-Host ""
 Write-Host "--- every permission level is a flag this harness has (remote R9) ---" -ForegroundColor Cyan
 $frag = @{}
-foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name }
-Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here"
+$trusted = @("folder-trusted")
+foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name -EntryPoint "interactive" -Verified $trusted }
+Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here, in a folder verified trusted"
+foreach ($lv in @("plan", "edits", "bypass")) {
+    $u = Get-HordePermissionArgs -Descriptor $d -Level $lv -EntryPoint "interactive"
+    Check ($u.state -eq "unknown" -and $u.reason -like "*folder-trusted*overridden to default*") ($lv + " in a folder not verified trusted is refused: the harness would silently run it as ask (review r60, F1 and F3)")
+}
+Check ((Get-HordePermissionArgs -Descriptor $d -Level "ask" -EntryPoint "interactive").state -eq "known") "CONTROL: ask is what an untrusted folder gives anyway, so it needs no trust"
 Check ((@($frag["plan"].value) -join " ") -ceq "--approval-mode plan" -and (@($frag["ask"].value) -join " ") -ceq "--approval-mode default") "plan and ask are its plan and default approval modes"
 Check ((@($frag["edits"].value) -join " ") -ceq "--approval-mode auto_edit" -and (@($frag["bypass"].value) -join " ") -ceq "--approval-mode yolo") "edits and bypass are its auto_edit and yolo approval modes"
 

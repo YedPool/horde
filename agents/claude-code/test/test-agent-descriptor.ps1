@@ -40,8 +40,10 @@ Check (-not [regex]::IsMatch("x2b0f2c5e-6a1d-4c3b-9e8f-0a1b2c3d4e5f", $d.session
 Write-Host ""
 Write-Host "--- every permission level is a flag this harness has (remote R9) ---" -ForegroundColor Cyan
 $frag = @{}
-foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name }
-Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here"
+foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name -EntryPoint "interactive" }
+Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here, with no precondition to verify"
+Check (@(@(Get-HordePermissionLevels) | Where-Object { (Get-HordePermissionArgs -Descriptor $d -Level $_.name -EntryPoint "headless").state -cne "known" }).Count -eq 0) "and on a headless start too"
+Check ((@($frag["ask"].value) -join " ") -ceq "--permission-mode manual") "ask is the mode the help calls manual, which reads back as default"
 Check ((@($frag["bypass"].value) -join " ") -ceq "--dangerously-skip-permissions") "bypass is the skip-permissions flag the fleet spawns with today"
 Check ((@($frag["plan"].value) -join " ") -ceq "--permission-mode plan") "plan is the plan permission mode"
 Check ((@($frag["edits"].value) -join " ") -ceq "--permission-mode acceptEdits") "edits is the mode that accepts edits"

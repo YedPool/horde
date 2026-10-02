@@ -33,11 +33,16 @@ Check (-not [regex]::IsMatch("rollout-01a0cccc-1111-7222-8333-444455556666", $d.
 Write-Host ""
 Write-Host "--- every permission level is a flag this harness has (remote R9) ---" -ForegroundColor Cyan
 $frag = @{}
-foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name }
-Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here"
+$sandboxSet = @("windows-sandbox-configured")
+foreach ($l in @(Get-HordePermissionLevels)) { $frag[$l.name] = Get-HordePermissionArgs -Descriptor $d -Level $l.name -EntryPoint "interactive" -Verified $sandboxSet }
+Check (@($frag.Values | Where-Object { $_.state -cne "known" }).Count -eq 0) "every level of the vocabulary is expressible here, with the sandbox setting verified"
+$e = Get-HordePermissionArgs -Descriptor $d -Level "edits" -EntryPoint "interactive"
+Check ($e.state -eq "unknown" -and $e.reason -like "*windows-sandbox-configured*silently read-only*") "edits without the sandbox setting verified is refused: it would silently be read-only (review r60, F3)"
+Check ((Get-HordePermissionArgs -Descriptor $d -Level "plan" -EntryPoint "interactive").state -eq "known") "CONTROL: plan needs no such setting"
+Check (@(@(Get-HordePermissionLevels) | Where-Object { (Get-HordePermissionArgs -Descriptor $d -Level $_.name -EntryPoint "headless" -Verified $sandboxSet).state -ceq "known" }).Count -eq 0) "no fragment is offered for the headless start, which rejects --ask-for-approval (review r60, F4)"
 Check ((@($frag["bypass"].value) -join " ") -ceq "--dangerously-bypass-approvals-and-sandbox") "bypass is this harness's own skip flag, spelt differently from other harnesses' (engines E0's lesson)"
 Check ((@($frag["plan"].value) -join " ") -ceq "--sandbox read-only --ask-for-approval never") "plan is a read-only sandbox that never escalates"
 Check ((@($frag["ask"].value) -join " ") -ceq "--sandbox read-only --ask-for-approval on-request") "ask is a read-only sandbox whose escalations a person approves"
-Check ((@($frag["edits"].value) -join " ") -ceq "--sandbox workspace-write --ask-for-approval on-request") "edits writes inside the working tree and asks for anything else"
+Check ((@($frag["edits"].value) -join " ") -ceq "--sandbox workspace-write --ask-for-approval on-request -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true") "edits writes inside the working tree only - the TEMP folder and /tmp excluded (review r60, F2) - and asks for anything else"
 
 Complete-HordeSuite -Success "this harness's descriptor loads and says what the plan relies on"
