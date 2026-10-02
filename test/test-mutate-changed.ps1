@@ -212,6 +212,31 @@ try {
     $zeroOther = Invoke-FxMutate @("-Changed", "HEAD~1", "-Spec", "test\mutations\other.psd1")
     Check ($zeroOther.code -eq 0 -and @($zeroOther.lines | Where-Object { $_ -match 'the diff touches no mutation target' }).Count -ge 1) "CONTROL: the same diff, against a spec whose target it does not touch, selects none and passes"
 
+    # A DIFF THAT DOES NOT PARSE STOPS THE TOOL, end to end. The prefixes are forced, so no git setting
+    # reaches this path any more; a git that prints other prefixes anyway (a wrapper, a future
+    # default) is played by a shim first on PATH that rewrites a/ to i/ in every diff header. Without
+    # this check the tool's own refusal could be deleted and every check above would still pass
+    # (mutant parse-problem-ignored survived the remote gate on 2026-10-02).
+    $shimDir = $fx + "-shim"
+    New-Item -ItemType Directory -Path $shimDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $shimDir "git.cmd"), "@powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0shim.ps1`" %*`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $shimDir "shim.ps1"), (@(
+        '$out = @(& $env:HORDE_TEST_REAL_GIT @args)',
+        '$code = $LASTEXITCODE',
+        'foreach ($l in $out) { $t = ("" + $l) -replace "^diff --git a/", "diff --git i/"; [Console]::Out.WriteLine($t) }',
+        'exit $code') -join "`r`n"))
+    $realGit = @(Get-Command git.exe -CommandType Application)[0].Source
+    $pathBefore = $env:PATH
+    $env:HORDE_TEST_REAL_GIT = $realGit
+    $env:PATH = $shimDir + ";" + $env:PATH
+    try { $shimmed = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan") } finally { $env:PATH = $pathBefore; $env:HORDE_TEST_REAL_GIT = $null }
+    Check ($shimmed.code -eq 2) ("a diff whose headers do not parse exits 2, not 0 (exit " + $shimmed.code + ")")
+    Check (@($shimmed.lines | Where-Object { $_ -match 'refusing to read it as unchanged' }).Count -eq 1) "and says it will not read it as unchanged"
+    Check (@($shimmed.lines | Where-Object { $_ -match '^\s*\[(SELECT|SKIP)\]' }).Count -eq 0) "and selects nothing from it"
+    $unshimmed = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
+    Check ($unshimmed.code -eq 0) "CONTROL: with the real git first on PATH again, the same plan exits 0"
+    if ((Split-Path -Leaf $shimDir) -match '^horde-mutchg-[0-9a-f]{32}-shim\z') { Remove-Item -LiteralPath $shimDir -Recurse -Force -ErrorAction SilentlyContinue }
+
     # THE ARGUMENTS.
     $noArgs = Invoke-FxMutate @()
     Check ($noArgs.code -eq 2) "with neither -Spec nor -Changed the tool refuses to run"
@@ -220,6 +245,7 @@ try {
     $badRef = Invoke-FxMutate @("-Changed", "no-such-ref-anywhere", "-Plan")
     Check ($badRef.code -eq 2 -and @($badRef.lines | Where-Object { $_ -match 'cannot find the merge-base' }).Count -eq 1) "a base that does not resolve is an error, not an empty diff"
 } finally {
+    if (Test-Path -LiteralPath ($fx + "-shim")) { Remove-Item -LiteralPath ($fx + "-shim") -Recurse -Force -ErrorAction SilentlyContinue }
     if ((Split-Path -Leaf $fx) -match '^horde-mutchg-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
