@@ -25,5 +25,11 @@
     "provider-select": { "support": "declined", "evidence": "fixture: Horde chooses not to use it" },
     "session-id-preset": { "support": "yes", "evidence": "fixture: --id <uuid> in its help" },
     "session.remoteName": { "support": "unverified", "evidence": "fixture: nobody has measured a remote view" }
-  }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--mode", "look"], "evidence": "fixture: --mode look in its help" },
+    { "level": "ask", "argv": ["--mode", "careful"], "evidence": "fixture: --mode careful in its help" },
+    { "level": "edits", "argv": ["--mode", "edit"], "evidence": "fixture: --mode edit in its help" },
+    { "level": "bypass", "inexpressible": "the fixture harness has no way to skip every prompt" }
+  ]
 }

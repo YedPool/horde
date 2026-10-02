@@ -81,6 +81,43 @@ Test-Rejected "an owned variable whose name is not an environment-variable name"
 Test-Rejected "an owned variable with blank evidence" { param($d) $d.ownedEnv[0].evidence = " " } "evidence"
 
 Write-Host ""
+Write-Host "--- every permission level of core/permission-levels.json is mapped once (remote R0, R9) ---" -ForegroundColor Cyan
+function Get-LevelRow { param($d, [string]$Level) return @($d.permissionLevels | Where-Object { $_.level -ceq $Level })[0] }
+Test-Rejected "a permission level left out" { param($d) $d.permissionLevels = @($d.permissionLevels | Where-Object { $_.level -cne "edits" }) } "edits"
+Test-Rejected "a permission level mapped twice" { param($d) $d.permissionLevels = @($d.permissionLevels) + @((Get-LevelRow $d "plan")) } "plan"
+Test-Rejected "a permission level the vocabulary does not have" { param($d) $d.permissionLevels = @($d.permissionLevels) + @([pscustomobject]@{ level = "sandboxed"; inexpressible = "x" }) } "sandboxed"
+Test-Rejected "a level in another case" { param($d) (Get-LevelRow $d "plan").level = "Plan" } "level"
+Test-Rejected "a level given both a fragment and a reason it cannot be expressed" { param($d) Add-Prop (Get-LevelRow $d "bypass") "argv" @("--all") } "bypass"
+Test-Rejected "a level given neither" { param($d) Remove-Prop (Get-LevelRow $d "bypass") "inexpressible" } "bypass"
+Test-Rejected "a fragment with no evidence that its flag was read off the help" { param($d) Remove-Prop (Get-LevelRow $d "edits") "evidence" } "evidence"
+Test-Rejected "a fragment whose evidence is blank" { param($d) (Get-LevelRow $d "edits").evidence = " " } "evidence"
+Test-Rejected "an empty fragment" { param($d) (Get-LevelRow $d "edits").argv = @() } "edits"
+Test-Rejected "a fragment holding a blank word" { param($d) (Get-LevelRow $d "edits").argv = @("--mode", " ") } "argv"
+Test-Rejected "an inexpressible level with a blank reason" { param($d) (Get-LevelRow $d "bypass").inexpressible = " " } "inexpressible"
+Test-Rejected "an inexpressible level that also carries evidence, as if it had a flag" { param($d) Add-Prop (Get-LevelRow $d "bypass") "evidence" "read off the help" } "bypass"
+$levels = @(Get-HordePermissionLevels)
+$grown = @($levels) + @([pscustomobject]@{ name = "sandboxed"; rank = $levels.Count; meaning = "a level added later" })
+$why = ""
+try { $null = Read-HordeAgentDescriptorText -Text $goldenText -ExpectedName "harness-a" -Levels $grown } catch { $why = "$($_.Exception.Message)" }
+Check ($why -like "*sandboxed*") "a vocabulary that gains a level fails a descriptor written against the old one, naming the level it lacks"
+
+Write-Host ""
+Write-Host "--- a level the harness cannot express is refused, never lowered ---" -ForegroundColor Cyan
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "edits"
+Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode edit") "CONTROL: an expressible level gives that level's fragment"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "bypass"
+Check ($p.state -eq "unknown") "an inexpressible level is refused (unknown), not answered with some fragment"
+Check ($p.state -eq "unknown" -and $p.reason -like "*no way to skip every prompt*") "and the refusal carries the descriptor's reason"
+Check ($p.state -ne "known" -or (@($p.value) -join " ") -cne "--mode edit") "and never the fragment of the nearest level below it"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "Bypass"
+Check ($p.state -eq "unknown" -and $p.reason -like "*not a Horde permission level*") "a level name in another case is not a level, and is refused"
+$p = Get-HordePermissionArgs -Descriptor $golden -Level "plan"
+Check ($p.state -eq "known" -and (@($p.value) -join " ") -ceq "--mode look") "CONTROL: the lowest level is a level like any other"
+$p1 = Get-HordePermissionArgs -Descriptor $golden -Level "plan"
+$p1.value[0] = "--changed"
+Check ((@((Get-HordePermissionArgs -Descriptor $golden -Level "plan").value) -join " ") -ceq "--mode look") "a caller that edits the fragment it was given does not change the descriptor"
+
+Write-Host ""
 Write-Host "--- the file as a whole ---" -ForegroundColor Cyan
 Check ((Get-Refusal -Text $goldenText -Name "harness-b") -like "*harness-b*") "refused: a descriptor whose name is not its folder's"
 Test-Rejected "a field the schema does not have" { param($d) Add-Prop $d "auth" "subscription" } "auth"
