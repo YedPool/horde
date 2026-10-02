@@ -87,7 +87,7 @@ Test-Rejected "a permission level left out" { param($d) $d.permissionLevels = @(
 Test-Rejected "a permission level mapped twice" { param($d) $d.permissionLevels = @($d.permissionLevels) + @((Get-LevelRow $d "plan")) } "plan"
 Test-Rejected "a permission level the vocabulary does not have" { param($d) $d.permissionLevels = @($d.permissionLevels) + @([pscustomobject]@{ level = "sandboxed"; inexpressible = "x" }) } "sandboxed"
 Test-Rejected "a level in another case" { param($d) (Get-LevelRow $d "plan").level = "Plan" } "level"
-Test-Rejected "a level given both a fragment and a reason it cannot be expressed" { param($d) Add-Prop (Get-LevelRow $d "bypass") "argv" @("--all") } "bypass"
+Test-Rejected "a level given both a fragment, with its evidence, and a reason it cannot be expressed" { param($d) $r = Get-LevelRow $d "bypass"; Add-Prop $r "argv" @("--all"); Add-Prop $r "evidence" "--all in its help" } "both"
 Test-Rejected "a level given neither" { param($d) Remove-Prop (Get-LevelRow $d "bypass") "inexpressible" } "bypass"
 Test-Rejected "a fragment with no evidence that its flag was read off the help" { param($d) Remove-Prop (Get-LevelRow $d "edits") "evidence" } "evidence"
 Test-Rejected "a fragment whose evidence is blank" { param($d) (Get-LevelRow $d "edits").evidence = " " } "evidence"
