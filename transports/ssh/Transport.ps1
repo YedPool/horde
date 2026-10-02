@@ -23,6 +23,18 @@
 # the reason): it is drained whenever the link reads or waits, only its first 4096 bytes are kept and
 # the rest is counted and dropped, and the reason is at most 200 printable characters.
 #
+# NO ORPHAN (review of PR #68, F7; the founder's rule that orphans are prevented structurally): from
+# the moment Open has started ssh.exe, every way out of Open hands the process to the link's channel,
+# which stops it on close, or stops it in a finally - checked by pid and start time, through the handle
+# held since the start. test-ssh.ps1 makes each later step throw and finds no ssh.exe of ours alive.
+#
+# KNOWN AND LEFT (review of PR #68, F6, LOW): Test-HordeSshFiles reads Horde's ssh_config as decoded
+# text, while ssh reads bytes, and reads it before the spawn, so a writer with access to <HordeHome>
+# could change it in between. The review's probes found no bypass - a UTF-16 file with a directive
+# made ssh fail closed, and a CR-only or BOM-prefixed file was either refused here or read by ssh as a
+# comment - and a byte-level ASCII check, or passing the config's bytes to ssh rather than its path,
+# would close the gap. Left as it is by the coordinator's decision of 2026-10-02.
+#
 # ONE PROGRAM START, AT ONE CALL SITE: Start-HordeSshProcess, called by Open with the System32 path.
 # tools/ExecScan.ps1 has no policy for transports/ yet (Horde #53); until it has, test-ssh.ps1 holds
 # this property by parsing this folder.
@@ -202,6 +214,20 @@ function New-HordeSshChannel {
     }
 }
 
+function Stop-HordeSshUnowned {
+    # Stop a process this adapter started and is not handing on (header, NO ORPHAN): only when its pid
+    # still names a process with the start time recorded at the start, and through the handle held
+    # since then, so a pid reused by another program is never the one stopped.
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process, [Parameter(Mandatory = $true)][datetime]$StartedAt)
+    try {
+        if ($Process.HasExited) { return }
+        $now = [System.Diagnostics.Process]::GetProcessById($Process.Id)
+        if ($now.StartTime -ne $StartedAt) { return }
+        $Process.Kill()
+        $null = $Process.WaitForExit(5000)
+    } catch { }
+}
+
 function New-HordeSshResult {
     param([bool]$Ok, $Channel = $null, $Peer = $null, [string]$Reason = "")
     return [pscustomobject]@{ ok = $Ok; channel = $Channel; peer = $Peer; listener = $null; reason = $Reason }
@@ -265,12 +291,22 @@ $null = Register-HordeTransport -Folder $script:HordeSshFolder `
         $ready = Test-HordeSshFiles -Paths $paths
         if (-not $ready.ok) { return (New-HordeSshResult -Ok $false -Reason $ready.reason) }
         $proc = Start-HordeSshProcess -FilePath $exe.path -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths))
-        $peer = [pscustomobject]@{
-            verified = $false
-            identity = ($script:HordeSshHostKeyAliasPrefix + $ep.hubId)
-            how = "the hub's host key is pinned by StrictHostKeyChecking=yes against Horde's own known_hosts under this alias; no live sshd has demonstrated it yet (remote plan R16, R17)"
+        # FROM HERE ssh.exe IS RUNNING, and every way out either hands it to the link or kills it (header,
+        # NO ORPHAN). $handed is set only on the last line before the return.
+        $startedAt = $proc.StartTime
+        $handed = $false
+        try {
+            $peer = [pscustomobject]@{
+                verified = $false
+                identity = ($script:HordeSshHostKeyAliasPrefix + $ep.hubId)
+                how = "the hub's host key is pinned by StrictHostKeyChecking=yes against Horde's own known_hosts under this alias; no live sshd has demonstrated it yet (remote plan R16, R17)"
+            }
+            $result = New-HordeSshResult -Ok $true -Channel (New-HordeSshChannel -Process $proc) -Peer $peer
+            $handed = $true
+            return $result
+        } finally {
+            if (-not $handed) { Stop-HordeSshUnowned -Process $proc -StartedAt $startedAt }
         }
-        return (New-HordeSshResult -Ok $true -Channel (New-HordeSshChannel -Process $proc) -Peer $peer)
     } `
     -Probe {
         param($Endpoint)

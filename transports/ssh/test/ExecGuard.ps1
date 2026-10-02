@@ -21,7 +21,7 @@
 
 $script:HordeSshGuardCmdlets = @("Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome")
 $script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
-$script:HordeSshGuardMethods = @("Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Copy", "Dispose", "EndsWith", "GetStream", "GetString", "IndexOf",
+$script:HordeSshGuardMethods = @("Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
     "IsMatch", "Kill", "Match", "Max", "Min", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
     "ToCharArray", "ToString", "Trim", "TrimEnd", "Wait", "WaitAny", "WaitForExit", "WriteAsync")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
