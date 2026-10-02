@@ -13,7 +13,9 @@
 #   - no verb takes a command line, script, program path, environment or path ... section C
 #   - no verb returns raw worker context: results are closed and capped ....... section D
 #   - the verbs the design leaves out are each refused ......................... section B
-# and one it implies: nothing in remote/ can start a program or a shell ........ section H
+# and one it implies - nothing in remote/ can start a program or a shell - is test/test-exec-scan.ps1's:
+# it tests tools/ExecScan.ps1, and lives apart so that the exec-scan mutation spec, which reruns its
+# suite once per mutant, reruns only the part a mutant of the scan can change.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -425,56 +427,5 @@ DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.peers[0].address 
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health.PSObject.Properties.Remove("value") } "$.health is known and carries no value" "an overlay's known health carries its value"
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health = [pscustomobject]@{ state = "unknown"; reason = "" } } "$.health is unknown and gives no reason" "an overlay's unknown health says why"
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health = $true } "$.health should be object" "overlay health is a tristate answer, never a bare boolean"
-
-Write-Host ""
-Write-Host "--- I. nothing in remote/ can start a program or a shell ---" -ForegroundColor Cyan
-
-# The verb table cannot express a shell; this proves the code beside it does not hold one either.
-# remote/ calls core and the adapters, which run what they run; it never starts anything itself.
-# tools/ExecScan.ps1 reads each file's syntax tree against an ALLOWLIST on every axis, because the
-# banned-name list it replaced caught 3 of the 27 ways to run something that the review
-# of PR #40 wrote (2026-10-01), and its second version, which still kept lists of banned methods and
-# types, let 7 of the verification's forms through. Every axis is now an allowlist (tools/ExecScan.ps1).
-. (Join-Path $root "tools\ExecScan.ps1")
-$known = Get-HordeExecFunctionNames -Roots @(Join-Path $root "remote")
-Check ($known.Contains("Test-HordeLinkFrame") -and -not $known.Contains("Invoke-HordeRead")) "CONTROL: the functions remote/ defines are read, and core's are not: only the listed core functions may be called, never Invoke-HordeRead, which runs the block it is given"
-
-function Get-LineFindings {
-    param($Findings, [int]$Line)
-    return @($Findings | Where-Object { "$_".StartsWith("line " + $Line + ": ") })
-}
-$ctlPath = Join-Path $fx "shell-control.ps1"
-$ctl = @(Get-HordeExecFindings -Path $ctlPath -Known $known)
-$ctlAst = [System.Management.Automation.Language.Parser]::ParseFile($ctlPath, [ref]$null, [ref]$null)
-$forms = @($ctlAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))
-Check ($forms.Count -eq 94) ("CONTROL: the control file holds 94 forms - the review's 27, the first scan's 9, the verification's 13, 44 that each isolate one rule, and a class method (found " + $forms.Count + ")")
-foreach ($form in $forms) {
-    $hits = @(Get-LineFindings $ctl $form.Extent.StartLineNumber)
-    Check ($hits.Count -ge 1) ("CONTROL: the form " + $form.Name + " is refused")
-}
-# Each form's own reason, so a rule switched off is seen even where another rule also catches the form.
-$expectCount = 0
-$lineNo = 0
-foreach ($text in [System.IO.File]::ReadAllLines($ctlPath)) {
-    $lineNo++
-    $m = [regex]::Match($text, '#\s*expect:\s*(.+?)\s*$')
-    if (-not $m.Success -or $text.TrimStart().StartsWith("#")) { continue }
-    $expectCount++
-    $want = $m.Groups[1].Value
-    $hits = @(Get-LineFindings $ctl $lineNo)
-    Check (@($hits | Where-Object { "$_".Contains($want) }).Count -ge 1) ("CONTROL: line " + $lineNo + " is refused because: " + $want)
-    if (@($hits | Where-Object { "$_".Contains($want) }).Count -eq 0) { Show $hits }
-}
-Check ($expectCount -eq 99) ("CONTROL: 99 lines of the control file name their reason (found " + $expectCount + ")")
-$clean = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-clean.ps1") -Known $known)
-Check ($clean.Count -eq 0) "CONTROL: a file written the way remote/ is written - its loader lines, allowlisted cmdlets, core functions, .NET types that start nothing - has no finding"; Show $clean
-$broken = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-unparsed.ps1") -Known $known)
-Check (Says $broken "does not parse") "a file that does not parse is a finding, never silence"
-$remoteFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "remote") -Filter "*.ps1" -Recurse)
-Check ($remoteFiles.Count -ge 1) "there is code in remote/ to check"
-foreach ($file in $remoteFiles) {
-    $got = @(Get-HordeExecFindings -Path $file.FullName -Known $known)
-    Check ($got.Count -eq 0) ("remote/" + $file.Name + " starts no program and no shell"); Show $got
-}
 
 Complete-HordeSuite -Success "the link contracts allow exactly the verbs they list, and refuse every shell, path, environment and raw-context shape"
