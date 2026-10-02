@@ -191,6 +191,9 @@ function Read-CodexTranscript {
         if (@($r.PSObject.TypeNames) -notcontains "Codex.TokenCountSlot") { [void]$records.Add($r); continue }
         [void]$records.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $r.ts -Line $r.line))
         if ($st.sawRecord) { continue }
+        # A token_count with no usage (info:null, a rate-limit-only event) is not a response (review of
+        # PR #50, F8): made a call, its unknown usage made the whole rollout's tokens unknown.
+        if ($r.last -isnot [System.Collections.IDictionary]) { continue }
         # 0.159.2: no token_usage_record. One call per change in the cumulative total; a token_count
         # whose total did not move is a repeat of the last one, not a new response.
         $key = ""

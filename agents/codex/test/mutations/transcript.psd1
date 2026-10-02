@@ -39,5 +39,8 @@
         @{ Name = "missing-usage-field-is-zero"
            Find = '        if ($null -eq $U[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
            Replace = '        if ($false) { }' }
+        @{ Name = "rate-limit-only-token-count-is-a-call"
+           Find = '        if ($r.last -isnot [System.Collections.IDictionary]) { continue }'
+           Replace = ''  }
     )
 }

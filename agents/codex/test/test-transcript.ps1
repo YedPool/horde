@@ -72,6 +72,23 @@ try {
     Check ($puc.usage.state -eq "unknown" -and $puc.usage.reason -like "*output_tokens*") "a usage object with no output_tokens is unknown, naming the missing field"
     Check ($calls[0].usage.state -eq "known") "CONTROL: a complete usage object is known"
 
+
+    Write-Host ""
+    Write-Host "--- a token_count with no usage is not a call ---" -ForegroundColor Cyan
+    # Review of PR #50, F8: in a 0.159.2 rollout a token_count can carry info:null (a rate-limit-only
+    # event); it became a call with unknown usage and made the whole rollout's tokens unknown.
+    $rl = Join-Path $work "ratelimit-only.jsonl"
+    $tu = '{"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":105}'
+    $rlines = @(
+        '{"timestamp":"2026-09-30T10:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"s2"}}',
+        '{"timestamp":"2026-09-30T10:00:01.000Z","ordinal":1,"type":"turn_context","payload":{"turn_id":"t1","model":"gpt-5.5"}}',
+        '{"timestamp":"2026-09-30T10:00:02.000Z","ordinal":2,"type":"event_msg","payload":{"type":"token_count","turn_id":"t1","info":null,"rate_limits":{"primary":{"used_percent":3.0}}}}',
+        ('{"timestamp":"2026-09-30T10:00:03.000Z","ordinal":3,"type":"event_msg","payload":{"type":"token_count","turn_id":"t1","info":{"total_token_usage":' + $tu + ',"last_token_usage":' + $tu + '}}}')
+    )
+    [System.IO.File]::WriteAllText($rl, ($rlines -join "`n") + "`n")
+    $rlw = Get-HordeWorkerSummary -Records (Read-HordeTranscript -Path $rl).value.records -PriceTable $noTable
+    Check ($rlw.calls.value -eq 1 -and $rlw.tokens.state -eq "known" -and $rlw.tokens.value.input -eq 100) ("a token_count with info:null is not a call, and leaves the rollout's tokens known (" + $rlw.calls.value + " calls)")
+
     Write-Host ""
     Write-Host "--- totals and their control ---" -ForegroundColor Cyan
     $ws = Get-HordeWorkerSummary -Records $recs -PriceTable $noTable
