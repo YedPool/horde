@@ -1,6 +1,6 @@
 core/Faults.ps1 | 0 -> 19 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 core/PaneSessions.ps1 | 0 -> 4 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
-core/Projection.ps1 | 0 -> 24 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
+core/Projection.ps1 | 0 -> 23 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 core/WezfleetState.ps1 | 0 -> 4 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 schema/session-view.v1.json | 0 -> 1 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
 test/test-projection.ps1 | 0 -> 21 | 2026-09-30 | core/projection reads this harness's stores until engines A4 moves the reads into its folder, and its tests and fixtures carry the stores' own names
