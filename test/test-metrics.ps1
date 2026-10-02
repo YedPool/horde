@@ -46,14 +46,14 @@ Write-Host "--- still waiting: the planted call is found ---" -ForegroundColor C
 $script:line = 0
 $planted = @(
     (UserSays 0), (Call "c1" 1 -Tools 1), (Tool "k1" 1), (Result "k1" 2), (Call "c2" 3 -Chars 900), (TurnEnd 3),
-    (Note 10 (Worker "w1")), (Call "c3" 11 -Chars 25 -In 5 -Read 90000 -Write 300 -Out 12), (TurnEnd 11)
+    (Note 10 (Worker "w1") -Interim), (Call "c3" 11 -Chars 25 -In 5 -Read 90000 -Write 300 -Out 12), (TurnEnd 11)
 )
 $m = Get-HordeOrcMeasures -Records $planted
 Check ($m.stillWaiting.calls -eq 1) "the planted still-waiting call is found"
 Check ($m.stillWaiting.contextTokens.value -eq 90305) "with the context it processed: input + cache read + cache write = 90305"
 Check ($m.stillWaiting.outputTokens.value -eq 12) "and the output it wrote"
 $script:line = 0
-$noUse = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Call "nu1" 1 -Chars 10), (Note 2 (Worker "w1")), (Call "nu2" 3 -Chars 10 -NoUsage))
+$noUse = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1") -Interim), (Call "nu1" 1 -Chars 10), (Note 2 (Worker "w1") -Interim), (Call "nu2" 3 -Chars 10 -NoUsage))
 Check ($noUse.stillWaiting.contextTokens.state -eq "unknown" -and $noUse.stillWaiting.contextTokens.reason -like "*1 of 2*") "a still-waiting total missing a call's usage is unknown, saying how many calls it lacks, not a smaller number"
 Check ($noUse.stillWaiting.outputTokens.state -eq "unknown") "and so is the output total"
 Check ($m.stillWaiting.byWorker["w1"] -eq 1 -and $m.stillWaiting.unattributed -eq 0) "it is attributed to the worker its notification proves"
@@ -63,30 +63,37 @@ Write-Host ""
 Write-Host "--- still waiting: a clean transcript finds none ---" -ForegroundColor Cyan
 $script:line = 0
 $clean = @(
-    (Note 0 (Worker "w1")), (Call "d1" 1 -Tools 1), (Tool "k1" 1), (Result "k1" 2), (Call "d2" 2 -Chars 30),
-    (Note 5 (Worker "w2")), (Call "d3" 6 -Chars 400),
+    (Note 0 (Worker "w1") -Interim), (Call "d1" 1 -Tools 1), (Tool "k1" 1), (Result "k1" 2), (Call "d2" 2 -Chars 30),
+    (Note 5 (Worker "w2") -Interim), (Call "d3" 6 -Chars 400),
     (UserSays 7), (Call "d4" 8 -Chars 10),
-    (Note 9 (Worker "w3")), (Tool "k2" 9), (Result "k2" 9.5), (Call "d5" 10 -Chars 10),
-    (Note 11 (Worker "w4")), (Call "d6" 12 -Tools 1), (Call "d7" 13 -Chars 10)
+    (Note 9 (Worker "w3") -Interim), (Tool "k2" 9), (Result "k2" 9.5), (Call "d5" 10 -Chars 10),
+    (Note 11 (Worker "w4") -Interim), (Call "d6" 12 -Tools 1), (Call "d7" 13 -Chars 10)
 )
 $mc = Get-HordeOrcMeasures -Records $clean
 Check ($mc.stillWaiting.calls -eq 0) "none in a transcript with none"
 $script:line = 0
-$viaTool = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Tool "k" 0.5), (Result "k" 1), (Call "v1" 2 -Chars 10))
-$direct = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1")), (Call "v2" 2 -Chars 10))
+$viaTool = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1") -Interim), (Tool "k" 0.5), (Result "k" 1), (Call "v1" 2 -Chars 10))
+$direct = Get-HordeOrcMeasures -Records @((Note 0 (Worker "w1") -Interim), (Call "v2" 2 -Chars 10))
 Check ($viaTool.stillWaiting.calls -eq 0 -and $direct.stillWaiting.calls -eq 1) "a tool result between the notification and the reply means the reply answers the tool, not the notification"
 Check ($mc.notifications -eq 4) "CONTROL: the clean transcript does contain notifications, so the zero is not for want of any"
+# A rule decided by the coordinator on 2026-10-02, to be calibrated by experiment program 3.4's
+# hand-labelling: a person speaking since the last call takes the reply.
+$script:line = 0
+$humanBetween = Get-HordeOrcMeasures -Records @((UserSays 0), (Note 1 (Worker "w1") -Interim), (Call "h1" 2 -Chars 10))
+$noHuman = Get-HordeOrcMeasures -Records @((Note 1 (Worker "w1") -Interim), (Call "h2" 2 -Chars 10))
+Check ($humanBetween.stillWaiting.calls -eq 0) "a reply after a person spoke since the last call answers the person, not the notification"
+Check ($noHuman.stillWaiting.calls -eq 1) "CONTROL: the same reply with no person speaking is still-waiting"
 
 Write-Host ""
 Write-Host "--- still waiting: attribution is never guessed ---" -ForegroundColor Cyan
 $script:line = 0
 $mixed = @(
-    (Note 0 $job), (Call "e1" 1), (Note 2 $unproved), (Call "e2" 3), (Note 4 (Worker "w9") -Interim), (Call "e3" 5), (Call "e3" 5)
+    (Note 0 $job -Interim), (Call "e1" 1), (Note 2 $unproved -Interim), (Call "e2" 3), (Note 4 (Worker "w9") -Interim), (Call "e3" 5), (Call "e3" 5)
 )
 $mm = Get-HordeOrcMeasures -Records $mixed
 Check ($mm.stillWaiting.calls -eq 3) "three still-waiting calls; the repeated id is counted once"
 Check ($mm.stillWaiting.jobs -eq 1 -and $mm.stillWaiting.unattributed -eq 1 -and $mm.stillWaiting.byWorker["w9"] -eq 1) "one about a job, one unattributed, one on the proved worker"
-Check ($mm.interimNotifications -eq 1) "an interim notification is counted as interim"
+Check ($mm.interimNotifications -eq 3) "interim notifications are counted as interim"
 $m200 = Get-HordeOrcMeasures -Records $planted -MaxChars 20
 Check ($m200.stillWaiting.calls -eq 0) "the character limit is a parameter: at 20 characters the 25-character call is not counted"
 

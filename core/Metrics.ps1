@@ -13,7 +13,9 @@
 #     and the longest tool call, the model, and the notional cost.
 #   Get-HordeOrcMeasures - the orchestrator's "still waiting" calls and the worker results that land
 #     in its context (study sections 4 and 5.2), attributed to a worker only where the transcript
-#     proves the link.
+#     proves the link. A still-waiting call answers an INTERIM notification with no person speaking
+#     in between; these rules are definitions until the hand-labelling of experiment program
+#     section 3.4 calibrates them (see Get-HordeOrcMeasures).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/Transcript.ps1 and core/Price.ps1.
@@ -171,6 +173,12 @@ function Get-HordeOrcMeasures {
     # (join.js); a call answering a tool result is not answering a notification. The context it
     # processed is input plus cache read plus cache write: what the call paid to say "still waiting".
     #
+    # TWO MORE RULES, decided 2026-10-02 (coordinator, after review of PR #50): the triggering
+    # notification must be INTERIM - a short reply to a final notification is a report, never waiting -
+    # and no person may have spoken since the previous call, or the reply is answering the person.
+    # EP 3.4's hand-labelling of 20 orchestrator turns will calibrate these rules and the 400-character
+    # limit; until then they are definitions, not measurements.
+    #
     # LANDED: the characters of worker results that entered this context - notifications about a
     # worker, and results of the tool that launches one - with tokens ESTIMATED at the study's
     # measured ratio. A notification about something that is provably not a worker (a background
@@ -188,13 +196,16 @@ function Get-HordeOrcMeasures {
     $wait = [ordered]@{ calls = 0; contextTokens = [long]0; outputTokens = [long]0; callsWithoutUsage = 0; byWorker = [ordered]@{}; jobs = 0; unattributed = 0; lines = New-Object System.Collections.ArrayList }
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $trigger = $null
+    $personSpoke = $false
     foreach ($r in $all) {
+        if ($r.kind -eq "input" -and $r.source -eq "user") { $personSpoke = $true }
         if ($r.kind -eq "input" -or $r.kind -eq "toolResult") { $trigger = $r; continue }
         if ($r.kind -ne "call") { continue }
         if (-not $seen.Add("$($r.id)")) { continue }
-        $isWait = ($r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trigger -and $trigger.kind -eq "input" -and $trigger.source -eq "notification")
+        $isWait = ($r.toolCallCount -eq 0 -and $r.textChars -lt $MaxChars -and $null -ne $trigger -and $trigger.kind -eq "input" -and $trigger.source -eq "notification" -and -not $personSpoke)
         $trig = $trigger
         $trigger = $null
+        $personSpoke = $false
         if (-not $isWait) { continue }
         $wait.calls++
         [void]$wait.lines.Add($r.line)
