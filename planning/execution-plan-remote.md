@@ -285,6 +285,14 @@ C. The node and the hub, read path (PROJ)
     from `horde follow`, whose never-acts tripwire stays. After lifecycle step 11. Gate: T1, the full
     protocol hub daemon to node daemon over `local`, with a fake host and agent; e2e drives the real
     `horde` CLI.
+    **Split, 2026-10-02 (coordinator's decision), so the read path does not wait on lifecycle step 11:**
+    - **R12a (now):** `horde node serve` over `local`, answering `hello`, `node.info`, `sessions.list`,
+      `session.get` and `request.status`; `sessions.list` says complete only when every store was
+      readable; the T1 gate (a hub client against the node daemon, fake host and agent) and an e2e
+      through the real `horde` CLI. No logon task: installing one is a side effect, and it lands with
+      `horde install`.
+    - **R12b (later):** `observe.since` after lifecycle step 11, and `binding.get` after Phase 3 step
+      3.8 ships the first record writer (until then there is no binding record to read).
 13. **R13. `horde hub serve`, mirrors, `horde nodes`.** Node registry, per-node outbox, mirror files
     and cursors, the binding-record mirror, `device` in the session view (step 2.3). Tests first: a
     dropped link resumes at the cursor with no loss and no duplicate; a node's sessions turn `unknown`
