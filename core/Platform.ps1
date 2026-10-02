@@ -69,3 +69,81 @@ function Get-HordeLocalPlatform {
     # The platform Horde runs on today. The one place core names the Windows process namespace.
     return (New-HordePlatform -Name "windows" -ProcessSpace "windows" -ProcessTable { Read-HordeWindowsProcessTable })
 }
+
+# POWER THROTTLING (EcoQoS). Measured 2026-10-02 on the development machine (the SSH agent's probe):
+# Windows slows a busy background process about 3 s after it starts - an empty PowerShell function
+# call went from 23 us to 165 us, and pure .NET ran at about half speed - and opting the process out of
+# execution-speed throttling removed the slowdown entirely. The opt-out is per process and is NOT
+# inherited: a grandchild of an opted-out process read back ControlMask=0 (measured the same day), so
+# every process that does sustained work opts itself out, or is opted out by the process that started
+# it. Nothing here changes a system power setting; the call touches only the given process.
+#
+# THE TYPE IS COMPILED ONCE PER PROCESS, on first use. Add-Type measured 198 ms here on 2026-10-02
+# (the 1 s first reported includes PowerShell's own first-use warm-up); loading a precompiled DLL
+# measured 112 ms, too little gain to justify a cached binary on disk. The type name carries a version
+# so a later change to it is a new type, never a clash with one already loaded in the session.
+#
+# NOT WINDOWS: there is no such throttling to opt out of, and the answer is absent with that note.
+$script:HordePowerTypeName = "HordePowerThrottlingV1"
+$script:HordePowerSource = @"
+using System;
+using System.Runtime.InteropServices;
+public static class HordePowerThrottlingV1 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct State { public uint Version; public uint ControlMask; public uint StateMask; }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetProcessInformation(IntPtr process, int infoClass, ref State info, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetProcessInformation(IntPtr process, int infoClass, ref State info, uint size);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
+    // ProcessPowerThrottling is information class 4; PROCESS_POWER_THROTTLING_EXECUTION_SPEED is 1.
+    // ControlMask 1 with StateMask 0 means: this process decides execution speed, and decides OFF.
+    public static int OptOut(IntPtr process) {
+        var s = new State { Version = 1, ControlMask = 1, StateMask = 0 };
+        return SetProcessInformation(process, 4, ref s, (uint)Marshal.SizeOf(s)) ? 0 : Marshal.GetLastWin32Error();
+    }
+    public static uint[] Read(IntPtr process) {
+        var s = new State { Version = 1 };
+        if (!GetProcessInformation(process, 4, ref s, (uint)Marshal.SizeOf(s))) { return new uint[] { 0xFFFFFFFF, (uint)Marshal.GetLastWin32Error() }; }
+        return new uint[] { s.ControlMask, s.StateMask };
+    }
+}
+"@
+
+function Test-HordeIsWindows {
+    param($OsPlatform = [System.Environment]::OSVersion.Platform)
+    return [bool]("" + $OsPlatform -ceq "Win32NT")
+}
+
+function Initialize-HordePowerType {
+    if (-not ($script:HordePowerTypeName -as [type])) { Add-Type -TypeDefinition $script:HordePowerSource }
+}
+
+function Set-HordeThrottlingOptOut {
+    # Opt a process - this one by default, or one given by its System.Diagnostics.Process - out of
+    # execution-speed power throttling. Known "set", absent off Windows, or unknown with the error.
+    param($Process = $null, $OsPlatform = [System.Environment]::OSVersion.Platform)
+    if (-not (Test-HordeIsWindows -OsPlatform $OsPlatform)) { return (New-HordeAbsent -Note ("not Windows (" + $OsPlatform + "): there is no execution-speed throttling to opt out of")) }
+    try {
+        Initialize-HordePowerType
+        $h = $(if ($null -eq $Process) { [HordePowerThrottlingV1]::GetCurrentProcess() } else { $Process.Handle })
+        $err = [HordePowerThrottlingV1]::OptOut($h)
+        if ($err -ne 0) { return (New-HordeUnknown -Reason ("SetProcessInformation refused the opt-out, error " + $err)) }
+        return (New-HordeKnown -Value "set")
+    } catch { return (New-HordeUnknown -Reason "the throttling opt-out could not be applied" -ErrorRecord $_) }
+}
+
+function Get-HordeThrottlingState {
+    # A process's throttling state as an answer: known { controlMask; stateMask; optedOut }, absent off
+    # Windows, unknown when it cannot be read. optedOut is true only for ControlMask with bit 1 set and
+    # StateMask with bit 1 clear - this process decides execution speed, and decided off.
+    param($Process = $null, $OsPlatform = [System.Environment]::OSVersion.Platform)
+    if (-not (Test-HordeIsWindows -OsPlatform $OsPlatform)) { return (New-HordeAbsent -Note ("not Windows (" + $OsPlatform + "): there is no execution-speed throttling")) }
+    try {
+        Initialize-HordePowerType
+        $h = $(if ($null -eq $Process) { [HordePowerThrottlingV1]::GetCurrentProcess() } else { $Process.Handle })
+        $r = [HordePowerThrottlingV1]::Read($h)
+        if ($r[0] -eq [uint32]::MaxValue) { return (New-HordeUnknown -Reason ("GetProcessInformation failed, error " + $r[1])) }
+        return (New-HordeKnown -Value ([pscustomobject]@{ controlMask = [int]$r[0]; stateMask = [int]$r[1]; optedOut = [bool](($r[0] -band 1) -eq 1 -and ($r[1] -band 1) -eq 0) }))
+    } catch { return (New-HordeUnknown -Reason "the throttling state could not be read" -ErrorRecord $_) }
+}
