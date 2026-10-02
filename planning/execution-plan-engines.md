@@ -279,6 +279,14 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    that the value appears nowhere in the output. The subscription rule's fixture pairs a
    `harness-login` provider with a harness whose `nativeProvider` is another provider. Every finding is
    mutation-tested. All fixtures here use neutral names.
+
+   **As built (2026-10-02).** A rule's `set` is checked against `core/config-keys.json`, the settings
+   registry - each key, the layers it may be set in and the values it takes - rather than listed in the
+   schema. It holds the four binding keys; `metrics.level` (metrics M2), `admission.tier` and remote
+   R9's node-policy keys (`remote.permissionCeiling`, L1 and L4 only) each land as one entry, and the
+   checker and E4's resolver read them with no code change. The live layer (L4) shares the schema,
+   with `revision` allowed there alone, instead of a second schema. The wire formats are named as
+   `schema/agent-descriptor.v1` names them (`google-genai`, not `gemini`).
 5. **E4. `core/EngineResolve.ps1`** (CAPS, after E2). A pure function. It takes the layers (already parsed) and a
    target, and returns one tristate answer per field, with its provenance. Tests cover:
    - the full precedence table;
