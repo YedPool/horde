@@ -393,6 +393,117 @@ try {
     } "a two-part name line rewritten with its kind written out is the same name, not a removal"
 
     Write-Host ""
+    Write-Host "--- one allowlisted cross-host import: a host may dot-source another host's Dialect.ps1, once (hosts plan step 5) ---" -ForegroundColor Cyan
+
+    # Hosts decision 3 (2026-09-30): the command language two multiplexers share lives in the first
+    # one's folder, and the second imports it as a declared dependency rather than copying it. Other
+    # hosts' folders are scanned, so without a rule of its own every file of the second host that uses
+    # the language would be a leak - and its own scrub of the first one's environment variables too,
+    # because those variables contain the first host's name. So: one allowlist entry, "<path> | import
+    # | <reason>", lets a file in another host's folder name this host exactly once, in a line that
+    # dot-sources this host's Dialect.ps1. The dialect hands out its variable names as data, so the
+    # importer never spells them. Any other mention in that folder is refused. The invented hosts are
+    # zorbmux, which owns the language, and zorbplex, which imports it.
+    $importLine = ". (Join-Path `$PSScriptRoot '..\zorbmux\Dialect.ps1')"
+    $importEntry = "hosts/zorbplex/Adapter.ps1 | import | the second multiplexer imports the shared command language"
+    # THE TWO LISTS NAME EACH OTHER, as the real ports' lists do: an import entry names the importing
+    # file by its path, so the importer's allowlist lists the other host's allowlist; that line names the
+    # other host, so its allowlist lists the importer's back. The importer's count is the entry's one
+    # mention plus that line's. -Entry "" writes the two list lines alone.
+    function Write-DialectLists {
+        param([string]$Entry)
+        $mux = ""
+        if ($Entry) { $mux = $Entry + "`n" }
+        Write-FakeFile "hosts/zorbmux/allowlist.txt" ($mux + "hosts/zorbplex/allowlist.txt | 1 | the importing host's allowlist names this host's allowlist by its path`n")
+        $n = 1; if ($Entry) { $n = 2 }
+        Write-FakeFile "hosts/zorbplex/allowlist.txt" ("hosts/zorbmux/allowlist.txt | " + $n + " | the shared language's allowlist names the importing file and this allowlist by path`n")
+    }
+    function New-DialectRepo {
+        param([string]$Name)
+        $null = New-FakeRepo $Name
+        Write-FakeFile "hosts/zorbmux/names.txt" "zorbmux | the invented multiplexer whose command language a second invented host shares`n"
+        Write-FakeFile "hosts/zorbmux/Dialect.ps1" "function Get-HordeMuxDialectEnvNames { return @('ZORBMUX', 'ZORBMUX_PANE') }`n"
+        Write-FakeFile "hosts/zorbplex/names.txt" "zorbplex | the invented second multiplexer, which imports the first one's dialect`n"
+        Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`n`$scrub = Get-HordeMuxDialectEnvNames`n")
+        Write-DialectLists $importEntry
+    }
+    function DialectScan { param([string]$Name, [scriptblock]$Change) New-DialectRepo $Name; & $Change; return @(Test-HordeHostNames -RepoRoot $script:repo) }
+    function DialectRefuses {
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(DialectScan $Name $Change)
+        $ok = ((Says $f $Text) -and $f.Count -eq 1)
+        Check $ok $What
+        if (-not $ok) { Show $f }
+    }
+    function DialectPasses {
+        param([string]$Name, [scriptblock]$Change, [string]$What)
+        $f = @(DialectScan $Name $Change)
+        Check ($f.Count -eq 0) $What
+        if ($f.Count -gt 0) { Show $f }
+    }
+    # A REFUSED ENTRY ALSO REPORTS ITS FILE, as RefusesEntry above asserts: both findings, and nothing else.
+    function DialectRefusesEntry {
+        param([string]$Name, [scriptblock]$Change, [string]$Text, [string]$What)
+        $f = @(DialectScan $Name $Change)
+        $ok = ((Says $f $Text) -and (Says $f "is not in hosts/zorbmux/allowlist.txt") -and $f.Count -eq 2)
+        Check $ok $What
+        if (-not $ok) { Show $f }
+    }
+    DialectPasses "dialect-import" { } "a file in another host's folder that dot-sources this host's Dialect.ps1 once, under an import entry, passes"
+    DialectPasses "dialect-import-crlf" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`r`n`$scrub = Get-HordeMuxDialectEnvNames`r`n") } "the import line is found the same with CRLF line endings"
+    DialectPasses "dialect-import-slash" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". (Join-Path `$PSScriptRoot '../zorbmux/Dialect.ps1')`n" } "the import may use forward slashes"
+    DialectRefuses "dialect-second-mention" { Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbplex/Adapter.ps1") -Value "`$p = `$env:ZORBMUX_PANE" } "2 mention(s); the allowlist allows 1 - a new mention" "a second mention beside the import is refused - the importer asks the dialect for the variable names"
+    DialectRefuses "dialect-spells-env" { Write-FakeFile "hosts/zorbplex/Scrub.ps1" "Remove-Item Env:ZORBMUX_PANE`n" } "is not in hosts/zorbmux/allowlist.txt" "a file of the importing host that spells the dialect's variable itself is refused"
+    DialectRefuses "dialect-other-file" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" ". (Join-Path `$PSScriptRoot '..\zorbmux\Transport.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "an import of a file other than Dialect.ps1 is refused"
+    DialectRefuses "dialect-not-dot-sourced" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" "# the language is in ..\zorbmux\Dialect.ps1`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a mention that only names the dialect, in a comment, is not an import and is refused"
+    DialectRefuses "dialect-called" { Write-FakeFile "hosts/zorbplex/Adapter.ps1" "& (Join-Path `$PSScriptRoot '..\zorbmux\Dialect.ps1')`n" } "dot-sources hosts/zorbmux/Dialect.ps1" "a dialect run with & instead of dot-sourced is refused"
+    DialectRefusesEntry "dialect-numbered-entry" {
+        Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`n`$p = `$env:ZORBMUX_PANE`n")
+        Write-DialectLists "hosts/zorbplex/Adapter.ps1 | 2 | the second multiplexer imports the language and reads its pane variable"
+    } "only through an import" "a numbered entry for a file in another host's folder is refused - an import is the one way in"
+    DialectRefusesEntry "dialect-import-outside-port" {
+        Write-FakeFile "core/engine.ps1" ($importLine + "`n")
+        Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbmux/allowlist.txt") -Value "core/engine.ps1 | import | the engine borrows the multiplexer language directly"
+    } "is not in another hosts port's folder" "an import entry for a file outside every host's folder is refused - core imports no host"
+    DialectRefusesEntry "dialect-import-from-harness" {
+        # A harness whose folder name is not its declared name, so the entry's path names no harness.
+        Write-FakeFile "agents/plainh/names.txt" "plaincode | an invented harness whose folder name does not contain its declared name`n"
+        Write-FakeFile "agents/plainh/adapter.ps1" ($importLine + "`n")
+        Add-Content -LiteralPath (Join-Path $script:repo "hosts/zorbmux/allowlist.txt") -Value "agents/plainh/adapter.ps1 | import | the harness borrows the multiplexer language directly"
+    } "is not in another hosts port's folder" "an import entry for a file in a harness's folder is refused - only another host imports a host's dialect"
+    DialectRefusesEntry "dialect-import-case" { Write-DialectLists "hosts/zorbplex/Adapter.ps1 | Import | the second multiplexer imports the shared command language" } "or the word import" "the word import is matched exactly, so a miscased one is refused rather than guessed at"
+    # THE MENTION MUST BE IN THE IMPORT LINE. Here the host's folder name is not one of its declared
+    # names, so the import line names nothing, and the file's one mention is a variable spelled
+    # elsewhere: an import line beside it must not excuse that.
+    DialectRefuses "dialect-mention-elsewhere" {
+        Write-FakeFile "hosts/zorbmux/names.txt" "zorbmuxd | the invented multiplexer's server name, which its folder name does not contain`n"
+        Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`n`$p = `$env:ZORBMUXD_PANE`n")
+        # zorbmuxd is not in the path hosts/zorbmux/allowlist.txt, so that list needs no line back.
+        Write-FakeFile "hosts/zorbmux/allowlist.txt" ($importEntry + "`n")
+        Write-FakeFile "hosts/zorbplex/allowlist.txt" "hosts/zorbmux/allowlist.txt | 1 | the shared language's allowlist names the importing file by its path`n"
+    } "dot-sources hosts/zorbmux/Dialect.ps1" "an import line that names nothing does not excuse the one mention made elsewhere in the file"
+    DialectRefusesEntry "dialect-missing" { Remove-Item -LiteralPath (Join-Path $script:repo "hosts/zorbmux/Dialect.ps1") } "hosts/zorbmux/Dialect.ps1 does not exist" "an import entry for a host with no Dialect.ps1 is refused - there is nothing to import"
+    DialectRefuses "dialect-import-names-path" {
+        Remove-Item -LiteralPath (Join-Path $script:repo "hosts/zorbplex/Adapter.ps1")
+        Write-FakeFile "hosts/zorbplex/zorbmux-shim.ps1" ($importLine + "`n")
+        Write-DialectLists "hosts/zorbplex/zorbmux-shim.ps1 | import | the second multiplexer imports the shared command language"
+    } "2 mention(s); the allowlist allows 1 - a new mention" "an importing file whose path also names the host has two mentions, and is refused"
+    function Save-DialectMain {
+        # zorbmux and zorbplex on origin/main, with no import yet: the branch then adds it.
+        Write-FakeFile "hosts/zorbmux/names.txt" "zorbmux | the invented multiplexer whose command language a second invented host shares`n"
+        Write-FakeFile "hosts/zorbmux/Dialect.ps1" "function Get-HordeMuxDialectEnvNames { return @('ZORBMUX', 'ZORBMUX_PANE') }`n"
+        Write-FakeFile "hosts/zorbplex/names.txt" "zorbplex | the invented second multiplexer, which imports the first one's dialect`n"
+        Write-DialectLists ""
+        # The importer's count as it will be once the import names it: only the import entry is new.
+        Write-FakeFile "hosts/zorbplex/allowlist.txt" "hosts/zorbmux/allowlist.txt | 2 | the shared language's allowlist names the importing file and this allowlist by path`n"
+        Save-FakeMain
+        Write-FakeFile "hosts/zorbplex/Adapter.ps1" ($importLine + "`n")
+        Write-DialectLists $importEntry
+    }
+    ShrinkRefuses "sh-import-new" { Save-DialectMain } "not on origin/main" "a new import entry is growth like any new entry, and is refused without a growth line"
+    ShrinkPasses "sh-import-growth" { Save-DialectMain; Write-FakeFile "hosts/zorbmux/growth.txt" "hosts/zorbplex/Adapter.ps1 | 0 -> 1 | 2026-10-02 | the second multiplexer imports the shared command language`n" } "a new import entry passes with a growth line recording 0 -> 1"
+
+    Write-Host ""
     Write-Host "--- core matches no process image, not even where an allowlist lets a file name the harness ---" -ForegroundColor Cyan
 
     # Lifecycle plan section 2.6: "Core matches no image name"; which processes are a harness's is its
