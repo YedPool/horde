@@ -24,11 +24,14 @@
         @{ Name = "spec-result-relayed-unindented"
            Find = 'if ($l -match ''^mutations: '') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l }'
            Replace = 'Write-Host $l' }
-        @{ Name = "changed-spec-not-compared-with-base"
-           Find = 'if ($diff.changed.ContainsKey($relKey)) { $baseKeys ='
-           Replace = 'if ($false) { $baseKeys =' }
+        @{ Name = "changed-spec-not-reselected"
+           Find = 'specChanged = $diff.changed.ContainsKey($relKey) }'
+           Replace = 'specChanged = $false }' }
         @{ Name = "spec-argument-ignored"
            Find = '        $specRels = @($Spec)'
            Replace = '        $specRels = @(Get-HordeMutationSpecFiles -Root $repo -Folders $script:HordeSuiteFolders)' }
+        @{ Name = "zero-line-carries-a-number"
+           Find = 'Write-Host ("mutations: none selected - "'
+           Replace = 'Write-Host ("mutations: 0 - "' }
     )
 }

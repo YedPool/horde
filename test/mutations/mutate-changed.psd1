@@ -35,8 +35,8 @@
            Find = '($Path.Trim() -replace ''\\'', ''/'')'
            Replace = '($Path.Trim())' }
         @{ Name = "diff-against-head-not-merge-base"
-           Find = '"--no-ext-diff", $sha, "--"'
-           Replace = '"--no-ext-diff", "HEAD", "--"' }
+           Find = '"--dst-prefix=b/", $sha, "--"'
+           Replace = '"--dst-prefix=b/", "HEAD", "--"' }
         @{ Name = "untracked-ignored"
            Find = 'Add-HordeWholeFile -Changed $changed -Path $rel -LineCount $n'
            Replace = '$null = $n' }
@@ -60,12 +60,25 @@
         @{ Name = "skips-ambiguous"
            Find = '$sel = $true; $why = "find string occurs "'
            Replace = '$sel = $false; $why = "find string occurs "' }
-        @{ Name = "new-in-spec-ignored"
-           Find = '} elseif ($null -ne $sp.baseKeys -and'
-           Replace = '} elseif ($false -and' }
-        @{ Name = "base-spec-read-as-empty"
-           Find = 'foreach ($m in @($old.Mutations)) {'
-           Replace = 'foreach ($m in @()) {' }
+        @{ Name = "spec-change-ignored"
+           Find = '} elseif ($sp.specChanged) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "multiline-placed"
+           Find = 'if ($Find -match "[\r\n]") { return [pscustomobject]@{ status = "multiline"'
+           Replace = 'if ($false) { return [pscustomobject]@{ status = "multiline"' }
+        @{ Name = "multiline-skipped"
+           Find = '$sel = $true; $why = "find string spans lines'
+           Replace = '$sel = $false; $why = "find string spans lines' }
+        # --- the diff is read the same way whatever the git config says
+        @{ Name = "prefixes-not-forced"
+           Find = '"--src-prefix=a/", "--dst-prefix=b/", '
+           Replace = '' }
+        @{ Name = "parse-problem-ignored"
+           Find = 'if ($why) { return [pscustomobject]@{ ok = $false; error = $why;'
+           Replace = 'if ($false) { return [pscustomobject]@{ ok = $false; error = $why;' }
+        @{ Name = "partial-parse-accepted"
+           Find = 'if ($parsed -ne $headers -or $Changed.Count -eq 0) {'
+           Replace = 'if ($parsed -eq 0 -and $Changed.Count -eq 0) {' }
         @{ Name = "no-spec-folders-searched"
            Find = 'foreach ($p in @(($pattern -split "/") + "mutations")) {'
            Replace = 'foreach ($p in @(($pattern -split "/"))) {' }
