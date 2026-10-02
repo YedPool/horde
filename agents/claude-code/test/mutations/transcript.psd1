@@ -47,5 +47,11 @@
         @{ Name = "usage-summed-across-lines"
            Find = '        if ($null -ne $v -and ($null -eq $Max[$k] -or [long]$v -gt $Max[$k])) { $Max[$k] = [long]$v }'
            Replace = '        if ($null -ne $v) { $Max[$k] = [long]$Max[$k] + [long]$v }' }
+        @{ Name = "notification-by-text"
+           Find = '                if ($s.isNote) { $n = Get-ClaudeCodeNotification -Text $s.text }'
+           Replace = '                if ($s.text -like "*<task-notification>*") { $n = Get-ClaudeCodeNotification -Text $s.text }' }
+        @{ Name = "human-origin-ignored"
+           Find = '    if ($Origin -is [System.Collections.IDictionary]) { return ($Origin["kind"] -ceq "task-notification") }'
+           Replace = '    if ($Origin -is [System.Collections.IDictionary]) { return $true }' }
     )
 }

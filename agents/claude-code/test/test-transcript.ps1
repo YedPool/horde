@@ -92,6 +92,32 @@ try {
     Check ($sws.calls.value -eq 1 -and $sws.tokens.value.output -eq 500) ("a response whose output grows across its lines counts its final output, 500, not its first line's 1 (" + $sws.tokens.value.output + ")")
     Check ($sws.tokens.value.input -eq 3 -and $sws.tokens.value.cacheRead -eq 100) "CONTROL: fields that do not grow are counted once, not summed across the lines"
 
+
+    Write-Host ""
+    Write-Host "--- a notification is what the harness says it is, not text that looks like one ---" -ForegroundColor Cyan
+    # Review of PR #50, F2. Measured 2026-10-02, read-only, over every transcript on this machine: user
+    # lines carry origin.kind, "task-notification" on 2,345 notifications and "human" on what a person
+    # typed; queued attachments carry it too (373), or, before the field existed, commandMode
+    # "task-notification" (1,016). 252 user lines CONTAIN the notification text with no such origin.
+    $pasted = Join-Path $work "pasted\33333333-4444-4555-8666-777777777777.jsonl"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $pasted) -Force | Out-Null
+    $nt = "<task-notification>`n<task-id>zz0000001</task-id>`n<status>completed</status>`n<summary>x</summary>`n</task-notification>"
+    $au = @{ input_tokens = 1; cache_read_input_tokens = 10; cache_creation_input_tokens = 0; output_tokens = 2 }
+    $reply = { param($id, $s) @{ type = "assistant"; sessionId = "s"; timestamp = ("2026-09-30T10:00:0" + $s + ".000Z"); message = @{ id = $id; model = "claude-opus-5-5"; content = @(@{ type = "text"; text = "Noted." }); stop_reason = "end_turn"; usage = $au } } }
+    $plines = @(
+        @{ type = "user"; sessionId = "s"; timestamp = "2026-09-30T10:00:00.000Z"; origin = @{ kind = "human" }; message = @{ role = "user"; content = ("I saw this, what is it? " + $nt) } },
+        (& $reply "p1" 1),
+        @{ type = "attachment"; sessionId = "s"; timestamp = "2026-09-30T10:00:02.000Z"; attachment = @{ type = "queued_command"; commandMode = "prompt"; origin = @{ kind = "human" }; prompt = $nt } },
+        (& $reply "p2" 3),
+        @{ type = "attachment"; sessionId = "s"; timestamp = "2026-09-30T10:00:04.000Z"; attachment = @{ type = "queued_command"; commandMode = "task-notification"; prompt = $nt } },
+        (& $reply "p3" 5)
+    )
+    [System.IO.File]::WriteAllText($pasted, ((@($plines | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 10 })) -join "`n") + "`n")
+    $pr = Read-HordeTranscript -Path $pasted
+    $pm = Get-HordeOrcMeasures -Records $pr.value.records
+    Check ($pm.notifications -eq 1) ("a notification pasted by a person, typed or queued, is a user message; only the harness's own is a notification (" + $pm.notifications + ")")
+    Check ($pm.stillWaiting.calls -eq 1) ("so only the reply to the harness's notification is still-waiting (" + $pm.stillWaiting.calls + ")")
+
     Write-Host ""
     Write-Host "--- an independent recount ---" -ForegroundColor Cyan
     # EP 3.4, instrument check for worker tokens: a second instrument must agree exactly. This one is

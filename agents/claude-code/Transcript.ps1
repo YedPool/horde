@@ -23,9 +23,11 @@
 #     in the orchestrator's transcript.)
 #   - input_tokens EXCLUDES cache reads and writes on this harness, as the port requires; the cache
 #     write is split into 5-minute and 1-hour lifetimes, priced differently (design 2.9).
-#   - NOTIFICATIONS are user content or a queued_command attachment containing <task-notification>
-#     (orc-extract.js read both shapes; 594 and 137 of them in the orchestrator's transcript on
-#     2026-10-01). The queue-operation lines repeat a queued prompt as bookkeeping and are NOT read
+#   - NOTIFICATIONS are user content or a queued_command attachment that the HARNESS marks as one -
+#     origin.kind "task-notification", or on older attachments commandMode "task-notification" - never
+#     text that merely contains <task-notification>, which a person can paste (review of PR #50, F2;
+#     orc-extract.js read both shapes by their text, 594 and 137 of them in the orchestrator's
+#     transcript on 2026-10-01). The queue-operation lines repeat a queued prompt as bookkeeping and are NOT read
 #     as inputs, or each notification would count twice.
 #   - A NOTIFICATION'S WORKER IS PROVED, never guessed. It carries <task-id> and <tool-use-id>
 #     (measured 2026-10-01). The worker is known when the task id names a subagent transcript in the
@@ -150,10 +152,24 @@ function Get-ClaudeCodeUsage {
     return (New-HordeUsage -Uncached (& $num $Max.input_tokens) -CacheRead (& $num $Max.cache_read_input_tokens) -CacheWrite (& $num $Max.cache_creation_input_tokens) -Output (& $num $Max.output_tokens) -Split $split)
 }
 
+function Test-ClaudeCodeNotificationOrigin {
+    # Is this input the harness's own notification? Decided by STRUCTURE, never by the text: a person
+    # who pastes a notification into the prompt wrote a user message (review of PR #50, F2).
+    # Measured 2026-10-02, read-only, over every transcript on this machine: user lines carry
+    # origin.kind "task-notification" (2,345) or "human"; queued attachments carry the same origin
+    # (373), or, in lines written before origin existed, commandMode "task-notification" (1,016, every
+    # one of them with no origin). 252 user lines contain notification text and have no origin: not
+    # notifications. -CommandMode is given only for an attachment.
+    param($Origin, $CommandMode = $null)
+    if ($Origin -is [System.Collections.IDictionary]) { return ($Origin["kind"] -ceq "task-notification") }
+    if ($null -eq $Origin -and $CommandMode -ceq "task-notification") { return $true }
+    return $false
+}
+
 function Get-ClaudeCodeNotification {
-    # The parts of a <task-notification> text that link it to its subject, or $null if it is not one.
+    # The parts of a notification's text that link it to its subject. Called only for an input the
+    # harness marked as a notification (Test-ClaudeCodeNotificationOrigin).
     param([string]$Text)
-    if ($Text -notlike "*<task-notification>*") { return $null }
     $get = { param($tag) $m = [regex]::Match($Text, "<" + $tag + ">([^<]*)</" + $tag + ">"); if ($m.Success) { $m.Groups[1].Value.Trim() } else { "" } }
     return [pscustomobject]@{
         taskId = (& $get "task-id"); toolCallId = (& $get "tool-use-id"); status = (& $get "status")
@@ -255,15 +271,17 @@ function Read-ClaudeCodeTranscript {
                 [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
                 return
             }
+            # A user line is a notification only when the harness says so (Test-ClaudeCodeNotificationOrigin).
+            $isNote = Test-ClaudeCodeNotificationOrigin -Origin $v["origin"]
             $content = $null
             if ($v["message"] -is [System.Collections.IDictionary]) { $content = $v["message"]["content"] }
-            if ($content -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; text = $content; ts = $ts; line = $ln }); return }
+            if ($content -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = $isNote; text = $content; ts = $ts; line = $ln }); return }
             foreach ($b in @($content)) {
                 if ($b -isnot [System.Collections.IDictionary]) { continue }
                 if ($b["type"] -eq "tool_result") {
                     [void]$slots.Add([pscustomobject]@{ kind = "result"; toolCallId = "$($b["tool_use_id"])"; isError = ($b["is_error"] -eq $true); chars = (Get-ClaudeCodeTextChars $b["content"]); ts = $ts; line = $ln })
                 }
-                elseif ($b["type"] -eq "text" -and $b["text"] -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; text = $b["text"]; ts = $ts; line = $ln }) }
+                elseif ($b["type"] -eq "text" -and $b["text"] -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = $isNote; text = $b["text"]; ts = $ts; line = $ln }) }
             }
             return
         }
@@ -273,7 +291,7 @@ function Read-ClaudeCodeTranscript {
             if ($att -is [System.Collections.IDictionary] -and $att["type"] -eq "queued_command") {
                 # A prompt is a string or a list of content blocks; its text is held only until the
                 # second pass has measured it and looked for a notification in it.
-                [void]$slots.Add([pscustomobject]@{ kind = "input"; text = (Get-ClaudeCodeText $att["prompt"]); ts = $ts; line = $ln })
+                [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = (Test-ClaudeCodeNotificationOrigin -Origin $att["origin"] -CommandMode $att["commandMode"]); text = (Get-ClaudeCodeText $att["prompt"]); ts = $ts; line = $ln })
                 return
             }
         }
@@ -320,7 +338,8 @@ function Read-ClaudeCodeTranscript {
                 [void]$records.Add((New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts $s.ts -Line $s.line -Fields @{ toolCallId = $s.toolCallId; isError = $(if ($s.isError) { $errTrue } else { $errFalse }); chars = $s.chars; worker = $worker }))
             }
             "input" {
-                $n = Get-ClaudeCodeNotification -Text $s.text
+                $n = $null
+                if ($s.isNote) { $n = Get-ClaudeCodeNotification -Text $s.text }
                 if ($null -eq $n) {
                     [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "user"; chars = $s.text.Length; taskId = ""; toolCallId = ""; interim = $false; worker = $userAbsent }))
                     continue
