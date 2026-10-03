@@ -83,6 +83,7 @@ Check (HasFinding "no-summary.ps1" "has no summary") "a command with no summary 
 Check (HasFinding "no-summary.ps1" "unknown key") "and so is a key the registry does not know"
 Check (HasFinding "wrong-usage.ps1" "usage does not start with its own name") "a usage line for a different command is refused"
 Check (HasFinding "quoted-key.ps1" "unknown key") "a key that spells another key inside its quotes is not taken for it"
+Check (HasFinding "sustained-text.ps1" "'sustained' must be") "sustained given as text is refused: it is `$true or `$false"
 Check ((Test-HordeCommandName -Name "version") -eq $true) "CONTROL: a plain command name is well-formed"
 Check ((Test-HordeCommandName -Name "version`n") -eq $false) "a command name with a trailing newline is not well-formed"
 Check (-not (Test-Path -LiteralPath $marker)) "listing the commands ran none of their code"
@@ -122,6 +123,11 @@ Write-Host "--- the real commands, and the help generated from them ---" -Foregr
 $real = Get-HordeCommands
 Check (@($real.findings).Count -eq 0) ("every shipped command file is well-formed" + $(if (@($real.findings).Count) { ": " + ($real.findings -join "; ") } else { "" }))
 Check (@($real.commands | Where-Object { $_.name -eq "version" }).Count -eq 1) "CONTROL: the registry really finds the shipped commands"
+# SUSTAINED COMMANDS ARE OPTED OUT OF POWER THROTTLING, AND ONLY THEY (core/Platform.ps1). Throttling
+# starts about 3 s into sustained work, and loading the type costs about 0.2 s, so a quick command
+# pays nothing.
+Check (@($real.commands | Where-Object { $_.name -eq "metrics" -and $_.sustained -eq $true }).Count -eq 1) "metrics declares itself sustained"
+Check (@($real.commands | Where-Object { $_.name -eq "version" -and $_.sustained -eq $false }).Count -eq 1) "version does not, and reads as not sustained"
 $helpText = @(Format-HordeHelp)
 $notOnce = @($real.commands | Where-Object { $u = "    horde " + $_.usage; @($helpText | Where-Object { $_ -eq $u }).Count -ne 1 } | ForEach-Object { $_.name })
 Check ($notOnce.Count -eq 0) ("help lists every command exactly once" + $(if ($notOnce.Count) { ": not " + ($notOnce -join ", ") } else { "" }))
@@ -461,6 +467,11 @@ try {
         Check ($r.out.Trim() -eq "seen=[]") ("a command body cannot see horde's own variables" + ", " + $how + " (got " + $r.out.Trim() + ")")
         Check ($r.code -eq 1 -and $r.err -like "horde peek: the command did not return*") ("and cannot fake having returned" + ", " + $how + " (got " + $r.code + ": " + $r.err.Trim() + ")")
     }
+    # A SUSTAINED COMMAND RUNS OPTED OUT OF POWER THROTTLING; ANY OTHER NEVER LOADS THE TYPE (core/Platform.ps1).
+    $r = Invoke-Horde -Root $tmp -Arguments @("busy")
+    Check ($r.code -eq 0 -and $r.out -match 'THROTTLE known 1/0') ("a command declared sustained runs opted out of power throttling (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    $r = Invoke-Horde -Root $tmp -Arguments @("quick")
+    Check ($r.code -eq 0 -and $r.out -match 'TYPE none') ("a command not declared sustained never loads the throttling type, so it pays nothing for it (got " + $r.out.Trim() + $r.err.Trim() + ")")
     # HELP DESCRIBES THE COMMANDS AS THEY ARE, NOT AS THEY WERE (YedPool/wezfleet 80aa026: a help text
     # that described the old kill and the old tell). The summary is read here from the file's text,
     # not through the registry, then changed on disk; help must follow the file.
