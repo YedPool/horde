@@ -177,6 +177,18 @@ function Read-HordeCommandAst {
             else { $info["parameters"] = @(Get-HordeRunParameters -ValueAst $pair.Item2) }
             continue
         }
+        # SUSTAINED (optional): the command does work long enough for Windows to throttle it, so horde
+        # opts it out of power throttling before running it (core/Platform.ps1). A literal $true or
+        # $false, read from the syntax tree like every other key. Absent is $false: a quick command
+        # never loads the throttling type, which costs about 0.2 s.
+        if ($key -eq "sustained") {
+            $sv = $pair.Item2
+            if ($sv -is [System.Management.Automation.Language.PipelineAst] -and @($sv.PipelineElements).Count -eq 1) { $sv = $sv.PipelineElements[0] }
+            if ($sv -is [System.Management.Automation.Language.CommandExpressionAst]) { $sv = $sv.Expression }
+            if ($sv -is [System.Management.Automation.Language.VariableExpressionAst] -and @("true", "false") -contains $sv.VariablePath.UserPath) { $info["sustained"] = ($sv.VariablePath.UserPath -eq "true") }
+            else { [void]$findings.Add("'sustained' must be `$true or `$false") }
+            continue
+        }
         if ((Get-HordeCommandKeys) -notcontains $key) { [void]$findings.Add("declares an unknown key '" + $key + "'"); continue }
         $text = Get-HordeConstantString -ValueAst $pair.Item2
         if ($null -eq $text) { [void]$findings.Add("'" + $key + "' is not a constant string, so it cannot be read without running the file") }
@@ -201,6 +213,7 @@ function Read-HordeCommandAst {
         [void]$findings.Add("usage does not start with its own name")
     }
     if ($findings.Count -gt 0) { return [pscustomobject]@{ info = $null; findings = @($findings) } }
+    if (-not $info.Contains("sustained")) { $info["sustained"] = $false }
     return [pscustomobject]@{ info = [pscustomobject]$info; findings = @() }
 }
 

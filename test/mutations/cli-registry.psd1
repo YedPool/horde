@@ -83,5 +83,11 @@
         @{ Name = "aliases-not-read"
            Find = 'ForEach-Object { $_.PositionalArguments } |'
            Replace = 'ForEach-Object { @() } |' }
+        @{ Name = "sustained-text-accepted"
+           Find = 'else { [void]$findings.Add("''sustained'' must be `$true or `$false") }'
+           Replace = 'else { $info["sustained"] = $true }' }
+        @{ Name = "sustained-defaults-true"
+           Find = 'if (-not $info.Contains("sustained")) { $info["sustained"] = $false }'
+           Replace = 'if (-not $info.Contains("sustained")) { $info["sustained"] = $true }' }
     )
 }
