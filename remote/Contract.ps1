@@ -409,37 +409,275 @@ function Get-HordeLinkContract {
     $verbs = Get-HordeSchema -Name "link-verbs.v1"
     $rows = @{}
     foreach ($r in @(Get-HordeLinkProp $verbs "x-horde-verbs")) { $rows["$($r.name)"] = $r }
-    return [pscustomobject]@{ frame = $frame; verbs = $verbs; limits = (Get-HordeLinkLimits $frame); rows = $rows }
+    # walk: the link walk's records for this contract's schemas, read once (Get-HordeLinkWalkTarget).
+    return [pscustomobject]@{ frame = $frame; verbs = $verbs; limits = (Get-HordeLinkLimits $frame); rows = $rows; walk = (New-HordeLinkWalkMemo) }
 }
 
-function Get-HordeLinkNodes {
-    # Every (value, schema node, path) pair in Value, walking the schema beside it: $refs are resolved in
-    # Root, properties and items followed where the value has them. Used after Test-HordeSchema has
-    # passed, so types agree. Returns a flat list - no callback, so nothing here invokes a block.
-    param($Value, $Node, $Root, [string]$Path = '$')
-    $out = New-Object System.Collections.ArrayList
-    $n = $Node
-    $guard = 0
-    while ($null -ne (Get-HordeLinkProp $n '$ref')) {
-        $n = Resolve-HordeLinkRef -Ref "$(Get-HordeLinkProp $n '$ref')" -Root $Root
-        $guard++
-        if ($guard -gt 64) { throw ("the schema's `$ref chain at " + $Path + " does not end") }
+# THE LINK WALK (fix/link-writer-speed). Every value a frame carries is checked by walking it beside its
+# schema: core/Schema.ps1's rules (Test-HordeSchema), core/tristate's rules on every answer inside it
+# (Test-HordeLinkAnswer), and every per-field cap (remote/Protocol.ps1, Test-HordeProtocolLimits). Those
+# were three recursive walks, one PowerShell call per node and a dozen helper calls inside each, about
+# 2,350 calls per session summary: encoding a 32-session sessions.list took 18 s on the founder's box
+# and 256 sessions 200 s (measured 2026-10-02; the profile is in the pull request). A call costs 25 us
+# there, 170 us once Windows throttles a busy background process; an inline step costs about 1 us.
+#
+# So the walk is ONE LOOP over an explicit stack, with each schema node read once into a record
+# (Get-HordeLinkWalkRecord) the first time a value reaches it, and kept. Nothing in the loop calls a
+# function per node except where the old code did something rare: a type or enum check on a number
+# that is not Int32 or Int64, a minimum, a string that needs escaping, an answer's own rules.
+#
+# EXACTLY THE OLD ANSWERS. The records are read through core/Schema.ps1's own Get-HordeSchemaNode and
+# Assert-HordeSchema, so a schema is refused as Test-HordeSchema refuses it and its pattern is the
+# Regex Test-HordeSchema matches with; each check below is the old line, inlined. The keywords the walk
+# implements are core/Schema.ps1's whole list; a node with any other is refused by Get-HordeSchemaNode,
+# and $script:HordeLinkWalkKeywords is compared with that list when this file loads, so the two cannot
+# drift apart silently. test/test-link-walk.ps1 runs the code this replaced
+# (test/fixtures/link-walk/reference.ps1) beside it, on every input of every link suite, and requires
+# the same findings, in the same order.
+#
+# Two walks in one. The schema check (Test-HordeSchema) stops at a value of the wrong type and matches
+# property names exactly; the node walk the caps and answers used (Get-HordeLinkNodes) went on below a
+# wrong type and matched names as PowerShell does, without case. Each stack entry carries whether the
+# schema check is still live, so one pass answers both, each as before.
+#
+# A SCHEMA THAT CHANGES MUST BE A NEW OBJECT, as in core/Schema.ps1: records are kept per contract
+# (Get-HordeLinkContract makes a new one each call) and read from the schema the first time.
+
+$script:HordeLinkWalkKeywords = @("type", "required", "properties", "additionalProperties", "items", "enum", "pattern", "minimum",
+                                  '$schema', '$id', "title", "description", "definitions", '$ref')
+$script:HordeLinkWalkKeywordsAgree = ($script:HordeLinkWalkKeywords.Count -eq @($script:HordeSchemaKeywords).Count)
+foreach ($hordeLinkWalkKeyword in @($script:HordeSchemaKeywords)) { if ($script:HordeLinkWalkKeywords -cnotcontains $hordeLinkWalkKeyword) { $script:HordeLinkWalkKeywordsAgree = $false } }
+if (-not $script:HordeLinkWalkKeywordsAgree) {
+    throw ("remote/Contract.ps1's link walk implements the keywords " + ($script:HordeLinkWalkKeywords -join ", ") + ", and core/Schema.ps1 now accepts " + ($script:HordeSchemaKeywords -join ", ") + ": teach the walk the difference before using it")
+}
+
+# Each property and items slot is numbered, so two views of a slot can be told to be the same one.
+$script:HordeLinkWalkSlots = 0
+
+function New-HordeLinkWalkMemo {
+    # Records by definition name, for one schema root: a definition reached through a $ref is read
+    # once per root, and a recursive one ends.
+    return (New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal))
+}
+
+function Get-HordeLinkWalkRecord {
+    # The walk's record for one schema node: its chain of $refs followed to the node a value meets, and
+    # that node's keywords as core/Schema.ps1 reads them. TopEntry is the top of a schema as
+    # Assert-HordeSchema returned it (a top may hold definitions, so it is not read as an inner node).
+    # Path is the path of the value that first reached the node: a refusal names it, as
+    # Test-HordeSchema's does.
+    param($Raw, $Root, [string]$Path, [Parameter(Mandatory = $true)]$Memo, $TopEntry = $null)
+    $entry = $TopEntry
+    if ($null -eq $entry) { $entry = Get-HordeSchemaNode -Schema $Raw -Path $Path -AtTop $false }
+    $chain = New-Object System.Collections.ArrayList
+    while ($entry.kw.ContainsKey('$ref')) {
+        $ref = $entry.kw['$ref']
+        if ($chain -ccontains $ref) { throw ("the schema's `$ref chain at " + $Path + " is circular: it comes back to '" + $ref + "' without reaching a value") }
+        [void]$chain.Add($ref)
+        if ($Memo.ContainsKey($ref)) {
+            $known = $Memo[$ref]
+            foreach ($r in $chain) { $Memo[$r] = $known }
+            return $known
+        }
+        $Raw = Resolve-HordeLinkRef -Ref $ref -Root $Root
+        $entry = Get-HordeSchemaNode -Schema $Raw -Path $Path -AtTop $false
     }
-    [void]$out.Add([pscustomobject]@{ value = $Value; node = $n; path = $Path })
-    $isObject = ($Value -is [System.Management.Automation.PSCustomObject] -or $Value -is [System.Collections.IDictionary])
-    $props = Get-HordeLinkProp $n "properties"
-    if ($isObject -and $null -ne $props) {
-        foreach ($p in (Get-HordeLinkPairs $Value)) {
-            $child = Get-HordeLinkProp $props $p.Name
-            if ($null -ne $child) { foreach ($x in @(Get-HordeLinkNodes -Value $p.Value -Node $child -Root $Root -Path ($Path + "." + $p.Name))) { [void]$out.Add($x) } }
+    $kw = $entry.kw
+    $rec = @{ type = $null; required = @(); props = $null; propsAnyCase = $null; addFalse = $false; items = $null
+        hasEnum = $false; enum = @(); regex = $null; pattern = $null; hasMin = $false; minimum = $null
+        isAnswer = $false; cap = $null; capEnum = $false }
+    if ($kw.ContainsKey("type")) { $rec.type = "$($kw['type'])" }
+    if ($kw.ContainsKey("required")) { $rec.required = @(@($kw["required"]) | Where-Object { $null -ne $_ } | ForEach-Object { "$_" }) }
+    if ($kw.ContainsKey("properties")) {
+        # Two views of one set of slots: by exact name for the schema check (core/Schema.ps1 keys an
+        # ordinal dictionary), and by name without case for the node walk (Get-HordeLinkProp read
+        # .PSObject.Properties, which ignores case; the first match won).
+        $rec.props = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+        $rec.propsAnyCase = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($name in @($entry.props.Keys)) {
+            $script:HordeLinkWalkSlots++
+            $slot = @{ raw = $entry.props[$name]; rec = $null; id = $script:HordeLinkWalkSlots }
+            $rec.props[$name] = $slot
+            if (-not $rec.propsAnyCase.ContainsKey($name)) { $rec.propsAnyCase[$name] = $slot }
         }
     }
-    $items = Get-HordeLinkProp $n "items"
-    if ($Value -is [System.Collections.IList] -and $null -ne $items) {
-        $i = 0
-        foreach ($item in $Value) { foreach ($x in @(Get-HordeLinkNodes -Value $item -Node $items -Root $Root -Path ($Path + "[" + $i + "]"))) { [void]$out.Add($x) }; $i++ }
+    $rec.addFalse = ($kw.ContainsKey("additionalProperties") -and $kw["additionalProperties"] -eq $false)
+    if ($kw.ContainsKey("items")) { $script:HordeLinkWalkSlots++; $rec.items = @{ raw = $kw["items"]; rec = $null; id = $script:HordeLinkWalkSlots } }
+    if ($kw.ContainsKey("enum")) { $rec.hasEnum = $true; $rec.enum = @($kw["enum"]) }
+    if ($kw.ContainsKey("pattern")) { $rec.pattern = $kw["pattern"]; $rec.regex = $entry.regex }
+    if ($kw.ContainsKey("minimum")) { $rec.hasMin = $true; $rec.minimum = $kw["minimum"] }
+    $rec.isAnswer = Test-HordeLinkIsAnswerNode $Raw
+    $rec.cap = Get-HordeLinkProp $Raw "x-horde-cap"
+    $rec.capEnum = ($null -ne (Get-HordeLinkProp $Raw "enum"))
+    foreach ($r in $chain) { $Memo[$r] = $rec }
+    return $rec
+}
+
+function Get-HordeLinkWalkTarget {
+    # The record for a verb row's args or result ("#/definitions/<name>" in the verb table, or a whole
+    # schema by name), asserted once as Test-HordeSchema asserts it and kept in the contract. Path is
+    # where the value sits in its frame ('$.args', '$.result.value').
+    param([Parameter(Mandatory = $true)]$Contract, [Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Path)
+    $cache = Get-HordeLinkWalkCache $Contract
+    $key = "target|" + $Path + "|" + $Target
+    if ($cache.ContainsKey($key)) { return $cache[$key] }
+    $t = Resolve-HordeLinkTarget -Doc $Contract.verbs -Target $Target
+    $top = Assert-HordeSchema -Schema $t.schema -Path $Path
+    $memoKey = "memo|verbs"
+    if (-not $Target.StartsWith("#")) { $memoKey = "memo|" + $Target }
+    if (-not $cache.ContainsKey($memoKey)) { $cache[$memoKey] = New-HordeLinkWalkMemo }
+    $rec = Get-HordeLinkWalkRecord -Raw $t.schema -Root $t.root -Path $Path -Memo $cache[$memoKey] -TopEntry $top
+    $found = [pscustomobject]@{ rec = $rec; root = $t.root; memo = $cache[$memoKey] }
+    $cache[$key] = $found
+    return $found
+}
+
+function Get-HordeLinkWalkCache {
+    # The contract's own table of records; a contract built by hand, without one, gets a table for this
+    # call only, so it is read correctly, just not remembered.
+    param([Parameter(Mandatory = $true)]$Contract)
+    $c = Get-HordeLinkProp $Contract "walk"
+    if ($null -ne $c) { return $c }
+    return (New-HordeLinkWalkMemo)
+}
+
+function Invoke-HordeLinkWalk {
+    # One value walked beside its schema record. Returns { schema; answers; caps }:
+    #   schema  - Test-HordeSchema's findings, in its order (empty unless -Schema);
+    #   answers - the answer objects met, as (value, path) pairs, in Get-HordeLinkNodes' order;
+    #   caps    - Test-HordeProtocolLimits' findings for this value (empty unless -Limits is given).
+    param($Value, [Parameter(Mandatory = $true)]$Rec, [string]$Path, $Root, [Parameter(Mandatory = $true)]$Memo, [bool]$Schema = $true, $Limits = $null)
+    $schemaOut = New-Object System.Collections.ArrayList
+    $answers = New-Object System.Collections.ArrayList
+    $capOut = New-Object System.Collections.ArrayList
+    $caps = ($null -ne $Limits)
+    $listCap = $null
+    if ($caps) { $listCap = $Limits["listItems"] }
+    # An entry is (0, value, record, path, schema check live) to visit, or (1, finding) to write a
+    # schema finding in its place among a parent's children.
+    $stack = New-Object System.Collections.Stack
+    $order = New-Object System.Collections.Stack
+    $stack.Push(@(0, $Value, $Rec, $Path, $Schema))
+    while ($stack.Count -gt 0) {
+        $e = $stack.Pop()
+        if ($e[0] -eq 1) { [void]$schemaOut.Add($e[1]); continue }
+        $v = $e[1]; $r = $e[2]; $p = $e[3]; $live = $e[4]
+        $isObject = ($v -is [System.Management.Automation.PSCustomObject] -or $v -is [System.Collections.IDictionary])
+        $isList = ($v -is [System.Collections.IList])
+        # THE CAPS, as Test-HordeProtocolLimits checked each node.
+        if ($caps) {
+            if ($v -is [string]) {
+                if ($null -eq $r.cap) {
+                    if (-not $r.capEnum) { [void]$capOut.Add($p + " is a string whose schema names no cap") }
+                } else {
+                    $limit = $Limits["$($r.cap)"]
+                    # Measure-HordeWireString's own fast path: a string with nothing to escape is its length.
+                    if ([regex]::IsMatch($v, $script:HordeWirePlain)) { $size = $v.Length } else { $size = Measure-HordeWireString $v }
+                    if ($size -gt $limit) { [void]$capOut.Add($p + " is " + $size + " bytes on the wire, over its " + $r.cap + " cap of " + $limit) }
+                }
+            } elseif ($isList) {
+                if ($v.Count -gt $listCap) { [void]$capOut.Add($p + " has " + $v.Count + " items, over the listItems cap of " + $listCap) }
+            }
+        }
+        if ($r.isAnswer -and $isObject) { [void]$answers.Add(@($v, $p)) }
+        # THE SCHEMA CHECK of this node, as Test-HordeSchema made it: a wrong type ends it here.
+        if ($live) {
+            if ($null -ne $r.type) {
+                $tt = $r.type
+                if ($tt -ceq "string") { $ok = ($v -is [string]) }
+                elseif ($tt -ceq "object") { $ok = $isObject }
+                elseif ($tt -ceq "array") { $ok = $isList }
+                elseif ($tt -ceq "boolean") { $ok = ($v -is [bool]) }
+                elseif ($tt -ceq "integer" -and ($v -is [int] -or $v -is [long])) { $ok = $true }
+                else { $ok = Test-HordeSchemaType -Value $v -Type $tt }
+                if (-not $ok) { [void]$schemaOut.Add($p + " should be " + $r.type); $live = $false }
+            }
+        }
+        if ($live) {
+            if ($r.hasEnum) {
+                $ok = $false
+                foreach ($m in $r.enum) {
+                    if ($m -is [string]) { if ($v -is [string] -and $v -ceq $m) { $ok = $true } }
+                    elseif ($m -is [bool]) { if ($v -is [bool] -and $v -eq $m) { $ok = $true } }
+                    elseif ((Test-HordeSchemaType -Value $v -Type "integer") -and [Math]::Abs([double]$v) -lt 1e19 -and [decimal]$v -eq [decimal]$m) { $ok = $true }
+                }
+                if (-not $ok) { [void]$schemaOut.Add($p + " is '" + $v + "', not one of: " + (@($r.enum) -join ", ")) }
+            }
+            if ($null -ne $r.regex -and $v -is [string]) {
+                if (-not $r.regex.IsMatch($v)) { [void]$schemaOut.Add($p + " does not match " + $r.pattern) }
+            }
+            if ($r.hasMin -and (Test-HordeSchemaIsNumber $v)) {
+                if (($v -is [double] -or $v -is [single]) -and [double]::IsNaN([double]$v)) { [void]$schemaOut.Add($p + " is NaN, which is not at or above the minimum " + $r.minimum) }
+                elseif ((Compare-HordeSchemaNumber $v $r.minimum) -lt 0) { [void]$schemaOut.Add($p + " is " + $v + ", below the minimum " + $r.minimum) }
+            }
+        }
+        # THE CHILDREN. Each is pushed onto $order first and then moved onto $stack, which reverses them,
+        # so they are visited first to last. No collection is made per node: New-Object costs 100 us and
+        # more here, more than the rest of a node's checks together.
+        if ($isObject) {
+            $isDict = ($v -is [System.Collections.IDictionary])
+            # Keys that are not strings can collide once written as text (1 and "1"). The schema check
+            # kept the last value under the first position, by exact name (Get-HordeObjectByKey); the
+            # node walk visited every pair (Get-HordeLinkPairs). Only such a dictionary is told apart.
+            $schemaValue = $null
+            if ($isDict -and $live) {
+                foreach ($k in @($v.Keys)) {
+                    if ($k -isnot [string]) {
+                        $schemaValue = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+                        foreach ($k2 in @($v.Keys)) { $schemaValue["$k2"] = $v[$k2] }
+                        break
+                    }
+                }
+            }
+            if ($live) {
+                foreach ($req in $r.required) {
+                    $has = $false
+                    if ($null -ne $schemaValue) { $has = $schemaValue.ContainsKey($req) }
+                    elseif ($isDict) { foreach ($k in @($v.Keys)) { if ("$k" -ceq $req) { $has = $true; break } } }
+                    else { $pr = $v.PSObject.Properties[$req]; $has = ($null -ne $pr -and $pr.Name -ceq $req) }
+                    if (-not $has) { [void]$schemaOut.Add($p + " has no '" + $req + "'") }
+                }
+            }
+            $seenKeys = $null
+            if ($null -ne $schemaValue) { $seenKeys = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal) }
+            $members = $null
+            if ($isDict) { $members = @($v.Keys) } else { $members = $v.PSObject.Properties }
+            foreach ($mem in $members) {
+                if ($isDict) { $name = "$mem"; $childValue = $v[$mem] } else { $name = $mem.Name; $childValue = $mem.Value }
+                $childPath = $p + "." + $name
+                $schemaHere = $live
+                if ($null -ne $seenKeys) { if ($seenKeys.ContainsKey($name)) { $schemaHere = $false } else { $seenKeys[$name] = $true } }
+                $exact = $null
+                if ($null -ne $r.props -and $r.props.ContainsKey($name)) { $exact = $r.props[$name] }
+                $anyCase = $null
+                if ($null -ne $r.propsAnyCase -and $r.propsAnyCase.ContainsKey($name)) { $anyCase = $r.propsAnyCase[$name] }
+                if ($schemaHere -and $null -eq $exact -and $r.addFalse) { $order.Push(@(1, ($p + " has '" + $name + "', which the schema does not allow"))) }
+                if ($null -eq $anyCase) { continue }
+                if ($null -eq $anyCase.rec) { $anyCase.rec = Get-HordeLinkWalkRecord -Raw $anyCase.raw -Root $Root -Path $childPath -Memo $Memo }
+                $childLive = ($schemaHere -and $null -ne $exact)
+                # The common case: one slot serves both checks. Otherwise (a schema naming two
+                # properties that differ only in case, or colliding dictionary keys) the node pair is
+                # walked without the schema check and the schema's own value is checked on its own.
+                if ($childLive -and ($exact.id -ne $anyCase.id -or $null -ne $schemaValue)) {
+                    $order.Push(@(0, $childValue, $anyCase.rec, $childPath, $false))
+                    if ($null -eq $exact.rec) { $exact.rec = Get-HordeLinkWalkRecord -Raw $exact.raw -Root $Root -Path $childPath -Memo $Memo }
+                    $own = $childValue
+                    if ($null -ne $schemaValue) { $own = $schemaValue[$name] }
+                    $sub = Invoke-HordeLinkWalk -Value $own -Rec $exact.rec -Path $childPath -Root $Root -Memo $Memo -Schema $true
+                    foreach ($f in $sub.schema) { $order.Push(@(1, $f)) }
+                } else {
+                    $order.Push(@(0, $childValue, $anyCase.rec, $childPath, $childLive))
+                }
+            }
+        }
+        if ($isList -and $null -ne $r.items) {
+            if ($null -eq $r.items.rec) { $r.items.rec = Get-HordeLinkWalkRecord -Raw $r.items.raw -Root $Root -Path ($p + "[0]") -Memo $Memo }
+            $i = 0
+            foreach ($item in $v) { $order.Push(@(0, $item, $r.items.rec, ($p + "[" + $i + "]"), $live)); $i++ }
+        }
+        while ($order.Count -gt 0) { $stack.Push($order.Pop()) }
     }
-    return @($out)
+    return [pscustomobject]@{ schema = $schemaOut.ToArray(); answers = $answers.ToArray(); caps = $capOut.ToArray() }
 }
 
 function Test-HordeLinkIsAnswerNode {
@@ -451,29 +689,61 @@ function Test-HordeLinkIsAnswerNode {
     return ($enum.Count -eq 3 -and $enum -ccontains "known" -and $enum -ccontains "absent" -and $enum -ccontains "unknown")
 }
 
+function Get-HordeLinkReturned {
+    # Value as a function returning it hands it back: a list unrolled, so an empty one is nothing and a
+    # list of one is its one item. Test-HordeLinkAnswer reads members inline and uses this to keep
+    # Get-HordeLinkProp's answer for a member that is a list.
+    param($Value)
+    return $Value
+}
+
 function Test-HordeLinkAnswer {
     # core/tristate's rules for one answer, as they travel (schema/link-frame.v1): known carries a value
     # and the time it was observed; absent carries the time and no value; unknown carries no value and a
     # reason that is not blank. A null value or time is left out, never written as null.
     param($Answer, [string]$Path)
-    $out = New-Object System.Collections.ArrayList
-    $state = "$(Get-HordeLinkProp $Answer 'state')"
-    $hasValue = Test-HordeLinkHasProp $Answer "value"
-    $hasTime = Test-HordeLinkHasProp $Answer "observedAt"
-    if ($hasValue -and $null -eq (Get-HordeLinkProp $Answer "value")) { [void]$out.Add("$Path.value is null; a value that is not there is left out") }
-    if ($hasTime -and $null -eq (Get-HordeLinkProp $Answer "observedAt")) { [void]$out.Add("$Path.observedAt is null; a time that is not there is left out") }
+    # Its members are read here, inline, exactly as Get-HordeLinkProp and Test-HordeLinkHasProp read them
+    # (a dictionary by Contains, anything else by its members, which ignores case). This runs once per
+    # answer in a frame, 3,584 times in a 256-session sessions.list, and the seven helper calls it made
+    # cost more than the rules themselves (fix/link-writer-speed). A list is made only for a finding.
+    $out = @()
+    $state = $null; $hasValue = $false; $value = $null; $hasTime = $false; $time = $null; $reason = $null
+    if ($Answer -is [System.Collections.IDictionary]) {
+        if ($Answer.Contains("state")) { $state = $Answer["state"] }
+        $hasValue = $Answer.Contains("value"); if ($hasValue) { $value = $Answer["value"] }
+        $hasTime = $Answer.Contains("observedAt"); if ($hasTime) { $time = $Answer["observedAt"] }
+        if ($Answer.Contains("reason")) { $reason = $Answer["reason"] }
+    } elseif ($null -ne $Answer) {
+        $members = $Answer.PSObject.Properties
+        $m = $members["state"]; if ($null -ne $m) { $state = $m.Value }
+        $m = $members["value"]; $hasValue = ($null -ne $m); if ($hasValue) { $value = $m.Value }
+        $m = $members["observedAt"]; $hasTime = ($null -ne $m); if ($hasTime) { $time = $m.Value }
+        $m = $members["reason"]; if ($null -ne $m) { $reason = $m.Value }
+    }
+    $state = "$state"
+    # A QUIRK, KEPT ON PURPOSE, NOT A RULE: Get-HordeLinkProp RETURNED each member, and PowerShell unrolls
+    # a list a function returns, so an empty list came back as nothing and a list of one null as null.
+    # An answer whose value is an empty list was therefore "null" to these rules. That looks like an
+    # accident of the language, not a decision; it is kept here only because fix/link-writer-speed must
+    # accept and refuse exactly as before (test/test-link-walk.ps1 found the difference, 2026-10-02).
+    # No v1 verb's answer value can be a list, so no verdict turns on it today. The intended meaning is
+    # issue #77: decide it there, and change this with the differential reference, never silently.
+    if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string] -and $value -isnot [System.Collections.IDictionary]) { $value = Get-HordeLinkReturned $value }
+    if ($time -is [System.Collections.IEnumerable] -and $time -isnot [string] -and $time -isnot [System.Collections.IDictionary]) { $time = Get-HordeLinkReturned $time }
+    if ($hasValue -and $null -eq $value) { $out += @("$Path.value is null; a value that is not there is left out") }
+    if ($hasTime -and $null -eq $time) { $out += @("$Path.observedAt is null; a time that is not there is left out") }
     switch ($state) {
         "known" {
-            if (-not $hasValue) { [void]$out.Add("$Path is known and carries no value") }
-            if (-not $hasTime) { [void]$out.Add("$Path is known and says nothing of when it was observed, so its age cannot be judged") }
+            if (-not $hasValue) { $out += @("$Path is known and carries no value") }
+            if (-not $hasTime) { $out += @("$Path is known and says nothing of when it was observed, so its age cannot be judged") }
         }
         "absent" {
-            if ($hasValue) { [void]$out.Add("$Path is absent and carries a value") }
-            if (-not $hasTime) { [void]$out.Add("$Path is absent and says nothing of when it was observed, so its age cannot be judged") }
+            if ($hasValue) { $out += @("$Path is absent and carries a value") }
+            if (-not $hasTime) { $out += @("$Path is absent and says nothing of when it was observed, so its age cannot be judged") }
         }
         "unknown" {
-            if ($hasValue) { [void]$out.Add("$Path is unknown and carries a value") }
-            if ("$(Get-HordeLinkProp $Answer 'reason')".Trim() -eq "") { [void]$out.Add("$Path is unknown and gives no reason") }
+            if ($hasValue) { $out += @("$Path is unknown and carries a value") }
+            if ("$reason".Trim() -eq "") { $out += @("$Path is unknown and gives no reason") }
         }
     }
     return @($out)
@@ -481,15 +751,20 @@ function Test-HordeLinkAnswer {
 
 function Test-HordeLinkValue {
     # A value against a schema (Schema is what Test-HordeSchema takes; Node and Root are the same schema
-    # for the walk), then core/tristate's rules on every answer inside it.
-    param($Value, $Schema, $Node, $Root, [string]$Path)
-    $found = @(Test-HordeSchema -Value $Value -Schema $Schema -Path $Path)
-    if ($found.Count -gt 0) { return $found }
+    # for the walk), then core/tristate's rules on every answer inside it. -Walk, from
+    # Get-HordeLinkWalkTarget, is the schema already read; without it the schema is read for this call.
+    # Findings in Test-HordeSchema's order; the answer rules only when the schema passed, as before.
+    param($Value, $Schema, $Node, $Root, [string]$Path, $Walk = $null)
+    if ($null -eq $Walk) {
+        $top = Assert-HordeSchema -Schema $Schema -Path $Path
+        $memo = New-HordeLinkWalkMemo
+        $Walk = [pscustomobject]@{ rec = (Get-HordeLinkWalkRecord -Raw $Schema -Root $Root -Path $Path -Memo $memo -TopEntry $top); root = $Root; memo = $memo }
+    }
+    $w = Invoke-HordeLinkWalk -Value $Value -Rec $Walk.rec -Path $Path -Root $Walk.root -Memo $Walk.memo
+    if ($w.schema.Count -gt 0) { return @($w.schema) }
     $out = New-Object System.Collections.ArrayList
-    foreach ($x in @(Get-HordeLinkNodes -Value $Value -Node $Node -Root $Root -Path $Path)) {
-        if ((Test-HordeLinkIsAnswerNode $x.node) -and ($x.value -is [System.Management.Automation.PSCustomObject] -or $x.value -is [System.Collections.IDictionary])) {
-            foreach ($f in @(Test-HordeLinkAnswer -Answer $x.value -Path $x.path)) { [void]$out.Add($f) }
-        }
+    foreach ($a in $w.answers) {
+        foreach ($f in @(Test-HordeLinkAnswer -Answer $a[0] -Path $a[1])) { [void]$out.Add($f) }
     }
     return @($out)
 }
@@ -536,16 +811,16 @@ function Test-HordeLinkFrame {
     if ($null -eq $row) { return @("unsupported-verb: '" + $Frame.verb + "' is not a verb of link-verbs v1") }
     if ($kind -ceq "evt") { return @("no verb of link-verbs v1 streams events: '" + $Frame.verb + "' has none (observe.since and metrics.since bring them, plan steps R12 and R15)") }
     if ($kind -ceq "req") {
-        $a = Resolve-HordeLinkTarget -Doc $Contract.verbs -Target "$($row.args)"
-        return @(Test-HordeLinkValue -Value $Frame.args -Schema $a.schema -Node $a.node -Root $a.root -Path '$.args')
+        $a = Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.args)" -Path '$.args'
+        return @(Test-HordeLinkValue -Value $Frame.args -Walk $a -Path '$.args')
     }
     if ($members -ccontains "result") {
         $answer = $Frame.result
         $found = @(Test-HordeLinkAnswer -Answer $answer -Path '$.result')
         if ($found.Count -gt 0) { return $found }
         if ("$($answer.state)" -ceq "known") {
-            $r = Resolve-HordeLinkTarget -Doc $Contract.verbs -Target "$($row.result)"
-            return @(Test-HordeLinkValue -Value $answer.value -Schema $r.schema -Node $r.node -Root $r.root -Path '$.result.value')
+            $r = Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.result)" -Path '$.result.value'
+            return @(Test-HordeLinkValue -Value $answer.value -Walk $r -Path '$.result.value')
         }
     }
     return @()
