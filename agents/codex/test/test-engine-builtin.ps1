@@ -19,7 +19,11 @@ Check (@(Test-HordeEngineConfig -Documents (@($l0) + @($user)) -Descriptors $des
 $g = Resolve-HordeEngine -Layers (@($l0) + @($user)) -Target @{ role = "goblin" } -Descriptors $desc -Now $now
 Check ($g.binding.state -eq "known" -and $g.binding.value.harness -ceq "codex" -and $g.binding.value.provider -ceq "openai") "a goblin then runs on this harness, on its own login"
 Check ($g.capabilities.value.ok -eq $true) "and has what a goblin needs: resume and the report hook"
-$o = Resolve-HordeEngine -Layers (@($l0) + @($user)) -Target @{ role = "orc" } -Descriptors $desc -Now $now -HostCapabilities @{ "text.send" = "yes" }
-Check ($o.capabilities.value.ok -eq $false -and (@($o.capabilities.value.missing | ForEach-Object { $_.name }) -join ",") -ceq "delivery-receipt") "an orc does not, even on a host that types: delivery-receipt is unverified here until measured"
+# Orcs since the measurement of 2026-10-02: delivery into a running session and its receipt are both
+# measured yes, so an orc no longer needs the host to type for it.
+$o = Resolve-HordeEngine -Layers (@($l0) + @($user)) -Target @{ role = "orc" } -Descriptors $desc -Now $now
+Check ($o.binding.state -eq "known" -and $o.capabilities.value.ok -eq $true) "an orc runs on this harness too, on any host: message-inject and delivery-receipt are measured"
+$w = Resolve-HordeEngine -Layers (@($l0) + @($user)) -Target @{ role = "warchief" } -Descriptors $desc -Now $now
+Check ($w.binding.value.harness -cne "codex") "CONTROL: the warchief, which no rule sends here, stays on the default harness"
 
-Complete-HordeSuite -Success "this harness can run goblins today, and says why not orcs"
+Complete-HordeSuite -Success "this harness can run goblins and orcs"

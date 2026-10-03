@@ -11,9 +11,12 @@
         @{ Name = "remote-name-claimed"
            Find = '"session.remoteName": { "support": "unverified"'
            Replace = '"session.remoteName": { "support": "yes"' }
-        @{ Name = "inject-claimed"
-           Find = '"message-inject": { "support": "unverified"'
-           Replace = '"message-inject": { "support": "yes"' }
+        @{ Name = "inject-unmeasured-again"
+           Find = '"message-inject": { "support": "yes"'
+           Replace = '"message-inject": { "support": "unverified"' }
+        @{ Name = "receipt-unmeasured-again"
+           Find = '"delivery-receipt": { "support": "yes"'
+           Replace = '"delivery-receipt": { "support": "unverified"' }
         @{ Name = "stop-caveat-dropped"
            Find = 'measured firing only on a turn that completes'
            Replace = 'measured firing at every turn end' }
