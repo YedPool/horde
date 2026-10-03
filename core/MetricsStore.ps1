@@ -198,22 +198,42 @@ function New-HordeTranscriptSummaryRecord {
     }
 }
 
+function Move-HordeFileAtomic {
+    # Rename -From over -To in ONE step: MoveFileEx with REPLACE_EXISTING and WRITE_THROUGH, a single
+    # rename on NTFS. Review of PR #70 measured why File.Replace is not enough: Win32 ReplaceFile works in
+    # steps, and one of 40 kills inside it left NO index - the new one only in its temp file. A rename is
+    # all or nothing: a kill leaves the old file or the new one, never neither. A reader holding the file
+    # without delete sharing makes the rename fail for a moment; it is tried again for up to 2 s.
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To)
+    if (-not ([System.Management.Automation.PSTypeName]"HordeNative.FileMove").Type) {
+        Add-Type -Namespace HordeNative -Name FileMove -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
+    }
+    $err = 0
+    for ($i = 0; $i -lt 20; $i++) {
+        # 0x1 MOVEFILE_REPLACE_EXISTING, 0x8 MOVEFILE_WRITE_THROUGH.
+        if ([HordeNative.FileMove]::MoveFileEx($From, $To, 0x9)) { return }
+        $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        Start-Sleep -Milliseconds 100
+    }
+    throw (New-Object System.ComponentModel.Win32Exception($err))
+}
+
 function Write-HordeMetricsFile {
-    # Write a file under the metrics folder whole: to a temporary file beside it, then moved into
-    # place, so a reader never sees half of it. Used for records and for collect's index.
+    # Write a file under the metrics folder whole: to a temporary file beside it, flushed to disk, then
+    # renamed over the file in one step (Move-HordeFileAtomic), so a reader - or a kill - never sees half
+    # of it. Used for records and for collect's index. The temp name is "." + name + "." + 32 hex + ".tmp":
+    # collect recovers from, and cleans up, exactly that pattern (core/MetricsCollect.ps1).
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Text)
     $dir = Split-Path -Parent $Path
     [void][System.IO.Directory]::CreateDirectory($dir)
     $temp = Join-Path $dir ("." + (Split-Path -Leaf $Path) + "." + [guid]::NewGuid().ToString("N") + ".tmp")
-    [System.IO.File]::WriteAllText($temp, $Text, (New-Object System.Text.UTF8Encoding($false)))
-    try {
-        # [NullString]::Value, not $null: PowerShell passes $null to a string parameter as "", and Replace
-        # refused "" as "not of a legal form" (measured 2026-10-01).
-        if (Test-Path -LiteralPath $Path -PathType Leaf) { [System.IO.File]::Replace($temp, $Path, [NullString]::Value) }
-        else { [System.IO.File]::Move($temp, $Path) }
-    } finally {
-        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
-    }
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)
+    $fs = New-Object System.IO.FileStream($temp, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+    # A rename that fails while this process lives leaves an uncommitted temp: removed here. Only a kill
+    # leaves one behind, and collect recovers or removes those (core/MetricsCollect.ps1).
+    try { Move-HordeFileAtomic -From $temp -To $Path }
+    catch { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw }
 }
 
 function Test-HordeMetricsRecordName {

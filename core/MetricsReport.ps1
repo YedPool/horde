@@ -166,6 +166,14 @@ function Format-HordeMetricsSummary {
             if ($big.Count -gt 0) { [void]$lines.Add("WARNING: collect skips " + $big.Count + " transcripts as too large to read within a run, so they are not in the store: " + ($big -join ", ")) }
         } catch { [void]$lines.Add("WARNING: the collect index could not be read to say which transcripts it skips") }
     }
+    $recPath = Join-Path (Get-HordeMetricsDir) "collect-recovered.json"
+    if (Test-Path -LiteralPath $recPath -PathType Leaf) {
+        try {
+            Add-Type -AssemblyName System.Web.Extensions
+            $rn = (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject((Read-HordeSharedText -Path $recPath))
+            [void]$lines.Add("WARNING: collect recovered from a write that was killed half way, at " + $rn["at"] + ": " + $rn["what"])
+        } catch { [void]$lines.Add("WARNING: collect recovered from a killed write, and its note cannot be read") }
+    }
     $written = @($Result.rows | Where-Object { $_.written -ne "" })
     if ($written.Count -gt 0) { [void]$lines.Add("recorded " + $written.Count + " summaries under " + (Join-Path (Get-HordeMetricsDir) "summaries")) }
     $notWritten = @($Result.rows | Where-Object { $_.written -eq "" })

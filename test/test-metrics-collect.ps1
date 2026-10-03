@@ -34,7 +34,7 @@ function Get-StoreSnapshot {
     return ((@(Get-ChildItem -LiteralPath $h -File -Recurse -Force | Where-Object { $_.Name -ne "collect.lock" } | Sort-Object FullName | ForEach-Object { $_.FullName + "|" + $_.Length + "|" + $_.LastWriteTimeUtc.Ticks + "|" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })) -join "`n")
 }
 function Get-Records { $d = Join-Path (Get-HordeMetricsDir) "summaries"; if (-not (Test-Path -LiteralPath $d)) { return @() }; return @(Get-ChildItem -LiteralPath $d -File -Recurse -Filter "*.json" | Where-Object { $_.Extension -ceq ".json" }) }
-function Get-Index { $p = Get-HordeCollectIndexPath; if (-not (Test-Path -LiteralPath $p)) { return $null }; return $ser.DeserializeObject([System.IO.File]::ReadAllText($p)) }
+function Get-Index { $p = Get-HordeCollectIndexPath; if (-not (Test-Path -LiteralPath $p)) { return $null }; return $ser.DeserializeObject((Read-HordeSharedText -Path $p)) }
 function Set-Old { param([string]$Path, [datetime]$At) (Get-Item -LiteralPath $Path).LastWriteTimeUtc = $At }
 
 try {
@@ -309,7 +309,8 @@ try {
     foreach ($bid in $backlogIds) { Remove-Item -LiteralPath (Join-Path $backlogDir ($bid + ".jsonl")) -Force }
     $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
 
-    Write-Host ""    Write-Host "--- one file too big for a run never starves the rest (review of #70, the budget) ---" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "--- one file too big for a run never starves the rest (review of #70, the budget) ---" -ForegroundColor Cyan
     # A run's budget is checked INSIDE a file too: a giant file is abandoned uncommitted ("deferred"),
     # read last in the next run, and after three deferrals in a row is "tooLarge": skipped, and said.
     $gDir = Join-Path (Split-Path -Parent $cleanSrc) "giant-backlog"
@@ -318,9 +319,9 @@ try {
     $gw = New-Object System.IO.StreamWriter($giant, $false, (New-Object System.Text.UTF8Encoding($false)))
     try {
         $gt0 = [datetime]::Parse("2026-09-30T00:00:00Z").ToUniversalTime()
-        # 15,000 responses: far over an 8 s budget, yet short enough that a run with no deadline inside a
+        # 5,000 responses: far over an 8 s budget, yet short enough that a run with no deadline inside a
         # file ends (in minutes) and fails its check, rather than hanging the suite.
-        for ($i = 0; $i -lt 15000; $i++) {
+        for ($i = 0; $i -lt 5000; $i++) {
             $gw.WriteLine('{"type":"assistant","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"id":"g' + $i + '","model":"model-a","content":[{"type":"tool_use","id":"gt' + $i + '","name":"Bash","input":{}}],"usage":{"input_tokens":3,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"output_tokens":50}}}')
             $gw.WriteLine('{"type":"user","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2 + 1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"gt' + $i + '","content":"ok"}]}}')
         }
@@ -359,19 +360,73 @@ try {
     Check ($g4.read -eq 0 -and $g4.tooLarge -eq 1 -and -not $g4.stoppedEarly) "and is then skipped, counted, and the run goes on"
     $sumOut = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
     Check ($sumOut.out -like "*too large*00000000-0000-4000-8000-000000000000.jsonl*") "summarize says, loudly, which transcript collect could not read within a run"
+    # TOO LARGE IS NOT FOREVER (review of #70: the largest transcripts - long orchestrator sessions - are
+    # the ones that matter most). A file that changes since it was marked gets a fresh count of deferrals...
+    [System.IO.File]::AppendAllText($giant, "`n")
+    Set-Old $giant $settledAt.AddMinutes(30)
+    $g5 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+    $ge5 = & $giantEntry
+    Check ($g5.read -ge 1 -and $null -ne $ge5 -and $ge5["outcome"] -eq "deferred" -and [int]$ge5["deferrals"] -eq 1) "a too-large transcript that grows is tried again, with a fresh count of deferrals"
+    # ...and a person can read it whole: -IncludeLarge has no budget, because a person is waiting for it.
+    for ($k = 0; $k -lt 4; $k++) { $ge = & $giantEntry; if ($ge["outcome"] -eq "tooLarge") { break }; $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8 }
+    Check ((& $giantEntry)["outcome"] -eq "tooLarge") "CONTROL: it is too large again"
+    $g6 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8 -IncludeLarge
+    $ge6 = & $giantEntry
+    Check ($g6.state -eq "done" -and $null -ne $ge6 -and $ge6["outcome"] -eq "recorded" -and @(Get-Records | Where-Object { $_.Name -like "00000000-*" }).Count -eq 1) ("with -IncludeLarge it is read whole, past the budget, and recorded (state " + $g6.state + ", read " + $g6.read + ", recorded " + $g6.recorded + ", failed " + $g6.failed + ", outcome " + $(if ($ge6) { $ge6["outcome"] + " " + $ge6["reason"] } else { "none" }) + ")")
+    $g7 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root -MaxSeconds 8
+    Check ($g7.read -eq 0 -and $g7.tooLarge -eq 0) "and is then simply unchanged"
     Remove-Item -LiteralPath $gDir -Recurse -Force
     $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
 
     Write-Host ""
-    Write-Host "--- a temp file left by a killed write is cleaned up, and only Horde's own ---" -ForegroundColor Cyan
-    $orphan = Join-Path (Get-HordeMetricsDir) (".collect-index.json." + [guid]::NewGuid().ToString("N") + ".tmp")
-    $notOurs = Join-Path (Get-HordeMetricsDir) "notes.tmp"
-    [System.IO.File]::WriteAllText($orphan, "half"); [System.IO.File]::WriteAllText($notOurs, "mine")
+    Write-Host "--- a write killed half way: the index is recovered, and no copy of it is ever deleted (review of #70) ---" -ForegroundColor Cyan
+    # Measured by the reviewer: a kill inside the replace left NO index, the new one only in its temp file,
+    # and the next run's cleanup deleted that temp - all progress lost. Now the temp is recovered first,
+    # and cleanup removes only temps older than a valid index.
+    $ixPath = Get-HordeCollectIndexPath
+    $mdir = Get-HordeMetricsDir
+    $tmpName = { "." + "collect-index.json." + [guid]::NewGuid().ToString("N") + ".tmp" }
+    $goodText = [System.IO.File]::ReadAllText($ixPath)
+    $goodCount = @((Get-Index)["entries"].Keys).Count
+    # The index is gone and a valid copy is in a temp file: that copy is the index again.
+    $kept = Join-Path $mdir (& $tmpName)
+    [System.IO.File]::WriteAllText($kept, $goodText)
+    Remove-Item -LiteralPath $ixPath -Force
+    $rc = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($rc.state -eq "done" -and $rc.recovered -ne "" -and $rc.read -eq 0 -and @((Get-Index)["entries"].Keys).Count -eq $goodCount) ("an index lost in a killed replace is recovered from the temp that holds it: nothing is read again (" + $rc.read + " read)")
+    Check (-not (Test-Path -LiteralPath $kept)) "and the temp became the index"
+    $sumRec = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
+    Check ($sumRec.out -like "*WARNING*recovered*") "summarize says, loudly, that the index was recovered"
+    # The same when the index is there but cannot be read.
+    $kept2 = Join-Path $mdir (& $tmpName)
+    [System.IO.File]::WriteAllText($kept2, $goodText)
+    [System.IO.File]::WriteAllText($ixPath, '{ half')
+    $rc2 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($rc2.recovered -ne "" -and $rc2.read -eq 0) "and when the index cannot be read, a valid temp is recovered the same way"
+    # A temp that is not a valid index is never taken for one, and never deleted while it might be the only copy.
+    $junk = Join-Path $mdir (& $tmpName)
+    [System.IO.File]::WriteAllText($junk, 'half a wri')
+    # Newer than any index this run will write, as the temp of a write killed just now would be.
+    (Get-Item -LiteralPath $junk).LastWriteTimeUtc = [datetime]::UtcNow.AddHours(1)
+    Remove-Item -LiteralPath $ixPath -Force
+    $rc3 = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    Check ($rc3.recovered -eq "" -and (Test-Path -LiteralPath $junk)) "a temp that does not parse is not recovered, and is not deleted while the index was missing"
+    $rc3b = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    # Cleanup: only temps OLDER than a valid index, and only Horde's own pattern.
+    (Get-Item -LiteralPath $junk).LastWriteTimeUtc = (Get-Item -LiteralPath $ixPath).LastWriteTimeUtc.AddMinutes(-5)
+    $newer = Join-Path $mdir (& $tmpName)
+    [System.IO.File]::WriteAllText($newer, $goodText)
+    (Get-Item -LiteralPath $newer).LastWriteTimeUtc = (Get-Item -LiteralPath $ixPath).LastWriteTimeUtc.AddMinutes(5)
+    $notOurs = Join-Path $mdir "notes.tmp"
+    [System.IO.File]::WriteAllText($notOurs, "mine")
+    (Get-Item -LiteralPath $notOurs).LastWriteTimeUtc = (Get-Item -LiteralPath $ixPath).LastWriteTimeUtc.AddMinutes(-5)
     $null = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
-    Check (-not (Test-Path -LiteralPath $orphan) -and (Test-Path -LiteralPath $notOurs)) "an orphaned temp file of Horde's own pattern is removed at the start of a run; a file that only looks like one is left"
-    Remove-Item -LiteralPath $notOurs -Force
+    Check (-not (Test-Path -LiteralPath $junk)) "a Horde temp older than a valid index is removed"
+    Check ((Test-Path -LiteralPath $newer) -and (Test-Path -LiteralPath $notOurs)) "one newer than the index is kept, and a file that only looks like a temp is left alone"
+    Remove-Item -LiteralPath $notOurs, $newer -Force
 
-    Write-Host ""    Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "--- through the real horde command ---" -ForegroundColor Cyan
     $envs = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
     [System.IO.File]::AppendAllText($planted, "`n"); Set-Old $planted $settledAt.AddMinutes(4)
     $c1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "collect") -Env $envs

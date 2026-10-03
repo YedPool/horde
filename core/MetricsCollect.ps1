@@ -155,15 +155,77 @@ function Set-HordeRecordSourceGone {
     Write-HordeMetricsFile -Path $path -Text (ConvertTo-Json -InputObject $doc -Depth 30)
 }
 
+function Test-HordeMetricsFileValid {
+    # Is this file a whole, valid copy of what its name says? The index: schemaVersion 2 with entries. A
+    # record: a JSON object of kind transcript.summary.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    Add-Type -AssemblyName System.Web.Extensions
+    $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $ser.MaxJsonLength = [int]::MaxValue
+    $d = $null
+    try { $d = $ser.DeserializeObject((Read-HordeSharedText -Path $Path)) } catch { return $false }
+    if ($d -isnot [System.Collections.IDictionary]) { return $false }
+    if ($Name -ceq "collect-index.json") { return ($d["schemaVersion"] -eq 2 -and $d["entries"] -is [System.Collections.IDictionary]) }
+    return ("$($d["kind"])" -ceq "transcript.summary")
+}
+
+function Restore-HordeMetricsTemps {
+    # For every file under -Dir that has temp copies (Write-HordeMetricsFile's pattern, and only that):
+    # when the file is missing or invalid, the newest VALID temp becomes the file, and nothing is deleted;
+    # when the file is valid, temps OLDER than it are removed, and newer ones are left for a later run. A
+    # temp is never deleted while it might be the only copy. Returns what was recovered ("" when nothing),
+    # and records it in <metrics>\collect-recovered.json, which summarize reports.
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    $groups = @{}
+    foreach ($tmp in @(Get-ChildItem -LiteralPath $Dir -File -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -cmatch $script:HordeTempNamePattern })) {
+        $target = Join-Path $tmp.DirectoryName ($tmp.Name.Substring(1, $tmp.Name.Length - 1 - 37))
+        if (-not $groups.ContainsKey($target)) { $groups[$target] = New-Object System.Collections.ArrayList }
+        [void]$groups[$target].Add($tmp)
+    }
+    $done = New-Object System.Collections.ArrayList
+    $problems = New-Object System.Collections.ArrayList
+    foreach ($target in @($groups.Keys)) {
+        # One file that cannot be recovered or cleaned never stops the others, nor the run.
+        try {
+        $name = Split-Path -Leaf $target
+        $temps = @($groups[$target] | Sort-Object LastWriteTimeUtc -Descending)
+        if (-not (Test-HordeMetricsFileValid -Path $target -Name $name)) {
+            foreach ($tmp in $temps) {
+                if (Test-HordeMetricsFileValid -Path $tmp.FullName -Name $name) {
+                    Move-HordeFileAtomic -From $tmp.FullName -To $target
+                    [void]$done.Add($target.Substring($Dir.Length).TrimStart('\') + " from " + $tmp.Name)
+                    break
+                }
+            }
+            continue
+        }
+        $at = (Get-Item -LiteralPath $target).LastWriteTimeUtc
+        foreach ($tmp in $temps) { if ($tmp.LastWriteTimeUtc -lt $at) { Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue } }
+        } catch { [void]$problems.Add($target.Substring($Dir.Length).TrimStart('\') + " could not be recovered or cleaned: " + $_.Exception.Message) }
+    }
+    $text = ""
+    if ($done.Count -gt 0) {
+        $text = "a write had been killed half way; recovered " + ($done -join "; ")
+        $note = [ordered]@{ schemaVersion = 1; kind = "metrics.recovered"; at = (ConvertTo-HordeJsonSafe ([datetime]::UtcNow)); what = $text }
+        Write-HordeMetricsFile -Path (Join-Path $Dir "collect-recovered.json") -Text (ConvertTo-Json -InputObject $note)
+    }
+    if ($problems.Count -gt 0) { $text = (@($text, ($problems -join "; ")) | Where-Object { $_ -ne "" }) -join "; " }
+    return $text
+}
+
 function Invoke-HordeMetricsCollect {
     # One collect run. Returns { state; reason; found; unchanged; read; recorded; provisional;
     # beforeConsent; notRecorded; failed; unreadable; noAdapter; removed; wroteIndex; rows }. state is
     # "off", "refused", "busy" or "done"; only "done" may have written anything.
     # -Now and -RepoRoot are for tests; -SettleMinutes is how long a transcript must be still before
     # its record is final.
-    param([int]$SettleMinutes = $script:HordeCollectSettleMinutes, $Now = $null, [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot), [int]$MaxFiles = 0, [int]$MaxSeconds = $script:HordeCollectMaxSeconds)
+    param([int]$SettleMinutes = $script:HordeCollectSettleMinutes, $Now = $null, [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot), [int]$MaxFiles = 0, [int]$MaxSeconds = $script:HordeCollectMaxSeconds, [switch]$IncludeLarge)
+    # -IncludeLarge: a person is running this, so there is no time budget, and too-large files are read
+    # whole however long they take. The scheduled job never passes it.
+    if ($IncludeLarge) { $MaxSeconds = [int]::MaxValue }
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
-    $res = [ordered]@{ state = ""; reason = ""; found = 0; unchanged = 0; read = 0; recorded = 0; provisional = 0; beforeConsent = 0; notRecorded = 0; failed = 0; unreadable = 0; noAdapter = 0; removed = 0; deferred = 0; tooLarge = 0; wroteIndex = $false; stoppedEarly = $false; rows = (New-Object System.Collections.ArrayList) }
+    $res = [ordered]@{ state = ""; reason = ""; found = 0; unchanged = 0; read = 0; recorded = 0; provisional = 0; beforeConsent = 0; notRecorded = 0; failed = 0; unreadable = 0; noAdapter = 0; removed = 0; deferred = 0; tooLarge = 0; recovered = ""; wroteIndex = $false; stoppedEarly = $false; rows = (New-Object System.Collections.ArrayList) }
     $gate = Read-HordeMetricsGate
     if ($gate.state -eq "absent" -or ($gate.state -eq "known" -and $gate.value.level -cne "usage")) { $res.state = "off"; $res.reason = "metrics are off; nothing was collected"; return [pscustomobject]$res }
     if ($gate.state -ne "known") { $res.state = "refused"; $res.reason = ("the gate is refused, so nothing was collected: " + $gate.reason); return [pscustomobject]$res }
@@ -188,11 +250,9 @@ function Invoke-HordeMetricsCollect {
         return [pscustomobject]$res
     }
     try {
-        # A temp file left by a write that was killed half way (review of #70: 40 kills left 10, about 359 KB
-        # each): removed now, under the lock, and only Horde's own temp-name pattern inside the metrics folder.
-        foreach ($tmp in @(Get-ChildItem -LiteralPath $dir -File -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -cmatch $script:HordeTempNamePattern })) {
-            Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue
-        }
+        # RECOVER BEFORE CLEANING (review of #70): a file that is missing or unreadable is restored from the
+        # newest of its temp copies that is valid, and only then are temps older than a valid file removed.
+        $res.recovered = Restore-HordeMetricsTemps -Dir $dir
         $index = Read-HordeCollectIndex
         if ($index.note -ne "") { $res.reason = $index.note }
         $entries = $index.entries
@@ -222,11 +282,13 @@ function Invoke-HordeMetricsCollect {
             $old = $entries[$plainKey]
             $key = $plainKey
             if ($null -eq $old) { $old = $entries[$hashKey]; if ($null -ne $old) { $key = $hashKey } }
-            if ($null -ne $old -and $old.outcome -eq "tooLarge") { $res.tooLarge++; continue }
+            # TOO LARGE IS NOT FOREVER (review of #70: the largest transcripts matter most): it is skipped only
+            # while it has not changed; a change gives it a fresh count of deferrals. -IncludeLarge reads it.
+            if ($null -ne $old -and $old.outcome -eq "tooLarge" -and $old.size -eq $size -and $old.modifiedTicks -eq $mod -and -not $IncludeLarge) { $res.tooLarge++; continue }
             if ($null -ne $old -and $old.size -eq $size -and $old.modifiedTicks -eq $mod -and $old.enabledAtTicks -eq $enabledTicks) {
                 # Unchanged. A provisional record is collected again only once its file has settled; a deferred
                 # file is always tried again, last (its run ran out inside it, so it was never read whole).
-                if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }
+                if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred" -and -not ($IncludeLarge -and $old.outcome -eq "tooLarge")) { $res.unchanged++; continue }
             }
             # Last written before consent, and never recorded: not read, not indexed.
             if ($mod -lt $enabledTicks -and ($null -eq $old -or $old.record -eq "")) {
@@ -252,7 +314,7 @@ function Invoke-HordeMetricsCollect {
                 # THE BUDGET HOLDS INSIDE A FILE TOO (review of #70: checked only between files, one file ran
                 # 48 s on a 2 s budget): the read stops at the run's deadline, and the file is deferred -
                 # uncommitted, its size kept - and read last next run. Deferred too often, it is too large.
-                Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds([Math]::Max(0, $MaxSeconds - $started.Elapsed.TotalSeconds)))
+                if (-not $IncludeLarge) { Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds([Math]::Max(0, $MaxSeconds - $started.Elapsed.TotalSeconds))) }
                 $measured = Measure-HordeTranscriptFile -Path $path -PriceTable $table
                 $hit = Test-HordeReadDeadlineHit
                 Set-HordeReadDeadline -At $null
@@ -333,6 +395,8 @@ function Invoke-HordeMetricsCollect {
             $entries.Remove($k); $dirty = $true; $res.removed++
         }
         if ($dirty) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true }
+        # Temps that this run's commits have made older than their files are removed now, not a run later.
+        $null = Restore-HordeMetricsTemps -Dir $dir
         $res.state = "done"
     } finally { $lock.Dispose() }
     return [pscustomobject]$res
@@ -345,6 +409,7 @@ function Format-HordeMetricsCollect {
     if ($r.state -ne "done") { return @("collect: " + $r.state + " - " + $r.reason) }
     $lines = @("collect: " + $r.found + " transcripts; " + $r.unchanged + " unchanged; " + $r.read + " read; " + $r.recorded + " recorded (" + $r.provisional + " provisional); " + $r.beforeConsent + " from before consent; " + $r.notRecorded + " not recorded; " + $r.failed + " failed; " + $r.noAdapter + " no adapter; " + $r.unreadable + " not readable; " + $r.removed + " gone from the index; " + $r.deferred + " deferred; " + $r.tooLarge + " too large")
     if ($r.reason -ne "") { $lines += ("collect: " + $r.reason) }
+    if ($r.recovered -ne "") { $lines += ("collect: WARNING: " + $r.recovered) }
     if (-not $r.wroteIndex) { $lines += "collect: nothing new or changed, nothing written" }
     if ($r.stoppedEarly) { $lines += "collect: stopped early on its budget; the next run goes on" }
     return $lines

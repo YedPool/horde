@@ -17,19 +17,22 @@
            Find = 'if ($null -ne $old -and $old.size -eq $size -and $old.modifiedTicks -eq $mod -and $old.enabledAtTicks -eq $enabledTicks) {'
            Replace = 'if ($false) {' }
         @{ Name = "size-not-compared"
-           Find = '$old.size -eq $size -and $old.modifiedTicks -eq $mod'
-           Replace = '$old.modifiedTicks -eq $mod' }
+           Find = '$old.size -eq $size -and $old.modifiedTicks -eq $mod -and $old.enabledAtTicks -eq $enabledTicks'
+           Replace = '$old.modifiedTicks -eq $mod -and $old.enabledAtTicks -eq $enabledTicks' }
         @{ Name = "time-not-compared"
-           Find = '$old.size -eq $size -and $old.modifiedTicks -eq $mod'
-           Replace = '$old.size -eq $size' }
+           Find = '$old.size -eq $size -and $old.modifiedTicks -eq $mod -and $old.enabledAtTicks -eq $enabledTicks'
+           Replace = '$old.size -eq $size -and $old.enabledAtTicks -eq $enabledTicks' }
         @{ Name = "provisional-never-collected-again"
-           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }'
+           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred" -and -not ($IncludeLarge -and $old.outcome -eq "tooLarge")) { $res.unchanged++; continue }'
            Replace = 'if ($old.outcome -ne "deferred") { $res.unchanged++; continue }' }
         @{ Name = "deferred-never-tried-again"
-           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }'
+           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred" -and -not ($IncludeLarge -and $old.outcome -eq "tooLarge")) { $res.unchanged++; continue }'
            Replace = 'if ($old.outcome -ne "provisional" -or -not $settled) { $res.unchanged++; continue }' }
+        @{ Name = "include-large-skips-unchanged"
+           Find = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred" -and -not ($IncludeLarge -and $old.outcome -eq "tooLarge")) { $res.unchanged++; continue }'
+           Replace = 'if (($old.outcome -ne "provisional" -or -not $settled) -and $old.outcome -ne "deferred") { $res.unchanged++; continue }' }
         @{ Name = "no-deadline-inside-a-file"
-           Find = '                Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds([Math]::Max(0, $MaxSeconds - $started.Elapsed.TotalSeconds)))'
+           Find = '                if (-not $IncludeLarge) { Set-HordeReadDeadline -At ([datetime]::UtcNow.AddSeconds([Math]::Max(0, $MaxSeconds - $started.Elapsed.TotalSeconds))) }'
            Replace = '' }
         @{ Name = "deferred-read-first"
            Find = '        $all = @(@($all | Where-Object { $null -eq $entries[$_.key] -or $entries[$_.key].outcome -ne "deferred" }) + @($all | Where-Object { $null -ne $entries[$_.key] -and $entries[$_.key].outcome -eq "deferred" }))'
@@ -38,14 +41,23 @@
            Find = 'if ($entry.deferrals -ge $script:HordeCollectMaxDeferrals) {'
            Replace = 'if ($false) {' }
         @{ Name = "too-large-read-again"
-           Find = '            if ($null -ne $old -and $old.outcome -eq "tooLarge") { $res.tooLarge++; continue }'
+           Find = 'if ($null -ne $old -and $old.outcome -eq "tooLarge" -and $old.size -eq $size -and $old.modifiedTicks -eq $mod -and -not $IncludeLarge) { $res.tooLarge++; continue }'
            Replace = '' }
-        @{ Name = "temp-files-left"
-           Find = '            Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue'
-           Replace = '            $null = $tmp' }
-        @{ Name = "any-tmp-removed"
-           Find = 'Where-Object { $_.Name -cmatch $script:HordeTempNamePattern }'
-           Replace = 'Where-Object { $_.Extension -eq ".tmp" }' }
+        @{ Name = "too-large-forever"
+           Find = 'if ($null -ne $old -and $old.outcome -eq "tooLarge" -and $old.size -eq $size -and $old.modifiedTicks -eq $mod -and -not $IncludeLarge) { $res.tooLarge++; continue }'
+           Replace = 'if ($null -ne $old -and $old.outcome -eq "tooLarge" -and -not $IncludeLarge) { $res.tooLarge++; continue }' }
+        @{ Name = "older-temps-left"
+           Find = 'foreach ($tmp in $temps) { if ($tmp.LastWriteTimeUtc -lt $at) { Remove-Item -LiteralPath $tmp.FullName -Force -ErrorAction SilentlyContinue } }'
+           Replace = 'foreach ($tmp in $temps) { if ($tmp.LastWriteTimeUtc -lt $at) { $null = $tmp } }' }
+        @{ Name = "newer-temps-removed"
+           Find = 'foreach ($tmp in $temps) { if ($tmp.LastWriteTimeUtc -lt $at) {'
+           Replace = 'foreach ($tmp in $temps) { if ($true) {' }
+        @{ Name = "recovery-skipped"
+           Find = '        if (-not (Test-HordeMetricsFileValid -Path $target -Name $name)) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "invalid-temp-adopted"
+           Find = '                if (Test-HordeMetricsFileValid -Path $tmp.FullName -Name $name) {'
+           Replace = '                if ($true) {' }
         @{ Name = "provisional-not-said"
            Find = '                    provisional = (-not $final)'
            Replace = '                    provisional = $false' }
