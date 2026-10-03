@@ -48,6 +48,13 @@ Check ($fxOne.Count -eq 0) "CONTROL: without the second file there is no duplica
 $fxPrefix = @(Get-HordeTopFunctionDefinitions -Root $fx -Files @("one.ps1", "prefixed.ps1"))
 Check (@(Find-HordeDuplicateFunctions -Definitions $fxPrefix).Count -eq 1) "a name with a scope prefix is the same name: function script:X and function X are one"
 Check (@($fxPrefix | Where-Object { $_.file -ceq "prefixed.ps1" } | ForEach-Object { $_.name }) -join "," -ceq "script:Get-FixtureThing,Get-FixtureHolder,global:Get-FixtureNested,Get-FixtureItem,Get-FixtureAlias") "a global: function inside another, Set-Item function:X and Set-Alias X are definitions too"
+# A CLASS METHOD IS NOT A COMMAND (batch 5, 2026-10-03: core/Metrics.ps1's HordeRecordOrderComparer.Compare,
+# the first class method in core, was counted as a top-level function, and the load check could not
+# find a command of that name).
+$fxMethod = @(Get-HordeTopFunctionDefinitions -Root $fx -Files @("method.ps1"))
+Check (@($fxMethod | ForEach-Object { $_.name }) -join "," -ceq "Compare" -and @(Find-HordeDuplicateFunctions -Definitions $fxMethod).Count -eq 0) "a class method is not counted: the file's one Compare is its top-level function"
+$fxMethod2 = @(Get-HordeTopFunctionDefinitions -Root $fx -Files @("method.ps1", "compare-again.ps1"))
+Check (@(Find-HordeDuplicateFunctions -Definitions $fxMethod2).Count -eq 1) "CONTROL: a top-level function of that same name in another file is still counted, and still a duplicate"
 $badFile = Join-Path $env:TEMP ("horde-fnames-" + [guid]::NewGuid().ToString("N") + ".ps1")
 try {
     [System.IO.File]::WriteAllText($badFile, "function Broken-Thing {")
