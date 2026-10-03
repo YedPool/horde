@@ -8,6 +8,9 @@
         @{ Name = "names-compared-by-case"
            Find = '-replace ''^(global|script|local|private):'', '''').ToLowerInvariant()'
            Replace = '-replace ''^(global|script|local|private):'', '''')' }
+        @{ Name = "class-methods-counted"
+           Find = '            if ($d.Parent -is [System.Management.Automation.Language.FunctionMemberAst]) { continue }'
+           Replace = '' }
         @{ Name = "nested-functions-counted"
            Find = 'if ($nested -and $d.Name -notmatch ''^(global|script):'') { continue }'
            Replace = '' }

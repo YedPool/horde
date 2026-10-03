@@ -12,10 +12,10 @@
            Find = 'if ($type -eq "event_msg" -and ($ptype -eq "task_complete" -or $ptype -eq "turn_aborted")) {'
            Replace = 'if ($type -eq "event_msg" -and ($ptype -eq "task_complete")) {' }
         @{ Name = "token-count-counted-too"
-           Find = '        if ($st.sawRecord) { continue }'
-           Replace = '        if ($false) { continue }' }
+           Find = '            if ($sawRecord) { return }'
+           Replace = '            if ($false) { return }' }
         @{ Name = "repeated-token-count-is-a-call"
-           Find = 'if ($key -ne "" -and $key -eq $prevTotal) { continue }'
+           Find = 'if ($key -ne "" -and $key -eq $st.prevTotal) { return }'
            Replace = '' }
         @{ Name = "response-item-user-is-input"
            Find = '            if ($ptype -eq "message" -and $p["role"] -eq "assistant") {'
@@ -40,7 +40,12 @@
            Find = '        if ($null -eq $U[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }'
            Replace = '        if ($false) { }' }
         @{ Name = "rate-limit-only-token-count-is-a-call"
-           Find = '        if ($r.last -isnot [System.Collections.IDictionary]) { continue }'
+           Find = '            if ($last -isnot [System.Collections.IDictionary]) { return }'
            Replace = ''  }
+        @{ Name = "fallback-model-from-the-line"
+           Find = 'if ($finalModel.ContainsKey($turn)) { $model = New-HordeKnown -Value $finalModel[$turn] }'
+           Replace = 'if ($turnModel.ContainsKey($turn)) { $model = New-HordeKnown -Value $turnModel[$turn] }'
+           Expect = "survives"
+           Reason = "M1 priced a token_count call with the model its turn had at the end of the file, and plan step M2 keeps that; in every rollout measured, a turn_context comes before the token_count lines of its turn, so the map at the line and the map at the end agree. Kept so the choice is written where a reader can disagree." }
     )
 }

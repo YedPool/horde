@@ -60,6 +60,10 @@ function Get-HordeTopFunctionDefinitions {
         if (@($errors).Count -gt 0) { [void]$out.Add([pscustomobject]@{ name = "<parse error>"; file = $rel; line = $errors[0].Extent.StartLineNumber }); continue }
         $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
         foreach ($d in $defs) {
+            # A class method is not a command: its body parses as a FunctionDefinitionAst under a
+            # FunctionMemberAst, and no call by name can reach it (batch 5, 2026-10-03: core/Metrics.ps1's
+            # HordeRecordOrderComparer.Compare was counted, and the load check found no command Compare).
+            if ($d.Parent -is [System.Management.Automation.Language.FunctionMemberAst]) { continue }
             $nested = $false
             $p = $d.Parent
             while ($null -ne $p) { if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst]) { $nested = $true; break }; $p = $p.Parent }

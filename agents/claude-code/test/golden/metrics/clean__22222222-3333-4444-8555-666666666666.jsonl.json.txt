@@ -1,0 +1,166 @@
+[
+    {
+        "schemaVersion":  1,
+        "kind":  "transcript.summary",
+        "metricsDefVersion":  "m1",
+        "writtenAt": "<writtenAt>",
+        "adapter":  "claude-code",
+        "file":  "22222222-3333-4444-8555-666666666666.jsonl",
+        "sessionId":  "22222222-3333-4444-8555-666666666666",
+        "parseSkipped":  0,
+        "tornTail":  0,
+        "worker":  {
+                       "firstEventAt":  {
+                                            "state":  "known",
+                                            "value":  "2026-09-30T10:00:00.000Z",
+                                            "reason":  "",
+                                            "observedAt":  null
+                                        },
+                       "lastEventAt":  {
+                                           "state":  "known",
+                                           "value":  "2026-09-30T10:07:00.000Z",
+                                           "reason":  "",
+                                           "observedAt":  null
+                                       },
+                       "wallClockSeconds":  {
+                                                "state":  "known",
+                                                "value":  420,
+                                                "reason":  "",
+                                                "observedAt":  null
+                                            },
+                       "longestGap":  {
+                                          "state":  "known",
+                                          "value":  {
+                                                        "seconds":  180,
+                                                        "startedAt":  "2026-09-30T10:02:00.000Z",
+                                                        "afterKind":  "turnEnd",
+                                                        "afterLine":  5
+                                                    },
+                                          "reason":  "",
+                                          "observedAt":  null
+                                      },
+                       "calls":  {
+                                     "state":  "known",
+                                     "value":  4,
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "duplicateCallRecords":  0,
+                       "tokens":  {
+                                      "state":  "known",
+                                      "value":  {
+                                                    "input":  8,
+                                                    "cacheRead":  4600,
+                                                    "cacheWrite":  0,
+                                                    "cacheWrite5m":  0,
+                                                    "cacheWrite1h":  0,
+                                                    "cacheWriteUnsplit":  0,
+                                                    "output":  112
+                                                },
+                                      "reason":  "",
+                                      "observedAt":  null
+                                  },
+                       "tokensReportedTotal":  {
+                                                   "state":  "absent",
+                                                   "value":  null,
+                                                   "reason":  "the harness writes no cumulative total",
+                                                   "observedAt":  null
+                                               },
+                       "models":  {
+                                      "claude-opus-5-5":  4
+                                  },
+                       "model":  {
+                                     "state":  "known",
+                                     "value":  "claude-opus-5-5",
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "toolCalls":  {
+                                         "state":  "known",
+                                         "value":  2,
+                                         "reason":  "",
+                                         "observedAt":  null
+                                     },
+                       "toolCallsWithoutResult":  0,
+                       "toolCallsWithNegativeDuration":  0,
+                       "longestToolCall":  {
+                                               "state":  "known",
+                                               "value":  {
+                                                             "seconds":  30,
+                                                             "name":  "Bash",
+                                                             "startedAt":  "2026-09-30T10:01:00.000Z",
+                                                             "returned":  true,
+                                                             "line":  2
+                                                         },
+                                               "reason":  "",
+                                               "observedAt":  null
+                                           },
+                       "turns":  {
+                                     "state":  "known",
+                                     "value":  2,
+                                     "reason":  "",
+                                     "observedAt":  null
+                                 },
+                       "compactions":  0,
+                       "cost":  {
+                                    "cost":  {
+                                                 "state":  "known",
+                                                 "value":  0.003192,
+                                                 "reason":  "",
+                                                 "observedAt":  null
+                                             },
+                                    "unit":  "notionalUsd",
+                                    "confidence":  "derived",
+                                    "tag":  "ESTIMATE",
+                                    "priceTables":  [
+                                                        "agents/<engine>/prices.json 2026-09-30.1"
+                                                    ]
+                                }
+                   },
+        "orc":  {
+                    "notifications":  1,
+                    "interimNotifications":  0,
+                    "unrecognisedNotes":  0,
+                    "stillWaiting":  {
+                                         "calls":  0,
+                                         "contextTokens":  {
+                                                               "state":  "known",
+                                                               "value":  0,
+                                                               "reason":  "",
+                                                               "observedAt":  null
+                                                           },
+                                         "outputTokens":  {
+                                                              "state":  "known",
+                                                              "value":  0,
+                                                              "reason":  "",
+                                                              "observedAt":  null
+                                                          },
+                                         "callsWithoutUsage":  0,
+                                         "afterUnrecognisedNote":  0,
+                                         "byWorker":  {
+
+                                                      },
+                                         "jobs":  0,
+                                         "unattributed":  0,
+                                         "lines":  [
+
+                                                   ]
+                                     },
+                    "landed":  {
+                                   "byWorker":  {
+
+                                                },
+                                   "workerChars":  0,
+                                   "unattributedChars":  0,
+                                   "unattributedCount":  0,
+                                   "jobChars":  263,
+                                   "jobCount":  1,
+                                   "charsPerToken":  2.38,
+                                   "confidence":  "estimated",
+                                   "tag":  "ESTIMATE",
+                                   "workerTokensEstimated":  0,
+                                   "unattributedTokensEstimated":  0
+                               }
+                }
+    }
+]

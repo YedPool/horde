@@ -6,13 +6,13 @@
     Suite  = "agents\claude-code\test\test-transcript.ps1"
     Mutations = @(
         @{ Name = "window-ignored"
-           Find = 'if ($windowed) { $records = Select-HordeRecordsInWindow -Records $records -From $From -To $To }'
-           Replace = '' }
+           Find = '$acc = New-HordeMetricsAccumulator -PriceTable $PriceTable -From $From -To $To'
+           Replace = '$acc = New-HordeMetricsAccumulator -PriceTable $PriceTable' }
         @{ Name = "written-whatever-the-gate-says"
            Find = '        if ($decision.write) {'
            Replace = '        if ($true) {' }
         @{ Name = "window-recorded"
-           Find = '-FirstEventAt $worker.firstEventAt -Windowed:$windowed'
-           Replace = '-FirstEventAt $worker.firstEventAt -Windowed:$false' }
+           Find = '-FirstEventAt $mv.worker.firstEventAt -Windowed:$windowed'
+           Replace = '-FirstEventAt $mv.worker.firstEventAt -Windowed:$false' }
     )
 }
