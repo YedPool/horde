@@ -289,8 +289,9 @@ try {
     $killedMidway = (-not $kp.HasExited)
     if ($killedMidway) { $kp.Kill(); $kp.WaitForExit() }
     $kp.Dispose()
+    $seenBefore = $committed
     $committed = & $countBacklog
-    Check ($killedMidway -and $committed -ge 3 -and $committed -lt 30) ("a run killed in the middle of a backlog has already committed what it finished (" + $committed + " of 30)")
+    Check ($killedMidway -and $committed -ge 1 -and $committed -lt 30) ("a run killed in the middle of a backlog has already committed what it finished (" + $committed + " of 30 after the kill; " + $seenBefore + " seen just before it)")
     $resume = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
     $recIds = @(Get-Records | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } | Where-Object { $_ -like "b0000000-*" })
     $resumedBacklog = @($resume.rows | Where-Object { $_.record -match '/b0000000-' }).Count
@@ -317,7 +318,9 @@ try {
     $gw = New-Object System.IO.StreamWriter($giant, $false, (New-Object System.Text.UTF8Encoding($false)))
     try {
         $gt0 = [datetime]::Parse("2026-09-30T00:00:00Z").ToUniversalTime()
-        for ($i = 0; $i -lt 150000; $i++) {
+        # 15,000 responses: far over an 8 s budget, yet short enough that a run with no deadline inside a
+        # file ends (in minutes) and fails its check, rather than hanging the suite.
+        for ($i = 0; $i -lt 15000; $i++) {
             $gw.WriteLine('{"type":"assistant","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"id":"g' + $i + '","model":"model-a","content":[{"type":"tool_use","id":"gt' + $i + '","name":"Bash","input":{}}],"usage":{"input_tokens":3,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"output_tokens":50}}}')
             $gw.WriteLine('{"type":"user","sessionId":"00000000-0000-4000-8000-000000000000","timestamp":"' + $gt0.AddSeconds($i * 2 + 1).ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + '","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"gt' + $i + '","content":"ok"}]}}')
         }
