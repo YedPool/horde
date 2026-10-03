@@ -8,7 +8,7 @@
     Suite  = "test\test-exec-scan.ps1"
     Mutations = @(
         @{ Name = "limit-age-not-allowed"
-           Find = '    "Limit-HordeAge")'
-           Replace = '    "New-HordeKnown")' }
+           Find = '    "Limit-HordeAge",'
+           Replace = '    "New-HordeKnown",' }
     )
 }

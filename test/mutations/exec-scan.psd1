@@ -86,8 +86,8 @@
            Find = 'if ($script:HordeExecTypes -notcontains (ConvertTo-HordeExecTypeKey $t.TypeName.FullName))'
            Replace = 'if ($false)' }
         @{ Name = "scriptblock-type-allowed"
-           Find = '    "int32", "int64", "io.fileattributes", "io.path")'
-           Replace = '    "int32", "int64", "io.fileattributes", "io.path", "scriptblock")' }
+           Find = '    "collections.ienumerable")'
+           Replace = '    "collections.ienumerable", "scriptblock")' }
         @{ Name = "type-key-keeps-system-prefix"
            Find = 'if ($n.StartsWith("system.")) { $n = $n.Substring(7) }'
            Replace = '' }
