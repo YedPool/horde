@@ -142,6 +142,14 @@ Check (Throws { ConvertTo-HordeWireText ([double]1) } "whole number") "a double,
 Check (Throws { ConvertTo-HordeWireText @{ 1 = "x" } } "key must be a string") "an object key that is not a string is refused"
 $deep = "x"; for ($i = 0; $i -lt 70; $i++) { $deep = @{ d = $deep } }
 Check (Throws { ConvertTo-HordeWireText $deep } "nested more than") "a value nested past 64 is refused, never truncated as ConvertTo-Json does"
+# THE LIMIT IS EXACT, for lists as for objects: a leaf 64 levels down is written, 65 is refused. Each level
+# of a list counts once (the writer is one loop since fix/link-writer-speed, and keeps the depth itself).
+$list64 = "leaf"; for ($i = 0; $i -lt 64; $i++) { $list64 = @(, $list64) }
+$list65 = @(, $list64)
+$obj64 = "leaf"; for ($i = 0; $i -lt 64; $i++) { $obj64 = [pscustomobject]@{ d = $obj64 } }
+$obj65 = [pscustomobject]@{ d = $obj64 }
+Check ((-not (Throws { ConvertTo-HordeWireText $list64 } "nested more than")) -and (Throws { ConvertTo-HordeWireText $list65 } "nested more than")) "lists: a leaf 64 deep is written, 65 deep is refused"
+Check ((-not (Throws { ConvertTo-HordeWireText $obj64 } "nested more than")) -and (Throws { ConvertTo-HordeWireText $obj65 } "nested more than")) "objects: a leaf 64 deep is written, 65 deep is refused"
 Check ((ConvertTo-HordeWireText ([ordered]@{ z = 1; a = @(); m = [ordered]@{ y = 2; b = 3 }; n = $null; t = $true; B = 4 })) -ceq '{"B":4,"a":[],"m":{"b":3,"y":2},"n":null,"t":true,"z":1}') "keys are written in ordinal order at every depth (B before a), and each kind of value has one spelling"
 Check ((ConvertTo-HordeWireText ([pscustomobject][ordered]@{ seq = 1; id = "x" })) -ceq (ConvertTo-HordeWireText ([pscustomobject][ordered]@{ id = "x"; seq = 1 }))) "the same object built in two key orders is written the same"
 Check ((ConvertTo-HordeWireText -Value @(1)) -ceq '[1]') "a one-element list stays a list"
@@ -244,6 +252,14 @@ $small.limits["nameBytes"] = 40
 Cap-Pair "nameBytes (a hello name, cap lowered to 40, above every id and time in the frame)" { param($n) $x = Copy-Json $golden["hello-node.json"]; $x.hello.name = "n" * $n; $x } 40 '$.hello.name' $small
 $tl = Test-HordeProtocolLimits -Frame $golden["res-node-info-known.json"] -Contract $contract
 Check (@($tl).Count -eq 0) "CONTROL: a golden frame is within every cap"
+# A STRING WHOSE SCHEMA NAMES NO CAP is a finding of its own. The contract's own checks never let such a
+# schema in, so it is proved on a copy of the verb table with the uuid's cap taken out.
+$noCapVerbs = Copy-Json $contract.verbs
+$noCapVerbs.definitions.uuid.PSObject.Properties.Remove("x-horde-cap")
+$noCap = [pscustomobject]@{ frame = $contract.frame; verbs = $noCapVerbs; rows = $contract.rows; limits = $contract.limits }
+$nc = @(Test-HordeProtocolLimits -Frame $golden["req-session-close.json"] -Contract $noCap)
+Check (Says ($nc -join " | ") '$.args.expect.ns.device is a string whose schema names no cap') "a string whose schema names no cap is refused, never let through unmeasured (the expected pid's device is a uuid)"
+Check (@(Test-HordeProtocolLimits -Frame $golden["req-session-close.json"] -Contract $contract).Count -eq 0) "CONTROL: the same frame against the real table is within every cap"
 
 # THE FRAME CAP. No valid frame reaches 1 MiB (the largest field is 64 KiB), so it is proved two ways:
 # with a cap set to a golden frame's exact length, and with raw lines around the default cap.

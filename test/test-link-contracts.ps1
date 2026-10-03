@@ -283,6 +283,16 @@ FrameRefuses "req-session-close.json" { param($x) $x.args.expect.PSObject.Proper
 FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.device = "DESKTOP-01" } "ns.device does not match" "an expected pid's device is a device id, never a host name"
 FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.space = "win32" } "ns.space does not match" "an expected pid's space is one core/Platform.ps1 knows"
 FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns | Add-Member -NotePropertyName pidDomain -NotePropertyValue "win32:tester" } "has 'pidDomain'" "an agent's pidDomain cannot ride in a namespace: it never stands in for the device"
+# THE ARGUMENTS ARE CHECKED BY remote/Contract.ps1's LINK WALK, which applies Test-HordeSchema's rules
+# itself (fix/link-writer-speed); each check here is one of those rules, deep inside a verb's arguments.
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.pid = "1234" } "$.args.expect.pid should be integer" "a pid sent as text is refused: an integer is a number, not digits"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.pid = 0 } "$.args.expect.pid is 0, below the minimum 1" "a pid of 0 is refused: a minimum holds inside the arguments too"
+$cased = @(Test-FrameWith "req-session-close.json" { param($x) $v = $x.args.sessionId; $x.args.PSObject.Properties.Remove("sessionId"); $x.args | Add-Member -NotePropertyName SessionId -NotePropertyValue $v })
+Check ((Says $cased "$.args has no 'sessionId'") -and (Says $cased "$.args has 'SessionId', which the schema does not allow")) "an argument named in another case is not that argument: it is missing, and the other spelling is refused"
+if (-not ((Says $cased "$.args has no 'sessionId'") -and (Says $cased "$.args has 'SessionId'"))) { Show $cased }
+$two = @(Test-FrameWith "req-session-close.json" { param($x) $x.args | Add-Member -NotePropertyName aa -NotePropertyValue 1; $x.args | Add-Member -NotePropertyName bb -NotePropertyValue 2 })
+Check (($two -join " | ") -clike "*has 'aa'*| *has 'bb'*") "findings come in the order of the members they are about"
+if (-not (($two -join " | ") -clike "*has 'aa'*| *has 'bb'*")) { Show $two }
 FrameRefuses "req-node-info.json" { param($x) $x.PSObject.Properties.Remove("requestId") } "a req frame has no 'requestId'" "a req without a requestId is refused"
 # issuedAt: when the hub first recorded the request (plan step R3's replay window). Required on a req,
 # a UTC time in ASCII digits, carried by no other kind, and the same on every resend - unlike ts.
