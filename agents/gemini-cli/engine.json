@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    { "name": "google", "protocol": "google-genai", "credential": { "kind": "harness-login" } }
+  ],
+  "profiles": [
+    { "name": "gemini", "harness": "gemini-cli", "provider": "google" }
+  ]
+}

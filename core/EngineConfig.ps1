@@ -49,7 +49,11 @@
 # setting - metrics.level (metrics M2), admission.tier (lifecycle 1), remote.permissionCeiling (remote
 # R9, allowed only in L1 and L4) - is one entry there, and every check and the resolver read it.
 #
-# NEVER A SECRET IN OUTPUT. Every string value is scanned; a finding names its document and path only.
+# NEVER A SECRET IN OUTPUT. Every string value and key name is scanned, and every finding's text is
+# redacted (Protect-HordeText). WHAT THIS DOES NOT CATCH: a secret split across two strings - half in a
+# note, half in another field, or broken by a space or punctuation inside one string - matches no
+# shape, so neither half is refused and each may be quoted. The shapes find keys as they are issued,
+# not keys someone has taken apart.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
@@ -59,7 +63,7 @@
 
 $script:HordeConfigLayers = @("L0", "L1", "L2", "L3", "L4", "L5")
 $script:HordeConfigDefinitionLayers = @("L0", "L1")
-$script:HordeConfigKeyFields = @("name", "layers", "value", "direction")
+$script:HordeConfigKeyFields = @("name", "layers", "value", "direction", "tuner")
 $script:HordeConfigDirections = @("any", "lower-only", "raise-only")
 $script:HordeConfigValueKinds = @{
     name = '^[a-z][a-z0-9-]{0,39}$'
@@ -137,6 +141,12 @@ function Read-HordeConfigKeysText {
         if ($ly.Count -eq 0 -or @($ly | Where-Object { $script:HordeConfigLayers -cnotcontains $_ }).Count -gt 0) { [void]$problems.Add("the key " + $n + " has layers outside L0 to L5") }
         $v = Get-HordeAgentProp $r "value"
         $kind = Get-HordeAgentProp $v "kind"
+        # Closed inside value as well (review of PR #74, F3): kind, and values for an enum alone.
+        if ($v -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($f in @($v.PSObject.Properties | ForEach-Object { $_.Name })) {
+                if ($f -cne "kind" -and -not ($f -ceq "values" -and $kind -ceq "enum")) { [void]$problems.Add("the key " + $n + "'s value has the field '" + $f + "', which a " + $kind + " value does not have") }
+            }
+        }
         if ($kind -ceq "enum") {
             $vals = @(Get-HordeConfigItems $v "values")
             if ($vals.Count -eq 0) { [void]$problems.Add("the key " + $n + " is an enum with no values") }
@@ -150,6 +160,10 @@ function Read-HordeConfigKeysText {
         $dir = Get-HordeAgentProp $r "direction"
         if ($script:HordeConfigDirections -cnotcontains ("" + $dir)) { [void]$problems.Add("the key " + $n + " has the direction '" + $dir + "'; one of " + ($script:HordeConfigDirections -join ", ")) }
         elseif ("" + $dir -cne "any" -and $kind -cne "enum") { [void]$problems.Add("the key " + $n + " has the direction " + $dir + ", which needs an enum: only an enum's values are ordered") }
+        # tuner: raise-only (engine-settings decision 9) compares values by their place in the list, so
+        # it is meaningful only for an enum, whose values are written lowest first.
+        $tuner = Get-HordeAgentProp $r "tuner"
+        if ($null -ne $tuner -and ("" + $tuner -cne "raise-only" -or $kind -cne "enum")) { [void]$problems.Add("the key " + $n + " has tuner '" + $tuner + "'; the only one is raise-only, and only on an enum") }
     }
     if ($problems.Count -gt 0) { throw ("the settings registry is malformed: " + ($problems -join "; ")) }
     return @($rows)
@@ -161,6 +175,31 @@ function Get-HordeConfigKeys {
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     Assert-HordeAsciiBytes -Bytes $bytes -What ("the settings registry at '" + $Path + "'")
     return (Read-HordeConfigKeysText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)))
+}
+
+function Read-HordeEngineLayerText {
+    # One layer document from its text: { layer; source; text; doc }. The text is kept for
+    # Test-HordeEngineConfig and the parsed doc for Resolve-HordeEngine; parsing is not checking.
+    param([Parameter(Mandatory = $true)][string]$Text, [Parameter(Mandatory = $true)][string]$Layer, [Parameter(Mandatory = $true)][string]$Source)
+    return [pscustomobject]@{ layer = $Layer; source = $Source; text = $Text; doc = ($Text | ConvertFrom-Json) }
+}
+
+function Get-HordeBuiltinLayer {
+    # The built-in layer (L0): every agents/<name>/engine.json, in folder order. Each harness ships its
+    # own native provider and profile there, so core names none (CONTRIBUTING 14); the default profile
+    # is a rule in exactly one of them, and two would tie, which resolution refuses.
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+    $agents = Join-Path $Root "agents"
+    if (-not (Test-Path -LiteralPath $agents -PathType Container)) { return @() }
+    $out = @()
+    foreach ($dir in @(Get-ChildItem -LiteralPath $agents -Directory | Sort-Object Name)) {
+        $f = Join-Path $dir.FullName "engine.json"
+        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($f)
+        Assert-HordeAsciiBytes -Bytes $bytes -What ("the built-in engine layer of " + $dir.Name)
+        $out += (Read-HordeEngineLayerText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)) -Layer "L0" -Source ("agents/" + $dir.Name + "/engine.json"))
+    }
+    return $out
 }
 
 function Test-HordeConfigValue {
