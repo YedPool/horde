@@ -52,6 +52,9 @@
         @{ Name = "newer-temps-removed"
            Find = 'foreach ($tmp in $temps) { if ($tmp.LastWriteTimeUtc -lt $at) {'
            Replace = 'foreach ($tmp in $temps) { if ($true) {' }
+        @{ Name = "recovery-warning-forever"
+           Find = '        if ($res.wroteIndex -and $res.recovered -eq "") { Remove-Item -LiteralPath (Join-Path $dir "collect-recovered.json")'
+           Replace = '        if ($false) { Remove-Item -LiteralPath (Join-Path $dir "collect-recovered.json")' }
         @{ Name = "recovery-skipped"
            Find = '        if (-not (Test-HordeMetricsFileValid -Path $target -Name $name)) {'
            Replace = '        if ($false) {' }

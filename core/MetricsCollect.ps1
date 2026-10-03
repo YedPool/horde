@@ -397,6 +397,9 @@ function Invoke-HordeMetricsCollect {
         if ($dirty) { Write-HordeCollectIndex -Entries $entries; $res.wroteIndex = $true }
         # Temps that this run's commits have made older than their files are removed now, not a run later.
         $null = Restore-HordeMetricsTemps -Dir $dir
+        # The recovery note is said until a clean run commits a valid index, then dropped (review of #70):
+        # summarize warns about a recovery once it happened, not forever.
+        if ($res.wroteIndex -and $res.recovered -eq "") { Remove-Item -LiteralPath (Join-Path $dir "collect-recovered.json") -Force -ErrorAction SilentlyContinue }
         $res.state = "done"
     } finally { $lock.Dispose() }
     return [pscustomobject]$res

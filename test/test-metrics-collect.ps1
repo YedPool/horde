@@ -397,6 +397,17 @@ try {
     Check (-not (Test-Path -LiteralPath $kept)) "and the temp became the index"
     $sumRec = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
     Check ($sumRec.out -like "*WARNING*recovered*") "summarize says, loudly, that the index was recovered"
+    Check ($sumRec.out -match 'WARNING: collect recovered .* at \d{4}-\d\d-\d\dT') "with the date it happened"
+    # SAID ONCE, THEN DROPPED (review of #70): a later clean run that commits a valid index clears it; a
+    # run that writes nothing does not.
+    $quiet = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    $sumQ = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
+    Check (-not $quiet.wroteIndex -and $sumQ.out -like "*WARNING*recovered*") "CONTROL: a run that commits nothing leaves the warning"
+    [System.IO.File]::AppendAllText($cleanSrc, "`n"); Set-Old $cleanSrc $settledAt.AddMinutes(41)
+    $clean = Invoke-HordeMetricsCollect -Now $later -RepoRoot $root
+    $sumC = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "summarize", $cleanSrc) -Env @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
+    Check ($clean.wroteIndex -and $clean.recovered -eq "" -and $sumC.out -notlike "*WARNING*recovered*") "a clean run that commits a valid index clears it: summarize no longer warns"
+    $goodText = [System.IO.File]::ReadAllText($ixPath)
     # The same when the index is there but cannot be read.
     $kept2 = Join-Path $mdir (& $tmpName)
     [System.IO.File]::WriteAllText($kept2, $goodText)
