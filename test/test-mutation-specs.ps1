@@ -31,6 +31,8 @@ function Get-SpecProblems {
         $s = Import-PowerShellDataFile -LiteralPath $f.FullName
         $target = Join-Path $rootFull "$($s.Target)"
         if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { [void]$out.Add($rel + ": its target " + $s.Target + " does not exist"); continue }
+        $suitePath = Join-Path $rootFull "$($s.Suite)"
+        if ("$($s.Suite)" -match "[\x00-\x1F]" -or -not (Test-Path -LiteralPath $suitePath -PathType Leaf)) { [void]$out.Add($rel + ": its suite " + ("$($s.Suite)" -replace "[\x00-\x1F]", "?") + " does not exist") }
         $text = [System.IO.File]::ReadAllText($target)
         foreach ($m in @($s.Mutations)) {
             # tools\Mutate.ps1 refuses a find that spans lines, since line endings differ by checkout;
@@ -65,6 +67,14 @@ try {
     Check (@($planted | Where-Object { $_ -match 'planted\.psd1 :: absent: its find string occurs 0 times' }).Count -eq 1) "CONTROL: a find string that does not occur is reported"
     Check (@($planted | Where-Object { $_ -match 'no-target\.psd1: its target gone\.ps1 does not exist' }).Count -eq 1) "CONTROL: a spec whose target is missing is reported"
     Check (@($planted | Where-Object { $_ -match ':: once:' }).Count -eq 0) "CONTROL: a find string that occurs once is not"
+    # A SUITE PATH THAT DOES NOT EXIST passed this guard and failed only on the remote box, as a run
+    # with no verdict: a spec written with a tab where a backslash belonged (2026-10-02).
+    [System.IO.File]::WriteAllText((Join-Path $fx "s.ps1"), "# a suite")
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\no-suite.psd1"), ("@{ Target = 't.ps1'; Suite = 'test" + [char]9 + "est.ps1'; Mutations = @(@{ Name = 'ok'; Find = 'function C'; Replace = 'function Z' }) }"))
+    $planted3 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
+    Check (@($planted3 | Where-Object { $_ -match 'no-suite\.psd1: its suite .* does not exist' }).Count -eq 1) "a spec whose suite does not exist is reported"
+    Check (@($planted3 | Where-Object { $_ -match 'planted\.psd1: its suite' }).Count -eq 0) "CONTROL: one whose suite exists is not"
+    Remove-Item -LiteralPath (Join-Path $fx "test\mutations\no-suite.psd1") -Force
     # A SPEC IN A SUBFOLDER OF mutations/ IS STILL A SPEC (review of PR #62, probe Q1: one in
     # test\mutations\sub\ was not seen and the suite passed).
     New-Item -ItemType Directory -Path (Join-Path $fx "test\mutations\sub") | Out-Null
