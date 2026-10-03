@@ -33,11 +33,6 @@
 #   passes horde's code through as it is.
 
 $ErrorActionPreference = "Stop"
-# OUT OF POWER THROTTLING FIRST (core/Platform.ps1). A busy background process on Windows slows about
-# 3 s in, measured 2026-10-02: an empty call 23 us to 165 us. horde status and metrics collect run that
-# long. Off Windows this does nothing. It costs one type compile, about 0.2 s, measured the same day.
-. (Join-Path $PSScriptRoot "core\Platform.ps1")
-$null = Set-HordeThrottlingOptOut
 . (Join-Path $PSScriptRoot "cli\Commands.ps1")
 . (Join-Path $PSScriptRoot "cli\Arguments.ps1")
 
@@ -101,6 +96,14 @@ try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $private:command = Import-HordeCommand -Path $lookup.command.path
+    # OUT OF POWER THROTTLING, FOR A SUSTAINED COMMAND ONLY (core/Platform.ps1). Windows slows a busy
+    # background process about 3 s in (measured 2026-10-02: an empty call 23 us to 165 us). Loading the
+    # type costs about 0.2 s, so only a command that declares sustained pays it; version and help stay
+    # instant. Off Windows the opt-out does nothing.
+    if ($lookup.command.sustained -eq $true) {
+        . (Join-Path $PSScriptRoot "core\Platform.ps1")
+        $null = Set-HordeThrottlingOptOut
+    }
     $global:LASTEXITCODE = 0
     & $runner -Run $command.run -Named $named -Positional $positional -State $state
     $settled = $true

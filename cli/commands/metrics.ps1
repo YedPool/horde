@@ -1,6 +1,7 @@
 $HordeCommand = @{
     name    = "metrics"
     group   = "metrics"
+    sustained = $true
     usage   = "metrics summarize <transcript-or-folder> [-From <UTC time>] [-To <UTC time>] [-Json]"
     summary = "read agent transcripts and print each worker's time, tokens, tool calls, silences and notional cost, and an orchestrator's still-waiting calls; records them only when metrics are enabled"
     run     = {

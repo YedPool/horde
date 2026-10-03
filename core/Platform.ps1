@@ -84,8 +84,9 @@ function Get-HordeLocalPlatform {
 # so a later change to it is a new type, never a clash with one already loaded in the session.
 #
 # NOT WINDOWS: there is no such throttling to opt out of, and the answer is absent with that note.
-$script:HordePowerTypeName = "HordePowerThrottlingV1"
-$script:HordePowerSource = @"
+# FUNCTIONS, NOT $script: VARIABLES (as cli/Commands.ps1 measured): a command's run block calls these
+# from cli/Runner.ps1's own script scope, where a $script: variable of this file reads as nothing.
+function Get-HordePowerSource { return @"
 using System;
 using System.Runtime.InteropServices;
 public static class HordePowerThrottlingV1 {
@@ -108,7 +109,7 @@ public static class HordePowerThrottlingV1 {
         return new uint[] { s.ControlMask, s.StateMask };
     }
 }
-"@
+"@ }
 
 function Test-HordeIsWindows {
     param($OsPlatform = [System.Environment]::OSVersion.Platform)
@@ -116,7 +117,7 @@ function Test-HordeIsWindows {
 }
 
 function Initialize-HordePowerType {
-    if (-not ($script:HordePowerTypeName -as [type])) { Add-Type -TypeDefinition $script:HordePowerSource }
+    if (-not ("HordePowerThrottlingV1" -as [type])) { Add-Type -TypeDefinition (Get-HordePowerSource) }
 }
 
 function Set-HordeThrottlingOptOut {

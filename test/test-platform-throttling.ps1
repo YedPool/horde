@@ -63,11 +63,11 @@ Check ($r.state -eq "known" -and (Get-HordeThrottlingState).value.optedOut -eq $
 
 Write-Host ""
 Write-Host "--- every place Horde starts sustained work applies it ---" -ForegroundColor Cyan
-# horde.ps1, the entry point, opts itself out before running a command; tools/Mutate.ps1 opts out each
+# horde.ps1, the entry point, opts out a command that declares itself sustained; tools/Mutate.ps1 opts out each
 # suite it starts; the test library's program runner opts out each child. Read from the source, and for
 # the runner, from the child itself.
 $entry = [System.IO.File]::ReadAllText((Join-Path $root "horde.ps1"))
-Check ($entry -match '(?m)^\$null = Set-HordeThrottlingOptOut\s*$') "horde.ps1 opts itself out"
+Check ($entry -match 'if \(\$lookup\.command\.sustained -eq \$true\) \{\s*\r?\n[^\r\n]*Platform\.ps1"\)\s*\r?\n\s*\$null = Set-HordeThrottlingOptOut' -and $entry -notmatch '(?m)^\$null = Set-HordeThrottlingOptOut') "horde.ps1 opts out a command that declares itself sustained, and only such a command (test-cli runs both)"
 $mut = [System.IO.File]::ReadAllText((Join-Path $root "tools\Mutate.ps1"))
 Check ($mut -match '\$p = \[System\.Diagnostics\.Process\]::Start\(\$psi\)\s*\r?\n\s*\$null = Set-HordeThrottlingOptOut -Process \$p') "tools/Mutate.ps1 opts out each suite right after starting it"
 $probe = Join-Path $env:TEMP ("horde-throttle-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
