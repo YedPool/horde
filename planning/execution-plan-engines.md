@@ -210,7 +210,12 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    (this step, the `agents/*` ratchet), then the lifecycle plan's step 5, then the hosts plan's step 5
    (the cross-host import). Each rebases on the one before.
 3. **E2. `schema/agent-descriptor.v1` and `core/capabilities.json`.** There is one descriptor for each
-   of `agents/claude-code/agent.json` and `agents/codex/agent.json`. Each capability is `yes`, `no`,
+   of `agents/claude-code/agent.json`, `agents/codex/agent.json` and `agents/gemini-cli/agent.json`
+   (the third added when E2 was built, 2026-10-02: the CLI was already installed, so its flags could be
+   read off `--help` with the profile redirected, and every hook and unmeasured capability is
+   `unverified` until G1 measures it). The wire formats are named after vendor and API -
+   `anthropic-messages`, `openai-responses`, `openai-chat`, `google-genai` - so no shared file names a
+   harness. Each capability is `yes`, `no`,
    `declined` or `unverified`, and each has evidence. The descriptor has more fields than the design
    showed:
    - `nativeProvider` (the subscription rule);
@@ -274,6 +279,14 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    that the value appears nowhere in the output. The subscription rule's fixture pairs a
    `harness-login` provider with a harness whose `nativeProvider` is another provider. Every finding is
    mutation-tested. All fixtures here use neutral names.
+
+   **As built (2026-10-02).** A rule's `set` is checked against `core/config-keys.json`, the settings
+   registry - each key, the layers it may be set in and the values it takes - rather than listed in the
+   schema. It holds the four binding keys; `metrics.level` (metrics M2), `admission.tier` and remote
+   R9's node-policy keys (`remote.permissionCeiling`, L1 and L4 only) each land as one entry, and the
+   checker and E4's resolver read them with no code change. The live layer (L4) shares the schema,
+   with `revision` allowed there alone, instead of a second schema. The wire formats are named as
+   `schema/agent-descriptor.v1` names them (`google-genai`, not `gemini`).
 5. **E4. `core/EngineResolve.ps1`** (CAPS, after E2). A pure function. It takes the layers (already parsed) and a
    target, and returns one tristate answer per field, with its provenance. Tests cover:
    - the full precedence table;
@@ -291,6 +304,16 @@ Half A writes only config files, so it can ship before Horde spawns anything.
    `schema/host-capabilities.v1.json`. So this step starts after that schema merges, and not before:
    a shape guessed now would be a second definition. Reading the real
    `hosts/<name>/capabilities.json` files is step 20.
+
+   **As built (2026-10-02).** Host capabilities come in as the host port's own table
+   (`core/HostPort.ps1`: capability name to yes, no, declined or unverified), which exists today, so
+   nothing guesses the Phase 3 file's shape; step 20 still reads the files. The role requirements are
+   `core/role-requirements.json` (the design's 4.3). The built-in layer (L0) is each harness's own
+   `agents/<name>/engine.json` - its native provider and profile, and in exactly one of them the
+   fleet's default rule - read by `Get-HordeBuiltinLayer`, so core names no harness. Measured on the
+   descriptors of E2: codex can run goblins today and not orcs (delivery-receipt is unverified);
+   gemini-cli cannot yet run goblins either, because resume and report-hook are unverified until G1
+   and G3 measure them, and `agents/gemini-cli/test/test-engine-builtin.ps1` pins that refusal.
 6. **E5. `core/Secrets.ps1`.** It resolves `env` and `harness-login` references, and nothing else. It
    answers `set`, `missing` or `unknown (why)`, and it gives the value only to the launch stub. The
    test finds no fake secret in any output, with a positive control.
@@ -560,8 +583,8 @@ G. The gemini-cli adapter
     - the hooks, and their `GEMINI_SESSION_ID`;
     - whether a status file exists.
 
-    Then `agents/gemini-cli/agent.json` is written with `protocols: [gemini]` and
-    `nativeProvider: google`. Its events map AfterAgent to turn-ended and BeforeAgent to
+    Then `agents/gemini-cli/agent.json`, which E2 wrote with `protocols: [google-genai]` and
+    `nativeProvider: google`, is updated from these measurements. Its events map AfterAgent to turn-ended and BeforeAgent to
     turn-started, and treat SessionEnd as best-effort. `message-inject` stays `unverified` until it is
     measured, so gemini-cli can run goblins but not orcs or the warchief.
 22. **G2. `agents/gemini-cli/Transcript.ps1`** (INSTALL and FOLLOW: after G1 and the lifecycle plan's

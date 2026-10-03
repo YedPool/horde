@@ -19,6 +19,10 @@
       "support": "yes",
       "evidence": "A hub-role Open round-trips frames in test/test-transport-conformance.ps1."
     },
+    "accept": {
+      "support": "yes",
+      "evidence": "A node dials this end's in-process queue and the link is accepted and carries frames, in test/test-transport-conformance.ps1 (its accepting cases)."
+    },
     "keepalive": {
       "support": "yes",
       "evidence": "Closing one end marks the other's inbound direction closed at once, and health reads closed with no frame sent (test/test-transport-conformance.ps1)."

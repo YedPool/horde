@@ -19,6 +19,10 @@
       "support": "yes",
       "evidence": "A hub-role Open round-trips frames in test/test-transport-conformance.ps1: on one machine the hub dials the node's pipe."
     },
+    "accept": {
+      "support": "yes",
+      "evidence": "A node dials this end's pipe and the link is accepted and carries frames, in test/test-transport-conformance.ps1 (its accepting cases)."
+    },
     "keepalive": {
       "support": "yes",
       "evidence": "A read is always pending; when the far end closes, it completes with 0 bytes and health reads closed with no frame sent (test/test-transport-conformance.ps1)."

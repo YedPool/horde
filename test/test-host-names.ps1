@@ -608,6 +608,38 @@ try {
         Add-ZorbcodeName $zcPath; Save-FakeMain
         Write-FakeFile "agents/zorbcode/names.txt" ("zorbcode | the invented agent harness this suite polices in place of a real one`n" + "zc-chatlog- | processImage | the invented fragment, now held to the stricter rule`n")
     } "a name promoted to processImage passes - the stricter rule only gains"
+
+    Write-Host ""
+    Write-Host "--- a transport is a port too: transports/<name>/ is the third family (remote plan step R5) ---" -ForegroundColor Cyan
+
+    # Founder decision 10 of the remote design: nothing outside transports/<name>/ names a transport
+    # program or its options, so the second transport is a new folder and not an engine change. The
+    # same scan, the same lists and the same origin/main comparison, over a third family of folders.
+    # The invented transport is zorblink; transports/Port.ps1 is the port, and belongs to no transport.
+    function Add-Zorblink {
+        Write-FakeFile "transports/zorblink/names.txt" "zorblink | the invented transport this suite polices in place of a real one`n"
+        Write-FakeFile "transports/zorblink/Transport.ps1" "# the zorblink adapter, which may name its own transport: zorblink`n"
+    }
+    Passes "transport-clean" { Add-Zorblink } "CONTROL: a transport named only in its own folder passes"
+    Refuses "transport-leak" { Add-Zorblink; Write-FakeFile "core/dial.ps1" "& ZORBLINK -T`n" } "is not in transports/zorblink/allowlist.txt" "a new file in core that names a transport is refused, whatever its case"
+    Refuses "transport-port-file" { Add-Zorblink; Write-FakeFile "transports/Port.ps1" "# dispatches to zorblink`n" } "is not in transports/zorblink/allowlist.txt" "the port file beside the transport folders belongs to no transport, and is refused for naming one"
+    Refuses "transport-no-names" { Write-FakeFile "transports/bare/Transport.ps1" "# a transport folder with no names.txt`n" } "declares no names.txt" "a transport folder with no names.txt is refused - it could not be checked"
+    Refuses "transport-names-host" { Add-Zorblink; Write-FakeFile "transports/zorblink/Transport.ps1" "# zorblink, carrying a zorbterm pane`n" } "is not in hosts/zorbterm/allowlist.txt" "a transport's folder that names a host is refused"
+    Refuses "host-names-transport" { Add-Zorblink; Write-FakeFile "hosts/zorbterm/adapter.ps1" "# zorbterm, reached over zorblink`n" } "is not in transports/zorblink/allowlist.txt" "a host's folder that names a transport is refused"
+    ShrinkRefuses "sh-transport-removed" { Add-Zorblink; Save-FakeMain; Remove-Item -Recurse -Force -LiteralPath (Join-Path $script:repo "transports/zorblink") } "deleting its folder" "a transport folder on origin/main that is gone here is refused"
+    $nt = Shrink "sh-new-transport" { Add-Zorblink }
+    Check ($nt.skip -eq "" -and @($nt.findings).Count -eq 0 -and (@($nt.newHosts) -join ",") -eq "transports/zorblink") "a transport new since origin/main is reported as new under its own port, not compared"
+    # THE IMAGE RULE SKIPS PORT FOLDERS, NOT FAMILIES: a file directly under transports/ - the port -
+    # belongs to no transport, so it is held to the image rule like core.
+    $null = New-FakeRepo "img-family-file"; Add-ZorbcodeName $zcImage; Add-Zorblink
+    Write-FakeFile "transports/Port.ps1" "# if (`$p.Name -eq 'zcrunner.exe') { }`n"
+    $famImg = @(Test-HordeProcessImages -RepoRoot $script:repo)
+    Check ((Says $famImg "matches the process image") -and $famImg.Count -eq 1) "a file directly under a family folder, in no port's folder, is held to the image rule"
+    if ($famImg.Count -ne 1) { Show $famImg }
+    $null = New-FakeRepo "img-transport-own"; Add-ZorbcodeName $zcImage; Add-Zorblink
+    Write-FakeFile "transports/zorblink/Transport.ps1" "# zorblink`n"
+    Write-FakeFile "transports/zorblink/Image.ps1" "# zorblink checks no harness image`n"
+    Check (@(Test-HordeProcessImages -RepoRoot $script:repo).Count -eq 0) "CONTROL: a transport's own folder that matches no image passes the image rule"
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $fake -ErrorAction SilentlyContinue
 }
@@ -623,7 +655,9 @@ $realHosts = @(Get-ChildItem -LiteralPath (Join-Path $root "hosts") -Directory -
 Check ($realHosts.Count -ge 1) ("CONTROL: this repository has at least one host to check (" + $realHosts.Count + ")")
 $realAgents = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory -ErrorAction SilentlyContinue)
 Check ($realAgents.Count -ge 1) ("CONTROL: this repository has at least one harness to check (" + $realAgents.Count + ")")
-foreach ($h in @($realHosts + $realAgents)) {
+$realTransports = @(Get-ChildItem -LiteralPath (Join-Path $root "transports") -Directory -ErrorAction SilentlyContinue)
+Check ($realTransports.Count -ge 1) ("CONTROL: this repository has at least one transport to check (" + $realTransports.Count + ")")
+foreach ($h in @($realHosts + $realAgents + $realTransports)) {
     $port = Split-Path -Leaf (Split-Path -Parent $h.FullName)
     $np = Join-Path $h.FullName "names.txt"
     # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so

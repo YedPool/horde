@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    { "name": "openai", "protocol": "openai-responses", "credential": { "kind": "harness-login" } }
+  ],
+  "profiles": [
+    { "name": "codex", "harness": "codex", "provider": "openai" }
+  ]
+}

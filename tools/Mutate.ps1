@@ -38,11 +38,103 @@
 #
 # -Only runs just the named mutants of the spec - to rerun one after a fix without the rest - and
 # refuses a name the spec does not have (second review of PR #31, finding 9).
-param([Parameter(Mandatory = $true)][string]$Spec, [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @())
+#
+# -Changed <base-ref> RUNS ONLY THE MUTANTS A CHANGE COULD HAVE MADE THE SUITES MISS: those whose find
+# string lies on a line the diff from merge-base(<base-ref>, HEAD) to the working tree added or
+# modified, plus every mutant that cannot be placed (fail safe) and every mutant of a spec whose file changed. The
+# rules, and why each leans towards running, are in tools\MutateChanged.ps1. Every spec is read unless
+# -Spec names one. Each spec with a selected mutant then runs as an ordinary -Spec -Only run, so it
+# keeps its own Environment - its suite's section filter - and its baselines. The output lists every
+# mutant selected and every one skipped, with the reason. A diff that touches a mutation target yet
+# selects nothing exits 2: zero is not a pass there. -Plan prints the selection and runs nothing (no
+# "mutations:" line, so no gate can read it as a result).
+#
+#   powershell -File tools\Mutate.ps1 -Changed origin/main
+param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan)
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
+# Each suite this tool starts is opted out of power throttling (core/Platform.ps1, Invoke-HordeSuite).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Platform.ps1")
 $repo = Split-Path -Parent $PSScriptRoot
+if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
+if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
+if ($Changed) {
+    if ($Only.Count -gt 0) { Write-Host "  -Only and -Changed both choose the mutants; give one" -ForegroundColor Red; exit 2 }
+    . (Join-Path $PSScriptRoot "MutateChanged.ps1")
+    . (Join-Path $repo "test\lib\SuiteFiles.ps1")
+    $diff = Get-HordeChangedLines -Repo $repo -Base $Changed
+    if (-not $diff.ok) { Write-Host ("  -Changed: " + $diff.error) -ForegroundColor Red; exit 2 }
+    $specRels = @()
+    if ($Spec) {
+        $specRels = @($Spec)
+    } else {
+        # The one rule for what a spec is, shared with test\test-mutation-specs.ps1 (test\lib\SuiteFiles.ps1).
+        $repoLen = [System.IO.Path]::GetFullPath($repo).TrimEnd('\').Length + 1
+        $specRels = @(Get-HordeMutationSpecFiles -Root $repo | ForEach-Object { $_.FullName.Substring($repoLen) })
+    }
+    $specObjs = @()
+    foreach ($rel in $specRels) {
+        $full = $rel; if (-not [System.IO.Path]::IsPathRooted($full)) { $full = Join-Path $repo $rel }
+        $data = Import-PowerShellDataFile -LiteralPath $full
+        foreach ($k in @("Target", "Suite", "Mutations")) { if (-not $data.ContainsKey($k)) { Write-Host ("  " + $rel + ": spec has no " + $k) -ForegroundColor Red; exit 2 } }
+        $tFull = Join-Path $repo "$($data.Target)"
+        $text = $null
+        if (Test-Path -LiteralPath $tFull -PathType Leaf) { $text = [System.IO.File]::ReadAllText($tFull) }
+        $relKey = ConvertTo-HordeDiffKey ([System.IO.Path]::GetFullPath($full).Substring([System.IO.Path]::GetFullPath($repo).TrimEnd('\').Length + 1))
+        $specObjs += [pscustomobject]@{ spec = $rel; data = $data; text = $text; specChanged = $diff.changed.ContainsKey($relKey) }
+    }
+    $rows = @(Select-HordeChangedMutants -Specs $specObjs -Changed $diff.changed)
+    $verdict = Get-HordeSelectionVerdict -Rows $rows -Changed $diff.changed
+    $tgtKeys = @{}; foreach ($so in $specObjs) { $tgtKeys[(ConvertTo-HordeDiffKey "$($so.data.Target)")] = $true }
+    $touchedTargets = @($diff.changed.Keys | Where-Object { $tgtKeys.ContainsKey($_) } | Sort-Object)
+    Write-Host ("changed: base " + $Changed + " (merge-base " + $diff.mergeBase.Substring(0, [Math]::Min(12, $diff.mergeBase.Length)) + "), " + $diff.changed.Count + " file(s) changed, " + $touchedTargets.Count + " of them mutation targets" + $(if ($touchedTargets.Count) { ": " + ($touchedTargets -join ", ") } else { "" }))
+    foreach ($so in $specObjs) {
+        $mine = @($rows | Where-Object { $_.spec -eq $so.spec })
+        if ($mine.Count -gt 0 -and @($mine | Where-Object { $_.selected -or $_.reason -notlike "* is not in the diff" }).Count -eq 0) {
+            # A spec whose target the diff never touched, with every mutant placed: one line says so.
+            Write-Host ("  [SKIP] " + $so.spec + ": all " + $mine.Count + " mutants - " + $so.data.Target + " is not in the diff") -ForegroundColor DarkGray
+            continue
+        }
+        foreach ($r in $mine) {
+            if ($r.selected) { Write-Host ("  [SELECT] " + $r.spec + " :: " + $r.name + " - " + $r.reason) }
+            else { Write-Host ("  [SKIP] " + $r.spec + " :: " + $r.name + " - " + $r.reason) -ForegroundColor DarkGray }
+        }
+    }
+    $selRows = @($rows | Where-Object { $_.selected })
+    Write-Host ("changed: " + $verdict.message + "; skipped " + ($rows.Count - $selRows.Count) + " as unchanged")
+    if (-not $verdict.ok) { Write-Host ("  -Changed: " + $verdict.message) -ForegroundColor Red; exit 2 }
+    if ($Plan) { Write-Host "changed: plan only - nothing was run"; exit 0 }
+    if ($selRows.Count -eq 0) { Write-Host ("mutations: none selected - " + $verdict.message); exit 0 }
+
+    # Each spec with a selected mutant runs as an ordinary -Spec -Only run of this same tool, in this
+    # process: its own Environment (section filter), its own baselines before and after.
+    $sum = 0; $okSum = 0; $notSum = 0; $worst = 0; $t0 = Get-Date
+    foreach ($so in $specObjs) {
+        $names = @($selRows | Where-Object { $_.spec -eq $so.spec } | ForEach-Object { $_.name } | Select-Object -Unique)
+        if ($names.Count -eq 0) { continue }
+        Write-Host ("changed: running " + $names.Count + " mutant(s) of " + $so.spec)
+        $ts = Get-Date
+        $childArgs = @{ Spec = $so.spec; Only = $names; TimeoutSeconds = $TimeoutSeconds }
+        if ($RunTag) { $childArgs.RunTag = $RunTag }
+        $lines = @(& $PSCommandPath @childArgs 6>&1 | ForEach-Object { "$_" })
+        $code = $LASTEXITCODE
+        # The spec's own result line is relayed indented, so the one line starting "mutations: " is
+        # the total below - the line a gate reads.
+        foreach ($l in $lines) { if ($l -match '^mutations: ') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l } }
+        $m = [regex]::Match((@($lines | Where-Object { $_ -match '^mutations: ' }) | Select-Object -Last 1), '^mutations: (\d+), as expected: (\d+), not: (\d+)')
+        if ($m.Success) { $sum += [int]$m.Groups[1].Value; $okSum += [int]$m.Groups[2].Value; $notSum += [int]$m.Groups[3].Value }
+        elseif ($code -eq 0) { $code = 2 }
+        if ($code -ne 0 -and $code -ne 1) { $code = 2 }
+        if ($code -gt $worst) { $worst = $code }
+        Write-Host ("changed: " + $so.spec + " exit=" + $code + " in " + [int]((Get-Date) - $ts).TotalSeconds + "s")
+    }
+    Write-Host ("changed: ran the selection in " + [int]((Get-Date) - $t0).TotalSeconds + "s")
+    if ($worst -eq 2) { Write-Host "mutations: not run - a selected spec could not run (see above)"; exit 2 }
+    Write-Host ("mutations: " + $sum + ", as expected: " + $okSum + ", not: " + $notSum)
+    if ($worst -ne 0 -or $notSum -gt 0) { exit 1 }
+    exit 0
+}
 
 function Invoke-HordeSuite {
     # Run a suite as its own process; returns { code; out; timedOut }. The two streams are read through
@@ -57,6 +149,7 @@ function Invoke-HordeSuite {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
+    $null = Set-HordeThrottlingOptOut -Process $p
     try {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()

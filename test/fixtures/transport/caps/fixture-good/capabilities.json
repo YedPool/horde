@@ -7,6 +7,7 @@
     "encrypt": { "support": "no", "evidence": "fixture" },
     "dial.out": { "support": "yes", "evidence": "fixture" },
     "dial.in": { "support": "unverified", "evidence": "fixture: never run" },
+    "accept": { "support": "yes", "evidence": "fixture" },
     "keepalive": { "support": "yes", "evidence": "fixture" },
     "survives.peer.restart": { "support": "declined", "evidence": "fixture" }
   }

@@ -96,6 +96,18 @@ try {
     # Loading is inside the handled path, so a file that fails to load is reported under the
     # command's name with exit 1, never as a bare PowerShell error (review of PR #12, finding 10).
     $private:command = Import-HordeCommand -Path $lookup.command.path
+    # OUT OF POWER THROTTLING, FOR A SUSTAINED COMMAND ONLY (core/Platform.ps1). Windows slows a busy
+    # background process about 3 s in (measured 2026-10-02: an empty call 23 us to 165 us). Loading the
+    # type costs about 0.2 s, so only a command that declares sustained pays it; version and help stay
+    # instant. Off Windows the opt-out does nothing.
+    # IN A SCOPE OF ITS OWN (review of PR #79, point 5): dot-sourced here, core's functions stayed visible
+    # to the run block while the $script: state they read did not, so a command that called them without
+    # loading them got answers that failed validation and a process-namespace check that never fired.
+    # A failed opt-out costs speed, not correctness, so it is said only when HORDE_DEBUG=1.
+    if ($lookup.command.sustained -eq $true) {
+        $private:throttle = & { . (Join-Path $PSScriptRoot "core\Platform.ps1"); Set-HordeThrottlingOptOut }
+        if ("$env:HORDE_DEBUG" -eq "1" -and $throttle.state -eq "unknown") { [Console]::Error.WriteLine("horde: the power-throttling opt-out was not applied: " + $throttle.reason) }
+    }
     $global:LASTEXITCODE = 0
     & $runner -Run $command.run -Named $named -Positional $positional -State $state
     $settled = $true

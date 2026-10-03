@@ -20,8 +20,8 @@
     },
     "spaces": {
       "type": "array", "x-horde-cap": "listItems",
-      "description": "The process-id spaces this node can look pids up in (hosts decision 5).",
-      "items": { "type": "string", "pattern": "^(win32|posix|synthetic|wsl:[A-Za-z0-9._-]{1,64})$", "x-horde-cap": "nameBytes" }
+      "description": "The process-id spaces this node can look pids up in (hosts decision 5), named as core/Platform.ps1 names them: windows, not win32 (remote plan R11; test/test-link-contracts.ps1 holds the two patterns equal).",
+      "items": { "type": "string", "pattern": "^(windows|posix|synthetic|wsl:[A-Za-z0-9._-]{1,64})$", "x-horde-cap": "nameBytes" }
     },
     "hosts": {
       "type": "array", "x-horde-cap": "listItems",

@@ -22,6 +22,8 @@
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 . (Join-Path $PSScriptRoot "Tristate.ps1")
+# The one duplicate-key scanner, shared with core/Ownership.ps1 (core/JsonText.ps1).
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 
 # A level's name: a lower-case letter, then lower-case letters, digits or hyphens, at most 32 in all.
 $script:HordePermissionLevelNamePattern = '^[a-z][a-z0-9-]{0,31}$'
@@ -41,51 +43,6 @@ function Format-HordePermissionLevelQuote {
     param([string]$Text)
     if ($Text.Length -le $script:HordePermissionLevelQuoteMax -and (Test-HordePermissionLevelPrintable -Text $Text)) { return ("'" + $Text + "'") }
     return ("a value of " + $Text.Length + " characters, not shown")
-}
-
-function Find-HordeJsonDuplicateKey {
-    # The first key that appears twice in one JSON object, or $null. ConvertFrom-Json in PowerShell 5.1
-    # keeps the LAST of two equal keys and says nothing (measured by the review of this PR:
-    # {"levels":[..plan..],"levels":[..plan, bypass..]} loads as plan,bypass), so a reader of the file
-    # would see one vocabulary and Horde would use another. Keys are compared after their escapes are
-    # decoded, so "\u006eame" is "name". Keys that differ only in case already make ConvertFrom-Json
-    # throw. Malformed JSON is ConvertFrom-Json's to refuse; this only has to find equal keys.
-    param([string]$Text)
-    $stack = New-Object System.Collections.ArrayList
-    $n = $Text.Length
-    $i = 0
-    while ($i -lt $n) {
-        $c = $Text[$i]
-        if ($c -ceq '"') {
-            $sb = New-Object System.Text.StringBuilder
-            $i++
-            while ($i -lt $n -and $Text[$i] -cne '"') {
-                if ($Text[$i] -ceq '\' -and $i + 1 -lt $n) {
-                    $e = [string]$Text[$i + 1]
-                    if ($e -ceq 'u' -and $i + 5 -lt $n) { [void]$sb.Append([char][System.Convert]::ToInt32($Text.Substring($i + 2, 4), 16)); $i += 6; continue }
-                    if ($e -ceq 'n') { $e = "`n" } elseif ($e -ceq 't') { $e = "`t" } elseif ($e -ceq 'r') { $e = "`r" } elseif ($e -ceq 'b') { $e = [string][char]8 } elseif ($e -ceq 'f') { $e = [string][char]12 }
-                    [void]$sb.Append($e)
-                    $i += 2
-                    continue
-                }
-                [void]$sb.Append($Text[$i])
-                $i++
-            }
-            $i++
-            $j = $i
-            while ($j -lt $n -and " `t`r`n".IndexOf($Text[$j]) -ge 0) { $j++ }
-            if ($j -lt $n -and $Text[$j] -ceq ':' -and $stack.Count -gt 0) {
-                $top = $stack[$stack.Count - 1]
-                if ($null -ne $top -and -not $top.Add($sb.ToString())) { return $sb.ToString() }
-            }
-            continue
-        }
-        if ($c -ceq '{') { [void]$stack.Add((New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal))) }
-        elseif ($c -ceq '[') { [void]$stack.Add($null) }
-        elseif (($c -ceq '}' -or $c -ceq ']') -and $stack.Count -gt 0) { $stack.RemoveAt($stack.Count - 1) }
-        $i++
-    }
-    return $null
 }
 
 function Test-HordePermissionLevelPrintable {
@@ -146,8 +103,14 @@ function Read-HordePermissionLevelText {
     # Throws, naming every problem, when the table is not well formed: a caller holding a broken
     # vocabulary has no ceiling it can trust.
     param([Parameter(Mandatory = $true)][string]$Text)
-    $dup = Find-HordeJsonDuplicateKey -Text $Text
-    if ($null -ne $dup) { throw ("the permission-level vocabulary is malformed: the key " + (Format-HordePermissionLevelQuote -Text $dup) + " appears twice in one object, and only the last would be read") }
+    $dups = @(Find-HordeJsonDuplicateKey -Text $Text)
+    # The first finding only, and only when it is short and printable: a reason is written to logs, and
+    # the scanner quotes the key and its path as they are (review of this fix, 2026-10-02).
+    if ($dups.Count -gt 0) {
+        $first = "$($dups[0])"
+        if ($first.Length -gt $script:HordePermissionLevelMeaningMax -or -not (Test-HordePermissionLevelPrintable -Text $first)) { $first = "a finding of " + $first.Length + " characters, not shown" }
+        throw ("the permission-level vocabulary is malformed: a key is written twice in one object, and only the last would be read (" + $dups.Count + " found; first: " + $first + ")")
+    }
     $table = $Text | ConvertFrom-Json
     $problems = @(Test-HordePermissionLevelTable -Table $table)
     if ($problems.Count -gt 0) { throw ("the permission-level vocabulary is malformed: " + ($problems -join "; ")) }

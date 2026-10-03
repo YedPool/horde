@@ -79,7 +79,7 @@ $script:HordeLinkVerbAllow = @{
     "session.resume"  = @{ effect = "spawn"; args = @("sessionId", "reresolve", "model") }
     "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body",
                           "ttlSeconds") }
-    "session.close"   = @{ effect = "kill";  args = @("sessionId", "expect", "expect.pid", "expect.procStart", "reason") }
+    "session.close"   = @{ effect = "kill";  args = @("sessionId", "expect", "expect.ns", "expect.ns.device", "expect.ns.space", "expect.pid", "expect.procStart", "reason") }
     "worktree.create" = @{ effect = "write"; args = @("repoId", "name", "branch", "base") }
     "worktree.remove" = @{ effect = "kill";  args = @("repoId", "name") }
     "alert.raise"     = @{ effect = "write"; args = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt") }

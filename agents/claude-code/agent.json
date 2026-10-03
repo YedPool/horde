@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "name": "claude-code",
+  "measured": { "cliVersion": "2.1.287", "on": "2026-10-02" },
+  "protocols": ["anthropic-messages"],
+  "nativeProvider": "anthropic",
+  "sessionIdPattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+  "ownedEnv": [
+    { "name": "ANTHROPIC_BASE_URL", "evidence": "the provider endpoint (engines P2); 117 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_AUTH_TOKEN", "evidence": "the provider token (engines P2); 70 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_API_KEY", "evidence": "an inherited API key that must never reach a child (engines P2); 144 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_MODEL", "evidence": "the model (engines P2); 25 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_DEFAULT_OPUS_MODEL", "evidence": "a model alias pin (engines P2); 70 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_DEFAULT_SONNET_MODEL", "evidence": "a model alias pin (engines P2); 53 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL", "evidence": "a model alias pin (engines P2); 53 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "ANTHROPIC_DEFAULT_FABLE_MODEL", "evidence": "a model alias pin (engines P2); 36 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "CLAUDE_CODE_SUBAGENT_MODEL", "evidence": "the subagent model pin (engines P2); 26 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "API_TIMEOUT_MS", "evidence": "a provider's request timeout (engines P2); 14 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "evidence": "set for an endpoint that rejects beta fields (engines P2); 14 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "evidence": "a provider's context window (engines P2); 16 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
+    { "name": "CLAUDE_CODE_EFFORT_LEVEL", "evidence": "a provider's effort setting (engines P2); 17 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" }
+  ],
+  "events": {
+    "session-started": { "hook": "SessionStart", "support": "yes", "evidence": "the fleet's registry hook runs on it in every session (YedPool/wezfleet hooks/wf-registry-refresh.ps1, SessionStart since 2026-09-15); 163 occurrences in the installed 2.1.287 claude.exe" },
+    "turn-started": { "hook": "UserPromptSubmit", "support": "unverified", "evidence": "80 occurrences in the installed 2.1.287 claude.exe, 2026-10-02; no hook of the fleet runs on it, so it has not been seen firing" },
+    "turn-ended": { "hook": "Stop", "support": "yes", "evidence": "the fleet's mail hook runs at the end of every turn of every session on it (YedPool/wezfleet hooks/wf-mail-deliver.mjs)" },
+    "session-ended": { "hook": "SessionEnd", "support": "unverified", "evidence": "53 occurrences in the installed 2.1.287 claude.exe, 2026-10-02; no hook of the fleet runs on it, so it has not been seen firing" }
+  },
+  "capabilities": {
+    "message-inject": { "support": "yes", "evidence": "a Stop hook that answers decision block hands its reason text to the running session, measured first-hand (YedPool/wezfleet hooks/wf-mail-deliver.mjs:3-8), and the fleet's mail is delivered that way" },
+    "delivery-receipt": { "support": "yes", "evidence": "every submitted user message is appended to the session transcript, which the fleet reads as the receipt (YedPool/wezfleet lib/Delivery.ps1, WHAT COUNTS AS ARRIVAL)" },
+    "resume": { "support": "yes", "evidence": "-r, --resume [value] in --help 2.1.287 (2026-10-02); resumed by id on 12 live processes (agent-engines research, 2026-09-30)" },
+    "report-hook": { "support": "yes", "evidence": "its SessionStart and Stop hooks run the fleet's own commands today (YedPool/wezfleet hooks/wf-registry-refresh.ps1, hooks/wf-mail-deliver.mjs)" },
+    "name-at-spawn": { "support": "yes", "evidence": "-n, --name <name> in --help 2.1.287 (2026-10-02), shown in the prompt box, the resume picker and the terminal title; passed at every spawn by YedPool/wezfleet lib/Agents.ps1" },
+    "model-select": { "support": "yes", "evidence": "--model <model> in --help 2.1.287 (2026-10-02), an alias or a full model name" },
+    "provider-select": { "support": "unverified", "evidence": "the endpoint and token come from ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN, both in the 2.1.287 executable; no session on another provider has been run yet (engines P3)" },
+    "session-id-preset": { "support": "yes", "evidence": "--session-id <uuid> in --help 2.1.287 (2026-10-02): use a specific session ID for the conversation, which must be a valid UUID" },
+    "session.remoteName": { "support": "yes", "evidence": "--remote-control [name] in --help 2.1.286 (2026-09-30) and 2.1.287 (2026-10-02); a session named at Remote Control start kept its web title, measured 2026-10-01 and confirmed on claude.ai/code (technique brief TECHNIQUE-web-session-names-2026-10-01.md, engines plan group I)" }
+  },
+  "permissionLevels": [
+    { "level": "plan", "argv": ["--permission-mode", "plan"], "entryPoints": ["interactive", "headless"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice plan", "readback": "permissionMode plan in the init event of claude -p --output-format stream-json --verbose, 2.1.287, CLAUDE_CONFIG_DIR redirected and the endpoint a closed local port, 2026-10-02 (agents/claude-code/test/test-permission-readback.ps1); read on the headless start only, the interactive one parses the same flag; review r60 saw every write denied" },
+    { "level": "ask", "argv": ["--permission-mode", "manual"], "entryPoints": ["interactive", "headless"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice manual. The mode reads back as default, the SDK types' name for it (sdk-tools.d.ts:795); default is also accepted and reads back the same, but the help does not list it, so the listed spelling is used", "readback": "permissionMode default in the init event of claude -p --output-format stream-json --verbose, 2.1.287, CLAUDE_CONFIG_DIR redirected and the endpoint a closed local port, 2026-10-02 (agents/claude-code/test/test-permission-readback.ps1); read on the headless start only, the interactive one parses the same flag" },
+    { "level": "edits", "argv": ["--permission-mode", "acceptEdits"], "entryPoints": ["interactive", "headless"], "evidence": "--permission-mode <mode> in --help 2.1.287 (2026-10-02), choice acceptEdits", "readback": "permissionMode acceptEdits in the init event of claude -p --output-format stream-json --verbose, 2.1.287, CLAUDE_CONFIG_DIR redirected and the endpoint a closed local port, 2026-10-02 (agents/claude-code/test/test-permission-readback.ps1); read on the headless start only, the interactive one parses the same flag; review r60 saw writes inside the folder allowed and outside it denied" },
+    { "level": "bypass", "argv": ["--dangerously-skip-permissions"], "entryPoints": ["interactive", "headless"], "evidence": "--dangerously-skip-permissions in --help 2.1.287 (2026-10-02): bypass all permission checks; the flag the fleet spawns with today (YedPool/wezfleet lib/Agents.ps1:18-19)", "readback": "permissionMode bypassPermissions in the init event of claude -p --output-format stream-json --verbose, 2.1.287, CLAUDE_CONFIG_DIR redirected and the endpoint a closed local port, 2026-10-02 (agents/claude-code/test/test-permission-readback.ps1); read on the headless start only, the interactive one parses the same flag" }
+  ]
+}

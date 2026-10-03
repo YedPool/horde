@@ -1,7 +1,7 @@
 # ExecScan.ps1 - can a PowerShell file start a program, a shell or a script? An allowlist on every axis
 # of the file's syntax tree.
 #
-# Development tooling, not part of the engine. test/test-link-contracts.ps1 runs it over every file in
+# Development tooling, not part of the engine. test/test-exec-scan.ps1 runs it over every file in
 # remote/, because the link protocol is never a remote shell (remote-sessions design section 6): the
 # verb table cannot express one, and this proves the code beside the table does not hold one either.
 #
@@ -69,7 +69,12 @@ $script:HordeExecCmdlets = @("Join-Path", "Split-Path", "New-Object", "Where-Obj
 $script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-HordeSchemaFile",
     # core/Tristate.ps1's constructors and converters, which the journal answers in. Each takes plain
     # values; Invoke-HordeRead, in the same file, takes a script block and is NOT here.
-    "New-HordeKnown", "New-HordeAbsent", "New-HordeUnknown", "ConvertTo-HordeAnswerRecord", "ConvertFrom-HordeAnswerRecord")
+    "New-HordeKnown", "New-HordeAbsent", "New-HordeUnknown", "ConvertTo-HordeAnswerRecord", "ConvertFrom-HordeAnswerRecord",
+    # Limit-HordeAge (remote plan R6, remote/Clock.ps1): ages a remote answer by the hub's receive time.
+    # It takes an answer, a TTL and a time - plain values - and returns an answer; it calls
+    # Assert-HordeAnswer and the constructors above, and runs nothing it is given. Its -Now defaults
+    # to Get-Date (already allowed); remote/Clock.ps1 always passes a UTC -Now. Added 2026-10-02.
+    "Limit-HordeAge")
 # Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
 $script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1")
 

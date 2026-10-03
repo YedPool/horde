@@ -41,6 +41,8 @@
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 # The process table is the platform's (core/Platform.ps1): the one place the operating system is asked.
 . (Join-Path $PSScriptRoot "Platform.ps1")
+# Where a pid belongs (remote plan R11): the process check never looks up another device's pid.
+. (Join-Path $PSScriptRoot "Namespace.ps1")
 # For Get-HordeWezfleetRoot: one definition of where wezfleet's store is, shared with core/roles.
 . (Join-Path $PSScriptRoot "Roles.ps1")
 
@@ -153,10 +155,28 @@ function Get-HordeProcessVerdict {
     #   reused       the pid is running but started at another time: the file is stale
     #   uncheckable  procStart is missing or not a file time, or the table gives no start time
     #   no-table     the process table could not be read
+    #   remote       the pid belongs to another device or another process space, so this table is
+    #                never consulted for it (remote plan R11, core/Namespace.ps1)
     #
     # procStart is a DECIMAL STRING of file-time ticks on disk (10 of 10 files, 2026-09-30), so it is
     # parsed as an integer and compared as one: as text, "0" + the same ticks would be another time.
-    param([int]$ProcId, $ProcStart, $Processes)
+    #
+    # -Namespace and -Local place the pid (R11). A caller that names no namespace checks a pid of this
+    # machine's own table, as every caller of 2026-10-02 does: the control files it reads are local.
+    # One that names one is refused before the table is touched unless the pid is this device's, in
+    # this table's space: pid 1234 on another machine is not pid 1234 here.
+    param([int]$ProcId, $ProcStart, $Processes, $Namespace = $null, $Local = $null)
+    #
+    # A namespace without this machine's is not checked against nothing: -Namespace given alone is
+    # uncheckable, never looked up (review of this PR: "-or" mutated to "-and" looked it up).
+    # LIMIT, written down: -Local is the caller's word. The table does not yet carry the namespace it
+    # was read in, so a caller that names another device as local is believed. That moves into the
+    # table when a remote pid can reach this code (R12, R13).
+    if ($null -ne $Namespace -or $null -ne $Local) {
+        $placed = Test-HordeNamespaceLocal -Namespace $Namespace -Local $Local
+        if ($placed.state -ne "known") { return [pscustomobject]@{ same = $false; kind = "uncheckable"; reason = $placed.reason } }
+        if ($placed.value -ne $true) { return [pscustomobject]@{ same = $false; kind = "remote"; reason = $placed.reason } }
+    }
     if ($Processes.state -ne "known") { return [pscustomobject]@{ same = $false; kind = "no-table"; reason = ("the process table could not be read (" + $Processes.reason + ")") } }
     $ticks = [long]0
     if ($null -eq $ProcStart -or -not [long]::TryParse("$ProcStart", [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ticks)) {

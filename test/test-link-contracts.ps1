@@ -13,7 +13,9 @@
 #   - no verb takes a command line, script, program path, environment or path ... section C
 #   - no verb returns raw worker context: results are closed and capped ....... section D
 #   - the verbs the design leaves out are each refused ......................... section B
-# and one it implies: nothing in remote/ can start a program or a shell ........ section H
+# and one it implies - nothing in remote/ can start a program or a shell - is test/test-exec-scan.ps1's:
+# it tests tools/ExecScan.ps1, and lives apart so that the exec-scan mutation spec, which reruns its
+# suite once per mutant, reruns only the part a mutant of the scan can change.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -58,7 +60,7 @@ Check ($f.Count -eq 0) "schema/link-verbs.v1 passes every static rule"; Show $f
 Check ($contract.rows.Count -eq 13) "the v1 table has the 13 verbs this step defines (the rest are named as deferred in its description)"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
-Check ($golden.Count -eq 14) "there are 14 golden frames, one per kind and verb shape this step covers"
+Check ($golden.Count -eq 15) "there are 15 golden frames, one per kind and verb shape covered so far"
 foreach ($g in $golden) {
     $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
@@ -91,7 +93,10 @@ function Test-VerbsWith {
         if ($i -ge $realRowText.Count -or $text -cne $realRowText[$i] -or $Keep -ccontains "$($rows[$i].name)") { [void]$kept.Add($rows[$i]) }
     }
     $v.'x-horde-verbs' = @($kept)
-    return @(Test-HordeLinkVerbTable -Verbs $v)
+    # -Frame: the frame schema this suite already holds. Without it the checker reads and re-checks
+    # schema/link-frame.v1 from disk on every one of the hundred-odd cases (Get-HordeSchema does not
+    # cache), the same file each time (measured 2026-10-02 on the always-on box).
+    return @(Test-HordeLinkVerbTable -Verbs $v -Frame $realFrame)
 }
 function Add-Row {
     # A new row on a table copy, with node.info's harmless args and a result that is certainly valid.
@@ -271,6 +276,13 @@ FrameRefuses "ping.json" { param($x) $x.id = $x.id.ToUpperInvariant() } "$.id do
 FrameRefuses "ping.json" { param($x) $x.ts = "2026-09-30T12:00:10" } "$.ts does not match" "a time with no zone is refused"
 FrameRefuses "ping.json" { param($x) $x.seq = 0 } "below the minimum" "a sequence number below 1 is refused"
 FrameRefuses "ping.json" { param($x) $x | Add-Member -NotePropertyName shell -NotePropertyValue "cmd" } "has 'shell', which the schema does not allow" "an envelope member that does not exist is refused"
+# EVERY PID THAT LEAVES A NODE CARRIES ITS NAMESPACE (R11): session.close's expect names the device
+# and the process space its pid and procStart belong to, so the node never checks them in a table
+# they do not come from.
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.PSObject.Properties.Remove("ns") } "has no 'ns'" "a session.close whose expected pid names no namespace is refused"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.device = "DESKTOP-01" } "ns.device does not match" "an expected pid's device is a device id, never a host name"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns.space = "win32" } "ns.space does not match" "an expected pid's space is one core/Platform.ps1 knows"
+FrameRefuses "req-session-close.json" { param($x) $x.args.expect.ns | Add-Member -NotePropertyName pidDomain -NotePropertyValue "win32:tester" } "has 'pidDomain'" "an agent's pidDomain cannot ride in a namespace: it never stands in for the device"
 FrameRefuses "req-node-info.json" { param($x) $x.PSObject.Properties.Remove("requestId") } "a req frame has no 'requestId'" "a req without a requestId is refused"
 # issuedAt: when the hub first recorded the request (plan step R3's replay window). Required on a req,
 # a UTC time in ASCII digits, carried by no other kind, and the same on every resend - unlike ts.
@@ -417,6 +429,14 @@ DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.profiles[0].resolve
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("C:\code\horde") } "$.repos[0] does not match" "a manifest names repositories by id, never by path"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.repos = @("github.com/../..") } "$.repos[0] does not match" "a manifest repository id cannot climb out with .. segments, as the verb table's cannot"
 DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.spaces = @("wsl") } "$.spaces[0] does not match" "a wsl space names its distro"
+# ONE VOCABULARY OF SPACES (R11): the manifest offers the spaces a node's pids live in, and those are
+# core/Platform.ps1's names. The manifest said win32 where the platform says windows until R11.
+DocRefuses "manifest.json" "node-manifest.v1" { param($d) $d.spaces = @("win32") } "$.spaces[0] does not match" "win32 is not a space: core/Platform.ps1 names it windows"
+$platformSpaces = & { . (Join-Path $root "core\Platform.ps1"); $script:HordeProcessSpacePattern }
+$manifestSpaces = "$((Get-HordeSchema -Name 'node-manifest.v1').properties.spaces.items.pattern)"
+Check ($manifestSpaces -ceq $platformSpaces) ("the manifest's spaces are core/Platform.ps1's, pattern for pattern (" + $manifestSpaces + ")")
+$linkSpaces = "$((Get-HordeSchema -Name 'link-verbs.v1').definitions.ns.properties.space.pattern)"
+Check ($linkSpaces -ceq $platformSpaces) ("the link's ns.space is core/Platform.ps1's pattern too (" + $linkSpaces + ")")
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.PSObject.Properties.Remove("encrypt") } "has no 'encrypt'" "a transport declares every capability"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.encrypt.support = "n/a" } "is 'n/a', not one of" "a capability is yes, no, declined or unverified, nothing else"
 DocRefuses "transport-local.json" "transport-capabilities.v1" { param($d) $d.capabilities.encrypt.evidence = "" } "evidence does not match" "a capability without evidence is refused"
@@ -425,56 +445,5 @@ DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.peers[0].address 
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health.PSObject.Properties.Remove("value") } "$.health is known and carries no value" "an overlay's known health carries its value"
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health = [pscustomobject]@{ state = "unknown"; reason = "" } } "$.health is unknown and gives no reason" "an overlay's unknown health says why"
 DocRefuses "overlay.json" "overlay-endpoint.v1" { param($d) $d.health = $true } "$.health should be object" "overlay health is a tristate answer, never a bare boolean"
-
-Write-Host ""
-Write-Host "--- I. nothing in remote/ can start a program or a shell ---" -ForegroundColor Cyan
-
-# The verb table cannot express a shell; this proves the code beside it does not hold one either.
-# remote/ calls core and the adapters, which run what they run; it never starts anything itself.
-# tools/ExecScan.ps1 reads each file's syntax tree against an ALLOWLIST on every axis, because the
-# banned-name list it replaced caught 3 of the 27 ways to run something that the review
-# of PR #40 wrote (2026-10-01), and its second version, which still kept lists of banned methods and
-# types, let 7 of the verification's forms through. Every axis is now an allowlist (tools/ExecScan.ps1).
-. (Join-Path $root "tools\ExecScan.ps1")
-$known = Get-HordeExecFunctionNames -Roots @(Join-Path $root "remote")
-Check ($known.Contains("Test-HordeLinkFrame") -and -not $known.Contains("Invoke-HordeRead")) "CONTROL: the functions remote/ defines are read, and core's are not: only the listed core functions may be called, never Invoke-HordeRead, which runs the block it is given"
-
-function Get-LineFindings {
-    param($Findings, [int]$Line)
-    return @($Findings | Where-Object { "$_".StartsWith("line " + $Line + ": ") })
-}
-$ctlPath = Join-Path $fx "shell-control.ps1"
-$ctl = @(Get-HordeExecFindings -Path $ctlPath -Known $known)
-$ctlAst = [System.Management.Automation.Language.Parser]::ParseFile($ctlPath, [ref]$null, [ref]$null)
-$forms = @($ctlAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))
-Check ($forms.Count -eq 94) ("CONTROL: the control file holds 94 forms - the review's 27, the first scan's 9, the verification's 13, 44 that each isolate one rule, and a class method (found " + $forms.Count + ")")
-foreach ($form in $forms) {
-    $hits = @(Get-LineFindings $ctl $form.Extent.StartLineNumber)
-    Check ($hits.Count -ge 1) ("CONTROL: the form " + $form.Name + " is refused")
-}
-# Each form's own reason, so a rule switched off is seen even where another rule also catches the form.
-$expectCount = 0
-$lineNo = 0
-foreach ($text in [System.IO.File]::ReadAllLines($ctlPath)) {
-    $lineNo++
-    $m = [regex]::Match($text, '#\s*expect:\s*(.+?)\s*$')
-    if (-not $m.Success -or $text.TrimStart().StartsWith("#")) { continue }
-    $expectCount++
-    $want = $m.Groups[1].Value
-    $hits = @(Get-LineFindings $ctl $lineNo)
-    Check (@($hits | Where-Object { "$_".Contains($want) }).Count -ge 1) ("CONTROL: line " + $lineNo + " is refused because: " + $want)
-    if (@($hits | Where-Object { "$_".Contains($want) }).Count -eq 0) { Show $hits }
-}
-Check ($expectCount -eq 99) ("CONTROL: 99 lines of the control file name their reason (found " + $expectCount + ")")
-$clean = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-clean.ps1") -Known $known)
-Check ($clean.Count -eq 0) "CONTROL: a file written the way remote/ is written - its loader lines, allowlisted cmdlets, core functions, .NET types that start nothing - has no finding"; Show $clean
-$broken = @(Get-HordeExecFindings -Path (Join-Path $fx "shell-unparsed.ps1") -Known $known)
-Check (Says $broken "does not parse") "a file that does not parse is a finding, never silence"
-$remoteFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "remote") -Filter "*.ps1" -Recurse)
-Check ($remoteFiles.Count -ge 1) "there is code in remote/ to check"
-foreach ($file in $remoteFiles) {
-    $got = @(Get-HordeExecFindings -Path $file.FullName -Known $known)
-    Check ($got.Count -eq 0) ("remote/" + $file.Name + " starts no program and no shell"); Show $got
-}
 
 Complete-HordeSuite -Success "the link contracts allow exactly the verbs they list, and refuse every shell, path, environment and raw-context shape"
