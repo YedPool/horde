@@ -470,6 +470,8 @@ try {
     # A SUSTAINED COMMAND RUNS OPTED OUT OF POWER THROTTLING; ANY OTHER NEVER LOADS THE TYPE (core/Platform.ps1).
     $r = Invoke-Horde -Root $tmp -Arguments @("busy")
     Check ($r.code -eq 0 -and $r.out -match 'THROTTLE known 1/0') ("a command declared sustained runs opted out of power throttling (got " + $r.code + ": " + $r.out.Trim() + $r.err.Trim() + ")")
+    Check ($r.out -match 'LEAKED no') ("and the dispatcher's opt-out leaks no core function into its run block (review of PR #79, point 5; got " + $r.out.Trim() + ")")
+    Check ($r.out -match 'valid=True' -and $r.out -match 'BOGUS-SPACE refused=True') ("so core loaded by the command itself works as written: answers validate, a bogus process space is refused (got " + $r.out.Trim() + ")")
     $r = Invoke-Horde -Root $tmp -Arguments @("quick")
     Check ($r.code -eq 0 -and $r.out -match 'TYPE none') ("a command not declared sustained never loads the throttling type, so it pays nothing for it (got " + $r.out.Trim() + $r.err.Trim() + ")")
     # HELP DESCRIBES THE COMMANDS AS THEY ARE, NOT AS THEY WERE (YedPool/wezfleet 80aa026: a help text
