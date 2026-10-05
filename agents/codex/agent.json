@@ -27,7 +27,11 @@
     "model-select": { "support": "yes", "evidence": "-m, --model <MODEL> in --help 0.159.2 (2026-10-02)" },
     "provider-select": { "support": "unverified", "evidence": "-c overrides and -p, --profile in --help 0.159.2 (2026-10-02) could select another provider; none has been run, and the API-key routes are phase 2" },
     "session-id-preset": { "support": "no", "evidence": "--help and resume --help 0.159.2 (2026-10-02) list no flag that starts a session with a chosen id; the id is learned from the SessionStart hook or the rollout file name (agent-engines research 6.3)" },
-    "session.remoteName": { "support": "unverified", "evidence": "remote-control in --help 0.159.2 (2026-10-02) is experimental and manages a daemon; no remote view's session name has been measured (engines plan group I)" }
+    "session.remoteName": { "support": "unverified", "evidence": "remote-control in --help 0.159.2 (2026-10-02) is experimental and manages a daemon; no remote view's session name has been measured (engines plan group I)" },
+    "idle.turnState": { "support": "unverified", "evidence": "four rollouts on this machine pair task_started with task_complete or turn_aborted by turn_id (agents/codex/Idle.ps1, 2026-10-05), but no live Codex session existed to take the live control (planning/idle-session-reaper.md I-13)" },
+    "idle.lastEvent": { "support": "unverified", "evidence": "every line of four rollouts carries a time with a zone (2026-10-05); not measured on a live session" },
+    "input.box": { "support": "unverified", "evidence": "no parser for its input box exists; wezfleet's reader is for another harness's screen" },
+    "close.keys": { "support": "unverified", "evidence": "no exit key sequence has been measured" }
   },
   "permissionLevels": [
     { "level": "plan", "argv": ["--sandbox", "read-only", "--ask-for-approval", "never"], "entryPoints": ["interactive"], "evidence": "-s, --sandbox read-only and -a, --ask-for-approval never in --help 0.159.2 (2026-10-02); codex exec rejects --ask-for-approval with exit 2 (review r60), so the fragment is for the interactive start only", "readback": "sandbox read-only, approval never, and no escalation section, from codex <fragment> debug prompt-input, 0.159.2, CODEX_HOME redirected to a scratch folder, 2026-10-02 (agents/codex/test/test-permission-readback.ps1), with and without a [windows] sandbox setting" },

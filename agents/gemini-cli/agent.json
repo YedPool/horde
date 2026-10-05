@@ -34,7 +34,11 @@
     "model-select": { "support": "yes", "evidence": "-m, --model in --help 0.62.0 (2026-10-02)" },
     "provider-select": { "support": "unverified", "evidence": "its own login is the only route used; the API-key and Vertex routes are phase 2 and unmeasured" },
     "session-id-preset": { "support": "yes", "evidence": "--session-id in --help 0.62.0 (2026-10-02): start a new session with a manually provided UUID" },
-    "session.remoteName": { "support": "unverified", "evidence": "no remote view of a session has been measured (engines plan group I)" }
+    "session.remoteName": { "support": "unverified", "evidence": "no remote view of a session has been measured (engines plan group I)" },
+    "idle.turnState": { "support": "unverified", "evidence": "no idle reader exists for this harness (planning/idle-session-reaper.md section 1.3)" },
+    "idle.lastEvent": { "support": "unverified", "evidence": "its session files have not been read for times" },
+    "input.box": { "support": "unverified", "evidence": "no parser for its input box exists" },
+    "close.keys": { "support": "unverified", "evidence": "no exit key sequence has been measured" }
   },
   "permissionLevels": [
     { "level": "plan", "argv": ["--approval-mode", "plan"], "entryPoints": ["interactive", "headless"], "evidence": "--approval-mode in --help 0.62.0 (2026-10-02), choice plan: read-only mode", "readback": "no override line in a trusted folder; Approval mode overridden to \"default\" because the current folder is not trusted in an untrusted one, from the stderr of gemini --approval-mode <mode> -p probe --debug, 0.62.0, HOME and USERPROFILE redirected and the endpoint a closed local port, 2026-10-02 (agents/gemini-cli/test/test-permission-readback.ps1). The CLI prints no effective mode; it prints a line when it overrides one, and the readback is that line's presence or absence", "preconditions": [{"name": "folder-trusted", "evidence": "folder trust is on by default in 0.62.0 (review r60: security.folderTrust.enabled defaults to true); in a folder neither listed in the profile's trustedFolders.json nor started with GEMINI_CLI_TRUST_WORKSPACE=true this mode is overridden to default, the ask mode, and only a debug line says so - measured 2026-10-02"}] },

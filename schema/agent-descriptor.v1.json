@@ -54,7 +54,7 @@
     "capabilities": {
       "type": "object",
       "description": "Every capability core/capabilities.json says an agent can satisfy (port agent or either), each declared once.",
-      "required": ["message-inject", "delivery-receipt", "resume", "report-hook", "name-at-spawn", "model-select", "provider-select", "session-id-preset", "session.remoteName"],
+      "required": ["message-inject", "delivery-receipt", "resume", "report-hook", "name-at-spawn", "model-select", "provider-select", "session-id-preset", "session.remoteName", "idle.turnState", "idle.lastEvent", "input.box", "close.keys"],
       "additionalProperties": false,
       "properties": {
         "message-inject": { "$ref": "#/definitions/capability" },
@@ -65,7 +65,11 @@
         "model-select": { "$ref": "#/definitions/capability" },
         "provider-select": { "$ref": "#/definitions/capability" },
         "session-id-preset": { "$ref": "#/definitions/capability" },
-        "session.remoteName": { "$ref": "#/definitions/capability" }
+        "session.remoteName": { "$ref": "#/definitions/capability" },
+        "idle.turnState": { "$ref": "#/definitions/capability" },
+        "idle.lastEvent": { "$ref": "#/definitions/capability" },
+        "input.box": { "$ref": "#/definitions/capability" },
+        "close.keys": { "$ref": "#/definitions/capability" }
       }
     },
     "permissionLevels": {
