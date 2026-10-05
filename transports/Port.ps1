@@ -43,7 +43,9 @@
 #   Open    param($Endpoint, [int]$TimeoutMs)   -> { ok; channel; peer; reason }
 #   Probe   param($Endpoint)                    -> a tristate answer: known true/false, or unknown
 #   Listen  param($Endpoint)                    -> { ok; listener; reason }
-#   Accept  param($ListenerState, [int]$TimeoutMs) -> { ok; channel; peer; reason }
+#   Accept  param($ListenerState, [int]$TimeoutMs) -> { ok; channel; peer; reason; refused }
+#           refused is $true only when a peer connected and the adapter turned it away, the listener
+#           still whole (issue #85); it may be left out otherwise.
 #   Stop    param($ListenerState)
 # A channel is { state; read; write; close }:
 #   read    param($Channel, [int]$WaitMs) -> { kind = data | eof | none | error; bytes; reason }
@@ -242,7 +244,15 @@ function Receive-HordeTransportLink {
     if ($Listener.stopped) { return (New-HordeUnknown -Reason "the listener is stopped") }
     $t = $Listener.transport
     $r = Invoke-HordeTransportOp -Op $t.accept -ArgList @($Listener.state, $TimeoutMs) -What ("accepting on " + $t.name + " endpoint '" + $Listener.endpoint + "'")
-    if (-not $r.ok) { return (New-HordeUnknown -Reason ("no link accepted on " + $t.name + " endpoint '" + $Listener.endpoint + "': " + $r.reason)) }
+    if (-not $r.ok) {
+        # A REFUSED PEER IS NOT A BROKEN LISTENER (issue #85): the answer says which, so node serve keeps
+        # a listener that turned a peer away and restarts only one that has nothing waiting. Only a true
+        # flag is a refusal; anything else reads as a failure, which a listener's restart count bounds.
+        $refused = ($null -ne $r.PSObject.Properties["refused"] -and $r.refused -is [bool] -and $r.refused)
+        $no = New-HordeUnknown -Reason ("no link accepted on " + $t.name + " endpoint '" + $Listener.endpoint + "': " + $r.reason)
+        $no | Add-Member -NotePropertyName refused -NotePropertyValue $refused
+        return $no
+    }
     return (New-HordeKnown -Value (New-HordeLink -Transport $t -Role "accept" -Endpoint $Listener.endpoint -Channel $r.channel -Peer $r.peer))
 }
 

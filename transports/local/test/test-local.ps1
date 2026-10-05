@@ -189,12 +189,36 @@ try {
             $r = & $t.accept $state 15000
             Check ($r.ok -eq $false -and "$($r.reason)" -like "*integrity*") "the node refuses a client whose integrity is below its own, naming it"
             Check ("$($r.reason)" -like "*run the hub and node at the same integrity level*") "and says what to do about it"
+            # Issue #85: a refusal, not a broken listener - the next waiting instance holds the name, so
+            # node serve may keep this listener (review of PR #90, F1: nothing checked the flag here).
+            Check ($null -ne $r.PSObject.Properties["refused"] -and $r.refused -eq $true -and $null -ne $state.server) "the refusal is marked refused, and the listener still holds a waiting instance"
             if ($r.ok) { & $r.channel.close $r.channel }
+            $quiet = & $t.accept $state 300
+            Check ($quiet.ok -eq $false -and $quiet.refused -eq $false) ("CONTROL: an accept on the same listener that times out is not marked refused (" + $quiet.reason + ")")
             $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
             $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
             Check ($holdText -match "hold: CONNECTED") "CONTROL: the low client did reach the node past the low label"
         } finally { & $t.stop $state }
     }
+
+    # 3b. The same refusal when the next waiting instance could not be made (review of PR #90, F2): the
+    # listener no longer holds the name, so it is broken, not a listener that refused a peer, and the
+    # answer must not say refused. The instance maker is replaced for this case only.
+    $id = New-Id
+    $pipe = Get-HordeLocalPipeName -DeviceId $id
+    $h = [HordeLocalNative]::CreateServer(($script:HordeLocalPipeRoot + $pipe), $lowSddl, $true, 65536, [ref]$err)
+    if (-not $h.IsInvalid) {
+        $state = @{ pipe = $pipe; server = (New-Object System.IO.Pipes.NamedPipeServerStream([System.IO.Pipes.PipeDirection]::InOut, $true, $false, $h)); wait = $null; broken = "" }
+        $realMaker = ${function:New-HordeLocalServer}
+        try {
+            ${function:New-HordeLocalServer} = { param([string]$Pipe, [switch]$First) return [pscustomobject]@{ stream = $null; reason = "the test made the next instance fail" } }
+            $hold = Start-HordeLowChild -Mode "hold" -Pipe $pipe -Folder $lowDir
+            $r = & $t.accept $state 15000
+            Check ($r.ok -eq $false -and "$($r.reason)" -like "*integrity*" -and $null -eq $state.server -and "$($state.broken)" -like "*next instance fail*") ("CONTROL: the low client was refused and the next instance was not made (" + $r.reason + ")")
+            Check ($r.refused -eq $false) "a refusal that leaves no waiting instance is not marked refused: the listener is broken, and serve must restart it"
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
+        } finally { ${function:New-HordeLocalServer} = $realMaker; & $t.stop $state }
+    } else { Check $false "a low-labelled pipe for the broken-after-refusal case" }
 
     # 4. A process BELOW the node's level adds an instance to the node's live pipe (review of PR #42,
     # round 2). GetNamedPipeServerProcessId names the FIRST instance's creator, not the instance the hub

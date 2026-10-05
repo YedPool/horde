@@ -41,5 +41,23 @@
         @{ Name = "fast-accept-failure-taken-as-timeout"
            Find = 'if ($took -ge ($AcceptTimeoutMs / 2)) { $inARow = 0; continue }'
            Replace = '$inARow = 0; continue' }
+        @{ Name = "refused-peer-treated-as-broken-listener"
+           Find = 'if ($null -ne $acc.PSObject.Properties["refused"] -and $acc.refused -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refusal-not-logged"
+           Find = '[void]$refusals.Add($why)'
+           Replace = '' }
+        @{ Name = "refusal-list-uncapped"
+           Find = 'if ($refusals.Count -gt $script:HordeNodeRefusalsKept) { $refusals.RemoveAt(0) }'
+           Replace = '' }
+        @{ Name = "refusal-does-not-reset-the-run"
+           Find = '$inARow = 0  # reset by a refusal'
+           Replace = '' }
+        @{ Name = "refusals-logged-one-by-one"
+           Find = 'if ($refusedCount -le $script:HordeNodeRefusalsLogged) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "control-characters-logged"
+           Find = 'return ($Text -replace ''[\x00-\x1F\x7F]'', ''?'')'
+           Replace = 'return $Text' }
     )
 }

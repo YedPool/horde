@@ -438,4 +438,82 @@ Check ($past.error -clike "*listener failed 3 times in a row*nothing waiting*") 
 Check ($past.listens -eq 3 -and $past.accepts -eq 3) ("having listened again exactly twice (" + $past.listens + " listens, " + $past.accepts + " accepts)")
 Check (-not (Get-HordeMemoryListeners).ContainsKey("relisten-test")) "and its last listener is stopped on the way out: the endpoint is free"
 
+Write-Host ""
+Write-Host "--- a refused peer is not a broken listener (issue #85) ---" -ForegroundColor Cyan
+# The same fake transport, now turning peers away: its accept says refused for the first N calls, then
+# hands over a link. A refusal must keep the listener - no stop, no new listen, so the endpoint's name is
+# held throughout - count nothing toward -RelistenLimit, wait for nothing, and be logged. Before the fix
+# each refusal disposed the listener and listened again, and RelistenLimit + 1 of them in a row ended the
+# node: a way for any peer the transport refuses to kill it (the #81 review, F3).
+$script:rf = @{ accepts = 0; refuseFirst = 0; held = 0; stops = 0; plan = @() }
+$refuser = $script:mem.PSObject.Copy()
+$refuser.listen = {
+    param($Endpoint)
+    $script:rl.listens++
+    return (& $script:mem.listen $Endpoint)
+}
+$refuser.stop = {
+    param($ListenerState)
+    $script:rf.stops++
+    & $script:mem.stop $ListenerState
+}
+$refuser.accept = {
+    param($ListenerState, [int]$TimeoutMs)
+    $script:rf.accepts++
+    # The endpoint's name, sampled at every accept: still held by this listener.
+    $now = $null
+    if ((Get-HordeMemoryListeners).TryGetValue($ListenerState.endpoint, [ref]$now) -and [object]::ReferenceEquals($now, $ListenerState)) { $script:rf.held++ }
+    # A plan, when given, says what each accept does in turn: R a refusal, F a listener with nothing
+    # waiting, E a refusal whose reason carries control characters.
+    if ($script:rf.accepts -le @($script:rf.plan).Count) {
+        $step = @($script:rf.plan)[$script:rf.accepts - 1]
+        if ($step -ceq "F") { return [pscustomobject]@{ ok = $false; channel = $null; peer = $null; listener = $null; reason = "the test listener has nothing waiting" } }
+        $why = "refused a client: test peer " + $script:rf.accepts
+        if ($step -ceq "E") { $why = "refused a client: " + [char]27 + "[2J" + [char]7 + "bell and clear" }
+        return [pscustomobject]@{ ok = $false; refused = $true; channel = $null; peer = $null; listener = $null; reason = $why }
+    }
+    if ($script:rf.accepts -le $script:rf.refuseFirst) { return [pscustomobject]@{ ok = $false; refused = $true; channel = $null; peer = $null; listener = $null; reason = ("refused a client: test peer " + $script:rf.accepts) } }
+    $hub = & $script:mem.open $ListenerState.endpoint 1000
+    & $hub.channel.close $hub.channel
+    return (& $script:mem.accept $ListenerState $TimeoutMs)
+}
+function Invoke-Refusals {
+    param([int]$N, [int]$Limit, [string[]]$Plan = @())
+    $script:rf.accepts = 0; $script:rf.refuseFirst = $N; $script:rf.held = 0; $script:rf.stops = 0; $script:rl.listens = 0; $script:rf.plan = $Plan
+    $script:logged = New-Object System.Collections.ArrayList
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $out = [pscustomobject]@{ result = $null; error = ""; ms = 0 }
+    try { $out.result = Invoke-HordeNodeServe -Transport $refuser -Endpoint "refusal-test" -Manifest $manifest -Namespace $ns -GetView { View } -MaxLinks 1 -AcceptTimeoutMs 30000 -IdleTimeoutMs 5000 -RelistenLimit $Limit -Log { param($Line) [void]$script:logged.Add($Line) } }
+    catch { $out.error = "$($_.Exception.Message)" }
+    $out.ms = $sw.ElapsedMilliseconds
+    return $out
+}
+$ref = Invoke-Refusals -N 8 -Limit 2
+Check ($ref.error -eq "" -and $null -ne $ref.result -and $ref.result.served -eq 1) ("eight refused peers in a row, with a relisten limit of two, and the node is still up: it serves the next link (" + $ref.error + ")")
+Check ($null -ne $ref.result -and $ref.result.relistens -eq 0 -and $script:rl.listens -eq 1 -and $script:rf.stops -eq 1) ("the listener was kept throughout: one listen, no restart, stopped once on the way out (" + $script:rl.listens + " listens, " + $script:rf.stops + " stops)")
+Check ($script:rf.accepts -eq 9 -and $script:rf.held -eq 9) ("the endpoint's name was held by that listener at every one of the nine accepts (" + $script:rf.held + " of " + $script:rf.accepts + ")")
+Check ($null -ne $ref.result -and @($ref.result.refusals).Count -eq 8 -and "$(@($ref.result.refusals)[0])" -clike "*refused a client: test peer 1*") ("each refusal is logged with its reason (" + @($ref.result.refusals).Count + " logged)")
+Check ($ref.ms -lt 4000) ("and the node waited for nothing between them (" + $ref.ms + " ms for eight)")
+
+# Review of PR #90, F3 and F4. Many refusals: the reasons kept are capped at the last 100, the count is
+# whole, and the log says the first few and then one summary, so a peer's connect rate does not set the
+# log's volume (5000 refusals wrote 5000 lines before). A reason with control characters is stored and
+# logged without them.
+$many = Invoke-Refusals -N 250 -Limit 2
+$kept = @()
+if ($null -ne $many.result) { $kept = @($many.result.refusals) }
+Check ($many.error -eq "" -and $null -ne $many.result -and $many.result.served -eq 1 -and $many.result.refused -eq 250) ("250 refusals: the node serves on, and counts them all (" + $many.error + ")")
+Check ($kept.Count -eq 100 -and "$($kept[0])" -clike "*test peer 151" -and "$($kept[99])" -clike "*test peer 250") ("the reasons kept are the last 100: #151 to #250 (" + $kept.Count + " kept, first '" + "$(@($kept)[0])" + "')")
+$lines = @($script:logged)
+Check ($lines.Count -le 11 -and @($lines | Where-Object { $_ -clike "*240 more*" }).Count -eq 1) ("the log has the first ten and one summary of the rest, not a line each (" + $lines.Count + " lines)")
+$esc = Invoke-Refusals -N 0 -Limit 2 -Plan @("E")
+$stored = "$(@($esc.result.refusals)[0])"
+Check ($stored -clike "*bell and clear*" -and $stored -notmatch '[\x00-\x1F\x7F]' -and @($script:logged | Where-Object { $_ -match '[\x00-\x1F\x7F]' }).Count -eq 0) "a reason with control characters is kept and logged without them"
+# A refusal proves the listener works, so it ends a run of failures: two failures, a refusal, two more
+# failures, against a limit of two, is not three in a row.
+$mixed = Invoke-Refusals -N 0 -Limit 2 -Plan @("F", "F", "R", "F", "F")
+Check ($mixed.error -eq "" -and $null -ne $mixed.result -and $mixed.result.served -eq 1 -and $mixed.result.relistens -eq 4) ("failure, failure, refusal, failure, failure with a limit of two: the refusal resets the run, and the node serves on (" + $mixed.error + ")")
+$broken = Invoke-Relisten -FailFirst 50 -Limit 2
+Check ($broken.error -clike "*listener failed 3 times in a row*") "CONTROL: the same count of failures that are not refusals still stops the node at its limit"
+
 Complete-HordeSuite -Success "the node answers hello, node.info, sessions.list, session.get and request.status, refuses the rest, and every frame it sends is one the contract accepts"

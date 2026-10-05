@@ -249,4 +249,22 @@ Check ($h.state -ceq "known" -and $h.value.state -ceq "closed" -and "$($h.value.
 $a = Receive-HordeLinkFrame -Link $l -TimeoutMs 100
 Check ($a.state -ceq "unknown") "receiving on it is unknown"
 
+Write-Host ""
+Write-Host "--- an accept says whether it refused a peer or has nothing (issue #85) ---" -ForegroundColor Cyan
+# A transport that turned a connected peer away is not a broken listener: node serve must keep that
+# listener and count nothing (cli/NodeServe.ps1). So the port carries the adapter's refused flag on the
+# unknown it returns, and only a refusal sets it.
+function Listener {
+    param([scriptblock]$Accept)
+    $t = $good.PSObject.Copy()
+    $t.accept = $Accept
+    return [pscustomobject]@{ PSTypeName = "Horde.Listener"; transport = $t; endpoint = "e"; state = @{}; stopped = $false }
+}
+$refused = Receive-HordeTransportLink -Listener (Listener { param($s, $t) [pscustomobject]@{ ok = $false; refused = $true; channel = $null; peer = $null; reason = "refused a client: below this node's integrity" } }) -TimeoutMs 10
+Check ($refused.state -ceq "unknown" -and $null -ne $refused.PSObject.Properties["refused"] -and $refused.refused -eq $true -and $refused.reason -clike "*refused a client*") ("an accept that refused a peer is unknown, marked refused, with the adapter's reason (" + $refused.reason + ")")
+$nothing = Receive-HordeTransportLink -Listener (Listener { param($s, $t) [pscustomobject]@{ ok = $false; channel = $null; peer = $null; reason = "no waiting instance" } }) -TimeoutMs 10
+Check ($nothing.state -ceq "unknown" -and $null -ne $nothing.PSObject.Properties["refused"] -and $nothing.refused -eq $false) "CONTROL: an accept that failed with no peer is unknown and not marked refused"
+$odd = Receive-HordeTransportLink -Listener (Listener { param($s, $t) [pscustomobject]@{ ok = $false; refused = "yes"; channel = $null; peer = $null; reason = "a word, not a flag" } }) -TimeoutMs 10
+Check ($odd.refused -eq $false) "only a true flag is a refusal: anything else reads as a failure, the safe side for the listener's count"
+
 Complete-HordeSuite -Success "the port refuses dishonest transports and never guesses a frame"

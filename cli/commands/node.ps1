@@ -42,5 +42,6 @@ $HordeCommand = @{
         $r = Invoke-HordeNodeServe -Transport $transport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say
         Write-Output ("served " + $r.served + " link(s)")
         foreach ($e in $r.endings) { Write-Output ("  " + $e) }
+        if ($r.refused -gt 0) { Write-Output ("refused " + $r.refused + " peer(s), the listener kept each time") }
     }
 }
