@@ -30,18 +30,19 @@ function Known { param($Value, [string]$At) return [pscustomobject][ordered]@{ s
 function Unknown { param([string]$Why) return [pscustomobject][ordered]@{ state = "unknown"; reason = $Why } }
 function Summary {
     # One session-summary as a node sends it (link-verbs v1), every field known at -At unless named.
-    param([string]$Id, [string]$Agent = "harness-a", [string]$At = (T 0), [string]$Role = "goblin")
+    param([string]$Id, [string]$Agent = "harness-a", [string]$At = (T 0), [string]$Role = "goblin", [int]$Pad = 0)
     $agentAnswer = Known $Agent $At
     if ($Agent -eq "") { $agentAnswer = Unknown "the node could not say which harness" }
     $ns = [pscustomobject][ordered]@{ device = $devA; space = "windows" }
     $pidAnswer = Known 4242 $At
     $pidAnswer | Add-Member -NotePropertyName ns -NotePropertyValue $ns
     return [pscustomobject][ordered]@{
-        sessionId = $Id; agent = $agentAnswer; fleetSessionId = (Unknown "no fleet record"); role = (Known $Role $At); label = (Known "A12" $At)
-        parent = (Unknown "no parent"); liveStatus = (Known "busy" $At); workState = (Known "running" $At); startedAt = (Known (T -3600) $At)
-        lastActivity = (Known $At $At); retired = (Known $false $At); pid = $pidAnswer; procStart = (Unknown "not read"); projectCwd = (Unknown "not read")
+        sessionId = $Id; agent = $agentAnswer; fleetSessionId = (Unknown ("no fleet record" + ("x" * $Pad))); role = (Known $Role $At); label = (Known "A12" $At)
+        parent = (Unknown ("no parent" + ("x" * $Pad))); liveStatus = (Known "busy" $At); workState = (Known "running" $At); startedAt = (Known (T -3600) $At)
+        lastActivity = (Known $At $At); retired = (Known $false $At); pid = $pidAnswer; procStart = (Unknown ("not read" + ("x" * $Pad))); projectCwd = (Unknown ("not read" + ("x" * $Pad)))
     }
 }
+function Sid { param([int]$Block, [int]$N) return ("aaaaaaaa-0000-4000-8000-" + ("{0:d6}{1:d6}" -f $Block, $N)) }
 function List {
     # A sessions.list value: complete known true or false, at -At.
     param([object[]]$Sessions, [bool]$Complete = $true, [string]$At = (T 0))
@@ -205,5 +206,101 @@ $n = @((Get-HordeFleetView -Mirrors @($m) -Now (At 5)).nodes)[0]
 Check ($n.heard.state -ceq "known" -and $n.listed -eq 2 -and $n.complete.state -ceq "known" -and $n.complete.value -eq $false -and $n.complete.reason -clike "*W2 (locked)*") "a node's entry says it is heard, how many sessions it listed, and that its inventory is partial, with the node's reason"
 $f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @() -Now (At 5)) -SessionId $s1
 Check ($f.state -ceq "unknown") "with no node mirrored, no session can be ruled out"
+
+Write-Host ""
+Write-Host "--- carried sessions fit one frame (review of PR #86, F1) ---" -ForegroundColor Cyan
+# The reviewer's shape: a complete list A of 90 large sessions, then a partial list B of 90 others (A is
+# carried), then a partial list C of one (A and B carried). Each list fits a frame; A and B together do not.
+$a90 = @(1..90 | ForEach-Object { Summary (Sid 1000 $_) -Pad 2300 })
+$b90 = @(1..90 | ForEach-Object { Summary (Sid 2000 $_) -Pad 2300 })
+$m = Pull (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") (List $a90) 0
+$m = Pull $m (List $b90 -Complete $false -At (T 20)) 20
+Check (@($m.inventory.carried).Count -eq 90) "CONTROL: one list of large sessions carried whole fits, and is kept whole"
+$m = Pull $m (List @((Summary $s1)) -Complete $false -At (T 40)) 40
+$carried = @($m.inventory.carried)
+$bytes = 0
+foreach ($c in $carried) { $bytes += (ConvertTo-HordeWireText $c.session).Length + 1 }
+$aIds = @(1..90 | ForEach-Object { Sid 1000 $_ })
+$bIds = @(1..90 | ForEach-Object { Sid 2000 $_ })
+$keptB = @($carried | Where-Object { $bIds -ccontains $_.session.sessionId }).Count
+$keptA = @($carried | Where-Object { $aIds -ccontains $_.session.sessionId }).Count
+Check ($carried.Count -lt 180 -and $bytes -le (1048576 - 8192)) ("180 large carried sessions are cut to what fits one frame: " + $carried.Count + " kept, " + $bytes + " bytes")
+Check ($keptB -eq 90 -and $keptA -lt 90) ("the oldest are shed first: all 90 of the newer list kept, " + $keptA + " of the older")
+$rows = @(Get-HordeMirrorRows -Mirror $m -Now (At 45))
+Check (@($rows | Where-Object { $_.presence.state -ceq "absent" }).Count -eq 0) "and a shed session is never absent"
+
+Write-Host ""
+Write-Host "--- the cost at the list cap (review of PR #86, F2) ---" -ForegroundColor Cyan
+# Measured before the fix on the reviewer's box: 11.4 s then 30.0 s for one partial update at 256, and
+# 54.7 s for a fleet view of 768 rows. The bounds below are a few times what the indexed code takes here,
+# so a return to comparing every pair fails them. The suite opts itself out of Windows power throttling
+# first: a busy background process is slowed about 7x after 3 s (core/Platform.ps1), which measured the
+# throttle and not the code (4.7 s throttled against 0.78 s for one update, 2026-10-05).
+. (Join-Path $root "core\Platform.ps1")
+$opt = Set-HordeThrottlingOptOut
+Check ($opt.state -ne "unknown") ("this suite's process is out of power throttling for the timings (" + $opt.state + ")")
+$first = @(1..256 | ForEach-Object { Summary (Sid 3000 $_) })
+$second = @(1..256 | ForEach-Object { Summary (Sid 4000 $_) })
+$m = Pull (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") (List $first) 0
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$m = Pull $m (List $second -Complete $false -At (T 20)) 20
+$m = Pull $m (List $first -Complete $false -At (T 40)) 40
+$sw.Stop()
+$upd = $sw.Elapsed.TotalSeconds
+Check (@($m.inventory.carried).Count -eq 256 -and $upd -lt 6) ("two partial updates at the 256 cap take " + [math]::Round($upd, 2) + " s, under 6 s")
+$m2 = Pull (New-HordeNodeMirror -DeviceId $devB -DeviceName "box-b") (List $first) 40
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$fleet = Get-HordeFleetView -Mirrors @($m, $m2) -Now (At 45)
+$sw.Stop()
+$fv = $sw.Elapsed.TotalSeconds
+Check (@($fleet.sessions).Count -eq 768 -and @($fleet.faults).Count -eq 256 -and $fv -lt 12) ("a fleet view of 768 rows, 256 of them faulted, takes " + [math]::Round($fv, 2) + " s, under 12 s")
+
+Write-Host ""
+Write-Host "--- absence needs a current, complete inventory (review of PR #86, F4 and F5) ---" -ForegroundColor Cyan
+$fresh = Pull (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") (List @((Summary $s1)) -At (T 0)) 0
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($fresh) -Now (At 5)) -SessionId $s3
+Check ($f.state -ceq "absent") "CONTROL: a heard node's current, complete inventory rules a session out"
+$old = Update-HordeNodeMirror -Mirror (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") -List (List @((Summary $s1)) -At (T -600)) -NodeSentAt (At 0) -ReceivedAt (At 0)
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($old) -Now (At 5)) -SessionId $s3
+Check ($f.state -ceq "unknown" -and $f.reason -clike "*could not rule it out*") ("a complete list observed 600 s before it was sent does not rule a session out (" + $f.reason + ")")
+$ahead = Update-HordeNodeMirror -Mirror (New-HordeNodeMirror -DeviceId $devA -DeviceName "box-a") -List (List @((Summary $s1)) -At (T 3600)) -NodeSentAt (At 0) -ReceivedAt (At 0)
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($ahead) -Now (At 5)) -SessionId $s3
+Check ($f.state -ceq "unknown") "nor does one dated an hour after it was sent"
+$n = @((Get-HordeFleetView -Mirrors @($old) -Now (At 5)).nodes)[0]
+Check ($n.fresh.state -ceq "unknown" -and $n.fresh.reason -clike "*not current*" -and $n.heard.state -ceq "known") "the node is heard, and its inventory says it is not current"
+$gone = Set-HordeNodeMirrorLost -Mirror $fresh -At (At 10) -Reason "the link dropped"
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($gone) -Now (At 15)) -SessionId $s3
+Check ($f.state -ceq "unknown" -and $f.reason -clike "*unreachable since*") ("a lost node's complete inventory does not rule a session out (" + $f.reason + ")")
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($fresh) -Now (At 61)) -SessionId $s3
+Check ($f.state -ceq "unknown" -and $f.reason -clike "*not heard since*") ("nor does a node not heard within the silence window (" + $f.reason + ")")
+$f = Find-HordeFleetSession -Fleet (Get-HordeFleetView -Mirrors @($gone) -Now (At 15)) -SessionId $s1
+Check ($f.state -ceq "known" -and $f.value.presence.state -ceq "unknown") "a session a lost node listed is found, present-unknown"
+
+Write-Host ""
+Write-Host "--- one bad mirror is that node's answer (review of PR #86, F7) ---" -ForegroundColor Cyan
+$p8 = ConvertFrom-HordeMirrorTime "2026-10-05T12:00:00.12345678Z"
+Check ($p8 -is [datetime] -and $p8.Kind -eq [System.DateTimeKind]::Utc -and $p8.Ticks -eq $t0.AddTicks(1234567).Ticks) "a link time with eight fraction digits reads, cut to the seven .NET keeps"
+$good = Pull (New-HordeNodeMirror -DeviceId $devB -DeviceName "box-b") (List @((Summary $s2))) 0
+$eight = ConvertTo-HordeMirrorObject $fresh
+$eight.inventory.nodeSentAt = "2026-10-05T12:00:00.12345678Z"
+$view = $null; $threw = ""
+try { $view = Get-HordeFleetView -Mirrors @($eight, $good) -Now (At 5) } catch { $threw = $_.Exception.Message }
+Check ($threw -eq "" -and @($view.sessions | Where-Object { $_.presence.state -ceq "known" }).Count -eq 2) ("a mirror whose send time has eight fraction digits is read, not thrown on (" + $threw + ")")
+$garbled = ConvertTo-HordeMirrorObject $fresh
+$garbled.inventory.nodeSentAt = "not a time"
+$view = Get-HordeFleetView -Mirrors @($garbled, $good) -Now (At 5)
+$gRows = @($view.sessions | Where-Object { $_.device -ceq $devA })
+Check ($gRows.Count -eq 1 -and $gRows[0].presence.state -ceq "unknown" -and $gRows[0].presence.reason -clike "*cannot be read*") ("a mirror whose send time cannot be read has its sessions unknown (" + $gRows[0].presence.reason + ")")
+$broken = ConvertTo-HordeMirrorObject $fresh
+$broken | Add-Member -NotePropertyName clock -NotePropertyValue ([pscustomobject]@{ at = (T 0); offsetSeconds = "not a number"; roundTripSeconds = 0.1 }) -Force
+$view = $null; $threw = ""
+try { $view = Get-HordeFleetView -Mirrors @($broken, $good) -Now (At 5) } catch { $threw = $_.Exception.Message }
+$bad = @($view.nodes | Where-Object { $_.deviceId -ceq $devA })
+$ok = @($view.nodes | Where-Object { $_.deviceId -ceq $devB })
+Check ($threw -eq "" -and $bad.Count -eq 1 -and $bad[0].heard.state -ceq "unknown" -and $bad[0].heard.reason -clike "*its mirror could not be read*") ("a mirror that throws while it is read is that node's unknown, not the view's end (" + $threw + ")")
+Check ($ok.Count -eq 1 -and $ok[0].heard.state -ceq "known" -and @($view.sessions | Where-Object { $_.device -ceq $devB }).Count -eq 1) "CONTROL: the other node is read as ever"
+Check (@($view.sessions | Where-Object { $_.device -ceq $devA }).Count -eq 0) "and the bad node gives no rows"
+$f = Find-HordeFleetSession -Fleet $view -SessionId $s3
+Check ($f.state -ceq "unknown") "and no session can be ruled out while it cannot be read"
 
 Complete-HordeSuite -Success "the hub's mirror says unknown for a node it cannot hear, never absent for a partial inventory, holds each inventory whole, and faults a key on two devices"

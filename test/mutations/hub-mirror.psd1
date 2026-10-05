@@ -30,8 +30,8 @@
            Find = '-Presence (New-HordeUnknown -Reason $why)'
            Replace = '-Presence (New-HordeAbsent -Note $why)' }
         @{ Name = "carried-and-listed-twice"
-           Find = 'if ($listed.Count -eq 0 -and $twice.Count -eq 0) {'
-           Replace = 'if ($twice.Count -eq 0) {' }
+           Find = 'if (-not $listed -and -not $twice) {'
+           Replace = 'if (-not $twice) {' }
         @{ Name = "carried-last-seen-moves"
            Find = '[void]$seen.Add([ordered]@{ lastSeenAt = "$(Get-HordeLinkProp $c ''lastSeenAt'')";'
            Replace = '[void]$seen.Add([ordered]@{ lastSeenAt = $oldAt;' }
@@ -60,13 +60,37 @@
            Find = 'if ($silent.Count -eq 0) { return (New-HordeAbsent'
            Replace = 'if ($true) { return (New-HordeAbsent' }
         @{ Name = "node-clock-trusted"
-           Find = 'return (New-HordeRemoteObservation -Answer $a -NodeSentAt $NodeSentAt -ReceivedAt $ReceivedAt).answer'
-           Replace = 'return $a' }
+           Find = 'if ($state -ceq "known") { return (New-HordeKnown -Value $f["value"] -ObservedAt $t.observedAt) }'
+           Replace = 'if ($state -ceq "known") { return (New-HordeKnown -Value $f["value"] -ObservedAt (ConvertFrom-HordeMirrorTime $stamp)) }' }
         @{ Name = "clock-sample-dropped"
            Find = 'if ($null -ne $Clock -and "$(Get-HordeLinkProp $Clock ''state'')" -ceq "known") {'
            Replace = 'if ($false) {' }
         @{ Name = "non-utc-time-read-in-local-zone"
            Find = 'if (-not (Test-HordeClockUtc $Time)) { throw ($What + " must be a UTC [datetime]") }'
            Replace = '' }
+        @{ Name = "carried-byte-budget-ignored"
+           Find = 'if ($used + $size -gt $budget) { break }'
+           Replace = '' }
+        @{ Name = "lookup-ignores-whether-the-node-is-heard"
+           Find = 'if ($n.heard.state -cne "known") { $why = $n.heard.reason }'
+           Replace = 'if ($false) { $why = $n.heard.reason }' }
+        @{ Name = "lookup-ignores-whether-the-inventory-is-current"
+           Find = 'elseif ($n.fresh.state -cne "known") { $why = $n.fresh.reason }'
+           Replace = '' }
+        @{ Name = "inventory-current-whatever-its-age"
+           Find = 'if ($aged.state -ceq "known") { return (New-HordeKnown -Value $true -ObservedAt $aged.observedAt) }'
+           Replace = 'return (New-HordeKnown -Value $true)' }
+        @{ Name = "lookup-scans-every-key"
+           Find = 'foreach ($e in $Index[$Key.id]) { if (Test-HordeMirrorKeysMatch $e.key $Key) { return $true } }'
+           Replace = 'foreach ($e in @($Index.Values | ForEach-Object { $_ })) { if (Test-HordeMirrorKeysMatch $e.key $Key) { return $true } }' }
+        @{ Name = "fraction-not-cut-to-seven"
+           Find = 'if ($m.Success) { $Text = $m.Groups[1].Value + "." + $m.Groups[2].Value.Substring(0, 7) + "Z" }'
+           Replace = '' }
+        @{ Name = "unreadable-mirror-times-not-unknown"
+           Find = 'if ($null -eq $sent -or $null -eq $got) { $node = New-HordeUnknown'
+           Replace = 'if ($false) { $node = New-HordeUnknown' }
+        @{ Name = "one-bad-mirror-ends-the-view"
+           Find = '$why = New-HordeUnknown -Reason ((Get-HordeMirrorNodeName $m) + ": its mirror could not be read") -ErrorRecord $_'
+           Replace = 'throw' }
     )
 }
