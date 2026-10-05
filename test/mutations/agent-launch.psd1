@@ -36,5 +36,8 @@
         @{ Name = "program-path-allowed"
            Find = 'if ($Program -cnotmatch ''\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "no-close-text-accepted"
+           Find = 'if (@($CloseText | Where-Object { "" + $_ -ne "" }).Count -eq 0) {'
+           Replace = 'if ($false) {' }
     )
 }

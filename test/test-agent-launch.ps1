@@ -32,7 +32,7 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Argv { param($s) $script:handed = $s; $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) $script:verifies } `
     -Identify { param($id, $view) New-HordeAbsent -Note "fixture" } `
-    -ReadMode { param($id, $view) New-HordeAbsent -Note "fixture" }
+    -ReadMode { param($id, $view) New-HordeAbsent -Note "fixture" } -CloseText @("bye", "`r")
 $name = Format-HordeSessionName -Label "E" -Title "client search orc"
 
 Write-Host ""
@@ -88,14 +88,15 @@ Check ($p.state -eq "unknown" -and $p.reason -like "*not resolved*") "an engine 
 $script:HordeLaunchAdapters.Clear()
 $p = New-HordeLaunchPlan -Resolution (Resolve) -Level "ask" -SessionId $sid -Name $name
 Check ($p.state -eq "unknown" -and $p.reason -like "*no launch adapter*harness-a*") "a harness with no launch adapter cannot be started"
-Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" -Argv { param($s) New-HordeUnknown -Reason "the fixture adapter refuses" } -Preconditions { param($n) @() } -Identify { param($id, $v) $null } -ReadMode { param($id, $v) $null }
+Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" -Argv { param($s) New-HordeUnknown -Reason "the fixture adapter refuses" } -Preconditions { param($n) @() } -Identify { param($id, $v) $null } -ReadMode { param($id, $v) $null } -CloseText @("bye")
 $p = New-HordeLaunchPlan -Resolution (Resolve) -Level "ask" -SessionId $sid -Name $name
 Check ($p.state -eq "unknown" -and $p.reason -ceq "the fixture adapter refuses") "an adapter's own refusal is the plan's answer"
 
 Write-Host ""
 Write-Host "--- the port ---" -ForegroundColor Cyan
-Check (Throws { Register-HordeLaunchAdapter -Name "x" -Program "C:\bin\x.exe" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } } "never a path") "an adapter names its program by command name, never by path"
-Check (Throws { Register-HordeLaunchAdapter -Name "X" -Program "x" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } } "lowercase") "an adapter name is lower case"
+Check (Throws { Register-HordeLaunchAdapter -Name "x" -Program "C:\bin\x.exe" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x") } "never a path") "an adapter names its program by command name, never by path"
+Check (Throws { Register-HordeLaunchAdapter -Name "X" -Program "x" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("x") } "lowercase") "an adapter name is lower case"
+Check (Throws { Register-HordeLaunchAdapter -Name "x" -Program "x" -Argv { 1 } -Preconditions { 1 } -Identify { 1 } -ReadMode { 1 } -CloseText @("") } "no text that ends") "an adapter must say what ends its session"
 $files = @(Get-HordeLaunchAdapterFiles -Root $root)
 Check ($files.Count -ge 1 -and @($files | Where-Object { $_ -notlike "*\agents\*\Launch.ps1" }).Count -eq 0) ("the adapter files are found by folder, agents\<name>\Launch.ps1 (" + $files.Count + ")")
 

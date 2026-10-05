@@ -20,6 +20,9 @@
 #   ReadMode       ($sessionId, $environment) -> the level the running session reports it is in
 #                  (issue #67, item 2), as an answer; unknown or absent when it cannot be read, which
 #                  the caller treats as refused (decision 6 of 2026-10-05: fail closed).
+#   CloseText      the text typed into the session's pane, in order, that ends it gracefully. The
+#                  host types it; the caller then proves the process gone by pid and start time, and
+#                  ends the pane itself if it is not (a session showing a dialog does not read it).
 #
 # THE NAME. Decision of 2026-10-05: label plus run title, as the web session names technique has it
 # (engines group I), capped. Format-HordeSessionName is the one place it is made; an adapter is
@@ -45,12 +48,14 @@ function Register-HordeLaunchAdapter {
         [Parameter(Mandatory = $true)][scriptblock]$Argv,
         [Parameter(Mandatory = $true)][scriptblock]$Preconditions,
         [Parameter(Mandatory = $true)][scriptblock]$Identify,
-        [Parameter(Mandatory = $true)][scriptblock]$ReadMode
+        [Parameter(Mandatory = $true)][scriptblock]$ReadMode,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowEmptyCollection()][string[]]$CloseText
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("an adapter name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     if ($Program -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z') { throw ("a launch adapter names its program by command name, never a path: '" + $Program + "'") }
     foreach ($a in $script:HordeLaunchAdapters) { if ($a.name -ceq $Name) { $script:HordeLaunchAdapters.Remove($a); break } }
-    [void]$script:HordeLaunchAdapters.Add([pscustomobject]@{ name = $Name; program = $Program; argv = $Argv; preconditions = $Preconditions; identify = $Identify; readMode = $ReadMode })
+    if (@($CloseText | Where-Object { "" + $_ -ne "" }).Count -eq 0) { throw ("the adapter " + $Name + " gives no text that ends its session") }
+    [void]$script:HordeLaunchAdapters.Add([pscustomobject]@{ name = $Name; program = $Program; argv = $Argv; preconditions = $Preconditions; identify = $Identify; readMode = $ReadMode; closeText = [string[]]@($CloseText) })
 }
 
 function Get-HordeLaunchAdapter {

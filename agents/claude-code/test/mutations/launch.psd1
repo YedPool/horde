@@ -44,5 +44,8 @@
         @{ Name = "precondition-claimed"
            Find = '    return @()'
            Replace = '    return $Names' }
+        @{ Name = "close-without-enter"
+           Find = '$script:ClaudeCodeCloseText = @("/exit", "`r")'
+           Replace = '$script:ClaudeCodeCloseText = @("/exit")' }
     )
 }

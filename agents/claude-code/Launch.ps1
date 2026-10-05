@@ -39,6 +39,11 @@ $script:ClaudeCodeModeLevels = @{ "plan" = "plan"; "default" = "ask"; "acceptEdi
 # of the argv is under 400, and the host's own wrapper takes some. A longer first prompt is refused
 # here, never cut, and is delivered as a message once the session runs.
 $script:ClaudeCodePromptMax = 16000
+# What ends a session gracefully: the /exit command, then Enter, typed as two keystroke runs. MEASURED
+# 2026-10-05 (2.1.289, interactive, isolated terminal): in three sessions at their prompt the pane
+# closed after it; in a fourth showing a first-run dialog it did not, so a caller proves the end by
+# pid and start time and ends the pane itself when it has not come.
+$script:ClaudeCodeCloseText = @("/exit", "`r")
 
 function Get-ClaudeCodeConfigDir {
     # The harness's folder for a given environment view: CLAUDE_CONFIG_DIR when set, else the profile's
@@ -152,4 +157,5 @@ Register-HordeLaunchAdapter -Name "claude-code" -Program $script:ClaudeCodeProgr
     -Argv { param($s) New-ClaudeCodeArgv -Spec $s } `
     -Preconditions { param($n) Get-ClaudeCodeVerifiedPreconditions -Names $n } `
     -Identify { param($id, $view) Find-ClaudeCodeSession -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id } `
-    -ReadMode { param($id, $view) Read-ClaudeCodeMode -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id }
+    -ReadMode { param($id, $view) Read-ClaudeCodeMode -ConfigDir (Get-ClaudeCodeConfigDir -Environment $view) -SessionId $id } `
+    -CloseText $script:ClaudeCodeCloseText

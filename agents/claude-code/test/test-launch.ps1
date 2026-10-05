@@ -102,5 +102,6 @@ Check ((Get-ClaudeCodeConfigDir -Environment @{ USERPROFILE = "C:\u" }) -ceq "C:
 $i = & $ad.identify $sid $view
 Check ($i.state -eq "known" -and $i.value.pid -eq 4242) "the registered Identify finds the control file the same way"
 Check (@(& $ad.preconditions @("folder-trusted")).Count -eq 0) "a precondition this file cannot check is never reported as verified"
+Check ((@($ad.closeText) -join "|") -ceq ("/exit|" + "`r")) "a session is ended by typing /exit and then Enter"
 
 Complete-HordeSuite -Success "the argv is the flags agent.json promises, and the mode, process and Remote Control state are read back exactly"
