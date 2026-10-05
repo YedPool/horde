@@ -100,11 +100,22 @@ function Get-ClaudeCodeTextChars {
     return (Get-ClaudeCodeText $Content).Length
 }
 
-function New-ClaudeCodeUsageMax {
-    # The running per-field maximum of one message id's usage, across all its lines; $null until a
-    # line gives the field.
-    return @{ lines = 0; input_tokens = $null; cache_read_input_tokens = $null; cache_creation_input_tokens = $null; output_tokens = $null; m5 = $null; h1 = $null }
+function New-ClaudeCodeCallFacts {
+    # What the first read gathers about one message id across all its lines, as ten numbers, because
+    # one is kept per call until the second read emits it (plan step M2): a hashtable per call cost
+    # about 3 KB, measured 2026-10-02 on PowerShell 5.1; ten longs cost about 100 bytes.
+    #   [0] lines that carried a usage object   [1] input_tokens        [2] cache_read_input_tokens
+    #   [3] cache_creation_input_tokens          [4] output_tokens       [5] 5-minute cache writes
+    #   [6] 1-hour cache writes                  [7] text characters     [8] tool uses
+    #   [9] 1 when any line's stop_reason is end_turn
+    # A token field no line has given yet holds [long]::MinValue, which any real count exceeds, so the
+    # maximum below starts from "not given" exactly as M1's $null did.
+    $f = New-Object 'long[]' 10
+    for ($i = 1; $i -le 6; $i++) { $f[$i] = [long]::MinValue }
+    return , $f
 }
+
+$script:ClaudeCodeUsageFields = @("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
 
 function Add-ClaudeCodeUsageMax {
     # Fold one line's usage into the maximum.
@@ -118,35 +129,34 @@ function Add-ClaudeCodeUsageMax {
     # does not depend on line order.
     param($Max, $Usage)
     if ($Usage -isnot [System.Collections.IDictionary]) { return }
-    $Max.lines++
-    foreach ($k in @("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")) {
-        $v = $Usage[$k]
-        if ($null -ne $v -and ($null -eq $Max[$k] -or [long]$v -gt $Max[$k])) { $Max[$k] = [long]$v }
+    $Max[0]++
+    for ($i = 0; $i -lt 4; $i++) {
+        $v = $Usage[$script:ClaudeCodeUsageFields[$i]]
+        if ($null -ne $v -and [long]$v -gt $Max[$i + 1]) { $Max[$i + 1] = [long]$v }
     }
     $cc = $Usage["cache_creation"]
     if ($cc -is [System.Collections.IDictionary]) {
-        foreach ($pair in @(@("m5", "ephemeral_5m_input_tokens"), @("h1", "ephemeral_1h_input_tokens"))) {
-            $v = $cc[$pair[1]]
-            if ($null -ne $v -and ($null -eq $Max[$pair[0]] -or [long]$v -gt $Max[$pair[0]])) { $Max[$pair[0]] = [long]$v }
-        }
+        $v = $cc["ephemeral_5m_input_tokens"]; if ($null -ne $v -and [long]$v -gt $Max[5]) { $Max[5] = [long]$v }
+        $v = $cc["ephemeral_1h_input_tokens"]; if ($null -ne $v -and [long]$v -gt $Max[6]) { $Max[6] = [long]$v }
     }
 }
 
 function Get-ClaudeCodeUsage {
     # The port's usage answer from a message id's per-field maximum.
     param($Max)
-    if ($Max.lines -eq 0) { return (New-HordeUnknown -Reason "the message carries no usage") }
+    if ($Max[0] -eq 0) { return (New-HordeUnknown -Reason "the message carries no usage") }
     # A field no line gave is unknown, never a known 0 (review of PR #50, F5): the whole usage is then
     # unknown, naming the field, and the summary's totals say how many calls lack usage.
-    foreach ($k in @("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")) {
-        if ($null -eq $Max[$k]) { return (New-HordeUnknown -Reason ("the usage has no " + $k)) }
+    for ($i = 0; $i -lt 4; $i++) {
+        if ($Max[$i + 1] -eq [long]::MinValue) { return (New-HordeUnknown -Reason ("the usage has no " + $script:ClaudeCodeUsageFields[$i])) }
     }
-    $num = { param($v) if ($null -eq $v) { [long]0 } else { [long]$v } }
     $split = New-HordeUnknown -Reason "the usage does not split cache writes by lifetime"
-    if ($null -ne $Max.m5 -or $null -ne $Max.h1) {
-        $split = New-HordeKnown -Value ([pscustomobject]@{ m5 = (& $num $Max.m5); h1 = (& $num $Max.h1) })
+    if ($Max[5] -ne [long]::MinValue -or $Max[6] -ne [long]::MinValue) {
+        $m5 = [long]0; if ($Max[5] -ne [long]::MinValue) { $m5 = $Max[5] }
+        $h1 = [long]0; if ($Max[6] -ne [long]::MinValue) { $h1 = $Max[6] }
+        $split = New-HordeKnown -Value ([pscustomobject]@{ m5 = $m5; h1 = $h1 })
     }
-    return (New-HordeUsage -Uncached (& $num $Max.input_tokens) -CacheRead (& $num $Max.cache_read_input_tokens) -CacheWrite (& $num $Max.cache_creation_input_tokens) -Output (& $num $Max.output_tokens) -Split $split)
+    return (New-HordeUsage -Uncached $Max[1] -CacheRead $Max[2] -CacheWrite $Max[3] -Output $Max[4] -Split $split)
 }
 
 function Test-ClaudeCodeNotificationOrigin {
@@ -230,27 +240,45 @@ function Read-ClaudeCodeSubagentLinks {
 }
 
 function Read-ClaudeCodeTranscript {
-    # The port's records for one transcript: { records; parseSkipped; tornTail; sessionId }.
-    param([string]$Path)
+    # The port's records for one transcript, handed to $Sink.Add in file order; returns
+    # { records; parseSkipped; tornTail; sessionId }, records empty when a sink was given.
+    #
+    # TWO READS, BECAUSE A CALL'S RECORD STANDS AT ITS FIRST LINE BUT IS ONLY KNOWN AT ITS LAST. One
+    # response is several lines, and its usage is the maximum over all of them (Add-ClaudeCodeUsageMax),
+    # so M1 held every line until the end of the file. Plan step M2 must not hold them, and the lines of
+    # one id are not always together: measured 2026-10-02, read-only, over this machine's 692
+    # transcripts, an id came back after another id had started 73 times, all in one subagent file. So
+    # the first read gathers, per id, the ten numbers of New-ClaudeCodeCallFacts, the name of every
+    # tool call, and whether the file writes turn durations; the second read emits every record in M1's
+    # order, each one complete when it is made. The second read stops exactly where the first did
+    # (Read-HordeJsonLines -Upto), so a file still being written gives one consistent snapshot.
+    param([string]$Path, $Sink = $null)
+    $kept = $null
+    if ($null -eq $Sink) { $kept = New-Object System.Collections.ArrayList; $Sink = $kept }
     $links = Read-ClaudeCodeSubagentLinks -Path $Path
-    # Calls are built across lines, so each is a mutable holder until the end.
-    $slots = New-Object System.Collections.ArrayList
-    $callAt = @{}
-    $toolCalls = @{}
-    $st = @{ sessionId = ""; turnDurations = 0 }
+    $calls = New-Object 'System.Collections.Generic.Dictionary[string,long[]]'
+    $tools = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+    $st = @{ sessionId = ""; turnDurations = 0; phase = 1 }
     $isSessionFile = ([System.IO.Path]::GetFileName($Path) -notlike "agent-*")
+    # Answers are never changed once made, so one is shared by every record it describes.
+    $userAbsent = New-HordeAbsent -Note "a user message"
+    $notWorker = @{}
+    $errTrue = New-HordeKnown -Value $true
+    $errFalse = New-HordeKnown -Value $false
 
-    # STREAMED, one line at a time (core/Transcript.ps1, Read-HordeJsonLines -Each): holding a large
-    # transcript whole slowed every allocation tenfold. Inside the block, "return" moves to the next line.
-    $parsed = Read-HordeJsonLines -Path $Path -Each {
+    # ONE BLOCK FOR BOTH READS, so the two can never disagree about which lines are calls. Each read
+    # streams one line at a time (core/Transcript.ps1, Read-HordeJsonLines -Each); "return" moves to the
+    # next line. In the first read nothing is emitted.
+    $visit = {
         param($ln, $v)
         if ($st.sessionId -eq "" -and $v["sessionId"] -is [string]) { $st.sessionId = $v["sessionId"] }
         $ts = ConvertTo-HordeUtcTime $v["timestamp"]
         if ($null -eq $ts) { return }
+        $first = ($st.phase -eq 1)
         # A side chain inlined into a SESSION file is a subagent's work, not the session's (review of PR
         # #50, F10; metrics design 2.1): an event only. A subagent file is all side chain by design.
         if ($isSessionFile -and $v["isSidechain"] -eq $true) {
-            [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
+            if (-not $first) { $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln)) }
             return
         }
         $type = "$($v["type"])"
@@ -262,56 +290,79 @@ function Read-ClaudeCodeTranscript {
             $model = ""
             if ($msg -is [System.Collections.IDictionary]) { $model = "$($msg["model"])" }
             if ($model -eq "<synthetic>" -or $v["isApiErrorMessage"] -eq $true -or $msg -isnot [System.Collections.IDictionary]) {
-                [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
+                if (-not $first) { $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln)) }
                 return
             }
             $id = "$($msg["id"])"
             if ($id -eq "") { $id = "line-" + $ln }
-            $slot = $callAt[$id]
-            if ($null -eq $slot) {
+            if ($first) {
+                $f = $null
+                if (-not $calls.TryGetValue($id, [ref]$f)) { $f = New-ClaudeCodeCallFacts; $calls[$id] = $f }
+                Add-ClaudeCodeUsageMax -Max $f -Usage $msg["usage"]
+                if ($msg["stop_reason"] -eq "end_turn") { $f[9] = 1 }
+                if ($msg["content"] -is [string]) { $f[7] += $msg["content"].Length }
+                foreach ($b in @($msg["content"])) {
+                    if ($b -isnot [System.Collections.IDictionary]) { continue }
+                    if ($b["type"] -eq "text" -and $b["text"] -is [string]) { $f[7] += $b["text"].Length }
+                    elseif ($b["type"] -eq "tool_use") { $f[8]++; $tools["$($b["id"])"] = "$($b["name"])" }
+                }
+                return
+            }
+            # The call's record, at the first line of its id; later lines of the id add only their tool calls.
+            $f = $null
+            if ($calls.TryGetValue($id, [ref]$f)) {
+                [void]$calls.Remove($id)
                 $speed = ""; $geo = ""
                 $mu = $msg["usage"]
                 if ($mu -is [System.Collections.IDictionary]) { $speed = "$($mu["speed"])"; $geo = "$($mu["inference_geo"])" }
                 $modelAnswer = New-HordeUnknown -Reason "the message names no model"
                 if ($model -ne "") { $modelAnswer = New-HordeKnown -Value $model }
-                $slot = [pscustomobject]@{ kind = "call"; id = $id; ts = $ts; line = $ln; model = $modelAnswer; usage = (New-ClaudeCodeUsageMax)
-                    textChars = 0; toolCallCount = 0; speed = $speed; inferenceGeo = $geo; endTurn = $false }
-                $callAt[$id] = $slot
-                [void]$slots.Add($slot)
-            }
-            Add-ClaudeCodeUsageMax -Max $slot.usage -Usage $msg["usage"]
-            if ($msg["stop_reason"] -eq "end_turn") { $slot.endTurn = $true }
-            if ($msg["content"] -is [string]) { $slot.textChars += $msg["content"].Length }
-            foreach ($b in @($msg["content"])) {
-                if ($b -isnot [System.Collections.IDictionary]) { continue }
-                if ($b["type"] -eq "text" -and $b["text"] -is [string]) { $slot.textChars += $b["text"].Length }
-                elseif ($b["type"] -eq "tool_use") {
-                    $slot.toolCallCount++
-                    $name = "$($b["name"])"
-                    $tc = New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts $ts -Line $ln -Fields @{ id = "$($b["id"])"; name = $name; callId = $id; launchesWorker = ($script:ClaudeCodeWorkerTools -ccontains $name) }
-                    $toolCalls["$($b["id"])"] = $tc
-                    [void]$slots.Add([pscustomobject]@{ kind = "record"; record = $tc })
+                $Sink.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $ts -Line $ln -Fields @{
+                    id = $id; model = $modelAnswer; usage = (Get-ClaudeCodeUsage $f); textChars = [int]$f[7]; toolCallCount = [int]$f[8]; speed = $speed; inferenceGeo = $geo }))
+                if ($st.turnDurations -eq 0 -and $f[9] -eq 1) {
+                    $Sink.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $ts -Line $ln -Fields @{ durationMs = (New-HordeUnknown -Reason "this transcript writes no turn durations; the end is the call's end_turn") }))
                 }
+            }
+            foreach ($b in @($msg["content"])) {
+                if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_use") { continue }
+                $name = "$($b["name"])"
+                $Sink.Add((New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts $ts -Line $ln -Fields @{ id = "$($b["id"])"; name = $name; callId = $id; launchesWorker = ($script:ClaudeCodeWorkerTools -ccontains $name) }))
             }
             return
         }
 
+        if ($type -eq "system" -and $v["subtype"] -eq "turn_duration") {
+            if ($first) { $st.turnDurations++; return }
+            $dur = New-HordeUnknown -Reason "the turn_duration line has no durationMs"
+            if ($null -ne $v["durationMs"]) { $dur = New-HordeKnown -Value ([long]$v["durationMs"]) }
+            $Sink.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $ts -Line $ln -Fields @{ durationMs = $dur }))
+            return
+        }
+        if ($first) { return }
+
         if ($type -eq "user") {
             if ($v["isMeta"] -eq $true -or $v["isCompactSummary"] -eq $true) {
-                [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
+                $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
                 return
             }
             # A user line is a notification only when the harness says so (Test-ClaudeCodeNotificationOrigin).
             $isNote = Test-ClaudeCodeNotificationOrigin -Origin $v["origin"]
             $content = $null
             if ($v["message"] -is [System.Collections.IDictionary]) { $content = $v["message"]["content"] }
-            if ($content -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = $isNote; text = $content; ts = $ts; line = $ln }); return }
+            if ($content -is [string]) { $Sink.Add((New-ClaudeCodeInputRecord -Tools $tools -Links $links -UserAbsent $userAbsent -IsNote $isNote -Text $content -Ts $ts -Line $ln)); return }
             foreach ($b in @($content)) {
                 if ($b -isnot [System.Collections.IDictionary]) { continue }
                 if ($b["type"] -eq "tool_result") {
-                    [void]$slots.Add([pscustomobject]@{ kind = "result"; toolCallId = "$($b["tool_use_id"])"; isError = ($b["is_error"] -eq $true); chars = (Get-ClaudeCodeTextChars $b["content"]); ts = $ts; line = $ln })
+                    $tid = "$($b["tool_use_id"])"
+                    $name = $null
+                    $worker = $null
+                    if (-not $tools.TryGetValue($tid, [ref]$name)) { $worker = New-HordeUnknown -Reason ("the call " + $tid + " is not in this transcript, so whether it launched a worker cannot be told") }
+                    elseif ($script:ClaudeCodeWorkerTools -cnotcontains $name) { if (-not $notWorker.ContainsKey($name)) { $notWorker[$name] = New-HordeAbsent -Note ("a " + $name + " result, not a worker's") }; $worker = $notWorker[$name] }
+                    elseif ($links.byTool.ContainsKey($tid)) { $worker = New-HordeKnown -Value $links.byTool[$tid] }
+                    else { $worker = New-HordeUnknown -Reason ("no meta.json names the launching call " + $tid) }
+                    $Sink.Add((New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts $ts -Line $ln -Fields @{ toolCallId = $tid; isError = $(if ($b["is_error"] -eq $true) { $errTrue } else { $errFalse }); chars = (Get-ClaudeCodeTextChars $b["content"]); worker = $worker }))
                 }
-                elseif ($b["type"] -eq "text" -and $b["text"] -is [string]) { [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = $isNote; text = $b["text"]; ts = $ts; line = $ln }) }
+                elseif ($b["type"] -eq "text" -and $b["text"] -is [string]) { $Sink.Add((New-ClaudeCodeInputRecord -Tools $tools -Links $links -UserAbsent $userAbsent -IsNote $isNote -Text $b["text"] -Ts $ts -Line $ln)) }
             }
             return
         }
@@ -319,87 +370,62 @@ function Read-ClaudeCodeTranscript {
         if ($type -eq "attachment") {
             $att = $v["attachment"]
             if ($att -is [System.Collections.IDictionary] -and $att["type"] -eq "queued_command") {
-                # A prompt is a string or a list of content blocks; its text is held only until the
-                # second pass has measured it and looked for a notification in it.
-                [void]$slots.Add([pscustomobject]@{ kind = "input"; isNote = (Test-ClaudeCodeNotificationOrigin -Origin $att["origin"] -CommandMode $att["commandMode"]); text = (Get-ClaudeCodeText $att["prompt"]); ts = $ts; line = $ln })
+                # A prompt is a string or a list of content blocks; its text is held only until it has been
+                # measured and looked at for a notification.
+                $Sink.Add((New-ClaudeCodeInputRecord -Tools $tools -Links $links -UserAbsent $userAbsent -IsNote (Test-ClaudeCodeNotificationOrigin -Origin $att["origin"] -CommandMode $att["commandMode"]) -Text (Get-ClaudeCodeText $att["prompt"]) -Ts $ts -Line $ln))
                 return
             }
         }
 
-        if ($type -eq "system" -and $v["subtype"] -eq "turn_duration") {
-            $st.turnDurations++
-            $dur = New-HordeUnknown -Reason "the turn_duration line has no durationMs"
-            if ($null -ne $v["durationMs"]) { $dur = New-HordeKnown -Value ([long]$v["durationMs"]) }
-            [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $ts -Line $ln -Fields @{ durationMs = $dur }) })
-            return
-        }
         if ($type -eq "system" -and $v["subtype"] -eq "compact_boundary") {
-            [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "compaction" -Role "system" -Ts $ts -Line $ln) })
+            $Sink.Add((New-HordeTranscriptRecord -Kind "compaction" -Role "system" -Ts $ts -Line $ln))
             return
         }
-        [void]$slots.Add([pscustomobject]@{ kind = "record"; record = (New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln) })
+        $Sink.Add((New-HordeTranscriptRecord -Kind "event" -Role "system" -Ts $ts -Line $ln))
     }
 
-    # Second pass: everything that needs the whole file - which calls launch workers, and the
-    # subagents folder - is known now.
-    $records = New-Object System.Collections.ArrayList
-    # Answers are never changed once made, so one is shared by every record it describes.
-    $userAbsent = New-HordeAbsent -Note "a user message"
-    $notWorker = @{}
-    $errTrue = New-HordeKnown -Value $true
-    $errFalse = New-HordeKnown -Value $false
-    foreach ($s in $slots) {
-        switch ($s.kind) {
-            "record" { [void]$records.Add($s.record) }
-            "call" {
-                [void]$records.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts $s.ts -Line $s.line -Fields @{
-                    id = $s.id; model = $s.model; usage = (Get-ClaudeCodeUsage $s.usage); textChars = $s.textChars; toolCallCount = $s.toolCallCount; speed = $s.speed; inferenceGeo = $s.inferenceGeo }))
-                if ($st.turnDurations -eq 0 -and $s.endTurn) {
-                    [void]$records.Add((New-HordeTranscriptRecord -Kind "turnEnd" -Role "system" -Ts $s.ts -Line $s.line -Fields @{ durationMs = (New-HordeUnknown -Reason "this transcript writes no turn durations; the end is the call's end_turn") }))
-                }
-            }
-            "result" {
-                $tc = $toolCalls[$s.toolCallId]
-                $worker = $null
-                if ($null -eq $tc) { $worker = New-HordeUnknown -Reason ("the call " + $s.toolCallId + " is not in this transcript, so whether it launched a worker cannot be told") }
-                elseif (-not $tc.launchesWorker) { if (-not $notWorker.ContainsKey($tc.name)) { $notWorker[$tc.name] = New-HordeAbsent -Note ("a " + $tc.name + " result, not a worker's") }; $worker = $notWorker[$tc.name] }
-                elseif ($links.byTool.ContainsKey($s.toolCallId)) { $worker = New-HordeKnown -Value $links.byTool[$s.toolCallId] }
-                else { $worker = New-HordeUnknown -Reason ("no meta.json names the launching call " + $s.toolCallId) }
-                [void]$records.Add((New-HordeTranscriptRecord -Kind "toolResult" -Role "tool" -Ts $s.ts -Line $s.line -Fields @{ toolCallId = $s.toolCallId; isError = $(if ($s.isError) { $errTrue } else { $errFalse }); chars = $s.chars; worker = $worker }))
-            }
-            "input" {
-                $n = $null
-                if ($s.isNote) { $n = Get-ClaudeCodeNotification -Text $s.text }
-                if ($null -eq $n) {
-                    [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "user"; chars = $s.text.Length; taskId = ""; toolCallId = ""; interim = $false; worker = $userAbsent }))
-                    continue
-                }
-                # THE IDS IN A NOTIFICATION'S TEXT ARE CHECKED, NEVER COPIED (review of PR #50, F3). The
-                # text is the harness's, but what reaches a record must be something this transcript or
-                # its subagents folder vouches for: a task id that names a subagent transcript on disk,
-                # or a tool-use id that is a call in this transcript. Anything else is dropped, so no
-                # text of a notification can become a key in a written summary.
-                $tc = $null
-                if ($n.toolCallId -ne "") { $tc = $toolCalls[$n.toolCallId] }
-                $taskOk = ($n.taskId -ne "" -and $links.agents.Contains($n.taskId))
-                $worker = $null
-                if ($null -ne $tc -and $tc.launchesWorker) {
-                    if ($links.byTool.ContainsKey($tc.id)) { $worker = New-HordeKnown -Value $links.byTool[$tc.id] }
-                    elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
-                    else { $worker = New-HordeKnown -Value $tc.id }
-                }
-                elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
-                elseif ($null -ne $tc) { $worker = New-HordeAbsent -Note ("about a " + $tc.name + " call, not a worker") }
-                else { $worker = New-HordeUnknown -Reason "its task and call resolve to nothing in this transcript or its subagents folder" }
-                $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }
-                $keptCall = ""; if ($null -ne $tc) { $keptCall = $tc.id }
-                [void]$records.Add((New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $s.ts -Line $s.line -Fields @{ source = "notification"; chars = $s.text.Length; taskId = $keptTask; toolCallId = $keptCall; interim = [bool]$n.interim; noteKind = $n.noteKind; worker = $worker }))
-            }
-        }
-    }
+    $firstRead = Read-HordeJsonLines -Path $Path -Each $visit
+    $st.phase = 2
+    $parsed = Read-HordeJsonLines -Path $Path -Each $visit -Upto $firstRead
     $sessionId = $st.sessionId
     if ($sessionId -eq "") { $sessionId = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
-    return [pscustomobject]@{ records = $records.ToArray(); parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId }
+    $records = @(); if ($null -ne $kept) { $records = $kept.ToArray() }
+    # THE RECORD KEY IS THE TRANSCRIPT'S OWN IDENTITY, not its path (review of PR #70, F4): a session file is
+    # its session id; a subagent file, which carries its parent's session id, is its own agent-<id> name.
+    $recordKey = $sessionId
+    if (-not $isSessionFile) { $recordKey = [System.IO.Path]::GetFileNameWithoutExtension($Path) }
+    return [pscustomobject]@{ records = $records; parseSkipped = $parsed.parseSkipped; tornTail = $parsed.tornTail; sessionId = $sessionId; recordKey = $recordKey }
 }
 
-Register-HordeTranscriptAdapter -Name "claude-code" -Claim { param($p) Test-ClaudeCodeTranscript -Path $p } -Read { param($p) Read-ClaudeCodeTranscript -Path $p }
+function New-ClaudeCodeInputRecord {
+    # The record for one input: a user message, or a notification the harness marked as one, linked to
+    # its subject only as far as this transcript and its subagents folder prove: -Tools maps each tool
+    # call id in the transcript to its name, -Links is Read-ClaudeCodeSubagentLinks.
+    param($Tools, $Links, $UserAbsent, [bool]$IsNote, [string]$Text, $Ts, [int]$Line)
+    if (-not $IsNote) {
+        return (New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $Ts -Line $Line -Fields @{ source = "user"; chars = $Text.Length; taskId = ""; toolCallId = ""; interim = $false; worker = $UserAbsent })
+    }
+    $n = Get-ClaudeCodeNotification -Text $Text
+    # THE IDS IN A NOTIFICATION'S TEXT ARE CHECKED, NEVER COPIED (review of PR #50, F3). The text is the
+    # harness's, but what reaches a record must be something this transcript or its subagents folder
+    # vouches for: a task id that names a subagent transcript on disk, or a tool-use id that is a call
+    # in this transcript. Anything else is dropped, so no text of a notification can become a key in a
+    # written summary.
+    $tcName = $null
+    $tcKnown = ($n.toolCallId -ne "" -and $Tools.TryGetValue($n.toolCallId, [ref]$tcName))
+    $taskOk = ($n.taskId -ne "" -and $Links.agents.Contains($n.taskId))
+    $worker = $null
+    if ($tcKnown -and $script:ClaudeCodeWorkerTools -ccontains $tcName) {
+        if ($Links.byTool.ContainsKey($n.toolCallId)) { $worker = New-HordeKnown -Value $Links.byTool[$n.toolCallId] }
+        elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
+        else { $worker = New-HordeKnown -Value $n.toolCallId }
+    }
+    elseif ($taskOk) { $worker = New-HordeKnown -Value $n.taskId }
+    elseif ($tcKnown) { $worker = New-HordeAbsent -Note ("about a " + $tcName + " call, not a worker") }
+    else { $worker = New-HordeUnknown -Reason "its task and call resolve to nothing in this transcript or its subagents folder" }
+    $keptTask = ""; if ($taskOk) { $keptTask = $n.taskId }
+    $keptCall = ""; if ($tcKnown) { $keptCall = $n.toolCallId }
+    return (New-HordeTranscriptRecord -Kind "input" -Role "user" -Ts $Ts -Line $Line -Fields @{ source = "notification"; chars = $Text.Length; taskId = $keptTask; toolCallId = $keptCall; interim = [bool]$n.interim; noteKind = $n.noteKind; worker = $worker })
+}
+
+Register-HordeTranscriptAdapter -Name "claude-code" -Claim { param($p) Test-ClaudeCodeTranscript -Path $p } -Read { param($p, $s) Read-ClaudeCodeTranscript -Path $p -Sink $s }

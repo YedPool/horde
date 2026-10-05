@@ -54,6 +54,8 @@ param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
+# Each suite this tool starts is opted out of power throttling (core/Platform.ps1, Invoke-HordeSuite).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Platform.ps1")
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
 if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
@@ -147,6 +149,7 @@ function Invoke-HordeSuite {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
+    $null = Set-HordeThrottlingOptOut -Process $p
     try {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()

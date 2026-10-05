@@ -42,6 +42,22 @@
 
 $script:HordeTranscriptKinds = @("call", "toolCall", "toolResult", "input", "usageTotal", "turnEnd", "compaction", "event")
 $script:HordeTranscriptAdapters = New-Object System.Collections.ArrayList
+# A READ DEADLINE, for a caller with a budget (core/MetricsCollect.ps1; review of #70: a budget checked
+# only between files let one file run 48 s on a 2 s budget). When set, Read-HordeJsonLines checks it every
+# 500 lines and throws $script:HordeReadDeadlineMessage, after setting HordeReadDeadlineHit, so the caller
+# can tell a spent budget from a failure. $null means no deadline.
+$script:HordeReadDeadline = $null
+$script:HordeReadDeadlineHit = $false
+$script:HordeReadDeadlineMessage = "the read deadline passed"
+
+function Set-HordeReadDeadline {
+    # Set (a UTC [datetime]) or clear ($null) the deadline every transcript read checks.
+    param($At)
+    $script:HordeReadDeadline = $At
+    $script:HordeReadDeadlineHit = $false
+}
+
+function Test-HordeReadDeadlineHit { return [bool]$script:HordeReadDeadlineHit }
 
 function ConvertTo-HordeUtcTime {
     # A transcript timestamp as a UTC [datetime], or $null when it is missing or carries no zone.
@@ -86,7 +102,8 @@ function New-HordeUsage {
 }
 
 function Read-HordeJsonLines {
-    # Every line of a JSONL file, parsed, in order: { lines = @({ line; value }); parseSkipped; tornTail }.
+    # Every line of a JSONL file, parsed, in order: { lines = @({ line; value }); parseSkipped; tornTail;
+    # lineCount; lastBad; lastTorn; stopped }.
     #
     # READ-ONLY AND SHARED (core/ReadShared.ps1): the harness is appending to the file while it is read,
     # and an ordinary read share made another system's writes fail (measured 2026-09-29).
@@ -104,15 +121,27 @@ function Read-HordeJsonLines {
     # so the file is never held in memory whole. Measured 2026-10-01 on PowerShell 5.1: with all 31,204
     # lines of a 46 MB transcript held as dictionaries, every later allocation slowed about tenfold (a
     # record constructor went from 0.04 to 0.4 ms), and reading took 56 s; an adapter streams.
-    param([Parameter(Mandatory = $true)][string]$Path, [scriptblock]$Each)
+    #
+    # -Upto REREADS EXACTLY WHAT AN EARLIER READ SAW (plan step M2). An adapter that needs a fact from
+    # the whole file before it can emit its first record reads twice; the transcript is still being
+    # appended to, so the second read stops at the first one's lineCount, and a last line the first read
+    # could not parse is not parsed now either, though it may be whole by now. The counts it returns are
+    # then the first read's. A file that has become SHORTER than the first read saw throws: it was
+    # rewritten, and two reads of it would not describe one file.
+    #
+    # -Control STOPS EARLY: a hashtable the block may set stop = $true in; the read ends after that
+    # line, and returns stopped = $true. An adapter looking for one fact need not read the rest.
+    param([Parameter(Mandatory = $true)][string]$Path, [scriptblock]$Each, $Upto = $null, [hashtable]$Control = $null)
     # EVERY LOCAL HERE IS PRIVATE. PowerShell scopes are dynamic: the -Each block runs below this
     # function, so a name it reads that this function also uses resolves HERE, not in the adapter that
     # wrote the block. Measured 2026-10-01: an adapter whose block added records to its own $out added
     # them to this function's $out instead, and the adapter read nothing. Private variables are not
     # visible to a child scope, so the block sees only its own and its author's.
-    foreach ($private:hordeParam in @("Path", "Each")) { (Get-Variable -Name $hordeParam -Scope Local).Options = "Private" }
+    foreach ($private:hordeParam in @("Path", "Each", "Upto", "Control")) { (Get-Variable -Name $hordeParam -Scope Local).Options = "Private" }
     $private:ser = $null; $private:out = $null; $private:skipped = 0; $private:torn = 0; $private:stream = $null
     $private:endsWithNewline = $true; $private:reader = $null; $private:n = 0; $private:pendingBad = $false; $private:text = $null; $private:value = $null
+    $private:limit = 0; $private:stopped = $false
+    if ($null -ne $Upto) { $limit = [int]$Upto.lineCount }
     Add-Type -AssemblyName System.Web.Extensions
     $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
     $ser.MaxJsonLength = [int]::MaxValue
@@ -130,20 +159,25 @@ function Read-HordeJsonLines {
         try {
             $n = 0
             $pendingBad = $false
-            while ($null -ne ($text = $reader.ReadLine())) {
+            while (($null -eq $Upto -or $n -lt $limit) -and $null -ne ($text = $reader.ReadLine())) {
                 $n++
+                if (($n % 500) -eq 0 -and $null -ne $script:HordeReadDeadline -and [datetime]::UtcNow -ge $script:HordeReadDeadline) { $script:HordeReadDeadlineHit = $true; throw $script:HordeReadDeadlineMessage }
                 if ($pendingBad) { $skipped++; $pendingBad = $false }
+                if ($null -ne $Upto -and $n -eq $limit -and $Upto.lastBad) { $pendingBad = $true; continue }
                 if ($text.Trim() -eq "") { continue }
                 $value = $null
                 try { $value = $ser.DeserializeObject($text) } catch { $value = $null }
                 if ($value -isnot [System.Collections.Generic.Dictionary[string, object]]) { $pendingBad = $true; continue }
                 # The block's output is discarded, so a stray value in an adapter can never become a line.
                 if ($null -ne $Each) { $null = & $Each $n $value } else { [void]$out.Add([pscustomobject]@{ line = $n; value = $value }) }
+                if ($null -ne $Control -and $Control["stop"] -eq $true) { $stopped = $true; break }
             }
-            if ($pendingBad) { if ($endsWithNewline) { $skipped++ } else { $torn++ } }
+            if ($null -ne $Upto -and $n -lt $limit) { throw ("the file is shorter than when it was first read (" + $n + " lines, then " + $limit + "), so it was rewritten") }
+            if ($null -ne $Upto) { $endsWithNewline = -not $Upto.lastTorn }
+            if ($pendingBad -and -not $stopped) { if ($endsWithNewline) { $skipped++ } else { $torn++ } }
         } finally { $reader.Dispose() }
     } finally { $stream.Dispose() }
-    return [pscustomobject]@{ lines = $out.ToArray(); parseSkipped = $skipped; tornTail = $torn }
+    return [pscustomobject]@{ lines = $out.ToArray(); parseSkipped = $skipped; tornTail = $torn; lineCount = $n; lastBad = ($pendingBad -and -not $stopped); lastTorn = ($pendingBad -and -not $stopped -and -not $endsWithNewline); stopped = $stopped }
 }
 
 function Get-HordeJsonPath {
@@ -205,55 +239,114 @@ function Resolve-HordeTranscriptAdapter {
     return (New-HordeKnown -Value $claimed[0])
 }
 
+function Test-HordeTranscriptRecord {
+    # Problems with one record of an adapter's output, as strings; none means it keeps the port's
+    # contract. -PreviousLine is the line of the record before it, for the file-order check.
+    param($Record, [int]$PreviousLine = 0)
+    $r = $Record
+    $problems = New-Object System.Collections.ArrayList
+    if ($null -eq $r -or @($r.PSObject.TypeNames) -notcontains "Horde.TranscriptRecord") { [void]$problems.Add("a record was not made by New-HordeTranscriptRecord"); return @($problems) }
+    if ($r.line -lt $PreviousLine) { [void]$problems.Add("records are out of file order at line " + $r.line) }
+    switch ($r.kind) {
+        "call" {
+            if ("$($r.id)" -eq "") { [void]$problems.Add("a call at line " + $r.line + " has no id") }
+            foreach ($f in @("model", "usage")) { if (-not (Test-HordeAnswer $r.$f)) { [void]$problems.Add("a call's " + $f + " at line " + $r.line + " is not an answer") } }
+        }
+        "toolCall" { if ("$($r.id)" -eq "") { [void]$problems.Add("a tool call at line " + $r.line + " has no id") } }
+        "toolResult" {
+            if (-not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a tool result's worker at line " + $r.line + " is not an answer") }
+            if (-not (Test-HordeAnswer $r.isError)) { [void]$problems.Add("a tool result's isError at line " + $r.line + " is not an answer") }
+        }
+        "input" {
+            if (@("user", "notification") -cnotcontains $r.source) { [void]$problems.Add("an input at line " + $r.line + " has source '" + $r.source + "'") }
+            if ($r.source -ceq "notification" -and -not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a notification's worker at line " + $r.line + " is not an answer") }
+        }
+        "turnEnd" { if (-not (Test-HordeAnswer $r.durationMs)) { [void]$problems.Add("a turn end's duration at line " + $r.line + " is not an answer") } }
+    }
+    return @($problems)
+}
+
 function Test-HordeTranscriptRecords {
-    # Problems with an adapter's output, as strings; none means it keeps the port's contract. Checked
-    # on every read, so an adapter that drifts is caught where it drifts.
+    # Problems with an adapter's whole output, as strings, in record order.
     param($Records)
     $problems = New-Object System.Collections.ArrayList
     $prev = 0
     foreach ($r in @($Records)) {
-        if (@($r.PSObject.TypeNames) -notcontains "Horde.TranscriptRecord") { [void]$problems.Add("a record was not made by New-HordeTranscriptRecord"); continue }
-        if ($r.line -lt $prev) { [void]$problems.Add("records are out of file order at line " + $r.line) }
-        $prev = $r.line
-        switch ($r.kind) {
-            "call" {
-                if ("$($r.id)" -eq "") { [void]$problems.Add("a call at line " + $r.line + " has no id") }
-                foreach ($f in @("model", "usage")) { if (-not (Test-HordeAnswer $r.$f)) { [void]$problems.Add("a call's " + $f + " at line " + $r.line + " is not an answer") } }
-            }
-            "toolCall" { if ("$($r.id)" -eq "") { [void]$problems.Add("a tool call at line " + $r.line + " has no id") } }
-            "toolResult" {
-                if (-not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a tool result's worker at line " + $r.line + " is not an answer") }
-                if (-not (Test-HordeAnswer $r.isError)) { [void]$problems.Add("a tool result's isError at line " + $r.line + " is not an answer") }
-            }
-            "input" {
-                if (@("user", "notification") -cnotcontains $r.source) { [void]$problems.Add("an input at line " + $r.line + " has source '" + $r.source + "'") }
-                if ($r.source -ceq "notification" -and -not (Test-HordeAnswer $r.worker)) { [void]$problems.Add("a notification's worker at line " + $r.line + " is not an answer") }
-            }
-            "turnEnd" { if (-not (Test-HordeAnswer $r.durationMs)) { [void]$problems.Add("a turn end's duration at line " + $r.line + " is not an answer") } }
-        }
+        foreach ($p in @(Test-HordeTranscriptRecord -Record $r -PreviousLine $prev)) { [void]$problems.Add($p) }
+        if ($null -ne $r -and $null -ne $r.PSObject.Properties["line"] -and $r.line -ge $prev) { $prev = $r.line }
     }
     return @($problems)
+}
+
+function New-HordeTranscriptSink {
+    # What an adapter hands its records to, one at a time, in file order: an object with Add(record).
+    # The sink checks each record against the port's contract AS IT ARRIVES and passes it on to -Into,
+    # which is anything with an Add(record) method: a list, for a caller that wants every record, or a
+    # running total (core/Metrics.ps1) for one that must not hold them.
+    #
+    # WHY A SINK AND NOT A SCRIPT BLOCK (plan step M2): a block handed down runs in the scope of whoever
+    # calls it, and reads THAT scope's variables of the same name (measured 2026-10-01; see
+    # Read-HordeJsonLines). A method reads its state from $this, which is always its own.
+    #
+    # The first broken record stops the read: problem says why, and the caller reports the file as
+    # unknown, as it did when the whole output was checked at the end.
+    param([Parameter(Mandatory = $true)]$Into)
+    $sink = [pscustomobject]@{ into = $Into; prev = 0; count = 0; problem = ""; downstream = $null }
+    $sink | Add-Member -MemberType ScriptMethod -Name Add -Value {
+        param($Record)
+        $bad = @(Test-HordeTranscriptRecord -Record $Record -PreviousLine $this.prev)
+        if ($bad.Count -gt 0) { $this.problem = $bad[0]; throw ("broke the record contract: " + $bad[0]) }
+        $this.prev = $Record.line
+        $this.count++
+        try { [void]$this.into.Add($Record) }
+        catch { $this.downstream = $_; throw }
+    }
+    return $sink
 }
 
 function Read-HordeTranscript {
     # Read one transcript through the adapter that claims it. Returns an answer: known
     # { adapter; path; sessionId; records; parseSkipped; tornTail }, unknown when no single adapter
     # claims it, the adapter fails, or its output breaks the contract.
-    param([Parameter(Mandatory = $true)][string]$Path)
+    #
+    # -Into STREAMS (plan step M2): each record goes to -Into's Add method as the adapter makes it, and
+    # records is then empty. Without it, records holds every record, as in M1. Measured 2026-10-02 on
+    # the always-on box: holding every record of a 133 MB transcript, and the summary's objects for
+    # each, peaked at 1,734 MB.
+    #
+    # AN ADAPTER EMITS OR RETURNS. Its -Read block is called with (path, sink); it hands each record to
+    # $sink.Add in file order and returns { sessionId; parseSkipped; tornTail }, or it returns its
+    # records in `records` as M1's did, and they are passed through the same sink here. Either way every
+    # record is checked against the contract before anything reads it.
+    param([Parameter(Mandatory = $true)][string]$Path, $Into = $null)
     $which = Resolve-HordeTranscriptAdapter -Path $Path
     if ($which.state -ne "known") {
         if ($which.state -eq "absent") { return (New-HordeUnknown -Reason ("no adapter reads " + (Split-Path -Leaf $Path))) }
         return $which
     }
     $adapter = $which.value
+    $kept = $null
+    $target = $Into
+    if ($null -eq $target) { $kept = New-Object System.Collections.ArrayList; $target = $kept }
+    $sink = New-HordeTranscriptSink -Into $target
     $got = $null
-    try { $got = & $adapter.read $Path }
-    catch { return (New-HordeUnknown -Reason ("adapter " + $adapter.name + " failed to read " + (Split-Path -Leaf $Path)) -ErrorRecord $_) }
-    $records = @($got.records)
-    $bad = @(Test-HordeTranscriptRecords -Records $records)
-    if ($bad.Count -gt 0) { return (New-HordeUnknown -Reason ("adapter " + $adapter.name + " broke the record contract: " + $bad[0])) }
+    try {
+        $got = & $adapter.read $Path $sink
+        if ($null -ne $got -and $null -ne $got.PSObject.Properties["records"]) { foreach ($r in @($got.records)) { $sink.Add($r) } }
+    }
+    catch {
+        if ($sink.problem -ne "") { return (New-HordeUnknown -Reason ("adapter " + $adapter.name + " broke the record contract: " + $sink.problem)) }
+        if ($null -ne $sink.downstream) { return (New-HordeUnknown -Reason ("what reads the records of " + (Split-Path -Leaf $Path) + " failed") -ErrorRecord $sink.downstream) }
+        return (New-HordeUnknown -Reason ("adapter " + $adapter.name + " failed to read " + (Split-Path -Leaf $Path)) -ErrorRecord $_)
+    }
+    $records = @()
+    if ($null -ne $kept) { $records = $kept.ToArray() }
+    # recordKey: the transcript's own identity, which names its record (review of PR #70, F4). An
+    # adapter that gives none is named by its file.
+    $recordKey = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+    if ($null -ne $got.PSObject.Properties["recordKey"] -and "$($got.recordKey)" -ne "") { $recordKey = "$($got.recordKey)" }
     return (New-HordeKnown -Value ([pscustomobject]@{
-        adapter = $adapter.name; path = $Path; sessionId = $got.sessionId
+        adapter = $adapter.name; path = $Path; sessionId = $got.sessionId; recordKey = $recordKey
         records = $records; parseSkipped = [int]$got.parseSkipped; tornTail = [int]$got.tornTail
     }))
 }

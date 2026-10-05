@@ -239,7 +239,7 @@ section 1.3 table, and each is carried below or dropped with its reason.
 ### L-045 The study counted a day by cutting at a time
 - source: study/join.js `DAY` and the 15:36:39 UTC cutoff
 - disposition: comment
-- where: core/MetricsReport.ps1 :: "The records whose time is inside"
+- where: core/Metrics.ps1 :: "keep only the records inside the window"
 
 ### L-046 A notification was told from other input by its text
 - source: study/atttypes.js (counts user strings and attachments by whether they contain task-notification) and orc-extract.js; review of PR #50, F2 (a person's pasted notification was counted)

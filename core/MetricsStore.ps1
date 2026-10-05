@@ -60,17 +60,23 @@ function Test-HordePathInside {
     return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-function Get-HordeAgentStoreRoots {
-    # The folders every engine keeps its own files in, as an answer: known list of full paths, or
-    # unknown when any engine folder does not say. Read as DATA from agents/<name>/stores.json, found by
-    # folder and never named, so an engine with no transcript adapter is protected too (review of PR
-    # #50, F7: a guard built from the loaded adapters left one engine's folder open, and a probe wrote
-    # two summaries into a fake profile's copy of it).
+function Get-HordeAgentStores {
+    # Every engine's declared stores, as an answer: known list of { agent; roots; transcripts }, roots
+    # being full paths and transcripts { dir; extension; label } for each folder under them that holds
+    # its transcripts, label naming the root and folder without a home path ("profile.x/logs",
+    # "env-VAR/logs"); unknown when any engine folder does not say. Read as DATA from
+    # agents/<name>/stores.json, found by folder and never named, so an engine with no transcript
+    # adapter is protected too (review of PR #50, F7: a guard built from the loaded adapters left one
+    # engine's folder open, and a probe wrote two summaries into a fake profile's copy of it).
     #
-    # stores.json: { "schemaVersion": 1, "roots": [ { "profile": ".name" } | { "env": "VARIABLE" } ] }.
-    # "profile" is a folder in the user profile; "env" names a variable that can move the store, and
-    # counts only when set. An engine folder with no stores.json, or one that cannot be read, makes the
-    # whole answer unknown, and the writer refuses: an engine nobody described is not left unguarded.
+    # stores.json: { "schemaVersion": 1, "roots": [ { "profile": ".name" } | { "env": "VARIABLE" } ],
+    # "transcripts": [ { "folder": "name", "extension": ".ext" }, ... ] }. "profile" is a folder in the
+    # user profile; "env" names a variable that can move the store, and counts only when set.
+    # "transcripts" names the folders, under each root, where `horde metrics collect` looks for
+    # transcripts, and the extension of the engine's transcript files (plan step M2); an engine Horde
+    # cannot read declares none. An engine folder with no stores.json, or one that cannot be
+    # read, makes the whole answer unknown, and the writer refuses: an engine nobody described is not
+    # left unguarded.
     param([string]$Root = (Split-Path -Parent $PSScriptRoot))
     $agents = Join-Path $Root "agents"
     $out = New-Object System.Collections.ArrayList
@@ -84,18 +90,47 @@ function Get-HordeAgentStoreRoots {
         $s = $null
         try { $s = $ser.DeserializeObject((Read-HordeSharedText -Path $file)) } catch { return (New-HordeUnknown -Reason ($where + " cannot be read") -ErrorRecord $_) }
         if ($s -isnot [System.Collections.IDictionary] -or $s["schemaVersion"] -ne 1 -or $s["roots"] -isnot [System.Collections.IEnumerable] -or @($s["roots"]).Count -eq 0) { return (New-HordeUnknown -Reason ($where + " is not a stores file with at least one root")) }
+        $roots = New-Object System.Collections.ArrayList
+        $labelled = New-Object System.Collections.ArrayList
         foreach ($r in @($s["roots"])) {
             if ($r -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a root that is not an object")) }
             if ($r["profile"] -is [string] -and $r["profile"] -ne "") {
-                if ("$env:USERPROFILE".Trim() -ne "") { [void]$out.Add((Join-Path "$env:USERPROFILE" $r["profile"])) }
+                if ("$env:USERPROFILE".Trim() -ne "") { $p = Join-Path "$env:USERPROFILE" $r["profile"]; [void]$roots.Add($p); [void]$labelled.Add([pscustomobject]@{ label = ("profile" + $r["profile"]); path = $p }) }
             }
             elseif ($r["env"] -is [string] -and $r["env"] -ne "") {
                 $v = [Environment]::GetEnvironmentVariable($r["env"])
-                if ("$v".Trim() -ne "") { [void]$out.Add("$v") }
+                if ("$v".Trim() -ne "") { [void]$roots.Add("$v"); [void]$labelled.Add([pscustomobject]@{ label = ("env-" + $r["env"]); path = "$v" }) }
             }
             else { return (New-HordeUnknown -Reason ($where + " has a root with neither profile nor env")) }
         }
+        $folders = New-Object System.Collections.ArrayList
+        $exts = New-Object System.Collections.ArrayList
+        if ($s.ContainsKey("transcripts")) {
+            if ($s["transcripts"] -is [string] -or $s["transcripts"] -isnot [System.Collections.IEnumerable]) { return (New-HordeUnknown -Reason ($where + " has a transcripts entry that is not a list")) }
+            foreach ($t in @($s["transcripts"])) {
+                # A folder name under the root, never a path that climbs out of it, and the extension of the
+                # engine's transcript files, which only the engine's folder may say (CONTRIBUTING 14).
+                if ($t -isnot [System.Collections.IDictionary]) { return (New-HordeUnknown -Reason ($where + " has a transcripts entry that is not { folder; extension }")) }
+                $fo = $t["folder"]; $ex = $t["extension"]
+                if ($fo -isnot [string] -or $fo -notmatch '\A[A-Za-z0-9._-]+\z' -or $fo -match '\A\.+\z') { return (New-HordeUnknown -Reason ($where + " has a transcripts folder that is not one plain folder name: '" + $fo + "'")) }
+                if ($ex -isnot [string] -or $ex -notmatch '\A\.[A-Za-z0-9]{1,10}\z') { return (New-HordeUnknown -Reason ($where + " has a transcripts extension that is not a dot and up to ten letters or digits: '" + $ex + "'")) }
+                if ($exts -notcontains $ex) { [void]$exts.Add($ex) }
+                foreach ($lr in $labelled) { [void]$folders.Add([pscustomobject]@{ dir = (Join-Path $lr.path $fo); extension = $ex; label = ($lr.label + "/" + $fo) }) }
+            }
+        }
+        [void]$out.Add([pscustomobject]@{ agent = $d.Name; roots = $roots.ToArray(); transcripts = $folders.ToArray(); extensions = $exts.ToArray() })
     }
+    return (New-HordeKnown -Value $out.ToArray())
+}
+
+function Get-HordeAgentStoreRoots {
+    # The folders every engine keeps its own files in, as an answer: known list of full paths, or
+    # unknown when any engine folder does not say (Get-HordeAgentStores).
+    param([string]$Root = (Split-Path -Parent $PSScriptRoot))
+    $stores = Get-HordeAgentStores -Root $Root
+    if ($stores.state -ne "known") { return $stores }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($s in @($stores.value)) { foreach ($r in @($s.roots)) { [void]$out.Add($r) } }
     return (New-HordeKnown -Value $out.ToArray())
 }
 
@@ -163,27 +198,64 @@ function New-HordeTranscriptSummaryRecord {
     }
 }
 
+function Move-HordeFileAtomic {
+    # Rename -From over -To in ONE step: MoveFileEx with REPLACE_EXISTING and WRITE_THROUGH, a single
+    # rename on NTFS. Review of PR #70 measured why File.Replace is not enough: Win32 ReplaceFile works in
+    # steps, and one of 40 kills inside it left NO index - the new one only in its temp file. A rename is
+    # all or nothing: a kill leaves the old file or the new one, never neither. A reader holding the file
+    # without delete sharing makes the rename fail for a moment; it is tried again for up to 2 s.
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To)
+    if (-not ([System.Management.Automation.PSTypeName]"HordeNative.FileMove").Type) {
+        Add-Type -Namespace HordeNative -Name FileMove -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
+    }
+    $err = 0
+    for ($i = 0; $i -lt 20; $i++) {
+        # 0x1 MOVEFILE_REPLACE_EXISTING, 0x8 MOVEFILE_WRITE_THROUGH.
+        if ([HordeNative.FileMove]::MoveFileEx($From, $To, 0x9)) { return }
+        $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        Start-Sleep -Milliseconds 100
+    }
+    throw (New-Object System.ComponentModel.Win32Exception($err))
+}
+
+function Write-HordeMetricsFile {
+    # Write a file under the metrics folder whole: to a temporary file beside it, flushed to disk, then
+    # renamed over the file in one step (Move-HordeFileAtomic), so a reader - or a kill - never sees half
+    # of it. Used for records and for collect's index. The temp name is "." + name + "." + 32 hex + ".tmp":
+    # collect recovers from, and cleans up, exactly that pattern (core/MetricsCollect.ps1).
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Text)
+    $dir = Split-Path -Parent $Path
+    [void][System.IO.Directory]::CreateDirectory($dir)
+    $temp = Join-Path $dir ("." + (Split-Path -Leaf $Path) + "." + [guid]::NewGuid().ToString("N") + ".tmp")
+    $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Text)
+    $fs = New-Object System.IO.FileStream($temp, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+    # A rename that fails while this process lives leaves an uncommitted temp: removed here. Only a kill
+    # leaves one behind, and collect recovers or removes those (core/MetricsCollect.ps1).
+    try { Move-HordeFileAtomic -From $temp -To $Path }
+    catch { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw }
+}
+
+function Test-HordeMetricsRecordName {
+    # The record's name comes from a transcript's file name; anything that could climb out of the
+    # folder or name a device is refused rather than cleaned.
+    param([string]$Name)
+    return ($Name -cmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,200}\z' -and $Name -notmatch '\.\.')
+}
+
+function Get-HordeMetricsRecordPath {
+    # Where the record <adapter>/<name> lives: <metrics>\summaries\<adapter>\<name>.json.
+    param([Parameter(Mandatory = $true)][string]$Adapter, [Parameter(Mandatory = $true)][string]$Name)
+    if ($Adapter -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("not an adapter name: '" + $Adapter + "'") }
+    if (-not (Test-HordeMetricsRecordName $Name)) { throw ("not a record name Horde will write: '" + $Name + "'") }
+    return (Join-Path (Join-Path (Join-Path (Get-HordeMetricsDir) "summaries") $Adapter) ($Name + ".json"))
+}
+
 function Write-HordeMetricsRecord {
     # Write one record, whole, as <metrics>\summaries\<adapter>\<name>.json. Returns the path written.
     # The caller has already had Get-HordeMetricsWriteDecision say yes.
     param([Parameter(Mandatory = $true)]$Record, [Parameter(Mandatory = $true)][string]$Adapter, [Parameter(Mandatory = $true)][string]$Name)
-    if ($Adapter -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("not an adapter name: '" + $Adapter + "'") }
-    # The record's name comes from a transcript's file name; anything that could climb out of the
-    # folder or name a device is refused rather than cleaned.
-    if ($Name -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,200}\z' -or $Name -match '\.\.') { throw ("not a record name Horde will write: '" + $Name + "'") }
-    $dir = Join-Path (Join-Path (Get-HordeMetricsDir) "summaries") $Adapter
-    [void][System.IO.Directory]::CreateDirectory($dir)
-    $target = Join-Path $dir ($Name + ".json")
-    $temp = Join-Path $dir ("." + $Name + "." + [guid]::NewGuid().ToString("N") + ".tmp")
-    $json = ConvertTo-Json -InputObject $Record -Depth 30
-    [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
-    try {
-        # [NullString]::Value, not $null: PowerShell passes $null to a string parameter as "", and Replace
-        # refused "" as "not of a legal form" (measured 2026-10-01).
-        if (Test-Path -LiteralPath $target -PathType Leaf) { [System.IO.File]::Replace($temp, $target, [NullString]::Value) }
-        else { [System.IO.File]::Move($temp, $target) }
-    } finally {
-        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
-    }
+    $target = Get-HordeMetricsRecordPath -Adapter $Adapter -Name $Name
+    Write-HordeMetricsFile -Path $target -Text (ConvertTo-Json -InputObject $Record -Depth 30)
     return $target
 }

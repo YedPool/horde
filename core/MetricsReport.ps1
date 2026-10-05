@@ -13,27 +13,43 @@
 # core/MetricsStore.ps1, and the adapters loaded.
 
 function Get-HordeTranscriptFiles {
-    # The .jsonl files a path names: the file itself, or every .jsonl under a folder, in name order.
+    # The transcript files a path names: the file itself, or every file under a folder whose extension
+    # an engine declares for its transcripts (agents/<name>/stores.json; CONTRIBUTING 14), in name order.
     # Extension compared here, not with -Filter, which also matches 8.3 short names (cli/Commands.ps1,
     # measured 2026-09-29).
     param([Parameter(Mandatory = $true)][string]$Path)
     if (Test-Path -LiteralPath $Path -PathType Leaf) { return @((Get-Item -LiteralPath $Path).FullName) }
     if (Test-Path -LiteralPath $Path -PathType Container) {
-        return @(Get-ChildItem -LiteralPath $Path -File -Recurse | Where-Object { $_.Extension -ieq ".jsonl" } | Sort-Object FullName | ForEach-Object { $_.FullName })
+        $stores = Get-HordeAgentStores
+        if ($stores.state -ne "known") { throw ("which files are transcripts is not known: " + $stores.reason) }
+        $exts = @($stores.value | ForEach-Object { @($_.extensions) } | Sort-Object -Unique)
+        return @(Get-ChildItem -LiteralPath $Path -File -Recurse | Where-Object { $exts -contains $_.Extension } | Sort-Object FullName | ForEach-Object { $_.FullName })
     }
     throw ("no file or folder at " + $Path)
 }
 
-function Select-HordeRecordsInWindow {
-    # The records whose time is inside [From, To]; either bound may be $null.
-    param($Records, $From, $To)
-    return @(@($Records) | Where-Object { ($null -eq $From -or $_.ts -ge $From) -and ($null -eq $To -or $_.ts -le $To) })
+function Measure-HordeTranscriptFile {
+    # Read one transcript and measure it, holding running totals and never its records (plan step M2;
+    # measured 2026-10-02, M1's list of records peaked at 1,734 MB on a 133 MB transcript). Returns an
+    # answer: known { read; worker; orc; record }, or the port's unknown when no adapter could read it.
+    # -From and -To window the measures; a windowed record says so.
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$PriceTable, $From = $null, $To = $null)
+    $acc = New-HordeMetricsAccumulator -PriceTable $PriceTable -From $From -To $To
+    $read = Read-HordeTranscript -Path $Path -Into $acc
+    if ($read.state -ne "known") { return $read }
+    $m = Complete-HordeMetricsAccumulator -Accumulator $acc
+    $record = New-HordeTranscriptSummaryRecord -Read $read.value -Worker $m.worker -Orc $m.orc
+    if ($null -ne $From -or $null -ne $To) {
+        $record["window"] = [ordered]@{ from = (ConvertTo-HordeJsonSafe $From); to = (ConvertTo-HordeJsonSafe $To) }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ read = $read.value; worker = $m.worker; orc = $m.orc; record = $record }))
 }
 
 function Invoke-HordeMetricsSummarize {
     # Summarise every transcript under Path. Returns { rows; unread; priceTable; gate; recorded }:
     # rows hold each transcript's read, worker summary, orchestrator measures, the record and what
-    # happened to it; unread lists files no adapter could read, with the reason.
+    # happened to it; unread lists files no adapter could read, with the reason. One file is read at a
+    # time, and only its measures are kept.
     param([Parameter(Mandatory = $true)][string]$Path, $From = $null, $To = $null)
     $windowed = ($null -ne $From -or $null -ne $To)
     $table = Read-HordePriceBook
@@ -41,24 +57,16 @@ function Invoke-HordeMetricsSummarize {
     $rows = New-Object System.Collections.ArrayList
     $unread = New-Object System.Collections.ArrayList
     foreach ($file in (Get-HordeTranscriptFiles -Path $Path)) {
-        $read = Read-HordeTranscript -Path $file
-        if ($read.state -ne "known") { [void]$unread.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); reason = $read.reason }); continue }
-        $r = $read.value
-        $records = @($r.records)
-        if ($windowed) { $records = Select-HordeRecordsInWindow -Records $records -From $From -To $To }
-        $worker = Get-HordeWorkerSummary -Records $records -PriceTable $table
-        $orc = Get-HordeOrcMeasures -Records $records
-        $record = New-HordeTranscriptSummaryRecord -Read $r -Worker $worker -Orc $orc
-        if ($windowed) {
-            $record["window"] = [ordered]@{ from = (ConvertTo-HordeJsonSafe $From); to = (ConvertTo-HordeJsonSafe $To) }
-        }
-        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $worker.firstEventAt -Windowed:$windowed
+        $measured = Measure-HordeTranscriptFile -Path $file -PriceTable $table -From $From -To $To
+        if ($measured.state -ne "known") { [void]$unread.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); reason = $measured.reason }); continue }
+        $mv = $measured.value
+        $r = $mv.read
+        $decision = Get-HordeMetricsWriteDecision -Gate $gate -FirstEventAt $mv.worker.firstEventAt -Windowed:$windowed
+        # The record is named by the transcript's identity, as collect names it (review of PR #70, F4).
+        if ($decision.write -and -not (Test-HordeMetricsRecordName $r.recordKey)) { $decision = [pscustomobject]@{ write = $false; reason = ("the transcript's identity is not a record name Horde will write") } }
         $written = ""
-        if ($decision.write) {
-            $name = [System.IO.Path]::GetFileNameWithoutExtension($file)
-            $written = Write-HordeMetricsRecord -Record $record -Adapter $r.adapter -Name $name
-        }
-        [void]$rows.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); adapter = $r.adapter; read = $r; worker = $worker; orc = $orc; record = $record; decision = $decision; written = $written })
+        if ($decision.write) { $written = Write-HordeMetricsRecord -Record $mv.record -Adapter $r.adapter -Name $r.recordKey }
+        [void]$rows.Add([pscustomobject]@{ file = (Split-Path -Leaf $file); adapter = $r.adapter; read = $r; worker = $mv.worker; orc = $mv.orc; record = $mv.record; decision = $decision; written = $written })
     }
     return [pscustomobject]@{ rows = $rows.ToArray(); unread = $unread.ToArray(); priceTable = $table; gate = $gate }
 }
@@ -145,6 +153,27 @@ function Format-HordeMetricsSummary {
     foreach ($row in $skipped) { [void]$lines.Add("lines not parsed: " + $row.file + ": " + $row.read.parseSkipped + " skipped, " + $row.read.tornTail + " still being written") }
     if ($Result.priceTable.state -eq "known") { [void]$lines.Add("cost: notional list price from " + ($Result.priceTable.value["sources"] -join ", ") + "; an ESTIMATE, never money spent on a subscription") }
     else { [void]$lines.Add("cost: unknown - " + $Result.priceTable.reason) }
+    # Transcripts collect could not read within a run, said loudly (review of #70): they are skipped, and
+    # a person should know their work is missing from the store.
+    $ixPath = Join-Path (Get-HordeMetricsDir) "collect-index.json"
+    if (Test-Path -LiteralPath $ixPath -PathType Leaf) {
+        try {
+            Add-Type -AssemblyName System.Web.Extensions
+            $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+            $ser.MaxJsonLength = [int]::MaxValue
+            $ix = $ser.DeserializeObject((Read-HordeSharedText -Path $ixPath))
+            $big = @($ix["entries"].Keys | Where-Object { "$($ix["entries"][$_]["outcome"])" -ceq "tooLarge" } | ForEach-Object { $_.Substring($_.LastIndexOf('/') + 1) } | Sort-Object)
+            if ($big.Count -gt 0) { [void]$lines.Add("WARNING: collect skips " + $big.Count + " transcripts as too large to read within a run, so they are not in the store: " + ($big -join ", ")) }
+        } catch { [void]$lines.Add("WARNING: the collect index could not be read to say which transcripts it skips") }
+    }
+    $recPath = Join-Path (Get-HordeMetricsDir) "collect-recovered.json"
+    if (Test-Path -LiteralPath $recPath -PathType Leaf) {
+        try {
+            Add-Type -AssemblyName System.Web.Extensions
+            $rn = (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject((Read-HordeSharedText -Path $recPath))
+            [void]$lines.Add("WARNING: collect recovered from a write that was killed half way, at " + $rn["at"] + ": " + $rn["what"])
+        } catch { [void]$lines.Add("WARNING: collect recovered from a killed write, and its note cannot be read") }
+    }
     $written = @($Result.rows | Where-Object { $_.written -ne "" })
     if ($written.Count -gt 0) { [void]$lines.Add("recorded " + $written.Count + " summaries under " + (Join-Path (Get-HordeMetricsDir) "summaries")) }
     $notWritten = @($Result.rows | Where-Object { $_.written -eq "" })

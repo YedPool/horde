@@ -109,6 +109,45 @@ What batch 1 of the experiment program needs and M1 does not give (EP 3.1, EP 9)
   the measures fold each line into running totals (calls, tokens, gaps, open tool calls, the
   still-waiting state) instead. Target: peak working set under 200 MB on the 133 MB file, measured
   the same way, with the probe kept as a suite so a regression fails the gate.
+  **Built (PR for M2 part 1):** the adapters read twice - facts per id, then records in M1's order -
+  and hand each record to a sink; `core/Metrics.ps1` folds them into running totals. Output pinned
+  byte for byte to M1's by golden files written by M1's own command; `agents/claude-code/test/test-summarize-memory.ps1`
+  is the probe as a suite. Measured 2026-10-02 on the always-on box: 256 MB on both the 33 MB and the
+  133 MB transcripts (M1: 599 and 1,734 MB), and byte for byte M1's output on 13 runs over large
+  varied transcripts. The bare command's floor - the same command on a one-response transcript - is
+  164 MB on that box and 143 MB on the working box (where the 33 MB file peaks at 155 MB); a forced
+  collection every 1,000 lines did not lower the peak. The 200 MB target is restated (coordinator,
+  2026-10-02): flat with file size, and within 120 MB of the floor on the same box (measured +92 MB
+  and +12 MB). **That is not flat by construction (review of PR #70, F5):** the code keeps, per call,
+  its id and usage, per record its time, line and kind, and per tool result its time, all needed to
+  stay byte for byte M1 (an id comes back after another 73 times in one of 692 real transcripts, and
+  M1's tie order needs every time). Memory is O(responses). A process peak cannot say how much: four
+  repeated runs on the always-on box gave per-response slopes of -2 to 507 bytes (median 53) for
+  10,000 against 60,000 short responses, the collector's noise. Measured instead as live bytes, in a
+  child process forcing a full collection every 5,000 records: **359 bytes per response** on the
+  always-on box (9.7 MB live at 10,000 responses, 26.8 MB at 60,000) and 383 on the working box. The
+  suite's limit is 800 bytes per response, about twice the larger measurement.
+- **`horde metrics collect`** (founder, 2026-10-02: "I want the metrics collector on until we have a
+  clear initial method for when to use a real session, when an agent etc."). Finds every transcript in
+  the folders each `agents/<name>/stores.json` declares under `transcripts`, and records what is new
+  or changed since its last run, keyed in `<HordeHome>\metrics\collect-index.json` by path, size and
+  modification time. The gate exactly as summarize; a file last written before consent is not read; a
+  transcript written within the last 10 minutes is recorded as provisional and collected again once
+  still; one run at a time; never writes in an engine's folder. The index is committed after every
+  transcript, so a run killed by the task's time limit keeps its progress; a run ends on a budget
+  (default 900 s, 5 minutes under the task's 20-minute limit), checked inside a read every 500 lines;
+  a file the budget runs out inside is deferred and read last, and after three deferrals in a row is
+  `tooLarge` - skipped, and named by summarize - so the rest of the backlog always proceeds (review of
+  PR #70).
+- **`horde metrics schedule install|remove|status`**: one job, "Horde metrics collect", every 30
+  minutes as the current user, priority 7, stopped after 20 minutes, installed only while the gate
+  says usage. `core/Schedule.ps1` defines the job; `core/schedule/WindowsTaskScheduler.ps1` is the
+  first scheduler; cron or a systemd timer is a new file there.
+- **Found while keeping M1's output (for its own pull request):** M1 sorted records with Sort-Object,
+  which is not stable on PowerShell 5.1 (measured 2026-10-02: 17,773 of 50,000 tied records
+  reordered), so the kind it reports before the longest silence, when several records share that
+  time and line, is whatever the sort did. M2 replays the same sort to stay byte for byte M1; a stable
+  rule is an intended change of output, with new golden files.
 - Each `subagents/agent-<id>.jsonl` becomes an `agent` span linked to the orchestrator's launch call
   through its `meta.json` `toolUseId`; a session's total is the parent plus its spans, deduplicated
   across files.

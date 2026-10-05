@@ -1,10 +1,14 @@
 # Mutations of core/EngineConfig.ps1 (engines E3).
 # Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\engine-config.psd1
 # Each removes or weakens one finding's condition; test\test-engine-config.ps1 must fail for every one.
+# The secret and redaction mutants are in engine-config-secrets.psd1, which runs the secret sections;
+# this spec runs every other section and never the 135-case secret matrix, most of a full run's time.
+# A filtered run exits 3, so PassCodes accepts it for these runs and nowhere else.
 @{
     Target = "core\EngineConfig.ps1"
     Suite  = "test\test-engine-config.ps1"
-    Environment = @{ HORDE_FAIL_FAST = "1" }
+    Environment = @{ HORDE_FAIL_FAST = "1"; HORDE_SECTIONS = "golden,text,layers,names,rules,pairings,review,registry" }
+    PassCodes = @(3)
     Mutations = @(
         @{ Name = "l2-read-like-any-layer"
            Find = 'if ($layer -ceq "L2") {'
@@ -12,42 +16,6 @@
         @{ Name = "duplicate-key-ignored"
            Find = 'if ($null -ne $d) { Add-Finding "duplicate-key"'
            Replace = 'if ($false) { Add-Finding "duplicate-key"' }
-        @{ Name = "secret-scan-skipped"
-           Find = 'foreach ($p in @(Find-HordeSecretPaths -Value $parsed)) {'
-           Replace = 'foreach ($p in @()) {' }
-        @{ Name = "secret-mixed-token-dropped"
-           Find = "if (`$Token -cmatch '[A-Z]' -and `$Token -cmatch '[a-z]' -and `$Token -cmatch '[0-9]') { return `$true }"
-           Replace = "if (`$false) { return `$true }" }
-        @{ Name = "secret-lower-token-dropped"
-           Find = "if (`$Token.Length -ge 40 -and `$Token -cmatch '^[a-z0-9]+`$' -and `$Token -cmatch '[a-z]' -and `$Token -cmatch '[0-9]') { return `$true }"
-           Replace = "if (`$false) { return `$true }" }
-        @{ Name = "secret-patterns-dropped"
-           Find = 'foreach ($pt in $script:HordeSecretPatterns) { $t = [regex]::Replace($t, $pt, $script:HordeRedacted) }'
-           Replace = '' }
-        @{ Name = "secret-zai-shape-dropped"
-           Find = "'[0-9a-fA-F]{32}\.[A-Za-z0-9]{16,}',"
-           Replace = "" }
-        @{ Name = "secret-hex-shape-dropped"
-           Find = "'(?<![0-9A-Za-z])[0-9a-fA-F]{40,}(?![0-9A-Za-z])'"
-           Replace = "'(?!)'" }
-        @{ Name = "secret-gitlab-shape-dropped"
-           Find = "'glpat-[A-Za-z0-9_-]{20,}',"
-           Replace = "" }
-        @{ Name = "secret-google-oauth-shape-dropped"
-           Find = "'ya29\.[A-Za-z0-9_-]{20,}',"
-           Replace = "" }
-        @{ Name = "secret-key-names-not-scanned"
-           Find = 'if (Test-HordeSecretShape -Text $p.Name) { [void]$out.Add($Path + "." + $p.Name) }'
-           Replace = '' }
-        @{ Name = "findings-not-redacted"
-           Find = 'source = (Protect-HordeText $Source); path = (Protect-HordeText $Path); detail = (Protect-HordeText $Detail)'
-           Replace = 'source = $Source; path = $Path; detail = $Detail' }
-        @{ Name = "finding-detail-not-redacted"
-           Find = 'detail = (Protect-HordeText $Detail)'
-           Replace = 'detail = $Detail' }
-        @{ Name = "layer-label-not-redacted"
-           Find = 'throw (Protect-HordeText ("'
-           Replace = 'throw (("' }
         @{ Name = "login-endpoint-accepted"
            Find = 'if ($cred.kind -ceq "harness-login" -and $null -ne (Get-HordeAgentProp $pv "endpoint")) {'
            Replace = 'if ($false) {' }
@@ -175,6 +143,9 @@
            Replace = '$null = $seen.Add($n)' }
         @{ Name = "registry-empty-enum-accepted"
            Find = 'if ($vals.Count -eq 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "registry-value-fields-open"
+           Find = 'if ($f -cne "kind" -and -not ($f -ceq "values" -and $kind -ceq "enum")) {'
            Replace = 'if ($false) {' }
     )
 }

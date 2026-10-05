@@ -9,10 +9,30 @@
 # native provider provider-a, from E2's fixture) and harness-b (speaks openai-responses, native
 # provider-b), and fixture providers, aliases and profiles.
 
+# SECTIONS (review of the batch-3 gate, 2026-10-02). The secret matrix plants nine shapes in fifteen
+# fields, 135 checks that take most of a run (about 70 s of 80); a mutation spec names the sections
+# that can catch its mutants, so most mutants never run the matrix. HORDE_SECTIONS=<id,id> selects;
+# a run that skipped any section exits 3, never 0. An unknown section id fails the run.
+$script:sectionIds = @("golden", "text", "layers", "names", "rules", "pairings", "secrets", "secret-matrix", "review", "registry")
+$script:sectionsWanted = @()
+if ("$env:HORDE_SECTIONS".Trim() -ne "") { $script:sectionsWanted = @("$env:HORDE_SECTIONS" -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }) }
+$script:sectionsSkipped = New-Object System.Collections.ArrayList
+function Section {
+    param([string]$Id, [string]$Title)
+    if ($script:sectionIds -cnotcontains $Id) { throw ("not a section of this suite: " + $Id) }
+    Write-Host ""
+    Write-Host ("--- " + $Title + " ---") -ForegroundColor Cyan
+    if ($script:sectionsWanted.Count -eq 0 -or $script:sectionsWanted -ccontains $Id) { return $true }
+    [void]$script:sectionsSkipped.Add($Id)
+    Write-Host ("  [SKIP] section " + $Id + " was not selected") -ForegroundColor Yellow
+    return $false
+}
+
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+foreach ($u in @($script:sectionsWanted | Where-Object { $script:sectionIds -cnotcontains $_ })) { Check $false ("HORDE_SECTIONS names " + $u + ", which is not a section of this suite") }
 . (Join-Path $root "core\EngineConfig.ps1")
 
 $fx = Join-Path $root "test\fixtures\engine-config"
@@ -57,8 +77,7 @@ function Add-Prop { param($Object, [string]$Name, $Value) $Object | Add-Member -
 function Get-Rule { param($Doc, [string]$Id) return @($Doc.rules | Where-Object { $_.id -ceq $Id })[0] }
 function Get-Profile { param($Doc, [string]$Name) return @($Doc.profiles | Where-Object { $_.name -ceq $Name })[0] }
 
-Write-Host ""
-Write-Host "--- the golden documents are clean ---" -ForegroundColor Cyan
+if (Section "golden" "the golden documents are clean") {
 $golden = @(Get-Findings (ConvertTo-DocList (New-Docs)))
 Check ($golden.Count -eq 0) ("CONTROL: the golden built-in, user and live documents give no finding" + $(if ($golden.Count) { " (got: " + (@($golden | ForEach-Object { $_.code + " " + $_.detail }) -join " | ") + ")" } else { "" }))
 $fromFiles = @(Test-HordeEngineConfig -Documents @(
@@ -67,8 +86,8 @@ $fromFiles = @(Test-HordeEngineConfig -Documents @(
     [pscustomobject]@{ layer = "L4"; source = "live.json"; text = $texts.L4 }) -Descriptors $descriptors)
 Check ($fromFiles.Count -eq 0) "CONTROL: and so do the files' own texts, before any round trip"
 
-Write-Host ""
-Write-Host "--- the text and the shape ---" -ForegroundColor Cyan
+}
+if (Section "text" "the text and the shape") {
 $dupList = @([pscustomobject]@{ layer = "L1"; source = "user"; text = $texts.L1.Replace('"schemaVersion": 1,', '"schemaVersion": 1, "schemaVersion": 1,') })
 $f = @(Get-Findings $dupList)
 Check (@($f | Where-Object { $_.code -ceq "duplicate-key" }).Count -ge 1) "a key repeated in one object -> duplicate-key"
@@ -78,8 +97,8 @@ Test-Finding "a credential kind the plan dropped" { param($d) $d.L1.providers[0]
 $f = @(Get-Findings @([pscustomobject]@{ layer = "L1"; source = "user"; text = "{ not json" }))
 Check (@($f | Where-Object { $_.code -ceq "not-json" }).Count -eq 1) "text that is not JSON -> not-json"
 
-Write-Host ""
-Write-Host "--- layers ---" -ForegroundColor Cyan
+}
+if (Section "layers" "layers") {
 $f = @(Get-Findings @([pscustomobject]@{ layer = "L2"; source = "a repo"; text = $texts.L1 }))
 Check (@($f | Where-Object { $_.code -ceq "layer-not-built" -and $_.detail -like "*project layer*not built*" }).Count -eq 1) "a document offered as L2, the project layer -> layer-not-built (engines plan: deferred until a repo needs one)"
 Check (Throws { Test-HordeEngineConfig -Documents @([pscustomobject]@{ layer = "L9"; source = "x"; text = $texts.L1 }) -Descriptors $descriptors } "L9") "a layer that does not exist is a mistake in the caller, and throws"
@@ -89,8 +108,8 @@ Test-Finding "a revision outside the live rules" { param($d) Add-Prop $d.L1 "rev
 Test-Finding "a tuner's rule in the user file" { param($d) (Get-Rule $d.L1 "user-default").writtenBy = "tuner" } "tuner-layer" "user-default"
 Test-Finding "an expiry on a rule outside the live rules" { param($d) Add-Prop (Get-Rule $d.L1 "user-default") "until" "run-closed" } "until-layer" "user-default"
 
-Write-Host ""
-Write-Host "--- names, once, and defined before use ---" -ForegroundColor Cyan
+}
+if (Section "names" "names, once, and defined before use") {
 Test-Finding "the user file redefining a built-in provider" { param($d) $d.L1.providers = @($d.L1.providers) + @($d.L0.providers[0]) } "duplicate-name" "provider-a"
 Test-Finding "two profiles of one name" { param($d) $d.L1.profiles = @($d.L1.profiles) + @($d.L1.profiles[0]) } "duplicate-name" "alpha-big"
 Test-Finding "two rules of one id in one layer" { param($d) $d.L1.rules = @($d.L1.rules) + @($d.L1.rules[0]) } "duplicate-name" "user-default"
@@ -102,15 +121,15 @@ Test-Finding "a rule setting a provider nobody defined" { param($d) (Get-Rule $d
 Test-Finding "an alias with two entries for one provider" { param($d) $d.L1.aliases[0].map = @($d.L1.aliases[0].map) + @([pscustomobject]@{ provider = "provider-a"; model = "model-a-other" }) } "alias-provider-twice" "big"
 Test-Finding "a provider that lacks a capability nobody defined" { param($d) $d.L1.providers[0].lacks = @("telepathy") } "unknown-capability" "telepathy"
 
-Write-Host ""
-Write-Host "--- rules ---" -ForegroundColor Cyan
+}
+if (Section "rules" "rules") {
 Test-Finding "a rule that sets nothing" { param($d) (Get-Rule $d.L1 "user-default").set = [pscustomobject]@{} } "empty-set" "user-default"
 Test-Finding "a fleet id without its run" { param($d) (Get-Rule $d.L1 "one-session").match.PSObject.Properties.Remove("run") } "fleet-without-run" "one-session"
 Test-Finding "a key no setting has" { param($d) Add-Prop (Get-Rule $d.L1 "user-default").set "colour" "red" } "unknown-key" "colour"
 Test-Finding "a harness value that is not a name" { param($d) (Get-Rule $d.L4 "live-2").set.harness = "Harness B" } "key-value" "harness"
 
-Write-Host ""
-Write-Host "--- the wire-format, subscription and pinning rules ---" -ForegroundColor Cyan
+}
+if (Section "pairings" "the wire-format, subscription and pinning rules") {
 Test-Finding "a profile pairing a harness with a provider whose protocol it does not speak" { param($d) (Get-Profile $d.L1 "gamma").harness = "harness-b" } "wire-format" "gamma"
 Test-Finding "a rule pairing them directly" { param($d) Add-Prop (Get-Rule $d.L4 "live-1").set "harness" "harness-b" } "wire-format" "live-1"
 Test-Finding "a harness-login provider on a harness whose native provider is another" { param($d) $d.L1.providers = @($d.L1.providers) + @([pscustomobject]@{ name = "provider-d"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "harness-login" } }); (Get-Profile $d.L1 "gamma").provider = "provider-d"; (Get-Profile $d.L1 "gamma").PSObject.Properties.Remove("model") } "subscription" "provider-d"
@@ -122,8 +141,8 @@ Test-Finding "a provider whose protocol no harness speaks" { param($d) $d.L1.pro
 Test-Finding "an env credential with no variable named" { param($d) $d.L1.providers[0].credential.PSObject.Properties.Remove("ref") } "credential-ref" "provider-c"
 Test-Finding "a harness-login credential that names a variable" { param($d) Add-Prop $d.L0.providers[0].credential "ref" "SOME_VAR" } "credential-ref" "provider-a"
 
-Write-Host ""
-Write-Host "--- a secret is refused, and never repeated ---" -ForegroundColor Cyan
+}
+if (Section "secrets" "a secret is refused, and never repeated") {
 # Planted values, each shaped like a real credential. The finding names where it is, never what it is.
 $planted = @("sk-ant-api03-Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI", "AKIAZQ9XYW8VU7TS6RR5", "AIzaSyZq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iI", "Zq9XyW8vU7tS6rR5qP4oN3mM2lK1jJ0iIhH")
 foreach ($secret in $planted) {
@@ -140,6 +159,8 @@ $docs = New-Docs
 (Get-Rule $docs.L1 "one-session").note = "rotate the key every quarter, see the runbook"
 Check (@(Get-Findings (ConvertTo-DocList $docs) | Where-Object { $_.code -ceq "secret" }).Count -eq 0) "CONTROL: an ordinary sentence is not a secret"
 
+}
+if (Section "secret-matrix" "every secret shape in every field a finding can quote") {
 # REVIEW OF PR #73, F1: the secret finding hid a planted value, but a SECOND finding on the same value
 # printed it whole. So every field a finding can quote gets a planted value of every shape, and the
 # value - or any long part of it - must appear in no finding at all.
@@ -204,8 +225,8 @@ $f = @(Test-HordeEngineConfig -Documents @([pscustomobject]@{ layer = "L1"; sour
 Check ((@($f | ForEach-Object { $_.detail + $_.path }) -join "") -notlike ("*" + $shapes["sk"] + "*")) "CONTROL: the same holds for a document given as text, not built by this suite"
 Check (Throws { Test-HordeEngineConfig -Documents @([pscustomobject]@{ layer = $shapes["sk"]; source = "x"; text = "{}" }) -Descriptors $descriptors } "redacted") "a secret-shaped layer label is not repeated by the refusal that names it"
 
-Write-Host ""
-Write-Host "--- the review of PR #73: endpoints, case, and text ---" -ForegroundColor Cyan
+}
+if (Section "review" "the review of PR #73: endpoints, case, and text") {
 # F2: a subscription runs on the vendor's own program; an endpoint would send its login elsewhere.
 Test-Finding "a harness-login provider with an endpoint of its own" { param($d) Add-Prop $d.L0.providers[0] "endpoint" "https://collector.example.test" } "login-endpoint" "provider-a"
 Test-Finding "the user file naming the native provider with an endpoint" { param($d) Add-Prop $d.L1.providers[0] "endpoint" "https://ok.example.test"; $d.L1.providers[0].credential = [pscustomobject]@{ kind = "harness-login" } } "login-endpoint" "provider-c"
@@ -217,8 +238,8 @@ Check (@($f | Where-Object { $_.code -ceq "not-ascii" }).Count -eq 1) "a documen
 $f = @(Get-Findings @([pscustomobject]@{ layer = "L1"; source = "user"; text = ([string][char]0xFEFF + $texts.L1) }))
 Check (@($f | Where-Object { $_.code -ceq "not-ascii" -and $_.detail -like "*byte-order mark*" }).Count -eq 1) "a document starting with a byte-order mark -> not-ascii, naming the mark"
 
-Write-Host ""
-Write-Host "--- the settings registry is the seam for keys beyond the binding (metrics.level, remote.*) ---" -ForegroundColor Cyan
+}
+if (Section "registry" "the settings registry is the seam for keys beyond the binding (metrics.level, remote.*)") {
 $reg = @(Get-HordeConfigKeys)
 Check (@($reg | ForEach-Object { $_.name }) -join "," -ceq "profile,harness,provider,model") "the registry holds the four binding keys today, in order"
 # A neutral key restricted to the user and live layers, the shape a node policy key will have (remote R9).
@@ -251,4 +272,14 @@ Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "directi
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "direction": "any"', '"value": { "kind": "model" }, "direction": "lower-only"'))) -like "*direction*enum*") "and a lower-only or raise-only direction on a key that is not an enum: there is no order"
 Check (@($reg | Where-Object { "" + $_.direction -cne "any" }).Count -eq 0 -and @($reg | Where-Object { $null -eq $_.direction }).Count -eq 0) "every binding key in the registry states its direction, any"
 
-Complete-HordeSuite -Success "an engine configuration is refused for each listed finding, and the golden one for none"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "max": 3 }'))) -like "*model*max*") "the registry refuses a field it does not know inside value, too (review of PR #74, F3)"
+Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "values": ["a"] }'))) -like "*model*values*") "and values on a kind that is not an enum"
+
+}
+
+# A RUN THAT SKIPPED SECTIONS IS NOT A GATE'S PASS: it says so in its banner and exits 3, as
+# test-projection does, so only a mutation spec that declares PassCodes = @(3) accepts it.
+$successBanner = "an engine configuration is refused for each listed finding, and the golden one for none"
+$passCode = 0
+if ($script:sectionsSkipped.Count -gt 0) { $successBanner = "SECTIONS ONLY (" + ($script:sectionsWanted -join ",") + "), EXIT 3: " + $successBanner; $passCode = 3 }
+Complete-HordeSuite -Success $successBanner -PassCode $passCode

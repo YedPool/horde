@@ -12,6 +12,8 @@
 # by name or by a recorded pid. Anything that process started is left alone and the run says it
 # timed out, so a person can look.
 
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Platform.ps1")
+
 function Find-HordeTestProgram {
     # The full path of a program on PATH, or "" when there is none.
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -46,6 +48,9 @@ function Invoke-HordeTestProgram {
         else { $psi.EnvironmentVariables[$k] = "" + $Env[$k] }
     }
     $p = [System.Diagnostics.Process]::Start($psi)
+    # Out of power throttling (core/Platform.ps1), set on the child itself: the opt-out is not inherited.
+    # A .cmd shim's own child (node) is not reached; only the process started here is.
+    $null = Set-HordeThrottlingOptOut -Process $p
     try {
         # stdin closed at once: a program that waits for input reads end of file, never a person.
         $p.StandardInput.Close()

@@ -183,4 +183,51 @@ Check ((Get-HordeWorkerSummary -Records $tok -PriceTable $noTable).tokensReporte
 $empty = Get-HordeWorkerSummary -Records @() -PriceTable $noTable
 Check ($empty.wallClockSeconds.state -eq "absent" -and $empty.calls.value -eq 0) "an empty transcript has no wall-clock and no calls, and says so"
 
+Write-Host ""
+Write-Host "--- running totals: what streaming must still get right (plan step M2) ---" -ForegroundColor Cyan
+# Records now arrive one at a time and are not kept, so every rule that looked across the whole list
+# in M1 is checked here where the order of arrival could change its answer.
+$script:line = 0
+$early = Get-HordeWorkerSummary -Records @((UserSays 0), (Result "pre" 10), (Tool "pre" 2 -Name "tool-pre"), (Call "e1" 11)) -PriceTable $noTable
+Check ($early.longestToolCall.value.name -eq "tool-pre" -and $early.longestToolCall.value.seconds -eq 480 -and $early.longestToolCall.value.returned) "a result that comes before its tool call in the file is still its result (8 minutes, returned)"
+Check ($early.toolCallsWithoutResult -eq 0) "and that call is not counted as one without a result"
+$script:line = 0
+$tie = Get-HordeWorkerSummary -Records @((UserSays 0), (Tool "ta" 0 -Name "tool-first"), (Tool "tb" 1 -Name "tool-second"), (Result "tb" 6), (Result "ta" 5)) -PriceTable $noTable
+Check ($tie.longestToolCall.value.name -eq "tool-first") "two tool calls of the same length: the earlier in the file is the longest, as M1 reported, though the later one ended first"
+$script:line = 0
+$unsorted = Get-HordeWorkerSummary -Records @((UserSays 0), (UserSays 100), (UserSays 10), (UserSays 20)) -PriceTable $noTable
+Check ($unsorted.longestGap.value.seconds -eq 4800 -and $unsorted.longestGap.value.startedAt -eq (At 20)) "the longest silence is measured in time order, not file order (80 minutes from minute 20)"
+$script:line = 0
+$sameTime = Get-HordeWorkerSummary -Records @((UserSays 0), (TurnEnd 0), (Call "s1" 50)) -PriceTable $noTable
+Check ($sameTime.longestGap.value.afterLine -eq 2 -and $sameTime.longestGap.value.afterKind -eq "turnEnd") "of two records at the time a silence starts, the one after it is the later line"
+$script:line = 0
+$allOne = Get-HordeWorkerSummary -Records @((UserSays 0), (TurnEnd 0)) -PriceTable $noTable
+Check ($allOne.longestGap.value.seconds -eq 0 -and $allOne.longestGap.value.afterLine -eq 1) "when every record has one time, the silence is 0 and starts after the first"
+
+# THE TIED-RECORD ORDER. M1 sorted with Sort-Object, which is not stable on PowerShell 5.1, so the
+# kind it reported for records sharing a time and a line is whatever its sort did. The oracle here
+# is that same sort, run on the same records; the summary must agree with it.
+$script:line = 0
+$tiedRecs = New-Object System.Collections.ArrayList
+$minute = 0.0
+for ($i = 0; $i -lt 40; $i++) {
+    $minute += $(if ($i -eq 23) { 90 } else { 1 + ($i % 3) })
+    $ln = Next
+    [void]$tiedRecs.Add((New-HordeTranscriptRecord -Kind "call" -Role "assistant" -Ts (At $minute) -Line $ln -Fields @{ id = ("tc" + $i); model = (New-HordeKnown -Value "model-a"); usage = (New-HordeUnknown -Reason "x"); textChars = 0; toolCallCount = 1; speed = ""; inferenceGeo = "" }))
+    [void]$tiedRecs.Add((New-HordeTranscriptRecord -Kind "toolCall" -Role "assistant" -Ts (At $minute) -Line $ln -Fields @{ id = ("tt" + $i); name = "tool-x"; callId = ("tc" + $i); launchesWorker = $false }))
+}
+$oracle = @($tiedRecs | Sort-Object -Property @{ Expression = { $_.ts } }, @{ Expression = { $_.line } })
+$ob = $null
+for ($i = 1; $i -lt $oracle.Count; $i++) { $g = ($oracle[$i].ts - $oracle[$i - 1].ts).TotalSeconds; if ($null -eq $ob -or $g -gt $ob.seconds) { $ob = [pscustomobject]@{ seconds = [decimal]$g; kind = $oracle[$i - 1].kind; line = $oracle[$i - 1].line } } }
+$wtie = Get-HordeWorkerSummary -Records $tiedRecs -PriceTable $noTable
+Check ($ob.seconds -eq 5400) "CONTROL: the planted 90-minute silence is the longest"
+Check ($ob.kind -eq "call") ("CONTROL: on these records M1's unstable sort puts the call after its tool call, the opposite of file order (" + $ob.kind + "), so a summary that kept file order, as a stable sort would, would differ")
+Check ($wtie.longestGap.value.afterKind -eq $ob.kind -and $wtie.longestGap.value.afterLine -eq $ob.line) ("the kind before the longest silence is the one M1's sort put there (" + $wtie.longestGap.value.afterKind + ")")
+
+$script:line = 0
+$acc = New-HordeMetricsAccumulator -PriceTable $noTable -From (At 5) -To (At 10)
+foreach ($r in @((UserSays 0), (Call "w1" 6), (Call "w2" 8), (Call "w3" 12))) { $acc.Add($r) }
+$win = (Complete-HordeMetricsAccumulator -Accumulator $acc).worker
+Check ($win.calls.value -eq 2 -and $win.firstEventAt.value -eq (At 6)) "a window keeps only the records inside it (2 calls, from minute 6)"
+
 Complete-HordeSuite -Success "every metric finds its planted case, finds nothing in a clean transcript, and never guesses an attribution"

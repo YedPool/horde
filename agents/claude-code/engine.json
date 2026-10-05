@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    { "name": "anthropic", "protocol": "anthropic-messages", "credential": { "kind": "harness-login" } }
+  ],
+  "profiles": [
+    { "name": "claude", "harness": "claude-code", "provider": "anthropic" }
+  ],
+  "rules": [
+    { "id": "builtin-default", "match": {}, "set": { "profile": "claude" }, "writtenBy": "user", "note": "Zero configuration behaves as the old system does: this harness, on its own login, with the model it chooses itself (engine-settings design 2.1, L0)." }
+  ]
+}
