@@ -20,5 +20,8 @@
         @{ Name = "extension-not-exact"
            Find = 'foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })) { [void]$out.Add($f) }'
            Replace = 'foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "test-*" -File)) { [void]$out.Add($f) }' }
+        @{ Name = "machine-bound-suite-renamed"
+           Find = '"transports/local/test/test-local.ps1" = '
+           Replace = '"transports/local/test/test-locals.ps1" = ' }
     )
 }

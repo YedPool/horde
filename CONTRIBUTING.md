@@ -194,6 +194,12 @@ review finding of its own.
   `@(Get-Thing)`.
 - **Inside a `Where-Object` or `ForEach-Object` block, `$MyInvocation` describes the block**, not the
   script. Use `$PSCommandPath` for the running file.
+- **A process started from Git Bash makes user-owned objects, even elevated.** MSYS rewrites the
+  token's default owner to the user at start-up, and its children inherit it; started from
+  PowerShell under an elevated admin token, a new pipe is owned by Administrators. So test-local's
+  elevated case - the attackers' explicit owner and the Administrators-owned pipe of issue #89 -
+  must be launched from PowerShell, not Git Bash: launched from Git Bash it cannot see #89 or a
+  regression of it (review of PRs #90 and #91, 2026-10-05).
 - **Dividing two integers gives a double.** `$ticks / 10` loses precision past about 16 digits, and
   a tick count has 18: two readings of one process's creation time disagreed for 304 of 365
   processes. Use `[Math]::DivRem` when the result must be exact.

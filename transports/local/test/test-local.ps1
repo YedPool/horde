@@ -25,6 +25,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $here "LowIntegrity.ps1")
 
 $t = Get-HordeTransport -Name "local"
+$script:ownerCaseSkipped = $false
 $me = Get-HordeLocalUserSid
 function New-Id { return [guid]::NewGuid().ToString() }
 function Test-PipeListed { param([string]$Pipe) return (@([System.IO.Directory]::EnumerateFiles($script:HordeLocalPipeRoot, $Pipe)).Count -gt 0) }
@@ -222,6 +223,44 @@ try {
         } else { Check $false "a listener for the instance-adder case" }
     }
 
+    # 4b. A pipe owned by ANOTHER principal, served at this process's level by the node's own
+    # interpreter (this process): integrity and image both pass, so the owner check is the one that
+    # refuses it (issue #89 keeps this path pinned now that the attackers above own their pipes).
+    # Administrators is the one other owner this suite can give a pipe, and only from a token allowed
+    # to assign it (an elevated admin token); elsewhere the case is skipped, never green.
+    $id = New-Id
+    $ba = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $baPipe = $null
+    $baWhy = ""
+    $baCode = 0
+    try {
+        $sec = New-Object System.IO.Pipes.PipeSecurity
+        $sec.SetOwner($ba)
+        $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $baPipe = New-Object System.IO.Pipes.NamedPipeServerStream((Get-HordeLocalPipeName -DeviceId $id), [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
+    } catch {
+        $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
+        $baWhy = $e.Message; $baCode = $e.HResult
+    }
+    # SKIPPED ONLY FOR THE ONE REASON IT MAY BE (review of PR #91, G2): HRESULT 0x8007051B,
+    # ERROR_INVALID_OWNER, "This security ID may not be assigned as the owner of this object" - measured
+    # 2026-10-05 from a runas /trustlevel:0x20000 token. Any other failure to make the pipe ("All pipe
+    # instances are busy", say) is a failure, never a quiet skip of the only end-to-end owner check.
+    if ($null -eq $baPipe -and $baCode -eq -2147023589) {
+        Write-Host ("  [SKIP] this token cannot make Administrators a pipe's owner (" + $baWhy + "), so the owner refusal is not shown end to end here; the decision is checked above. EXIT 3.") -ForegroundColor Yellow
+        $script:ownerCaseSkipped = $true
+    } elseif ($null -eq $baPipe) {
+        Check $false ("an Administrators-owned pipe for the owner case (" + $baWhy + ", HRESULT " + $baCode + ")")
+    } else {
+        try {
+            $read = $baPipe.GetAccessControl().GetOwner([System.Security.Principal.SecurityIdentifier])
+            Check ("$read" -ceq "$ba") ("CONTROL: the pipe's owner reads back as Administrators (" + $read + ")")
+            $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
+            Check ($o.state -ceq "unknown" -and "$($o.reason)" -like ("*owned by '" + $ba + "', not by this user*")) ("the hub refuses a pipe owned by another principal, served by its own interpreter at its own level (" + $o.reason + ")")
+            if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        } finally { $baPipe.Dispose() }
+    }
+
     # 5. A program that is not the node's interpreter, at THIS process's level, serves the pipe first.
     # Integrity cannot tell it apart; the image check refuses it. (At the same level the image check is
     # advisory - see transports/local/Transport.ps1 - but it does refuse this, and this kills the mutant
@@ -351,4 +390,10 @@ if ($la.state -eq "known") {
 } else { Check $false "a listener for the DACL-order case" }
 $bad = New-Object Microsoft.Win32.SafeHandles.SafePipeHandle([IntPtr]::new(-1), $false)
 Check ([HordeLocalNative]::LabelSddl($bad) -ceq "") "the label of an invalid handle is empty, not this process's own label"
-Complete-HordeSuite -Success "the local pipe admits only its own user, and refuses a pipe it did not make"
+# A RUN THAT SKIPPED THE OWNER CASE IS NOT A PASS TO A GATE (review of PR #91, G1): it exits 3, as
+# test-projection does when it skips, so anything that expects 0 fails loudly, and tools\Mutate.ps1
+# accepts 3 only from a spec that declares it (PassCodes).
+$banner = "the local pipe admits only its own user, and refuses a pipe it did not make"
+$passCode = 0
+if ($script:ownerCaseSkipped) { $banner = "OWNER CASE SKIPPED (this token cannot make Administrators an owner), EXIT 3: " + $banner; $passCode = 3 }
+Complete-HordeSuite -Success $banner -PassCode $passCode
