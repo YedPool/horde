@@ -298,6 +298,21 @@ C. The node and the hub, read path (PROJ)
     dropped link resumes at the cursor with no loss and no duplicate; a node's sessions turn `unknown`
     with "node D unreachable since T" when the link drops, never `absent`; a partial inventory never
     marks a session absent; a key seen on two devices is a fault, never resolved by picking one.
+    **Split, 2026-10-05, on R12's line, so the read path does not wait on R12b, R17 or R19:**
+    - **R13a (now):** `horde hub serve` pulls each registered node's whole inventory (`hello`, a
+      `ping` for the clock sample of R6, `sessions.list`, `bye`) over the transport port, and keeps
+      one mirror file per node under `<HordeHome>/hub/mirror/`, checked on read by
+      `schema/node-mirror.v1` and by the link contract itself. The registry is the hub's own node over
+      the local link, because a node is added only by enrolment (R17). `horde nodes` shows each node's
+      reachability, its inventory and the fleet's faults; every remote session row carries its
+      `device`. Tests first, the four above, with the cursor test read for whole inventories: after a
+      dropped link the next pull leaves the mirror equal to the node's inventory, nothing lost and
+      nothing twice.
+    - **R13b (later):** cursors, with `observe.since` (R12b); the binding-record mirror, with
+      `binding.get` (R12b); the per-node outbox, with the first verb that queues for a node (R19's
+      act verbs, R20's alerts); registry entries written by `horde hub enroll` (R17); and `device` in
+      the local session view's schema (`schema/session-view.v1`, step 2.3), which R13a's rows carry
+      but the local projection does not yet.
 14. **R14. `handoff.get`, and context purity.** A goblin's handoff comes back as a distilled document,
     capped at 64 KiB, the cap declared as data on the verb in R1 and enforced on the node by R2's
     `Test-HordeProtocolLimits`, since the schema checker has no byte keyword; transcripts, tool output and exploratory notes stay on the node, on disk, and
