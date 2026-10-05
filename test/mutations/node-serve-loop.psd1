@@ -41,5 +41,11 @@
         @{ Name = "fast-accept-failure-taken-as-timeout"
            Find = 'if ($took -ge ($AcceptTimeoutMs / 2)) { $inARow = 0; continue }'
            Replace = '$inARow = 0; continue' }
+        @{ Name = "refused-peer-treated-as-broken-listener"
+           Find = 'if ($null -ne $acc.PSObject.Properties["refused"] -and $acc.refused -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refusal-not-logged"
+           Find = '[void]$refusals.Add($acc.reason)'
+           Replace = '' }
     )
 }

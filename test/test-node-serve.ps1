@@ -438,4 +438,53 @@ Check ($past.error -clike "*listener failed 3 times in a row*nothing waiting*") 
 Check ($past.listens -eq 3 -and $past.accepts -eq 3) ("having listened again exactly twice (" + $past.listens + " listens, " + $past.accepts + " accepts)")
 Check (-not (Get-HordeMemoryListeners).ContainsKey("relisten-test")) "and its last listener is stopped on the way out: the endpoint is free"
 
+Write-Host ""
+Write-Host "--- a refused peer is not a broken listener (issue #85) ---" -ForegroundColor Cyan
+# The same fake transport, now turning peers away: its accept says refused for the first N calls, then
+# hands over a link. A refusal must keep the listener - no stop, no new listen, so the endpoint's name is
+# held throughout - count nothing toward -RelistenLimit, wait for nothing, and be logged. Before the fix
+# each refusal disposed the listener and listened again, and RelistenLimit + 1 of them in a row ended the
+# node: a way for any peer the transport refuses to kill it (the #81 review, F3).
+$script:rf = @{ accepts = 0; refuseFirst = 0; held = 0; stops = 0 }
+$refuser = $script:mem.PSObject.Copy()
+$refuser.listen = {
+    param($Endpoint)
+    $script:rl.listens++
+    return (& $script:mem.listen $Endpoint)
+}
+$refuser.stop = {
+    param($ListenerState)
+    $script:rf.stops++
+    & $script:mem.stop $ListenerState
+}
+$refuser.accept = {
+    param($ListenerState, [int]$TimeoutMs)
+    $script:rf.accepts++
+    # The endpoint's name, sampled at every accept: still held by this listener.
+    $now = $null
+    if ((Get-HordeMemoryListeners).TryGetValue($ListenerState.endpoint, [ref]$now) -and [object]::ReferenceEquals($now, $ListenerState)) { $script:rf.held++ }
+    if ($script:rf.accepts -le $script:rf.refuseFirst) { return [pscustomobject]@{ ok = $false; refused = $true; channel = $null; peer = $null; listener = $null; reason = ("refused a client: test peer " + $script:rf.accepts) } }
+    $hub = & $script:mem.open $ListenerState.endpoint 1000
+    & $hub.channel.close $hub.channel
+    return (& $script:mem.accept $ListenerState $TimeoutMs)
+}
+function Invoke-Refusals {
+    param([int]$N, [int]$Limit)
+    $script:rf.accepts = 0; $script:rf.refuseFirst = $N; $script:rf.held = 0; $script:rf.stops = 0; $script:rl.listens = 0
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $out = [pscustomobject]@{ result = $null; error = ""; ms = 0 }
+    try { $out.result = Invoke-HordeNodeServe -Transport $refuser -Endpoint "refusal-test" -Manifest $manifest -Namespace $ns -GetView { View } -MaxLinks 1 -AcceptTimeoutMs 30000 -IdleTimeoutMs 5000 -RelistenLimit $Limit }
+    catch { $out.error = "$($_.Exception.Message)" }
+    $out.ms = $sw.ElapsedMilliseconds
+    return $out
+}
+$ref = Invoke-Refusals -N 8 -Limit 2
+Check ($ref.error -eq "" -and $null -ne $ref.result -and $ref.result.served -eq 1) ("eight refused peers in a row, with a relisten limit of two, and the node is still up: it serves the next link (" + $ref.error + ")")
+Check ($null -ne $ref.result -and $ref.result.relistens -eq 0 -and $script:rl.listens -eq 1 -and $script:rf.stops -eq 1) ("the listener was kept throughout: one listen, no restart, stopped once on the way out (" + $script:rl.listens + " listens, " + $script:rf.stops + " stops)")
+Check ($script:rf.accepts -eq 9 -and $script:rf.held -eq 9) ("the endpoint's name was held by that listener at every one of the nine accepts (" + $script:rf.held + " of " + $script:rf.accepts + ")")
+Check ($null -ne $ref.result -and @($ref.result.refusals).Count -eq 8 -and "$(@($ref.result.refusals)[0])" -clike "*refused a client: test peer 1*") ("each refusal is logged with its reason (" + @($ref.result.refusals).Count + " logged)")
+Check ($ref.ms -lt 4000) ("and the node waited for nothing between them (" + $ref.ms + " ms for eight)")
+$broken = Invoke-Relisten -FailFirst 50 -Limit 2
+Check ($broken.error -clike "*listener failed 3 times in a row*") "CONTROL: the same count of failures that are not refusals still stops the node at its limit"
+
 Complete-HordeSuite -Success "the node answers hello, node.info, sessions.list, session.get and request.status, refuses the rest, and every frame it sends is one the contract accepts"

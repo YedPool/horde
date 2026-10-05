@@ -103,5 +103,14 @@
         @{ Name = "accept-not-a-capability"
            Find = '"dial.in", "accept", "keepalive"'
            Replace = '"dial.in", "keepalive"' }
+        @{ Name = "refused-flag-dropped"
+           Find = '$no | Add-Member -NotePropertyName refused -NotePropertyValue $refused'
+           Replace = '$no | Add-Member -NotePropertyName refused -NotePropertyValue $false' }
+        @{ Name = "any-truthy-word-is-a-refusal"
+           Find = '$r.refused -is [bool] -and $r.refused)'
+           Replace = '[bool]$r.refused)' }
+        @{ Name = "every-failure-is-a-refusal"
+           Find = '$refused = ($null -ne $r.PSObject.Properties["refused"] -and $r.refused -is [bool] -and $r.refused)'
+           Replace = '$refused = $true' }
     )
 }
