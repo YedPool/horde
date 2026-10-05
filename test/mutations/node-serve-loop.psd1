@@ -21,5 +21,25 @@
         @{ Name = "manifest-names-another-device"
            Find = '        deviceId = "$($Node.deviceId)"'
            Replace = '        deviceId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"' }
+        # The serve loop's recovery paths (review of PR #81, F1): a fault while answering, a result the
+        # writer refuses, and a listener that keeps failing.
+        @{ Name = "answer-fault-kills-node"
+           Find = '$why = "$($_.Exception.Message)"'
+           Replace = 'throw' }
+        @{ Name = "refused-result-not-replaced"
+           Find = 'if (-not $bytes.ok -and "$($Frame.kind)" -ceq "res") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "relisten-limit-ignored"
+           Find = 'if ($inARow -gt $RelistenLimit) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "relisten-skipped"
+           Find = 'Start-Sleep -Milliseconds 1000'
+           Replace = 'Start-Sleep -Milliseconds 1000; $relistens++; continue' }
+        @{ Name = "relisten-no-backoff"
+           Find = 'Start-Sleep -Milliseconds 1000'
+           Replace = '' }
+        @{ Name = "fast-accept-failure-taken-as-timeout"
+           Find = 'if ($took -ge ($AcceptTimeoutMs / 2)) { $inARow = 0; continue }'
+           Replace = '$inARow = 0; continue' }
     )
 }

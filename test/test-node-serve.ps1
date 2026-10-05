@@ -275,12 +275,14 @@ Write-Host ""
 Write-Host "--- the loop, over the in-process transport, with a fake view ---" -ForegroundColor Cyan
 function Start-Node {
     # cli/NodeServe.ps1's real loop in a second runspace, on the memory transport; returns its handles.
-    param([int]$IdleTimeoutMs = 30000, [switch]$ThrowOnView)
+    param([int]$IdleTimeoutMs = 30000, [switch]$ThrowOnView, [switch]$ViewThrowsWhenRead, [switch]$ManifestTooLarge)
     $ready = New-Object System.Threading.ManualResetEventSlim($false)
     $counter = [hashtable]::Synchronized(@{ views = 0 })
     $ps = [PowerShell]::Create()
     [void]$ps.AddCommand((Join-Path $fx "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $device).AddParameter("ViewPath", $viewPath).AddParameter("MaxLinks", 1).AddParameter("IdleTimeoutMs", $IdleTimeoutMs).AddParameter("Counter", $counter).AddParameter("Ready", $ready)
     if ($ThrowOnView) { [void]$ps.AddParameter("ThrowOnView", $true) }
+    if ($ViewThrowsWhenRead) { [void]$ps.AddParameter("ViewThrowsWhenRead", $true) }
+    if ($ManifestTooLarge) { [void]$ps.AddParameter("ManifestTooLarge", $true) }
     $h = $ps.BeginInvoke()
     $up = $ready.Wait(30000)
     return [pscustomobject]@{ ps = $ps; h = $h; counter = $counter; up = $up }
@@ -352,5 +354,88 @@ try {
 } finally { if ($null -ne $link) { Close-HordeLink -Link $link } }
 $served = Stop-Node $node
 Check ($null -ne $served -and "$(@($served.endings)[0])" -clike "*the link ended*") ("the node ended the idle link itself (" + "$(@($served.endings)[0])" + ")")
+
+Write-Host ""
+Write-Host "--- a fault while answering is an answer, not a crash ---" -ForegroundColor Cyan
+# cli/NodeServe.ps1's outer catch: horde.ps1 runs with $ErrorActionPreference Stop and nothing restarts
+# the node yet, so a throw while building an answer - past the view's own try - must become an internal
+# error to that request, and the link and the node go on (review of PR #81, F1a; the bug it fixes, a view
+# with no observedAt, killed the daemon).
+$node = Start-Node -ViewThrowsWhenRead
+$link = $null
+try {
+    $link = Dial
+    $null = Talk $link (Hello)
+    $faulted = Talk $link (Req "sessions.list")
+    Check ($null -ne $faulted -and "$($faulted.kind)" -ceq "res" -and "$($faulted.error.code)" -ceq "internal" -and "$($faulted.error.reason)" -clike "*failed while answering*breaks when read*") ("a view that throws while the answer is built from it is an internal error to that request (" + "$($faulted.error.reason)" + ")")
+    Check ([int]$node.counter["views"] -eq 1) "CONTROL: the view itself was built, so the throw came from answering, not from the view's own try"
+    $after = Talk $link (Req "node.info")
+    Check ($null -ne $after -and "$($after.result.state)" -ceq "known") "and the link goes on: the next request is answered"
+    $null = Send-HordeLinkFrame -Link $link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "the hub is finished" -Seq 9))
+} finally { if ($null -ne $link) { Close-HordeLink -Link $link } }
+$served = Stop-Node $node
+Check ($null -ne $served -and $served.served -eq 1 -and "$(@($served.endings)[0])" -clike "*closed by the protocol*") "and the node served its link to the hub's bye, and returned"
+
+Write-Host ""
+Write-Host "--- a result the link cannot carry is an internal error, and the link goes on ---" -ForegroundColor Cyan
+# Send-HordeNodeAnswer: a res the writer refuses is replaced by an internal error to the same request;
+# one record the link cannot carry must not end the link (review of PR #81, F1b).
+$node = Start-Node -ManifestTooLarge
+$link = $null
+try {
+    $link = Dial
+    $null = Talk $link (Hello)
+    $refused = Talk $link (Req "node.info")
+    Check ($null -ne $refused -and "$($refused.kind)" -ceq "res" -and "$($refused.error.code)" -ceq "internal" -and "$($refused.error.reason)" -clike "*answer could not be sent*") ("a node.info result over the link's caps is an internal error to that request (" + "$($refused.error.reason)" + ")")
+    Check ($null -ne $refused -and "$($refused.verb)" -ceq "node.info" -and "$($refused.re)" -cmatch '^[0-9a-f-]{36}$') "answering the same request: its verb and the frame it answers"
+    $after = Talk $link (Req "sessions.list")
+    Check ($null -ne $after -and "$($after.result.state)" -ceq "known") "and the link goes on: the next request is answered"
+    $null = Send-HordeLinkFrame -Link $link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "the hub is finished" -Seq 9))
+} finally { if ($null -ne $link) { Close-HordeLink -Link $link } }
+$served = Stop-Node $node
+Check ($null -ne $served -and $served.served -eq 1 -and "$(@($served.endings)[0])" -clike "*closed by the protocol*") ("and the node served its link to the hub's bye (" + "$(@($served.endings)[0])" + ")")
+
+Write-Host ""
+Write-Host "--- a broken listener is restarted, up to its limit, and then the node stops ---" -ForegroundColor Cyan
+# Invoke-HordeNodeServe's relisten (review of PR #81, F1c): an accept that fails at once means nothing is
+# waiting; the loop waits a second, stops the listener, listens again, and throws after -RelistenLimit
+# restarts in a row. Driven on this thread by a memory transport whose accept fails at once a set number
+# of times, then hands over a link whose hub has already gone. Its listen is counted, and refuses after
+# a cap, so a loop that never gives up ends here too instead of hanging the suite.
+$script:mem = Get-HordeTransport -Name "memory"
+$script:rl = @{ accepts = 0; listens = 0; failFirst = 0; listenCap = 0 }
+$fake = $script:mem.PSObject.Copy()
+$fake.listen = {
+    param($Endpoint)
+    $script:rl.listens++
+    if ($script:rl.listens -gt $script:rl.listenCap) { return [pscustomobject]@{ ok = $false; channel = $null; peer = $null; listener = $null; reason = "the test's listen cap was reached" } }
+    return (& $script:mem.listen $Endpoint)
+}
+$fake.accept = {
+    param($ListenerState, [int]$TimeoutMs)
+    $script:rl.accepts++
+    if ($script:rl.accepts -le $script:rl.failFirst) { return [pscustomobject]@{ ok = $false; channel = $null; peer = $null; listener = $null; reason = "the test listener has nothing waiting" } }
+    $hub = & $script:mem.open $ListenerState.endpoint 1000
+    & $hub.channel.close $hub.channel
+    return (& $script:mem.accept $ListenerState $TimeoutMs)
+}
+function Invoke-Relisten {
+    param([int]$FailFirst, [int]$Limit)
+    $script:rl.accepts = 0; $script:rl.listens = 0; $script:rl.failFirst = $FailFirst; $script:rl.listenCap = 10
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $out = [pscustomobject]@{ result = $null; error = ""; ms = 0; listens = 0; accepts = 0 }
+    try { $out.result = Invoke-HordeNodeServe -Transport $fake -Endpoint "relisten-test" -Manifest $manifest -Namespace $ns -GetView { View } -MaxLinks 1 -AcceptTimeoutMs 30000 -IdleTimeoutMs 5000 -RelistenLimit $Limit }
+    catch { $out.error = "$($_.Exception.Message)" }
+    $out.ms = $sw.ElapsedMilliseconds; $out.listens = $script:rl.listens; $out.accepts = $script:rl.accepts
+    return $out
+}
+$up = Invoke-Relisten -FailFirst 2 -Limit 2
+Check ($up.error -eq "" -and $null -ne $up.result -and $up.result.served -eq 1 -and $up.result.relistens -eq 2) ("two fast accept failures with a limit of two: the node listens again twice and then serves its link (relistens " + "$($up.result.relistens)" + "; " + $up.error + ")")
+Check ($up.listens -eq 3 -and $up.accepts -eq 3) ("each restart is a new listener: three listens for three accepts (" + $up.listens + " listens, " + $up.accepts + " accepts)")
+Check ($up.ms -ge 1800) ("and it waits a second before each restart rather than spinning (" + $up.ms + " ms for two)")
+$past = Invoke-Relisten -FailFirst 50 -Limit 2
+Check ($past.error -clike "*listener failed 3 times in a row*nothing waiting*") ("a third fast failure in a row, past the limit of two, stops the node with the reason (" + $past.error + ")")
+Check ($past.listens -eq 3 -and $past.accepts -eq 3) ("having listened again exactly twice (" + $past.listens + " listens, " + $past.accepts + " accepts)")
+Check (-not (Get-HordeMemoryListeners).ContainsKey("relisten-test")) "and its last listener is stopped on the way out: the endpoint is free"
 
 Complete-HordeSuite -Success "the node answers hello, node.info, sessions.list, session.get and request.status, refuses the rest, and every frame it sends is one the contract accepts"
