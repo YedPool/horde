@@ -57,7 +57,8 @@ $f = @(Test-HordeLinkFrameContract -Frame $realFrame)
 Check ($f.Count -eq 0) "schema/link-frame.v1 passes every static rule"; Show $f
 $f = @(Test-HordeLinkVerbTable -Verbs $realVerbs)
 Check ($f.Count -eq 0) "schema/link-verbs.v1 passes every static rule"; Show $f
-Check ($contract.rows.Count -eq 13) "the v1 table has the 13 verbs this step defines (the rest are named as deferred in its description)"
+Check ($contract.rows.Count -eq 15) "the v1 table has its 15 verbs: R1's 13 and R12a's sessions.list and session.get (the rest are named as deferred in its description)"
+Check (@("sessions.list", "session.get" | Where-Object { $contract.rows.ContainsKey($_) -and "$($contract.rows[$_].effect)" -ceq "read" }).Count -eq 2) "sessions.list and session.get are read verbs"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
 Check ($golden.Count -eq 15) "there are 15 golden frames, one per kind and verb shape covered so far"
@@ -137,7 +138,10 @@ Check (@($realVerbs.definitions.'verb-row'.properties.effect.enum) -ccontains "d
 Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node")) "the deliver contract says it may target only a session this hub spawned on the node"
 $deliverAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.deliver")
 Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$deliverAt].effect = 'write'")) "remote/Contract.ps1 classes it 'drive'" "a table that classes session.deliver write is refused: drive is pinned" @("session.deliver")
-Refuses { param($v) $v.'x-horde-verbs'[5].effect = "read" } "remote/Contract.ps1 classes it 'spawn'" "a table that reclasses session.spawn read is refused" @("session.spawn")
+# Found by name, not by place: R12a's rows moved session.spawn off index 5 and the check went red.
+$spawnAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.spawn")
+Check ($spawnAt -ge 0) "CONTROL: session.spawn is in the real table"
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$spawnAt].effect = 'read'")) "remote/Contract.ps1 classes it 'spawn'" "a table that reclasses session.spawn read is refused" @("session.spawn")
 Refuses { param($v) $v.'x-horde-verbs'[0].args = "#/definitions/nothing-here" } "which is not there" "a row whose args name no definition is refused"
 Refuses { param($v) $v.'x-horde-verbs'[0].result = "no-such-schema.v1" } "which is not there" "a row whose result names no schema is refused"
 # THE ROW RULES ARE THE REAL FILE'S. A table that loosens its own verb-row must not get a pass.
