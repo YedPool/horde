@@ -76,6 +76,9 @@
 . (Join-Path $PSScriptRoot "Contract.ps1")
 
 $script:HordeWireMaxDepth = 64
+# A string with nothing to escape: printable ASCII but the quote and the backslash. Written as it is,
+# by ConvertTo-HordeWireString, the writer and the caps (remote/Contract.ps1); one pattern for all three.
+$script:HordeWirePlain = '\A[\x20\x21\x23-\x5B\x5D-\x7E]*\z'
 $script:HordeLinkProtocols = @(1)
 
 function ConvertTo-HordeWireString {
@@ -91,7 +94,7 @@ function ConvertTo-HordeWireString {
     # character in any encoding. A received one is refused too, because the receiver writes the frame
     # again with this function and requires the same bytes.
     param([string]$Text)
-    if ([regex]::IsMatch($Text, '\A[\x20\x21\x23-\x5B\x5D-\x7E]*\z')) { return ('"' + $Text + '"') }
+    if ([regex]::IsMatch($Text, $script:HordeWirePlain)) { return ('"' + $Text + '"') }
     $sb = New-Object System.Text.StringBuilder ($Text.Length + 16)
     [void]$sb.Append('"')
     $chars = $Text.ToCharArray()
@@ -124,48 +127,95 @@ function ConvertTo-HordeWireText {
     # no whitespace. Refused, by throwing: a [datetime] (times cross as ISO text, schema/link-frame.v1),
     # a fractional type ([decimal], [double], [single]), a key that is not a string, anything nested
     # deeper than 64, and any other type.
+    #
+    # ONE LOOP, NOT ONE CALL PER VALUE (fix/link-writer-speed): this was recursive, a call per value and
+    # one more per string, and wrote a 32-session sessions.list in 2.5 s on the founder's box (0.5 s
+    # before Windows throttled the process). The work list holds what is still to be written, in order:
+    # a value with its depth, a key, or literal text. Everything is written in the order the recursive
+    # version wrote it, so a refusal is the same one, for the same value, with the same words;
+    # test/test-link-walk.ps1 holds the two side by side. A string with nothing to escape is written
+    # here; any other goes through ConvertTo-HordeWireString, which refuses a NUL or half a pair.
     param($Value, [int]$Depth = 0)
-    if ($Depth -gt $script:HordeWireMaxDepth) { throw ("a value nested more than " + $script:HordeWireMaxDepth + " deep cannot cross the link") }
     $inv = [System.Globalization.CultureInfo]::InvariantCulture
-    if ($null -eq $Value) { return "null" }
-    if ($Value -is [string]) { return (ConvertTo-HordeWireString $Value) }
-    if ($Value -is [bool]) { if ($Value) { return "true" } else { return "false" } }
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [int16] -or $Value -is [byte] -or $Value -is [sbyte] -or
-        $Value -is [uint16] -or $Value -is [uint32] -or $Value -is [uint64]) {
-        return $Value.ToString($inv)
-    }
-    if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) {
-        throw ("a number on the link is a whole number, written as one; " + $Value.ToString($inv) + " (a " + $Value.PSObject.TypeNames[0] + ") is not, and 1.0 would be a second spelling of 1")
-    }
-    if ($Value -is [datetime]) { throw "a [datetime] does not cross the link; write it as ISO 8601 text in UTC" }
-    $parts = New-Object System.Collections.ArrayList
-    if ($Value -is [System.Collections.IDictionary]) {
-        foreach ($k in @($Value.Keys)) { if ($k -isnot [string]) { throw ("an object key must be a string, not " + $k.PSObject.TypeNames[0]) } }
-        $keys = [string[]]@($Value.Keys)
-        [Array]::Sort($keys, [System.StringComparer]::Ordinal)
-        foreach ($k in $keys) {
-            [void]$parts.Add((ConvertTo-HordeWireString $k) + ":" + (ConvertTo-HordeWireText -Value $Value[$k] -Depth ($Depth + 1)))
+    $plain = $script:HordeWirePlain
+    $sb = New-Object System.Text.StringBuilder
+    $todo = New-Object System.Collections.Stack
+    $order = New-Object System.Collections.Stack
+    # An entry is (0, value, depth) to write a value, (1, key) to write a key and its colon, or
+    # (2, text) to write text as it is.
+    $todo.Push(@(0, $Value, $Depth))
+    while ($todo.Count -gt 0) {
+        $e = $todo.Pop()
+        if ($e[0] -eq 2) { [void]$sb.Append($e[1]); continue }
+        if ($e[0] -eq 1) {
+            $k = $e[1]
+            if ([regex]::IsMatch($k, $plain)) { [void]$sb.Append('"').Append($k).Append('":') } else { [void]$sb.Append((ConvertTo-HordeWireString $k)).Append(':') }
+            continue
         }
-        return ("{" + ($parts -join ",") + "}")
-    }
-    if ($Value -is [System.Management.Automation.PSCustomObject]) {
-        # A loop, not the pipeline: this runs for every object of every frame, the fuzz section's
-        # thousands included.
-        $props = @{}
-        $names = New-Object System.Collections.Generic.List[string]
-        foreach ($p in @($Value.PSObject.Properties)) { $props[$p.Name] = $p.Value; $names.Add($p.Name) }
-        $keys = $names.ToArray()
-        [Array]::Sort($keys, [StringComparer]::Ordinal)
-        foreach ($k in $keys) {
-            [void]$parts.Add((ConvertTo-HordeWireString $k) + ":" + (ConvertTo-HordeWireText -Value $props[$k] -Depth ($Depth + 1)))
+        $v = $e[1]
+        $d = $e[2]
+        if ($d -gt $script:HordeWireMaxDepth) { throw ("a value nested more than " + $script:HordeWireMaxDepth + " deep cannot cross the link") }
+        if ($null -eq $v) { [void]$sb.Append("null"); continue }
+        if ($v -is [string]) {
+            if ([regex]::IsMatch($v, $plain)) { [void]$sb.Append('"').Append($v).Append('"') } else { [void]$sb.Append((ConvertTo-HordeWireString $v)) }
+            continue
         }
-        return ("{" + ($parts -join ",") + "}")
+        if ($v -is [bool]) { if ($v) { [void]$sb.Append("true") } else { [void]$sb.Append("false") }; continue }
+        if ($v -is [int] -or $v -is [long] -or $v -is [int16] -or $v -is [byte] -or $v -is [sbyte] -or
+            $v -is [uint16] -or $v -is [uint32] -or $v -is [uint64]) {
+            [void]$sb.Append($v.ToString($inv))
+            continue
+        }
+        if ($v -is [decimal] -or $v -is [double] -or $v -is [single]) {
+            throw ("a number on the link is a whole number, written as one; " + $v.ToString($inv) + " (a " + $v.PSObject.TypeNames[0] + ") is not, and 1.0 would be a second spelling of 1")
+        }
+        if ($v -is [datetime]) { throw "a [datetime] does not cross the link; write it as ISO 8601 text in UTC" }
+        # The parts of an object or a list go onto $order first to last, then onto $todo, which reverses
+        # them, so the first is written first.
+        if ($v -is [System.Collections.IDictionary]) {
+            foreach ($k in @($v.Keys)) { if ($k -isnot [string]) { throw ("an object key must be a string, not " + $k.PSObject.TypeNames[0]) } }
+            $keys = [string[]]@($v.Keys)
+            [Array]::Sort($keys, [System.StringComparer]::Ordinal)
+            $order.Push(@(2, "{"))
+            $first = $true
+            foreach ($k in $keys) {
+                if (-not $first) { $order.Push(@(2, ",")) }
+                $first = $false
+                $order.Push(@(1, $k))
+                $order.Push(@(0, $v[$k], ($d + 1)))
+            }
+            $order.Push(@(2, "}"))
+        } elseif ($v -is [System.Management.Automation.PSCustomObject]) {
+            # The recursive version read each value back from a hashtable by name; PowerShell's own
+            # lookup by name, as here, is the same lookup. No list is made for the names: New-Object
+            # costs more than the rest of an object's writing.
+            $members = $v.PSObject.Properties
+            $keys = [string[]]@(foreach ($pp in $members) { $pp.Name })
+            [Array]::Sort($keys, [StringComparer]::Ordinal)
+            $order.Push(@(2, "{"))
+            $first = $true
+            foreach ($k in $keys) {
+                if (-not $first) { $order.Push(@(2, ",")) }
+                $first = $false
+                $order.Push(@(1, $k))
+                $order.Push(@(0, $members[$k].Value, ($d + 1)))
+            }
+            $order.Push(@(2, "}"))
+        } elseif ($v -is [System.Collections.IList]) {
+            $order.Push(@(2, "["))
+            $first = $true
+            foreach ($item in $v) {
+                if (-not $first) { $order.Push(@(2, ",")) }
+                $first = $false
+                $order.Push(@(0, $item, ($d + 1)))
+            }
+            $order.Push(@(2, "]"))
+        } else {
+            throw ("a " + $v.PSObject.TypeNames[0] + " cannot cross the link")
+        }
+        while ($order.Count -gt 0) { $todo.Push($order.Pop()) }
     }
-    if ($Value -is [System.Collections.IList]) {
-        foreach ($item in $Value) { [void]$parts.Add((ConvertTo-HordeWireText -Value $item -Depth ($Depth + 1))) }
-        return ("[" + ($parts -join ",") + "]")
-    }
-    throw ("a " + $Value.PSObject.TypeNames[0] + " cannot cross the link")
+    return $sb.ToString()
 }
 
 function Get-HordeFrameCap {
@@ -191,19 +241,26 @@ function Test-HordeProtocolLimits {
     # with their own schema. Returns findings; empty means every field is within its cap.
     param($Frame, $Contract = $null)
     if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
+    # The envelope, the verb's arguments and a known result's value, each with its own schema, in that
+    # order; each one walk (remote/Contract.ps1, Invoke-HordeLinkWalk) with the records kept in the
+    # contract.
     $walks = New-Object System.Collections.ArrayList
-    [void]$walks.Add(@($Frame, $Contract.frame, $Contract.frame, '$'))
+    $cache = Get-HordeLinkWalkCache $Contract
+    if (-not $cache.ContainsKey("frame|top")) {
+        $frameMemo = New-HordeLinkWalkMemo
+        $frameTop = Assert-HordeSchema -Schema $Contract.frame -Path '$'
+        $cache["frame|top"] = [pscustomobject]@{ rec = (Get-HordeLinkWalkRecord -Raw $Contract.frame -Root $Contract.frame -Path '$' -Memo $frameMemo -TopEntry $frameTop); root = $Contract.frame; memo = $frameMemo }
+    }
+    [void]$walks.Add(@($Frame, $cache["frame|top"], '$'))
     $verb = Get-HordeLinkProp $Frame "verb"
     $row = $null
     if ($null -ne $verb -and $Contract.rows.ContainsKey("$verb")) { $row = $Contract.rows["$verb"] }
     if ($null -ne $row -and (Test-HordeLinkHasProp $Frame "args")) {
-        $t = Resolve-HordeLinkTarget -Doc $Contract.verbs -Target "$($row.args)"
-        [void]$walks.Add(@((Get-HordeLinkProp $Frame "args"), $t.node, $t.root, '$.args'))
+        [void]$walks.Add(@((Get-HordeLinkProp $Frame "args"), (Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.args)" -Path '$.args'), '$.args'))
     }
     $result = Get-HordeLinkProp $Frame "result"
     if ($null -ne $row -and $null -ne $result -and "$(Get-HordeLinkProp $result 'state')" -ceq "known") {
-        $t = Resolve-HordeLinkTarget -Doc $Contract.verbs -Target "$($row.result)"
-        [void]$walks.Add(@((Get-HordeLinkProp $result "value"), $t.node, $t.root, '$.result.value'))
+        [void]$walks.Add(@((Get-HordeLinkProp $result "value"), (Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.result)" -Path '$.result.value'), '$.result.value'))
     }
     $out = New-Object System.Collections.ArrayList
     # A HELLO'S VERSION LISTS are bounded tighter than any list: at most versionItems entries, none above
@@ -222,21 +279,9 @@ function Test-HordeProtocolLimits {
         }
     }
     foreach ($w in $walks) {
-        foreach ($x in @(Get-HordeLinkNodes -Value $w[0] -Node $w[1] -Root $w[2] -Path $w[3])) {
-            $cap = Get-HordeLinkProp $x.node "x-horde-cap"
-            if ($x.value -is [string]) {
-                if ($null -eq $cap) {
-                    if ($null -eq (Get-HordeLinkProp $x.node "enum")) { [void]$out.Add($x.path + " is a string whose schema names no cap") }
-                    continue
-                }
-                $limit = $Contract.limits["$cap"]
-                $size = Measure-HordeWireString $x.value
-                if ($size -gt $limit) { [void]$out.Add($x.path + " is " + $size + " bytes on the wire, over its " + $cap + " cap of " + $limit) }
-            } elseif ($x.value -is [System.Collections.IList]) {
-                $limit = $Contract.limits["listItems"]
-                if ($x.value.Count -gt $limit) { [void]$out.Add($x.path + " has " + $x.value.Count + " items, over the listItems cap of " + $limit) }
-            }
-        }
+        $t = $w[1]
+        $found = Invoke-HordeLinkWalk -Value $w[0] -Rec $t.rec -Path $w[2] -Root $t.root -Memo $t.memo -Schema $false -Limits $Contract.limits
+        foreach ($f in $found.caps) { [void]$out.Add($f) }
     }
     return @($out)
 }

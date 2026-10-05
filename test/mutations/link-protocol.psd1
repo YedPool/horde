@@ -37,7 +37,7 @@
            Find = 'return ((ConvertTo-HordeWireString $Text).Length - 2)'
            Replace = 'return $Text.Length' }
         @{ Name = "depth-unguarded"
-           Find = 'if ($Depth -gt $script:HordeWireMaxDepth)'
+           Find = 'if ($d -gt $script:HordeWireMaxDepth)'
            Replace = 'if ($false)' }
         @{ Name = "ceiling-unchecked"
            Find = 'if ($cap -gt $Contract.limits["frameBytesCeiling"])'
@@ -48,17 +48,13 @@
         @{ Name = "receiver-frame-cap-off-by-one"
            Find = 'if ($length -gt $cap) {'
            Replace = 'if ($length -gt $cap + 1) {' }
-        @{ Name = "string-cap-off-by-one"
-           Find = 'if ($size -gt $limit) {'
-           Replace = 'if ($size -gt $limit + 1) {' }
-        @{ Name = "list-cap-off-by-one"
-           Find = 'if ($x.value.Count -gt $limit) {'
-           Replace = 'if ($x.value.Count -gt $limit + 1) {' }
+        # string-cap-off-by-one and list-cap-off-by-one moved with the caps into remote/Contract.ps1's link
+        # walk: test/mutations/link-walk-caps.psd1.
         @{ Name = "args-caps-unchecked"
-           Find = '[void]$walks.Add(@((Get-HordeLinkProp $Frame "args"), $t.node, $t.root, ''$.args''))'
+           Find = '[void]$walks.Add(@((Get-HordeLinkProp $Frame "args"), (Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.args)" -Path ''$.args''), ''$.args''))'
            Replace = '' }
         @{ Name = "result-caps-unchecked"
-           Find = '[void]$walks.Add(@((Get-HordeLinkProp $result "value"), $t.node, $t.root, ''$.result.value''))'
+           Find = '[void]$walks.Add(@((Get-HordeLinkProp $result "value"), (Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.result)" -Path ''$.result.value''), ''$.result.value''))'
            Replace = '' }
         @{ Name = "sender-skips-caps"
            Find = 'if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "oversized" -Reason ("not sent: "'
@@ -91,8 +87,8 @@
            Find = '[Array]::Sort($keys, [StringComparer]::Ordinal)'
            Replace = '' }
         @{ Name = "fractions-written-with-their-scale"
-           Find = 'if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) {'
-           Replace = 'if ($Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) { return $Value.ToString($inv)' }
+           Find = 'if ($v -is [decimal] -or $v -is [double] -or $v -is [single]) {'
+           Replace = 'if ($v -is [decimal] -or $v -is [double] -or $v -is [single]) { [void]$sb.Append($v.ToString($inv)); continue' }
         @{ Name = "version-not-read-first"
            Find = 'if (-not ($v -is [int] -and $v -eq 1))'
            Replace = 'if ($false)' }
@@ -129,5 +125,18 @@
         @{ Name = "no-common-version-no-bye"
            Find = 'if ($p -gt 0) {'
            Replace = 'if ($p -ge 0) {' }
+        # The writer is one loop over a work list (fix/link-writer-speed); these break its order.
+        @{ Name = "writer-parts-reversed"
+           Find = 'while ($order.Count -gt 0) { $todo.Push($order.Pop()) }'
+           Replace = 'if ($order.Count -gt 0) { foreach ($o in @($order.ToArray()[($order.Count - 1)..0])) { $todo.Push($o) } }; while ($order.Count -gt 0) { $null = $order.Pop() }' }
+        @{ Name = "writer-plain-key-unquoted"
+           Find = 'if ([regex]::IsMatch($k, $plain)) { [void]$sb.Append(''"'').Append($k).Append(''":'') }'
+           Replace = 'if ([regex]::IsMatch($k, $plain)) { [void]$sb.Append($k).Append('':'') }' }
+        @{ Name = "writer-plain-string-unquoted"
+           Find = 'if ([regex]::IsMatch($v, $plain)) { [void]$sb.Append(''"'').Append($v).Append(''"'') }'
+           Replace = 'if ([regex]::IsMatch($v, $plain)) { [void]$sb.Append($v) }' }
+        @{ Name = "writer-children-one-level-shallower"
+           Find = '$order.Push(@(0, $item, ($d + 1)))'
+           Replace = '$order.Push(@(0, $item, $d))' }
     )
 }

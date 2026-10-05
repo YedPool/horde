@@ -74,7 +74,14 @@ $script:HordeExecCoreFunctions = @("Get-HordeSchema", "Test-HordeSchema", "Read-
     # It takes an answer, a TTL and a time - plain values - and returns an answer; it calls
     # Assert-HordeAnswer and the constructors above, and runs nothing it is given. Its -Now defaults
     # to Get-Date (already allowed); remote/Clock.ps1 always passes a UTC -Now. Added 2026-10-02.
-    "Limit-HordeAge")
+    "Limit-HordeAge",
+    # The link walk (remote/Contract.ps1, fix/link-writer-speed) reads each schema node once into a
+    # record and must read it exactly as Test-HordeSchema does: Get-HordeSchemaNode and
+    # Assert-HordeSchema are the reads Test-HordeSchema itself makes (they take a schema and return its
+    # checked keywords and compiled pattern, or throw), and Test-HordeSchemaType, Test-HordeSchemaIsNumber
+    # and Compare-HordeSchemaNumber are the type and minimum checks it applies, called for the rare value
+    # the walk does not check inline. Each takes plain values and runs nothing it is given. Added 2026-10-02.
+    "Get-HordeSchemaNode", "Assert-HordeSchema", "Test-HordeSchemaType", "Test-HordeSchemaIsNumber", "Compare-HordeSchemaNumber")
 # Rule 1. The core files remote/ may dot-source: the ones defining the functions above.
 $script:HordeExecCoreFiles = @("Schema.ps1", "Tristate.ps1")
 
@@ -84,7 +91,10 @@ $script:HordeExecNewTypes = @("System.Collections.ArrayList", "System.Collection
     # The journal's file access: a FileStream opens one journal file to read or to create (CreateNew,
     # WriteThrough), a StreamReader reads it, UTF8Encoding (no BOM) spells its text, and a datetime is
     # rebuilt from a high-water mark's ticks. None of them runs anything.
-    "System.IO.FileStream", "System.IO.StreamReader", "System.Text.UTF8Encoding", "datetime")
+    "System.IO.FileStream", "System.IO.StreamReader", "System.Text.UTF8Encoding", "datetime",
+    # The link walk's records (remote/Contract.ps1): property names to records, by exact name and
+    # without case, as core/Schema.ps1 and PowerShell's member lookup match them. A dictionary of data.
+    "System.Collections.Generic.Dictionary[string,object]")
 
 # Rule 4. The types that may be named, lower case, without a leading "system.". An array of one is
 # allowed as the type itself is.
@@ -101,7 +111,11 @@ $script:HordeExecTypes = @("string", "int", "long", "bool", "byte", "sbyte", "ch
     # DateTimeKind for UTC times; Int32 and Int64 are int and long by their CLR names.
     "io.file", "io.directory", "io.filemode", "io.fileaccess", "io.fileshare", "io.fileoptions", "io.ioexception",
     "io.filenotfoundexception", "io.directorynotfoundexception", "security.cryptography.sha256", "datetimekind",
-    "int32", "int64", "io.fileattributes", "io.path")
+    "int32", "int64", "io.fileattributes", "io.path",
+    # collections.ienumerable: the link's answer rules (remote/Contract.ps1, Test-HordeLinkAnswer) ask
+    # whether a member is something PowerShell would unroll on return, to keep the old reading of it
+    # (issue #77). An interface named in a type test; nothing is made or run with it.
+    "collections.ienumerable")
 $script:HordeExecAttributes = @("Parameter", "CmdletBinding")
 
 # Rule 5. Per type (named as in $HordeExecTypes), the static members that may be read or called.
@@ -130,7 +144,9 @@ $script:HordeExecStatic = @{
     "globalization.datetimestyles" = @("AdjustToUniversal", "AssumeUniversal", "RoundtripKind")
     # OrdinalIgnoreCase: the journal compares a resolved folder with its root as Windows does, without case.
     "stringcomparison" = @("Ordinal", "OrdinalIgnoreCase")
-    "stringcomparer" = @("Ordinal")
+    # OrdinalIgnoreCase: the link walk finds a property's schema without case, as Get-HordeLinkProp's
+    # .PSObject.Properties lookup did (remote/Contract.ps1, Get-HordeLinkWalkRecord).
+    "stringcomparer" = @("Ordinal", "OrdinalIgnoreCase")
     "array" = @("Copy", "IndexOf", "Sort")
     "char" = @("IsHighSurrogate", "IsLowSurrogate")
     "guid" = @("NewGuid")
@@ -150,7 +166,10 @@ $script:HordeExecInstanceMethods = @("ToString", "Trim", "Split", "Contains", "S
     "Read",
     # The journal's own files: write and flush a record, read one back, close what was opened; trim a
     # number's trailing zeros; hash the canonical arguments.
-    "Write", "Flush", "ReadToEnd", "Dispose", "TrimEnd", "ComputeHash", "IndexOfAny")
+    "Write", "Flush", "ReadToEnd", "Dispose", "TrimEnd", "ComputeHash", "IndexOfAny",
+    # IsMatch: the link walk matches a string with the Regex core/Schema.ps1 compiled for the schema's
+    # pattern (Get-HordeSchemaNode), as Test-HordeSchema does; it matches text and runs nothing.
+    "IsMatch")
 
 # Rule 7. Variables refused whatever their scope.
 $script:HordeExecVariables = @("ExecutionContext", "Host", "MyInvocation", "PSCmdlet")

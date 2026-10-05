@@ -87,23 +87,23 @@
            Find = 'if ("$($answer.state)" -ceq "known") {'
            Replace = 'if ($false) {' }
         @{ Name = "known-without-value"
-           Find = 'if (-not $hasValue) { [void]$out.Add("$Path is known and carries no value") }'
+           Find = 'if (-not $hasValue) { $out += @("$Path is known and carries no value") }'
            Replace = '' }
         @{ Name = "known-without-time"
-           Find = 'if (-not $hasTime) { [void]$out.Add("$Path is known and says'
-           Replace = 'if ($false) { [void]$out.Add("$Path is known and says' }
+           Find = 'if (-not $hasTime) { $out += @("$Path is known and says'
+           Replace = 'if ($false) { $out += @("$Path is known and says' }
         @{ Name = "absent-with-value"
-           Find = 'if ($hasValue) { [void]$out.Add("$Path is absent and carries a value") }'
+           Find = 'if ($hasValue) { $out += @("$Path is absent and carries a value") }'
            Replace = '' }
         @{ Name = "unknown-without-reason"
-           Find = 'if ("$(Get-HordeLinkProp $Answer ''reason'')".Trim() -eq "") {'
+           Find = 'if ("$reason".Trim() -eq "") {'
            Replace = 'if ($false) {' }
         @{ Name = "null-value-allowed"
-           Find = 'if ($hasValue -and $null -eq (Get-HordeLinkProp $Answer "value"))'
+           Find = 'if ($hasValue -and $null -eq $value)'
            Replace = 'if ($false)' }
         @{ Name = "nested-answers-skipped"
-           Find = 'if ((Test-HordeLinkIsAnswerNode $x.node) -and'
-           Replace = 'if ($false -and' }
+           Find = 'if ($r.isAnswer -and $isObject) {'
+           Replace = 'if ($false) {' }
         @{ Name = "frame-cap-above-ceiling-allowed"
            Find = 'if ($limits["frameBytes"] -gt $limits["frameBytesCeiling"])'
            Replace = 'if ($false)' }
