@@ -9,13 +9,14 @@
 # low-integrity squatter of the same user - the integrity check that does is
 # server-integrity-not-checked-on-open, caught here - and the case that shows the owner refusal end to
 # end runs only from a token that may make Administrators an owner.
-# PassCodes 3: test-local exits 3 when that case is skipped (review of PR #91, G1).
+# PassCodes 0 and 3: test-local passes with 0 from a token that runs the owner case and with 3 from
+# one that skips it (review of PR #91, G1); this spec's mutants do not depend on that case.
 # image-not-checked-on-open (round 1 survivor) is caught since round 2, by a compiled probe that
 # serves the pipe at this process's own level (transports/local/test/SquatProbe.cs).
 @{
     Target = "transports\local\Transport.ps1"
     Suite  = "transports\local\test\test-local.ps1"
-    PassCodes = @(3)
+    PassCodes = @(0, 3)
     Mutations = @(
         @{ Name = "acl-not-protected"
            Find = 'D:P(D;;0x1f019f;;;NU)'
