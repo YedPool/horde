@@ -6,10 +6,18 @@
 # every answer can be tested without a pipe.
 #
 # WHAT IT ANSWERS. The hub's hello, once, with the node's own (protocol negotiation, R2); a ping, with a
-# pong carrying the node's clock (R6); and the read verbs of R12a: node.info, sessions.list,
-# session.get and request.status. Every other verb of link-verbs v1 is refused as unsupported here -
-# the act verbs (session.deliver, a drive verb, among them) belong to R19, and observe.since and
-# binding.get to R12b - so nothing is ever acted on. Anything before the hello but the hello, a second
+# pong carrying the node's clock (R6); the read verbs of R12a: node.info, sessions.list, session.get
+# and request.status; and, on a node that serves acts, the two act verbs of R19's first version
+# (the act path's A3, 2026-10-05): session.spawn and session.close. Every other verb of link-verbs v1
+# is refused as unsupported - session.deliver, a drive verb, among them, and observe.since and
+# binding.get, which belong to R12b.
+#
+# AN ACT HAPPENS ONCE PER REQUEST ID, AND NOT HERE. This file starts nothing. On the first sight of an
+# act request it records it in the request journal (remote/Journal.ps1, before anything acts) and
+# answers NeedAct: its caller (cli/NodeServe.ps1, through cli/NodeAct.ps1) acts through the host and
+# agent layers and calls again with the outcome, which is recorded and answered as the journal entry.
+# A resend replays what was recorded and acts nothing; the same id with other arguments is refused; a
+# node with no journal, or that serves no acts, acts on nothing. Anything before the hello but the hello, a second
 # hello, and a hello that is not a hub's end the link; a line that is not a frame ends it too.
 #
 # WHAT CROSSES. sessions.list and session.get carry a fixed summary of each session (schema
@@ -29,6 +37,10 @@
 
 # The verbs this node answers in R12a, and those that need the session projection.
 $script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status")
+# The act verbs of R19's first version, answered only by a node that serves acts (Data.acts).
+$script:HordeNodeActVerbs = @("session.spawn", "session.close")
+# The link's time spelling (Get-HordeLinkTime), for a request's issuedAt.
+$script:HordeNodeIssuedFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"
 $script:HordeNodeViewVerbs = @("sessions.list", "session.get")
 # The verbs versions this node speaks (link-verbs v1).
 $script:HordeNodeVerbsVersions = @(1)
@@ -62,8 +74,8 @@ function Get-HordeNodeNextSeq {
 function New-HordeNodeReply {
     # What Invoke-HordeNodeFrame decided: the frame to send (or none), whether the projection is needed
     # first, and whether the link ends after the reply.
-    param($Reply = $null, [bool]$NeedView = $false, [bool]$Close = $false)
-    return [pscustomobject]@{ reply = $Reply; needView = $NeedView; close = $Close }
+    param($Reply = $null, [bool]$NeedView = $false, [bool]$Close = $false, [bool]$NeedAct = $false, $Act = $null)
+    return [pscustomobject]@{ reply = $Reply; needView = $NeedView; close = $Close; needAct = $NeedAct; act = $Act }
 }
 
 function Limit-HordeNodeReason {
@@ -214,6 +226,20 @@ function ConvertTo-HordeNodeRequestEntry {
     $out["state"] = "$($Entry.state)"
     $out["receivedAt"] = Get-HordeLinkTime -At $Entry.receivedAt
     if ($null -ne $Entry.doneAt) { $out["doneAt"] = Get-HordeLinkTime -At $Entry.doneAt }
+    # An act's outcome (R19): the session it concerns, the process a spawn started, and the reason.
+    $res = $Entry.PSObject.Properties["result"]
+    if ($null -ne $res -and $null -ne $res.Value -and "$($res.Value.state)" -ceq "known" -and $null -ne $res.Value.value) {
+        $v = $res.Value.value
+        $sidv = "$(Get-HordeLinkProp $v 'sessionId')"
+        if ($sidv -ne "") { $out["sessionId"] = $sidv }
+        $ex = Get-HordeLinkProp $v "expect"
+        if ($null -ne $ex) {
+            $exNs = Get-HordeLinkProp $ex "ns"
+            $out["expect"] = [ordered]@{ ns = [ordered]@{ device = "$(Get-HordeLinkProp $exNs 'device')"; space = "$(Get-HordeLinkProp $exNs 'space')" }; pid = [long](Get-HordeLinkProp $ex "pid"); procStart = "$(Get-HordeLinkProp $ex 'procStart')" }
+        }
+        $why = "$(Get-HordeLinkProp $v 'reason')"
+        if ($why -ne "") { $out["reason"] = Limit-HordeNodeReason $why }
+    }
     return $out
 }
 
@@ -242,6 +268,68 @@ function New-HordeNodeError {
 function New-HordeNodeBye {
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Code, [Parameter(Mandatory = $true)][string]$Reason)
     return (New-HordeNodeReply -Reply (New-HordeLinkBye -Code $Code -Reason $Reason -Seq (Get-HordeNodeNextSeq $State) -Contract $State.contract) -Close $true)
+}
+
+function ConvertFrom-HordeNodeIssuedAt {
+    # A request's issuedAt as a UTC time, or $null when it is not the link's spelling of one.
+    param([string]$Text)
+    $d = [datetime]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal
+    if ([datetime]::TryParseExact($Text, $script:HordeNodeIssuedFormat, [System.Globalization.CultureInfo]::InvariantCulture, $styles, [ref]$d)) { return $d }
+    return $null
+}
+
+function Test-HordeNodeActArgs {
+    # The rules of an act's arguments the schema cannot say: "" when they hold, or the refusal.
+    param([Parameter(Mandatory = $true)][string]$Verb, $Arguments)
+    if ($Verb -cne "session.spawn") { return "" }
+    $p = Get-HordeLinkProp $Arguments "prompt"
+    $hasText = ($null -ne (Get-HordeLinkProp $p "text"))
+    $hasRef = ($null -ne (Get-HordeLinkProp $p "handoffRef"))
+    if ($hasText -and $hasRef) { return "a spawn's prompt is text or a handoff reference, not both" }
+    if (-not $hasText -and -not $hasRef) { return "a spawn's prompt is text or a handoff reference, and this one has neither" }
+    if ($hasRef) { return "a prompt given as a handoff reference is not served yet (R14); send its text" }
+    return ""
+}
+
+function Invoke-HordeNodeAct {
+    # An act verb's frame, answered (see the header: AN ACT HAPPENS ONCE PER REQUEST ID, AND NOT HERE).
+    # -Data.actOutcome is $null on the first call and { state; sessionId; expect; reason } on the second.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Frame, [Parameter(Mandatory = $true)]$Data)
+    $verb = "$($Frame.verb)"
+    $journal = "$($Data.journalRoot)"
+    if ($journal -eq "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "this node keeps no request journal, so it acts on nothing: an act it could not record could happen twice")) }
+    $outcome = Get-HordeLinkProp $Data "actOutcome"
+    if ($null -eq $outcome) {
+        $bad = Test-HordeNodeActArgs -Verb $verb -Arguments $Frame.args
+        if ($bad -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason $bad)) }
+        $issued = ConvertFrom-HordeNodeIssuedAt -Text "$($Frame.issuedAt)"
+        if ($null -eq $issued) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "the request's issuedAt is not a time this node can record")) }
+        $o = Open-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)" -Verb $verb -Arguments $Frame.args -IssuedAt $issued
+        switch ("$($o.decision)") {
+            "act" { return (New-HordeNodeReply -NeedAct $true -Act ([pscustomobject]@{ verb = $verb; args = $Frame.args; requestId = "$($Frame.requestId)" })) }
+            "refuse" { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "$($o.reason)")) }
+            "replay" {
+                $e = Get-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)"
+                if ($e.state -ceq "known") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "known"; value = (ConvertTo-HordeNodeRequestEntry -Entry $e.value); reason = ""; observedAt = (Get-HordeLinkTime) }))) }
+            }
+        }
+        # The journal cannot say what happened; its own reason can name its files and stays on the node.
+        return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "unknown"; reason = "the node's journal cannot say what happened to this request, so it is not acted on again; its own reason is kept on the node" })))
+    }
+    $st = "$(Get-HordeLinkProp $outcome 'state')"
+    if (@("done", "failed", "refused") -cnotcontains $st) { $st = "failed" }
+    $value = [ordered]@{ sessionId = "$(Get-HordeLinkProp $outcome 'sessionId')"; expect = (Get-HordeLinkProp $outcome "expect"); reason = (Limit-HordeNodeReason "$(Get-HordeLinkProp $outcome 'reason')") }
+    $now = Get-HordeLinkTime
+    $existing = Get-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)"
+    if ($existing.state -ceq "known" -and "$($existing.value.state)" -cne "accepted") {
+        # Already recorded: the first outcome stands, and is what is answered.
+        return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "known"; value = (ConvertTo-HordeNodeRequestEntry -Entry $existing.value); reason = ""; observedAt = $now })))
+    }
+    $null = Complete-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)" -State $st -Result (New-HordeKnown -Value $value)
+    $e = Get-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)"
+    if ($e.state -ceq "known") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "known"; value = (ConvertTo-HordeNodeRequestEntry -Entry $e.value); reason = ""; observedAt = $now }))) }
+    return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "unknown"; reason = "the outcome was recorded and could not be read back; ask request.status" })))
 }
 
 function Invoke-HordeNodeFrame {
@@ -280,6 +368,7 @@ function Invoke-HordeNodeFrame {
     }
     if ($kind -cne "req") { return (New-HordeNodeReply) }
     $verb = "$($f.verb)"
+    if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) { return (Invoke-HordeNodeAct -State $State -Frame $f -Data $Data) }
     if ($script:HordeNodeServedVerbs -cnotcontains $verb) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "unsupported-verb" -Reason ("this node answers " + ($script:HordeNodeServedVerbs -join ", ") + "; '" + $verb + "' is not one of them"))) }
     if ($script:HordeNodeViewVerbs -ccontains $verb) {
         if ("$($Data.viewError)" -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("the node could not build its view of its sessions: " + $Data.viewError))) }
