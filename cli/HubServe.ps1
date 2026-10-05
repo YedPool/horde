@@ -34,6 +34,7 @@ $script:HordeHubOwnTransport = "local"
 # The verbs versions this hub speaks (link-verbs v1).
 $script:HordeHubVerbsVersions = @(1)
 # Unicode without a byte-order mark: a mirror file is the hub's own and read back by this file only.
+# Callers load core/ReadShared.ps1 and core/FileAtomic.ps1 (Read-HordeSharedText, Move-HordeFileAtomic).
 $script:HordeHubMirrorEncoding = New-Object System.Text.UTF8Encoding($false)
 
 function Get-HordeHubRegistry {
@@ -83,21 +84,60 @@ function Test-HordeHubMirror {
 
 function Read-HordeHubMirror {
     # A node's mirror file: known, the mirror; absent when there is no file; unknown with the reason when
-    # it cannot be read or is not one to trust.
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Contract)
+    # it cannot be read, is not one to trust, or names another device than -DeviceId, the one its file
+    # is named by (review of PR #86, F6: <A>.json holding B's mirror read as B's, and the next write then
+    # went to B.json).
+    #
+    # READ WITH EVERY SHARE (core/ReadShared.ps1): ReadAllText's ordinary read share made the hub's
+    # write fail whenever `horde nodes` read at the same moment (review of PR #86, F3).
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$Contract)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no mirror file at " + $Path)) }
     $m = $null
-    try { $m = [System.IO.File]::ReadAllText($Path, $script:HordeHubMirrorEncoding) | ConvertFrom-Json }
+    try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }
     catch { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_) }
     if ($null -eq $m) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read: it is empty")) }
     $found = @(Test-HordeHubMirror -Mirror $m -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read as a mirror: " + ($found -join "; "))) }
+    if ("$($m.deviceId)" -cne $DeviceId) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " holds the mirror of device " + $m.deviceId + ", not " + $DeviceId)) }
     return (New-HordeKnown -Value $m)
 }
 
+function Get-HordeHubMirrorTemps {
+    # The temporary files a write of this device's mirror leaves only when it is killed between writing
+    # and renaming: <deviceId>.json.<32 hex>.tmp, beside the mirror.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$DeviceId)
+    $name = Split-Path -Leaf (Get-HordeHubMirrorPath -Root $Root -DeviceId $DeviceId)
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Root -File -Filter ($name + ".*.tmp") | Where-Object { $_.Name -cmatch ('\A' + [regex]::Escape($name) + '\.[0-9a-f]{32}\.tmp\z') } | Sort-Object LastWriteTimeUtc -Descending)
+}
+
+function Clear-HordeHubMirrorTemps {
+    # Recover, then clean up, what killed writes left (review of PR #86, F3: 5 of 60 kills left a temp
+    # file, and nothing removed it). A temp is a whole, checked mirror - it was checked before it was
+    # written - so when the mirror itself is missing or cannot be read, the newest temp that reads as
+    # this device's mirror is renamed into its place. Every other temp is removed. Returns one line per
+    # file acted on.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)]$Contract)
+    $path = Get-HordeHubMirrorPath -Root $Root -DeviceId $DeviceId
+    $out = New-Object System.Collections.ArrayList
+    $have = (Read-HordeHubMirror -Path $path -DeviceId $DeviceId -Contract $Contract).state -ceq "known"
+    foreach ($t in @(Get-HordeHubMirrorTemps -Root $Root -DeviceId $DeviceId)) {
+        if (-not $have -and (Read-HordeHubMirror -Path $t.FullName -DeviceId $DeviceId -Contract $Contract).state -ceq "known") {
+            Move-HordeFileAtomic -From $t.FullName -To $path
+            $have = $true
+            [void]$out.Add("recovered " + $t.Name + " as " + (Split-Path -Leaf $path))
+            continue
+        }
+        Remove-Item -LiteralPath $t.FullName -Force
+        [void]$out.Add("removed " + $t.Name)
+    }
+    return $out.ToArray()
+}
+
 function Write-HordeHubMirror {
-    # Write a mirror, checked first, through a temporary file in the same folder that then replaces the
-    # old one: a reader sees the old mirror or the new one, never half of one. Returns the path.
+    # Write a mirror, checked first, through a temporary file in the same folder that is then renamed
+    # over the old one in one step (core/FileAtomic.ps1, the precedent of PR #70): a reader or a kill
+    # sees the old mirror or the new one, never half of one and never neither. Returns the path.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Mirror, [Parameter(Mandatory = $true)]$Contract)
     $found = @(Test-HordeHubMirror -Mirror $Mirror -Contract $Contract)
     if ($found.Count -gt 0) { throw ("this mirror is not one to write: " + ($found -join "; ")) }
@@ -105,15 +145,12 @@ function Write-HordeHubMirror {
     [void][System.IO.Directory]::CreateDirectory($Root)
     $tmp = $path + "." + [guid]::NewGuid().ToString("N") + ".tmp"
     $bytes = $script:HordeHubMirrorEncoding.GetBytes(($Mirror | ConvertTo-Json -Depth 40 -Compress))
-    try {
-        $fs = New-Object System.IO.FileStream($tmp, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
-        try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
-        # [NullString]::Value, not $null: PowerShell passes $null to a string parameter as "", which
-        # File.Replace refuses as "not of a legal form" (measured 2026-10-05). No backup file is kept.
-        if ([System.IO.File]::Exists($path)) { [System.IO.File]::Replace($tmp, $path, [NullString]::Value) } else { [System.IO.File]::Move($tmp, $path) }
-    } finally {
-        if ([System.IO.File]::Exists($tmp)) { [System.IO.File]::Delete($tmp) }
-    }
+    $fs = New-Object System.IO.FileStream($tmp, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
+    try { $fs.Write($bytes, 0, $bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
+    # A rename that fails while this process lives leaves no temp behind; only a kill does, and
+    # Clear-HordeHubMirrorTemps recovers or removes those when the hub starts.
+    try { Move-HordeFileAtomic -From $tmp -To $path }
+    catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }
     return $path
 }
 
@@ -223,7 +260,7 @@ function Update-HordeHubNode {
     $who = "node " + $Entry.deviceName + " (" + $Entry.deviceId + ")"
     $note = ""
     try {
-        $old = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $Root -DeviceId "$($Entry.deviceId)") -Contract $Contract
+        $old = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $Root -DeviceId "$($Entry.deviceId)") -DeviceId "$($Entry.deviceId)" -Contract $Contract
         $m = $null
         if ($old.state -ceq "known") { $m = $old.value }
         else {
@@ -265,10 +302,17 @@ function Invoke-HordeHubServe {
         [scriptblock]$OnRound = $null
     )
     $done = New-Object System.Collections.ArrayList
+    # What a killed hub left: recovered or removed before the first round reads a mirror.
+    $swept = New-Object System.Collections.ArrayList
+    foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) {
+        try { foreach ($l in @(Clear-HordeHubMirrorTemps -Root $Root -DeviceId "$($e.deviceId)" -Contract $Contract)) { [void]$swept.Add("node " + $e.deviceName + " (" + $e.deviceId + "): " + $l) } }
+        catch { [void]$swept.Add("node " + $e.deviceName + " (" + $e.deviceId + "): its temporary files could not be cleared: " + $_.Exception.Message) }
+    }
     while ($Rounds -le 0 -or $done.Count -lt $Rounds) {
         $began = [datetime]::UtcNow
         $outcomes = New-Object System.Collections.ArrayList
         foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) { [void]$outcomes.Add((Update-HordeHubNode -Entry $e -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs)) }
+        if ($done.Count -eq 0) { foreach ($l in $swept) { [void]$outcomes.Add($l) } }
         $round = [pscustomobject]@{ at = (Get-HordeLinkTime -At $began); outcomes = $outcomes.ToArray() }
         [void]$done.Add($round)
         # Whatever the block writes is not a round: discarded, so the return is only the rounds.

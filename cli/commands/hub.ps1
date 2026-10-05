@@ -18,7 +18,7 @@ $HordeCommand = @{
         # Loaded here, in the command's own scope, so the transports' helpers stay visible to the blocks
         # they register (transports/Port.ps1, the adapter contract).
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device", "Schema")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
         . (Join-Path $root "transports\Port.ps1")
         foreach ($t in @(Get-HordeTransportFiles)) { . $t }
         . (Join-Path $root "remote\Mirror.ps1")

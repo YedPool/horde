@@ -62,5 +62,29 @@
         @{ Name = "text-hides-why-unheard"
            Find = 'if ($n.heard.state -cne "known") { [void]$lines.Add($n.heard.reason); continue }'
            Replace = 'if ($n.heard.state -cne "known") { [void]$lines.Add($who + ": not heard"); continue }' }
+        @{ Name = "mirror-of-another-device-read"
+           Find = 'if ("$($m.deviceId)" -cne $DeviceId) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "reader-without-shared-access"
+           Find = 'try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }'
+           Replace = 'try { $m = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json }' }
+        @{ Name = "write-not-a-rename"
+           Find = 'try { Move-HordeFileAtomic -From $tmp -To $path }'
+           Replace = 'try { [System.IO.File]::Copy($tmp, $path, $true) }' }
+        @{ Name = "failed-write-leaves-its-temporary-file"
+           Find = 'catch { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }'
+           Replace = 'catch { throw }' }
+        @{ Name = "whole-temporary-mirror-not-recovered"
+           Find = 'Move-HordeFileAtomic -From $t.FullName -To $path'
+           Replace = 'Remove-Item -LiteralPath $t.FullName -Force' }
+        @{ Name = "temporary-files-never-cleared"
+           Find = '        Remove-Item -LiteralPath $t.FullName -Force'
+           Replace = '' }
+        @{ Name = "hub-start-does-not-sweep"
+           Find = 'foreach ($l in @(Clear-HordeHubMirrorTemps -Root $Root -DeviceId "$($e.deviceId)" -Contract $Contract))'
+           Replace = 'foreach ($l in @())' }
+        @{ Name = "mirror-path-not-anchored"
+           Find = '-cnotmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'') { throw'
+           Replace = '-cnotmatch ''[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'') { throw' }
     )
 }

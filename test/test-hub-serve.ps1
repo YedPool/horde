@@ -21,7 +21,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-foreach ($f in @("Tristate", "Platform", "Namespace")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+foreach ($f in @("Tristate", "Platform", "Namespace", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
 . (Join-Path $root "transports\Port.ps1")
 foreach ($t in @(Get-HordeTransportFiles)) { . $t }
 . (Join-Path $root "remote\NodeServe.ps1")
@@ -75,38 +75,130 @@ try {
     $m = New-HordeNodeMirror -DeviceId $device -DeviceName "fixture-node"
     $path = Write-HordeHubMirror -Root $mirrorRoot -Mirror $m -Contract $contract
     Check ($path -ceq (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -and (Split-Path -Leaf $path) -ceq ($device + ".json")) "a mirror is written to <root>\<deviceId>.json"
-    $back = Read-HordeHubMirror -Path $path -Contract $contract
+    $back = Read-HordeHubMirror -Path $path -DeviceId $device -Contract $contract
     Check ($back.state -ceq "known" -and $back.value.deviceId -ceq $device -and $back.value.deviceName -ceq "fixture-node") "and reads back as the same mirror"
     Check (@(Get-ChildItem -LiteralPath $mirrorRoot -Force).Count -eq 1) "nothing is left beside it: the write went through a temporary file that became it"
-    $none = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $other) -Contract $contract
+    $none = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $other) -DeviceId $other -Contract $contract
     Check ($none.state -ceq "absent") "a node with no mirror file has none: absent"
     $bad = Join-Path $mirrorRoot "bad.json"
     [System.IO.File]::WriteAllText($bad, "{ not json")
-    $r = Read-HordeHubMirror -Path $bad -Contract $contract
+    $r = Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract
     Check ($r.state -ceq "unknown" -and $r.reason -clike "*could not be read*") ("a file that is not JSON is unknown, never a guessed mirror (" + $r.reason + ")")
     [System.IO.File]::WriteAllText($bad, '{"schemaVersion":1,"deviceId":"' + $device + '","deviceName":"x","extra":1}')
-    $r = Read-HordeHubMirror -Path $bad -Contract $contract
+    $r = Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract
     Check ($r.state -ceq "unknown" -and $r.reason -clike "*node-mirror.v1*extra*") ("a file that fails schema/node-mirror.v1 is unknown, naming the finding (" + $r.reason + ")")
     [System.IO.File]::WriteAllText($bad, '{"schemaVersion":1,"deviceId":"' + $device + '","deviceName":"x"}')
-    Check ((Read-HordeHubMirror -Path $bad -Contract $contract).state -ceq "known") "CONTROL: the same file without the extra member reads"
+    Check ((Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract).state -ceq "known") "CONTROL: the same file without the extra member reads"
     # An inventory the link contract refuses: a session whose role answer is known with no value.
     $view = [System.IO.File]::ReadAllText($viewPath) | ConvertFrom-Json
     $ns = New-HordeNamespace -Device $device -Space "windows"
     $list = ConvertTo-HordeMirrorObject (Get-HordeNodeSessionList -View $view -Namespace $ns -Contract $contract)
     $good = Update-HordeNodeMirror -Mirror $m -List $list -NodeSentAt (Utc) -ReceivedAt (Utc)
     $gp = Write-HordeHubMirror -Root $mirrorRoot -Mirror $good -Contract $contract
-    Check ((Read-HordeHubMirror -Path $gp -Contract $contract).state -ceq "known") "CONTROL: a mirror holding the node's real list reads"
+    Check ((Read-HordeHubMirror -Path $gp -DeviceId $device -Contract $contract).state -ceq "known") "CONTROL: a mirror holding the node's real list reads"
     $text = [System.IO.File]::ReadAllText($gp)
     $broken = $text.Replace('"role":{"state":"known","value":"goblin"', '"role":{"state":"known"')
     Check ($broken -cne $text) "CONTROL: the fixture's role answer is there to break"
     [System.IO.File]::WriteAllText($bad, $broken)
-    $r = Read-HordeHubMirror -Path $bad -Contract $contract
+    $r = Read-HordeHubMirror -Path $bad -DeviceId $device -Contract $contract
     Check ($r.state -ceq "unknown" -and $r.reason -clike "*link contract*") ("an inventory the link contract refuses is unknown, naming the contract (" + $r.reason + ")")
     $carriedBroken = $good | ConvertTo-Json -Depth 40 | ConvertFrom-Json
     $carriedBroken.inventory.carried = @([pscustomobject]@{ lastSeenAt = "2026-10-05T12:00:00Z"; session = [pscustomobject]@{ sessionId = "x" } })
     $threw = $false; try { $null = Write-HordeHubMirror -Root $mirrorRoot -Mirror $carriedBroken -Contract $contract } catch { $threw = $true }
     Check $threw "a mirror whose carried sessions the contract refuses is never written"
     Remove-Item -LiteralPath $bad -Force
+
+    Write-Host ""
+    Write-Host "--- the write path (review of PR #86, F1, F3, F5 and F6) ---" -ForegroundColor Cyan
+    # F1, the reviewer's shape, through the real write: a complete list of 90 large sessions, then a
+    # partial list of 90 others, then a partial list of one. Each list fits a frame; the carried union of
+    # the first two did not, and the mirror could never be written again.
+    $big = Join-Path $work "big"
+    function Large {
+        param([string]$Id)
+        $at = Get-HordeLinkTime
+        $why = "r" + ("x" * 900)
+        $ns = [pscustomobject][ordered]@{ device = $device; space = "windows" }
+        $u = { [pscustomobject][ordered]@{ state = "unknown"; reason = $why } }
+        $placed = { [pscustomobject][ordered]@{ state = "unknown"; reason = $why; ns = $ns } }
+        return [pscustomobject][ordered]@{ sessionId = $Id; agent = [pscustomobject][ordered]@{ state = "known"; value = "harness-a"; reason = ""; observedAt = $at }; fleetSessionId = (& $u); role = [pscustomobject][ordered]@{ state = "known"; value = "goblin"; reason = ""; observedAt = $at }; label = (& $u); parent = (& $u); liveStatus = (& $u); workState = (& $u); startedAt = (& $u); lastActivity = (& $u); retired = (& $u); pid = (& $placed); procStart = (& $placed); projectCwd = (& $placed) }
+    }
+    function BigList {
+        param([object[]]$Sessions, [bool]$Complete)
+        $at = Get-HordeLinkTime
+        $c = [pscustomobject][ordered]@{ state = "known"; value = $Complete; reason = ""; observedAt = $at }
+        if (-not $Complete) { $c.reason = "not complete: a store was locked" }
+        return (ConvertTo-HordeMirrorObject ([pscustomobject][ordered]@{ complete = $c; sessions = @($Sessions); observedAt = $at }))
+    }
+    $bm = New-HordeNodeMirror -DeviceId $device -DeviceName "fixture-node"
+    $bm = Update-HordeNodeMirror -Mirror $bm -List (BigList @(1..90 | ForEach-Object { Large ("a-" + $_) }) $true) -NodeSentAt (Utc) -ReceivedAt (Utc)
+    $e1 = ""; try { $null = Write-HordeHubMirror -Root $big -Mirror $bm -Contract $contract } catch { $e1 = $_.Exception.Message }
+    $bm = Update-HordeNodeMirror -Mirror $bm -List (BigList @(1..90 | ForEach-Object { Large ("b-" + $_) }) $false) -NodeSentAt (Utc) -ReceivedAt (Utc)
+    $e2 = ""; try { $null = Write-HordeHubMirror -Root $big -Mirror $bm -Contract $contract } catch { $e2 = $_.Exception.Message }
+    Check ($e1 -eq "" -and $e2 -eq "" -and @($bm.inventory.carried).Count -eq 90) ("CONTROL: the first two writes succeed, with 90 large sessions carried (" + $e1 + $e2 + ")")
+    $bm = Update-HordeNodeMirror -Mirror $bm -List (BigList @((Large "c-1")) $false) -NodeSentAt (Utc) -ReceivedAt (Utc)
+    $e3 = ""; try { $null = Write-HordeHubMirror -Root $big -Mirror $bm -Contract $contract } catch { $e3 = $_.Exception.Message }
+    $back = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $big -DeviceId $device) -DeviceId $device -Contract $contract
+    Check ($e3 -eq "" -and $back.state -ceq "known" -and @($back.value.inventory.carried).Count -lt 180 -and @($back.value.inventory.carried).Count -ge 90) ("the third write succeeds: the carried sessions were cut to fit one frame (" + @($bm.inventory.carried).Count + " kept; " + $e3 + ")")
+    Check ([int]$contract.limits["frameBytes"] -eq $script:HordeMirrorFrameBytes) "the mirror's frame budget is the contract's frameBytes"
+
+    # F3. MEASURED HERE, 2026-10-05: MoveFileEx's rename over the mirror fails "Access is denied" for as
+    # long as any handle is open on it, delete sharing or not; Move-HordeFileAtomic tries again for 2 s.
+    # So a reader that holds the mirror briefly - one `horde nodes` read - costs the write a retry, not
+    # the round; a reader that holds it past 2 s makes that write fail, and the write leaves nothing.
+    $mp = Get-HordeHubMirrorPath -Root $big -DeviceId $device
+    $opened = New-Object System.Threading.ManualResetEventSlim($false)
+    $brief = [PowerShell]::Create()
+    [void]$brief.AddScript({ param($Path, $Opened) $s = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)); $Opened.Set(); Start-Sleep -Milliseconds 500; $s.Dispose() }).AddArgument($mp).AddArgument($opened)
+    $h = $brief.BeginInvoke()
+    $null = $opened.Wait(10000)
+    $e4 = ""; $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try { $null = Write-HordeHubMirror -Root $big -Mirror $bm -Contract $contract } catch { $e4 = $_.Exception.Message }
+    $sw.Stop()
+    $null = $h.AsyncWaitHandle.WaitOne(10000); $brief.Dispose()
+    Check ($e4 -eq "") ("a write begun while a reader holds the mirror for half a second waits it out and succeeds (" + [math]::Round($sw.Elapsed.TotalSeconds, 2) + " s; " + $e4 + ")")
+    $long = [System.IO.File]::Open($mp, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    $e5 = ""
+    try { $null = Write-HordeHubMirror -Root $big -Mirror $bm -Contract $contract } catch { $e5 = $_.Exception.Message } finally { $long.Dispose() }
+    Check ($e5 -ne "") ("CONTROL: a reader that holds it past the 2 s retry makes that write fail (" + $e5 + ")")
+    Check (@(Get-HordeHubMirrorTemps -Root $big -DeviceId $device).Count -eq 0) "and the failed write leaves no temporary file behind"
+    Check ((Read-HordeHubMirror -Path $mp -DeviceId $device -Contract $contract).state -ceq "known") "and the mirror it could not replace is still whole"
+    $writer = [System.IO.File]::Open($mp, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    $r6 = $null; $e6 = ""
+    try {
+        $r6 = Read-HordeHubMirror -Path $mp -DeviceId $device -Contract $contract
+        try { $null = [System.IO.File]::ReadAllText($mp) } catch { $e6 = $_.Exception.Message }
+    } finally { $writer.Dispose() }
+    Check ($null -ne $r6 -and $r6.state -ceq "known") "Read-HordeHubMirror reads while another process holds the mirror open for writing"
+    Check ($e6 -ne "") ("CONTROL: ReadAllText cannot (" + $e6 + ")")
+
+    # The temporary files a killed write leaves: recovered when the mirror is gone, removed otherwise.
+    $name = Split-Path -Leaf $mp
+    $orphan = Join-Path $big ($name + "." + [guid]::NewGuid().ToString("N") + ".tmp")
+    [System.IO.File]::Copy($mp, $orphan)
+    $other1 = Join-Path $big "unrelated.json.tmp"
+    [System.IO.File]::WriteAllText($other1, "not ours")
+    $lines = @(Clear-HordeHubMirrorTemps -Root $big -DeviceId $device -Contract $contract)
+    Check (-not (Test-Path -LiteralPath $orphan) -and (Test-Path -LiteralPath $mp) -and $lines.Count -eq 1 -and $lines[0] -clike "removed *") ("with the mirror whole, a left-behind temporary file is removed (" + ($lines -join "; ") + ")")
+    Check (Test-Path -LiteralPath $other1) "and a file that is not one of its temporary files is left alone"
+    [System.IO.File]::Copy($mp, $orphan)
+    $junk = Join-Path $big ($name + "." + [guid]::NewGuid().ToString("N") + ".tmp")
+    [System.IO.File]::WriteAllText($junk, "half a mirror")
+    Remove-Item -LiteralPath $mp -Force
+    $lines = @(Clear-HordeHubMirrorTemps -Root $big -DeviceId $device -Contract $contract)
+    $rec = Read-HordeHubMirror -Path $mp -DeviceId $device -Contract $contract
+    Check ($rec.state -ceq "known" -and @($lines | Where-Object { $_ -clike "recovered *" }).Count -eq 1) ("with the mirror gone, a whole temporary mirror is recovered into its place (" + ($lines -join "; ") + ")")
+    Check (@(Get-HordeHubMirrorTemps -Root $big -DeviceId $device).Count -eq 0) "and the torn one is removed"
+
+    # F5: only a device id names a mirror file; F6: a file holding another device's mirror is refused.
+    $threw = 0
+    foreach ($badId in @(("..\" + $device), $device.ToUpperInvariant(), ($device + "\x"))) { try { $null = Get-HordeHubMirrorPath -Root $big -DeviceId $badId } catch { $threw++ } }
+    Check ($threw -eq 3) "a mirror path is only ever named by a lower-case device id: no '..', no upper case, nothing after it"
+    $impostor = New-HordeNodeMirror -DeviceId $other -DeviceName "impostor"
+    [System.IO.File]::WriteAllText($mp, ($impostor | ConvertTo-Json -Compress))
+    $r7 = Read-HordeHubMirror -Path $mp -DeviceId $device -Contract $contract
+    Check ($r7.state -ceq "unknown" -and $r7.reason -clike ("*holds the mirror of device " + $other + ", not " + $device + "*")) ("a mirror file holding another device's mirror is refused, naming both (" + $r7.reason + ")")
+    Check ((Read-HordeHubMirror -Path $mp -DeviceId $other -Contract $contract).state -ceq "known") "CONTROL: read as the device it names, the same file is a mirror"
 
     Write-Host ""
     Write-Host "--- one pull, from the node's real loop ---" -ForegroundColor Cyan
@@ -146,13 +238,13 @@ try {
     $node = Start-Node -MaxLinks 1 -View $freshView
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     $null = Stop-Node $node
-    $after1 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -Contract $contract
+    $after1 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -DeviceId $device -Contract $contract
     Check ($rounds.Count -eq 1 -and $after1.state -ceq "known" -and $null -ne (Get-HordeLinkProp $after1.value "heardAt") -and @($after1.value.inventory.list.sessions).Count -eq 2) "round one writes a mirror with the node's two sessions"
     $rows = @(Get-HordeMirrorRows -Mirror $after1.value -Now (Utc))
     Check ($rows.Count -eq 2 -and @($rows | Where-Object { $_.presence.state -ceq "known" -and $_.device -ceq $device }).Count -eq 2) "CONTROL: and its sessions are known present, on the node's device"
     $t2 = Utc
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
-    $after2 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -Contract $contract
+    $after2 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -DeviceId $device -Contract $contract
     $lost = Get-HordeLinkProp $after2.value "lost"
     Check ($after2.state -ceq "known" -and $null -ne $lost -and (ConvertFrom-HordeMirrorTime $lost.since) -ge $t2.AddSeconds(-1)) "round two, with the node gone, marks the mirror lost since that round"
     Check (@($after2.value.inventory.list.sessions).Count -eq 2) "and keeps the last inventory as last-known"
@@ -162,10 +254,14 @@ try {
 
     $corrupt = Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device
     [System.IO.File]::WriteAllText($corrupt, "garbage")
+    # And a temporary file a killed write left: the hub clears it before its first round reads a mirror.
+    $left = $corrupt + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+    [System.IO.File]::WriteAllText($left, "half a mirror")
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
-    $after3 = Read-HordeHubMirror -Path $corrupt -Contract $contract
+    $after3 = Read-HordeHubMirror -Path $corrupt -DeviceId $device -Contract $contract
     Check ($after3.state -ceq "known" -and "$((Get-HordeLinkProp $after3.value 'lost').reason)" -clike "*no transport*") "an unreadable mirror is started afresh, never a crash, and the round's failure is recorded in it"
     Check ("$(@($rounds)[0].outcomes[0])" -clike "*mirror*could not be read*") ("and the round says the old mirror was unreadable (" + "$(@($rounds)[0].outcomes[0])" + ")")
+    Check (-not (Test-Path -LiteralPath $left) -and @(@($rounds)[0].outcomes | Where-Object { $_ -clike "*removed *.tmp" }).Count -eq 1) "the hub cleared the temporary file a killed write left, and said so"
 
     # A fault while pulling is that node's outcome, recorded in its mirror, never the end of the hub (as
     # the node's own loop answers a fault rather than crash): a contract the link's writer cannot use
@@ -174,7 +270,7 @@ try {
     $brokenContract = [pscustomobject]@{ frame = $null; verbs = $null; limits = @{} }
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $brokenContract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     $null = Stop-Node $node
-    $after4 = Read-HordeHubMirror -Path $corrupt -Contract $contract
+    $after4 = Read-HordeHubMirror -Path $corrupt -DeviceId $device -Contract $contract
     Check ("$(@($rounds)[0].outcomes[0])" -clike "*unreachable: the hub failed while pulling*") ("a throw while pulling is the node's outcome (" + "$(@($rounds)[0].outcomes[0])" + ")")
     Check ($after4.state -ceq "known" -and "$((Get-HordeLinkProp $after4.value 'lost').reason)" -clike "*failed while pulling*") "and is recorded in its mirror, so its sessions read unknown"
 

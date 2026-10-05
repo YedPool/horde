@@ -6,7 +6,7 @@ $HordeCommand = @{
     run     = {
         [CmdletBinding()] param([switch]$Json)
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device", "Schema")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
         . (Join-Path $root "transports\Port.ps1")
         . (Join-Path $root "remote\Mirror.ps1")
         . (Join-Path $root "cli\HubServe.ps1")
@@ -15,7 +15,7 @@ $HordeCommand = @{
         $contract = Get-HordeLinkContract
         $mirrors = New-Object System.Collections.ArrayList
         foreach ($e in @(Get-HordeHubRegistry -Node $node)) {
-            $m = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $e.deviceId) -Contract $contract
+            $m = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $e.deviceId) -DeviceId $e.deviceId -Contract $contract
             # A registered node with no mirror, or one that cannot be read, is shown as never heard:
             # its sessions are unknown, never absent, and the reason says why.
             $mirror = New-HordeNodeMirror -DeviceId $e.deviceId -DeviceName $e.deviceName
