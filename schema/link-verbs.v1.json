@@ -101,9 +101,9 @@
     },
     "session-spawn-args": {
       "type": "object",
-      "required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt", "closeOn"],
+      "required": ["label", "role", "runId", "profile", "repoId", "prompt", "closeOn"],
       "additionalProperties": false,
-      "description": "Everything the node needs to start one session, and nothing it could run: the program, its arguments and its environment come from the node's own profile, chosen here by name (engine-settings 2.3). prompt carries text or handoffRef, not both; the node refuses anything else (step R19), because this validator cannot say 'exactly one'.",
+      "description": "Everything the node needs to start one session, and nothing it could run: the program, its arguments and its environment come from the node's own profile, chosen here by name (engine-settings 2.3). prompt carries text or handoffRef, not both; the node refuses anything else (step R19), because this validator cannot say 'exactly one'. worktree is optional (decision of 2026-10-05): without one the session runs in the node's registered clone of repoId. title is the run's title, which the node joins to the label to name the session at birth, capped (decision 4). permission is the Horde level asked for (core/permission-levels.json); the node compiles it into its spawn layer and refuses it above its own ceiling, never lowering it (remote plan R9). No argument can carry the ceiling: it is the node's own setting.",
       "properties": {
         "label": { "$ref": "#/definitions/label" },
         "role": { "$ref": "#/definitions/role" },
@@ -129,6 +129,8 @@
           }
         },
         "host": { "$ref": "#/definitions/token" },
+        "title": { "type": "string", "pattern": "^[\\x20-\\x7E]{1,200}$", "x-horde-cap": "nameBytes" },
+        "permission": { "type": "string", "enum": ["plan", "ask", "edits", "bypass"] },
         "closeOn": { "type": "string", "enum": ["proof", "routed"] }
       }
     },
@@ -288,6 +290,15 @@
         "receivedAt": { "$ref": "#/definitions/time" },
         "doneAt": { "$ref": "#/definitions/time" },
         "sessionId": { "$ref": "#/definitions/session-id" },
+        "expect": {
+          "type": "object", "required": ["ns", "pid", "procStart"], "additionalProperties": false,
+          "description": "For a session.spawn that is done: the started process as the node proved it, placed by its namespace (R11) - exactly what a later session.close carries back as its expect.",
+          "properties": {
+            "ns": { "$ref": "#/definitions/ns" },
+            "pid": { "type": "integer", "minimum": 1 },
+            "procStart": { "type": "string", "pattern": "^[0-9]{1,20}$", "x-horde-cap": "nameBytes" }
+          }
+        },
         "reason": { "$ref": "#/definitions/reason" }
       }
     },
