@@ -33,7 +33,7 @@ $ok = New-HordeTurnState -Fields (New-GoodFields)
 Check ($ok.PSObject.TypeNames -contains "Horde.TurnState" -and $ok.harness -ceq "harness-a") "CONTROL: a complete set of fields makes a turn state"
 foreach ($k in @("newestEventAt", "atBoundary", "openTasks", "crons", "versions", "queued")) {
     $f = New-GoodFields; $f.Remove($k)
-    Check (Throws { New-HordeTurnState -Fields $f } $k) ("a turn state without '" + $k + "' is refused, naming it")
+    Check (Throws { New-HordeTurnState -Fields $f } ("needs the field '" + $k + "'")) ("a turn state without '" + $k + "' is refused as missing it, not for some later check")
 }
 $f = New-GoodFields; $f["extra"] = 1
 Check (Throws { New-HordeTurnState -Fields $f } "extra") "a turn state with a field the port does not define is refused"

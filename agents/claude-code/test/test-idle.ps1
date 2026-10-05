@@ -188,6 +188,8 @@ try {
     Check (@($s.wakes).Count -eq 1 -and $s.wakes[0].dueAt.state -eq "known" -and $s.wakes[0].dueAt.value -eq (& $utc "2026-10-04T10:10:00Z")) "a wake-up is due at its request time plus its delay"
     $s = State (Write-Lines "wakenodelay" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K2" "ScheduleWakeup" @{ prompt = "x" }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K2" "ok")))
     Check (@($s.wakes).Count -eq 1 -and $s.wakes[0].dueAt.state -eq "unknown") "a wake-up whose delay cannot be read has an unknown due time"
+    $s = State (Write-Lines "wakeold" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K4" "ScheduleWakeup" @{ delaySeconds = 600; prompt = "x"; reason = "x" }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K4" "ok"))) -Since (& $utc "2026-10-04T12:00:00Z")
+    Check (@($s.wakes).Count -eq 0) "a wake-up requested before this process started died with the old process"
     $s = State (Write-Lines "wakestop" @((ToolUse "2026-10-04T10:00:00Z" "toolu_K3" "ScheduleWakeup" @{ stop = $true }), (ToolResult "2026-10-04T10:00:01Z" "toolu_K3" "ok")))
     Check (@($s.wakes).Count -eq 0) "a call that only stops a loop is not a wake-up"
 
