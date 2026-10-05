@@ -28,7 +28,7 @@
       "additionalProperties": false,
       "properties": {
         "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
-        "evidence": { "type": "string", "pattern": "\S", "description": "What was run or read, and when. Never blank." }
+        "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, and when. Never blank." }
       }
     }
   }
