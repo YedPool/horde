@@ -95,6 +95,16 @@ Write-Host "--- deciding whether panes look isolated ---" -ForegroundColor Cyan
 Check ((Test-HordeIsolationPanes -Panes @()) -like "*unknown, not empty*") "zero panes is refused as unknown, never treated as an empty terminal"
 Check ($null -eq (Test-HordeIsolationPanes -Panes @($panes[0], $panes[1]))) "panes in one window look like a fresh instance"
 Check ((Test-HordeIsolationPanes -Panes $panes) -like "*looks like the user's terminal*") "panes across two windows are refused as the user's terminal"
+
+Write-Host ""
+Write-Host "--- a pane's environment is proven from inside the pane (issue #95) ---" -ForegroundColor Cyan
+$want = @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg" }
+Check ($null -eq (Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg"; PATH = "x" } -Expect $want)) "CONTROL: a dump holding every expected variable, exactly, proves the pane's environment"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store" } -Expect $want) -like "*CFG_DIR is not set inside the pane*") "a variable missing inside the pane is refused, naming it - the 2026-10-05 failure"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\Users\real\cfg" } -Expect $want) -like "*CFG_DIR is set inside the pane to another value*") "a variable with another value inside the pane is refused"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "c:\t\cfg" } -Expect $want) -like "*another value*") "values are compared exactly"
+Check ((Test-HordePaneEnvironment -Dump $null -Expect $want) -like "*unknown, not proven*") "no dump at all is unknown, never a pass"
+Check ((Test-HordePaneEnvironment -Dump @{ A = "1" } -Expect @{}) -like "*nothing was proven*") "expecting nothing proves nothing"
 $noWin = @([pscustomobject]@{ pane_id = 1 }, [pscustomobject]@{ pane_id = 2 })
 Check ((Test-HordeIsolationPanes -Panes $noWin) -like "*no window_id*") "a pane with no window_id is refused rather than counted as one window"
 

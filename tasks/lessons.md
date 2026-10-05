@@ -153,3 +153,16 @@ redirection. If it does not, prove isolation with the tool's own report of its c
 -G), with a control that shows the hazard, never by writing into the real profile. And refuse to
 start when a file the isolation depends on is missing, because a native tool's fallback is the
 user's own files.
+
+## An isolated terminal does not isolate the environment of what runs in it
+
+On 2026-10-05 a probe set a harness's config redirect, a fake key and a closed endpoint in the process
+that started an isolated WezTerm, then started the harness in a pane of it. The pane did not inherit
+any of them: WezTerm gives a new pane the user's own environment. So four real sessions ran on the
+user's own login, opened Remote Control sessions on the web, and wrote into the real profile; the
+probe even answered a folder-trust prompt, which was itself the sign it was on the real config.
+
+**Rule:** before any harness starts in a pane, prove from inside a pane that the redirected
+environment is there (Assert-HordePaneEnvironment, issue #95), and give it to the program only
+through a wrapper that sets it inside the pane. A test never answers an interactive prompt it did not
+expect: an unexpected prompt fails the test.

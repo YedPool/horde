@@ -81,5 +81,17 @@
            Replace = 'if ($sockOk) {'
            Expect = "survives"
            Reason = "Proving it needs a gui that outlives a kill, which the fast suite cannot make without a real terminal; the rule is carried by its comment in Stop-HordeIsolatedWezterm." }
+        @{ Name = "pane-env-missing-passes"
+           Find = 'if (-not $Dump.ContainsKey($k)) { [void]$bad.Add($k + " is not set inside the pane") }'
+           Replace = 'if (-not $Dump.ContainsKey($k)) { }' }
+        @{ Name = "pane-env-value-ignored"
+           Find = 'elseif ("" + $Dump[$k] -cne "" + $Expect[$k]) {'
+           Replace = 'elseif ("" + $Dump[$k] -ne "" + $Expect[$k]) {' }
+        @{ Name = "pane-env-no-dump-passes"
+           Find = 'if ($null -eq $Dump) { return "no environment was read from inside the pane - unknown, not proven" }'
+           Replace = 'if ($null -eq $Dump) { return $null }' }
+        @{ Name = "pane-env-nothing-expected-passes"
+           Find = 'if ($Expect.Count -eq 0) { return "nothing was expected, so nothing was proven" }'
+           Replace = 'if ($false) { }' }
     )
 }
