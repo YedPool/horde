@@ -4,14 +4,18 @@
 # The native half (the pipe flags, integrity read) is transport-local-native.psd1; the
 # transport-neutral behaviour of this file (framing, keepalive) is transport-conformance-local.psd1.
 #
-# No mutant here is declared to survive. owner-not-checked-on-open (round 1) is gone: the
-# review of PR #42 showed the owner check does not stop a low-integrity squatter of the same user, and
-# the integrity check that does is server-integrity-not-checked-on-open, which is caught.
+# No mutant here is declared to survive. owner-not-checked-on-open is in its own spec,
+# transport-local-owner.psd1 (issue #89): the review of PR #42 showed the owner check does not stop a
+# low-integrity squatter of the same user - the integrity check that does is
+# server-integrity-not-checked-on-open, caught here - and the case that shows the owner refusal end to
+# end runs only from a token that may make Administrators an owner.
+# PassCodes 3: test-local exits 3 when that case is skipped (review of PR #91, G1).
 # image-not-checked-on-open (round 1 survivor) is caught since round 2, by a compiled probe that
 # serves the pipe at this process's own level (transports/local/test/SquatProbe.cs).
 @{
     Target = "transports\local\Transport.ps1"
     Suite  = "transports\local\test\test-local.ps1"
+    PassCodes = @(3)
     Mutations = @(
         @{ Name = "acl-not-protected"
            Find = 'D:P(D;;0x1f019f;;;NU)'
