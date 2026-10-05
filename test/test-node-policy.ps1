@@ -85,7 +85,7 @@ foreach ($n in @("..", "a\b", "a/b", "x..y", "trailing.", "")) {
 }
 $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example/other"
 Check ($wd.state -eq "unknown" -and $wd.reason -like "*not registered*") "a repository the node has not registered is refused"
-Check ((Test-HordePathInside -Path "C:\a\bc" -Root "C:\a\b") -eq $false -and (Test-HordePathInside -Path "C:\A\B\c" -Root "c:\a\b") -eq $true) "inside means whole segments, compared without case"
+Check ((Test-HordeNodePathInside -Path "C:\a\bc" -Root "C:\a\b") -eq $false -and (Test-HordeNodePathInside -Path "C:\A\B\c" -Root "c:\a\b") -eq $true) "inside means whole segments, compared without case"
 
 Write-Host ""
 Write-Host "--- the request ---" -ForegroundColor Cyan

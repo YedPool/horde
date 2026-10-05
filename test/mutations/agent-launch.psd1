@@ -8,9 +8,13 @@
         @{ Name = "preconditions-claimed-not-verified"
            Find = '$verified = @(& $a.preconditions $need | ForEach-Object { "" + $_ } | Where-Object { $need -ccontains $_ })'
            Replace = '$verified = $need' }
+        # Survives by design: Get-HordePermissionArgs compares each name exactly as well, so this filter
+        # is the second of two lines; the test that Folder-OK is not folder-ok holds through the first.
         @{ Name = "precondition-matched-without-case"
            Find = 'Where-Object { $need -ccontains $_ })'
-           Replace = 'Where-Object { $need -contains $_ })' }
+           Replace = 'Where-Object { $need -contains $_ })'
+           Expect = "survives"
+           Reason = "Get-HordePermissionArgs compares each precondition name exactly, so this filter is the second of two lines; the test that Folder-OK is not folder-ok holds through the first." }
         @{ Name = "name-without-capability"
            Find = 'elseif (-not (Test-HordeAgentCapability -Descriptor $d -Name "session.remoteName")) {'
            Replace = 'elseif ($false) {' }

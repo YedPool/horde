@@ -30,7 +30,7 @@
            Find = 'return $p.StartsWith($r + ''\'', [System.StringComparison]::OrdinalIgnoreCase)'
            Replace = 'return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)' }
         @{ Name = "root-inside-clone-allowed"
-           Find = 'elseif (Test-HordePathInside -Path $root -Root ("" + $r.path)) {'
+           Find = 'elseif (Test-HordeNodePathInside -Path $root -Root ("" + $r.path)) {'
            Replace = 'elseif ($false) {' }
         @{ Name = "dotdot-path-allowed"
            Find = 'if ($seg -ceq "." -or $seg -ceq "..") { return $false }'

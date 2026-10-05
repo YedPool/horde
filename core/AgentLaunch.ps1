@@ -33,7 +33,7 @@
 
 $script:HordeLaunchAdapters = New-Object System.Collections.ArrayList
 # The longest session name. The web list shows about 60 characters before it cuts a title, measured on
-# claude.ai/code on 2026-10-01 with the fleet's own titles; a name past that loses its end anyway.
+# the web session list on 2026-10-01 with the fleet's own titles; a name past that loses its end anyway.
 $script:HordeSessionNameMax = 60
 $script:HordeLabelPattern = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'
 

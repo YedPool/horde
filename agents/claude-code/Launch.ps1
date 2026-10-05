@@ -17,7 +17,7 @@
 #                              flag, so it is refused rather than guessed about.
 #
 # THE READBACK (issue #67, item 2; decision 6 of 2026-10-05, fail closed). MEASURED 2026-10-05 on
-# 2.1.289, interactive sessions in an isolated WezTerm, one per level: the transcript's first lines
+# 2.1.289, interactive sessions in an isolated terminal, one per level: the transcript's first lines
 # include {"type":"permission-mode","permissionMode":<mode>,"sessionId":<id>}, written at start
 # before the first turn and again on each turn, and the four levels read back as plan, default,
 # acceptEdits and bypassPermissions. The same transcript carries {"type":"bridge-session",

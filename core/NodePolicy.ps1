@@ -48,7 +48,7 @@ function Test-HordeNodePolicyPath {
     return $true
 }
 
-function Test-HordePathInside {
+function Test-HordeNodePathInside {
     # Is -Path the folder -Root or somewhere below it? Compared without case, as Windows compares paths,
     # on whole segments: C:\a\bc is not inside C:\a\b.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Root)
@@ -85,7 +85,7 @@ function Read-HordeNodePolicyText {
         $root = Get-HordeNodeWorktreeRoot -Repo $r
         if (-not (Test-HordeNodePolicyPath -Path $root)) { [void]$problems.Add("the worktree root of " + $r.repoId + " has a '.' or '..' segment") }
         # A ROOT INSIDE THE CLONE is refused: a worktree there is a folder git sees as part of the clone.
-        elseif (Test-HordePathInside -Path $root -Root ("" + $r.path)) { [void]$problems.Add("the worktree root of " + $r.repoId + " is inside its clone") }
+        elseif (Test-HordeNodePathInside -Path $root -Root ("" + $r.path)) { [void]$problems.Add("the worktree root of " + $r.repoId + " is inside its clone") }
     }
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($p in @($doc.profiles)) { if ($null -ne $p -and -not $names.Add("" + $p)) { [void]$problems.Add("the profile " + $p + " is offered twice") } }
@@ -118,7 +118,7 @@ function Resolve-HordeNodeWorkdir {
     if ($name -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z' -or $name.Contains("..") -or $name.EndsWith(".")) { return (New-HordeUnknown -Reason ("'" + $name + "' is not a worktree name")) }
     $root = Get-HordeNodeWorktreeRoot -Repo $repo[0]
     $path = $root + "\" + $name
-    if (-not (Test-HordePathInside -Path $path -Root $root)) { return (New-HordeUnknown -Reason ("the worktree " + $name + " would not sit inside " + $root)) }
+    if (-not (Test-HordeNodePathInside -Path $path -Root $root)) { return (New-HordeUnknown -Reason ("the worktree " + $name + " would not sit inside " + $root)) }
     return (New-HordeKnown -Value $path)
 }
 
