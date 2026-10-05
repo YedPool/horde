@@ -10,9 +10,13 @@
 # LOCAL ONLY. The local transport admits only this user at this integrity level, from an interactive
 # logon; the always-on box's gate runs suites detached, so this suite runs here (as test-local does).
 # Every process it starts it stops by its own handle, and every folder it makes it removes.
+#
+# WHY IT LIVES HERE, beside test-local.ps1: it dials the local transport's own pipe and needs that
+# transport's interactive logon, so it names the transport (its pipe prefix), and a file outside
+# transports/local/ may not (tools/HostNames.ps1, CONTRIBUTING rule 14).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$root = Split-Path -Parent $here
+$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 foreach ($f in @("Tristate", "Platform", "Namespace")) { . (Join-Path $root ("core\" + $f + ".ps1")) }

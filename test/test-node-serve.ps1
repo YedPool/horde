@@ -13,7 +13,7 @@
 #   - the loop itself, cli/NodeServe.ps1, over the in-process memory transport with a fake session
 #     view: a hub client on this thread, the node in a second runspace.
 # The same loop over the real local pipe, started through the real horde CLI, is
-# test/test-node-serve-local.ps1, which needs this machine's interactive logon.
+# transports/local/test/test-node-serve-local.ps1, which needs this machine's interactive logon.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -232,7 +232,7 @@ Write-Host "--- request.status ---" -ForegroundColor Cyan
 $rid = New-HordeLinkFrameId
 $r = Ask "request.status" ([pscustomobject]@{ requestId = $rid })
 Check ("$($r.reply.result.state)" -ceq "unknown" -and "$($r.reply.result.reason)" -clike "*no request journal*" -and (Sendable $r.reply)) "a node with no journal answers unknown, never absent"
-$jr = Join-Path $env:TEMP ("horde-node-serve-" + [guid]::NewGuid().ToString("N"))
+$jr = Join-Path $env:TEMP ("horde-serve-journal-" + [guid]::NewGuid().ToString("N"))
 try {
     Initialize-HordeJournal -Root $jr -Kind "request" | Out-Null
     $issued = [datetime]::UtcNow
@@ -243,7 +243,7 @@ try {
     $r = Ask "request.status" ([pscustomobject]@{ requestId = (New-HordeLinkFrameId) }) -Journal $jr
     Check ("$($r.reply.result.state)" -ceq "absent" -and (Sendable $r.reply)) "a request the journal never saw is absent"
 } finally {
-    if ((Split-Path -Leaf $jr) -match '^horde-node-serve-[0-9a-f]{32}$') { Remove-Item -LiteralPath $jr -Recurse -Force -ErrorAction SilentlyContinue }
+    if ((Split-Path -Leaf $jr) -match '^horde-serve-journal-[0-9a-f]{32}$') { Remove-Item -LiteralPath $jr -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ""
