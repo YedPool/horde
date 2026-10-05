@@ -16,14 +16,16 @@
 # once kept this logic inside a test file; a second copy is how a safety property rots, and this is
 # the property that had already been broken twice.
 #
-# WHAT IS NOT ISOLATED, said plainly. The terminal is, and Horde's own store is FOR THE TEST PROCESS
-# ONLY. NOTHING RUN INSIDE A PANE INHERITS THIS PROCESS'S ENVIRONMENT: measured 2026-10-05 (issue #95),
-# a variable set here before the terminal started, or before `cli spawn`, was absent in the new pane,
-# which got the user's own environment - so HORDE_ROOT below does not reach a pane, and neither does a
-# harness's config redirect. That is how a probe started four real agent sessions on the user's own
-# login in an isolated terminal. A program in a pane gets a redirected environment only through a
-# wrapper that sets it INSIDE the pane (test/lib/PaneTool.ps1, wrap), and only after
-# Assert-HordePaneEnvironment has proved, from inside a pane, that the wrapper delivers it.
+# WHAT IS NOT ISOLATED, said plainly. The terminal and Horde's own store are. A PANE GETS THE
+# ENVIRONMENT OF THE PROCESS THAT RUNS `cli spawn`, not of the terminal - measured 2026-10-05 (issue
+# #95): a variable removed from the spawning process before the spawn was absent in the pane even
+# though the terminal had started with it, and one set only in the spawning process was present. So
+# HORDE_ROOT below reaches a pane because this process keeps it set while it spawns, and any redirect
+# a test drops before it spawns is gone from the pane. That is how a probe started four real agent
+# sessions on the user's own login in an isolated terminal: it restored its config redirect right
+# after the terminal started and before it spawned. Assert-HordePaneEnvironment proves, from inside a
+# pane spawned exactly as the scenario will spawn, that the redirect arrives; every scenario that
+# starts a harness passes it first.
 # An AGENT started inside the isolated terminal also runs the user's own hooks and writes the agent's
 # own real state unless its environment says otherwise - on the old system, a real session started in
 # an isolated instance wrote a pane-sessions file and a registry record into the user's real home
@@ -375,8 +377,8 @@ function Start-HordeIsolatedWezterm {
                 if ($LASTEXITCODE -eq 0 -and $probe) {
                     # A SEPARATE MUX DOES NOT SEPARATE THE STORES. On the old system a real session
                     # started in an isolated instance still wrote into the user's real pane-sessions and
-                    # registry. Horde's own state, at least, goes somewhere throwaway for the instance's life -
-                    # in THIS process and its own children; a pane does not inherit it (issue #95).
+                    # registry. Horde's own state, at least, goes somewhere throwaway for the instance's life,
+                    # and reaches every pane this process spawns while it is set (issue #95).
                     #
                     # NAMED BY A FRESH GUID AND CREATED ONLY IF NEW. The first version named it by pid and
                     # created it with -Force, so a stale folder from an earlier run - or another run's live
@@ -437,18 +439,19 @@ function Test-HordePaneEnvironment {
 
 function Assert-HordePaneEnvironment {
     # THE CONTROL BEFORE ANY HARNESS STARTS IN A PANE (coordinator's rule of 2026-10-05). Spawns the
-    # pane tool's wrap, which sets -Variables inside the pane and runs the tool's env-dump as its child,
-    # exactly as a harness would be run; then compares the dump. Throws on any doubt; returns $true.
-    # -Tool is test/lib/PaneTool.ps1's Get-HordePaneTool.
-    param($Instance, [Parameter(Mandatory = $true)][hashtable]$Variables, [Parameter(Mandatory = $true)][string]$Tool, [int]$TimeoutSeconds = 20)
+    # pane tool's env-dump EXACTLY AS THE SCENARIO WILL SPAWN ITS PROGRAM - through -Spawn, which takes
+    # (program, argv, cwd) and returns the pane's handle text - and compares what the pane saw with
+    # -Variables. Without -Spawn it spawns as this process's cli calls do, with this process's
+    # environment. Throws on any doubt; returns $true. -Tool is test/lib/PaneTool.ps1's Get-HordePaneTool.
+    param($Instance, [Parameter(Mandatory = $true)][hashtable]$Variables, [Parameter(Mandatory = $true)][string]$Tool, [scriptblock]$Spawn = $null, [int]$TimeoutSeconds = 20)
     [void](Assert-HordeIsolated -Instance $Instance)
     $dir = Join-Path $env:TEMP ("horde-paneenv-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $dir | Out-Null
     try {
-        $envFile = Join-Path $dir "env.txt"
         $dumpFile = Join-Path $dir "dump.txt"
-        Write-HordePaneToolEnvFile -Path $envFile -Variables $Variables
-        $out = Invoke-HordeWeztermCli -Rest @("spawn", "--cwd", $dir, "--", $Tool, "wrap", $envFile, $Tool, "env-dump", $dumpFile)
+        $out = $null
+        if ($null -ne $Spawn) { $out = & $Spawn $Tool @("env-dump", $dumpFile) $dir }
+        else { $out = Invoke-HordeWeztermCli -Rest @("spawn", "--cwd", $dir, "--", $Tool, "env-dump", $dumpFile) }
         if ("$(@($out) -join '')".Trim() -notmatch '^\d+$') { throw "pane environment not proven: the terminal did not spawn the check" }
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         while (-not (Test-Path -LiteralPath $dumpFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }

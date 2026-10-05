@@ -38,7 +38,14 @@ if ($iso) {
         Check ($count -eq 1) "it is isolated, measured: exactly one pane, in its own window"
         Check ("$env:HORDE_ROOT" -eq "$($iso.store)" -and (Test-Path -LiteralPath $iso.store)) "Horde's own state points at a throwaway store while it runs"
 
+        # EVERY PANE PASSES THE IN-PANE ENVIRONMENT CHECK FIRST (coordinator's rule of 2026-10-05; issue
+        # #95): the throwaway store must reach a pane spawned the way this scenario spawns.
+        $envOk = $false
         if ($count -eq 1) {
+            try { $envOk = Assert-HordePaneEnvironment -Instance $iso -Variables @{ HORDE_ROOT = "$($iso.store)" } -Tool (Get-HordePaneTool) } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
+        }
+        Check ($envOk -eq $true) "a pane spawned as this scenario spawns sees the throwaway store, proved from inside the pane"
+        if ($count -eq 1 -and $envOk) {
             $spawned = Invoke-HordeWeztermCli -Rest @("spawn", "--", "cmd", "/c", "echo $marker && ping -n 120 127.0.0.1 >nul")
             $pane = "$(@($spawned) -join '')".Trim()
             Check ($pane -match '^\d+$') "a pane was spawned in the isolated instance"

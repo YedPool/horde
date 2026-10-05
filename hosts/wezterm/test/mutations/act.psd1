@@ -46,5 +46,14 @@
         @{ Name = "kill-any-handle"
            Find = '$rest = @("kill-pane", "--pane-id", $Handle)'
            Replace = '$rest = @("kill-pane")' }
+        @{ Name = "environment-not-applied"
+           Find = '    Set-HordeWeztermActEnvironment -Psi $psi -Environment $Environment'
+           Replace = '' }
+        @{ Name = "removal-ignored"
+           Find = 'if ($null -eq $Environment[$k]) { if ($Psi.EnvironmentVariables.ContainsKey($k)) { $Psi.EnvironmentVariables.Remove($k) } }'
+           Replace = 'if ($null -eq $Environment[$k]) { }' }
+        @{ Name = "environment-not-passed-to-spawn"
+           Find = 'if ($null -ne $Runner) { $r = & $Runner $rest $Environment } else { $r = Invoke-HordeWeztermAct -Rest $rest -Environment $Environment }'
+           Replace = 'if ($null -ne $Runner) { $r = & $Runner $rest @{} } else { $r = Invoke-HordeWeztermAct -Rest $rest }' }
     )
 }

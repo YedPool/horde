@@ -19,10 +19,13 @@
 # program installed only as a .cmd or .bat shim is refused, because cmd.exe would read & | ^ % in a
 # prompt as its own syntax.
 #
-# WHAT A PANE DOES NOT GET: THE CALLER'S ENVIRONMENT. Measured 2026-10-05 (issue #95): a variable set
-# in the process that started the terminal, or that ran `cli spawn`, is absent inside the new pane,
-# and `cli spawn` (20240203) has no option to pass one. A pane gets the user's own environment. So this
-# file passes none, and says so; an engine's variables wait for engines E10's launch stub.
+# A PANE GETS THE ENVIRONMENT OF THE PROCESS THAT RUNS `cli spawn`. Measured 2026-10-05 (issue #95,
+# three cases in an isolated instance): a variable removed from the spawning process was absent in the
+# pane though the terminal had started with it; one set only in the spawning process, or only in the
+# ProcessStartInfo of the spawn call, was present. So a pane would inherit the NODE's whole
+# environment. Start-HordeWeztermPane therefore takes an explicit -Environment: each name mapped to a
+# value is set for that spawn alone, and each name mapped to $null is removed - the caller lists every
+# variable the node holds that the session must not get (a harness's ownedEnv, engines E2).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
@@ -63,10 +66,22 @@ function Get-HordeWeztermActArgv {
     return @("cli", "--no-auto-start") + @($Rest)
 }
 
+function Set-HordeWeztermActEnvironment {
+    # Apply -Environment to one ProcessStartInfo: a name with a value is set, a name with $null removed.
+    # Names are environment variable names; anything else is refused before the call is made.
+    param([Parameter(Mandatory = $true)][System.Diagnostics.ProcessStartInfo]$Psi, [hashtable]$Environment = @{})
+    foreach ($k in @($Environment.Keys)) {
+        if ("" + $k -cnotmatch '\A[A-Za-z_][A-Za-z0-9_]{0,127}\z') { throw ("'" + $k + "' is not an environment variable name") }
+        if ($null -eq $Environment[$k]) { if ($Psi.EnvironmentVariables.ContainsKey($k)) { $Psi.EnvironmentVariables.Remove($k) } }
+        else { $Psi.EnvironmentVariables[$k] = "" + $Environment[$k] }
+    }
+}
+
 function Invoke-HordeWeztermAct {
     # Run one cli call. Returns { code; out; err; timedOut }. Streams are read through the process API
     # (no 2>&1, CONTRIBUTING 12); a call past the timeout is killed by the handle this function holds.
-    param([Parameter(Mandatory = $true)][string[]]$Rest, [int]$TimeoutMs = $script:HordeWeztermActTimeoutMs)
+    # -Environment changes the call's environment only (see the header); a spawned pane inherits it.
+    param([Parameter(Mandatory = $true)][string[]]$Rest, [int]$TimeoutMs = $script:HordeWeztermActTimeoutMs, [hashtable]$Environment = @{})
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $script:HordeWeztermActExe
     $psi.Arguments = ConvertTo-HordeWindowsCommandLine -Argv (Get-HordeWeztermActArgv -Rest $Rest)
@@ -74,6 +89,7 @@ function Invoke-HordeWeztermAct {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    Set-HordeWeztermActEnvironment -Psi $psi -Environment $Environment
     $p = $null
     try { $p = [System.Diagnostics.Process]::Start($psi) } catch { return [pscustomobject]@{ code = -1; out = ""; err = ("the terminal's command could not be started: " + $_.Exception.Message); timedOut = $false } }
     try {
@@ -115,16 +131,17 @@ function Get-HordeWeztermSpawnArgv {
 
 function Start-HordeWeztermPane {
     # Start -Program (a full path to an .exe, from Resolve-HordeWeztermProgram) with -Argv in a new pane
-    # whose working folder is -Cwd. Returns an answer: known { handle; program; cwd }, the handle the
-    # pane id as text; unknown with the terminal's own reason.
+    # whose working folder is -Cwd, with -Environment applied to the spawn (see the header). Returns an
+    # answer: known { handle; program; cwd }, the handle the pane id as text; unknown with the
+    # terminal's own reason.
     param([Parameter(Mandatory = $true)][string]$Program, [string[]]$Argv = @(), [Parameter(Mandatory = $true)][string]$Cwd,
-        [string]$WindowId = "", [scriptblock]$Runner = $null)
+        [string]$WindowId = "", [hashtable]$Environment = @{}, [scriptblock]$Runner = $null)
     if (-not [System.IO.Path]::IsPathRooted($Program) -or [System.IO.Path]::GetExtension($Program) -ine ".exe") { return (New-HordeUnknown -Reason ("the program must be a full path to an .exe, not '" + $Program + "'")) }
     if (-not [System.IO.Path]::IsPathRooted($Cwd)) { return (New-HordeUnknown -Reason ("the working folder must be absolute, not '" + $Cwd + "'")) }
     if ($WindowId -ne "" -and $WindowId -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason ("'" + $WindowId + "' is not a window id")) }
     $rest = Get-HordeWeztermSpawnArgv -Program $Program -Argv $Argv -Cwd $Cwd -WindowId $WindowId
     $r = $null
-    if ($null -ne $Runner) { $r = & $Runner $rest } else { $r = Invoke-HordeWeztermAct -Rest $rest }
+    if ($null -ne $Runner) { $r = & $Runner $rest $Environment } else { $r = Invoke-HordeWeztermAct -Rest $rest -Environment $Environment }
     if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not start the pane (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
     $id = ("" + $r.out).Trim()
     if ($id -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason ("the terminal answered the spawn with '" + $id + "', not a pane id; whether a pane started is unknown")) }
@@ -191,7 +208,7 @@ function Stop-HordeWeztermPane {
 # hosts/wezterm/ names the terminal (CONTRIBUTING 14).
 Register-HordeHostActor -Name "wezterm" `
     -Resolve { param($n) Resolve-HordeWeztermProgram -Name $n } `
-    -Start { param($prog, $argv, $cwd) Start-HordeWeztermPane -Program $prog -Argv $argv -Cwd $cwd } `
+    -Start { param($prog, $argv, $cwd, $envMap) if ($null -eq $envMap) { $envMap = @{} }; Start-HordeWeztermPane -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap } `
     -Send { param($h, $t) Send-HordeWeztermText -Handle $h -Text $t } `
     -Live { param($h) Test-HordeWeztermPaneLive -Handle $h } `
     -Stop { param($h) Stop-HordeWeztermPane -Handle $h }

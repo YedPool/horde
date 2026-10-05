@@ -15,7 +15,8 @@ trap { Register-HordeSuiteError $_; continue }
 
 $script:calls = New-Object System.Collections.ArrayList
 $script:reply = [pscustomobject]@{ code = 0; out = "17`n"; err = ""; timedOut = $false }
-$rec = { param($rest) [void]$script:calls.Add(@($rest)); $script:reply }
+$script:envSeen = $null
+$rec = { param($rest, $envMap) [void]$script:calls.Add(@($rest)); $script:envSeen = $envMap; $script:reply }
 $prog = "C:\Program Files\Harness\harness.exe"
 
 Write-Host ""
@@ -70,6 +71,41 @@ Check ($r.state -eq "unknown" -and $r.reason -like "*exit 1*no mux*") "a refused
 $script:reply = [pscustomobject]@{ code = 0; out = "Error: something"; err = ""; timedOut = $false }
 $r = Start-HordeWeztermPane -Program $prog -Cwd "C:\w" -Runner $rec
 Check ($r.state -eq "unknown" -and $r.reason -like "*not a pane id*") "an answer that is not a pane id leaves whether a pane started unknown"
+
+Write-Host ""
+Write-Host "--- the spawn's environment: set what is mapped, remove what is mapped to nothing (issue #95) ---" -ForegroundColor Cyan
+$script:reply = [pscustomobject]@{ code = 0; out = "17"; err = ""; timedOut = $false }
+$null = Start-HordeWeztermPane -Program $prog -Cwd "C:\w" -Environment @{ HORDE_MAPPED = "m"; HORDE_NODE_ONLY = $null } -Runner $rec
+Check ($null -ne $script:envSeen -and $script:envSeen["HORDE_MAPPED"] -ceq "m" -and $script:envSeen.ContainsKey("HORDE_NODE_ONLY")) "the spawn is handed the environment map, removals included"
+[Environment]::SetEnvironmentVariable("HORDE_NODE_ONLY", "node-secret", "Process")
+try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    Check ($psi.EnvironmentVariables["HORDE_NODE_ONLY"] -ceq "node-secret") "CONTROL: a call's environment starts as the node's own, so a node-only variable would reach the pane"
+    Set-HordeWeztermActEnvironment -Psi $psi -Environment @{ HORDE_MAPPED = "m"; HORDE_NODE_ONLY = $null }
+    Check (-not $psi.EnvironmentVariables.ContainsKey("HORDE_NODE_ONLY") -and $psi.EnvironmentVariables["HORDE_MAPPED"] -ceq "m") "a variable mapped to nothing is removed from the call, and a mapped one is set"
+} finally { [Environment]::SetEnvironmentVariable("HORDE_NODE_ONLY", $null, "Process") }
+Check (Throws { Set-HordeWeztermActEnvironment -Psi (New-Object System.Diagnostics.ProcessStartInfo) -Environment @{ "A=B" = "x" } } "not an environment variable name") "a name that is not a variable name is refused"
+# Through a real process: the pane tool stands in for the terminal's command, so what a cli call's
+# process received is read back - the environment a spawned pane would inherit.
+$saveExe = $script:HordeWeztermActExe
+$script:HordeWeztermActExe = $tool
+[Environment]::SetEnvironmentVariable("HORDE_NODE_ONLY", "node-secret", "Process")
+$envWork = Join-Path $env:TEMP ("horde-act-env-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $envWork | Out-Null
+try {
+    $d1 = Join-Path $envWork "mapped.txt"
+    $r = Invoke-HordeWeztermAct -Rest @("env-dump", $d1) -Environment @{ HORDE_MAPPED = "m"; HORDE_NODE_ONLY = $null }
+    $seen = Read-HordePaneToolEnv -Path $d1
+    Check ($r.code -eq 0 -and $null -ne $seen -and $seen["HORDE_MAPPED"] -ceq "m" -and -not $seen.ContainsKey("HORDE_NODE_ONLY")) "a terminal call's process gets the mapped variable and not the node-only one"
+    $d2 = Join-Path $envWork "plain.txt"
+    $null = Invoke-HordeWeztermAct -Rest @("env-dump", $d2)
+    $seen2 = Read-HordePaneToolEnv -Path $d2
+    Check ($null -ne $seen2 -and $seen2["HORDE_NODE_ONLY"] -ceq "node-secret") "CONTROL: without the map, the node's own variable would reach it"
+} finally {
+    $script:HordeWeztermActExe = $saveExe
+    [Environment]::SetEnvironmentVariable("HORDE_NODE_ONLY", $null, "Process")
+    Remove-Item -LiteralPath $envWork -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 Write-Host "--- type, check, end ---" -ForegroundColor Cyan

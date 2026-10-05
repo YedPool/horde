@@ -154,15 +154,18 @@ redirection. If it does not, prove isolation with the tool's own report of its c
 start when a file the isolation depends on is missing, because a native tool's fallback is the
 user's own files.
 
-## An isolated terminal does not isolate the environment of what runs in it
+## A redirect dropped before the spawn is a redirect the pane never had
 
-On 2026-10-05 a probe set a harness's config redirect, a fake key and a closed endpoint in the process
-that started an isolated WezTerm, then started the harness in a pane of it. The pane did not inherit
-any of them: WezTerm gives a new pane the user's own environment. So four real sessions ran on the
-user's own login, opened Remote Control sessions on the web, and wrote into the real profile; the
-probe even answered a folder-trust prompt, which was itself the sign it was on the real config.
+On 2026-10-05 a probe set a harness's config redirect, a fake key and a closed endpoint, started an
+isolated terminal, then restored its own environment and only after that spawned the harness in panes.
+A pane gets the environment of the process that runs `cli spawn` (measured the same day, issue #95),
+so the panes ran on the user's own login: four real sessions opened Remote Control on the web and
+wrote into the real profile, and the probe even answered a folder-trust prompt - itself the sign it
+was on the real config. The first diagnosis blamed the terminal; a three-case measurement showed the
+probe had dropped its own redirect.
 
-**Rule:** before any harness starts in a pane, prove from inside a pane that the redirected
-environment is there (Assert-HordePaneEnvironment, issue #95), and give it to the program only
-through a wrapper that sets it inside the pane. A test never answers an interactive prompt it did not
-expect: an unexpected prompt fails the test.
+**Rule:** keep every redirect set until the last pane is spawned, and before any harness starts in a
+pane, prove from inside a pane spawned the same way that the redirect is there
+(Assert-HordePaneEnvironment). A test never answers an interactive prompt it did not expect: an
+unexpected prompt fails the test. And a diagnosis of a dangerous failure is a claim to measure with a
+control, not the first explanation that fits.

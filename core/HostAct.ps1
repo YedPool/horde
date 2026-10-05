@@ -7,7 +7,9 @@
 # adapters do (core/Transcript.ps1, core/AgentLaunch.ps1), and is found by folder, never by name
 # (CONTRIBUTING 14). An actor gives five blocks, each answering in core/tristate form:
 #   Resolve ($name)               the full path of a program from its command name
-#   Start   ($program, $argv, $cwd)  a new pane running it: known { handle; program; cwd }
+#   Start   ($program, $argv, $cwd, $environment)  a new pane running it: known { handle; program;
+#                                 cwd }. $environment maps a name to the value the session gets, or
+#                                 to $null for a variable of the node the session must not inherit.
 #   Send    ($handle, $text)      typed into that pane: known $true
 #   Live    ($handle)             whether the pane is still there: known bool, unknown if unlisted
 #   Stop    ($handle)             the pane ended by the terminal: known $true

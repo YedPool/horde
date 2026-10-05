@@ -12,12 +12,11 @@
 #                                         the terminal; with exit, the line /exit ends it with code 0;
 #                                         with never, nothing does (a session that ignores a close).
 #   env-dump <out>                        write every environment variable, NAME=base64(value).
-#   wrap <envfile> <program> <args...>    set each NAME=base64(value) of <envfile> in its OWN
-#                                         environment, then run <program> with <args> as its child,
-#                                         which inherits it, and exit with the child's code. This is
-#                                         how a test gives a program in a pane an environment: a pane
-#                                         does not inherit the environment of whoever started the
-#                                         terminal or the spawn (measured 2026-10-05, issue #95).
+#   cli --no-auto-start <mode> ...        run <mode>: the tool standing in for the terminal's command,
+#                                         so a test sees what a terminal call's process received.
+#
+# A pane gets the environment of the process that runs `cli spawn` (measured 2026-10-05, issue #95),
+# so env-dump in a pane shows exactly what a program spawned the same way would see.
 #
 # Test-only. Nothing that ships uses it.
 
@@ -31,22 +30,15 @@ using System.Text;
 public static class HordePaneTool {
     static string B64(string s) { return Convert.ToBase64String(Encoding.UTF8.GetBytes(s)); }
     static string Un64(string s) { return Encoding.UTF8.GetString(Convert.FromBase64String(s)); }
-    static string Quote(string a) {
-        if (a.Length > 0 && a.IndexOfAny(new char[] { ' ', '\t', '\n', '\r', '\v', '"' }) < 0) return a;
-        var sb = new StringBuilder("\"");
-        int slashes = 0;
-        foreach (char c in a) {
-            if (c == '\\') { slashes++; continue; }
-            if (c == '"') { sb.Append('\\', slashes * 2 + 1); sb.Append('"'); slashes = 0; continue; }
-            if (slashes > 0) { sb.Append('\\', slashes); slashes = 0; }
-            sb.Append(c);
-        }
-        if (slashes > 0) sb.Append('\\', slashes * 2);
-        sb.Append('"');
-        return sb.ToString();
-    }
     public static int Main(string[] args) {
         if (args.Length < 1) return 64;
+        // Standing in for the terminal's command in a test: "cli --no-auto-start <mode> ..." runs <mode>,
+        // so a test can see what a terminal call's process received, environment included.
+        if (args.Length >= 3 && args[0] == "cli" && args[1] == "--no-auto-start") {
+            var rest = new string[args.Length - 2];
+            Array.Copy(args, 2, rest, 0, rest.Length);
+            return Main(rest);
+        }
         if (args[0] == "standin" && args.Length >= 3) {
             var lines = new List<string>();
             lines.Add("pid=" + Process.GetCurrentProcess().Id);
@@ -65,20 +57,6 @@ public static class HordePaneTool {
             foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables()) lines.Add(e.Key + "=" + B64("" + e.Value));
             File.WriteAllLines(args[1], lines.ToArray(), Encoding.ASCII);
             return 0;
-        }
-        if (args[0] == "wrap" && args.Length >= 3) {
-            foreach (string l in File.ReadAllLines(args[1])) {
-                int i = l.IndexOf('=');
-                if (i <= 0) continue;
-                Environment.SetEnvironmentVariable(l.Substring(0, i), Un64(l.Substring(i + 1)));
-            }
-            var rest = new List<string>();
-            for (int i = 3; i < args.Length; i++) rest.Add(Quote(args[i]));
-            var psi = new ProcessStartInfo(args[2], string.Join(" ", rest.ToArray()));
-            psi.UseShellExecute = false;
-            var p = Process.Start(psi);
-            p.WaitForExit();
-            return p.ExitCode;
         }
         return 64;
     }
@@ -129,11 +107,4 @@ function Read-HordePaneToolEnv {
         $h[$l.Substring(0, $i)] = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($l.Substring($i + 1)))
     }
     return $h
-}
-
-function Write-HordePaneToolEnvFile {
-    # Write the variables a wrap must set, NAME=base64(value), to -Path.
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][hashtable]$Variables)
-    $lines = @($Variables.Keys | Sort-Object | ForEach-Object { $_ + "=" + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("" + $Variables[$_])) })
-    [System.IO.File]::WriteAllLines($Path, [string[]]$lines, [System.Text.Encoding]::ASCII)
 }

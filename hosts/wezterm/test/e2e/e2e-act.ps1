@@ -2,15 +2,15 @@
 #
 # The act path's A2. Runs only inside an instance of its own (Isolation.ps1: socket pin, --skip-config,
 # --no-auto-start), and starts NO harness: the program in every pane is test/lib/PaneTool.ps1's
-# standin, which records what it received and ends on /exit, or never. Nothing here reaches the
-# user's terminal, the user's agents or their files.
+# compiled tool, an absolute path under TEMP, and every pane's process is checked to be that file and
+# nothing named after a harness. Nothing here reaches the user's terminal, agents or files.
 #
-# WHAT IT PROVES:
-#   1. A pane does not inherit this process's environment (issue #95), measured again here as the
-#      control, and the pane tool's wrap does give it one - Assert-HordePaneEnvironment, which every
-#      scenario that starts a harness must pass first.
-#   2. Start-HordeWeztermPane starts the program with exactly its argv, quotes, line breaks and
-#      & | ^ % included, in the folder asked for.
+# WHAT IT PROVES, in this order - nothing is spawned before step 1 has passed:
+#   1. The in-pane environment check (Assert-HordePaneEnvironment, issue #95), through the production
+#      spawn: a mapped variable reaches the pane; a variable of this process mapped to nothing does NOT
+#      (the node's own variables never reach a session), with the control that, unmapped, it would.
+#   2. Start-HordeWeztermPane starts the program with exactly its argv - quotes, line breaks and
+#      & | ^ % included - in the folder asked for.
 #   3. A graceful close - the text a harness ends on, typed into the pane - ends the program; the
 #      process is gone by pid and start time, and the pane is gone.
 #   4. A program that ignores it is still running after the bound (the control), and Stop ends it.
@@ -31,13 +31,23 @@ function Check { param($Cond, [string]$What)
 function Get-StartTicks { param([int]$Id) $p = Get-Process -Id $Id -ErrorAction SilentlyContinue; if ($p) { return $p.StartTime.ToUniversalTime().Ticks }; return $null }
 function Test-Gone { param([int]$Id, $Ticks) $t = Get-StartTicks -Id $Id; return [bool]($null -eq $t -or $t -ne $Ticks) }
 function Wait-Until { param([scriptblock]$Cond, [int]$Seconds) $d = (Get-Date).AddSeconds($Seconds); while ((Get-Date) -lt $d) { if (& $Cond) { return $true }; Start-Sleep -Milliseconds 250 }; return [bool](& $Cond) }
+function Test-IsTool {
+    # Is the process -Id running exactly the pane tool, and nothing named after a harness?
+    param([int]$Id)
+    $p = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $Id) -ErrorAction SilentlyContinue
+    if (-not $p) { return $false }
+    return [bool](("" + $p.ExecutablePath) -ieq $tool -and ("" + $p.ExecutablePath) -notlike "*claude*" -and ("" + $p.CommandLine) -notlike "*claude*")
+}
 
 $tool = Get-HordePaneTool
+Check ([System.IO.Path]::IsPathRooted($tool) -and $tool -notlike "*claude*" -and (Split-Path -Leaf $tool) -ceq "horde-panetool.exe") "the only program this scenario starts is the compiled pane tool, by absolute path"
 $work = Join-Path $env:TEMP ("horde-e2e-act-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
-$probeName = "HORDE_PANE_PROBE"
-$probeValue = "probe-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
-[Environment]::SetEnvironmentVariable($probeName, $probeValue, "Process")
+$nodeOnly = "HORDE_NODE_ONLY"
+[Environment]::SetEnvironmentVariable($nodeOnly, "node-" + [guid]::NewGuid().ToString("N").Substring(0, 8), "Process")
+$mappedValue = "mapped-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+$envMap = @{ HORDE_MAPPED = $mappedValue; $nodeOnly = $null }
+$spawn = { param($prog, $argv, $cwd) $r = Start-HordeWeztermPane -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap; if ($r.state -eq "known") { $r.value.handle } else { "" } }
 
 $iso = Start-HordeIsolatedWezterm -TimeoutSeconds 45
 Check ($null -ne $iso) "an isolated instance started and answered"
@@ -47,34 +57,36 @@ if ($iso) {
         $count = $null
         try { $count = Assert-HordeIsolated -Instance $iso } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
         Check ($count -eq 1) "it is isolated, measured: exactly one pane, in its own window"
+        $envOk = $false
         if ($count -eq 1) {
             Write-Host ""
-            Write-Host "=== 1. the pane's environment ===" -ForegroundColor Cyan
-            # CONTROL, issue #95: this process set the probe variable before the terminal started.
-            $dump = Join-Path $work "plain-dump.txt"
-            $null = Invoke-HordeWeztermCli -Rest @("spawn", "--cwd", $work, "--", $tool, "env-dump", $dump)
-            $null = Wait-Until { Test-Path -LiteralPath $dump } 20
-            Start-Sleep -Milliseconds 300
-            $why = Test-HordePaneEnvironment -Dump (Read-HordePaneToolEnv -Path $dump) -Expect @{ $probeName = $probeValue }
-            Check ($null -ne $why -and $why -like "*not set inside the pane*") "CONTROL: a variable this process set before the terminal started is NOT in a pane (issue #95)"
-            $proved = $false
-            try { $proved = Assert-HordePaneEnvironment -Instance $iso -Variables @{ $probeName = $probeValue; HORDE_ROOT = $iso.store } -Tool $tool } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
-            Check ($proved -eq $true) "through the pane tool's wrap, the program in the pane has exactly the variables asked for"
-            $threw = $false
-            try { $null = Assert-HordePaneEnvironment -Instance $iso -Variables @{ HORDE_NEVER_SET_HERE = "x" } -Tool (Join-Path $work "no-such-tool.exe") -TimeoutSeconds 5 } catch { $threw = ($_.Exception.Message -like "*pane environment not proven*") }
-            Check $threw "a check that could not read the pane's environment throws, and nothing would start"
+            Write-Host "=== 1. the pane's environment, before anything else runs ===" -ForegroundColor Cyan
+            try { $envOk = Assert-HordePaneEnvironment -Instance $iso -Variables @{ HORDE_MAPPED = $mappedValue } -Tool $tool -Spawn $spawn } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
+            Check ($envOk -eq $true) "through the production spawn, the pane has exactly the variable mapped to it"
+        }
+        if ($envOk) {
+            $dump = Join-Path $work "strip.txt"
+            $h = & $spawn $tool @("env-dump", $dump) $work
+            $null = Wait-Until { Test-Path -LiteralPath $dump } 20; Start-Sleep -Milliseconds 300
+            $seen = Read-HordePaneToolEnv -Path $dump
+            Check ($null -ne $seen -and -not $seen.ContainsKey($nodeOnly) -and $seen["HORDE_MAPPED"] -ceq $mappedValue) "a variable this process holds and maps to nothing does NOT reach the pane"
+            $dump2 = Join-Path $work "nostrip.txt"
+            $r2 = Start-HordeWeztermPane -Program $tool -Argv @("env-dump", $dump2) -Cwd $work
+            $null = Wait-Until { Test-Path -LiteralPath $dump2 } 20; Start-Sleep -Milliseconds 300
+            $seen2 = Read-HordePaneToolEnv -Path $dump2
+            Check ($null -ne $seen2 -and $seen2.ContainsKey($nodeOnly)) "CONTROL: unmapped, the same variable does reach the pane - the spawner's environment is inherited (issue #95)"
 
             Write-Host ""
             Write-Host "=== 2. the program gets exactly its argv, in its folder ===" -ForegroundColor Cyan
             $prompt = 'first line with "quotes" & pipe | caret ^ pct %PATH%' + "`n" + 'second line, trailing slash\'
             $rec1 = Join-Path $work "standin-1.txt"
-            $s1 = Start-HordeWeztermPane -Program $tool -Argv @("standin", $rec1, "exit", "--name", "E e2e act", $prompt) -Cwd $work
+            $s1 = Start-HordeWeztermPane -Program $tool -Argv @("standin", $rec1, "exit", "--name", "E e2e act", $prompt) -Cwd $work -Environment $envMap
             Check ($s1.state -eq "known") ("the pane started" + $(if ($s1.state -ne "known") { " (" + $s1.reason + ")" } else { "" }))
             $got = $null
             if ($s1.state -eq "known") { $null = Wait-Until { Test-Path -LiteralPath $rec1 } 20; Start-Sleep -Milliseconds 300; $got = Read-HordePaneToolArgs -Path $rec1 }
             Check ($null -ne $got -and @($got.args).Count -eq 3 -and $got.args[0] -ceq "--name" -and $got.args[1] -ceq "E e2e act" -and $got.args[2] -ceq $prompt) "every argument arrived exactly, the multi-line prompt with its quotes and & | ^ % included"
             $ticks1 = $null
-            if ($got) { $ticks1 = Get-StartTicks -Id $got.pid }
+            if ($got) { $ticks1 = Get-StartTicks -Id $got.pid; Check (Test-IsTool -Id $got.pid) "the pane's process is the pane tool itself, by its executable path" }
             Check ($null -ne $ticks1) "the program is running, with a pid and a start time"
             if ($s1.state -eq "known") { Check ((Test-HordeWeztermPaneLive -Handle $s1.value.handle).value -eq $true) "its pane is live" }
 
@@ -91,11 +103,11 @@ if ($iso) {
             Write-Host ""
             Write-Host "=== 4. a program that ignores the close, then Stop ===" -ForegroundColor Cyan
             $rec2 = Join-Path $work "standin-2.txt"
-            $s2 = Start-HordeWeztermPane -Program $tool -Argv @("standin", $rec2, "never") -Cwd $work
+            $s2 = Start-HordeWeztermPane -Program $tool -Argv @("standin", $rec2, "never") -Cwd $work -Environment $envMap
             $got2 = $null
             if ($s2.state -eq "known") { $null = Wait-Until { Test-Path -LiteralPath $rec2 } 20; Start-Sleep -Milliseconds 300; $got2 = Read-HordePaneToolArgs -Path $rec2 }
             $ticks2 = $null
-            if ($got2) { $ticks2 = Get-StartTicks -Id $got2.pid }
+            if ($got2) { $ticks2 = Get-StartTicks -Id $got2.pid; Check (Test-IsTool -Id $got2.pid) "the second pane's process is the pane tool too" }
             Check ($null -ne $ticks2) "a second program started"
             if ($null -ne $ticks2) {
                 $null = Send-HordeWeztermText -Handle $s2.value.handle -Text "/exit"
@@ -114,7 +126,7 @@ if ($iso) {
     finally {
         # Teardown runs whatever happened above. A teardown that only runs on success is the leak.
         $result = Stop-HordeIsolatedWezterm -Instance $iso
-        [Environment]::SetEnvironmentVariable($probeName, $null, "Process")
+        [Environment]::SetEnvironmentVariable($nodeOnly, $null, "Process")
     }
     Check (-not $result.refused) "teardown accepted the instance Start issued"
     Check ($result.stopped -and -not $result.survived -and @($result.orphansSurvived).Count -eq 0) "the terminal and everything that ran in it are gone"
