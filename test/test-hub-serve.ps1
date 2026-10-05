@@ -47,10 +47,10 @@ $fixtureAt = "2026-10-02T12:00:00.000Z"
 
 function Start-Node {
     # cli/NodeServe.ps1's real loop in a second runspace, on the memory transport (test-node-serve's peer).
-    param([int]$MaxLinks = 1, [switch]$ThrowOnView, [string]$View = $viewPath)
+    param([int]$MaxLinks = 1, [switch]$ThrowOnView, [string]$View = $viewPath, [string]$At = $device, [int]$ViewDelayMs = 0)
     $ready = New-Object System.Threading.ManualResetEventSlim($false)
     $ps = [PowerShell]::Create()
-    [void]$ps.AddCommand((Join-Path $fx "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $device).AddParameter("ViewPath", $View).AddParameter("MaxLinks", $MaxLinks).AddParameter("IdleTimeoutMs", 30000).AddParameter("Ready", $ready)
+    [void]$ps.AddCommand((Join-Path $fx "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $At).AddParameter("ViewPath", $View).AddParameter("ViewDelayMs", $ViewDelayMs).AddParameter("MaxLinks", $MaxLinks).AddParameter("IdleTimeoutMs", 30000).AddParameter("Ready", $ready)
     if ($ThrowOnView) { [void]$ps.AddParameter("ThrowOnView", $true) }
     $h = $ps.BeginInvoke()
     $up = $ready.Wait(30000)
@@ -64,8 +64,8 @@ function Stop-Node {
     return (@($out | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["served"] }) | Select-Object -First 1)
 }
 function Entry {
-    param([string]$Expect = $device, $Transport = $mem, [string]$TransportError = "")
-    return [pscustomobject]@{ deviceId = $Expect; deviceName = "fixture-node"; endpoint = $device; transport = $Transport; transportError = $TransportError }
+    param([string]$Expect = $device, $Transport = $mem, [string]$TransportError = "", [string]$At = $device)
+    return [pscustomobject]@{ deviceId = $Expect; deviceName = "fixture-node"; endpoint = $At; transport = $Transport; transportError = $TransportError }
 }
 function Utc { return [datetime]::UtcNow }
 
@@ -273,6 +273,65 @@ try {
     $after4 = Read-HordeHubMirror -Path $corrupt -DeviceId $device -Contract $contract
     Check ("$(@($rounds)[0].outcomes[0])" -clike "*unreachable: the hub failed while pulling*") ("a throw while pulling is the node's outcome (" + "$(@($rounds)[0].outcomes[0])" + ")")
     Check ($after4.state -ceq "known" -and "$((Get-HordeLinkProp $after4.value 'lost').reason)" -clike "*failed while pulling*") "and is recorded in its mirror, so its sessions read unknown"
+
+    Write-Host ""
+    Write-Host "--- a mirror the hub cannot use is kept aside (issue #87, F8) ---" -ForegroundColor Cyan
+    $f8 = Join-Path $work "f8"
+    New-Item -ItemType Directory -Path $f8 | Out-Null
+    $f8Path = Get-HordeHubMirrorPath -Root $f8 -DeviceId $device
+    [System.IO.File]::WriteAllText($f8Path, "garbage that was a mirror")
+    $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+    $aside = @(Get-ChildItem -LiteralPath $f8 -File | Where-Object { $_.Name -cmatch ('\A' + [regex]::Escape($device) + '\.json\.bad-[0-9]{8}T[0-9]{9}Z\z') })
+    Check ($aside.Count -eq 1 -and [System.IO.File]::ReadAllText($aside[0].FullName) -ceq "garbage that was a mirror") ("an unreadable mirror is renamed aside as <id>.json.bad-<stamp>, its bytes kept (" + (@($aside | ForEach-Object { $_.Name }) -join ", ") + ")")
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike ("*kept aside as " + $aside[0].Name + "*") }).Count -eq 1) ("and the round says where (" + ($rounds[0].outcomes -join " | ") + ")")
+    Check ((Read-HordeHubMirror -Path $f8Path -DeviceId $device -Contract $contract).state -ceq "known") "a fresh mirror takes its place"
+    Remove-Item -LiteralPath $f8Path -Force
+    $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*no mirror file was there; started afresh*" }).Count -eq 1) ("a missing mirror is said, not silently started afresh (" + ($rounds[0].outcomes -join " | ") + ")")
+    $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*afresh*" -or $_ -clike "*kept aside*" }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1) "CONTROL: a readable mirror is used as it is: no note, nothing new kept aside"
+
+    Write-Host ""
+    Write-Host "--- one hub at a time (issue #87, F9) ---" -ForegroundColor Cyan
+    $f9 = Join-Path $work "f9"
+    $f9Mirror = Join-Path $f9 "mirror"
+    New-Item -ItemType Directory -Path $f9Mirror | Out-Null
+    $lockPath = Join-Path $f9 "serve.lock"
+    Check ((Get-HordeHubLockPath -Root $f9Mirror) -ceq $lockPath) "the run lock is <hub>\serve.lock, beside the mirror folder"
+    $held = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    $busy = ""
+    try { $null = Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f9Mirror -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 } catch { $busy = $_.Exception.Message } finally { $held.Dispose() }
+    Check ($busy -clike "*another horde hub serve is running*") ("while another hub holds the run lock, hub serve refuses to start (" + $busy + ")")
+    Check (@(Get-ChildItem -LiteralPath $f9Mirror -File).Count -eq 0) "and writes no mirror"
+    $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f9Mirror -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+    Check ($rounds.Count -eq 1 -and @(Get-ChildItem -LiteralPath $f9Mirror -File).Count -eq 1) "CONTROL: with the lock free, the same call runs its round"
+    $again = $null; try { $again = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) } catch { } finally { if ($null -ne $again) { $again.Dispose() } }
+    Check ($null -ne $again) "and it lets the lock go when it returns"
+    $denied = Join-Path $f9 "denied"
+    New-Item -ItemType Directory -Path (Join-Path $denied "serve.lock") -Force | Out-Null
+    $other = ""
+    try { $null = Invoke-HordeHubServe -Nodes @() -Root (Join-Path $denied "mirror") -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 } catch { $other = $_.Exception.Message }
+    Check ($other -clike "*the hub's run lock could not be opened*" -and $other -cnotlike "*another horde hub serve*") ("a lock that cannot be opened for another reason says so, never 'busy' (" + $other + ")")
+
+    Write-Host ""
+    Write-Host "--- one slow node does not hold the round (issue #87, F10) ---" -ForegroundColor Cyan
+    $slowDev = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b"
+    $slowRoot = Join-Path $work "f10"
+    $slow = Start-Node -At $slowDev -ViewDelayMs 8000
+    $fast = Start-Node
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $rounds = @(Invoke-HordeHubServe -Nodes @((Entry -Expect $slowDev -At $slowDev), (Entry)) -Root $slowRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 -NodeBudgetMs 3000)
+    $sw.Stop()
+    $null = Stop-Node $slow
+    $null = Stop-Node $fast
+    $outs = @($rounds[0].outcomes)
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $slowDev + "): unreachable: *past its 3 s bound*") }).Count -eq 1) ("a node slower than its bound is cut off at the bound (" + ($outs -join " | ") + ")")
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $device + "): heard, 2 session(s)*") }).Count -eq 1) "the node after it is still pulled in the same round"
+    Check ($sw.Elapsed.TotalSeconds -lt 7) ("and the round took " + [math]::Round($sw.Elapsed.TotalSeconds, 1) + " s, not the slow node's 8 s plus the rest")
+    $slow = Start-Node -At $slowDev -ViewDelayMs 3000
+    $rounds = @(Invoke-HordeHubServe -Nodes @((Entry -Expect $slowDev -At $slowDev)) -Root $slowRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 -NodeBudgetMs 15000)
+    $null = Stop-Node $slow
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*heard, 2 session(s)*" }).Count -eq 1) ("CONTROL: the same slow node inside a bound it fits is heard (" + ($rounds[0].outcomes -join " | ") + ")")
 
     Write-Host ""
     Write-Host "--- the registry ---" -ForegroundColor Cyan
