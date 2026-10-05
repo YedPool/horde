@@ -106,6 +106,7 @@ $cases = @(
     @{ change = { param($m) $m.messageId = "0E000000-0000-4000-8000-000000000001" }; like = "messageId"; what = "a messageId in upper case" },
     @{ change = { param($m) $m.messageId = "0e0000000000400080000000000000001" }; like = "messageId"; what = "a messageId without its dashes" },
     @{ change = { param($m) $m.PSObject.Properties.Remove("messageId") }; like = "messageId"; what = "no messageId" },
+    @{ change = { param($m) $m.messageId = "0e000000-0000-4000-8000-000000000001`n" }; like = "messageId"; what = "a messageId with a line break after it (a pattern ending in $ matches before a final LF)" },
     @{ change = { param($m) $m.sessionId = "C:\Users\x" }; like = "sessionId"; what = "a sessionId that is a drive path" },
     @{ change = { param($m) $m.sessionId = "a..b" }; like = "sessionId"; what = "a sessionId holding .." },
     @{ change = { param($m) $m.label = "orc-1" }; like = "label"; what = "a label that is not a hub label" },
@@ -151,6 +152,9 @@ $a = Send-HordeMessengerMessage -Messenger $bad -Message (New-Msg)
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("delivered")) "a stage outside accepted, handed-over, seen, expired and held is unknown, naming it"
 $a = Get-HordeMessengerStatus -Messenger $bad -MessageId "0e000000-0000-4000-8000-000000000001"
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("time")) "a stage whose time is not a time is unknown"
+$silent = Reg "fixture-silent" -Post { param($m) New-HordeAbsent -Note "nothing here" -ObservedAt ([datetime]::UtcNow) }
+$a = Send-HordeMessengerMessage -Messenger $silent -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("absent")) "a post answered absent is unknown: it says nothing of the message it was handed"
 $a = Get-HordeMessengerStatus -Messenger $good -MessageId "0e000000-0000-4000-8000-000000000009"
 Check ($a.state -ceq "absent") "CONTROL: an adapter's absent status stays absent"
 $before = $script:asked

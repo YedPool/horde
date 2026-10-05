@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/messenger-capabilities.v1",
+  "title": "messenger-capabilities v1",
+  "description": "What one messenger says it can do, as data: messengers/<name>/capabilities.json (remote plan step R21, slice 3). A messenger hands one message to one session on its own machine and says how far it got; it knows nothing of links, verbs or other machines. Each capability is declared in the one vocabulary the host and transport capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no, and a capability is yes only with evidence that was run. declined means the messenger chooses not to offer it: the in-process test messenger declares receipt.receiver declined so that no production path can pick it. The list is closed: a messenger declares every one, and nothing else.",
+  "type": "object",
+  "required": ["schemaVersion", "messenger", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "messenger": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under messengers/." },
+    "capabilities": {
+      "type": "object",
+      "required": ["body.untyped", "idempotent.post", "receipt.receiver", "wake"],
+      "additionalProperties": false,
+      "properties": {
+        "body.untyped": { "$ref": "#/definitions/capability", "description": "The body never passes through an input box: it is stored and handed to the session by the session's own side, so no paste can sit unsent, no shell can cut it at a newline and nothing can splice into what someone is typing (wezfleet lib/Mail.ps1, its header)." },
+        "idempotent.post": { "$ref": "#/definitions/capability", "description": "A second post of one messageId delivers nothing more and returns the stage recorded for the first, so a resend after a dropped link never delivers twice." },
+        "receipt.receiver": { "$ref": "#/definitions/capability", "description": "Stage seen is the receiving session's own word: its hook found the message's id in its own transcript. Not the sender's inference from a screen." },
+        "wake": { "$ref": "#/definitions/capability", "description": "A target that has ended its turn is woken without its body being typed: at most a one-line notice carrying the id." }
+      }
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+        "evidence": { "type": "string", "pattern": "\S", "description": "What was run or read, and when. Never blank." }
+      }
+    }
+  }
+}

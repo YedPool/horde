@@ -657,7 +657,9 @@ $realAgents = @(Get-ChildItem -LiteralPath (Join-Path $root "agents") -Directory
 Check ($realAgents.Count -ge 1) ("CONTROL: this repository has at least one harness to check (" + $realAgents.Count + ")")
 $realTransports = @(Get-ChildItem -LiteralPath (Join-Path $root "transports") -Directory -ErrorAction SilentlyContinue)
 Check ($realTransports.Count -ge 1) ("CONTROL: this repository has at least one transport to check (" + $realTransports.Count + ")")
-foreach ($h in @($realHosts + $realAgents + $realTransports)) {
+$realMessengers = @(Get-ChildItem -LiteralPath (Join-Path $root "messengers") -Directory -ErrorAction SilentlyContinue)
+Check ($realMessengers.Count -ge 1) ("CONTROL: this repository has at least one messenger to check (" + $realMessengers.Count + ")")
+foreach ($h in @($realHosts + $realAgents + $realTransports + $realMessengers)) {
     $port = Split-Path -Leaf (Split-Path -Parent $h.FullName)
     $np = Join-Path $h.FullName "names.txt"
     # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so

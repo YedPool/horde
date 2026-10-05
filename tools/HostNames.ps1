@@ -150,7 +150,10 @@ $script:HordeHostNamesProseFolder = "planning"
 # transports/<name>/ names a transport program or its options, so the second transport is a new folder
 # and not an engine change. transports/Port.ps1, beside the transport folders, belongs to no transport
 # and is scanned like core.
-$script:HordePortFamilies = @("hosts", "agents", "transports")
+# THE FOURTH FAMILY (remote plan step R21, slice 3): nothing outside messengers/<name>/ names what
+# identifies a messenger, so a second way of handing a message to a session is a new folder too.
+# messengers/Port.ps1 belongs to no messenger, like transports/Port.ps1.
+$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 # The cross-host import (header, THE ONE CROSS-HOST IMPORT): the count cell that marks it, matched
