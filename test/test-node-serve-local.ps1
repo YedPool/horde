@@ -87,6 +87,11 @@ try {
         Start-Sleep -Milliseconds 300
     }
     Check ($null -ne $open -and "$($open.state)" -ceq "known") ("the hub dials the node's pipe (" + "$($open.reason)" + ")")
+    # node is declared sustained (cli/commands/node.ps1), so horde.ps1 opted the node out of power
+    # throttling before it listened; read back from the node process itself by its handle, as
+    # test-platform-throttling reads a child (review of PR #81, F2).
+    $thr = Get-HordeThrottlingState -Process $node
+    Check ("$($thr.state)" -ceq "known" -and $thr.value.controlMask -eq 1 -and $thr.value.stateMask -eq 0 -and $thr.value.optedOut -eq $true) ("the node process reads back opted out of power throttling: ControlMask 1, StateMask 0 (" + $thr.value.controlMask + "/" + $thr.value.stateMask + ")")
     if ("$($open.state)" -ceq "known") {
         $script:link = $open.value
         $t = Get-HordeLinkTime

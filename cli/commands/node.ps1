@@ -1,6 +1,10 @@
 $HordeCommand = @{
     name    = "node"
     group   = "node"
+    # The longest-lived command horde has: each sessions.list builds the projection (11.4 s measured
+    # 2026-10-02) and a busy background process is throttled about 7x after 3 s (core/Platform.ps1),
+    # which could put a node past the hub's wait (review of PR #81, F2).
+    sustained = $true
     usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>]"
     summary = "serve this machine's sessions to the hub over the local link: hello, node.info, sessions.list, session.get and request.status, read-only"
     run     = {
