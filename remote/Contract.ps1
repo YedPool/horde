@@ -63,10 +63,12 @@ $script:HordeLinkResultWords = @("transcript", "transcripts", "tool", "tools", "
 # file that a reviewer reads. The table cannot loosen it: it lives here, not in the table.
 #
 # EACH VERB'S EFFECT CLASS IS PINNED HERE TOO, so a table cannot reclass a verb downwards. The class that
-# matters most is drive: session.deliver types into a running session, and the review of PR #40 found
-# that classing it write let it drive any session on the node, a bypass-permission one included. Its
-# class is drive, gated by the node's permission ceiling exactly like spawn (plan step R9), and it may
-# target only a session this hub spawned on that node - hub-owned in the session record (R19, R21).
+# matters most is drive: session.deliver hands a message to a running session, and the review of PR #40
+# found that classing it write let it drive any session on the node, a bypass-permission one included.
+# Its class is drive, and it may target only a session this hub spawned on that node or one whose label
+# the node's own remote.deliverTo lists (R21, 2026-10-05); R9 adds the permission ceiling on top, as for
+# spawn. mail.next and mail.receipt are the reverse path's pull: a read of the node's outbox and a write
+# to one outbox record, both hub to node, so a node still never asks the hub to drive anything.
 $script:HordeLinkVerbAllow = @{
     "node.info"       = @{ effect = "read";  args = @() }
     "request.status"  = @{ effect = "read";  args = @("requestId") }
@@ -79,13 +81,15 @@ $script:HordeLinkVerbAllow = @{
                           "worktree", "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text",
                           "prompt.handoffRef", "host", "closeOn") }
     "session.resume"  = @{ effect = "spawn"; args = @("sessionId", "reresolve", "model") }
-    "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body",
+    "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label", "from", "from.deviceId", "from.sessionId", "from.label", "body",
                           "ttlSeconds") }
     "session.close"   = @{ effect = "kill";  args = @("sessionId", "expect", "expect.ns", "expect.ns.device", "expect.ns.space", "expect.pid", "expect.procStart", "reason") }
     "worktree.create" = @{ effect = "write"; args = @("repoId", "name", "branch", "base") }
     "worktree.remove" = @{ effect = "kill";  args = @("repoId", "name") }
     "alert.raise"     = @{ effect = "write"; args = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt") }
     "unowned.report"  = @{ effect = "read";  args = @("sessions", "sessions[].sessionId", "sessions[].harness", "sessions[].startedAt", "observedAt") }
+    "mail.next"       = @{ effect = "read";  args = @() }
+    "mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason") }
 }
 
 # The caps a result string may name. textBytes (a prompt, a message body) is for arguments only, so
