@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "fixture-good",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture for test/test-messenger-port.ps1." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture for test/test-messenger-port.ps1." },
+    "receipt.receiver": { "support": "yes", "evidence": "A fixture for test/test-messenger-port.ps1." },
+    "wake": { "support": "no", "evidence": "A fixture for test/test-messenger-port.ps1." }
+  }
+}
