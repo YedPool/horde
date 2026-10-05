@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/node-mirror.v1",
+  "title": "node-mirror v1",
+  "description": "What the hub keeps of one node, one file per node under <HordeHome>/hub/mirror/<deviceId>.json, written by `horde hub serve` and read by `horde nodes` (remote plan step R13a; remote/Mirror.ps1 holds the rules, cli/HubServe.ps1 the files). heardAt is when the hub last received an inventory from the node, by the hub's clock. lost is the first failed pull since then (since), the latest try and its reason: while it is present the node's sessions are unknown, 'node D unreachable since T'. clock is the last ping's offset sample (remote/Clock.ps1). inventory is the last sessions.list value exactly as the link's decoder accepted it (list), the node's send time and the hub's receive time, and the sessions a partial inventory left out (carried), each with when it was last seen. WHAT THIS SCHEMA DOES NOT CHECK: list and each carried session are objects here; cli/HubServe.ps1 checks them on read against the link contract itself (link-verbs v1 session-list and session-summary), so the file and the wire cannot drift apart. heardAt, lost, clock and inventory are left out until there is one, because core/Schema.ps1 gives a value one type and has no 'or null'.",
+  "type": "object",
+  "required": ["schemaVersion", "deviceId", "deviceName"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "deviceId": { "$ref": "#/definitions/uuid" },
+    "deviceName": { "type": "string" },
+    "heardAt": { "$ref": "#/definitions/time" },
+    "lost": {
+      "type": "object",
+      "required": ["since", "lastTryAt", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "since": { "$ref": "#/definitions/time" },
+        "lastTryAt": { "$ref": "#/definitions/time" },
+        "reason": { "type": "string" }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "required": ["at", "offsetSeconds", "roundTripSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "#/definitions/time" },
+        "offsetSeconds": { "type": "number" },
+        "roundTripSeconds": { "type": "number" }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "required": ["receivedAt", "nodeSentAt", "list", "carried"],
+      "additionalProperties": false,
+      "properties": {
+        "receivedAt": { "$ref": "#/definitions/time" },
+        "nodeSentAt": { "$ref": "#/definitions/time" },
+        "list": { "type": "object" },
+        "carried": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["lastSeenAt", "session"],
+            "additionalProperties": false,
+            "properties": {
+              "lastSeenAt": { "$ref": "#/definitions/time" },
+              "session": { "type": "object" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "uuid": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" }
+  }
+}
