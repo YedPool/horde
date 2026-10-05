@@ -30,7 +30,7 @@ function Known { param($Value, [string]$At) return [pscustomobject][ordered]@{ s
 function Unknown { param([string]$Why) return [pscustomobject][ordered]@{ state = "unknown"; reason = $Why } }
 function Summary {
     # One session-summary as a node sends it (link-verbs v1), every field known at -At unless named.
-    param([string]$Id, [string]$Agent = "claude-code", [string]$At = (T 0), [string]$Role = "goblin")
+    param([string]$Id, [string]$Agent = "harness-a", [string]$At = (T 0), [string]$Role = "goblin")
     $agentAnswer = Known $Agent $At
     if ($Agent -eq "") { $agentAnswer = Unknown "the node could not say which harness" }
     $ns = [pscustomobject][ordered]@{ device = $devA; space = "windows" }
@@ -162,10 +162,10 @@ $f = Find-HordeFleetSession -Fleet $fleet -SessionId $s1
 Check ($f.state -ceq "unknown" -and $f.reason -clike ("*" + $devA + "*" + $devB + "*not resolved by picking one*")) ("a lookup of the key is unknown, naming both devices (" + $f.reason + ")")
 $f = Find-HordeFleetSession -Fleet $fleet -SessionId $s2
 Check ($f.state -ceq "known" -and $f.value.device -ceq $devB) "CONTROL: a key on one device is found, on that device"
-$mb2 = Pull (New-HordeNodeMirror -DeviceId $devB -DeviceName "box-b") (List @((Summary $s1 -Agent "codex"))) 0
+$mb2 = Pull (New-HordeNodeMirror -DeviceId $devB -DeviceName "box-b") (List @((Summary $s1 -Agent "harness-b"))) 0
 $fleet = Get-HordeFleetView -Mirrors @($ma, $mb2) -Now (At 5)
 Check (@($fleet.faults).Count -eq 0) "CONTROL: one id under two harnesses is two sessions, not a fault"
-$f = Find-HordeFleetSession -Fleet $fleet -SessionId $s1 -Agent "codex"
+$f = Find-HordeFleetSession -Fleet $fleet -SessionId $s1 -Agent "harness-b"
 Check ($f.state -ceq "known" -and $f.value.device -ceq $devB) "and a lookup naming the agent finds the one"
 $mb3 = Pull (New-HordeNodeMirror -DeviceId $devB -DeviceName "box-b") (List @((Summary $s1 -Agent ""))) 0
 $fleet = Get-HordeFleetView -Mirrors @($ma, $mb3) -Now (At 5)

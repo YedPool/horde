@@ -19,7 +19,7 @@
 #
 # THE REGISTRY is the hub's own node, dialled at its device id over the local link: the hub is always
 # also a node (remote design, decision 1), and another node is added only by enrolment (R17). A node that
-# dials in through sshd arrives with R17 too.
+# dials in to the hub, through the listener and shim of R17, arrives with R17 too.
 #
 # A MIRROR FILE IS TRUSTED ONLY AFTER IT IS CHECKED, on write and on read: schema/node-mirror.v1 for its
 # own fields, and the link contract itself for the inventory it holds - the list and the carried

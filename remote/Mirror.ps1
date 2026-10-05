@@ -254,7 +254,7 @@ function Get-HordeFleetView {
     # Every mirror at once: one entry per node (its answer, its inventory's size and completeness, its
     # clock), every remote session row, and the faults. A key listed by two devices is one fault naming
     # every device that lists it; both rows stay, each marked with the fault (twoDevices).
-    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Mirrors, $Now, $TtlSeconds = $script:HordeLinkSilenceSeconds)
+    param($Mirrors = @(), $Now, $TtlSeconds = $script:HordeLinkSilenceSeconds)
     Assert-HordeMirrorUtc $Now "now"
     $nodes = New-Object System.Collections.ArrayList
     $rows = New-Object System.Collections.ArrayList
