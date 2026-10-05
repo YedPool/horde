@@ -66,6 +66,17 @@ function Send-HordeNodeAnswer {
 # How many refusals Invoke-HordeNodeServe keeps the reasons of: a node up for weeks must not grow a
 # list without end; the count is kept whole.
 $script:HordeNodeRefusalsKept = 100
+# The log says the first this-many refusals one by one, then one line per interval for the rest, and
+# one for whatever is left when the loop ends: a peer's connect rate must not set the log's volume
+# (review of PR #90, F3: 5000 refusals wrote 5000 lines in 21.6 s).
+$script:HordeNodeRefusalsLogged = 10
+$script:HordeNodeRefusalSummarySeconds = 60
+
+function ConvertTo-HordeNodeLogText {
+    # A peer-supplied reason made safe for a log line: every control character becomes '?'.
+    param([string]$Text)
+    return ($Text -replace '[\x00-\x1F\x7F]', '?')
+}
 
 function Invoke-HordeNodeServe {
     # Serve links until -MaxLinks have been served (0: until stopped). -Transport is a loaded transport
@@ -105,7 +116,9 @@ function Invoke-HordeNodeServe {
         [int]$AcceptTimeoutMs = 15000,
         [int]$IdleTimeoutMs = 120000,
         [int]$RelistenLimit = 5,
-        [scriptblock]$OnListening = $null
+        [scriptblock]$OnListening = $null,
+        # Where a log line goes; Write-Host when none is given. A test collects them.
+        [scriptblock]$Log = $null
     )
     $listen = Start-HordeTransportListener -Transport $Transport -Endpoint $Endpoint
     if ($listen.state -cne "known") { throw ("the node could not listen on " + $Transport.name + " " + $Endpoint + ": " + $listen.reason) }
@@ -117,6 +130,9 @@ function Invoke-HordeNodeServe {
     $inARow = 0
     $refusals = New-Object System.Collections.ArrayList
     $refusedCount = 0
+    $unsaid = 0
+    $saidAt = [datetime]::UtcNow
+    $say = { param($Line) if ($null -ne $Log) { $null = & $Log $Line } else { Write-Host $Line } }
     try {
         if ($null -ne $OnListening) { & $OnListening }
         while ($MaxLinks -le 0 -or $served.Count -lt $MaxLinks) {
@@ -125,10 +141,20 @@ function Invoke-HordeNodeServe {
             if ($acc.state -cne "known") {
                 if ($null -ne $acc.PSObject.Properties["refused"] -and $acc.refused -eq $true) {
                     $refusedCount++
-                    [void]$refusals.Add($acc.reason)
+                    $why = ConvertTo-HordeNodeLogText $acc.reason
+                    [void]$refusals.Add($why)
                     if ($refusals.Count -gt $script:HordeNodeRefusalsKept) { $refusals.RemoveAt(0) }
-                    Write-Host ("refused a peer, listener kept: " + $acc.reason)
-                    $inARow = 0
+                    if ($refusedCount -le $script:HordeNodeRefusalsLogged) { & $say ("refused a peer, listener kept: " + $why) }
+                    else {
+                        $unsaid++
+                        if (([datetime]::UtcNow - $saidAt).TotalSeconds -ge $script:HordeNodeRefusalSummarySeconds) {
+                            & $say ("refused " + $unsaid + " more peer(s), listener kept; the last: " + $why)
+                            $unsaid = 0
+                            $saidAt = [datetime]::UtcNow
+                        }
+                    }
+                    # A refusal proves the listener works, so it ends a run of failures.
+                    $inARow = 0  # reset by a refusal
                     continue
                 }
                 $took = ([datetime]::UtcNow - $began).TotalMilliseconds
@@ -181,6 +207,7 @@ function Invoke-HordeNodeServe {
             [void]$served.Add($ended)
         }
     } finally {
+        if ($unsaid -gt 0) { & $say ("refused " + $unsaid + " more peer(s), listener kept; the last: " + "$(@($refusals)[-1])") }
         Stop-HordeTransportListener -Listener $listener
     }
     return [pscustomobject]@{ served = $served.Count; endings = $served.ToArray(); relistens = $relistens; refusals = $refusals.ToArray(); refused = $refusedCount }

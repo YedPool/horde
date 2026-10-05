@@ -302,9 +302,10 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
         if ($clientPid -gt 0) { $cil = [HordeLocalNative]::Integrity([uint32]$clientPid) }
         if (-not (Test-HordeLocalPeerIntegrity -Peer $cil -Own $own)) {
             try { $server.Dispose() } catch { }
-            # A refusal, not a failure: the next waiting instance was made above, so the listener holds
-            # the name and serve keeps it (issue #85).
-            return (New-HordeLocalResult -Ok $false -Refused $true -Reason ("refused a client: process " + $clientPid + " runs at integrity " + $cil + ", below this node's " + $own + "; run the hub and node at the same integrity level"))
+            # A refusal, not a failure, only while the next waiting instance holds the name, so serve may
+            # keep this listener (issue #85). When that instance could not be made the name is free and
+            # the listener is broken: not refused, so serve restarts it (review of PR #90, F2).
+            return (New-HordeLocalResult -Ok $false -Refused ($null -ne $st.server) -Reason ("refused a client: process " + $clientPid + " runs at integrity " + $cil + ", below this node's " + $own + "; run the hub and node at the same integrity level"))
         }
         $peer = [pscustomobject]@{ verified = $true; identity = "$(Get-HordeLocalUserSid)"; how = ("admitted by the pipe's ACL and label: this user only, no network logons, and its process " + $clientPid + " runs at integrity " + $cil + ", not below this node's " + $own) }
         return (New-HordeLocalResult -Ok $true -Channel (New-HordeLocalChannel -Stream $server) -Peer $peer)

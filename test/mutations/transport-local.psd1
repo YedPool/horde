@@ -73,5 +73,11 @@
         @{ Name = "accept-peer-unexplained"
            Find = 'how = ("admitted by the pipe''s ACL and label'
            Replace = 'how = ("a peer' }
+        @{ Name = "local-refused-flag-dropped"
+           Find = '-Ok $false -Refused ($null -ne $st.server) -Reason'
+           Replace = '-Ok $false -Reason' }
+        @{ Name = "refused-while-the-name-is-free"
+           Find = '-Refused ($null -ne $st.server)'
+           Replace = '-Refused $true' }
     )
 }
