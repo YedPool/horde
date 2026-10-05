@@ -238,6 +238,10 @@ try {
     $node = Start-Node -MaxLinks 1 -View $freshView
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     $null = Stop-Node $node
+    # Checked here, at the first round, so a hub that kept its run lock fails a check rather than every
+    # later round with "another hub is running" (issue #87, F9).
+    $free = $null; try { $free = [System.IO.File]::Open((Get-HordeHubLockPath -Root $mirrorRoot), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) } catch { } finally { if ($null -ne $free) { $free.Dispose() } }
+    Check ($null -ne $free) "the hub lets its run lock go when it returns"
     $after1 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -DeviceId $device -Contract $contract
     Check ($rounds.Count -eq 1 -and $after1.state -ceq "known" -and $null -ne (Get-HordeLinkProp $after1.value "heardAt") -and @($after1.value.inventory.list.sessions).Count -eq 2) "round one writes a mirror with the node's two sessions"
     $rows = @(Get-HordeMirrorRows -Mirror $after1.value -Now (Utc))
