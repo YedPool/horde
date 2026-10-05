@@ -80,9 +80,9 @@
         @{ Name = "inventory-current-whatever-its-age"
            Find = 'if ($aged.state -ceq "known") { return (New-HordeKnown -Value $true -ObservedAt $aged.observedAt) }'
            Replace = 'return (New-HordeKnown -Value $true)' }
-        @{ Name = "lookup-scans-every-key"
-           Find = 'foreach ($e in $Index[$Key.id]) { if (Test-HordeMirrorKeysMatch $e.key $Key) { return $true } }'
-           Replace = 'foreach ($e in @($Index.Values | ForEach-Object { $_ })) { if (Test-HordeMirrorKeysMatch $e.key $Key) { return $true } }' }
+        @{ Name = "update-compares-every-pair"
+           Find = '$listed = Test-HordeMirrorIndexed -Index $listedIndex -Key $k'
+           Replace = '$listed = @($now | Where-Object { Test-HordeMirrorSameKey $_ $e["session"] }).Count -gt 0' }
         @{ Name = "fraction-not-cut-to-seven"
            Find = 'if ($m.Success) { $Text = $m.Groups[1].Value + "." + $m.Groups[2].Value.Substring(0, 7) + "Z" }'
            Replace = '' }
