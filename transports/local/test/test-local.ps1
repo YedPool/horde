@@ -222,6 +222,33 @@ try {
         } else { Check $false "a listener for the instance-adder case" }
     }
 
+    # 4b. A pipe owned by ANOTHER principal, served at this process's level by the node's own
+    # interpreter (this process): integrity and image both pass, so the owner check is the one that
+    # refuses it (issue #89 keeps this path pinned now that the attackers above own their pipes).
+    # Administrators is the one other owner this suite can give a pipe, and only from a token allowed
+    # to assign it (an elevated admin token); elsewhere the case is skipped, never green.
+    $id = New-Id
+    $ba = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $baPipe = $null
+    $baWhy = ""
+    try {
+        $sec = New-Object System.IO.Pipes.PipeSecurity
+        $sec.SetOwner($ba)
+        $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $baPipe = New-Object System.IO.Pipes.NamedPipeServerStream((Get-HordeLocalPipeName -DeviceId $id), [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
+    } catch { $baWhy = $_.Exception.Message }
+    if ($null -eq $baPipe) {
+        Write-Host ("  [SKIP] this token cannot make Administrators a pipe's owner (" + $baWhy + "), so the owner refusal is not shown end to end here; the decision is checked above") -ForegroundColor Yellow
+    } else {
+        try {
+            $read = $baPipe.GetAccessControl().GetOwner([System.Security.Principal.SecurityIdentifier])
+            Check ("$read" -ceq "$ba") ("CONTROL: the pipe's owner reads back as Administrators (" + $read + ")")
+            $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
+            Check ($o.state -ceq "unknown" -and "$($o.reason)" -like ("*owned by '" + $ba + "', not by this user*")) ("the hub refuses a pipe owned by another principal, served by its own interpreter at its own level (" + $o.reason + ")")
+            if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        } finally { $baPipe.Dispose() }
+    }
+
     # 5. A program that is not the node's interpreter, at THIS process's level, serves the pipe first.
     # Integrity cannot tell it apart; the image check refuses it. (At the same level the image check is
     # advisory - see transports/local/Transport.ps1 - but it does refuse this, and this kills the mutant

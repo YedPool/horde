@@ -13,6 +13,8 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 
 public static class SquatProbe {
@@ -26,7 +28,17 @@ public static class SquatProbe {
         int secs = a.Length > 3 ? int.Parse(a[3]) : 15;
         R("started pid=" + Process.GetCurrentProcess().Id);
         try {
-            NamedPipeServerStream s = new NamedPipeServerStream(pipe, PipeDirection.InOut, -1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            // Owned by this user, said explicitly (issue #89): an elevated admin token would otherwise make
+            // Administrators the owner, and the hub would refuse the pipe for its owner before the image
+            // check this probe exists to reach. Set only on the first instance: on an instance added to a
+            // pipe someone else made, Windows keeps the first one's security.
+            PipeSecurity sec = new PipeSecurity();
+            SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
+            sec.SetOwner(me);
+            sec.AddAccessRule(new PipeAccessRule(me, PipeAccessRights.FullControl, AccessControlType.Allow));
+            NamedPipeServerStream s = mode == "serve"
+                ? new NamedPipeServerStream(pipe, PipeDirection.InOut, -1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, sec)
+                : new NamedPipeServerStream(pipe, PipeDirection.InOut, -1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
             R(mode + ": CREATED");
             var w = s.WaitForConnectionAsync();
             if (w.Wait(secs * 1000)) {

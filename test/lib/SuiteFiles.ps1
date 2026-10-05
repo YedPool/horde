@@ -19,6 +19,22 @@
 $script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")
 $script:HordeSuiteDataFolder = "test/fixtures"
 
+# MACHINE-BOUND SUITES: the gate runs them, but only on a machine with the founder's interactive logon,
+# never on the remote test box (CONTRIBUTING 15, rule 5). Each is here because it was measured failing
+# there and passing here, or says so in its own header. Listed once, so a batch script and the remote
+# gate read the same list instead of each remembering it (issue #89).
+$script:HordeMachineBoundSuites = [ordered]@{
+    "transports/local/test/test-local.ps1" = "the local pipe and integrity levels; and run from a token whose default owner is the user, or the owner refusal answers first (issue #89)"
+    "transports/local/test/test-node-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "transports/local/test/test-hub-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "test/test-transport-conformance.ps1" = "its [local] cases: on the always-on box its 27 [local] checks fail on main 54d97b3 exactly as on #85, and pass here (2026-10-05)"
+}
+
+function Get-HordeMachineBoundSuites {
+    # The machine-bound suites, as { path; why }, paths relative to the repository with forward slashes.
+    return @($script:HordeMachineBoundSuites.Keys | ForEach-Object { [pscustomobject]@{ path = $_; why = $script:HordeMachineBoundSuites[$_] } })
+}
+
 function Get-HordeSuiteFiles {
     # Every suite the gate runs, as FileInfo.
     param([Parameter(Mandatory = $true)][string]$Root)

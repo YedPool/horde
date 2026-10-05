@@ -10,7 +10,16 @@ function Inner { param($E) while ($null -ne $E.InnerException) { $E = $E.InnerEx
 Report "started"
 if ($Mode -eq "squat") {
     try {
-        $s = New-Object System.IO.Pipes.NamedPipeServerStream($Pipe, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous)
+        # OWNED BY THIS USER, SAID EXPLICITLY (issue #89). Left to the default, an elevated admin token
+        # makes Administrators (S-1-5-32-544) the owner of what it creates, so the hub refused this pipe
+        # for its owner before its integrity was looked at, and the checks that pin the integrity
+        # refusal failed (measured 2026-10-05, High token, session 1). The attacker this plays is this
+        # user under a lowered token, so its pipe is this user's.
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $sec = New-Object System.IO.Pipes.PipeSecurity
+        $sec.SetOwner($me)
+        $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $s = New-Object System.IO.Pipes.NamedPipeServerStream($Pipe, [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
         Report "squat: CREATED"
         $wait = $s.WaitForConnectionAsync()
         if ($wait.Wait(20000)) {
