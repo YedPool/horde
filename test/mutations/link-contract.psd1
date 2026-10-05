@@ -140,5 +140,15 @@
         @{ Name = "resend-of-any-kind"
            Find = 'if ("$(Get-HordeLinkProp $pair[1] ''kind'')" -cne "req") {'
            Replace = 'if ($false) {' }
+        # Messaging over the link (plan step R21, 2026-10-05): each new argument list is the allowlist.
+        @{ Name = "mail-receipt-may-name-a-session"
+           Find = '"mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason") }'
+           Replace = '"mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason", "sessionId") }' }
+        @{ Name = "mail-next-may-take-a-label"
+           Find = '"mail.next"       = @{ effect = "read";  args = @() }'
+           Replace = '"mail.next"       = @{ effect = "read";  args = @("label") }' }
+        @{ Name = "deliver-may-take-a-pane"
+           Find = '"session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label",'
+           Replace = '"session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label", "pane",' }
     )
 }

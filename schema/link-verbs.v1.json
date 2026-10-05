@@ -365,12 +365,13 @@
         "ttlSeconds": { "type": "integer", "minimum": 1 }
       }
     },
+    "receipt-stage": { "type": "string", "enum": ["accepted", "handed-over", "seen", "expired", "held", "refused"], "description": "A mail receipt's stage: delivery's stages less queued, plus refused." },
     "mail-receipt-args": {
       "type": "object", "required": ["messageId", "stage", "at"], "additionalProperties": false,
       "description": "Where the hub's delivery of one outbound message stands, written to that message's outbox record and nowhere else, so the sender on the node learns whether it was taken. The stages are delivery's, less queued (the node's own stage before the hub took it), plus refused (the hub would not deliver it: no live session wears the label, or the target's gate said no; the reason says which). seen is TAKEN: the receiving session's own hook confirmed it in that session's transcript.",
       "properties": {
         "messageId": { "$ref": "#/definitions/uuid" },
-        "stage": { "type": "string", "enum": ["accepted", "handed-over", "seen", "expired", "held", "refused"] },
+        "stage": { "$ref": "#/definitions/receipt-stage" },
         "at": { "$ref": "#/definitions/time" },
         "reason": { "$ref": "#/definitions/reason" }
       }
@@ -379,7 +380,7 @@
       "type": "object", "required": ["messageId", "stage", "recordedAt"], "additionalProperties": false,
       "properties": {
         "messageId": { "$ref": "#/definitions/uuid" },
-        "stage": { "type": "string", "enum": ["accepted", "handed-over", "seen", "expired", "held", "refused"] },
+        "stage": { "$ref": "#/definitions/receipt-stage" },
         "recordedAt": { "$ref": "#/definitions/time" }
       }
     },
