@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "kind": "res",
+  "id": "0a000000-0000-4000-8000-000000000021",
+  "seq": 12,
+  "ts": "2026-10-05T12:00:01Z",
+  "verb": "mail.next",
+  "requestId": "0b000000-0000-4000-8000-000000000020",
+  "re": "0a000000-0000-4000-8000-000000000020",
+  "result": {
+    "state": "known",
+    "reason": "",
+    "observedAt": "2026-10-05T12:00:00.900Z",
+    "value": {
+      "pending": 2,
+      "mail": {
+        "messageId": "0e000000-0000-4000-8000-000000000001",
+        "from": {
+          "deviceId": "0f000000-0000-4000-8000-000000000002",
+          "sessionId": "22222222-3333-4444-8555-666666666666",
+          "label": "A"
+        },
+        "to": {
+          "label": "M"
+        },
+        "body": "The box finished batch 7. Two PRs are open and green; one needs your decision.",
+        "createdAt": "2026-10-05T11:59:58.000Z",
+        "ttlSeconds": 86400
+      }
+    }
+  }
+}

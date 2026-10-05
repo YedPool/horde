@@ -57,11 +57,11 @@ $f = @(Test-HordeLinkFrameContract -Frame $realFrame)
 Check ($f.Count -eq 0) "schema/link-frame.v1 passes every static rule"; Show $f
 $f = @(Test-HordeLinkVerbTable -Verbs $realVerbs)
 Check ($f.Count -eq 0) "schema/link-verbs.v1 passes every static rule"; Show $f
-Check ($contract.rows.Count -eq 15) "the v1 table has its 15 verbs: R1's 13 and R12a's sessions.list and session.get (the rest are named as deferred in its description)"
+Check ($contract.rows.Count -eq 17) "the v1 table has its 17 verbs: R1's 13, R12a's sessions.list and session.get, and R21's mail.next and mail.receipt (the rest are named as deferred in its description)"
 Check (@("sessions.list", "session.get" | Where-Object { $contract.rows.ContainsKey($_) -and "$($contract.rows[$_].effect)" -ceq "read" }).Count -eq 2) "sessions.list and session.get are read verbs"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
-Check ($golden.Count -eq 15) "there are 15 golden frames, one per kind and verb shape covered so far"
+Check ($golden.Count -eq 21) "there are 21 golden frames, one per kind and verb shape covered so far"
 foreach ($g in $golden) {
     $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
@@ -135,7 +135,8 @@ Refuses { param($v) Add-Row $v "alert.forward" "drive" "node-to-hub" } "never as
 # remote/Contract.ps1, so a table that reclasses it, or any verb, is refused.
 Check ("$($contract.rows['session.deliver'].effect)" -ceq "drive") "session.deliver is classed drive in the real table"
 Check (@($realVerbs.definitions.'verb-row'.properties.effect.enum) -ccontains "drive") "drive is an effect class of the verb-row definition"
-Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node")) "the deliver contract says it may target only a session this hub spawned on the node"
+Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node, or one whose label the node's own remote.deliverTo lists")) "the deliver contract says it may target only a session this hub spawned on the node, or one the node's owner opted in by label"
+Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("never from the link")) "the deliver contract says the opt-in list is read only from the node's own configuration, never from the link"
 $deliverAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.deliver")
 Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$deliverAt].effect = 'write'")) "remote/Contract.ps1 classes it 'drive'" "a table that classes session.deliver write is refused: drive is pinned" @("session.deliver")
 # Found by name, not by place: R12a's rows moved session.spawn off index 5 and the check went red.
@@ -427,6 +428,36 @@ $f = @(Test-HordeLinkAnswer -Answer $wireObj -Path '$.result')
 Check ($f.Count -eq 0 -and -not (Test-HordeLinkHasProp $wireObj "value")) "core/tristate's stored form with its nulls left out is a valid wire answer"; Show $f
 $f = @(Test-HordeLinkAnswer -Answer ([pscustomobject]$rec) -Path '$.result')
 Check (Says $f "value is null") "and the stored form with its nulls written is refused, so there is one wire form"
+
+Write-Host ""
+Write-Host "--- M. messaging over the link: session.deliver, mail.next and mail.receipt (plan step R21) ---" -ForegroundColor Cyan
+
+# THE REVERSE PATH IS A PULL. A node never asks the hub to drive a session (section B), so an orc on a
+# node that writes to an orc on the hub's machine leaves its message in the node's outbox, and the hub
+# takes it with mail.next (a read) and reports how it went with mail.receipt (a write to that outbox
+# record only). Every drive stays hub to node; the hub delivers through its own local node.
+Check ("$($contract.rows['mail.next'].effect)" -ceq "read" -and "$($contract.rows['mail.next'].direction)" -ceq "hub-to-node") "mail.next is a read, hub to node"
+Check ("$($contract.rows['mail.receipt'].effect)" -ceq "write" -and "$($contract.rows['mail.receipt'].direction)" -ceq "hub-to-node") "mail.receipt is a write, hub to node"
+$nextAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "mail.next")
+$receiptAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "mail.receipt")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$nextAt].effect = 'drive'")) "remote/Contract.ps1 classes it 'read'" "a table that reclasses mail.next drive is refused: its class is pinned" @("mail.next")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$receiptAt].effect = 'read'")) "remote/Contract.ps1 classes it 'write'" "a table that reclasses mail.receipt read is refused: its class is pinned" @("mail.receipt")
+# A RECEIPT NAMES ITS MESSAGE AND NOTHING IT COULD BE REDIRECTED BY: no session, no label, no body.
+Refuses { param($v) $v.definitions.'mail-receipt-args'.properties | Add-Member -NotePropertyName "sessionId" -NotePropertyValue ('{ "$ref": "#/definitions/session-id" }' | ConvertFrom-Json) } "args has 'sessionId', which is not an argument mail.receipt may take" "a receipt that could name a session is refused by the allowlist" @("mail.receipt")
+Refuses { param($v) $v.definitions.'mail-next-args'.properties | Add-Member -NotePropertyName "label" -NotePropertyValue ('{ "$ref": "#/definitions/label" }' | ConvertFrom-Json) } "args has 'label', which is not an argument mail.next may take" "mail.next takes no argument: a filter would be one more thing to trust" @("mail.next")
+# THE TARGET IS A STABLE IDENTITY. session.deliver may carry the target's label, so a node can follow a
+# session whose id changed (a compact, a /clear) to the one session that wears that label; never a pane.
+Refuses { param($v) $v.definitions.'session-deliver-args'.properties | Add-Member -NotePropertyName "pane" -NotePropertyValue ('{ "type": "integer", "minimum": 0 }' | ConvertFrom-Json) } "args has 'pane', which is not an argument session.deliver may take" "a deliver addressed by pane number is refused" @("session.deliver")
+Check ("$($realVerbs.definitions.'outbound-mail'.properties.body.'x-horde-cap')" -ceq "summaryBytes") "an outbound mail body crossing in a result names the summaryBytes cap, the most a result string may hold"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.PSObject.Properties.Remove("pending") } "has no 'pending'" "mail.next always says how many are waiting"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.to | Add-Member -NotePropertyName pane -NotePropertyValue 4 } "has 'pane', which the schema does not allow" "an outbound mail addressed by pane is refused"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.to.PSObject.Properties.Remove("label") } "has no 'label'" "an outbound mail names its target by label"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.from.PSObject.Properties.Remove("deviceId") } "has no 'deviceId'" "an outbound mail says which device it came from"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.body = " " } "body does not match" "an outbound mail with a blank body is refused"
+FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "delivered" } "is 'delivered', not one of" "a receipt stage outside the delivery stages is refused"
+FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "queued" } "is 'queued', not one of" "queued is the node's own stage, never a receipt the hub sends"
+FrameRefuses "res-mail-receipt.json" { param($x) $x.result.value.PSObject.Properties.Remove("recordedAt") } "has no 'recordedAt'" "a receipt's acknowledgement says when the node recorded it"
+FrameRefuses "req-session-deliver.json" { param($x) $x.args.label = "orc-1" } "label does not match" "a deliver label is a hub label, nothing else"
 
 Write-Host ""
 Write-Host "--- H. the other contract documents ---" -ForegroundColor Cyan
