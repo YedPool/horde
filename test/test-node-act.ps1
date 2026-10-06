@@ -34,6 +34,8 @@ $script:reportMode = $null
 $script:noIdentify = $false
 $script:stubborn = $false
 $script:reusedPid = $false
+$script:noOwn = $false
+$script:stopRefused = 0
 $modeOf = @{ careful = "ask"; edit = "edits"; look = "plan" }
 
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
@@ -43,11 +45,14 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -ReadMode { param($id, $view) if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
     -CloseText @("bye", "`r")
 
+# The fixture terminal: named explicitly by Own, as the real host names the node's own (review of #96).
+$fakeTerm = [pscustomobject]@{ socket = "C:\fake\gui-sock-1"; guiPid = 1; guiStart = "1" }
 Register-HordeHostActor -Name "fakehost" `
+    -Own { if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
     -Resolve { param($n) if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
-    -Start { param($prog, $argv, $cwd, $envMap)
+    -Start { param($term, $prog, $argv, $cwd, $envMap)
         $h = "" + (100 + $script:panes.Count)
-        [void]$script:panes.Add([pscustomobject]@{ handle = $h; program = $prog; argv = @($argv); cwd = $cwd; env = $envMap })
+        [void]$script:panes.Add([pscustomobject]@{ handle = $h; program = $prog; argv = @($argv); cwd = $cwd; env = $envMap; term = $term })
         $sidv = $argv[[array]::IndexOf(@($argv), "--id") + 1]
         $pidv = $script:nextPid; $script:nextPid++
         $ticks = "" + (134000000000000000 + $pidv)
@@ -58,11 +63,17 @@ Register-HordeHostActor -Name "fakehost" `
         $nm = ""; $j = [array]::IndexOf(@($argv), "--title"); if ($j -ge 0) { $nm = $argv[$j + 1] }
         $script:sessions[$sidv] = [pscustomobject]@{ pid = $pidv; procStart = $claimed; name = $nm; mode = $mode; handle = $h }
         New-HordeKnown -Value ([pscustomobject]@{ handle = $h; program = $prog; cwd = $cwd }) } `
-    -Send { param($h, $t) [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t })
-        if ($t -eq "`r" -and -not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } }
+    -Send { param($term, $h, $t, $submit)
+        if ("" + $t -cmatch '[\x00-\x1F]') { return (New-HordeUnknown -Reason "the fixture host, like the real one, types printable text only") }
+        if ("" + $t -ne "") { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = $t }) }
+        if ($submit) { [void]$script:sent.Add([pscustomobject]@{ handle = $h; text = "<enter>" }) }
+        if ($submit -and -not $script:stubborn) { foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } } }
         New-HordeKnown -Value $true } `
-    -Live { param($h) New-HordeKnown -Value $true } `
-    -Stop { param($h) [void]$script:stopped.Add($h); foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } }; New-HordeKnown -Value $true }
+    -Live { param($term, $h, $expect) New-HordeKnown -Value $true } `
+    -Stop { param($term, $h, $expect)
+        # Like the real host: ends a pane only for the expected process, alive with its start time.
+        if ($null -eq $expect -or -not $script:procs.ContainsKey([int]$expect.pid) -or "" + $script:procs[[int]$expect.pid] -cne "" + $expect.procStart) { $script:stopRefused++; return (New-HordeUnknown -Reason "nothing was ended: the expected process is not proven") }
+        [void]$script:stopped.Add($h); foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } }; New-HordeKnown -Value $true }
 
 $work = Join-Path $env:TEMP ("horde-node-act-" + [guid]::NewGuid().ToString("N"))
 $clone = Join-Path $work "code\app"
@@ -91,7 +102,7 @@ function SpawnAct {
     foreach ($k in $Extra.Keys) { if ($null -eq $Extra[$k]) { $a.Remove($k) } else { $a[$k] = $Extra[$k] } }
     return [pscustomobject]@{ verb = "session.spawn"; args = ([pscustomobject]$a); requestId = [guid]::NewGuid().ToString() }
 }
-function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false }
+function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:stopRefused = 0 }
 
 try {
 Write-Host ""
@@ -101,7 +112,7 @@ $ctx0 = New-Context
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx0
 Check ("$($o.state)" -ceq "done") ("a spawn the policy allows is done" + $(if ("$($o.state)" -cne "done") { " (" + $o.reason + ")" } else { "" }))
 $p = $script:panes[0]
-Check ($script:panes.Count -eq 1 -and $p.program -ceq "C:\bin\harness-a.exe" -and $p.cwd -ceq $clone) "one pane, running the program the host resolved, in the registered clone (no worktree given)"
+Check ($script:panes.Count -eq 1 -and $p.program -ceq "C:\bin\harness-a.exe" -and $p.cwd -ceq $clone -and $p.term -eq $fakeTerm) "one pane, in the terminal the host named, running the absolute .exe it resolved, in the registered clone (no worktree given)"
 Check ((@($p.argv) -join "|") -ceq ("--id|" + $o.sessionId + "|--mode|edit|--title|E client search orc|read the plan")) "its argv is the launch plan's: the id the node chose, the level's flags, the name, the prompt"
 Check ($null -ne $p.env -and $p.env.ContainsKey("PROVIDER_A_TOKEN") -and $null -eq $p.env["PROVIDER_A_TOKEN"] -and $p.env.ContainsKey("PROVIDER_A_BASE_URL") -and $null -eq $p.env["PROVIDER_A_BASE_URL"]) "every variable the harness owns is removed from the spawn, so the node's own engine settings never reach the session"
 Check ($o.expect.pid -eq $script:sessions[$o.sessionId].pid -and "$($o.expect.procStart)" -ceq $script:procs[$script:sessions[$o.sessionId].pid] -and "$($o.expect.ns.device)" -ceq $device -and "$($o.expect.ns.space)" -ceq "windows") "the outcome carries the process, proved against the process table, placed by device and space"
@@ -145,7 +156,7 @@ Reset; $script:reportMode = "bypass"
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
 $x = $script:sessions[$o.sessionId]
 Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*reports the level bypass*asked for edits*" -and -not $script:procs.ContainsKey($x.pid)) "a session that reports a level above the one asked for is closed and the spawn refused"
-Check (@($script:sent | Where-Object { $_.text -ceq "bye" }).Count -eq 1) "it was closed gracefully first, with the harness's own close text"
+Check ((@($script:sent | ForEach-Object { $_.text }) -join "|") -ceq "bye|<enter>") "it was closed gracefully first: the harness's close text typed, then Enter by -Submit"
 Reset; $script:reportMode = "plan"
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
 Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*reports the level plan*asked for edits*") "a session in another level than asked, even a lower one, is closed: the hub gets what it asked or nothing"
@@ -169,10 +180,11 @@ $x = $script:sessions[$o.sessionId]
 Check ("$($o.state)" -ceq "refused" -and @($script:stopped).Count -eq 1 -and -not $script:procs.ContainsKey($x.pid)) "one that ignores the close text is ended by the host, so a refused session never keeps running"
 Reset; $script:noIdentify = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
-Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its process*" -and @($script:stopped).Count -eq 1) "a harness that never reports its process fails the spawn, and its pane is ended"
+Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its process*left for a person*" -and @($script:stopped).Count -eq 0) "a harness that never reports its process fails the spawn; its pane is NOT ended, since a pane is ended only for a proven process, and the reason names it"
+Check ((@($script:sent | ForEach-Object { $_.text }) -join "|") -ceq "bye|<enter>") "but its close text is typed, so a harness that started late still ends itself"
 Reset; $script:reusedPid = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
-Check ("$($o.state)" -ceq "failed" -and @($script:stopped).Count -eq 1) "a reported process whose start time is not the live one's is not believed: the spawn fails and the pane is ended"
+Check ("$($o.state)" -ceq "failed" -and @($script:stopped).Count -eq 0) "a reported process whose start time is not the live one's is not believed: the spawn fails, and nothing unproven is ended"
 # Back to the reporting adapter for what follows.
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Argv { param($s) $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
@@ -180,6 +192,21 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
     -ReadMode { param($id, $view) if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "none" } } `
     -CloseText @("bye", "`r")
+
+Write-Host ""
+Write-Host "--- refused before anything starts: the node's own configuration and terminal ---" -ForegroundColor Cyan
+Reset
+$ctx = New-Context; $ctx | Add-Member -NotePropertyName layerProblems -NotePropertyValue @("C:\h\engine.json $.rules[0].set: key-value - 'Plan' is not a value of remote.permissionCeiling") -Force
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*engine configuration fails its checks*Plan*" -and $script:panes.Count -eq 0) "a layer file that fails its checks refuses every spawn, never dropped and acted on without it (review of #98, F1)"
+Reset; $script:noOwn = $true
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*cannot name its own terminal*" -and $script:panes.Count -eq 0) "a node that cannot name its own terminal starts nothing: no call ever falls back to whatever terminal the environment points at"
+Reset
+Register-HordeHostActor -Name "fakehost2" -Own { New-HordeKnown -Value $fakeTerm } -Resolve { param($n) New-HordeKnown -Value "C:\npm\harness-a.cmd" } -Start { param($t, $p, $a, $c, $e) [void]$script:panes.Add($p); New-HordeKnown -Value ([pscustomobject]@{ handle = "1" }) } -Send { param($t, $h, $x, $s) New-HordeKnown -Value $true } -Live { param($t, $h, $e) New-HordeKnown -Value $true } -Stop { param($t, $h, $e) New-HordeKnown -Value $true }
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ host = "fakehost2" }) -Context (New-Context)
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*absolute path to an .exe*" -and $script:panes.Count -eq 0) "a host that resolves the harness to a .cmd shim starts nothing: the program is an absolute .exe or no program (review of #98, F3)"
+$script:HordeHostActors.Remove(@($script:HordeHostActors | Where-Object { $_.name -ceq "fakehost2" })[0])
 
 Write-Host ""
 Write-Host "--- the daily cap counts what this node started today ---" -ForegroundColor Cyan
@@ -191,6 +218,39 @@ foreach ($i in 1..3) { Reset; if ("$((Invoke-HordeNodeActRequest -Act (SpawnAct)
 Reset
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx
 Check ($done -eq 3 -and "$($o.state)" -ceq "refused" -and $o.reason -like "*daily spawn cap of 3 is reached*") "three spawns under a cap of 3 start; the fourth is refused"
+# THE COUNT, case by case (review of #98: clock skew, the UTC-day boundary, concurrency, junctions).
+$cd = Join-Path $work "count"
+New-Item -ItemType Directory -Path $cd | Out-Null
+$noon = [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime()
+function Rec { param([string]$Name, [string]$At) [System.IO.File]::WriteAllText((Join-Path $cd ($Name + ".json")), ('{ "sessionId": "' + $Name + '", "startedAt": "' + $At + '" }')) }
+Rec "a" "2026-10-04T23:59:59.9990000Z"
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 0) "a start one millisecond before UTC midnight is yesterday's"
+Rec "b" "2026-10-05T00:00:00.0000000Z"
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 1) "a start at UTC midnight is today's"
+Rec "c" "2026-10-07T09:00:00.0000000Z"
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 2) "a start in the future counts: setting the clock back frees nothing"
+[System.IO.File]::WriteAllText((Join-Path $cd "d.json"), "{ torn")
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 3) "a record that cannot be read counts: a torn file never raises the cap"
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now ([datetime]::Parse("2026-10-05T00:30:00+02:00"))).value -eq 4) "the day is the UTC day, whatever zone the clock is read in: 00:30 +02:00 is 22:30 on the 4th in UTC, so the 4th's start counts, with everything after it and the torn one"
+$lk = Enter-HordeNodeSpawnLock -Dir $cd
+try {
+    Check ($null -ne $lk -and $null -eq (Enter-HordeNodeSpawnLock -Dir $cd)) "the spawn lock is held by one act at a time"
+    $ctxL = New-Context; $ctxL.records = $cd
+    Reset
+    $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxL
+    Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*spawn lock*" -and $script:panes.Count -eq 0) "a spawn while another holds the lock is refused: the cap is never counted by two at once"
+} finally { if ($null -ne $lk) { $lk.Dispose() } }
+$jdir = Join-Path $work "junction"
+$null = cmd /c mklink /J "$jdir" "$cd"
+if (Test-Path -LiteralPath $jdir) {
+    $jc = Get-HordeNodeSpawnsToday -Dir $jdir -Now $noon
+    Check ($jc.state -eq "unknown" -and $jc.reason -like "*junction or link*") "a records folder that is a junction refuses: what it counts is another folder's"
+    $ctxJ = New-Context; $ctxJ.records = $jdir
+    Reset
+    $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxJ
+    Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*junction or link*") "and so does a spawn counted through it"
+    [System.IO.Directory]::Delete($jdir)
+} else { Check $false "CONTROL: a junction could be made for the test" }
 
 Write-Host ""
 Write-Host "--- a close: only a session this node started, only the process the hub names, gracefully ---" -ForegroundColor Cyan
@@ -201,7 +261,7 @@ $closeArgs = [pscustomobject]@{ sessionId = $s.sessionId; expect = $s.expect; re
 $c = Invoke-HordeNodeActRequest -Act ([pscustomobject]@{ verb = "session.close"; args = $closeArgs; requestId = [guid]::NewGuid().ToString() }) -Context $ctx
 $x = $script:sessions[$s.sessionId]
 Check ("$($c.state)" -ceq "done" -and -not $script:procs.ContainsKey($x.pid) -and "$($c.sessionId)" -ceq $s.sessionId) "a close ends the session: done, and no process has its pid and start time"
-Check ((@($script:sent | Where-Object { $_.handle -ceq $x.handle } | ForEach-Object { $_.text }) -join "|") -ceq ("bye|" + "`r") -and @($script:stopped).Count -eq 0) "it typed the harness's close text into that pane, and forced nothing"
+Check ((@($script:sent | Where-Object { $_.handle -ceq $x.handle } | ForEach-Object { $_.text }) -join "|") -ceq "bye|<enter>" -and @($script:stopped).Count -eq 0) "it typed the harness's close text into that pane, then Enter by -Submit, and forced nothing"
 $rec = Read-HordeNodeSpawnRecord -Dir $ctx.records -SessionId $s.sessionId
 Check ($rec.state -eq "known" -and "$($rec.value.closedAt)" -ne "") "the node's record says when it was closed"
 $c = Invoke-HordeNodeActRequest -Act ([pscustomobject]@{ verb = "session.close"; args = $closeArgs; requestId = [guid]::NewGuid().ToString() }) -Context $ctx

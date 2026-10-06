@@ -18,21 +18,12 @@
         @{ Name = "owned-variables-kept"
            Find = 'foreach ($o in @($owned)) { if ($null -ne $o) { $envMap["" + $o.name] = $null } }'
            Replace = '' }
-        @{ Name = "process-believed-without-start-time"
-           Find = 'if ($null -ne $live -and "" + $live -ceq "" + $i.value.procStart) { return $i.value }'
-           Replace = 'return $i.value' }
-        @{ Name = "unidentified-pane-left-running"
-           Find = '$null = Stop-HordeNodeSession -Context $Context -Actor $actor -Adapter $adapter -Handle ("" + $record.handle)'
-           Replace = '$null = $record.handle' }
         @{ Name = "unreadable-mode-kept"
            Find = 'if ($null -eq $mode) { $why = "the session''s permission mode could not be read back within " + $Context.bounds.modeSeconds + " s, so it is not kept (fail closed)" }'
            Replace = 'if ($false) { }' }
         @{ Name = "other-mode-kept"
            Find = 'elseif ("" + $mode.value -cne $d.level) {'
            Replace = 'elseif ($false) {' }
-        @{ Name = "refused-session-not-forced"
-           Find = '    $null = & $Actor.stop $Handle'
-           Replace = '' }
         @{ Name = "close-without-record"
            Find = 'if ($rec.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -SessionId $sid -Reason $rec.reason) }'
            Replace = 'if ($rec.state -ne "known") { $rec = [pscustomobject]@{ value = [pscustomobject]@{ pid = $a.expect.pid; procStart = $a.expect.procStart; host = "fakehost"; harness = "harness-a"; handle = "100"; closedAt = ""; outcome = "" } } }' }
@@ -45,14 +36,50 @@
         @{ Name = "close-forces"
            Find = 'if ($gone -ne $true) { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running "'
            Replace = 'if ($gone -ne $true) { $null = & $ac.value.stop ("" + $r.handle); return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running "' }
-        @{ Name = "cap-counts-nothing"
-           Find = 'if ("" + $r.startedAt -like ($day + "*")) { $n++ }'
-           Replace = '' }
         @{ Name = "expect-without-namespace"
            Find = '$expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $Context.namespace.device; space = "" + $Context.namespace.space }; pid = [long]$record.pid; procStart = $record.procStart }'
            Replace = '$expect = [pscustomobject][ordered]@{ ns = $null; pid = [long]$record.pid; procStart = $record.procStart }' }
         @{ Name = "level-from-request-ignored"
            Find = 'if ($null -ne $a.PSObject.Properties["permission"] -and "" + $a.permission -ne "") { $set["permission"] = "" + $a.permission }'
+           Replace = '' }
+        @{ Name = "process-believed-without-start-time"
+           Find = 'if ($null -ne $live -and (Test-HordeNodeSameStart $live $i.value.procStart)) { return $i.value }'
+           Replace = 'return $i.value' }
+        @{ Name = "start-compared-to-the-millisecond"
+           Find = 'return [bool]([decimal]::Floor($x / 10) -eq [decimal]::Floor($y / 10))'
+           Replace = 'return [bool]([decimal]::Floor($x / 10000) -eq [decimal]::Floor($y / 10000))' }
+        @{ Name = "refused-session-not-forced"
+           Find = '    $null = & $Actor.stop $Target $Handle ([pscustomobject]@{ pid = $ProcessId; procStart = $ProcStart })'
+           Replace = '' }
+        @{ Name = "unproven-pane-not-told"
+           Find = '$null = Send-HordeNodeCloseText -Actor $actor -Target $term -Handle $record.handle -Adapter $adapter'
+           Replace = '$null = $record.handle' }
+        @{ Name = "layer-problems-ignored"
+           Find = 'if ($bad.Count -gt 0) { return (New-HordeNodeOutcome -State "refused" -Reason ("this node''s engine configuration fails its checks'
+           Replace = 'if ($false) { return (New-HordeNodeOutcome -State "refused" -Reason ("this node''s engine configuration fails its checks' }
+        @{ Name = "own-terminal-unchecked"
+           Find = 'if ($null -eq $tg -or $tg.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason ("this node cannot name its own terminal: "'
+           Replace = 'if ($false) { return (New-HordeNodeOutcome -State "refused" -Reason ("this node cannot name its own terminal: "' }
+        @{ Name = "lock-not-taken"
+           Find = 'if ($null -eq $lock) { return (New-HordeNodeOutcome -State "refused" -Reason "another spawn on this node holds its spawn lock'
+           Replace = 'if ($false) { return (New-HordeNodeOutcome -State "refused" -Reason "another spawn on this node holds its spawn lock' }
+        @{ Name = "lock-shared"
+           Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)'
+           Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)' }
+        @{ Name = "future-records-free-the-cap"
+           Find = 'if (-not $ok -or $t -ge $midnight) { $n++ }'
+           Replace = 'if (-not $ok -or ($t -ge $midnight -and $t -lt $midnight.AddDays(1))) { $n++ }' }
+        @{ Name = "torn-records-free-the-cap"
+           Find = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { $n++; continue }'
+           Replace = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue }' }
+        @{ Name = "local-day-not-utc"
+           Find = '$midnight = $Now.ToUniversalTime().Date'
+           Replace = '$midnight = $Now.Date' }
+        @{ Name = "junction-counted"
+           Find = 'if (Test-HordeNodeReparse -Path $Dir) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unread-count-allows"
+           Find = 'if ($today.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $today.reason) }'
            Replace = '' }
     )
 }

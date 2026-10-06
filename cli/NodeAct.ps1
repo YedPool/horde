@@ -10,19 +10,31 @@
 # may touch (tools/ExecScan.ps1). Process launching itself is the host's; nothing here starts one.
 #
 # A SPAWN, in order, each step a refusal with its reason if it does not hold:
+#   0. the node's engine layer files pass their checker: a file that fails refuses every spawn, never
+#      dropped, because a dropped L1 or L4 would drop the owner's ceiling with it (review of #98, F1);
 #   1. the node's policy and ceiling (core/NodePolicy.ps1), over the engine resolution of the node's
-#      own layers plus the request compiled into the spawn layer (L5): its profile, model and level;
+#      own layers plus the request compiled into the spawn layer (L5), and the day's count, taken under
+#      the node's spawn lock (see THE COUNT);
 #   2. a profile on the harness's own login only: a provider's key belongs to engines E10's launch
 #      stub, so a profile that needs one is refused until it exists (decision of 2026-10-05);
 #   3. the folder: the registered clone, or an existing worktree under its root - none is created;
-#   4. the launch plan (core/AgentLaunch.ps1) and the program, resolved by the host;
-#   5. the pane, then the harness's own record of its process, believed only when the live process
-#      has that pid AND that start time; never reported within the bound, the pane is ended;
-#   6. the mode the session reports (issue #67, decision 6): exactly the level asked for, or the
-#      session is closed - gracefully, then by the host - and the spawn refused. Unreadable within the
-#      bound is the same: fail closed.
-# The node keeps a record of each session it started for a hub (<HordeHome>\node\spawned), with its
-# pane: the only sessions a close may name, and the count behind the daily cap.
+#   4. the terminal: the host names this node's own, explicitly (Own), or the spawn is refused;
+#   5. the launch plan (core/AgentLaunch.ps1), given the policy's decision and the host's program
+#      lookup, so the program is an absolute .exe and the level is the one the policy allowed;
+#   6. the pane, then the harness's own record of its process, believed only when the live process
+#      has that pid AND that start time (to the microsecond both clocks keep);
+#   7. the mode the session reports (issue #67, decision 6): exactly the level asked for, or the
+#      session is closed - its close text, then the host's end of the pane, which the host does only
+#      once the process is proven in it - and the spawn refused. Unreadable within the bound: the same.
+# A pane whose harness never reports its process cannot be proven, so the host will not end it; the
+# spawn fails, and the record names the pane left open for a person.
+#
+# THE COUNT behind the daily cap is the node's records of what it started, by UTC day: every record
+# whose start is at or after today's UTC midnight - a record dated in the future (the clock was set
+# back) counts too, so moving the clock never frees the cap - and every record that cannot be read. The
+# count and the new record are taken under one lock file opened with FileShare None, so two acts can
+# never both see room for one. A records folder that is a junction or a symbolic link refuses every
+# spawn: the count would be another folder's.
 #
 # A CLOSE is graceful only. The node refuses unless it started that session, the hub's expected
 # process is on this device and space (R11) and is exactly the node's own view, pid and start time;
@@ -32,11 +44,19 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 $script:HordeNodeActCore = Split-Path -Parent $PSScriptRoot
 foreach ($f in @("Tristate", "Namespace", "NodePolicy", "EngineResolve", "AgentLaunch", "HostAct")) { . (Join-Path $script:HordeNodeActCore ("core\" + $f + ".ps1")) }
+$script:HordeNodeSpawnLockName = ".spawn.lock"
 
 function Get-HordeNodeSpawnDir {
     # Where a node keeps its records of the sessions it started for a hub.
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     return (Join-Path (Join-Path $HordeHome "node") "spawned")
+}
+
+function Test-HordeNodeReparse {
+    # Is -Path a junction or symbolic link? A missing path is not.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    return [bool](((Get-Item -LiteralPath $Path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
 }
 
 function Read-HordeNodeSpawnRecord {
@@ -61,26 +81,51 @@ function Write-HordeNodeSpawnRecord {
 }
 
 function Get-HordeNodeSpawnsToday {
-    # How many sessions this node started for a hub on the UTC day of -Now, from its records.
+    # How many sessions this node started for a hub on the UTC day of -Now, as an answer (see THE COUNT
+    # in the header). Unknown when the folder is a junction or link: then the count is another folder's.
     param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][datetime]$Now)
-    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return 0 }
-    $day = $Now.ToUniversalTime().ToString("yyyy-MM-dd")
+    if (Test-HordeNodeReparse -Path $Dir) { return (New-HordeUnknown -Reason ("the records folder " + $Dir + " is a junction or link, so what it counts is another folder's")) }
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return (New-HordeKnown -Value 0) }
+    $midnight = $Now.ToUniversalTime().Date
     $n = 0
-    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File)) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File -Force)) {
+        if ($f.Name.StartsWith(".")) { continue }
+        if (($f.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { $n++; continue }
+        $r = $null
         try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { $n++; continue }
-        # A record that cannot be read still counts: the cap is never raised by a torn file.
-        if ("" + $r.startedAt -like ($day + "*")) { $n++ }
+        $t = [datetime]::MinValue
+        $ok = [datetime]::TryParse("" + $r.startedAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$t)
+        # An unreadable start counts: the cap is never raised by a torn file. A start at or after today's
+        # UTC midnight counts, and so does one in the future: setting the clock back frees nothing.
+        if (-not $ok -or $t -ge $midnight) { $n++ }
     }
-    return $n
+    return (New-HordeKnown -Value $n)
+}
+
+function Enter-HordeNodeSpawnLock {
+    # The node's spawn lock: a file opened with FileShare None, held until disposed, so the count and
+    # the new record are one step (see THE COUNT). Returns the stream, or $null when another act holds it.
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+    try { return [System.IO.File]::Open((Join-Path $Dir $script:HordeNodeSpawnLockName), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) }
+    catch { return $null }
 }
 
 function Get-HordeLocalProcessStart {
-    # A live process's start time as FILETIME ticks (UTC) in text, the unit the harnesses' control files
-    # and core/Projection.ps1 use, or $null when no process has that pid.
-    param([Parameter(Mandatory = $true)][int]$ProcessId)
+    # A live process's start time as FILETIME ticks (UTC) in text, or $null when no process has that pid.
+    param([Parameter(Mandatory = $true)][long]$ProcessId)
     $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($null -eq $p) { return $null }
     try { return ("" + $p.StartTime.ToUniversalTime().ToFileTimeUtc()) } catch { return $null }
+}
+
+function Test-HordeNodeSameStart {
+    # Two start times (FILETIME ticks as text) naming one instant to the microsecond: the precision the
+    # process table and Get-Process share (measured 2026-10-06, #96). Unreadable is never the same.
+    param($A, $B)
+    $x = [decimal]0; $y = [decimal]0
+    if (-not [decimal]::TryParse("" + $A, [ref]$x) -or -not [decimal]::TryParse("" + $B, [ref]$y)) { return $false }
+    return [bool]([decimal]::Floor($x / 10) -eq [decimal]::Floor($y / 10))
 }
 
 function New-HordeNodeOutcome {
@@ -105,20 +150,30 @@ function Test-HordeNodeProcessGone {
     # has it started at another time?
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][long]$ProcessId, [Parameter(Mandatory = $true)][string]$ProcStart)
     $live = & $Context.processStart $ProcessId
-    return [bool]($null -eq $live -or "" + $live -cne $ProcStart)
+    return [bool]($null -eq $live -or -not (Test-HordeNodeSameStart $live $ProcStart))
+}
+
+function Send-HordeNodeCloseText {
+    # Type a harness's close text into its pane: each item typed, and a lone CR pressed as Enter
+    # (-Submit), since the host types printable text only (review of #96).
+    param([Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)][string]$Handle, [Parameter(Mandatory = $true)]$Adapter)
+    foreach ($t in @($Adapter.closeText)) {
+        $r = $null
+        if ("" + $t -ceq "`r") { $r = & $Actor.send $Target $Handle "" $true } else { $r = & $Actor.send $Target $Handle ("" + $t) $false }
+        if ($null -eq $r -or $r.state -ne "known") { return $r }
+    }
+    return (New-HordeKnown -Value $true)
 }
 
 function Stop-HordeNodeSession {
-    # End a session this node just started and will not keep: its close text, then the host's end of
-    # its pane. Returns whether the process is gone (known by pid and start time when given).
-    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Adapter, [Parameter(Mandatory = $true)][string]$Handle, $ProcessId = $null, [string]$ProcStart = "")
-    foreach ($t in @($Adapter.closeText)) { $null = & $Actor.send $Handle $t }
-    if ($null -ne $ProcessId) {
-        $gone = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.closeSeconds -Probe { if (Test-HordeNodeProcessGone -Context $Context -ProcessId $ProcessId -ProcStart $ProcStart) { $true } else { $null } }
-        if ($gone -eq $true) { return $true }
-    }
-    $null = & $Actor.stop $Handle
-    if ($null -eq $ProcessId) { return $false }
+    # End a session this node just started and will not keep: its close text, then - only for a process
+    # proven by pid and start time - the host's end of its pane. Returns whether the process is gone.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)]$Adapter,
+        [Parameter(Mandatory = $true)][string]$Handle, [Parameter(Mandatory = $true)][long]$ProcessId, [Parameter(Mandatory = $true)][string]$ProcStart)
+    $null = Send-HordeNodeCloseText -Actor $Actor -Target $Target -Handle $Handle -Adapter $Adapter
+    $gone = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.closeSeconds -Probe { if (Test-HordeNodeProcessGone -Context $Context -ProcessId $ProcessId -ProcStart $ProcStart) { $true } else { $null } }
+    if ($gone -eq $true) { return $true }
+    $null = & $Actor.stop $Target $Handle ([pscustomobject]@{ pid = $ProcessId; procStart = $ProcStart })
     $gone = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.closeSeconds -Probe { if (Test-HordeNodeProcessGone -Context $Context -ProcessId $ProcessId -ProcStart $ProcStart) { $true } else { $null } }
     return [bool]($gone -eq $true)
 }
@@ -145,6 +200,9 @@ function Test-HordeNodeOwnLogin {
 function Invoke-HordeNodeSpawn {
     param([Parameter(Mandatory = $true)]$Act, [Parameter(Mandatory = $true)]$Context)
     $a = $Act.args
+    # 0. The node's own layer files must all pass: one that fails could carry the owner's ceiling.
+    $bad = @(@($Context.PSObject.Properties["layerProblems"] | ForEach-Object { $_.Value }) | ForEach-Object { $_ } | Where-Object { "" + $_ -ne "" })
+    if ($bad.Count -gt 0) { return (New-HordeNodeOutcome -State "refused" -Reason ("this node's engine configuration fails its checks, so it starts nothing until it is fixed: " + ($bad -join " | "))) }
     # 1. The request as the spawn layer, then the node's policy and ceiling over the resolution.
     $set = [ordered]@{ profile = "" + $a.profile }
     if ($null -ne $a.PSObject.Properties["model"] -and "" + $a.model -ne "") { $set["model"] = "" + $a.model }
@@ -160,41 +218,47 @@ function Invoke-HordeNodeSpawn {
     $wt = $null
     if ($null -ne $a.PSObject.Properties["worktree"]) { $wt = $a.worktree }
     $req = [pscustomobject]@{ profile = "" + $a.profile; repoId = "" + $a.repoId; worktree = $wt }
-    $today = Get-HordeNodeSpawnsToday -Dir $Context.records -Now (& $Context.now)
-    $d = Test-HordeRemotePolicy -Policy $Context.policy -Resolution $res -Request $req -SpawnsToday $today
-    if (-not $d.allowed) { return (New-HordeNodeOutcome -State "refused" -Reason (@($d.reasons) -join "; ")) }
-    # 2. Own login only.
-    if (-not (Test-HordeNodeOwnLogin -Layers $layers -Provider ("" + $res.binding.value.provider))) { return (New-HordeNodeOutcome -State "refused" -Reason ("the provider " + $res.binding.value.provider + " needs a key, which only engines E10's launch stub may hand a session; until it exists only a profile on the harness's own login is started remotely")) }
-    # 3. The folder.
-    if (-not (& $Context.workdirExists $d.workdir)) { return (New-HordeNodeOutcome -State "refused" -Reason ("the folder " + $d.workdir + " does not exist; this version starts sessions only in existing folders and creates no worktree")) }
-    # 4. The plan, the program and the host.
-    $sid = [guid]::NewGuid().ToString()
-    $title = $null
-    if ($null -ne $a.PSObject.Properties["title"]) { $title = "" + $a.title }
-    $name = Format-HordeSessionName -Label ("" + $a.label) -Title $title
-    $prompt = ""
-    if ($null -ne $a.prompt.PSObject.Properties["text"]) { $prompt = "" + $a.prompt.text }
-    $plan = New-HordeLaunchPlan -Resolution $res -Level $d.level -SessionId $sid -Name $name -Prompt $prompt
-    if ($plan.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $plan.reason) }
-    $hostName = "" + $Context.hostName
-    if ($null -ne $a.PSObject.Properties["host"] -and "" + $a.host -ne "") { $hostName = "" + $a.host }
-    $ac = Get-HordeNodeActor -Name $hostName
-    if ($ac.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $ac.reason) }
-    $actor = $ac.value
-    $adapter = (Get-HordeLaunchAdapter -Name $plan.value.harness).value
-    $prog = & $actor.resolve $plan.value.program
-    if ($prog.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $prog.reason) }
-    # 5. The pane, recorded before it starts so a node that stops halfway leaves a trace.
-    $started = (& $Context.now).ToUniversalTime().ToString("o")
-    $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = $started; pid = $null; procStart = ""; closedAt = ""; outcome = "starting" }
-    Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
+    $lock = Enter-HordeNodeSpawnLock -Dir $Context.records
+    if ($null -eq $lock) { return (New-HordeNodeOutcome -State "refused" -Reason "another spawn on this node holds its spawn lock; the cap is never counted by two at once") }
+    try {
+        $today = Get-HordeNodeSpawnsToday -Dir $Context.records -Now (& $Context.now)
+        if ($today.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $today.reason) }
+        $d = Test-HordeRemotePolicy -Policy $Context.policy -Resolution $res -Request $req -SpawnsToday $today.value
+        if (-not $d.allowed) { return (New-HordeNodeOutcome -State "refused" -Reason (@($d.reasons) -join "; ")) }
+        # 2. Own login only.
+        if (-not (Test-HordeNodeOwnLogin -Layers $layers -Provider ("" + $res.binding.value.provider))) { return (New-HordeNodeOutcome -State "refused" -Reason ("the provider " + $res.binding.value.provider + " needs a key, which only engines E10's launch stub may hand a session; until it exists only a profile on the harness's own login is started remotely")) }
+        # 3. The folder.
+        if (-not (& $Context.workdirExists $d.workdir)) { return (New-HordeNodeOutcome -State "refused" -Reason ("the folder " + $d.workdir + " does not exist; this version starts sessions only in existing folders and creates no worktree")) }
+        # 4. The host and this node's own terminal, named.
+        $hostName = "" + $Context.hostName
+        if ($null -ne $a.PSObject.Properties["host"] -and "" + $a.host -ne "") { $hostName = "" + $a.host }
+        $ac = Get-HordeNodeActor -Name $hostName
+        if ($ac.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $ac.reason) }
+        $actor = $ac.value
+        $tg = & $actor.own
+        if ($null -eq $tg -or $tg.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason ("this node cannot name its own terminal: " + $(if ($null -ne $tg) { $tg.reason } else { "the host gave no answer" }))) }
+        $term = $tg.value
+        # 5. The plan: the policy's decision, and the host's lookup of an absolute .exe.
+        $sid = [guid]::NewGuid().ToString()
+        $title = $null
+        if ($null -ne $a.PSObject.Properties["title"]) { $title = "" + $a.title }
+        $name = Format-HordeSessionName -Label ("" + $a.label) -Title $title
+        $prompt = ""
+        if ($null -ne $a.prompt.PSObject.Properties["text"]) { $prompt = "" + $a.prompt.text }
+        $resolveProgram = { param($n) & $actor.resolve $n }
+        $plan = New-HordeLaunchPlan -Resolution $res -Decision $d -SessionId $sid -Name $name -Prompt $prompt -Resolve $resolveProgram
+        if ($plan.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $plan.reason) }
+        $adapter = (Get-HordeLaunchAdapter -Name $plan.value.harness).value
+        # 6. The pane, recorded before it starts, under the lock, so the count already holds it.
+        $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = (& $Context.now).ToUniversalTime().ToString("o"); pid = $null; procStart = ""; closedAt = ""; outcome = "starting" }
+        Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
+    } finally { $lock.Dispose() }
     # The pane inherits the environment of the spawn call (issue #95): every variable the harness owns
     # is removed from it, so nothing of the node's own engine settings reaches the session.
     $envMap = @{}
-    # Assigned before it is listed: Get-HordeAgentProp hands a list back as one object.
     $owned = Get-HordeAgentProp $res.descriptor "ownedEnv"
     foreach ($o in @($owned)) { if ($null -ne $o) { $envMap["" + $o.name] = $null } }
-    $pane = & $actor.start $prog.value @($plan.value.argv) $d.workdir $envMap
+    $pane = & $actor.start $term $plan.value.program @($plan.value.argv) $d.workdir $envMap
     if ($pane.state -ne "known") {
         $record.outcome = "failed"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
         return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the host did not start the session's pane: " + $pane.reason))
@@ -205,23 +269,25 @@ function Invoke-HordeNodeSpawn {
         $i = & $adapter.identify $sid $Context.environment
         if ($i.state -ne "known") { return $null }
         $live = & $Context.processStart $i.value.pid
-        if ($null -ne $live -and "" + $live -ceq "" + $i.value.procStart) { return $i.value }
+        if ($null -ne $live -and (Test-HordeNodeSameStart $live $i.value.procStart)) { return $i.value }
         return $null
     }
     if ($null -eq $proc) {
-        $null = Stop-HordeNodeSession -Context $Context -Actor $actor -Adapter $adapter -Handle ("" + $record.handle)
-        $record.outcome = "failed"; $record.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
-        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the harness never reported its process within " + $Context.bounds.identifySeconds + " s as one the process table shows with that start time; its pane was ended"))
+        # Not proven, so not ended: the host ends a pane only for a process proven in it. Its close text
+        # is typed, and the record names the pane for a person.
+        $null = Send-HordeNodeCloseText -Actor $actor -Target $term -Handle $record.handle -Adapter $adapter
+        $record.outcome = "unproven"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
+        return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the harness never reported its process within " + $Context.bounds.identifySeconds + " s as one the process table shows with that start time; its close text was typed, and its pane " + $record.handle + " is left for a person, since a pane is ended only for a proven process"))
     }
     $record.pid = [long]$proc.pid; $record.procStart = "" + $proc.procStart
     Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
-    # 6. The mode, read back. Exactly the level asked for, or the session is not kept.
+    # 7. The mode, read back. Exactly the level asked for, or the session is not kept.
     $mode = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.modeSeconds -Probe { $m = & $adapter.readMode $sid $Context.environment; if ($m.state -eq "known") { $m } else { $null } }
     $why = ""
     if ($null -eq $mode) { $why = "the session's permission mode could not be read back within " + $Context.bounds.modeSeconds + " s, so it is not kept (fail closed)" }
     elseif ("" + $mode.value -cne $d.level) { $why = "the session reports the level " + $mode.value + " and was asked for " + $d.level + ", so it is not kept" }
     if ($why -ne "") {
-        $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart
+        $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart
         if (-not $gone) { $why += "; WARNING: it could not be proven ended" }
         $record.outcome = "refused"; $record.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
         return (New-HordeNodeOutcome -State "refused" -SessionId $sid -Reason $why)
@@ -252,10 +318,10 @@ function Invoke-HordeNodeClose {
     if ($ac.state -ne "known") { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason $ac.reason) }
     $ad = Get-HordeLaunchAdapter -Name ("" + $r.harness)
     if ($ad.state -ne "known") { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason $ad.reason) }
-    foreach ($t in @($ad.value.closeText)) {
-        $sent = & $ac.value.send ("" + $r.handle) $t
-        if ($sent.state -ne "known") { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the close text could not be typed into the session's pane: " + $sent.reason)) }
-    }
+    $tg = & $ac.value.own
+    if ($null -eq $tg -or $tg.state -ne "known") { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("this node cannot name its own terminal: " + $(if ($null -ne $tg) { $tg.reason } else { "the host gave no answer" }))) }
+    $sent = Send-HordeNodeCloseText -Actor $ac.value -Target $tg.value -Handle ("" + $r.handle) -Adapter $ad.value
+    if ($null -eq $sent -or $sent.state -ne "known") { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the close text could not be typed into the session's pane: " + $(if ($null -ne $sent) { $sent.reason } else { "no answer" }))) }
     $gone = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.closeSeconds -Probe { if (Test-HordeNodeProcessGone -Context $Context -ProcessId ([long]$r.pid) -ProcStart ("" + $r.procStart)) { $true } else { $null } }
     if ($gone -ne $true) { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running " + $Context.bounds.closeSeconds + " s after its close text; a close is graceful, so nothing was forced")) }
     $r.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); $r.outcome = "closed"
@@ -265,27 +331,27 @@ function Invoke-HordeNodeClose {
 
 function Get-HordeNodeEngineLayers {
     # The node's own engine layers: L0 from the harness folders, L1 from <HordeHome>\engine.json and L4
-    # from <HordeHome>\engine-live.json when they exist - the names engines E6 and E7 will read and
-    # write. Returns { layers; problems }: layers that fail the checker are left out, and each problem
-    # is named, so a node with a broken file acts on the layers it can trust and says which it could not.
+    # from <HordeHome>\engine-live.json when they exist - the names engines E6 and E7 inherit. Returns
+    # { layers; problems }. Every problem refuses every spawn (step 0): a file that fails is never
+    # dropped and acted on without it.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, $Descriptors)
     $docs = New-Object System.Collections.ArrayList
     foreach ($l in @(Get-HordeBuiltinLayer -Root $Root)) { [void]$docs.Add($l) }
+    $problems = New-Object System.Collections.ArrayList
     foreach ($pair in @(@("L1", "engine.json"), @("L4", "engine-live.json"))) {
         $path = Join-Path $HordeHome $pair[1]
-        if (Test-Path -LiteralPath $path -PathType Leaf) { [void]$docs.Add((Read-HordeEngineLayerText -Text ([System.IO.File]::ReadAllText($path)) -Layer $pair[0] -Source $path)) }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try { [void]$docs.Add((Read-HordeEngineLayerText -Text ([System.IO.File]::ReadAllText($path)) -Layer $pair[0] -Source $path)) }
+        catch { [void]$problems.Add($path + ": not JSON") }
     }
-    $problems = New-Object System.Collections.ArrayList
     $findings = @(Test-HordeEngineConfig -Documents $docs.ToArray() -Descriptors $Descriptors | Where-Object { $_.severity -ceq "error" })
     foreach ($f in $findings) { [void]$problems.Add($f.source + " " + $f.path + ": " + $f.code + " - " + $f.detail) }
-    $bad = @($findings | ForEach-Object { "" + $_.source } | Select-Object -Unique)
-    $kept = @($docs | Where-Object { $bad -cnotcontains ("" + $_.source) })
-    return [pscustomobject]@{ layers = $kept; problems = $problems.ToArray() }
+    return [pscustomobject]@{ layers = $docs.ToArray(); problems = $problems.ToArray() }
 }
 
 function New-HordeNodeActContext {
-    # What a node acts with, read once when it starts serving: its policy, its engine layers, the
-    # harness descriptors, its namespace and its spawn records, the real clock and process table.
+    # What a node acts with, read once when it starts serving: its policy, its engine layers and their
+    # problems, the harness descriptors, its namespace and its spawn records, the real clock and process table.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)]$Namespace)
     $all = Get-HordeAgentDescriptors -Root $Root
     $descriptors = @{}
@@ -294,13 +360,13 @@ function New-HordeNodeActContext {
     $policy = Get-HordeNodePolicy -Path $policyPath
     $eng = Get-HordeNodeEngineLayers -Root $Root -HordeHome $HordeHome -Descriptors $descriptors
     $note = "policy " + $policy.state + " (" + $policyPath + ")"
-    if (@($eng.problems).Count -gt 0) { $note += "; engine layers left out: " + (@($eng.problems) -join " | ") }
+    if (@($eng.problems).Count -gt 0) { $note += "; ENGINE CONFIGURATION FAILS ITS CHECKS, every spawn is refused: " + (@($eng.problems) -join " | ") }
     # The environment the harness will see is the one the spawn call passes on (issue #95): this
     # process's, less what the spawn removes. A harness finds its own files from it.
     $view = @{}
     foreach ($e in @([System.Environment]::GetEnvironmentVariables().GetEnumerator())) { $view["" + $e.Key] = "" + $e.Value }
     return [pscustomobject]@{
-        policy = $policy; layers = @($eng.layers); descriptors = $descriptors; namespace = $Namespace
+        policy = $policy; layers = @($eng.layers); layerProblems = @($eng.problems); descriptors = $descriptors; namespace = $Namespace
         records = (Get-HordeNodeSpawnDir -HordeHome $HordeHome); environment = $view; hostName = ""
         processStart = { param($p) Get-HordeLocalProcessStart -ProcessId $p }
         sleep = { param($ms) Start-Sleep -Milliseconds $ms }; now = { [datetime]::UtcNow }
