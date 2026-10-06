@@ -17,7 +17,11 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "remote\Messaging.ps1")
 
-function S { param([string]$Id, [string]$Label, [string]$ProcessId, [string]$Start) return [pscustomobject]@{ sessionId = $Id; label = $Label; pid = $ProcessId; procStart = $Start } }
+function S {
+    # A session entry with its full R11 identity: the pid and procStart are placed by device and space.
+    param([string]$Id, [string]$Label, [string]$ProcessId, [string]$Start, [string]$Device = "0f000000-0000-4000-8000-0000000000d1", [string]$Space = "windows")
+    return [pscustomobject]@{ sessionId = $Id; label = $Label; pid = $ProcessId; procStart = $Start; ns = [pscustomobject]@{ device = $Device; space = $Space } }
+}
 function Has { param([string]$Text, [string]$Part) return ("$Text".Contains($Part)) }
 
 Write-Host ""
@@ -104,5 +108,35 @@ $t = Resolve-HordeDeliverTarget -SessionId "h1" -Label "C2" -Live @() -HubSpawne
 Check ((Has $t.refused "no live session wears the label C2")) "a label no live session wears is refused"
 $t = Resolve-HordeDeliverTarget -SessionId "l1" -Label "" -Live @(S "l1" "" "200" "p200") -HubSpawned $hub -DeliverTo @("C2")
 Check ((Has $t.refused "neither spawned by this hub nor opted in")) "a live session with no label is never opted in"
+
+Write-Host ""
+Write-Host "--- R11. one process is one device, one space, one pid and one start time ---" -ForegroundColor Cyan
+
+# WSL beside Windows on one node: the same pid number, and even the same start ticks, name two
+# processes in two spaces. Hub-spawned status passes through the process only when all four agree.
+$a = S "h1" "C2" "100" "p100"
+Check (Test-HordeDeliverSameProcess $a (S "h1b" "C2" "100" "p100")) "CONTROL: the same device, space, pid and start time are one process"
+Check (-not (Test-HordeDeliverSameProcess $a (S "h1b" "C2" "100" "p100" -Space "wsl:ubuntu"))) "the same pid and start time in another space are another process"
+Check (-not (Test-HordeDeliverSameProcess $a (S "h1b" "C2" "100" "p100" -Device "0f000000-0000-4000-8000-0000000000d2"))) "the same pid and start time on another device are another process"
+$noNs = [pscustomobject]@{ sessionId = "h1b"; label = "C2"; pid = "100"; procStart = "p100" }
+Check (-not (Test-HordeDeliverSameProcess $a $noNs)) "an entry with no namespace proves nothing"
+Check (-not (Test-HordeDeliverSameProcess $noNs $a)) "and neither does a hub record with none"
+Check (-not (Test-HordeDeliverSameProcess $a (S "h1b" "C2" "100" "p100" -Space ""))) "an empty space proves nothing"
+Check (-not (Test-HordeDeliverSameProcess (S "h1" "C2" "100" "p100" -Device "") (S "h1b" "C2" "100" "p100" -Device ""))) "an empty device on both sides proves nothing"
+$t = Resolve-HordeDeliverTarget -SessionId "h1" -Label "C2" -Live @(S "w1" "C2" "100" "p100" -Space "wsl:ubuntu") -HubSpawned @(S "h1" "C2" "100" "p100") -DeliverTo @()
+Check ((Has $t.refused "neither spawned by this hub nor opted in")) "a WSL session with the hub's Windows pid and start time does not inherit hub-spawned status"
+
+Write-Host ""
+Write-Host "--- the stage an outbox record holds is decided from its markers by the receipt rule ---" -ForegroundColor Cyan
+
+function M { param([string]$Stage, [string]$At) return [pscustomobject]@{ stage = $Stage; at = $At } }
+$r = Select-HordeMailRecordedStage -Markers @()
+Check ($r.stage -ceq "queued" -and $r.at -eq "") "a record with no marker is queued"
+$r = Select-HordeMailRecordedStage -Markers @((M "handed-over" "2026-10-05T12:00:02.000Z"), (M "accepted" "2026-10-05T12:00:01.000Z"))
+Check ($r.stage -ceq "handed-over" -and $r.at -ceq "2026-10-05T12:00:02.000Z") "markers are replayed in time order: accepted, then handed-over"
+$r = Select-HordeMailRecordedStage -Markers @((M "seen" "2026-10-05T12:00:03.000Z"), (M "refused" "2026-10-05T12:00:04.000Z"), (M "accepted" "2026-10-05T12:00:05.000Z"))
+Check ($r.stage -ceq "seen" -and $r.at -ceq "2026-10-05T12:00:03.000Z") "two final markers from a race: the first stands, and nothing after it moves the record"
+$r = Select-HordeMailRecordedStage -Markers @((M "accepted" "2026-10-05T12:00:01.000Z"), (M "lost" "2026-10-05T12:00:02.000Z"))
+Check ($r.stage -ceq "accepted") "a marker naming no stage moves nothing"
 
 Complete-HordeSuite -Success "a deliver reaches one live session past its own gate, a receipt only moves forward, held mail never blocks the queue, and mail comes from its link's device"
