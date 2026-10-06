@@ -31,16 +31,20 @@ function Check { param($Cond, [string]$What)
 function Get-StartTicks { param([int]$Id) $p = Get-Process -Id $Id -ErrorAction SilentlyContinue; if ($p) { return $p.StartTime.ToUniversalTime().Ticks }; return $null }
 function Test-Gone { param([int]$Id, $Ticks) $t = Get-StartTicks -Id $Id; return [bool]($null -eq $t -or $t -ne $Ticks) }
 function Wait-Until { param([scriptblock]$Cond, [int]$Seconds) $d = (Get-Date).AddSeconds($Seconds); while ((Get-Date) -lt $d) { if (& $Cond) { return $true }; Start-Sleep -Milliseconds 250 }; return [bool](& $Cond) }
+# Every harness's process image, read from the harnesses' own names.txt (CONTRIBUTING 14: this file
+# names none of them), so a pane running any harness is caught by its image name.
+$harnessImages = @(Get-ChildItem -Path (Join-Path $root "agents\*\names.txt") | ForEach-Object { Get-Content -LiteralPath $_.FullName } | Where-Object { $_ -match '^\s*([^|#]+?)\s*\|\s*processImage\s*\|' } | ForEach-Object { $Matches[1].Trim() })
 function Test-IsTool {
-    # Is the process -Id running exactly the pane tool, and nothing named after a harness?
+    # Is the process -Id running exactly the pane tool, and no harness's image?
     param([int]$Id)
     $p = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $Id) -ErrorAction SilentlyContinue
     if (-not $p) { return $false }
-    return [bool](("" + $p.ExecutablePath) -ieq $tool -and ("" + $p.ExecutablePath) -notlike "*claude*" -and ("" + $p.CommandLine) -notlike "*claude*")
+    return [bool](("" + $p.ExecutablePath) -ieq $tool -and $harnessImages -notcontains ("" + $p.Name))
 }
 
 $tool = Get-HordePaneTool
-Check ([System.IO.Path]::IsPathRooted($tool) -and $tool -notlike "*claude*" -and (Split-Path -Leaf $tool) -ceq "horde-panetool.exe") "the only program this scenario starts is the compiled pane tool, by absolute path"
+Check ($harnessImages.Count -ge 1) ("CONTROL: the harnesses' process images were read, so the check below can see one (" + ($harnessImages -join ", ") + ")")
+Check ([System.IO.Path]::IsPathRooted($tool) -and $harnessImages -notcontains (Split-Path -Leaf $tool) -and (Split-Path -Leaf $tool) -ceq "horde-panetool.exe") "the only program this scenario starts is the compiled pane tool, by absolute path, and it is no harness's image"
 $work = Join-Path $env:TEMP ("horde-e2e-act-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $nodeOnly = "HORDE_NODE_ONLY"
