@@ -284,7 +284,14 @@ function Get-HordeDecisionTitleProblem {
     # them, do not count as saying anything.
     param([string]$Title)
     if ($Title -notmatch '\p{L}') { return "the title has no letters: write the question in plain words" }
-    $rest = [regex]::Replace($Title, '(?i)\b(pull[\s-]*requests?|prs?|merge[\s-]*requests?|mrs?|issues?|tickets?|bugs?)\b', ' ')
+    # A LINK IS A REFERENCE, whatever words its host and path are made of: before links were set
+    # aside, a title that was only a pull request's address counted six words and was added (measured
+    # 2026-10-06).
+    $rest = [regex]::Replace($Title, '(?i)\b[a-z][a-z0-9+.-]*://\S+', ' ')
+    # "Not followed by a letter", not \b: there is no word boundary between a letter and a digit, so
+    # with \b "PR1469" kept its "PR" as a word, and "PR1469 PR1470 PR1471" was added as three (same
+    # measurement). "press" and "bugfix" are still words: a letter follows.
+    $rest = [regex]::Replace($rest, '(?i)\b(pull[\s-]*requests?|prs?|merge[\s-]*requests?|mrs?|issues?|tickets?|bugs?)(?!\p{L})', ' ')
     $rest = [regex]::Replace($rest, '#?[0-9]+', ' ')
     $words = [regex]::Matches($rest, '\p{L}[\p{L}\p{M}]*').Count
     if ($words -eq 0) { return "the title is only a pull-request or issue reference: write the question in plain words, and put the reference in 'references'" }

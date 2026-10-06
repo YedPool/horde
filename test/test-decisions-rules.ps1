@@ -84,6 +84,18 @@ foreach ($bad in @("7", "#7?", "1469", "PR 1469?", "pr 1469", "pull request 1469
     Check ($f.Count -eq 1 -and ((Test-Says $f "only a pull-request or issue reference") -or (Test-Says $f "no letters") -or (Test-Says $f "too short"))) ("refused: '" + $bad + "'")
 }
 Check (Test-Says (Get-Findings (New-Question @{ title = "PR 1469?" })) "only a pull-request or issue reference") "'PR 1469?' is refused as only a reference, and told where a reference belongs"
+# THE SAME REFERENCES IN THE TWO SPELLINGS THE RULE FIRST MISSED (measured 2026-10-06, each was added
+# as a question): the word joined to its number, where there is no word boundary between them, and a
+# link, whose host and path counted as six words.
+foreach ($bad in @("PR1469 PR1470 PR1471", "issue7, issue8 and issue9?", "https://github.com/acme/app/pull/12", "See https://github.com/acme/app/pull/12 and https://github.com/acme/app/issues/7")) {
+    $f = Get-Findings (New-Question @{ title = $bad })
+    Check ($f.Count -eq 1 -and ((Test-Says $f "only a pull-request or issue reference") -or (Test-Says $f "too short"))) ("refused: '" + $bad + "'" + $(if ($f.Count -ne 1) { " (" + $f.Count + " finding(s))" } else { "" }))
+}
+Check (Test-Says (Get-Findings (New-Question @{ title = "https://github.com/acme/app/pull/12" })) "only a pull-request or issue reference") "a title that is only a link is refused as only a reference"
+foreach ($good in @("Should the closing sound follow https://example.org/sound-notes or stay silent?", "Is the press release ready to send?", "Does the bugfix for the reader need another device test?")) {
+    $f = Get-Findings (New-Question @{ title = $good })
+    Check ($f.Count -eq 0) ("CONTROL: accepted: '" + $good + "'" + $(if ($f.Count) { " (" + ($f -join "; ") + ")" } else { "" }))
+}
 Check (Test-Says (Get-Findings (New-Question @{ title = "1469" })) "no letters") "a title that is only a number is refused as having no letters"
 Check (Test-Says (Get-Findings (New-Question @{ title = "???" })) "no letters") "so is a title of punctuation"
 Check (Test-Says (Get-Findings (New-Question @{ title = "Merge PR 1469?" })) "too short") "'Merge PR 1469?' is refused: one word beside the reference does not explain it"

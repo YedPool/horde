@@ -117,8 +117,14 @@
            Find = 'if ($words -lt $script:HordeDecisionMinTitleWords) {'
            Replace = 'if ($false) {' }
         @{ Name = "reference-words-count-as-explaining"
-           Find = '$rest = [regex]::Replace($Title, ''(?i)\b(pull[\s-]*requests?|prs?|merge[\s-]*requests?|mrs?|issues?|tickets?|bugs?)\b'', '' '')'
+           Find = '$rest = [regex]::Replace($rest, ''(?i)\b(pull[\s-]*requests?|prs?|merge[\s-]*requests?|mrs?|issues?|tickets?|bugs?)(?!\p{L})'', '' '')'
+           Replace = '$rest = $rest' }
+        @{ Name = "link-counts-as-explaining"
+           Find = '$rest = [regex]::Replace($Title, ''(?i)\b[a-z][a-z0-9+.-]*://\S+'', '' '')'
            Replace = '$rest = $Title' }
+        @{ Name = "reference-joined-to-its-number-counts-as-a-word"
+           Find = 'tickets?|bugs?)(?!\p{L})'', '' '')'
+           Replace = 'tickets?|bugs?)\b'', '' '')' }
         @{ Name = "two-word-title-allowed"
            Find = '$script:HordeDecisionMinTitleWords = 3'
            Replace = '$script:HordeDecisionMinTitleWords = 2' }
