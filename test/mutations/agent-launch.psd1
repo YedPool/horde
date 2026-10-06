@@ -40,10 +40,10 @@
            Find = 'if (@($CloseText | Where-Object { "" + $_ -ne "" }).Count -eq 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "decision-not-checked"
-           Find = 'if ($Decision.allowed -ne $true) {'
+           Find = 'if (-not ($Decision.allowed -is [bool] -and $Decision.allowed)) {'
            Replace = 'if ($false) {' }
         @{ Name = "program-not-checked"
-           Find = 'if (-not [System.IO.Path]::IsPathRooted($path) -or [System.IO.Path]::GetExtension($path) -ine ".exe") {'
+           Find = 'if (-not (Test-HordeLaunchProgramPath -Path $path)) {'
            Replace = 'if ($false) {' }
         @{ Name = "program-by-name"
            Find = 'program = $path;'
@@ -54,5 +54,14 @@
         @{ Name = "id-line-break-accepted"
            Find = ' -or $SessionId -cmatch ''[\r\n]'''
            Replace = '' }
+        @{ Name = "allowed-not-a-bool"
+           Find = 'if (-not ($Decision.allowed -is [bool] -and $Decision.allowed)) {'
+           Replace = 'if (-not $Decision.allowed) {' }
+        @{ Name = "drive-relative-program"
+           Find = '    if ($Path -cnotmatch ''\A[A-Za-z]:\\'') { return $false }'
+           Replace = '' }
+        @{ Name = "program-not-full-form"
+           Find = '    return [bool]($full -ceq $Path)'
+           Replace = '    return $true' }
     )
 }

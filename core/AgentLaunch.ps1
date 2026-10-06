@@ -109,6 +109,19 @@ function Format-HordeSessionName {
     return (New-HordeKnown -Value $name)
 }
 
+function Test-HordeLaunchProgramPath {
+    # Is -Path a full, local, absolute path to an .exe? A drive letter, ":\", and the path equal to its
+    # own full form: C:claude.exe (drive-relative) and \claude.exe (rooted on the current drive) are
+    # rooted to IsPathRooted but name a file relative to state the node does not control (re-review of
+    # PR #98).
+    param([AllowEmptyString()][string]$Path)
+    if ($Path -cnotmatch '\A[A-Za-z]:\\') { return $false }
+    if ([System.IO.Path]::GetExtension($Path) -ine ".exe") { return $false }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
+    return [bool]($full -ceq $Path)
+}
+
 function New-HordeLaunchPlan {
     # The launch plan for one session, as an answer: known { harness; program; argv; level; model;
     # name; notes }, or unknown with the first reason it cannot be built. Pure but for what the
@@ -119,7 +132,7 @@ function New-HordeLaunchPlan {
     param([Parameter(Mandatory = $true)]$Resolution, [Parameter(Mandatory = $true)]$Decision,
         [Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)]$Name,
         [AllowEmptyString()][string]$Prompt = "", [Parameter(Mandatory = $true)][scriptblock]$Resolve, $Levels = $null)
-    if ($Decision.allowed -ne $true) { return (New-HordeUnknown -Reason ("the node's policy did not allow this session: " + (@($Decision.reasons) -join "; "))) }
+    if (-not ($Decision.allowed -is [bool] -and $Decision.allowed)) { return (New-HordeUnknown -Reason ("the node's policy did not allow this session: " + (@($Decision.reasons) -join "; "))) }
     $Level = "" + $Decision.level
     if ($Level -eq "") { return (New-HordeUnknown -Reason "the policy's decision names no level") }
     if ($Resolution.binding.state -ne "known") { return (New-HordeUnknown -Reason ("the engine is not resolved: " + $Resolution.binding.reason)) }
@@ -163,6 +176,6 @@ function New-HordeLaunchPlan {
         return (New-HordeUnknown -Reason $why)
     }
     $path = "" + $prog.value
-    if (-not [System.IO.Path]::IsPathRooted($path) -or [System.IO.Path]::GetExtension($path) -ine ".exe") { return (New-HordeUnknown -Reason ("the program must be an absolute path to an .exe, never a name looked up at spawn time or a script shim run by cmd.exe; the host gave '" + $path + "'")) }
+    if (-not (Test-HordeLaunchProgramPath -Path $path)) { return (New-HordeUnknown -Reason ("the program must be an absolute path to an .exe, never a name looked up at spawn time or a script shim run by cmd.exe; the host gave '" + $path + "'")) }
     return (New-HordeKnown -Value ([pscustomobject]@{ harness = "" + $b.harness; program = $path; argv = [string[]]@($argv.value); level = $Level; model = $b.model; name = $nameText; notes = $notes.ToArray() }))
 }

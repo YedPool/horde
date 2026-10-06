@@ -98,7 +98,7 @@ Check ($p.state -eq "unknown" -and $p.reason -ceq "the fixture adapter refuses")
 Write-Host ""
 Write-Host "--- the program is an absolute .exe; the level is the policy's own (review of PR #98, F3 and F4) ---" -ForegroundColor Cyan
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" -Argv { param($s) New-HordeKnown -Value ([string[]]@("--id", $s.sessionId)) } -Preconditions { param($n) @() } -Identify { param($id, $v) $null } -ReadMode { param($id, $v) $null } -CloseText @("bye")
-foreach ($bad in @("C:\npm\harness-a.cmd", "C:\npm\harness-a.bat", "harness-a.exe", "harness-a", "C:\bin\harness-a.exe.cmd")) {
+foreach ($bad in @("C:\npm\harness-a.cmd", "C:\npm\harness-a.bat", "harness-a.exe", "harness-a", "C:\bin\harness-a.exe.cmd", "C:harness-a.exe", "\harness-a.exe", "C:\bin\..\bin\harness-a.exe", "\\server\share\harness-a.exe", "C:\bin\harness-a.exe ")) {
     $rb = $bad
     $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -SessionId $sid -Name $name -Resolve ([scriptblock]::Create("param(`$n) New-HordeKnown -Value '" + $rb + "'"))
     Check ($p.state -eq "unknown" -and $p.reason -like "*absolute path to an .exe*") ("a program resolved as '" + $bad + "' is refused: only an absolute .exe is ever run")
@@ -107,6 +107,11 @@ $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -SessionI
 Check ($p.state -eq "unknown" -and $p.reason -like "*not on this node's PATH*") "a program the host cannot find gives no plan, with the host's reason"
 $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision ([pscustomobject]@{ allowed = $false; level = "ask"; reasons = @("over the cap") }) -SessionId $sid -Name $name -Resolve $exeOf
 Check ($p.state -eq "unknown" -and $p.reason -like "*did not allow*over the cap*") "a decision the policy did not allow gives no plan, whatever level it names"
+$p = New-HordeLaunchPlan -Resolution (Resolve) -Decision ([pscustomobject]@{ allowed = "true"; level = "ask"; reasons = @() }) -SessionId $sid -Name $name -Resolve $exeOf
+Check ($p.state -eq "unknown" -and $p.reason -like "*did not allow*") "a decision whose allowed is the text 'true', not the boolean, gives no plan (re-review of PR #98)"
+$p = New-HordeLaunchPlan -Resolution (Resolve) -Decision ([pscustomobject]@{ allowed = 1; level = "ask"; reasons = @() }) -SessionId $sid -Name $name -Resolve $exeOf
+Check ($p.state -eq "unknown") "nor one whose allowed is the number 1"
+Check ((Test-HordeLaunchProgramPath -Path "C:\bin\harness-a.exe") -eq $true) "CONTROL: a full local path to an .exe is accepted"
 $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision ([pscustomobject]@{ allowed = $true; level = $null; reasons = @() }) -SessionId $sid -Name $name -Resolve $exeOf
 Check ($p.state -eq "unknown" -and $p.reason -like "*names no level*") "a decision with no level gives no plan"
 $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -SessionId ($sid + "`n") -Name $name -Resolve $exeOf
