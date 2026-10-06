@@ -27,5 +27,8 @@
         @{ Name = "process-not-printed"
            Find = 'if ($null -ne $ex) { $line += " pid " + $ex.pid + " procStart " + $ex.procStart }'
            Replace = '' }
+        @{ Name = "status-names-itself"
+           Find = '    if ("" + $v.requestId -ne "") { $rid = "" + $v.requestId }'
+           Replace = '' }
     )
 }

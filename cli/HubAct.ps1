@@ -142,7 +142,10 @@ function Format-HordeHubActAnswer {
     if ($null -ne $Res.error) { return ("REFUSED request " + $RequestId + " (" + $Res.error.code + "): " + $Res.error.reason) }
     if ("" + $Res.result.state -cne "known") { return ("UNKNOWN request " + $RequestId + ": " + $Res.result.reason) }
     $v = $Res.result.value
-    $line = ($("" + $v.state).ToUpperInvariant() + " " + $v.verb + " request " + $RequestId)
+    # The entry names its own request: for request.status that is the request asked about, not this one.
+    $rid = $RequestId
+    if ("" + $v.requestId -ne "") { $rid = "" + $v.requestId }
+    $line = ($("" + $v.state).ToUpperInvariant() + " " + $v.verb + " request " + $rid)
     if ("" + $v.sessionId -ne "") { $line += " session " + $v.sessionId }
     $ex = Get-HordeLinkProp $v "expect"
     if ($null -ne $ex) { $line += " pid " + $ex.pid + " procStart " + $ex.procStart }

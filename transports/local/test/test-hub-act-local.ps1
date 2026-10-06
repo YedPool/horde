@@ -82,7 +82,9 @@ try {
     Check ($cl.code -ne 0 -and ($cl.out + $cl.err) -clike "*no record of starting the session*") "a close of a session the hub never started is refused before anything is sent"
     $exited = $node.WaitForExit(60000)
     Check ($exited -and $node.ExitCode -eq 0) "the node served its two links and stopped"
-    Check (-not (Test-Path -LiteralPath (Join-Path $homeDir "node\spawned"))) "the node recorded no spawned session: nothing was started"
+    # The spawn lock lives in the records folder, so the folder may exist; no record may.
+    $recs = @(Get-ChildItem -LiteralPath (Join-Path $homeDir "node\spawned") -Filter "*.json" -File -ErrorAction SilentlyContinue | Where-Object { -not $_.Name.StartsWith(".") })
+    Check ($recs.Count -eq 0) "the node recorded no spawned session: nothing was started"
     Check (-not (Test-Path -LiteralPath (Join-Path $root "Microsoft"))) "nothing was written into the repository the commands were started from"
 } finally {
     if ($null -ne $node -and -not $node.HasExited) { try { $node.Kill() } catch { }; $null = $node.WaitForExit(10000) }

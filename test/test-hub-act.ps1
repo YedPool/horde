@@ -59,6 +59,7 @@ $r2 = Invoke-HordeHubAct -Entry $entry -Hub $hub -Contract $contract -Verb "sess
 Check ($r2.answered -and "$($r2.result.value.state)" -ceq "done" -and [int]$node.counter["acts"] -eq 1) ("sent again with the same id and issue time, it is answered from the node's journal: the node acted once (" + $node.counter["acts"] + ")")
 $st = Invoke-HordeHubAct -Entry $entry -Hub $hub -Contract $contract -Verb "request.status" -Arguments ([pscustomobject]@{ requestId = $rid }) -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 30000
 Check ($st.answered -and "$($st.result.value.state)" -ceq "done" -and "$($st.result.value.sessionId)" -ceq "aaaaaaaa-1111-4222-8333-444444444444") "request.status reports the spawn's outcome"
+Check ((Format-HordeHubActAnswer -Res $st -RequestId "status-request-of-its-own") -clike ("DONE session.spawn request " + $rid + "*")) "and the person reads the request it was asked about, not the status request's own id"
 Stop-ActNode $node
 
 Write-Host ""
