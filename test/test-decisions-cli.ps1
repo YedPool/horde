@@ -121,6 +121,17 @@ $ansiFile = Join-Path $script:work "ansi.json"
 [System.IO.File]::WriteAllBytes($ansiFile, [byte[]](@(0x7B, 0x22, 0x74, 0x69, 0x74, 0x6C, 0x65, 0x22, 0x3A, 0x22, 0xE9, 0xE8, 0xE0, 0x22, 0x7D)))
 $ansi = Invoke-Decisions @("add", "-File", $ansiFile)
 Check ($ansi.code -eq 1 -and $ansi.out -like "*is not UTF-8 text*" -and (Get-Files) -ceq "0000000001.json") "a file in a legacy code page is refused, not read as other letters"
+# A FILE THAT IS NOT JSON IS REFUSED WITHOUT BEING QUOTED. Windows PowerShell 5.1's JSON parser puts
+# the text it could not read into its own message - the whole file for a string left open - so
+# repeating that message printed a token from a question file one quote short of valid (measured
+# 2026-10-06). The second file is a token and nothing else, which the parser names as a "primitive".
+$cutFile = Write-Json "cut.json" ('{"title":"Should the test login be rotated this week?","kind":"yes-no","whatItIs":"The token is ' + $token + ' today.')
+$cut = Invoke-Decisions @("add", "-File", $cutFile)
+Check ($cut.code -eq 1 -and $cut.out -like "*the question file*is not JSON*" -and (Get-Files) -ceq "0000000001.json") "a question file that is cut-off JSON is refused as not JSON, and nothing is stored"
+Check (-not $cut.out.Contains($token) -and -not $cut.out.Contains("rotated this week")) "and the refusal quotes nothing of the file: not the token, not the title"
+$bareFile = Write-Json "bare.json" $token
+$bare = Invoke-Decisions @("add", "-File", $bareFile)
+Check ($bare.code -eq 1 -and $bare.out -like "*is not JSON*" -and -not $bare.out.Contains($token)) "a file holding only a token is refused as not JSON, and the token is not printed back"
 $none = Invoke-Decisions @("show", "99")
 Check ($none.code -eq 1 -and $none.out -like "*there is no question 99; the highest number given is 1*") "show 99 says there is no question 99, and exits 1"
 

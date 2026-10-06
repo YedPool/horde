@@ -7,6 +7,9 @@
     Target = "decisions\Console.ps1"
     Suite  = "test\test-decisions-cli.ps1"
     Mutations = @(
+        @{ Name = "parser-message-repeated"
+           Find = 'is not JSON. Nothing of it is quoted here, because it may hold what must not be printed; ConvertFrom-Json on the file says where it stops being JSON")'
+           Replace = 'is not JSON: " + $_.Exception.Message)' }
         @{ Name = "json-not-ascii"
            Find = 'return [regex]::Replace($json, ''[^\x20-\x7E]'', {'
            Replace = 'return [regex]::Replace($json, ''(?!)'', {' }

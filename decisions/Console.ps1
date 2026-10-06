@@ -71,7 +71,11 @@ function Read-HordeDecisionJsonFile {
     $twice = @(Find-HordeJsonDuplicateKey -Text $text)
     if ($twice.Count -gt 0) { throw ($What + " '" + $Path + "' gives a key twice: " + ($twice -join "; ")) }
     $parsed = $null
-    try { $parsed = $text | ConvertFrom-Json } catch { throw ($What + " '" + $Path + "' is not JSON: " + $_.Exception.Message) }
+    # THE PARSER'S OWN MESSAGE IS NOT REPEATED. Windows PowerShell 5.1's ConvertFrom-Json quotes what it
+    # could not read: "Invalid JSON primitive: <the text>", and for a string left open the whole file.
+    # Measured 2026-10-06: a question file one quote short of valid, holding a token, had the token
+    # printed back by this refusal - before the secret check, which only sees a request, could run.
+    try { $parsed = $text | ConvertFrom-Json } catch { throw ($What + " '" + $Path + "' is not JSON. Nothing of it is quoted here, because it may hold what must not be printed; ConvertFrom-Json on the file says where it stops being JSON") }
     if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { throw ($What + " '" + $Path + "' must hold one JSON object, written between { and }") }
     return $parsed
 }
