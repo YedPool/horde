@@ -29,7 +29,7 @@ $sid = "0a1b2c3d-1111-4222-8333-444455556666"
 $script:handed = $null
 $script:verifies = @()
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $script:handed = $s; $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
+    -Argv { param($s) $script:handed = $s; $a = @("--id", $s.sessionId); foreach ($x in @($s.addDirs)) { if ("" + $x -ne "") { $a += @("--grant", ("" + $x)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) $script:verifies } `
     -Identify { param($id, $view) New-HordeAbsent -Note "fixture" } `
     -ReadMode { param($id, $view) New-HordeAbsent -Note "fixture" } -CloseText @("bye", "`r")
@@ -58,6 +58,21 @@ $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -Resolve 
 Check ($p.state -eq "known") ("CONTROL: a resolved engine, an expressible level and a name give a plan" + $(if ($p.state -ne "known") { " (" + $p.reason + ")" } else { "" }))
 Check ($p.value.program -ceq "C:\bin\harness-a.exe" -and $p.value.harness -ceq "harness-a" -and $p.value.level -ceq "ask") "the plan names the program as the absolute .exe the host resolved, the harness and the level"
 Check ((@($p.value.argv) -join "|") -ceq ("--id|" + $sid + "|--mode|careful|--title|E client search orc|hello")) "the argv is the adapter's, from the descriptor's fragment for the level, the id, the name and the prompt"
+$gd = "C:\h\node\spawned\" + $sid
+$p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -Resolve $exeOf -SessionId $sid -Name $name -AddDirs @($gd)
+Check ($p.state -eq "known" -and (@($script:handed.addDirs) -join "|") -ceq $gd -and (@($p.value.argv) -join "|") -like ("*--grant|" + $gd + "|*")) "a folder to grant is handed to the adapter and carried in its argv"
+foreach ($bad in @("relative\dir", "-C:\x", "C:\a\..\b", ("C:\a" + [char]10))) {
+    $p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -Resolve $exeOf -SessionId $sid -Name $name -AddDirs @($bad)
+    Check ($p.state -eq "unknown" -and $p.reason -like "*not a full rooted path*") ("a folder to grant that is not a full rooted path is refused: '" + ($bad -replace '[^\x20-\x7E]', '?') + "'")
+}
+Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" -Argv { param($s) New-HordeKnown -Value ([string[]]@("--id", $s.sessionId) + @($s.permissionArgs)) } -Preconditions { param($n) $script:verifies } -Identify { param($id, $view) New-HordeAbsent -Note "fixture" } -ReadMode { param($id, $view) New-HordeAbsent -Note "fixture" } -CloseText @("bye", "`r")
+$p = New-HordeLaunchPlan -Resolution (Resolve) -Decision (Allow "ask") -Resolve $exeOf -SessionId $sid -Name $name -AddDirs @($gd)
+Check ($p.state -eq "unknown" -and $p.reason -like "*was not given the folder*") "an adapter that leaves a granted folder out of its argv gets no plan"
+Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
+    -Argv { param($s) $script:handed = $s; $a = @("--id", $s.sessionId); foreach ($x in @($s.addDirs)) { if ("" + $x -ne "") { $a += @("--grant", ("" + $x)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
+    -Preconditions { param($n) $script:verifies } `
+    -Identify { param($id, $view) New-HordeAbsent -Note "fixture" } `
+    -ReadMode { param($id, $view) New-HordeAbsent -Note "fixture" } -CloseText @("bye", "`r")
 Check ($script:handed.name -ceq "E client search orc") "the adapter is handed the name; it never formats one"
 $p = New-HordeLaunchPlan -Resolution (Resolve -Desc $descA) -Decision (Allow "ask") -Resolve $exeOf -SessionId $sid -Name $name
 Check ($p.state -eq "known" -and (@($p.value.argv) -cnotcontains "--title") -and @($p.value.notes | Where-Object { $_ -like "unnamed:*session.remoteName*" }).Count -eq 1) "a harness whose session.remoteName is not yes gets no name, and the plan says why"

@@ -325,6 +325,22 @@ FrameRefuses "req-node-info.json" { param($x) $x.verb = "exec" } "unsupported-ve
 FrameRefuses "req-node-info.json" { param($x) $x.args | Add-Member -NotePropertyName argv -NotePropertyValue @("cmd.exe", "/c", "dir") } "$.args has 'argv', which the schema does not allow" "a req smuggling an argv into a verb's arguments is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree | Add-Member -NotePropertyName path -NotePropertyValue "C:\anything" } "$.args.worktree has 'path'" "a spawn smuggling a path into its worktree is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree.name = "..\..\elsewhere" } "$.args.worktree.name does not match" "a worktree name that climbs out of its root is refused"
+# THE ACT PATH'S FIRST VERSION (A3, decisions of 2026-10-05). A spawn may leave out its worktree (the
+# node's registered clone), may give the run's title (the session's name at birth) and the permission
+# level it asks for. Nothing a spawn carries can name the node's ceiling.
+$f = @(Test-FrameWith "req-session-spawn.json" { param($x) $x.args.PSObject.Properties.Remove("worktree") })
+Check ($f.Count -eq 0) "CONTROL: a spawn with no worktree is accepted: it runs in the node's registered clone"; Show $f
+$f = @(Test-FrameWith "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName title -NotePropertyValue "client search orc"; $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "bypass" })
+Check ($f.Count -eq 0) "CONTROL: a spawn naming its run title and the level it asks for is accepted"; Show $f
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "Bypass" } "$.args.permission" "a level is one of R0's names, exactly: Bypass is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "root" } "$.args.permission" "a level R0 does not have is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName title -NotePropertyValue ("run" + [char]10 + "two lines") } "$.args.title does not match" "a title holding a line break is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permissionCeiling -NotePropertyValue "bypass" } "$.args has 'permissionCeiling'" "a spawn cannot carry a ceiling: the ceiling is the node's own setting"
+$levelsEnum = @($realVerbs.definitions.'session-spawn-args'.properties.permission.enum)
+. (Join-Path $root "core\PermissionLevels.ps1")
+Check (($levelsEnum -join ",") -ceq (@(Get-HordePermissionLevels | ForEach-Object { "" + $_.name }) -join ",")) "the levels a spawn may ask for are R0's, in R0's order"
+$expectDef = $realVerbs.definitions.'request-entry'.properties.expect
+Check ($null -ne $expectDef -and (@($expectDef.required) -join ",") -ceq "ns,pid,procStart" -and $expectDef.additionalProperties -eq $false) "a spawn's journal entry can carry the started process, exactly the shape session.close expects back"
 # NAMES THAT BECOME FILE NAMES ON THE NODE (review of PR #40). Path.Combine("D:\h", "C:..") is "C:..",
 # a drive-relative path; "foo." is the folder foo; CON is the console device, with or without a dot.
 function Test-Def {

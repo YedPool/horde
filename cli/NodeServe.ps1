@@ -8,8 +8,10 @@
 # WHAT IT DOES. Starts the listener once, then accepts links one after another. On each link it reads a
 # frame, asks remote/NodeServe.ps1 what to answer, builds the session view only when a verb needs it
 # (fresh for each such request: a list from the last request would be stale), sends the answer, and
-# ends the link when the other side says bye, the frame was not one, or the link drops. It never acts:
-# the verbs it answers are reads (R12a), and an act verb is refused as unsupported.
+# ends the link when the other side says bye, the frame was not one, or the link drops. Given -Act
+# (the act path's A3), it acts on session.spawn and session.close: remote/NodeServe.ps1 records each
+# request in the journal and hands it here once, -Act (cli/NodeAct.ps1) acts, and the outcome is
+# recorded and answered. Without -Act an act verb is refused as unsupported, as before.
 #
 # WHAT IT DOES NOT. Install itself to start at logon (that is an install step, `horde install`), stream
 # observe.since (R12b, after lifecycle step 11), or read a binding record (R12b, after Phase 3 step 3.8).
@@ -112,6 +114,9 @@ function Invoke-HordeNodeServe {
         [Parameter(Mandatory = $true)]$Namespace,
         [Parameter(Mandatory = $true)][scriptblock]$GetView,
         [string]$JournalRoot = "",
+        # Given the act ({ verb; args; requestId }), returns its outcome { state; sessionId; expect;
+        # reason }; $null serves no acts.
+        [scriptblock]$Act = $null,
         [int]$MaxLinks = 0,
         [int]$AcceptTimeoutMs = 15000,
         [int]$IdleTimeoutMs = 120000,
@@ -177,7 +182,7 @@ function Invoke-HordeNodeServe {
                 while ($true) {
                     $line = Receive-HordeLinkFrame -Link $link -TimeoutMs $IdleTimeoutMs
                     if ($line.state -cne "known") { $ended = "the link ended: " + $line.reason; break }
-                    $data = [pscustomobject]@{ manifest = $Manifest; view = $null; viewError = ""; journalRoot = $JournalRoot; namespace = $Namespace }
+                    $data = [pscustomobject]@{ manifest = $Manifest; view = $null; viewError = ""; journalRoot = $JournalRoot; namespace = $Namespace; acts = ($null -ne $Act); actOutcome = $null }
                     $r = $null
                     try {
                         $r = Invoke-HordeNodeFrame -State $state -Line "$($line.value)" -Data $data
@@ -186,6 +191,15 @@ function Invoke-HordeNodeServe {
                             # request would be stale.
                             try { $data.view = & $GetView } catch { $data.viewError = "$($_.Exception.Message)" }
                             if ($null -eq $data.view -and $data.viewError -eq "") { $data.viewError = "the projection gave nothing" }
+                            $r = Invoke-HordeNodeFrame -State $state -Line "$($line.value)" -Data $data
+                        }
+                        if ($r.needAct) {
+                            # Acted on once: the journal recorded it before this line. An act that throws
+                            # is a failed outcome, so the journal always gets one for what it recorded.
+                            $o = $null
+                            try { $o = & $Act $r.act } catch { $o = [pscustomobject]@{ state = "failed"; sessionId = ""; expect = $null; reason = ("the node failed while acting: " + $_.Exception.Message) } }
+                            if ($null -eq $o) { $o = [pscustomobject]@{ state = "failed"; sessionId = ""; expect = $null; reason = "the node's act gave no outcome" } }
+                            $data.actOutcome = $o
                             $r = Invoke-HordeNodeFrame -State $state -Line "$($line.value)" -Data $data
                         }
                     } catch {

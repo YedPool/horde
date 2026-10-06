@@ -79,7 +79,7 @@ $script:HordeLinkVerbAllow = @{
     "delivery.status" = @{ effect = "read";  args = @("messageId") }
     "session.spawn"   = @{ effect = "spawn"; args = @("label", "role", "parent", "runId", "fleetSessionId", "profile", "model", "repoId",
                           "worktree", "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text",
-                          "prompt.handoffRef", "host", "closeOn") }
+                          "prompt.handoffRef", "host", "title", "permission", "closeOn") }
     "session.resume"  = @{ effect = "spawn"; args = @("sessionId", "reresolve", "model") }
     "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label", "from", "from.deviceId", "from.sessionId", "from.label", "body",
                           "ttlSeconds") }
