@@ -5,8 +5,9 @@
 # its own process; `horde session spawn` asks it to start a session; `horde session status` asks what
 # became of the request. The node's policy lets a hub start nothing today (its daily cap is 0), so the
 # spawn is REFUSED by the node before any launch plan is made: the round trip is real and nothing is
-# started. As a second line, the node's terminal pin points at a socket that does not exist, and every
-# terminal call carries --no-auto-start, so even a broken policy check could reach no terminal.
+# started. As a second line, the node finds its own terminal only in the user profile's socket folder,
+# and USERPROFILE here is an empty folder this suite makes, so even a broken policy check would find no
+# terminal to start in; and every terminal call carries --no-auto-start, so none is started for it.
 #
 # The stores are fakes: HORDE_HOME and USERPROFILE point at folders this suite makes.
 #
@@ -18,12 +19,15 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# The hosts' acting adapters, found by folder (CONTRIBUTING 14), for the isolation probe below.
+foreach ($f in @("Tristate", "HostAct", "ReadShared")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+foreach ($f in @(Get-HordeHostActorFiles -Root $root)) { . $f }
 
 $work = Join-Path $env:TEMP ("horde-act-local-" + [guid]::NewGuid().ToString("N"))
 $homeDir = Join-Path $work "home"
 $profileDir = Join-Path $work "profile"
 $clone = Join-Path $work "code\app"
-$saved = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE; WEZTERM_UNIX_SOCKET = $env:WEZTERM_UNIX_SOCKET }
+$saved = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
 $node = $null
 
 function New-HordeTestStart {
@@ -56,7 +60,24 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $homeDir "node\policy.json"), $policy)
     $env:HORDE_HOME = $homeDir
     $env:USERPROFILE = $profileDir
-    $env:WEZTERM_UNIX_SOCKET = Join-Path $work "no-such-terminal.sock"
+    # THE ISOLATION PROBE, before anything acts: every host that can act, asked in the node's environment
+    # (this process's, which the node inherits) for its own terminal, names none. The control plants a
+    # terminal's socket in a second profile folder and the same probe finds it, so the empty answer is
+    # the profile's and not a probe that cannot see. A wrong USERPROFILE fails here, loudly.
+    $actors = @(Get-HordeHostActors)
+    Check ($actors.Count -ge 1) "at least one host can act on this node, so its isolation is checked"
+    foreach ($ac in $actors) {
+        $none = & $ac.own
+        Check ("$($none.state)" -cne "known") ("in the node's environment the host " + $ac.name + " names no terminal of its own (" + $none.reason + ")")
+        if ($null -eq $ac.ownMarker) { Check $false ("the host " + $ac.name + " names no socket file, so its isolation cannot be shown"); continue }
+        $ctl = Join-Path $work ("own-control-" + $ac.name)
+        $m = "" + (& $ac.ownMarker $ctl 4242)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $m) -Force | Out-Null
+        New-Item -ItemType File -Path $m -Force | Out-Null
+        $hit = & $ac.own $ctl @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+        $named = ("$($hit.state)" -ceq "known") -and (@($hit.value.PSObject.Properties | Where-Object { "" + $_.Value -ceq $m }).Count -eq 1)
+        Check $named ("CONTROL: the same probe, with a terminal's socket planted in another profile folder, names it (" + $m + ")")
+    }
     $node = [System.Diagnostics.Process]::Start((New-HordeTestStart "node serve -MaxLinks 2 -IdleSeconds 60"))
     $nodeOut = $node.StandardOutput.ReadToEndAsync()
     $nodeErr = $node.StandardError.ReadToEndAsync()
