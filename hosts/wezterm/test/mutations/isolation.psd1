@@ -93,5 +93,8 @@
         @{ Name = "pane-env-nothing-expected-passes"
            Find = 'if ($Expect.Count -eq 0) { return "nothing was expected, so nothing was proven" }'
            Replace = 'if ($false) { }' }
+        @{ Name = "pin-comparison-skipped"
+           Find = 'if ("$env:WEZTERM_UNIX_SOCKET" -ne "$($Instance.socket)") {'
+           Replace = 'if ($false) {' }
     )
 }

@@ -1,8 +1,7 @@
-# Mutations of hosts/wezterm/Act.ps1 (the act path's A2). Run:
+# Mutations of hosts/wezterm/Act.ps1 (the act path's A2, with the fixes of PR #96's review). Run:
 #   powershell -File tools\Mutate.ps1 -Spec hosts\wezterm\test\mutations\act.psd1
-# hosts\wezterm\test\test-act.ps1 must fail for every one. Each breaks one rule that keeps a node's own
-# terminal safe to act in: the flag that never starts a server, the quoting a prompt depends on, no
-# cmd.exe in between, and never calling a pane gone when the terminal could not say.
+# hosts\wezterm\test\test-act.ps1 must fail for every one. Each breaks one rule that keeps a node's acts
+# in the terminal it names and on the panes it proves are its own.
 @{
     Target = "hosts\wezterm\Act.ps1"
     Suite  = "hosts\wezterm\test\test-act.ps1"
@@ -10,6 +9,27 @@
         @{ Name = "no-auto-start-dropped"
            Find = 'return @("cli", "--no-auto-start") + @($Rest)'
            Replace = 'return @("cli") + @($Rest)' }
+        @{ Name = "unnamed-terminal-allowed"
+           Find = '    if ($null -ne $bad) { return [pscustomobject]@{ code = -1; out = ""; err = ("refused: " + $bad); timedOut = $false } }'
+           Replace = '' }
+        @{ Name = "empty-socket-allowed"
+           Find = 'if ($sock.Trim() -eq "") { return "the named terminal has no socket'
+           Replace = 'if ($false) { return "the named terminal has no socket' }
+        @{ Name = "pin-not-set-from-target"
+           Find = '    $psi.EnvironmentVariables["WEZTERM_UNIX_SOCKET"] = "" + $Target.socket'
+           Replace = '' }
+        @{ Name = "wezterm-names-allowed-in-map"
+           Find = 'if (("" + $k).StartsWith("WEZTERM_", [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nul-allowed"
+           Find = 'if (("" + $v).Contains([string][char]0)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "value-uncapped"
+           Find = 'if (("" + $v).Length -gt $script:HordeWeztermEnvValueMax) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "removal-ignored"
+           Find = 'if ($null -eq $Environment[$k]) { if ($Psi.EnvironmentVariables.ContainsKey($k)) { $Psi.EnvironmentVariables.Remove($k) } }'
+           Replace = 'if ($null -eq $Environment[$k]) { }' }
         @{ Name = "quote-not-escaped"
            Find = 'if ($ch -eq ''"'') { [void]$sb.Append(([string][char]92) * ($slashes * 2 + 1)); [void]$sb.Append(''"''); $slashes = 0; continue }'
            Replace = 'if ($ch -eq ''"'') { [void]$sb.Append(''"''); $slashes = 0; continue }' }
@@ -19,41 +39,53 @@
         @{ Name = "line-break-not-quoted"
            Find = 'if ($Arg.Length -gt 0 -and $Arg -cnotmatch ''[\s"]'') { return $Arg }'
            Replace = 'if ($Arg.Length -gt 0 -and $Arg -cnotmatch ''[ "]'') { return $Arg }' }
-        @{ Name = "empty-not-quoted"
-           Find = 'if ($Arg.Length -gt 0 -and $Arg -cnotmatch'
-           Replace = 'if ($Arg.Length -ge 0 -and $Arg -cnotmatch' }
         @{ Name = "shim-accepted"
            Find = '$exe = @($found | Where-Object { [System.IO.Path]::GetExtension("" + $_) -ieq ".exe" })'
            Replace = '$exe = @($found)' }
         @{ Name = "spawn-without-separator"
            Find = '$rest += @("--cwd", $Cwd, "--", $Program) + @($Argv)'
            Replace = '$rest += @("--cwd", $Cwd, $Program) + @($Argv)' }
-        @{ Name = "relative-program-accepted"
-           Find = 'if (-not [System.IO.Path]::IsPathRooted($Program) -or [System.IO.Path]::GetExtension($Program) -ine ".exe") {'
+        @{ Name = "handle-without-terminal"
+           Find = 'return ("" + $Target.guiPid + "." + $Target.guiStart + "." + $Pane)'
+           Replace = 'return ("" + $Pane)' }
+        @{ Name = "handle-of-another-terminal-accepted"
+           Find = 'if ($m.Groups[1].Value -cne "" + $Target.guiPid -or $m.Groups[2].Value -cne "" + $Target.guiStart) {'
            Replace = 'if ($false) {' }
-        @{ Name = "non-numeric-answer-accepted"
-           Find = 'if ($id -cnotmatch ''\A[0-9]{1,9}\z'') { return (New-HordeUnknown -Reason ("the terminal answered the spawn with'
-           Replace = 'if ($id -eq "") { return (New-HordeUnknown -Reason ("the terminal answered the spawn with' }
-        @{ Name = "send-pasted"
-           Find = '$rest = @("send-text", "--pane-id", $Handle, "--no-paste", $Text)'
-           Replace = '$rest = @("send-text", "--pane-id", $Handle, $Text)' }
+        @{ Name = "restarted-terminal-accepted"
+           Find = 'if ("" + $now -cne "" + $Target.guiStart) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "send-without-separator"
+           Find = '$r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", "--", $Text)'
+           Replace = '$r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", $Text)' }
+        @{ Name = "control-characters-typed"
+           Find = 'if ($Text -cmatch ''[\x00-\x1F\x7F]'') {'
+           Replace = 'if ($false) {' }
+        @{ Name = "send-uncapped"
+           Find = 'if ($Text.Length -gt $script:HordeWeztermSendMax) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "enter-always-pressed"
+           Find = '    if ($Submit) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "stop-without-process-proof"
+           Find = 'if ($in.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $in.reason)) }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "stop-on-gone-process"
+           Find = 'if (-not $in.value) { return (New-HordeUnknown -Reason "nothing was ended: the expected process is not running with its start time") }'
+           Replace = '' }
+        @{ Name = "younger-parent-believed"
+           Find = 'if ($null -eq $par -or [decimal]("0" + $par.start) -gt [decimal]("0" + $cur.start)) {'
+           Replace = 'if ($null -eq $par) {' }
+        @{ Name = "start-time-ignored"
+           Find = 'if ($null -eq $cur -or "" + $cur.start -cne "" + $Expect.procStart) { return (New-HordeKnown -Value $false) }'
+           Replace = 'if ($null -eq $cur) { return (New-HordeKnown -Value $false) }' }
         @{ Name = "empty-list-is-none"
            Find = 'if ($joined -eq "") { return (New-HordeUnknown -Reason "the terminal''s pane list was empty output, which is unknown, not none") }'
            Replace = 'if ($joined -eq "") { return (New-HordeKnown -Value @()) }' }
         @{ Name = "unlisted-is-gone"
            Find = 'if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit " + $r.code + ")")) }'
            Replace = 'if ($r.code -ne 0) { return (New-HordeKnown -Value $false) }' }
-        @{ Name = "kill-any-handle"
-           Find = '$rest = @("kill-pane", "--pane-id", $Handle)'
-           Replace = '$rest = @("kill-pane")' }
-        @{ Name = "environment-not-applied"
-           Find = '    Set-HordeWeztermActEnvironment -Psi $psi -Environment $Environment'
-           Replace = '' }
-        @{ Name = "removal-ignored"
-           Find = 'if ($null -eq $Environment[$k]) { if ($Psi.EnvironmentVariables.ContainsKey($k)) { $Psi.EnvironmentVariables.Remove($k) } }'
-           Replace = 'if ($null -eq $Environment[$k]) { }' }
-        @{ Name = "environment-not-passed-to-spawn"
-           Find = 'if ($null -ne $Runner) { $r = & $Runner $rest $Environment } else { $r = Invoke-HordeWeztermAct -Rest $rest -Environment $Environment }'
-           Replace = 'if ($null -ne $Runner) { $r = & $Runner $rest @{} } else { $r = Invoke-HordeWeztermAct -Rest $rest }' }
+        @{ Name = "own-mux-picks-first"
+           Find = 'if ($socks.Count -gt 1) {'
+           Replace = 'if ($false) {' }
     )
 }

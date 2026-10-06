@@ -5,15 +5,23 @@
 # of a host is core/HostPort.ps1; this is the half that acts, kept apart so a reader can never act. One
 # adapter per host, hosts/<name>/Act.ps1, registers itself here when it is dot-sourced, as the agent
 # adapters do (core/Transcript.ps1, core/AgentLaunch.ps1), and is found by folder, never by name
-# (CONTRIBUTING 14). An actor gives five blocks, each answering in core/tristate form:
+# (CONTRIBUTING 14). An actor gives six blocks, each answering in core/tristate form. Every one that
+# touches the terminal takes a $target: the terminal is always named, never left to the environment
+# (review of PR #96).
+#   Own     ()                    this node's own terminal, named explicitly: known target, or unknown
+#                                 when which one it is cannot be told
 #   Resolve ($name)               the full path of a program from its command name
-#   Start   ($program, $argv, $cwd, $environment)  a new pane running it: known { handle; program;
-#                                 cwd }. $environment maps a name to the value the session gets, or
-#                                 to $null for a variable of the node the session must not inherit.
-#   Send    ($handle, $text)      typed into that pane: known $true
-#   Live    ($handle)             whether the pane is still there: known bool, unknown if unlisted
-#   Stop    ($handle)             the pane ended by the terminal: known $true
-# A handle is the host's own text, opaque here (core/HostPort.ps1: "a host handle ... never a key").
+#   Start   ($target, $program, $argv, $cwd, $environment)  a new pane running it: known { handle;
+#                                 program; cwd }. $environment maps a name to the value the session
+#                                 gets, or to $null for a variable of the node it must not inherit.
+#   Send    ($target, $handle, $text, $submit)  printable text typed into that pane, then Enter when
+#                                 $submit: known $true
+#   Live    ($target, $handle, $expect)  whether the pane is still there running the expected process
+#                                 { pid; procStart }: known bool, unknown when it cannot be told
+#   Stop    ($target, $handle, $expect)  the pane ended, only after the expected process is proven
+#                                 to be in it: known $true
+# A handle is the host's own text, opaque here (core/HostPort.ps1: "a host handle ... never a key"); a
+# host whose pane ids restart puts its terminal's identity in it.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
@@ -24,6 +32,7 @@ function Register-HordeHostActor {
     # Called by hosts/<name>/Act.ps1 when it is dot-sourced. Re-registering a name replaces it.
     param(
         [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Own,
         [Parameter(Mandatory = $true)][scriptblock]$Resolve,
         [Parameter(Mandatory = $true)][scriptblock]$Start,
         [Parameter(Mandatory = $true)][scriptblock]$Send,
@@ -32,7 +41,7 @@ function Register-HordeHostActor {
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a host name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in $script:HordeHostActors) { if ($a.name -ceq $Name) { $script:HordeHostActors.Remove($a); break } }
-    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop })
+    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; own = $Own; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop })
 }
 
 function Get-HordeHostActor {
