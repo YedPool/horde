@@ -6,6 +6,16 @@
     Target = "decisions\Operations.ps1"
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
+        # --- a write's wait on a held record has an end ---
+        @{ Name = "held-record-waited-for-ten-times-as-long"
+           Find = '$script:HordeDecisionWriteBusyReads = 5'
+           Replace = '$script:HordeDecisionWriteBusyReads = 50' }
+        @{ Name = "held-record-not-waited-for-by-a-write"
+           Find = '$script:HordeDecisionWriteBusyReads = 5'
+           Replace = '$script:HordeDecisionWriteBusyReads = 1' }
+        @{ Name = "held-record-written-past"
+           Find = 'if ($null -ne $read.busy) {'
+           Replace = 'if ($false) {' }
         # --- a stray file in the store is named in every result ---
         @{ Name = "stray-files-not-named"
            Find = 'foreach ($stray in @($loaded.strays)) { [void]$list.strays.Add($stray) }'

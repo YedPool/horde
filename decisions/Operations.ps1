@@ -60,6 +60,13 @@ $script:HordeDecisionOperations = [ordered]@{
 # another writer's record was written, so 200 is 200 other writes landing first; a write that still
 # has not won is reported, never spun for ever.
 $script:HordeDecisionWriteTries = 200
+# How many reads in a row may find a record held open by another process before a write gives up. The
+# store has already waited its own 2 s for that record on each read (decisions/Store.ps1), so 5 is
+# about ten seconds - far longer than any writer holds a record, and short enough to wait for at a
+# command line. It has a limit of its own because the tries above were sized for losing a race,
+# which costs milliseconds: measured 2026-10-06, counted against them, a write with record 1 held
+# open was still waiting after 40 s and could have waited 400.
+$script:HordeDecisionWriteBusyReads = 5
 
 function Get-HordeDecisionOperations {
     # The operations, as { name; writes }, for a caller that offers them (a bridge, a help text).
@@ -221,13 +228,18 @@ function Invoke-HordeDecisionWrite {
     }
     $id = [string]$Request.id
 
+    $busyReads = 0
     for ($attempt = 1; $attempt -le $script:HordeDecisionWriteTries; $attempt++) {
         $read = Read-HordeDecisionState -Root $Root -Definitions $Definitions
         if ($read.state -ceq "unknown") { return (New-HordeUnknown -Reason ("nothing was written: " + $read.reason)) }
         if ($null -ne $read.busy) {
-            # Another writer's record is still open after the store's own wait. Its content decides
-            # whether this request may be written, so this request waits for it rather than guess.
-            if ($attempt -eq $script:HordeDecisionWriteTries) { return (New-HordeUnknown -Reason ("nothing was written: record " + $read.busy.sequence + " " + $read.busy.reason)) }
+            # A record is still open in another process after the store's own wait. Its content decides
+            # whether this request may be written, so this request waits for it rather than guess -
+            # for about ten seconds, and then says which record, and that nothing was written.
+            $busyReads++
+            if ($busyReads -ge $script:HordeDecisionWriteBusyReads) {
+                return (New-HordeUnknown -Reason ("nothing was written: another process holds record " + $read.busy.sequence + " open, and still did after " + $busyReads + " reads that each waited for it. Try again when it has let go"))
+            }
             continue
         }
         $list = $read.list

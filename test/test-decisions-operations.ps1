@@ -396,6 +396,23 @@ try {
 Check ((Add-HordeDecisionRecord -Root $s -Sequence 1 -Text "{}") -ceq "exists") "CONTROL: the real create is back in place for the rest of the suite"
 
 Write-Host ""
+Write-Host "--- a write does not wait for ever on a record another process holds open ---" -ForegroundColor Cyan
+# Measured 2026-10-06, before the wait had a limit of its own: with record 1 held open, an add was
+# still waiting after 40 s, and the code allowed it 400. Here this process holds the record without
+# sharing, as a stuck program would, and the add must come back by itself, saying which record.
+$s = New-TestStore
+$null = Add-Q $s
+$held = New-Object System.IO.FileStream((Join-Path $s "0000000001.json"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+try { $a = Add-Q $s } finally { $held.Dispose() }
+$sw.Stop()
+Check ($a.state -ceq "unknown" -and $a.reason -like "*nothing was written*another process holds record 1 open*") ("an add while record 1 is held open is unknown, and names the record (" + $a.state + ": " + $a.reason + ")")
+Check ($sw.Elapsed.TotalSeconds -ge 8 -and $sw.Elapsed.TotalSeconds -le 25) ("it waited about ten seconds for the holder, and no longer (" + [int]$sw.Elapsed.TotalSeconds + " s)")
+Check ((Get-Files $s) -ceq "0000000001.json") "and nothing was written"
+$a = Add-Q $s
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 2) "CONTROL: once the record is let go, the same add is made"
+
+Write-Host ""
 Write-Host "--- a store that cannot be written is unknown, not refused ---" -ForegroundColor Cyan
 $blocked = Join-Path $script:work "a-file-where-the-store-should-be"
 [System.IO.File]::WriteAllText($blocked, "not a folder", $utf8)
