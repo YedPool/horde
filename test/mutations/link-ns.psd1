@@ -8,8 +8,8 @@
     Suite  = "test\test-link-contracts.ps1"
     Mutations = @(
         @{ Name = "expect-ns-optional"
-           Find = '"required": ["ns", "pid", "procStart"],'
-           Replace = '"required": ["pid", "procStart"],' }
+           Find = '"type": "object", "required": ["ns", "pid", "procStart"],'
+           Replace = '"type": "object", "required": ["pid", "procStart"],' }
         @{ Name = "ns-device-any-string"
            Find = '"device": { "$ref": "#/definitions/uuid" },'
            Replace = '"device": { "type": "string", "x-horde-cap": "nameBytes" },' }
@@ -19,5 +19,8 @@
         @{ Name = "ns-open-to-pid-domain"
            Find = '"type": "object", "required": ["device", "space"], "additionalProperties": false,'
            Replace = '"type": "object", "required": ["device", "space"], "additionalProperties": true,' }
+        @{ Name = "entry-expect-ns-optional"
+           Find = '"type": "object", "additionalProperties": false, "required": ["ns", "pid", "procStart"],'
+           Replace = '"type": "object", "additionalProperties": false, "required": ["pid", "procStart"],' }
     )
 }

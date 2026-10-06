@@ -209,7 +209,7 @@ function Invoke-HordeNodeSpawn {
         return $null
     }
     if ($null -eq $proc) {
-        $null = Stop-HordeNodeSession -Context $Context -Actor $actor -Adapter $adapter -Handle $record.handle
+        $null = Stop-HordeNodeSession -Context $Context -Actor $actor -Adapter $adapter -Handle ("" + $record.handle)
         $record.outcome = "failed"; $record.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
         return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the harness never reported its process within " + $Context.bounds.identifySeconds + " s as one the process table shows with that start time; its pane was ended"))
     }

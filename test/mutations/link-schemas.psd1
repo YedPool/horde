@@ -42,8 +42,8 @@
            Find = '"token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",'
            Replace = '"token": { "type": "string", "pattern": "^.{1,64}$",' }
         @{ Name = "spawn-close-on-optional"
-           Find = '"required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt", "closeOn"],'
-           Replace = '"required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt"],' }
+           Find = '"required": ["label", "role", "runId", "profile", "repoId", "prompt", "closeOn"],'
+           Replace = '"required": ["label", "role", "runId", "profile", "repoId", "prompt"],' }
         @{ Name = "clone-status-branch-bare"
            Find = '"branch": { "$ref": "#/definitions/answer-token" },'
            Replace = '"branch": { "$ref": "#/definitions/token" },' }
