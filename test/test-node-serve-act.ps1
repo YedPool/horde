@@ -37,7 +37,7 @@ function Sendable { param($Frame) $b = ConvertTo-HordeFrameBytes -Frame $Frame -
 function Linked { $st = State; $null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello)) -Data (Data); return $st }
 function Spawn {
     param([hashtable]$Extra = @{})
-    $a = [ordered]@{ label = "E"; role = "orc"; runId = "20261005-120000-act"; profile = "claude"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; title = "client search orc"; permission = "bypass" }
+    $a = [ordered]@{ label = "E"; role = "orc"; runId = "20261005-120000-act"; profile = "alpha"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; title = "client search orc"; permission = "bypass" }
     foreach ($k in $Extra.Keys) { $a[$k] = $Extra[$k] }
     return [pscustomobject]$a
 }

@@ -35,7 +35,7 @@
            Replace = 'if ($false) {' }
         @{ Name = "close-forces"
            Find = 'if ($gone -ne $true) { return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running "'
-           Replace = 'if ($gone -ne $true) { $null = & $ac.value.stop ("" + $r.handle); return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running "' }
+           Replace = 'if ($gone -ne $true) { $null = & $ac.value.stop $tg.value ("" + $r.handle) ([pscustomobject]@{ pid = [long]$r.pid; procStart = "" + $r.procStart }); return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ("the session is still running "' }
         @{ Name = "expect-without-namespace"
            Find = '$expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $Context.namespace.device; space = "" + $Context.namespace.space }; pid = [long]$record.pid; procStart = $record.procStart }'
            Replace = '$expect = [pscustomobject][ordered]@{ ns = $null; pid = [long]$record.pid; procStart = $record.procStart }' }
@@ -72,9 +72,9 @@
         @{ Name = "torn-records-free-the-cap"
            Find = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { $n++; continue }'
            Replace = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue }' }
-        @{ Name = "local-day-not-utc"
-           Find = '$midnight = $Now.ToUniversalTime().Date'
-           Replace = '$midnight = $Now.Date' }
+        @{ Name = "local-time-accepted"
+           Find = 'if ($Now.Kind -ne [System.DateTimeKind]::Utc) {'
+           Replace = 'if ($false) {' }
         @{ Name = "junction-counted"
            Find = 'if (Test-HordeNodeReparse -Path $Dir) {'
            Replace = 'if ($false) {' }

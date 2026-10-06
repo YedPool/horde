@@ -34,6 +34,7 @@ $script:noIdentify = $false
 $script:stubborn = $false
 $script:reusedPid = $false
 $script:noOwn = $false
+$script:offByMicros = $false
 $script:stopRefused = 0
 $modeOf = @{ careful = "ask"; edit = "edits"; look = "plan" }
 
@@ -59,6 +60,7 @@ Register-HordeHostActor -Name "fakehost" `
         $i = [array]::IndexOf(@($argv), "--mode"); $mode = $null; if ($i -ge 0) { $mode = $modeOf[$argv[$i + 1]] }
         if ($null -ne $script:reportMode) { $mode = $script:reportMode }
         $claimed = $ticks; if ($script:reusedPid) { $claimed = "" + (133000000000000000 + $pidv) }
+        if ($script:offByMicros) { $claimed = "" + ([long]$ticks + 1000) }
         $nm = ""; $j = [array]::IndexOf(@($argv), "--title"); if ($j -ge 0) { $nm = $argv[$j + 1] }
         $script:sessions[$sidv] = [pscustomobject]@{ pid = $pidv; procStart = $claimed; name = $nm; mode = $mode; handle = $h }
         New-HordeKnown -Value ([pscustomobject]@{ handle = $h; program = $prog; cwd = $cwd }) } `
@@ -74,7 +76,7 @@ Register-HordeHostActor -Name "fakehost" `
         if ($null -eq $expect -or -not $script:procs.ContainsKey([int]$expect.pid) -or "" + $script:procs[[int]$expect.pid] -cne "" + $expect.procStart) { $script:stopRefused++; return (New-HordeUnknown -Reason "nothing was ended: the expected process is not proven") }
         [void]$script:stopped.Add($h); foreach ($s in @($script:sessions.Values)) { if ($s.handle -ceq $h) { $script:procs.Remove($s.pid) } }; New-HordeKnown -Value $true }
 
-$work = Join-Path $env:TEMP ("horde-node-act-" + [guid]::NewGuid().ToString("N"))
+$work = Join-Path $env:TEMP ("horde-nodeact-" + [guid]::NewGuid().ToString("N"))
 $clone = Join-Path $work "code\app"
 New-Item -ItemType Directory -Path $clone, (Join-Path $work "code\app-worktrees\act-a3"), (Join-Path $work "records") -Force | Out-Null
 $policyText = '{ "schemaVersion": 1, "repos": [ { "repoId": "github.com/example/app", "path": "' + $clone.Replace([string][char]92, ([string][char]92) * 2) + '" } ], "profiles": ["alpha", "beta"], "dailySpawnCap": 3 }'
@@ -101,7 +103,7 @@ function SpawnAct {
     foreach ($k in $Extra.Keys) { if ($null -eq $Extra[$k]) { $a.Remove($k) } else { $a[$k] = $Extra[$k] } }
     return [pscustomobject]@{ verb = "session.spawn"; args = ([pscustomobject]$a); requestId = [guid]::NewGuid().ToString() }
 }
-function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:stopRefused = 0 }
+function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0 }
 
 try {
 Write-Host ""
@@ -184,6 +186,10 @@ Check ((@($script:sent | ForEach-Object { $_.text }) -join "|") -ceq "bye|<enter
 Reset; $script:reusedPid = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
 Check ("$($o.state)" -ceq "failed" -and @($script:stopped).Count -eq 0) "a reported process whose start time is not the live one's is not believed: the spawn fails, and nothing unproven is ended"
+Reset; $script:offByMicros = $true
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
+Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its process*") "a reported start 100 microseconds off the live one is another process: start times are compared to the microsecond, not the millisecond"
+Check ((Test-HordeNodeSameStart "133000000000000207" "133000000000000200") -eq $true -and (Test-HordeNodeSameStart "133000000000001200" "133000000000000200") -eq $false) "the same instant read to 100 ns matches; 100 microseconds apart does not"
 # Back to the reporting adapter for what follows.
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Argv { param($s) $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
@@ -233,7 +239,7 @@ Check ($done -eq 3 -and "$($o.state)" -ceq "refused" -and $o.reason -like "*dail
 # THE COUNT, case by case (review of #98: clock skew, the UTC-day boundary, concurrency, junctions).
 $cd = Join-Path $work "count"
 New-Item -ItemType Directory -Path $cd | Out-Null
-$noon = [datetime]::Parse("2026-10-05T12:00:00Z").ToUniversalTime()
+$noon = [datetime]::SpecifyKind([datetime]::Parse("2026-10-05T12:00:00"), [System.DateTimeKind]::Utc)
 function Rec { param([string]$Name, [string]$At) [System.IO.File]::WriteAllText((Join-Path $cd ($Name + ".json")), ('{ "sessionId": "' + $Name + '", "startedAt": "' + $At + '" }')) }
 Rec "a" "2026-10-04T23:59:59.9990000Z"
 Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 0) "a start one millisecond before UTC midnight is yesterday's"
@@ -243,7 +249,12 @@ Rec "c" "2026-10-07T09:00:00.0000000Z"
 Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 2) "a start in the future counts: setting the clock back frees nothing"
 [System.IO.File]::WriteAllText((Join-Path $cd "d.json"), "{ torn")
 Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now $noon).value -eq 3) "a record that cannot be read counts: a torn file never raises the cap"
-Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now ([datetime]::Parse("2026-10-05T00:30:00+02:00"))).value -eq 4) "the day is the UTC day, whatever zone the clock is read in: 00:30 +02:00 is 22:30 on the 4th in UTC, so the 4th's start counts, with everything after it and the torn one"
+Check ((Get-HordeNodeSpawnsToday -Dir $cd -Now ([datetime]::Parse("2026-10-04T22:30:00Z").ToUniversalTime())).value -eq 4) "the day is the UTC day: at 22:30 UTC on the 4th, the 4th's start counts, with everything after it and the torn one"
+$localNow = [datetime]::SpecifyKind([datetime]::Parse("2026-10-05T00:30:00"), [System.DateTimeKind]::Local)
+$lc = Get-HordeNodeSpawnsToday -Dir $cd -Now $localNow
+Check ($lc.state -eq "unknown" -and $lc.reason -like "*clock in UTC*") "a local time is refused, never quietly taken as a UTC day"
+$uc = Get-HordeNodeSpawnsToday -Dir $cd -Now ([datetime]::SpecifyKind([datetime]::Parse("2026-10-05T00:30:00"), [System.DateTimeKind]::Unspecified))
+Check ($uc.state -eq "unknown") "and so is a time of unspecified kind"
 $lk = Enter-HordeNodeSpawnLock -Dir $cd
 try {
     Check ($null -ne $lk -and $null -eq (Enter-HordeNodeSpawnLock -Dir $cd)) "the spawn lock is held by one act at a time"
@@ -294,7 +305,7 @@ $script:stubborn = $true
 $c = CloseWith ([pscustomobject]@{ sessionId = $s.sessionId; expect = $s.expect; reason = "x" })
 Check ("$($c.state)" -ceq "failed" -and $c.reason -like "*still running*" -and $script:procs.ContainsKey($x.pid) -and @($script:stopped).Count -eq 0) "a session that ignores the close is answered failed and left running: a close is graceful, nothing is forced"
 } finally {
-    if ((Split-Path -Leaf $work) -match '^horde-node-act-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+    if ((Split-Path -Leaf $work) -match '^horde-nodeact-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Complete-HordeSuite -Success "a node starts and closes a hub's sessions exactly as its policy, its ceiling and the process allow, each proved by pid and start time"

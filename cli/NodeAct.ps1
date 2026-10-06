@@ -84,9 +84,12 @@ function Get-HordeNodeSpawnsToday {
     # How many sessions this node started for a hub on the UTC day of -Now, as an answer (see THE COUNT
     # in the header). Unknown when the folder is a junction or link: then the count is another folder's.
     param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][datetime]$Now)
+    # THE CLOCK IS UTC. A time of another kind is refused rather than converted, so no caller can count
+    # by a local day (the gate's local-day mutant survived while a local time was quietly converted).
+    if ($Now.Kind -ne [System.DateTimeKind]::Utc) { return (New-HordeUnknown -Reason "the daily count needs the clock in UTC; a local or unspecified time is refused") }
     if (Test-HordeNodeReparse -Path $Dir) { return (New-HordeUnknown -Reason ("the records folder " + $Dir + " is a junction or link, so what it counts is another folder's")) }
     if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return (New-HordeKnown -Value 0) }
-    $midnight = $Now.ToUniversalTime().Date
+    $midnight = [datetime]::SpecifyKind($Now.Date, [System.DateTimeKind]::Utc)
     $n = 0
     foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File -Force)) {
         if ($f.Name.StartsWith(".")) { continue }
