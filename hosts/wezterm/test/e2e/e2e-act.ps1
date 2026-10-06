@@ -79,7 +79,9 @@ if ($iso) {
             $null = Wait-Until { Test-Path -LiteralPath $dump } 20; Start-Sleep -Milliseconds 300
             $seen = Read-HordePaneToolEnv -Path $dump
             Check ($null -ne $seen -and -not $seen.ContainsKey($nodeOnly) -and $seen["HORDE_MAPPED"] -ceq $mappedValue) "a variable this process holds and maps to nothing does NOT reach the pane"
-            Check ($null -ne $seen -and $seen["WEZTERM_UNIX_SOCKET"] -ceq $T.socket) "the pane's own pin is the named terminal's socket"
+            # The terminal sets a pane's own pin itself, spelling the same socket with forward slashes in
+            # the middle (measured 2026-10-06: C:\Users\u\.local/share/wezterm\gui-sock-<pid>).
+            Check ($null -ne $seen -and ("" + $seen["WEZTERM_UNIX_SOCKET"]).Replace("/", [string][char]92) -ieq $T.socket) "the pane's own pin is the named terminal's socket"
             $dump2 = Join-Path $work "nostrip.txt"
             $null = Start-HordeWeztermPane -Target $T -Program $tool -Argv @("env-dump", $dump2) -Cwd $work
             $null = Wait-Until { Test-Path -LiteralPath $dump2 } 20; Start-Sleep -Milliseconds 300
@@ -129,9 +131,10 @@ if ($iso) {
                 Check (-not (Test-Gone -Id $e2.pid -Start $e2.procStart)) "CONTROL: it ignored the close and is still running after the bound, so the check above can see a failure"
                 $wrong = Stop-HordeWeztermPane -Target $T -Handle $s2.value.handle -Expect ([pscustomobject]@{ pid = $e2.pid; procStart = "1" })
                 Check ($wrong.state -eq "unknown" -and -not (Test-Gone -Id $e2.pid -Start $e2.procStart)) "Stop given another start time than the program's ends nothing"
-                $still = $null
-                try { $still = Assert-HordeIsolated -Instance $iso } catch { Write-Host ("         " + $_.Exception.Message) -ForegroundColor Red }
-                Check ($null -ne $still) "still isolated, measured again before anything is ended"
+                # Measured again before anything is ended: this process is still pinned to the instance it
+                # started, and the named target is that instance. (Assert-HordeIsolated's one-window rule
+                # does not hold here: the spawns above opened windows of their own.)
+                Check ("$env:WEZTERM_UNIX_SOCKET" -ceq "$($iso.socket)" -and $T.socket -ceq $iso.socket -and $T.guiPid -eq [long]$iso.pid) "still pinned to the isolated instance, and the target is that instance, measured again before anything is ended"
                 $st = Stop-HordeWeztermPane -Target $T -Handle $s2.value.handle -Expect $e2
                 Check ($st.state -eq "known") "Stop, given the process it expects, was taken by the terminal"
                 Check (Wait-Until { Test-Gone -Id $e2.pid -Start $e2.procStart } 10) "and the program is gone, by pid and start time"

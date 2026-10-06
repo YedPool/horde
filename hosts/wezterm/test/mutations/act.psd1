@@ -52,7 +52,7 @@
            Find = 'if ($m.Groups[1].Value -cne "" + $Target.guiPid -or $m.Groups[2].Value -cne "" + $Target.guiStart) {'
            Replace = 'if ($false) {' }
         @{ Name = "restarted-terminal-accepted"
-           Find = 'if ("" + $now -cne "" + $Target.guiStart) {'
+           Find = 'if ($null -eq $now -or -not (Test-HordeWeztermSameStart $now $Target.guiStart)) {'
            Replace = 'if ($false) {' }
         @{ Name = "send-without-separator"
            Find = '$r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", "--", $Text)'
@@ -76,8 +76,11 @@
            Find = 'if ($null -eq $par -or [decimal]("0" + $par.start) -gt [decimal]("0" + $cur.start)) {'
            Replace = 'if ($null -eq $par) {' }
         @{ Name = "start-time-ignored"
-           Find = 'if ($null -eq $cur -or "" + $cur.start -cne "" + $Expect.procStart) { return (New-HordeKnown -Value $false) }'
+           Find = 'if ($null -eq $cur -or -not (Test-HordeWeztermSameStart $cur.start $Expect.procStart)) { return (New-HordeKnown -Value $false) }'
            Replace = 'if ($null -eq $cur) { return (New-HordeKnown -Value $false) }' }
+        @{ Name = "start-compared-to-the-millisecond"
+           Find = 'return [bool]([decimal]::Floor($x / 10) -eq [decimal]::Floor($y / 10))'
+           Replace = 'return [bool]([decimal]::Floor($x / 10000) -eq [decimal]::Floor($y / 10000))' }
         @{ Name = "empty-list-is-none"
            Find = 'if ($joined -eq "") { return (New-HordeUnknown -Reason "the terminal''s pane list was empty output, which is unknown, not none") }'
            Replace = 'if ($joined -eq "") { return (New-HordeKnown -Value @()) }' }

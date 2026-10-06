@@ -96,6 +96,17 @@ function Get-HordeWeztermProcessStart {
     try { return ("" + $p.StartTime.ToUniversalTime().ToFileTimeUtc()) } catch { return $null }
 }
 
+function Test-HordeWeztermSameStart {
+    # Do two start times, FILETIME ticks as text, name the same instant to the microsecond? MEASURED
+    # 2026-10-06 (#96 round 4): the process table (CIM CreationDate) keeps microseconds, Get-Process
+    # keeps 100 ns ticks, and one gui read both ways differed by 2 ticks. So every comparison here is
+    # at the precision both sources share; anything unreadable is not the same.
+    param($A, $B)
+    $x = [decimal]0; $y = [decimal]0
+    if (-not [decimal]::TryParse("" + $A, [ref]$x) -or -not [decimal]::TryParse("" + $B, [ref]$y)) { return $false }
+    return [bool]([decimal]::Floor($x / 10) -eq [decimal]::Floor($y / 10))
+}
+
 function Test-HordeWeztermTargetShape {
     # Is -Target a named terminal: { socket; guiPid; guiStart }, the socket absolute and named after its
     # gui? $null when it is, or the reason.
@@ -155,7 +166,7 @@ function Resolve-HordeWeztermHandle {
     if ($m.Groups[1].Value -cne "" + $Target.guiPid -or $m.Groups[2].Value -cne "" + $Target.guiStart) { return (New-HordeUnknown -Reason ("the handle " + $Handle + " belongs to another terminal than the one named (gui " + $Target.guiPid + " started " + $Target.guiStart + ")")) }
     $now = $null
     if ($null -ne $ProcessStart) { $now = & $ProcessStart ([long]$Target.guiPid) } else { $now = Get-HordeWeztermProcessStart -ProcessId ([long]$Target.guiPid) }
-    if ("" + $now -cne "" + $Target.guiStart) { return (New-HordeUnknown -Reason ("the terminal of handle " + $Handle + " is no longer running with that start time; a pane id of another terminal is never acted on")) }
+    if ($null -eq $now -or -not (Test-HordeWeztermSameStart $now $Target.guiStart)) { return (New-HordeUnknown -Reason ("the terminal of handle " + $Handle + " is no longer running with that start time; a pane id of another terminal is never acted on")) }
     return (New-HordeKnown -Value $m.Groups[3].Value)
 }
 
@@ -325,11 +336,11 @@ function Test-HordeWeztermProcessInTerminal {
     $byPid = @{}
     foreach ($r in @($Table)) { $byPid[[long]$r.pid] = $r }
     $cur = $byPid[[long]$Expect.pid]
-    if ($null -eq $cur -or "" + $cur.start -cne "" + $Expect.procStart) { return (New-HordeKnown -Value $false) }
+    if ($null -eq $cur -or -not (Test-HordeWeztermSameStart $cur.start $Expect.procStart)) { return (New-HordeKnown -Value $false) }
     for ($hop = 0; $hop -lt 8; $hop++) {
         $par = $byPid[[long]$cur.ppid]
         if ($null -eq $par -or [decimal]("0" + $par.start) -gt [decimal]("0" + $cur.start)) { return (New-HordeUnknown -Reason ("the process " + $Expect.pid + " is not traced to the terminal's gui: its parent chain ends at pid " + $cur.ppid)) }
-        if ([long]$par.pid -eq [long]$Target.guiPid -and "" + $par.start -ceq "" + $Target.guiStart) { return (New-HordeKnown -Value $true) }
+        if ([long]$par.pid -eq [long]$Target.guiPid -and (Test-HordeWeztermSameStart $par.start $Target.guiStart)) { return (New-HordeKnown -Value $true) }
         $cur = $par
     }
     return (New-HordeUnknown -Reason ("the process " + $Expect.pid + " is not traced to the terminal's gui within 8 parents"))

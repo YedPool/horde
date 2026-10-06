@@ -170,21 +170,25 @@ $table = @(
     [pscustomobject]@{ pid = 7000; ppid = 4242; start = "132000000000000000" })
 $ok = [pscustomobject]@{ pid = 5000; procStart = "133000000000000200" }
 Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect $ok -Table $table).value -eq $true) "CONTROL: the pane's program, traced through its parents to this terminal's gui, is in it"
-Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect ([pscustomobject]@{ pid = 5000; procStart = "133000000000000201" }) -Table $table).value -eq $false) "a pid now running with another start time is not the expected process"
+Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect ([pscustomobject]@{ pid = 5000; procStart = "133000000000000250" }) -Table $table).value -eq $false) "a pid now running with another start time is not the expected process"
 Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect ([pscustomobject]@{ pid = 6000; procStart = "133000000000000300" }) -Table $table).state -eq "unknown") "a process not traced to this terminal's gui is never called in it"
 Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect ([pscustomobject]@{ pid = 7000; procStart = "132000000000000000" }) -Table $table).state -eq "unknown") "a parent that started after its child is a reused pid, and is not believed"
 Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect $null -Table $table).state -eq "unknown") "no expected process: unknown, never assumed"
+# One instant read by two sources: the process table keeps microseconds, Get-Process 100 ns ticks.
+Check ((Test-HordeWeztermProcessInTerminal -Target $T -Expect ([pscustomobject]@{ pid = 5000; procStart = "133000000000000207" }) -Table $table).value -eq $true) "a start time read to 100 ns matches the table's microseconds (measured: one gui read both ways differed by 2 ticks)"
+Check ((Test-HordeWeztermSameStart "133000000000000200" "133000000000000210") -eq $false) "a microsecond apart is another start time"
+Check ((Test-HordeWeztermSameStart "x" "x") -eq $false) "an unreadable start time is never the same"
 $script:reply = [pscustomobject]@{ code = 0; out = ""; err = ""; timedOut = $false }
 $script:calls.Clear()
 $r = Stop-HordeWeztermPane -Target $T -Handle $H -Expect $ok -Runner $rec -ProcessStart $alive -Table $table
 Check ($r.state -eq "known" -and (@($script:calls[0]) -join "|") -ceq "kill-pane|--pane-id|17") "ending a pane is kill-pane on that pane, once its expected process is proven in this terminal"
 $script:calls.Clear()
 $r = Stop-HordeWeztermPane -Target $T -Handle $H -Expect ([pscustomobject]@{ pid = 6000; procStart = "133000000000000300" }) -Runner $rec -ProcessStart $alive -Table $table
-Check ($r.state -eq "unknown" -and $script:calls.Count -eq 0) "a process not proven in this terminal: nothing is ended"
-$r = Stop-HordeWeztermPane -Target $T -Handle $H -Expect ([pscustomobject]@{ pid = 5000; procStart = "1" }) -Runner $rec -ProcessStart $alive -Table $table
+Check ($r.state -eq "unknown" -and $r.reason -like "nothing was ended: *not traced to the terminal's gui*" -and $script:calls.Count -eq 0) "a process not proven in this terminal: nothing is ended, saying it could not be traced"
+$r = Stop-HordeWeztermPane -Target $T -Handle $H -Expect ([pscustomobject]@{ pid = 5000; procStart = "100" }) -Runner $rec -ProcessStart $alive -Table $table
 Check ($r.state -eq "unknown" -and $r.reason -like "*not running with its start time*" -and $script:calls.Count -eq 0) "an expected process that is gone: nothing is ended"
 $r = Stop-HordeWeztermPane -Target $T -Handle $H -Runner $rec -ProcessStart $alive -Table $table
-Check ($r.state -eq "unknown" -and $script:calls.Count -eq 0) "no expected process at all: nothing is ended, a pane id alone is never enough"
+Check ($r.state -eq "unknown" -and $r.reason -like "nothing was ended: no expected process*" -and $script:calls.Count -eq 0) "no expected process at all: nothing is ended, a pane id alone is never enough"
 $r = Stop-HordeWeztermPane -Target $T -Handle "4242.1.17" -Expect $ok -Runner $rec -ProcessStart $alive -Table $table
 Check ($r.state -eq "unknown" -and $script:calls.Count -eq 0) "a handle of another terminal: nothing is ended"
 $script:reply = [pscustomobject]@{ code = 0; out = '[{"window_id":0,"tab_id":0,"pane_id":17,"title":"t","cwd":""},{"window_id":0,"tab_id":1,"pane_id":18,"title":"u","cwd":""}]'; err = ""; timedOut = $false }
