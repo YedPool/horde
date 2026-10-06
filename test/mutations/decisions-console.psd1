@@ -9,7 +9,7 @@
     Mutations = @(
         @{ Name = "json-not-ascii"
            Find = 'return [regex]::Replace($json, ''[^\x20-\x7E]'', {'
-           Replace = 'return [regex]::Replace($json, ''[^\x00-￿]'', {' }
+           Replace = 'return [regex]::Replace($json, ''(?!)'', {' }
         @{ Name = "refusal-exits-zero"
            Find = 'elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }'
            Replace = '' }
