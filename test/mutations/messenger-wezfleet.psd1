@@ -27,9 +27,12 @@
         @{ Name = "empty-label-sent"
            Find = 'if ($null -ne $fl -and "$($fl.Value)" -ne "") { $argv += @("-FromLabel", [string]$fl.Value) }'
            Replace = '$argv += @("-FromLabel", "")' }
-        @{ Name = "body-written-utf16"
+        # Written in a single-byte code page, a non-ASCII letter in the body is lost. (UTF-16 is not a
+        # mutant here: it carries a BOM, and wezfleet's reader detects it and decodes the body intact -
+        # measured, msg-b3-mut 2026-10-06.)
+        @{ Name = "body-written-ascii"
            Find = '(New-Object System.Text.UTF8Encoding($false))'
-           Replace = '[System.Text.Encoding]::Unicode' }
+           Replace = '[System.Text.Encoding]::ASCII' }
         @{ Name = "many-lines-read"
            Find = 'if ($lines.Count -ne 1) {'
            Replace = 'if ($lines.Count -eq 0) {' }

@@ -92,6 +92,8 @@ $got = @(Test-Planted -File "" -Change $null -ListChange "messengers/memory/Mess
 Check (Says $got "not one of") "a list line with a kind outside the list is refused"
 $got = @(Test-Planted -File "" -Change $null -ListChange "a line with no cells")
 Check (Says $got "is not 'file | function | kind | text | why'") "a malformed list line is refused"
+$got = @(Test-Planted -File "" -Change $null -ListChange "messengers/memory/Messenger.ps1 | Get-X | command")
+Check (Says $got "is not 'file | function | kind | text | why'") "a list line with three of its five cells is refused"
 $got = @(Test-Planted -File "messengers\wezfleet\test\Planted.ps1" -Change { param($t) "function Get-X { Start-Process notepad.exe }" })
 Check ($got.Count -eq 0) "a file under a test folder is not read: tests start stand-in children on purpose"; Show $got
 $got = @(Test-Planted -File $mem -Change { param($t) $t + "`r`nfunction Get-X {" })

@@ -27,7 +27,8 @@ function New-Msg {
         sessionId = "22222222-3333-4444-8555-666666666666"
         label = "A"
         from = [pscustomobject]@{ deviceId = "0f000000-0000-4000-8000-000000000001"; sessionId = "33333333-4444-4555-8666-777777777777"; label = "M" }
-        body = ("unit body " + [guid]::NewGuid().ToString("N") + "`nline two")
+        # Two lines and a non-ASCII letter: the file must carry both, in UTF-8.
+        body = ("unit body " + [guid]::NewGuid().ToString("N") + "`nline two caf" + [char]0x00E9)
         ttlSeconds = 3600
     }
 }
