@@ -76,7 +76,9 @@ function Read-HordeDecisionJsonFile {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$What)
     $text = Read-HordeDecisionTextFile -Path $Path -What $What
     $twice = @(Find-HordeJsonDuplicateKey -Text $text)
-    if ($twice.Count -gt 0) { throw ($What + " '" + $Path + "' gives a key twice: " + ($twice -join "; ")) }
+    # The key is not named: a name is text somebody typed, and what Find-HordeJsonDuplicateKey says
+    # of it quotes it. A token pasted where a name goes was printed back here (measured 2026-10-06).
+    if ($twice.Count -gt 0) { throw ($What + " '" + $Path + "' gives a key twice (" + $twice.Count + " key(s) are given more than once). One of each pair would be stored unseen, so nothing was read. The keys are not named here, because a name may hold what must not be printed") }
     $parsed = $null
     # THE PARSER'S OWN MESSAGE IS NOT REPEATED. Windows PowerShell 5.1's ConvertFrom-Json quotes what it
     # could not read: "Invalid JSON primitive: <the text>", and for a string left open the whole file.

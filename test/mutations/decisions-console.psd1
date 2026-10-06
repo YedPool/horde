@@ -7,6 +7,9 @@
     Target = "decisions\Console.ps1"
     Suite  = "test\test-decisions-cli.ps1"
     Mutations = @(
+        @{ Name = "key-given-twice-named"
+           Find = 'One of each pair would be stored unseen, so nothing was read. The keys are not named here, because a name may hold what must not be printed")'
+           Replace = '" + ($twice -join "; "))' }
         @{ Name = "piped-output-left-in-the-console-code-page"
            Find = '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)'
            Replace = '' }

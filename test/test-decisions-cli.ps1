@@ -176,7 +176,13 @@ Check ($sec.code -eq 1 -and $null -ne $j -and $j.value.outcome -ceq "refused" -a
 Check (-not $sec.out.Contains($token) -and -not $sec.out.Contains("Qr7Qr7") -and (Get-Files) -ceq "0000000001.json") "the token is not printed back, on either stream, and nothing is stored"
 $twiceFile = Write-Json "twice.json" '{"title":"Should the closing sound be a tone or a spoken line?","title":"PR 1469?","kind":"yes-no","whatItIs":"x","group":"voice","askedBy":"orc-b"}'
 $twice = Invoke-Decisions @("add", "-File", $twiceFile)
-Check ($twice.code -eq 1 -and $twice.out -like "*gives a key twice*title*" -and (Get-Files) -ceq "0000000001.json") "a file that gives the title twice is refused: one of the two would be stored unseen"
+Check ($twice.code -eq 1 -and $twice.out -like "*gives a key twice*" -and (Get-Files) -ceq "0000000001.json") "a file that gives the title twice is refused: one of the two would be stored unseen"
+# THE KEY IS NOT NAMED: a name is text a person typed, and a token pasted where a name goes was printed
+# back by this refusal (measured 2026-10-06). It says how many, and where to look instead.
+$twiceTokenFile = Write-Json "twice-token.json" ('{"title":"Should the closing sound be a tone or a spoken line?","' + $token + '":"a","' + $token + '":"b","kind":"yes-no","whatItIs":"x","group":"voice","askedBy":"orc-b"}')
+$twiceToken = Invoke-Decisions @("add", "-File", $twiceTokenFile)
+Check ($twiceToken.code -eq 1 -and $twiceToken.out -like "*gives a key twice*" -and -not $twiceToken.out.Contains($token) -and (Get-Files) -ceq "0000000001.json") "a file that gives a key twice is refused without naming the key: a token used as the key is not printed back"
+Check ($twice.out -like "*1 key*" -and $twice.out -notlike "*'title'*") "the refusal says how many keys are given twice, and names none"
 $ansiFile = Join-Path $script:work "ansi.json"
 [System.IO.File]::WriteAllBytes($ansiFile, [byte[]](@(0x7B, 0x22, 0x74, 0x69, 0x74, 0x6C, 0x65, 0x22, 0x3A, 0x22, 0xE9, 0xE8, 0xE0, 0x22, 0x7D)))
 $ansi = Invoke-Decisions @("add", "-File", $ansiFile)
