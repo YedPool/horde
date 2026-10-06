@@ -439,15 +439,48 @@ E. Acting over the link
          hub's delivery, written to that outbox record only); `session.deliver` gains an optional
          `label`, the target's stable identity, followed by the node when the session id moved (a
          compact or a /clear), never a pane. `link-verbs.v1` may still be edited until R17.
-      3. The messenger port, `core/Messenger.ps1` (post and status, tristate answers), with
-         `messengers/memory` (the test fake, in-process, declared unusable in production as the
-         in-process transport pair is) and `messengers/wezfleet`, which runs the two commands of slice
-         1. **Delivery code lives in `messengers/`, not `remote/`**: it starts a program, and `remote/`
-         stays pure under `tools/ExecScan.ps1`; `messengers/` gets its own allowlist, as `transports/`
-         has, and the node takes its messenger injected.
+      3. **Amended 2026-10-06 to what PR #102 ships (review of #102, finding 8); split in two.**
+         - **3a, the messenger port (PR #102).** `messengers/Port.ps1` (post and status, tristate
+           answers), the fourth port family beside `hosts/`, `agents/` and `transports/`
+           (`tools/HostNames.ps1`, `tools/FunctionNames.ps1`, and `messengers/*/test` in
+           `test/lib/SuiteFiles.ps1`), `schema/messenger-capabilities.v1` (body.untyped,
+           idempotent.post, receipt.receiver, wake; only yes counts), and `messengers/memory`, the
+           in-process test fake, which declines receipt.receiver so `Resolve-HordeNodeMessenger` never
+           picks it. **The port lives in `messengers/`, not `remote/`**: it invokes what each messenger
+           registers, and `remote/` stays pure under `tools/ExecScan.ps1`. The port checks the message
+           against session.deliver's own patterns and ttl ceiling before any adapter sees it, calls
+           only a registered messenger, and reads an adapter's answer only when it names the message it
+           was asked about, its stage is one of the list, and its reason is one line within reasonBytes
+           (given for held). **The port passes stages through as the adapter said them.** It does not
+           own forward-only receipts or the args-hash check on a repost: those are
+           `remote/Messaging.ps1`'s rules (review of PR #97), enforced in slice 4 against the message
+           journal, and a port test pins that a backward stage reaches slice 4 uncorrected.
+         - **3b, the wezfleet adapter (its own PR, after slice 1's CLI shape has shipped).**
+           `messengers/wezfleet`, which runs slice 1's two commands, and the `messengers/` exec guard
+           that comes with the first messenger that starts a program. **Merge conditions, recorded from
+           the review of #102 (findings 1 and 7), each tested red first with a mutant:**
+           (1) the conformance suite observes real side effects, never the adapter's own report: what
+           was actually typed is read from a fake pane or a recorded send-text stub, and wakes are
+           counted the same way; the wake text is one line, holds no control characters and never
+           contains the body; a repost wakes nothing and never resets a stage, and a repost after a
+           later stage returns that later stage; a conformance mutation spec for each messenger, as the
+           transports have one.
+           (2) start sites: an absolute .exe, or a fixed `powershell.exe` with a fixed script path, its
+           arguments built as separate argv elements, never one command string; a `messengers/`
+           ExecScan or ExecGuard allowlist that refuses a second start site.
+           (3) wezfleet missing, the wrong version, or output that is not JSON each comes back
+           `unknown` with the reason, never a stage.
+         The node takes its messenger injected in both: slice 4 does not wait for 3b.
       4. The node side: `node serve` answers `session.deliver` and `delivery.status` through the
          message journal (R3, kind `message`, keyed by messageId with its argsHash: a resend returns the
          recorded stage and posts nothing), and `mail.next` and `mail.receipt` from the node's outbox.
+         It takes its deliverer injected and wires in slice 3a's port once #102 merges. **Slice 4 owns
+         what the port passes through** (review of #102, findings 2 and 4): a stage a messenger reports
+         is never allowed to move a message backward or overwrite a final stage (forward-only, as
+         `Resolve-HordeMailReceipt` already rules for receipts), and a repost of one messageId with a
+         different argsHash is refused, never answered with the first content's stage. The
+         `remote.deliverTo` gate, the journal and the wake-notice decision are this slice's and 3b's,
+         not 3a's.
          The gate above (hub-spawned or `remote.deliverTo`) is checked here, on the resolved session,
          through `remote/Messaging.ps1` (landed with slice 2, after the review of PR #97): the deliver
          target (`Resolve-HordeDeliverTarget`), the receipt (`Resolve-HordeMailReceipt`: forward only,

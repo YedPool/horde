@@ -28,19 +28,33 @@
 # so no production path can pick it.
 #
 # THE PORT NEVER GUESSES AND NEVER THROWS FOR THE FAR END. A message is checked before any adapter sees
-# it, and an invalid one is unknown with the reason. An adapter that throws, answers with something that
-# is not a core/tristate answer, or names a stage outside the list, comes back unknown with the reason.
+# it, and an invalid one is unknown with the reason. Only a messenger registered through
+# Register-HordeMessenger is called: a look-alike object is refused, so "memory is never picked in
+# production" does not rest on every caller going through Resolve-HordeNodeMessenger (review of #102).
+# An adapter that throws, answers with something that is not a core/tristate answer, answers about a
+# message other than the one it was asked about, names a stage outside the list, or gives a reason the
+# link could not carry, comes back unknown with the reason.
+#
+# WHAT THE PORT DOES NOT OWN (review of #102, findings 2 and 4). It passes a stage through exactly as the
+# adapter said it, a backward one included. Forward-only receipts (a stage never moves back, a final
+# stage is never overwritten) and the args-hash check on a repost (one messageId, different content, is
+# refused rather than answered with the first content's stage) are remote/Messaging.ps1's rules, from
+# the review of PR #97, enforced in slice 4 against the message journal. Two places deciding the same
+# rule would drift; slice 4 is the one that holds the journal.
 #
 # ADAPTER CONTRACT. messengers/<name>/Messenger.ps1 is dot-sourced at script level and calls
 # Register-HordeMessenger with two script blocks:
 #   Post    param($Message)          -> a tristate answer: known { stage; at; reason }, or unknown
 #   Status  param([string]$MessageId) -> known { stage; at; reason }, absent (never took it), or unknown
-# at is a [datetime]; reason is text, possibly empty. A post of a messageId already taken returns the
-# stage recorded for it and delivers nothing more (idempotent.post).
+# The known value is { messageId; stage; at; reason }: messageId must be the id the port asked about, at
+# is a [datetime], reason is one line within the link's reasonBytes, and must be given for held. A post
+# of a messageId already taken returns the stage recorded for it and delivers nothing more
+# (idempotent.post). The port's own known value leaves reason out when it is empty, because
+# schema/link-verbs.v1's delivery.reason requires text.
 #
 # THE MESSAGE: { messageId; sessionId; label (optional); from { deviceId; sessionId; label (optional) };
 # body; ttlSeconds }, the shape of session.deliver's arguments (schema/link-verbs.v1), with the same
-# patterns, read from that schema so there is one definition of each.
+# patterns, read from that schema so there is one definition of each, and the same ttl ceiling.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -56,6 +70,14 @@ $script:HordeMessengerMembers = @("messageId", "sessionId", "label", "from", "bo
 $script:HordeMessengerFromMembers = @("deviceId", "sessionId", "label")
 # The most a body may take, in UTF-8 bytes: the link's textBytes (schema/link-frame.v1), 64 KiB.
 $script:HordeMessengerBodyBytes = 65536
+# The longest a message may wait: remote/Contract.ps1's $script:HordeMailTtlMaxSeconds, 7 days, the
+# replay window. Copied, not loaded, so the port does not load the link contract; test-messenger-port
+# fails if the two ever differ.
+$script:HordeMessengerTtlMaxSeconds = 604800
+# The most a reason may take, in UTF-8 bytes: the link's reasonBytes (schema/link-frame.v1).
+$script:HordeMessengerReasonBytes = 1024
+# The stages that must say why: held is known not delivered, and the reason is the only account of it.
+$script:HordeMessengerReasonStages = @("held")
 $script:HordeMessengerPatterns = $null
 
 function Get-HordeMessengerRoot {
@@ -227,6 +249,7 @@ function Test-HordeMessengerMessage {
     }
     $ttl = Get-HordeMessengerMember $Message "ttlSeconds"
     if (-not $ttl.has -or -not ($ttl.value -is [int] -or $ttl.value -is [long]) -or $ttl.value -lt 1) { [void]$out.Add("ttlSeconds is not a whole number of seconds, at least 1") }
+    elseif ($ttl.value -gt $script:HordeMessengerTtlMaxSeconds) { [void]$out.Add("ttlSeconds is " + $ttl.value + ", over the " + $script:HordeMessengerTtlMaxSeconds + " (7 days) a message may wait") }
     return @($out)
 }
 
@@ -242,6 +265,11 @@ function ConvertFrom-HordeMessengerAnswer {
         return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " absent, which says nothing of the message it was handed"))
     }
     $v = $Answer.value
+    # BOUND TO ITS MESSAGE: an adapter that mis-read its store would otherwise report another message's
+    # stage as this one's - a false "seen" (review of #102, finding 3).
+    $said = Get-HordeMessengerMember $v "messageId"
+    if (-not $said.has -or $said.value -isnot [string]) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " for " + $MessageId + " without naming the messageId it is about")) }
+    if ($said.value -cne $MessageId) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' was asked about " + $MessageId + " and answered " + $What + " about " + $said.value)) }
     $stage = Get-HordeMessengerMember $v "stage"
     if (-not $stage.has -or $stage.value -isnot [string] -or $script:HordeMessengerStages -cnotcontains $stage.value) {
         return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with the stage '" + $stage.value + "', which is not one of " + ($script:HordeMessengerStages -join ", ")))
@@ -249,13 +277,41 @@ function ConvertFrom-HordeMessengerAnswer {
     $at = Get-HordeMessengerMember $v "at"
     if (-not $at.has -or $at.value -isnot [datetime]) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with a stage whose time is not a time")) }
     $reason = Get-HordeMessengerMember $v "reason"
-    $value = [pscustomobject]@{ messageId = $MessageId; stage = [string]$stage.value; at = ([datetime]$at.value).ToUniversalTime(); reason = "$($reason.value)" }
-    return (New-HordeKnown -Value $value -ObservedAt $Answer.observedAt)
+    $why = ""
+    if ($reason.has -and $null -ne $reason.value) { $why = "$($reason.value)" }
+    if ($why -cmatch "[`r`n]") { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with a reason holding a line break")) }
+    if ([System.Text.Encoding]::UTF8.GetByteCount($why) -gt $script:HordeMessengerReasonBytes) { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " with a reason over the link's " + $script:HordeMessengerReasonBytes + " bytes")) }
+    if ($script:HordeMessengerReasonStages -ccontains $stage.value -and $why.Trim() -eq "") { return (New-HordeUnknown -Reason ("messenger '" + $Messenger + "' answered " + $What + " " + $stage.value + " without saying why")) }
+    $value = [ordered]@{ messageId = $MessageId; stage = [string]$stage.value; at = ([datetime]$at.value).ToUniversalTime() }
+    # Left out when empty: link-verbs' delivery.reason requires text (review of #102, finding 5).
+    if ($why.Trim() -ne "") { $value["reason"] = $why }
+    return (New-HordeKnown -Value ([pscustomobject]$value) -ObservedAt $Answer.observedAt)
+}
+
+function Test-HordeMessengerRegistered {
+    # Is this the very object Register-HordeMessenger made under its name? A look-alike carrying the same
+    # name and script blocks is not: it never passed the capability check (review of #102, finding 6).
+    param($Messenger)
+    if ($null -eq $Messenger -or $Messenger -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    if (@($Messenger.PSObject.TypeNames) -notcontains "Horde.Messenger") { return $false }
+    $n = $Messenger.PSObject.Properties["name"]
+    if ($null -eq $n -or $n.Value -isnot [string] -or -not $script:HordeMessengers.ContainsKey($n.Value)) { return $false }
+    return [object]::ReferenceEquals($script:HordeMessengers[$n.Value], $Messenger)
+}
+
+function Get-HordeMessengerLabel {
+    # The name to put in a refusal, for an object that may not be a messenger at all.
+    param($Messenger)
+    if ($null -eq $Messenger) { return "(none)" }
+    $n = $Messenger.PSObject.Properties["name"]
+    if ($null -eq $n) { return "(unnamed)" }
+    return "$($n.Value)"
 }
 
 function Send-HordeMessengerMessage {
     # Hand one message to its session through -Messenger. A tristate answer, never a throw for the far end.
-    param([Parameter(Mandatory = $true)]$Messenger, $Message)
+    param($Messenger, $Message)
+    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so it was not called")) }
     $findings = @(Test-HordeMessengerMessage -Message $Message)
     if ($findings.Count -gt 0) { return (New-HordeUnknown -Reason ("the message was not handed to messenger '" + $Messenger.name + "': " + ($findings -join "; "))) }
     $id = "$((Get-HordeMessengerMember $Message 'messageId').value)"
@@ -266,7 +322,8 @@ function Send-HordeMessengerMessage {
 
 function Get-HordeMessengerStatus {
     # Where one message is, by its id, as -Messenger sees it. absent means it never took it.
-    param([Parameter(Mandatory = $true)]$Messenger, [string]$MessageId)
+    param($Messenger, [string]$MessageId)
+    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so it was not called")) }
     $p = Get-HordeMessengerPatterns
     if (-not (Test-HordeMessengerText $MessageId $p.uuid)) { return (New-HordeUnknown -Reason ("'" + $MessageId + "' is not a messageId (a lowercase uuid), so messenger '" + $Messenger.name + "' was not asked")) }
     try { $a = & $Messenger.status $MessageId }

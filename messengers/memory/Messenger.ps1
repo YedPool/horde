@@ -45,7 +45,7 @@ function Get-HordeMemoryMessengerLog {
 
 function ConvertTo-HordeMemoryMessengerAnswer {
     param($Record)
-    return (New-HordeKnown -Value ([pscustomobject]@{ stage = $Record.stage; at = $Record.at; reason = $Record.reason }) -ObservedAt ([datetime]::UtcNow))
+    return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Record.message.messageId)"; stage = $Record.stage; at = $Record.at; reason = $Record.reason }) -ObservedAt ([datetime]::UtcNow))
 }
 
 $null = Register-HordeMessenger -Folder $script:HordeMemoryMessengerFolder `

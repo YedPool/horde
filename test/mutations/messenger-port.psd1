@@ -53,5 +53,43 @@
         @{ Name = "adapter-throw-escapes"
            Find = 'catch { return (New-HordeUnknown -Reason ("messenger ''" + $Messenger.name + "'' failed to post " + $id) -ErrorRecord $_) }'
            Replace = 'catch { throw }' }
+        # Review of #102.
+        @{ Name = "non-string-identifier-allowed"
+           Find = 'return ($Value -is [string] -and $Value -cnotmatch'
+           Replace = 'return ($Value -cnotmatch' }
+        @{ Name = "ttl-ceiling-dropped"
+           Find = 'elseif ($ttl.value -gt $script:HordeMessengerTtlMaxSeconds) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "answer-without-message-id-read"
+           Find = 'if (-not $said.has -or $said.value -isnot [string]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "answer-about-another-message-read"
+           Find = 'if ($said.value -cne $MessageId) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "reason-line-break-allowed"
+           Find = 'if ($why -cmatch "[`r`n]") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "reason-cap-dropped"
+           Find = 'if ([System.Text.Encoding]::UTF8.GetByteCount($why) -gt $script:HordeMessengerReasonBytes) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "held-without-reason-read"
+           Find = 'if ($script:HordeMessengerReasonStages -ccontains $stage.value -and $why.Trim() -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "empty-reason-written"
+           Find = 'if ($why.Trim() -ne "") { $value["reason"] = $why }'
+           Replace = '$value["reason"] = $why' }
+        @{ Name = "look-alike-messenger-called"
+           Find = 'return [object]::ReferenceEquals($script:HordeMessengers[$n.Value], $Messenger)'
+           Replace = 'return $true' }
+        @{ Name = "send-skips-registration"
+           Find = '    param($Messenger, $Message)
+    if (-not (Test-HordeMessengerRegistered $Messenger)) {'
+           Replace = '    param($Messenger, $Message)
+    if ($false) {' }
+        @{ Name = "status-skips-registration"
+           Find = '    param($Messenger, [string]$MessageId)
+    if (-not (Test-HordeMessengerRegistered $Messenger)) {'
+           Replace = '    param($Messenger, [string]$MessageId)
+    if ($false) {' }
     )
 }
