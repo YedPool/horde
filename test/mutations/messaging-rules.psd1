@@ -38,12 +38,21 @@
         @{ Name = "hub-spawned-carried-by-label"
            Find = 'Where-Object { $null -ne $_ -and (Test-HordeDeliverSameProcess $_ $target) }'
            Replace = 'Where-Object { $null -ne $_ -and ((Test-HordeDeliverSameProcess $_ $target) -or "$($_.label)" -ceq "$($target.label)") }' }
+        @{ Name = "process-ignores-device"
+           Find = '"$(Get-HordeLinkProp $ns ''device'')"'
+           Replace = '"same-device"' }
+        @{ Name = "process-ignores-space"
+           Find = '"$(Get-HordeLinkProp $ns ''space'')"'
+           Replace = '"same-space"' }
         @{ Name = "process-by-pid-alone"
-           Find = 'return ([string]::Equals($ap, $bp, [System.StringComparison]::Ordinal) -and [string]::Equals($as, $bs,'
-           Replace = 'return ([string]::Equals($ap, $bp, [System.StringComparison]::Ordinal) -or [string]::Equals($as, $bs,' }
-        @{ Name = "empty-start-time-proves-the-process"
-           Find = 'if ($ap -eq "" -or $as -eq "" -or $bs -eq "") { return $false }'
-           Replace = 'if ($ap -eq "") { return $false }' }
+           Find = '"$(Get-HordeLinkProp $Entry ''procStart'')"'
+           Replace = '"same-start"' }
+        @{ Name = "empty-part-proves-the-process"
+           Find = 'if ($a[$i] -eq "" -or $b[$i] -eq "") { return $false }'
+           Replace = 'if ($false) { return $false }' }
+        @{ Name = "markers-replayed-in-read-order"
+           Find = '[Array]::Sort($keys, [System.StringComparer]::Ordinal)  # oldest marker first'
+           Replace = '$null = $keys  # oldest marker first' }
         @{ Name = "shared-label-picks-one"
            Find = 'if ($byLabel.Count -gt 1) {'
            Replace = 'if ($false) {' }

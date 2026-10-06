@@ -136,6 +136,8 @@ $r = Select-HordeMailRecordedStage -Markers @((M "handed-over" "2026-10-05T12:00
 Check ($r.stage -ceq "handed-over" -and $r.at -ceq "2026-10-05T12:00:02.000Z") "markers are replayed in time order: accepted, then handed-over"
 $r = Select-HordeMailRecordedStage -Markers @((M "seen" "2026-10-05T12:00:03.000Z"), (M "refused" "2026-10-05T12:00:04.000Z"), (M "accepted" "2026-10-05T12:00:05.000Z"))
 Check ($r.stage -ceq "seen" -and $r.at -ceq "2026-10-05T12:00:03.000Z") "two final markers from a race: the first stands, and nothing after it moves the record"
+$r = Select-HordeMailRecordedStage -Markers @((M "refused" "2026-10-05T12:00:06.000Z"), (M "seen" "2026-10-05T12:00:03.000Z"))
+Check ($r.stage -ceq "seen" -and $r.at -ceq "2026-10-05T12:00:03.000Z") "the earliest final marker stands, whatever order the files were read in"
 $r = Select-HordeMailRecordedStage -Markers @((M "accepted" "2026-10-05T12:00:01.000Z"), (M "lost" "2026-10-05T12:00:02.000Z"))
 Check ($r.stage -ceq "accepted") "a marker naming no stage moves nothing"
 
