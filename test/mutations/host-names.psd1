@@ -245,8 +245,8 @@
            Replace = '-Skip @($script:HordeProcessImageExempt)' }
         # --- transports/ is the third family (remote plan step R5)
         @{ Name = "transports-not-a-family"
-           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports")'
-           Replace = '$script:HordePortFamilies = @("hosts", "agents")' }
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents", "messengers")' }
         @{ Name = "image-rule-skips-whole-families"
            Find = '-Skip (@(Get-HordePortFolders -RepoRoot $RepoRoot) + @($script:HordeProcessImageExempt))'
            Replace = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))' }

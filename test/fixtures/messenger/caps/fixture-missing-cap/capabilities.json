@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "messenger": "fixture-missing-cap",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture." },
+    "wake": { "support": "no", "evidence": "A fixture." }
+  }
+}

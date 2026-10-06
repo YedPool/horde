@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "fixture-unverified",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture." },
+    "idempotent.post": { "support": "unverified", "evidence": "A fixture whose repost was never measured." },
+    "receipt.receiver": { "support": "yes", "evidence": "A fixture." },
+    "wake": { "support": "no", "evidence": "A fixture." }
+  }
+}

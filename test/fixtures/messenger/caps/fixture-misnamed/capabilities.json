@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "fixture-other",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture." },
+    "receipt.receiver": { "support": "yes", "evidence": "A fixture." },
+    "wake": { "support": "no", "evidence": "A fixture." }
+  }
+}

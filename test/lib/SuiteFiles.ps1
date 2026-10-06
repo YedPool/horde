@@ -12,11 +12,13 @@
 #   hosts/*/test/test-*.ps1         a host's own suites (D12)
 #   transports/*/test/test-*.ps1    a transport's own suites (remote design, decision 10)
 #   agents/*/test/test-*.ps1        an agent harness's own suites (engines plan, E1)
+#   messengers/*/test/test-*.ps1    a messenger's own suites (remote plan R21; review of #102). Its
+#                                   test/Fixture.ps1 is not a suite: only test-*.ps1 is run.
 #
 # NOT SUITES: anything under test/fixtures/. Those files are inputs that suites read or run as
 # fixtures - test/fixtures/ledger holds test-*.ps1 files on purpose, as the trees a ledger cites.
 
-$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")
+$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")
 $script:HordeSuiteDataFolder = "test/fixtures"
 
 # MACHINE-BOUND SUITES: the gate runs them, but only on a machine with the founder's interactive logon,
