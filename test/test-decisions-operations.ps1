@@ -236,6 +236,20 @@ $null = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 4; o
 $a = Invoke-Op $s "list" @{ }
 Check ((@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3,5" -and $a.value.counts.open -eq 4 -and $a.value.counts.closed -eq 1) "the default is the open ones, in number order, and the counts cover every state whatever is shown"
 Check (Test-Refused (Invoke-Op $s "list" @{ state = "answered" }) "is not a state a question can be in") "a state that does not exist yet is refused by name, not answered with an empty list"
+# THE LISTED WORDS, IN ANY CASE, AND NOTHING ELSE. Measured 2026-10-06: `list -State ALL` was refused
+# with a regular expression for a reason ("request.state does not match ^[a-z][a-z-]{0,31}$").
+foreach ($spelt in @("ALL", "All", "CLOSED", "Open")) {
+    $a = Invoke-Op $s "list" @{ state = $spelt }
+    $same = Invoke-Op $s "list" @{ state = $spelt.ToLowerInvariant() }
+    Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq (@($same.value.questions | ForEach-Object { $_.number }) -join ",")) ("list with state '" + $spelt + "' is the list with state '" + $spelt.ToLowerInvariant() + "' (" + (Get-Outcome $a) + ")")
+}
+Check ((@((Invoke-Op $s "list" @{ state = "CLOSED" }).value.questions | ForEach-Object { $_.number }) -join ",") -ceq "4") "CONTROL: and that is the closed question alone, not every question"
+$a = Invoke-Op $s "list" @{ state = "ANSWERED" }
+Check ((Test-Refused $a "is not a state a question can be in; give one of: open, closed, or all") -and -not "$($a.value.findings)".Contains("^[")) "a word that is not listed is refused in words, in any case, with the words that are"
+foreach ($notAWord in @("open closed", "open!", "")) {
+    $a = Invoke-Op $s "list" @{ state = $notAWord }
+    Check ((Get-Outcome $a) -ceq "refused" -and -not "$($a.value.findings)".Contains("^[") -and -not "$($a.value.findings)".Contains("'" + $notAWord + "'")) ("'" + $notAWord + "' is refused; the reason is not a regular expression, and text that is not a word is not said back")
+}
 $empty = New-TestStore
 $a = Invoke-Op $empty "list" @{ state = "all" }
 Check ((Get-Outcome $a) -ceq "done" -and @($a.value.questions).Count -eq 0 -and $a.value.counts.open -eq 0 -and -not (Test-Path -LiteralPath $empty)) "a store nobody has added to lists nothing, and listing does not create it"

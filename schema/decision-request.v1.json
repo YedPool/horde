@@ -55,7 +55,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "state": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Which questions: a state name, or all. Absent means open. The states are the list in decisions/Rules.ps1."}
+        "state": {"type": "string", "description": "Which questions: a state name, or all, in any case. Absent means open. The states are the list in decisions/Rules.ps1; any other text is refused there, in words, and no pattern is set here so that the refusal is never a regular expression."}
       }
     },
     "show": {

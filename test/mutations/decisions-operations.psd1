@@ -6,6 +6,13 @@
     Target = "decisions\Operations.ps1"
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
+        # --- list: the listed states in any case, and nothing else ---
+        @{ Name = "state-in-capitals-refused"
+           Find = '$want = ([string]$Request.state).ToLowerInvariant() }'
+           Replace = '$want = [string]$Request.state }' }
+        @{ Name = "refused-state-repeated-whatever-it-is"
+           Find = 'if ($want -cmatch ''\A[a-z][a-z-]{0,31}\z'') { $named ='
+           Replace = 'if ($true) { $named =' }
         # --- a write's wait on a held record has an end ---
         @{ Name = "held-record-waited-for-ten-times-as-long"
            Find = '$script:HordeDecisionWriteBusyReads = 5'

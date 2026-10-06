@@ -164,10 +164,15 @@ function Get-HordeDecisionNumberAnswer {
 function Get-HordeDecisionListAnswer {
     param($Request, $State, $Definitions, [datetime]$Now)
     $want = "open"
-    if (Test-HordeDecisionMember -Object $Request -Name "state") { $want = [string]$Request.state }
+    # The listed words in any case: a person types this one, and "ALL" means all. Nothing else is
+    # taken; what is refused is named back only when it is letters and hyphens, so that a refusal
+    # never repeats text of another kind.
+    if (Test-HordeDecisionMember -Object $Request -Name "state") { $want = ([string]$Request.state).ToLowerInvariant() }
     $states = @(Get-HordeDecisionStates)
     if ($want -cne "all" -and $states -cnotcontains $want) {
-        $why = "'" + $want + "' is not a state a question can be in; give one of: " + ($states -join ", ") + ", or all"
+        $named = "that"
+        if ($want -cmatch '\A[a-z][a-z-]{0,31}\z') { $named = "'" + $want + "'" }
+        $why = $named + " is not a state a question can be in; give one of: " + ($states -join ", ") + ", or all"
         return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation "list" -Outcome "refused" -Reason $why -Findings @($why) -State $State) -Definitions $Definitions -Now $Now)
     }
     $counts = [ordered]@{}
