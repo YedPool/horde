@@ -17,6 +17,9 @@
            Replace = '$q = [System.Diagnostics.Process]::Start($psi); try { $p = [System.Diagnostics.Process]::Start($psi) }' }
         @{ Name = "shell-start"
            Find = '$psi.UseShellExecute = $false'
-           Replace = '$psi.UseShellExecute = $false; Start-Process $Script' }
+           Replace = '$psi.UseShellExecute = $false; Start-Process $Argv' }
+        @{ Name = "program-set-later"
+           Find = '$psi.CreateNoWindow = $true'
+           Replace = '$psi.CreateNoWindow = $true; $psi.FileName = "cmd.exe"' }
     )
 }

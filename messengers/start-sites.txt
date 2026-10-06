@@ -15,3 +15,11 @@ messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | type |
 messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | method | [System.Diagnostics.Process]::Start($psi) | the same start, seen as the method call it is
 messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Post parameter: a messenger registers its post as a script block, which only the port's call above runs
 messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Status parameter, likewise
+messengers/wezfleet/Messenger.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1") | the messenger's loader line: Horde's home, where its body files are kept
+messengers/wezfleet/Messenger.ps1 | Send-HordeWezfleetMessengerPost | starter | Start-HordeWezfleetMessengerProcess -Argv $argv | the post's one call of the start: mail post, its arguments built as separate elements above it
+messengers/wezfleet/Messenger.ps1 | Get-HordeWezfleetMessengerStatus | starter | Start-HordeWezfleetMessengerProcess -Argv @("mail", "status", "-Id", $MessageId.Replace("-", ""), "-Json") | the status's one call of the start, its arguments fixed here
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.UseShellExecute = $false | the program is started directly, never through the shell's file associations
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.CreateNoWindow = $true | no console window
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardOutput = $true | its one line of JSON is read
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardError = $true | its errors are read into a reason
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardInput = $true | input held open and never written, so a prompt waits for the deadline instead of reading this console
