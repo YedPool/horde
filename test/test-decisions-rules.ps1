@@ -160,6 +160,52 @@ foreach ($name in $secrets.Keys) {
 $more = @("gh" + "o_" + ("Cd2" * 12); "github" + "_pat_" + ("Ef3" * 10); "gl" + "pat-" + ("Gh4" * 8); "xo" + "xb-" + ("123456789012" * 2); "s" + "k-" + ("Ij5" * 10); "AK" + "IA" + "ABCDEFGHIJKLMNOP"; "AS" + "IA" + "QRSTUVWXYZ234567"; "AI" + "za" + ("Kl6" * 12); "api_" + "key = " + "abc"; "TOK" + "EN=" + "x"; "-----BEGIN PRIV" + "ATE KEY-----"; "-----BEGIN EC PRIV" + "ATE KEY-----")
 $missed = @($more | Where-Object { (Find-HordeDecisionSecretKind -Text ("see " + $_ + " here")) -eq "" })
 Check ($missed.Count -eq 0) ("twelve more credential shapes are each refused: other token prefixes, cloud key ids, name = value with spaces, other key headers (" + $missed.Count + " missed)")
+# THE SHAPES THE FIRST CHECK LET THROUGH. Measured 2026-10-06: each of these was ADDED to a store.
+# Assembled from pieces, like the rest, so no credential-shaped text sits in this file.
+$let = [ordered]@{
+    "a cloud secret key with slashes in it" = @(("wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"), "a long random-looking string")
+    "a storage key with slashes and padding" = @(("kq3J9s/Zr8/Lm2Xv0Bn5Ty7Uw1Ae4Cd6Fg8Hj0Kl2M/aQ" + "=="), "a long random-looking string")
+    "an address with a user and a password in it" = @(("https://deploy:Tr0ub4dor3x@" + "git.example.com/repo.git"), "a password inside an address")
+    "a database address with a password in it" = @(("postgres://app:s3cretWord@" + "db.internal:5432/main"), "a password inside an address")
+    "a chat webhook address" = @(("https://hooks.slack.com/services/T00000000/B00000000/" + "XXXXXXXXXXXXXXXXXXXXXXXX"), "a webhook address")
+    "an Authorization header, Basic" = @(("Authorization: Basic " + "ZGVwbG95OlRyMHViNGRvcjM="), "an authorization value")
+    "an Authorization header, Bearer, short" = @(("Authorization: Bearer " + "abc123def"), "an authorization value")
+    "the word Basic and a value" = @(("send Basic " + "ZGVwbG95OlRyMHViNGRvcjM=" + " with it"), "an authorization value")
+    "the word Bearer and a short value" = @(("use Bearer " + "aB3dE5fG7hJ9k" + " for now"), "an authorization value")
+    "a password said in a sentence" = @(("the pass" + "word is hunter2"), "a password written in a sentence")
+    "a password said in a sentence, quoted" = @(("the pass" + "word is 'correct horse battery staple'"), "a password written in a sentence")
+    "a password that was" = @(("the old pass" + "phrase was Winter2026!"), "a password written in a sentence")
+    "a password after a colon, quoted" = @(("pass" + 'word: "correct horse"'), "a password written after a colon")
+    "a password after a colon, digits only" = @(("pw" + "d: 12345678"), "a password written after a colon")
+    "pwd= in a sentence" = @(("run it with pw" + "d=hunter2 set"), "a password or key written as name=value")
+}
+foreach ($what in $let.Keys) {
+    $text = $let[$what][0]
+    $found = @(Find-HordeDecisionSecrets -Value ([pscustomobject]@{ question = [pscustomobject]@{ whatItIs = ("For now it is " + $text + " as agreed.") } }))
+    Check ($found.Count -eq 1 -and (Test-Says $found $let[$what][1])) ("refused: " + $what + ", named as " + $let[$what][1] + $(if ($found.Count -eq 0) { " (let through)" } else { "" }))
+    Check (@($found | Where-Object { "$_".Contains($text) -or "$_".Contains("hunter2") -or "$_".Contains("Tr0ub4") -or "$_".Contains("s3cret") -or "$_".Contains("correct horse") -or "$_".Contains("ZGVwbG95") -or "$_".Contains("wJalrX") }).Count -eq 0) "and the finding does not repeat it"
+}
+# WHAT MUST STILL PASS, each beside the shape it could be mistaken for.
+$stillOrdinary = @(
+    "api/v2/Customers/Invoices/Search/ByDateRange/Page"                # a mixed-case path with a digit: 4.32 bits a character, under the limit
+    "src/Components/Dashboard/Widgets/Chart2/Renderer/Canvas"
+    "See https://example.org/notes/closing-sound:draft for the proposal"   # a colon in a link, and no @
+    "Write to support@example.org or see https://example.org/help"         # an @ that is not in the link
+    "The basic understanding is that Version2Reader replaces it"           # the word basic before an ordinary word
+    "The bearer of the news was Orc3 again"
+    "Authorization: none is needed for this page"
+    "A password is needed before this can be tested"
+    "The password was changed on 2026-10-06 and is not written here"
+    "The password is at least 12 characters, by the new rule"
+    "password: ask whoever owns the test account"
+    "07af8361c2d4e5f60718293a4b5c6d7e8f901234"
+    "0273216a-4aa6-420b-8bd6-b5d61a13d73d"
+)
+$wronglyNow = @($stillOrdinary | Where-Object { (Find-HordeDecisionSecretKind -Text $_) -ne "" })
+Check ($wronglyNow.Count -eq 0) ("CONTROL: thirteen ordinary texts beside those shapes are let through: paths, links, the words basic, bearer, authorization and password in a sentence, a commit id, a UUID (" + $wronglyNow.Count + " refused" + $(if ($wronglyNow.Count) { ": " + (@($wronglyNow | ForEach-Object { $_.Substring(0, [Math]::Min(40, $_.Length)) }) -join " | ") } else { "" }) + ")")
+# WHAT THE CHECK DELIBERATELY LETS THROUGH (decisions/Rules.ps1 says so): pinned, so it is a decision.
+$letOnPurpose = @(("pass" + "word: correct horse battery staple"), "9f8e7d6c5b4a3z2y1x0w9v8u7t6s5r4q", "Zx9Qm2Lp7Rt4Vb8Nc1Hd")
+Check (@($letOnPurpose | Where-Object { (Find-HordeDecisionSecretKind -Text $_) -ne "" }).Count -eq 0) "the stated limits: a password of plain words with no quotes, a long string in one case, and a mixed string under 32 characters are not seen"
 $deep = [pscustomobject]@{ id = "x"; question = [pscustomobject]@{ options = @("fine", ("use " + $secrets["an access token"])); files = @("a.txt") }; outcome = $secrets["a private key"] }
 $found = @(Find-HordeDecisionSecrets -Value $deep)
 Check ($found.Count -eq 2 -and (Test-Says $found "'options' (item 2)") -and (Test-Says $found "'outcome'")) "a secret is found wherever it sits: an item of a list, and a text beside the question"

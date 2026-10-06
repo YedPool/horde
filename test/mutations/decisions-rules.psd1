@@ -202,6 +202,36 @@
         @{ Name = "password-after-colon-not-seen"
            Find = '"a password written after a colon" = ''(?i)\b('
            Replace = '"a password written after a colon" = ''never-matches-\A\z.(' }
+        @{ Name = "password-in-a-sentence-not-seen"
+           Find = '"a password written in a sentence" = ''(?i)\b('
+           Replace = '"a password written in a sentence" = ''never-matches-\A\z.(' }
+        @{ Name = "quoted-password-not-seen"
+           Find = '\s+(is|was)\s+(?:["''''][^"''''\s][^"'''']*["'''']|'
+           Replace = '\s+(is|was)\s+(?:' }
+        @{ Name = "password-inside-an-address-not-seen"
+           Find = '"a password inside an address" = ''(?i)'
+           Replace = '"a password inside an address" = ''never-matches-\A\z.' }
+        @{ Name = "any-link-with-a-colon-refused"
+           Find = '://[^\s/:@]+:[^\s/@]+@'''
+           Replace = '://[^\s:@]+:[^\s@]+''' }
+        @{ Name = "webhook-address-not-seen"
+           Find = '"a webhook address" = ''(?i)'
+           Replace = '"a webhook address" = ''never-matches-\A\z.' }
+        @{ Name = "authorization-header-not-seen"
+           Find = '"an authorization value" = ''(?i:\bauthorization'
+           Replace = '"an authorization value" = ''(?i:\bnever-matches-\A\z.' }
+        @{ Name = "authorization-word-and-value-not-seen"
+           Find = '|(?i:\b(basic|bearer))\s+'
+           Replace = '|(?i:\b(never-matches-\A\z.))\s+' }
+        @{ Name = "the-word-basic-before-any-word-refused"
+           Find = '(?=[A-Za-z0-9._~+/-]*[0-9])(?=[A-Za-z0-9._~+/-]*[a-z])(?=[A-Za-z0-9._~+/-]*[A-Z])[A-Za-z0-9._~+/-]{12,}'
+           Replace = '[A-Za-z0-9._~+/-]{12,}' }
+        @{ Name = "key-with-slashes-not-seen"
+           Find = '-ge $script:HordeDecisionSecretSlashRunBits) {'
+           Replace = '-ge 99) {' }
+        @{ Name = "mixed-case-path-refused"
+           Find = '$script:HordeDecisionSecretSlashRunBits = 4.35'
+           Replace = '$script:HordeDecisionSecretSlashRunBits = 4.0' }
         @{ Name = "random-string-not-seen"
            Find = '-ge $script:HordeDecisionSecretRunBits) {'
            Replace = '-ge 99) {' }

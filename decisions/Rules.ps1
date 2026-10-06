@@ -98,13 +98,31 @@ $script:HordeDecisionMinTitleWords = 3
 # WHAT LOOKS LIKE A SECRET. Names are what a finding says; the value is never repeated. Matched
 # case-sensitively unless the pattern says (?i). A key header is matched by its fixed words, whatever
 # kind of key it names.
+# THIS IS BEST EFFORT, AND SAYS SO. It refuses the shapes a secret is usually written in; it cannot
+# know a secret that looks like a word. Measured 2026-10-06, the first set of patterns let all of these
+# be ADDED to a store: a cloud secret key with slashes in it, an address with user:password@ in it, a
+# chat webhook address, an Authorization header, and "the password is ..." in a sentence. Each now
+# has its pattern. WHAT IS STILL LET THROUGH, on purpose, because refusing it would refuse ordinary
+# text: a password of plain words with no quotes round it ("password: ask the owner" must pass); a
+# long string in one case only (a commit id, a UUID and a hash are those); a mixed string shorter
+# than 32 characters. The list is never the place for a secret: the needsSecret flag is.
 $script:HordeDecisionSecretPatterns = [ordered]@{
     "a private key" = '-----BEGIN [A-Z0-9 ]*PRIVATE KEY'
     "an access token" = '(?<![A-Za-z0-9])(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,})'
     "a signed web token" = 'eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.'
     "a bearer token" = '(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}'
     "a password or key written as name=value" = '(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key)\s*=\s*\S'
-    "a password written after a colon" = '(?i)\b(password|passwd|pwd|passphrase)\s*:\s*(?=\S*[0-9])(?=\S*[A-Za-z])\S{6,}'
+    # After the colon, or after "is" or "was": anything in quotes, or a word of six or more characters
+    # with a digit in it. "password: ask the owner" and "a password is needed" have neither.
+    "a password written after a colon" = '(?i)\b(password|passwd|pwd|passphrase)\s*:\s*(?:["''][^"''\s][^"'']*["'']|(?=\S*[0-9])\S{6,})'
+    "a password written in a sentence" = '(?i)\b(password|passwd|pwd|passphrase)\s+(is|was)\s+(?:["''][^"''\s][^"'']*["'']|(?=\S*[0-9])\S{6,})'
+    # scheme://user:password@host. A colon in a link's path, or an @ outside the link, is not this.
+    "a password inside an address" = '(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@'
+    # An address that is itself the credential: whoever holds it can post.
+    "a webhook address" = '(?i)\b(hooks\.slack\.com/services/|discord(app)?\.com/api/webhooks/)[A-Za-z0-9/_-]{8,}'
+    # The header by its name and scheme, or the scheme word before a value with both cases and a
+    # digit in it: "the basic understanding" and "the bearer of the news" are not values.
+    "an authorization value" = '(?i:\bauthorization\s*:\s*(basic|bearer|digest|token|apikey)\s+\S{4,})|(?i:\b(basic|bearer))\s+(?=[A-Za-z0-9._~+/-]*[0-9])(?=[A-Za-z0-9._~+/-]*[a-z])(?=[A-Za-z0-9._~+/-]*[A-Z])[A-Za-z0-9._~+/-]{12,}'
 }
 # A LONG RANDOM-LOOKING STRING: 32 or more characters of the letters, digits and + = _ - that keys are
 # written in, holding an upper-case letter, a lower-case letter and a digit, with at least 4 bits of
@@ -117,6 +135,16 @@ $script:HordeDecisionSecretPatterns = [ordered]@{
 # refused too. That costs a reworded sentence; a key stored in the list cannot be taken back.
 $script:HordeDecisionSecretRunPattern = '[A-Za-z0-9+=_-]{32,}'
 $script:HordeDecisionSecretRunBits = 4.0
+# THE SAME, FOR A KEY WITH SLASHES IN IT. Cutting at every slash keeps paths out, and let the most
+# common cloud secret in: 40 characters of base64, slashes among them. So a second look: 40 or more
+# characters of letters, digits, + and /, standing alone (no dot, dash or underscore beside them, so
+# a piece of a longer path is not a candidate), holding a slash, both cases and a digit. The bar is
+# higher than above because a path is made of words. Measured 2026-10-06: of 300 random 40-character
+# base64 strings the lowest had 4.40 bits a character and the documented example key has 4.66; of
+# five mixed-case paths with a digit in them the highest had 4.32. 4.35 sits between, narrowly: a
+# mixed-case path of unusual variety may be refused, and a key of unusual sameness may pass.
+$script:HordeDecisionSecretSlashRunPattern = '(?<![A-Za-z0-9+/=_.-])[A-Za-z0-9+/]{40,}(?![A-Za-z0-9+/_.-])'
+$script:HordeDecisionSecretSlashRunBits = 4.35
 
 function Get-HordeDecisionEventKinds { return @($script:HordeDecisionEventKinds.Keys) }
 function Get-HordeDecisionStates { return @($script:HordeDecisionStates) }
@@ -214,6 +242,10 @@ function Find-HordeDecisionSecretKind {
     foreach ($m in [regex]::Matches($Text, $script:HordeDecisionSecretRunPattern)) {
         $run = $m.Value
         if ($run -cmatch '[A-Z]' -and $run -cmatch '[a-z]' -and $run -cmatch '[0-9]' -and (Get-HordeDecisionTextBits -Text $run) -ge $script:HordeDecisionSecretRunBits) { return "a long random-looking string, as a key or token is" }
+    }
+    foreach ($m in [regex]::Matches($Text, $script:HordeDecisionSecretSlashRunPattern)) {
+        $piece = $m.Value
+        if ($piece.Contains("/") -and $piece -cmatch '[A-Z]' -and $piece -cmatch '[a-z]' -and $piece -cmatch '[0-9]' -and (Get-HordeDecisionTextBits -Text $piece) -ge $script:HordeDecisionSecretSlashRunBits) { return "a long random-looking string, as a key or token is" }
     }
     return ""
 }
