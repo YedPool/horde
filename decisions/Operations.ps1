@@ -315,6 +315,12 @@ function Invoke-HordeDecision {
     $shapeSchema = Get-HordeDecisionMember -Object $definitions.requestSchema.definitions -Name $Operation
     $shape = @(Test-HordeSchema -Value $plain -Schema $shapeSchema -Path "request" -Root $definitions.requestSchema)
     if ($shape.Count -gt 0) { return (& $refuse $Operation ("the request is not what '" + $Operation + "' takes; nothing was done") $shape) }
+    # A NUMBER NO QUESTION CAN HAVE IS ANSWERED HERE, BEFORE ANYTHING CASTS IT. 1e30 passes the schema's
+    # "type": "integer", and the cast to a 64-bit number below it threw instead of answering (measured
+    # 2026-10-06: show and close). No store need be read to know there is no such question.
+    if ((Test-HordeDecisionMember -Object $plain -Name "number") -and -not (Test-HordeDecisionCount -Value $plain.number -Most (Get-HordeDecisionMaxNumber))) {
+        return (New-HordeAbsent -Note ("there is no question " + $plain.number + ": no question has a number above " + (Get-HordeDecisionMaxNumber)))
+    }
 
     if ($Root -eq "") {
         try { $Root = Get-HordeDecisionStoreRoot }

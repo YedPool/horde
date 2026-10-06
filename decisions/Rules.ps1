@@ -83,6 +83,15 @@ $script:HordeDecisionRequiredFields = @("title", "kind", "group", "askedBy")
 $script:HordeDecisionMaxTextChars = 500000
 $script:HordeDecisionMaxLineChars = 1000
 $script:HordeDecisionMaxListItems = 100
+# THE LARGEST NUMBER A QUESTION AND A RECORD CAN HAVE. core/Schema.ps1 has no "maximum", and "type":
+# "integer" passes 99999999999 and 1e30, so these are held here, for a stored record and a request
+# alike. Measured 2026-10-06, before they were: ONE record numbered 99999999999 made list, show and
+# add throw "Cannot convert value to type System.Int32" - the whole list unloadable for one record -
+# and one numbered 2147483647 made every later add throw. A question's number is nine digits, which
+# is what the command line takes (decisions/Console.ps1) and is inside the Int32 the list keeps it
+# in; a record's sequence number is ten, the length of its file name (decisions/Store.ps1).
+$script:HordeDecisionMaxNumber = 999999999
+$script:HordeDecisionMaxSequence = 9999999999
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
 $script:HordeDecisionMinTitleWords = 3
 
@@ -112,6 +121,17 @@ $script:HordeDecisionSecretRunBits = 4.0
 function Get-HordeDecisionEventKinds { return @($script:HordeDecisionEventKinds.Keys) }
 function Get-HordeDecisionStates { return @($script:HordeDecisionStates) }
 function Get-HordeDecisionFieldNames { return @($script:HordeDecisionFields.Keys) }
+function Get-HordeDecisionMaxNumber { return $script:HordeDecisionMaxNumber }
+
+function Test-HordeDecisionCount {
+    # Is a value a whole number from 1 to -Most? Compared as a Double and NEVER CAST FIRST: 1e30 is an
+    # integer to the schema, and casting it to a 32- or 64-bit number is the throw this guards against.
+    # Every limit here is far below 2^53, so the comparison is exact.
+    param($Value, [Parameter(Mandatory = $true)][double]$Most)
+    if (-not (Test-HordeSchemaType -Value $Value -Type "integer")) { return $false }
+    $size = [double]$Value
+    return ($size -ge 1 -and $size -le $Most)
+}
 
 function Test-HordeDecisionMember {
     # Does a parsed JSON object, or a table built here, have the member? Asked, never assumed: under
@@ -469,6 +489,7 @@ function Test-HordeDecisionEvent {
     param($Ev, $Definitions)
     $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
     if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
+    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) { return @("its sequence number is beyond " + $script:HordeDecisionMaxSequence + ", the largest a record can have") }
     $entry = $script:HordeDecisionEventKinds["$($Ev.kind)"]
     if ($null -eq $entry) { return @("its kind '" + $Ev.kind + "' is not one this version of Horde knows; a newer version may have written it") }
     $dataSchema = Get-HordeDecisionMember -Object $Definitions.eventSchema.definitions -Name $entry.data
@@ -477,6 +498,7 @@ function Test-HordeDecisionEvent {
         $found = @(Test-HordeSchema -Value (Get-HordeDecisionMember -Object $Ev.data -Name $entry.words) -Schema $Definitions.questionSchema -Path ('$.data.' + $entry.words))
     }
     if ($found.Count -gt 0) { return @("its data is not what a " + $Ev.kind + " record holds: " + (@($found | Select-Object -First 3) -join "; ")) }
+    if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) { return @("its question number is beyond " + $script:HordeDecisionMaxNumber + ", the largest a question can have") }
     return @()
 }
 

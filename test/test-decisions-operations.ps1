@@ -214,6 +214,12 @@ foreach ($try in @(@{ op = "show"; req = @{ number = 99 } }, @{ op = "update"; r
     Check ($a.state -ceq "absent" -and $a.reason -like "*there is no question 99; the highest number given is 5*") ($try.op + " 99 is absent - the store was read and there is no such question - not refused and not unknown")
 }
 Check ((Invoke-Op $s "show" @{ number = 3000000000 }).state -ceq "absent") "a number beyond any that could be given is absent too, not an error"
+# 1e30 passes "type": "integer" and overflowed the cast to a 64-bit number: show and close THREW
+# instead of answering (measured 2026-10-06). An operation always answers.
+$a = Invoke-Op $s "show" @{ number = 1e30 }
+Check ($a.state -ceq "absent" -and $a.reason -like "*no question has a number above 999999999*") ("show 1e30 is absent, with the largest number a question can have (" + $a.state + ": " + $a.reason + ")")
+$a = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1e30; outcome = "Done." }
+Check ($a.state -ceq "absent") ("close 1e30 is absent too (" + $a.state + ": " + $a.reason + ")")
 Check ((Get-Files $s) -ceq $filesBefore) "and none of them wrote anything"
 
 Write-Host ""
@@ -285,6 +291,21 @@ $a = Invoke-Op $s "list" @{ state = "all" }
 Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 2) "the list loads with question 1, and both records are reported"
 Check ($a.value.unreadable[0].sequence -eq 2 -and $a.value.unreadable[0].reason -like "*not a decision-event.v1 record*schemaVersion*") "the version 2 record is not read as version 1, and the reason names the field"
 Check ($a.value.unreadable[1].sequence -eq 3 -and $a.value.unreadable[1].reason -like "*'answer-recorded' is not one this version of Horde knows*") "the unknown kind is named, not guessed at"
+
+Write-Host ""
+Write-Host "--- a record holding a number no question can have: every operation still answers ---" -ForegroundColor Cyan
+$s = New-TestStore
+$null = Add-Q $s
+$good = [System.IO.File]::ReadAllText((Join-Path $s "0000000001.json"))
+$huge = $good.Replace('"sequence":1', '"sequence":2').Replace('"number":1', '"number":99999999999')
+Check ($huge -cne $good -and $huge.Contains('"number":99999999999')) "CONTROL: the planted record differs from a real one only in its place and its number"
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), $huge, $utf8)
+$a = Invoke-Op $s "list" @{ state = "all" }
+Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 1 -and $a.value.unreadable[0].sequence -eq 2) ("list loads question 1 and names record 2 (" + (Get-Outcome $a) + ")")
+$a = Invoke-Op $s "show" @{ number = 1 }
+Check ((Get-Outcome $a) -ceq "done") ("show 1 answers (" + (Get-Outcome $a) + ")")
+$a = Add-Q $s
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and $a.value.sequence -eq 3) ("a question added now is number 3, record 3: one number left unused for the record that cannot be read (" + (Get-Outcome $a) + ")")
 
 Write-Host ""
 Write-Host "--- a record deleted from under the list: nothing is renumbered ---" -ForegroundColor Cyan

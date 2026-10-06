@@ -293,6 +293,32 @@ $st = Get-Fold @((New-Added 1 1), $long400)
 Check ($st.unreadable[0].reason.Length -lt 450 -and $st.unreadable[0].reason -like "*reason cut at 400 characters*") "a very long reason is cut, and says it was"
 
 Write-Host ""
+Write-Host "--- a number too large to be one never stops the list ---" -ForegroundColor Cyan
+# A record that is well-formed JSON and passes "type": "integer" can still hold a number no question
+# or record can have. Measured 2026-10-06, before the limits in decisions/Rules.ps1: one such record in
+# the store made list, show and add throw "Cannot convert value 99999999999 to type System.Int32" -
+# the whole list unloadable for one bad record. These are built as JSON text, as the store reads them,
+# because 1e30 has no spelling as a PowerShell whole number.
+function New-RawRecord {
+    param([long]$Seq, [string]$SaysSeq, [string]$Kind, [string]$DataJson)
+    $json = '{"schemaVersion":1,"sequence":' + $SaysSeq + ',"id":"' + $Seq.ToString("x32") + '","kind":"' + $Kind + '","at":"2026-10-06T12:00:00.0000000Z","actor":"warchief","requestHash":"' + $zeros + '","data":' + $DataJson + '}'
+    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = ($json | ConvertFrom-Json); reason = "" }
+}
+$wordsJson = ConvertTo-Json -InputObject (ConvertTo-HordeDecisionFields -Source (New-Question)) -Compress
+foreach ($huge in @("99999999999", "1e30", "1000000000")) {
+    $st = Get-Fold @((New-Added 1 1), (New-RawRecord 2 "2" "question-added" ('{"number":' + $huge + ',"question":' + $wordsJson + '}')), (New-Added 3 3))
+    Check ((Get-Numbers $st) -ceq "1,3" -and $st.unreadable.Count -eq 1 -and $st.unreadable[0].sequence -eq 2 -and $st.unreadable[0].reason -like "*question number*999999999*") ("a question-added record numbered " + $huge + " is unreadable, by name, and questions 1 and 3 are still listed")
+    Check ((Get-HordeDecisionNextNumber -State $st) -eq 4) "and the next question is 4: the record did not move the numbering"
+}
+$st = Get-Fold @((New-Added 1 1), (New-RawRecord 2 "2" "question-closed" '{"number":99999999999,"outcome":"Done."}'), (New-Added 3 2))
+Check ((Get-Numbers $st) -ceq "1,2" -and $st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*question number*" -and $st.questions[1].state -ceq "open") "a close of question 99999999999 is unreadable too, and the list loads"
+$st = Get-Fold @((New-Added 1 1), (New-RawRecord 2 "1e30" "question-closed" '{"number":1,"outcome":"Done."}'), (New-Added 3 2))
+Check ((Get-Numbers $st) -ceq "1,2" -and $st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*sequence number*9999999999*" -and $st.questions[1].state -ceq "open") "a record that says its sequence number is 1e30 is unreadable, and the list loads"
+$st = Get-Fold @((New-Added 1 1), (New-RawRecord 2 "2" "question-added" ('{"number":999999999,"question":' + $wordsJson + '}')))
+Check ((Get-Numbers $st) -ceq "1,999999999" -and $st.unreadable.Count -eq 0) "CONTROL: 999999999 is the largest number a question can have, and a record holding it is read"
+Check ((Get-HordeDecisionMaxNumber) -eq 999999999) "CONTROL: the limit the rules give out is that number"
+
+Write-Host ""
 Write-Host "--- one id, one record to answer from ---" -ForegroundColor Cyan
 $sameId = "ab" * 16
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." }) -Id $sameId), (New-Record 3 "question-reopened" ([ordered]@{ number = 1; reason = "again" }) -Id $sameId))

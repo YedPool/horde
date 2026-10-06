@@ -6,6 +6,10 @@
     Target = "decisions\Operations.ps1"
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
+        # --- a number no question can have is answered, never cast ---
+        @{ Name = "huge-request-number-cast"
+           Find = 'if ((Test-HordeDecisionMember -Object $plain -Name "number") -and -not (Test-HordeDecisionCount -Value $plain.number -Most (Get-HordeDecisionMaxNumber))) {'
+           Replace = 'if ($false) {' }
         # --- a request is checked before anything is read ---
         @{ Name = "secrets-not-looked-for"
            Find = 'if ($secrets.Count -gt 0) {'

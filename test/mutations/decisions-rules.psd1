@@ -5,6 +5,19 @@
     Target = "decisions\Rules.ps1"
     Suite  = "test\test-decisions-rules.ps1"
     Mutations = @(
+        # --- a number too large to be one is unreadable, never a throw ---
+        @{ Name = "huge-question-number-cast"
+           Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "huge-sequence-number-cast"
+           Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "ten-digit-question-number-believed"
+           Find = '$script:HordeDecisionMaxNumber = 999999999'
+           Replace = '$script:HordeDecisionMaxNumber = 9999999999' }
+        @{ Name = "largest-question-number-refused"
+           Find = 'return ($size -ge 1 -and $size -le $Most)'
+           Replace = 'return ($size -ge 1 -and $size -lt $Most)' }
         # --- the number is permanent ---
         @{ Name = "given-number-given-again"
            Find = 'if ($number -le [int]$State.lastNumber) {'
