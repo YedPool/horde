@@ -141,6 +141,46 @@ Check (Test-Says @(Test-HordeDecisionNote -Text "one`ntwo" -Name "reason" -OneLi
 Check (@(Test-HordeDecisionNote -Text "Built and shipped.`nSecond line." -Name "outcome").Count -eq 0) "CONTROL: an outcome may have several lines"
 
 Write-Host ""
+Write-Host "--- characters that are not text: refused by field and code point, never cleaned ---" -ForegroundColor Cyan
+# Measured 2026-10-06, before this rule: a title holding ESC [2J ESC [31m and a group holding BEL were
+# added, and the plain-text list printed the raw ESC and BEL to the terminal, which obeys them. A line
+# separator (U+2028) and a NUL were stored in a "one line" title too. Every character here is written
+# by its code, so this file stays ASCII.
+$base = "Should the closing sound play when it closes"
+$oneLineBad = [ordered]@{ "ESC" = 0x1B; "BEL" = 0x07; "NUL" = 0x00; "a tab" = 0x09; "DEL" = 0x7F; "NEL, a C1 control" = 0x85; "a line separator" = 0x2028; "a paragraph separator" = 0x2029
+    "a zero-width space" = 0x200B; "a right-to-left override" = 0x202E; "a left-to-right isolate" = 0x2066; "a byte-order mark" = 0xFEFF }
+foreach ($what in $oneLineBad.Keys) {
+    $code = [int]$oneLineBad[$what]
+    $f = Get-Findings (New-Question @{ title = ($base + [char]$code + " or stay silent?") })
+    Check ($f.Count -eq 1 -and (Test-Says $f ("'title' holds the character U+" + $code.ToString("X4")))) ("a title holding " + $what + " is refused, by field and code point (U+" + $code.ToString("X4") + ")" + $(if ($f.Count -ne 1) { " (" + $f.Count + " finding(s))" } else { "" }))
+}
+$f = Get-Findings (New-Question @{ kind = "choice"; options = @("a tone", ("a spoken" + [char]0x1B + "[31m line")) })
+Check ($f.Count -eq 1 -and (Test-Says $f "'options' (item 2) holds the character U+001B")) "in a list the finding names the item"
+$f = Get-Findings (New-Question @{ title = ($base + [char]0x1B + "?") })
+Check ((Test-Says $f "refused, not removed") -and -not (Test-Says $f ("" + [char]0x1B))) "the finding says the text is refused, not cleaned, and does not carry the character itself"
+$f = Get-Findings (New-Question @{ title = ("Should the closing sound`nplay when the assistant closes?") })
+Check ($f.Count -eq 1 -and (Test-Says $f "must be one line")) "CONTROL: a line break in a title is still the one-line finding, said once"
+# A text of several lines takes a line break and a tab, and nothing else that is not text.
+Check ((Get-Findings (New-Question @{ whatItIs = ("Line one.`r`nLine two.`n`tIndented with a tab.") })).Count -eq 0) "CONTROL: a background may hold line breaks and tabs"
+foreach ($what in @("ESC", "NUL", "a line separator", "a right-to-left override", "a zero-width space")) {
+    $code = [int]$oneLineBad[$what]
+    $f = Get-Findings (New-Question @{ whatItIs = ("Line one.`nLine " + [char]$code + "two.") })
+    Check ($f.Count -eq 1 -and (Test-Says $f ("'whatItIs' holds the character U+" + $code.ToString("X4")))) ("a background holding " + $what + " is refused, by field and code point")
+}
+Check (Test-Says @(Test-HordeDecisionNote -Text ("Built." + [char]0x1B + "[2J") -Name "outcome") "'outcome' holds the character U+001B") "a closing outcome is held to the same rule"
+Check (@(Test-HordeDecisionNote -Text "Built and shipped.`r`n`tSee the log." -Name "outcome").Count -eq 0) "CONTROL: an outcome may hold line breaks and tabs"
+Check (Test-Says @(Test-HordeDecisionNote -Text ("it came" + [char]0x09 + "back") -Name "reason" -OneLine) "'reason' holds the character U+0009") "a reopening reason is one line: a tab in it is refused"
+# FOUR FORMAT CHARACTERS ARE TEXT: the two direction marks and the two joiners. Right-to-left text is
+# written with them, and the design requires it stored exactly. What can reorder or hide other text
+# (an override, an isolate, a zero-width space) is refused above.
+$hebrewWords = "" + [char]0x05D4 + [char]0x05D0 + [char]0x05DD + " " + [char]0x05DC + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05D7 + " " + [char]0x05D0 + [char]0x05EA + " " + [char]0x05D4 + [char]0x05E7 + [char]0x05D5 + [char]0x05D1 + [char]0x05E5
+Check ((Get-Findings (New-Question @{ title = ($hebrewWords + "?") })).Count -eq 0) "CONTROL: a title in Hebrew passes"
+foreach ($mark in @(0x200F, 0x200E, 0x200D, 0x200C)) {
+    $f = Get-Findings (New-Question @{ title = ($hebrewWords + [char]$mark + "?"); whatItIs = ("Line one.`n" + $hebrewWords + [char]$mark + " line two.") })
+    Check ($f.Count -eq 0) ("CONTROL: U+" + ([int]$mark).ToString("X4") + " in a title and in a background is text, and passes" + $(if ($f.Count) { " (" + ($f -join "; ") + ")" } else { "" }))
+}
+
+Write-Host ""
 Write-Host "--- no secrets, in any field, and never repeated ---" -ForegroundColor Cyan
 $secrets = [ordered]@{
     "a private key" = ("-----BEGIN RSA PRIV" + "ATE KEY-----")

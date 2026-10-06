@@ -177,6 +177,34 @@
         @{ Name = "long-list-allowed"
            Find = 'if ($spec.type -eq "list" -and $texts.Count -gt $script:HordeDecisionMaxListItems) {'
            Replace = 'if ($false) {' }
+        # --- characters that are not text ---
+        @{ Name = "character-that-is-not-text-stored-in-a-question"
+           Find = 'if ($notText -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "character-that-is-not-text-stored-in-a-note"
+           Find = 'if ($unfit -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "tab-allowed-in-a-one-line-field"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]''' }
+        @{ Name = "format-character-allowed-in-a-one-line-field"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
+        @{ Name = "separator-allowed-in-a-one-line-field"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}-[\r\n\u200C-\u200F]]''' }
+        @{ Name = "direction-mark-refused-in-a-one-line-field"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n]]''' }
+        @{ Name = "tab-refused-in-a-text-of-several-lines"
+           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
+        @{ Name = "format-and-separators-allowed-in-a-text-of-several-lines"
+           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
+           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}-[\t\r\n\u200C-\u200F]]''' }
+        @{ Name = "one-line-field-held-to-the-rule-for-several-lines"
+           Find = '$notText = Get-HordeDecisionCharProblem -Text "$text" -OneLine:([bool]$spec.oneLine)'
+           Replace = '$notText = Get-HordeDecisionCharProblem -Text "$text"' }
         @{ Name = "blank-note-allowed"
            Find = 'if ($Text.Trim() -eq "") {'
            Replace = 'if ($false) {' }

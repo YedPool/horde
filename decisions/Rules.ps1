@@ -92,6 +92,21 @@ $script:HordeDecisionMaxListItems = 100
 # in; a record's sequence number is ten, the length of its file name (decisions/Store.ps1).
 $script:HordeDecisionMaxNumber = 999999999
 $script:HordeDecisionMaxSequence = 9999999999
+# CHARACTERS THAT ARE NOT TEXT. A terminal obeys a control character, and a format or separator
+# character changes how a line reads without being seen. Measured 2026-10-06, before these: a title
+# holding ESC [2J and a group holding BEL were stored, and the plain-text list printed both raw; a
+# line separator (U+2028) and a NUL sat in a "one line" title. Unicode's own categories are the
+# list: Cc control, Cf format, Zl line separator, Zp paragraph separator. A one-line field takes
+# none of them (CR and LF are left to the one-line rule, which names them better); a text of several
+# lines takes CR, LF and tab and no other.
+# FOUR FORMAT CHARACTERS ARE TEXT, AND ARE LEFT OUT OF THE REFUSAL: the direction marks U+200E and
+# U+200F and the joiners U+200C and U+200D. Right-to-left text is written with the first two, and
+# Persian, Indic scripts and joined emoji with the others; the design requires text in any alphabet
+# to be stored exactly, and the operations suite's own Hebrew title carries U+200F. None of the four
+# can reorder or hide other text. What reorders or hides IS refused: the embeddings, overrides and
+# isolates (U+202A to U+202E, U+2066 to U+2069), the zero-width space, the byte-order mark.
+$script:HordeDecisionNotTextInOneLine = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'
+$script:HordeDecisionNotTextInLines = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
 $script:HordeDecisionMinTitleWords = 3
 
@@ -309,6 +324,28 @@ function ConvertTo-HordeDecisionFields {
     return $out
 }
 
+function Get-HordeDecisionCharProblem {
+    # Why a text holds something that is not text, as the end of a finding ("holds the character
+    # U+001B ..."), or "". Only the first such character is named. The text is never cleaned: what is
+    # stored is what was given, so what cannot be stored is refused whole.
+    param([string]$Text, [switch]$OneLine)
+    $pattern = $script:HordeDecisionNotTextInLines
+    $takes = "a text of several lines takes line breaks and tabs, and no other control, format or separator character"
+    if ($OneLine) {
+        $pattern = $script:HordeDecisionNotTextInOneLine
+        $takes = "a one-line field takes no control, format or separator character, a tab included"
+    }
+    $hit = [regex]::Match($Text, $pattern)
+    if (-not $hit.Success) { return "" }
+    $code = [int][char]$hit.Value
+    $sort = "a control character"
+    $category = [System.Char]::GetUnicodeCategory([char]$code)
+    if ($category -eq [System.Globalization.UnicodeCategory]::Format) { $sort = "an invisible format character" }
+    elseif ($category -eq [System.Globalization.UnicodeCategory]::LineSeparator) { $sort = "a line separator" }
+    elseif ($category -eq [System.Globalization.UnicodeCategory]::ParagraphSeparator) { $sort = "a paragraph separator" }
+    return ("holds the character U+" + $code.ToString("X4") + ", " + $sort + ". It is refused, not removed: " + $takes)
+}
+
 function Get-HordeDecisionTitleProblem {
     # Why a title does not explain itself, or "". The rule this builds in: a person reading only the
     # title, with no other context, must understand what is asked. A number or a pull-request or issue
@@ -360,6 +397,8 @@ function Test-HordeDecisionQuestion {
                 if ("$text" -match "[\r\n]") { [void]$out.Add($where + " must be one line, and it has a line break") }
             }
             if ("$text".Length -gt $most) { [void]$out.Add($where + " is " + "$text".Length + " characters long; the most is " + $most + ". It is refused whole, never cut") }
+            $notText = Get-HordeDecisionCharProblem -Text "$text" -OneLine:([bool]$spec.oneLine)
+            if ($notText -ne "") { [void]$out.Add($where + " " + $notText) }
         }
     }
     foreach ($name in $script:HordeDecisionRequiredFields) {
@@ -406,6 +445,8 @@ function Test-HordeDecisionNote {
         if ($Text -match "[\r\n]") { [void]$out.Add("'" + $Name + "' must be one line, and it has a line break") }
     }
     if ($Text.Length -gt $most) { [void]$out.Add("'" + $Name + "' is " + $Text.Length + " characters long; the most is " + $most + ". It is refused whole, never cut") }
+    $unfit = Get-HordeDecisionCharProblem -Text $Text -OneLine:$OneLine
+    if ($unfit -ne "") { [void]$out.Add("'" + $Name + "' " + $unfit) }
     return @($out)
 }
 
