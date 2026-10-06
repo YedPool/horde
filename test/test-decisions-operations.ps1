@@ -189,7 +189,9 @@ Check ((Get-Outcome $a) -ceq "done" -and $a.value.question.state -ceq "closed" -
 Check ((Get-Listed $s "open") -ceq "1:open,3:open" -and (Get-Listed $s "closed") -ceq "2:closed" -and (Get-Listed $s "all") -ceq "1:open,2:closed,3:open") "the open list shows 1 and 3 - a gap, not a renumbering - and the closed list shows 2"
 $a = Add-Q $s @{ title = "Is the question added after a close given a new number?" }
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 4) "a question added after 2 closed is number 4: the closed number is not reused"
-Check (Test-Refused (Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ recommendation = "too late" } }) "only an open question can be changed") "a change to the closed question is refused, and told to reopen it first"
+$late = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ recommendation = "too late" } }
+Check (Test-Refused $late "only an open question can be changed") "a change to the closed question is refused, and told to reopen it first"
+Check ($late.state -ceq "known" -and @($late.value.ignored).Count -eq 0 -and @($late.value.unreadable).Count -eq 0) "and the refusal does not list the record it did not write among the store's records"
 Check (Test-Refused (Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 2; outcome = "Again." }) "already closed") "closing it again is refused"
 Check (Test-Refused (Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; reason = "why not" }) "only a closed question can be reopened") "reopening an open question is refused"
 Check (Test-Refused (Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "   " }) "'outcome' is blank") "a close with a blank outcome is refused"

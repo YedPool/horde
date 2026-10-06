@@ -56,10 +56,17 @@ $s = New-TestStore
 $got = Get-Safely $s
 Check ($got.state -ceq "absent" -and $got.last -eq 0 -and @($got.records).Count -eq 0) "a store folder that does not exist reads as absent, with no records"
 Check (-not (Test-Path -LiteralPath $s)) "and reading it did not create it"
-$rel = Get-Safely "relative\store"
-Check ($rel.state -ceq "unknown" -and $rel.reason -like "*absolute*") "a relative store folder is unknown, never resolved against the current folder"
-Check ((Add-Safely "relative\store" 1 "{}") -like "THREW:*absolute*") "and nothing is written to one"
-Check (-not (Test-Path -LiteralPath "relative\store")) "CONTROL: no folder appeared under the current folder"
+# The process's current folder is this suite's own for these checks, so that a store which did write
+# to a relative path - a mutant of the refusal - writes inside the suite's folder, not wherever the
+# suite was started from (CONTRIBUTING 9).
+$cwdBefore = [System.IO.Directory]::GetCurrentDirectory()
+try {
+    [System.IO.Directory]::SetCurrentDirectory($script:work)
+    $rel = Get-Safely "relative\store"
+    Check ($rel.state -ceq "unknown" -and $rel.reason -like "*absolute*") "a relative store folder is unknown, never resolved against the current folder"
+    Check ((Add-Safely "relative\store" 1 "{}") -like "THREW:*absolute*") "and nothing is written to one"
+    Check (-not (Test-Path -LiteralPath (Join-Path $script:work "relative"))) "CONTROL: no folder appeared under the current folder"
+} finally { [System.IO.Directory]::SetCurrentDirectory($cwdBefore) }
 
 Write-Host ""
 Write-Host "--- a sequence number is taken once ---" -ForegroundColor Cyan

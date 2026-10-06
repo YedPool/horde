@@ -72,7 +72,7 @@ function Add-HordeDecisionRecord {
     # close it. Returns "created" or "exists"; throws when the folder or the file cannot be made.
     # "exists" is not an error: it is how a writer learns another one took that place in the order.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][long]$Sequence, [Parameter(Mandatory = $true)][string]$Text)
-    if ("$Root".Trim() -eq "" -or -not [System.IO.Path]::IsPathRooted($Root)) { throw ("the decisions store needs an absolute folder, not '" + $Root + "'") }
+    if (-not [System.IO.Path]::IsPathRooted("$Root")) { throw ("the decisions store needs an absolute folder, not '" + $Root + "'") }
     [void][System.IO.Directory]::CreateDirectory($Root)
     $recPath = Join-Path $Root (Get-HordeDecisionRecordName -Sequence $Sequence)
     try {
@@ -132,7 +132,8 @@ function Get-HordeDecisionRecords {
     # are. They cannot be mistaken for a record, so they cannot change the list.
     param([Parameter(Mandatory = $true)][string]$Root)
     $none = [pscustomobject]@{ state = "absent"; reason = "there is no decisions store yet"; last = [long]0; records = @() }
-    if ("$Root".Trim() -eq "" -or -not [System.IO.Path]::IsPathRooted($Root)) {
+    $absolute = [System.IO.Path]::IsPathRooted("$Root")
+    if (-not $absolute) {
         return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store needs an absolute folder, not '" + $Root + "'"); last = [long]0; records = @() }
     }
     if (-not [System.IO.Directory]::Exists($Root)) { return $none }

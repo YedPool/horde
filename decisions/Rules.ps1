@@ -403,12 +403,12 @@ function Step-HordeDecisionAdded {
 function Get-HordeDecisionTarget {
     # The question a record is about, as { question; why }: why says what is wrong when there is none.
     param($State, $Ev)
-    $number = [int]$Ev.data.number
-    if ($State.questions.ContainsKey($number)) { return [pscustomobject]@{ question = $State.questions[$number]; why = "" } }
-    if ((Get-HordeDecisionNumberStatus -State $State -Number $number) -eq "unreadable") {
-        return [pscustomobject]@{ question = $null; why = ("it is about question " + $number + ", whose own record cannot be read") }
+    $about = [int]$Ev.data.number
+    if ($State.questions.ContainsKey($about)) { return [pscustomobject]@{ question = $State.questions[$about]; why = "" } }
+    if ((Get-HordeDecisionNumberStatus -State $State -Number $about) -eq "unreadable") {
+        return [pscustomobject]@{ question = $null; why = ("it is about question " + $about + ", whose own record cannot be read") }
     }
-    return [pscustomobject]@{ question = $null; why = ("it is about question " + $number + ", and there is no question " + $number) }
+    return [pscustomobject]@{ question = $null; why = ("it is about question " + $about + ", and there is no question " + $about) }
 }
 
 function Step-HordeDecisionUpdated {

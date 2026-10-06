@@ -154,7 +154,7 @@ Check ($found.Count -eq 2 -and (Test-Says $found "'options' (item 2)") -and (Tes
 $ordinary = @(
     "07af8361c2d4e5f60718293a4b5c6d7e8f901234"                       # a commit id: hex, one case
     "0273216a-4aa6-420b-8bd6-b5d61a13d73d"                           # a UUID
-    "C:\work\horde-worktrees\decisions\test\fixtures\a-rather-long-file-name-for-a-fixture.json"
+    "C:\Work\horde-worktrees\decisions2\test\fixtures\a-rather-long-file-name-for-a-fixture.json"   # cut at every separator: no piece is long
     "work/horde-worktrees/decisions/test/fixtures/another-rather-long-file-name-2-for-a-fixture.json"
     "A password is needed before this can be tested; it will be typed into the session."
     "token: none yet"
