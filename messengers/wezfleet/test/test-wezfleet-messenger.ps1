@@ -225,12 +225,20 @@ With-Fake {
     $t0 = Get-Date
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     $took = ((Get-Date) - $t0).TotalSeconds
-    $runs = @(& $fx.Runs $st)
-    $childPid = $(if ($runs.Count -ge 1) { [int]$runs[0].pid } else { 0 })
     Start-Sleep -Milliseconds 500
-    $alive = ($childPid -gt 0) -and ($null -ne (Get-Process -Id $childPid -ErrorAction SilentlyContinue))
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("3 s") -and $took -lt 30) ("a hung command is unknown after its deadline (" + [int]$took + " s): " + $a.reason)
-    Check ($childPid -gt 0 -and -not $alive) ("and the child it started was stopped (pid " + $childPid + ")")
+    # THE CHILD IS LOOKED FOR BY ITS COMMAND LINE, NOT BY A PID IT LOGGED. This check read the pid from the
+    # fake's argv.log, and on a loaded machine the fake had not reached its first line within the 3 s
+    # deadline: nothing was logged, and the check failed with "pid 0" although the child had been
+    # stopped (measured 2026-10-06: the unmutated baseline of this suite's mutation spec failed that way,
+    # so none of its mutants ran). The process exists from the moment it is started, whatever it has run,
+    # and its command line names this state's folder, which no other process does.
+    $self = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $PID)
+    Check ($null -ne $self -and "$($self.CommandLine)" -ne "") "CONTROL: a process's command line can be read here, so finding no child below is a finding"
+    $left = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { "$($_.CommandLine)".Contains($st.dir) })
+    Check ($left.Count -eq 0) ("and the child it started was stopped: no PowerShell is left running the fake in this state's folder (" + $left.Count + ")")
+    # A leftover would outlive the suite for the rest of its sleep; it is this test's to stop.
+    foreach ($l in $left) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 # THE TEMP FILE NEVER OUTLIVES A FAILURE either.
 With-Fake {
