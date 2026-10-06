@@ -9,7 +9,9 @@
 # ONE ADAPTER PER HARNESS, found by folder and never named (CONTRIBUTING 14): agents/<name>/Launch.ps1
 # registers itself with Register-HordeLaunchAdapter, as the transcript adapters do. An adapter gives:
 #   Program        the command the host runs, a name looked up on the node's PATH, never a path.
-#   Argv           { sessionId; permissionArgs; model; name; prompt } -> the argv, as an answer.
+#   Argv           { sessionId; permissionArgs; model; name; prompt; addDirs } -> the argv, as an
+#                  answer. addDirs are folders the session may read and write without asking, beyond
+#                  its working folder; the plan refuses an argv that does not carry each of them.
 #   Preconditions  ($names) -> the names it VERIFIED against the real environment, read-only (issue
 #                  #67, item 1). A name it cannot check is not returned, so the level is refused.
 #   Identify       ($sessionId, $environment) -> the started process as the harness records it:
@@ -122,6 +124,16 @@ function Test-HordeLaunchProgramPath {
     return [bool]($full -ceq $Path)
 }
 
+function Test-HordeLaunchDirPath {
+    # A folder a session is granted: rooted, already in full form, no control characters, and not
+    # starting with '-' so no harness can read it as a flag.
+    param([AllowEmptyString()][string]$Path)
+    if ($Path -eq "" -or $Path.StartsWith("-") -or $Path -cmatch '[\x00-\x1F\x7F]' -or -not [System.IO.Path]::IsPathRooted($Path)) { return $false }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $false }
+    return [bool]($Path -ceq $full)
+}
+
 function New-HordeLaunchPlan {
     # The launch plan for one session, as an answer: known { harness; program; argv; level; model;
     # name; notes }, or unknown with the first reason it cannot be built. Pure but for what the
@@ -129,9 +141,10 @@ function New-HordeLaunchPlan {
     # -Resolution: Resolve-HordeEngine's. -Decision: Test-HordeRemotePolicy's, whose level is used and
     # which must be allowed. -SessionId: the id the node chose. -Name: Format-HordeSessionName's answer.
     # -Prompt: the first prompt's text, or "". -Resolve: the host's program lookup, name -> answer.
+    # -AddDirs: folders the session is granted beyond its working folder, each a full rooted path.
     param([Parameter(Mandatory = $true)]$Resolution, [Parameter(Mandatory = $true)]$Decision,
         [Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)]$Name,
-        [AllowEmptyString()][string]$Prompt = "", [Parameter(Mandatory = $true)][scriptblock]$Resolve, $Levels = $null)
+        [AllowEmptyString()][string]$Prompt = "", [Parameter(Mandatory = $true)][scriptblock]$Resolve, $Levels = $null, [string[]]$AddDirs = @())
     if (-not ($Decision.allowed -is [bool] -and $Decision.allowed)) { return (New-HordeUnknown -Reason ("the node's policy did not allow this session: " + (@($Decision.reasons) -join "; "))) }
     $Level = "" + $Decision.level
     if ($Level -eq "") { return (New-HordeUnknown -Reason "the policy's decision names no level") }
@@ -162,13 +175,15 @@ function New-HordeLaunchPlan {
     elseif (-not (Test-HordeAgentCapability -Descriptor $d -Name "session.remoteName")) { [void]$notes.Add("unnamed: the harness " + $b.harness + " cannot be told a remote session name (session.remoteName is not yes)") }
     else { $nameText = "" + $Name.value }
 
-    $spec = [pscustomobject]@{ sessionId = $SessionId; permissionArgs = @($perm.value); model = $b.model; name = $nameText; prompt = $Prompt }
+    foreach ($dir in @($AddDirs)) { if (-not (Test-HordeLaunchDirPath -Path ("" + $dir))) { return (New-HordeUnknown -Reason ("the folder '" + $dir + "' a session would be granted is not a full rooted path")) } }
+    $spec = [pscustomobject]@{ sessionId = $SessionId; permissionArgs = @($perm.value); model = $b.model; name = $nameText; prompt = $Prompt; addDirs = [string[]]@($AddDirs) }
     $argv = & $a.argv $spec
     if ($null -eq $argv -or $argv.state -ne "known") {
         $why = "the adapter built no argv"
         if ($null -ne $argv) { $why = $argv.reason }
         return (New-HordeUnknown -Reason $why)
     }
+    foreach ($dir in @($AddDirs)) { if (@($argv.value) -cnotcontains ("" + $dir)) { return (New-HordeUnknown -Reason ("the harness " + $b.harness + " was not given the folder " + $dir + " in its argv, so the session could not read what is put there")) } }
     $prog = & $Resolve $a.program
     if ($null -eq $prog -or $prog.state -ne "known") {
         $why = "the host could not find the program " + $a.program

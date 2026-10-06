@@ -117,7 +117,10 @@ try {
             Check ($null -ne $one -and "$($one.result.state)" -ceq "known" -and "$($one.result.value.sessionId)" -ceq $id) "session.get answers one listed session"
         }
         $spawn = Talk (Req "request.status" ([pscustomobject]@{ requestId = (New-HordeLinkFrameId) }))
-        Check ($null -ne $spawn -and "$($spawn.result.state)" -ceq "unknown") "request.status on a node with no journal is unknown, never absent"
+        # Since the act path's A3 a node serves acts unless -ReadOnly, so it keeps a request journal: a
+        # request it never saw is absent from it. (The no-journal answer is test-node-serve's.)
+        Check ($null -ne $spawn -and "$($spawn.result.state)" -ceq "absent") "a node that acts keeps a request journal: request.status for an id it never saw is absent"
+        Check (Test-Path -LiteralPath (Join-Path $homeDir "node\requests\journal.json")) "and the journal is in the node's home"
         $null = Send-HordeLinkFrame -Link $script:link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "the hub is finished" -Seq 9))
     }
     $exited = $node.WaitForExit(60000)
