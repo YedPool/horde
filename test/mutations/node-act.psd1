@@ -150,5 +150,17 @@
         @{ Name = "spawn-without-hub"
            Find = 'if ($hubId -eq "") { return (New-HordeNodeOutcome -State "refused" -Reason "the request names no hub, so no hub could close the session; nothing is started") }'
            Replace = '' }
+        @{ Name = "prompt-sent-first"
+           Find = '$noop = & $actor.send $term $record.handle $script:HordeNodeNoOpLine $true'
+           Replace = '$noop = & $actor.send $term $record.handle $prompt $true' }
+        @{ Name = "no-op-dropped"
+           Find = '$noop = & $actor.send $term $record.handle $script:HordeNodeNoOpLine $true'
+           Replace = '$noop = New-HordeKnown -Value $true' }
+        @{ Name = "no-op-failure-read-anyway"
+           Find = 'if ($null -ne $noop -and $noop.state -eq "known") {'
+           Replace = 'if ($true) {' }
+        @{ Name = "no-op-unrecorded"
+           Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpAt'
+           Replace = '$record.noOp = ""; $record.noOpAt' }
     )
 }

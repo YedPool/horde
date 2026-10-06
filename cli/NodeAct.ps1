@@ -34,6 +34,8 @@
 #      A session that cannot be ended either is NOT refused: it is failed, recorded as still running
 #      (outcome unkept-running, no closedAt), its process returned so the hub can close it again, and
 #      an ALERT line raised (review of #104, F2);
+#      Before the readback one fixed line that asks for nothing, "Reply with OK only.", is typed and
+#      submitted, so the harness writes its record of the mode (see $script:HordeNodeNoOpLine);
 #   8. only now the work: the session starts with NO prompt, so a session in the wrong mode is closed
 #      before it ever sees work (review of #104, F4: prevent, not detect). The prompt is typed as one
 #      line and submitted; a prompt holding a line break or any other control character, or too long
@@ -75,6 +77,14 @@ $script:HordeNodeSpawnLockName = ".spawn.lock"
 # The longest prompt typed into a pane as one line. The host types at most 1024 characters a call
 # (hosts/<name>/Act.ps1); a longer prompt goes to a file the session is told to read.
 $script:HordeNodePromptTypedMax = 1000
+# The line typed before the mode is read back. A harness may keep its transcript in memory until the
+# first user turn: MEASURED 2026-10-06, read-only over 279 transcripts of claude-code 2.1.228 to
+# 2.1.285, the file was created with the first user line in 192 of 199, lines timestamped up to 21
+# minutes earlier written with it, so a session started with no prompt has no permission-mode line
+# on disk to read. One turn that asks for nothing makes it write one. A constant, never from the link;
+# its cost is one model turn, and its window is that one turn, before the mode is proven (decision of
+# 2026-10-06; a local command that forces the write without a model turn is to be measured live).
+$script:HordeNodeNoOpLine = "Reply with OK only."
 
 function Get-HordeNodeSpawnDir {
     # Where a node keeps its records of the sessions it started for a hub.
@@ -333,7 +343,7 @@ function Invoke-HordeNodeSpawn {
         if ($plan.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $plan.reason) }
         $adapter = (Get-HordeLaunchAdapter -Name $plan.value.harness).value
         # 6. The pane, recorded before it starts, under the lock, so the count already holds it.
-        $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; hubId = $hubId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = (& $Context.now).ToUniversalTime().ToString("o"); pid = $null; procStart = ""; closedAt = ""; outcome = "starting" }
+        $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; hubId = $hubId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = (& $Context.now).ToUniversalTime().ToString("o"); pid = $null; procStart = ""; noOp = ""; noOpAt = ""; closedAt = ""; outcome = "starting" }
         Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
     } finally { $lock.Dispose() }
     # The pane inherits the environment of the spawn call (issue #95): every variable the harness owns
@@ -364,8 +374,16 @@ function Invoke-HordeNodeSpawn {
     }
     $record.pid = [long]$proc.pid; $record.procStart = "" + $proc.procStart
     Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
-    # 7. The mode, read back. Exactly the level asked for, or the session is not kept.
-    $mode = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.modeSeconds -Probe { $m = & $adapter.readMode $sid $Context.environment; if ($m.state -eq "known") { $m } else { $null } }
+    # 7. The mode, read back. Exactly the level asked for, or the session is not kept. First the fixed
+    # line that asks for nothing, so the harness writes the record the mode is read from.
+    $noop = & $actor.send $term $record.handle $script:HordeNodeNoOpLine $true
+    $record.noOp = $script:HordeNodeNoOpLine; $record.noOpAt = (& $Context.now).ToUniversalTime().ToString("o")
+    if ($null -eq $noop -or $noop.state -ne "known") { $record.noOp = ""; $record.noOpAt = "" }
+    Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
+    $mode = $null
+    if ($null -ne $noop -and $noop.state -eq "known") {
+        $mode = Wait-HordeNodeUntil -Context $Context -Seconds $Context.bounds.modeSeconds -Probe { $m = & $adapter.readMode $sid $Context.environment; if ($m.state -eq "known") { $m } else { $null } }
+    }
     $why = ""
     if ($null -eq $mode) { $why = "the session's permission mode could not be read back within " + $Context.bounds.modeSeconds + " s, so it is not kept (fail closed)" }
     elseif ("" + $mode.value -cne $d.level) { $why = "the session reports the level " + $mode.value + " and was asked for " + $d.level + ", so it is not kept" }

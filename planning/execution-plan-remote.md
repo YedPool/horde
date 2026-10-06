@@ -407,7 +407,11 @@ E. Acting over the link
     - **The name** is the label plus the run title, capped at 60 characters, given at birth with
       Remote Control on.
     - **Fail closed on the mode, before any work.** The session starts with no prompt. The node reads
-      the effective mode back from the harness's own record; if it cannot, or it is any other level than
+      the effective mode back from the harness's own record, after typing one fixed line that asks for
+      nothing, "Reply with OK only.": a session started with no prompt keeps its transcript in memory
+      until the first user turn (measured 2026-10-06 over 279 transcripts), so there is nothing to read
+      before it. The cost is one model turn; the window is that one turn, which asks for nothing. If the
+      mode cannot be read, or it is any other level than
       the one asked, the session is closed and the spawn refused, so a wrong mode never sees work. Only
       then is the prompt typed as one line, or, holding a line break or too long, written to a file the
       session is told to read (review of #104, F4). A session that cannot be ended is answered failed,
@@ -425,6 +429,12 @@ E. Acting over the link
       long before judging the node gone (review of #104, F7). Acting asynchronously is later work.
     - **No live acceptance before #99.** The live run waits for #99 (a pane tied to its process by
       the pane id), as well as R17 and the founder's login.
+    - **The acceptance run's checklist** (laptop to the always-on box, one real session): the session
+      starts with no prompt; the no-op line is typed and the permission-mode line read back as the level
+      asked; only then the prompt; the session is named with Remote Control on; it is closed and
+      verified gone by pid and start time; the report lists it. And one measurement: whether a local
+      slash command, typed instead of the no-op line, makes the harness write its transcript without a
+      model turn. If it does, a later PR swaps it in for the no-op line.
     - **No engine environment.** A pane does not inherit its starter's environment (measured
       2026-10-05, issue #95), so until engines E10's launch stub a remote spawn allows only a profile on
       the harness's own login.
