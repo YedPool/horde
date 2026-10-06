@@ -89,6 +89,8 @@ $got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShel
 Check (Says $got "assign start site") "the arguments replaced by one string, by setting Arguments, is refused"
 $got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShellExecute = $false', '    $psi.UseShellExecute = $true') })
 Check ((Says $got "assign start site") -and (Says $got "that is not there")) "a listed property set to another value is a site the list does not have"
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShellExecute = $false', '    $psi.EnvironmentVariables["PATH"] = "C:\x"' + "`r`n" + '    $psi.UseShellExecute = $false') })
+Check (Says $got "assign start site") "a start-info property set through an index, EnvironmentVariables[...], is refused"
 $got = @(Test-Planted -File $mem -Change { param($t) $t + "`r`nfunction Get-X { `$o.`$name = 1 }" })
 Check (Says $got "assign start site") "a property named by an expression and assigned is refused"
 # THE PROGRAM IS PART OF THE SITE'S TEXT: pointing the one start at another program is a changed site,

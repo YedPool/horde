@@ -12,7 +12,7 @@
            Find = '[System.IO.File]::WriteAllText($file, [string]$Message.body,'
            Replace = '[System.IO.File]::WriteAllText($file, ([string]$Message.body -split "`n")[0],' }
         @{ Name = "absent-read-as-unknown"
-           Find = 'if ($j.stage -ceq "absent") { return (New-HordeAbsent'
+           Find = 'if ($Command -ceq "status" -and $j.stage -ceq "absent") { return (New-HordeAbsent'
            Replace = 'if ($false) { return (New-HordeAbsent' }
     )
 }

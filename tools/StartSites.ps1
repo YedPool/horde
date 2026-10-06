@@ -24,19 +24,35 @@
 #   type     a type that leads to a process, a script block or the engine ([System.Diagnostics.Process],
 #            [scriptblock], [powershell], [wmiclass], [activator], ...); a static call on one is the
 #            whole call, so [ProcessStartInfo]::new(<program>, ...) carries its program in its text
+#   assign   an assignment to a property a start is made of - FileName, Arguments, UseShellExecute and
+#            every other property of a ProcessStartInfo - or to a property named by an expression: the
+#            program, its arguments or how it runs could otherwise change after the listed start was
+#            made, without changing any listed text (review of #106, G2)
+#   starter  a call of a function that holds a process start, from anywhere: a second caller could
+#            hand it other arguments (review of #106, G2)
+# and the commands that compile code (Add-Type), reach COM (New-Object -ComObject) or WMI and CIM are
+# command sites, like Start-Process.
 # A folder named test is not read: tests start stand-in children on purpose.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 $script:HordeStartSiteCommands = @("start-process", "saps", "start", "invoke-expression", "iex", "invoke-command", "icm", "invoke-item", "ii",
-    "start-job", "sajb", "start-threadjob", "receive-job", "cmd", "powershell", "pwsh", "bash", "wsl", "invoke-wmimethod", "invoke-cimmethod")
+    "start-job", "sajb", "start-threadjob", "receive-job", "cmd", "powershell", "pwsh", "bash", "wsl", "invoke-wmimethod", "invoke-cimmethod",
+    "add-type", "get-wmiobject", "gwmi", "set-wmiinstance", "register-wmievent", "get-ciminstance", "gcim", "new-ciminstance", "set-ciminstance",
+    "register-cimindicationevent", "new-cimsession", "register-objectevent", "register-engineevent")
+# Every property of a ProcessStartInfo, and the member that leads to one: an assignment to any of them,
+# anywhere in the family, is an assign site.
+$script:HordeStartSiteProperties = @("filename", "arguments", "argumentlist", "workingdirectory", "verb", "username", "password", "passwordincleartext",
+    "domain", "loaduserprofile", "environmentvariables", "environment", "useshellexecute", "createnowindow", "windowstyle", "errordialog",
+    "errordialogparenthandle", "redirectstandardinput", "redirectstandardoutput", "redirectstandarderror", "standardinputencoding",
+    "standardoutputencoding", "standarderrorencoding", "startinfo")
 $script:HordeStartSiteMethods = @("start", "invoke", "invokescript", "invokereturnasis", "invokewithcontext", "begininvoke", "create", "createdelegate",
     "invokemethod", "invokemember", "shellexecute", "run", "exec", "addscript", "addcommand", "newscriptblock", "expandstring", "getnewclosure")
 $script:HordeStartSiteTypes = @("system.diagnostics.process", "diagnostics.process", "system.diagnostics.processstartinfo", "diagnostics.processstartinfo",
     "scriptblock", "system.management.automation.scriptblock", "powershell", "system.management.automation.powershell", "runspacefactory",
     "system.management.automation.runspaces.runspacefactory", "wmiclass", "wmi", "wmisearcher", "activator", "system.activator", "type", "system.type",
     "appdomain", "system.appdomain", "reflection.assembly", "system.reflection.assembly")
-$script:HordeStartSiteKinds = @("call", "dot", "command", "method", "type")
+$script:HordeStartSiteKinds = @("call", "dot", "command", "method", "type", "assign", "starter")
 
 function Get-HordeStartSiteFiles {
     # Every .ps1 under -Folder of -Root, outside any folder named test, as paths relative to -Root with
@@ -72,6 +88,17 @@ function Get-HordeStartSites {
     # of kind "parse", which no list line can match.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Folder)
     $out = New-Object System.Collections.ArrayList
+    # FIRST, every function in the family that holds a call of a method named Start: each call of one is
+    # a starter site, wherever it is.
+    $starters = @{}
+    foreach ($rel in @(Get-HordeStartSiteFiles -Root $Root -Folder $Folder)) {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Root $rel), [ref]$tokens, [ref]$errors)
+        foreach ($fd in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))) {
+            $hasStart = @($fd.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $n.Member.Value -ieq "Start" }, $true)).Count -gt 0
+            if ($hasStart) { $starters[$fd.Name.ToLowerInvariant()] = $true }
+        }
+    }
     foreach ($rel in @(Get-HordeStartSiteFiles -Root $Root -Folder $Folder)) {
         $tokens = $null; $errors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Root $rel), [ref]$tokens, [ref]$errors)
@@ -86,7 +113,21 @@ function Get-HordeStartSites {
             if ($c.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Dot) { & $add $c "dot" $c.Extent.Text; continue }
             $name = $c.GetCommandName()
             if ($null -eq $name) { & $add $c "command" $c.Extent.Text; continue }
-            if ($script:HordeStartSiteCommands -contains $name.ToLowerInvariant() -or $name -match '[.\\/:]') { & $add $c "command" $c.Extent.Text }
+            if ($script:HordeStartSiteCommands -contains $name.ToLowerInvariant() -or $name -match '[.\\/:]') { & $add $c "command" $c.Extent.Text; continue }
+            if ($starters.ContainsKey($name.ToLowerInvariant())) { & $add $c "starter" $c.Extent.Text; continue }
+            if ($name -ieq "New-Object" -and @($c.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -ilike "com*" }).Count -gt 0) { & $add $c "command" $c.Extent.Text }
+        }
+        foreach ($as in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true))) {
+            # The member assigned, through any cast or index: $psi.FileName, [string]$psi.Arguments,
+            # $psi.EnvironmentVariables["X"].
+            $lhs = $as.Left
+            while ($true) {
+                if ($lhs -is [System.Management.Automation.Language.ConvertExpressionAst]) { $lhs = $lhs.Child; continue }
+                if ($lhs -is [System.Management.Automation.Language.IndexExpressionAst]) { $lhs = $lhs.Target; continue }
+                break
+            }
+            if ($lhs -isnot [System.Management.Automation.Language.MemberExpressionAst]) { continue }
+            if ($lhs.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $script:HordeStartSiteProperties -contains $lhs.Member.Value.ToLowerInvariant()) { & $add $as "assign" $as.Extent.Text }
         }
         foreach ($mc in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true))) {
             if ($mc.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { & $add $mc "method" $mc.Extent.Text; continue }

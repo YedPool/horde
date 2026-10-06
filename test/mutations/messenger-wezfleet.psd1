@@ -1,4 +1,4 @@
-# Mutations of the wezfleet messenger (remote plan R21, slice 3b). Run:
+# Mutations of the wezfleet messenger (remote plan R21, slice 3b; review of #106). Run:
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\messenger-wezfleet.psd1
 # Each loosens one rule of messengers/wezfleet/Messenger.ps1, and its own suite must fail for every one.
 # Every find string occurs exactly once, on one line.
@@ -15,21 +15,54 @@
         @{ Name = "climbing-root-used"
            Find = ' -or @($dir -split ''[\\/]'') -contains "..") {'
            Replace = ') {' }
+        @{ Name = "reparse-point-followed"
+           Find = 'if (($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "reparse-point-above-unseen"
+           Find = '$d = $d.Parent'
+           Replace = '$d = $null' }
+        @{ Name = "markers-unchecked"
+           Find = 'if (-not (Test-Path -LiteralPath (Join-Path $dir $marker) -PathType Leaf)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "mail-commands-marker-dropped"
+           Find = '"lib\MailPost.ps1", '
+           Replace = '' }
         @{ Name = "timeout-floor-dropped"
            Find = 'if ($TimeoutSeconds -lt 1) { throw'
            Replace = 'if ($false) { throw' }
+        @{ Name = "bad-to-started"
+           Find = 'if ($to -cnotmatch $script:HordeWezfleetMessengerSessionPattern) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "bad-label-started"
+           Find = 'if ($label -ne "" -and $label -cnotmatch $script:HordeWezfleetMessengerLabelPattern) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "nameless-sender-started"
+           Find = 'if (-not $sidOk -and $label -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "non-uuid-sender-passed"
+           Find = 'if ($sidOk) { $argv += @("-FromSessionId", $fromSid) }'
+           Replace = '$argv += @("-FromSessionId", $fromSid)' }
         @{ Name = "body-on-command-line"
            Find = '"-MessageFile", $file)'
            Replace = '"-MessageFile", $file, "-Body", [string]$Message.body)' }
         @{ Name = "message-file-kept"
            Find = 'if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }'
            Replace = '' }
+        @{ Name = "body-outside-horde-folder"
+           Find = '$file = Join-Path (Get-HordeWezfleetMessengerOutgoing) ('
+           Replace = '$file = Join-Path ([System.IO.Path]::GetTempPath()) (' }
+        @{ Name = "folder-acl-not-set"
+           Find = '[System.IO.Directory]::SetAccessControl($dir, $sec)'
+           Replace = '' }
+        @{ Name = "folder-acl-inherits"
+           Find = '$sec.SetAccessRuleProtection($true, $false)'
+           Replace = '$sec.SetAccessRuleProtection($false, $true)' }
+        @{ Name = "sweep-removes-nothing"
+           Find = 'foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force)) { Remove-Item -LiteralPath $f.FullName -Force; $n++ }'
+           Replace = '' }
         @{ Name = "empty-label-sent"
-           Find = 'if ($null -ne $fl -and "$($fl.Value)" -ne "") { $argv += @("-FromLabel", [string]$fl.Value) }'
+           Find = 'if ($label -ne "") { $argv += @("-FromLabel", $label) }'
            Replace = '$argv += @("-FromLabel", "")' }
-        # Written in a single-byte code page, a non-ASCII letter in the body is lost. (UTF-16 is not a
-        # mutant here: it carries a BOM, and wezfleet's reader detects it and decodes the body intact -
-        # measured, msg-b3-mut 2026-10-06.)
         @{ Name = "body-written-ascii"
            Find = '(New-Object System.Text.UTF8Encoding($false))'
            Replace = '[System.Text.Encoding]::ASCII' }
@@ -43,8 +76,11 @@
            Find = 'foreach ($k in $need) { if ($names -cnotcontains $k) {'
            Replace = 'foreach ($k in $need) { if ($false) {' }
         @{ Name = "extra-field-unchecked"
-           Find = 'foreach ($k in $names) { if ($need -cnotcontains $k) {'
+           Find = 'foreach ($k in $names) { if ($may -cnotcontains $k) {'
            Replace = 'foreach ($k in $names) { if ($false) {' }
+        @{ Name = "detail-not-read"
+           Find = '$may = @($need) + @("detail")'
+           Replace = '$may = @($need)' }
         @{ Name = "woken-type-unchecked"
            Find = 'if ($Command -ceq "post" -and $j.woken -isnot [bool]) {'
            Replace = 'if ($false) {' }
@@ -60,6 +96,45 @@
         @{ Name = "stage-exit-unpaired"
            Find = 'if (@($byExit[[int]$Run.exit]) -cnotcontains $j.stage) {'
            Replace = 'if ($false) {' }
+        @{ Name = "exit-4-unread"
+           Find = '; 4 = @("absent", "queued") }'
+           Replace = ' }' }
+        @{ Name = "exit-4-queued-unread"
+           Find = '4 = @("absent", "queued")'
+           Replace = '4 = @("absent")' }
+        @{ Name = "exit-4-not-held"
+           Find = 'if ([int]$Run.exit -eq 4) { $stage = "held";'
+           Replace = 'if ([int]$Run.exit -eq 4) { $stage = $stage;' }
+        @{ Name = "post-target-unchecked"
+           Find = 'if ($j.to -cne $To) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "moved-repost-refused"
+           Find = 'if ($code -cne "already-posted" -or'
+           Replace = 'if ($true -or' }
+        @{ Name = "moved-repost-any-text"
+           Find = ' -or $j.to -cnotmatch $script:HordeWezfleetMessengerSessionPattern) {'
+           Replace = ') {' }
+        @{ Name = "follow-unsaid"
+           Find = '$where = "followed to " + $j.to'
+           Replace = '$where = ""' }
+        @{ Name = "status-target-unchecked"
+           Find = 'if ($j.to -cnotmatch $script:HordeWezfleetMessengerSessionPattern) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "status-target-unsaid"
+           Find = '$where = "at " + $j.to'
+           Replace = '$where = ""' }
+        @{ Name = "detail-uncut"
+           Find = '$detail = ConvertTo-HordeWezfleetMessengerLine $dp.Value -Max $script:HordeWezfleetMessengerDetailChars'
+           Replace = '$detail = [string]$dp.Value' }
+        @{ Name = "detail-uncapped"
+           Find = '-Max $script:HordeWezfleetMessengerDetailChars'
+           Replace = '-Max 100000' }
+        @{ Name = "detail-not-text-kept"
+           Find = 'if ($null -ne $dp -and $dp.Value -is [string]) {'
+           Replace = 'if ($null -ne $dp) {' }
+        @{ Name = "detail-dropped"
+           Find = 'if ($detail -ne "") { $reason = $(if ($reason -ne "") { $reason + ": " + $detail } else { $detail }) }'
+           Replace = '' }
         @{ Name = "queued-misread"
            Find = '"queued" = "accepted";'
            Replace = '"queued" = "handed-over";' }
@@ -73,10 +148,10 @@
            Find = '"refused" = "held" }'
            Replace = '"refused" = "expired" }' }
         @{ Name = "unconfirmed-reasonless"
-           Find = 'if ($reason -eq "" -and $j.stage -ceq "unconfirmed") {'
+           Find = 'if ($code -eq "" -and $j.stage -ceq "unconfirmed") {'
            Replace = 'if ($false) {' }
         @{ Name = "refused-reasonless"
-           Find = 'if ($reason -eq "" -and $j.stage -ceq "refused") {'
+           Find = 'if ($code -eq "" -and $j.stage -ceq "refused") {'
            Replace = 'if ($false) {' }
         @{ Name = "hung-child-not-killed"
            Find = 'try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }'

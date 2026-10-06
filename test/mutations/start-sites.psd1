@@ -15,8 +15,8 @@
            Find = 'if ($script:HordeStartSiteCommands -contains $name.ToLowerInvariant() -or $name -match'
            Replace = 'if ($name -match' }
         @{ Name = "program-names-unseen"
-           Find = ' -or $name -match ''[.\\/:]'') { & $add $c "command" $c.Extent.Text }'
-           Replace = ') { & $add $c "command" $c.Extent.Text }' }
+           Find = ' -or $name -match ''[.\\/:]'') { & $add $c "command" $c.Extent.Text; continue }'
+           Replace = ') { & $add $c "command" $c.Extent.Text; continue }' }
         @{ Name = "dynamic-member-unseen"
            Find = 'if ($mc.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { & $add $mc "method" $mc.Extent.Text; continue }'
            Replace = 'if ($mc.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { continue }' }
@@ -53,6 +53,33 @@
         @{ Name = "parse-error-passes"
            Find = 'if (@($errors).Count -gt 0) { [void]$out.Add([pscustomobject]@{ file = $rel; function = "(top)"; kind = "parse"; text = "the file does not parse" }); continue }'
            Replace = '' }
+        @{ Name = "assign-unseen"
+           Find = 'if ($lhs.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $script:HordeStartSiteProperties -contains $lhs.Member.Value.ToLowerInvariant()) { & $add $as "assign" $as.Extent.Text }'
+           Replace = '' }
+        @{ Name = "named-assign-unseen"
+           Find = 'if ($lhs.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $script:HordeStartSiteProperties -contains $lhs.Member.Value.ToLowerInvariant()) {'
+           Replace = 'if ($script:HordeStartSiteProperties -contains "$($lhs.Member.Value)".ToLowerInvariant()) {' }
+        @{ Name = "indexed-assign-unseen"
+           Find = 'if ($lhs -is [System.Management.Automation.Language.IndexExpressionAst]) { $lhs = $lhs.Target; continue }'
+           Replace = '' }
+        @{ Name = "starter-unseen"
+           Find = 'if ($starters.ContainsKey($name.ToLowerInvariant())) { & $add $c "starter" $c.Extent.Text; continue }'
+           Replace = '' }
+        @{ Name = "starters-never-found"
+           Find = 'if ($hasStart) { $starters[$fd.Name.ToLowerInvariant()] = $true }'
+           Replace = '' }
+        @{ Name = "com-unseen"
+           Find = 'if ($name -ieq "New-Object" -and @($c.CommandElements | Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -ilike "com*" }).Count -gt 0) { & $add $c "command" $c.Extent.Text }'
+           Replace = '' }
+        @{ Name = "add-type-unseen"
+           Find = '"add-type", "get-wmiobject"'
+           Replace = '"get-wmiobject"' }
+        @{ Name = "wmi-unseen"
+           Find = '"get-wmiobject", "gwmi"'
+           Replace = '"gwmi"' }
+        @{ Name = "cim-unseen"
+           Find = '"invoke-wmimethod", "invoke-cimmethod",'
+           Replace = '"invoke-wmimethod",' }
         @{ Name = "missing-list-passes"
            Find = 'if (-not (Test-Path -LiteralPath $listPath -PathType Leaf)) { return @('
            Replace = 'if ($false) { return @(' }
