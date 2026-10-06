@@ -279,6 +279,16 @@ $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.Security
 Check ($acl.AreAccessRulesProtected -and $rules.Count -ge 1 -and @($rules | Where-Object { $_.IdentityReference -ne $me }).Count -eq 0) ("the folder is this user's alone: inheritance cut, every rule this user's (" + $rules.Count + " rule(s))")
 $rec = Read-HordeNodeSpawnRecord -Dir $ctxG.records -SessionId $o.sessionId
 Check ("$($rec.value.promptDir)" -ceq $pdir) "the record names the prompt folder"
+# Called directly: a session id is fresh, so only a folder planted ahead of it can be a junction.
+$ctxJ2 = New-Context
+New-Item -ItemType Directory -Path $ctxJ2.records, (Join-Path $work "elsewhere-prompt") -Force | Out-Null
+$planted = "b0000000-0000-4000-8000-000000000001"
+$null = cmd /c mklink /J "$(Join-Path $ctxJ2.records $planted)" "$(Join-Path $work 'elsewhere-prompt')"
+if (Test-Path -LiteralPath (Join-Path $ctxJ2.records $planted)) {
+    $pj = New-HordeNodePromptDir -Context $ctxJ2 -SessionId $planted
+    Check ($pj.reason -like "*junction or link*" -and $pj.dir -eq "") ("a prompt folder that is a junction is refused, never granted (" + $pj.reason + ")")
+    [System.IO.Directory]::Delete((Join-Path $ctxJ2.records $planted))
+} else { Check $false "CONTROL: a junction could be made for the test" }
 $hU = Join-Path $work ("home-" + [char]0x00E9)
 New-Item -ItemType Directory -Path $hU -Force | Out-Null
 Reset
