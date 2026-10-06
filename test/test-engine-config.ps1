@@ -241,7 +241,7 @@ Check (@($f | Where-Object { $_.code -ceq "not-ascii" -and $_.detail -like "*byt
 }
 if (Section "registry" "the settings registry is the seam for keys beyond the binding (metrics.level, remote.*)") {
 $reg = @(Get-HordeConfigKeys)
-Check (@($reg | ForEach-Object { $_.name }) -join "," -ceq "profile,harness,provider,model") "the registry holds the four binding keys today, in order"
+Check ((@($reg | ForEach-Object { $_.name }) | Select-Object -First 4) -join "," -ceq "profile,harness,provider,model") "the registry holds the four binding keys first, in order"
 # A neutral key restricted to the user and live layers, the shape a node policy key will have (remote R9).
 $fixtureReg = @($reg) + @([pscustomobject]@{ name = "fixture.level"; layers = @("L1", "L4"); value = [pscustomobject]@{ kind = "enum"; values = @("off", "low", "high") } })
 $docs = New-Docs
@@ -270,7 +270,8 @@ Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "direction": "any"', '"value": { "kind": "enum", "values": ["low", "high"] }, "direction": "lower-only"'))) -eq "") "CONTROL: direction lower-only on an enum loads (the shape of remote R9's ceiling)"
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "direction": "any"', '"value": { "kind": "enum", "values": ["low", "high"] }, "direction": "sideways"'))) -like "*direction*sideways*") "the registry refuses a direction other than any, lower-only and raise-only"
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }, "direction": "any"', '"value": { "kind": "model" }, "direction": "lower-only"'))) -like "*direction*enum*") "and a lower-only or raise-only direction on a key that is not an enum: there is no order"
-Check (@($reg | Where-Object { "" + $_.direction -cne "any" }).Count -eq 0 -and @($reg | Where-Object { $null -eq $_.direction }).Count -eq 0) "every binding key in the registry states its direction, any"
+$bindReg = @($reg | Select-Object -First 4)
+Check (@($bindReg | Where-Object { "" + $_.direction -cne "any" }).Count -eq 0 -and @($bindReg | Where-Object { $null -eq $_.direction }).Count -eq 0) "every binding key in the registry states its direction, any"
 
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "max": 3 }'))) -like "*model*max*") "the registry refuses a field it does not know inside value, too (review of PR #74, F3)"
 Check ((Get-RegRefusal ($regText.Replace('"value": { "kind": "model" }', '"value": { "kind": "model", "values": ["a"] }'))) -like "*model*values*") "and values on a kind that is not an enum"

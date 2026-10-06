@@ -373,6 +373,34 @@ E. Acting over the link
     over `local`, so there is one actuation path. Tests first: one refusal per policy rule, each
     mutated; a spawn above the ceiling is refused; a request cut by a partition resolves through
     `request.status`; T1 e2e over `local`, then T2 through the WSL sshd.
+    **The act path, first version (founder's request and coordinator's decisions, 2026-10-05).** So that
+    M can start, message and close an orchestrator on the always-on box before 3.8, R18 and lifecycle
+    steps 24 to 28 land, `session.spawn` and `session.close` are built first, in four PRs: A1 (R9: the
+    `permission` and `remote.permissionCeiling` keys, `schema/node-policy.v1` and `core/NodePolicy.ps1`,
+    the launch port `core/AgentLaunch.ps1` with `agents/<name>/Launch.ps1`, and the effective mode read
+    back from the harness's own record, issue #67); A2 (spawn, send-text and close in the node's own
+    WezTerm mux, `hosts/wezterm/`); A3 (the two verbs, journaled once per id); A4 (the hub's CLI and a
+    live acceptance run). Process launching lives only in `hosts/<name>/` and `agents/<name>/`;
+    `remote/` stays under ExecScan's proof. What this version decides:
+    - **No anchor yet, so no job-object containment.** The pane's program is the harness itself, a
+      child of the terminal's mux, never of `node serve`, so restarting the node kills nothing.
+      Containment arrives with the anchor at lifecycle step 22 and the anchored spawn of step 27;
+      until then a remote session's descendants are what the host's own teardown leaves (R18).
+    - **The worktree is optional.** Absent, the session runs in the node's registered clone
+      (`node-policy.v1` repos); present, in `<worktreeRoot>\<name>` and nowhere else.
+    - **The ceiling** defaults to the level below the top. A node's owner may set it to the top in L1
+      (the always-on box: ssh access there is already that trust); L4 may only lower it; nothing the
+      link carries can raise it.
+    - **The name** is the label plus the run title, capped at 60 characters, given at birth with
+      Remote Control on.
+    - **Fail closed on the mode.** After start the node reads the effective mode back from the
+      harness's own record; if it cannot, or it is above the level asked, the session is closed and the
+      spawn refused.
+    - **No engine environment.** A pane does not inherit its starter's environment (measured
+      2026-10-05, issue #95), so until engines E10's launch stub a remote spawn allows only a profile on
+      the harness's own login.
+    - **Not yet**: `session.resume`, `session.park`, `session.route`, `worktree.*`, the per-node
+      outbox and the binding record, each at its planned step.
 20. **R20. Alerts over the link** (PROJ; after lifecycle step 13 and R13). `alert.raise` from the node,
     a node outbox that drains in seq order on reconnect, alerts older than 24 h delivered marked
     stale. Tests first: a partition queues alerts and they drain in order; nothing is killed because

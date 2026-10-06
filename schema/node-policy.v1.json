@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/node-policy.v1",
+  "title": "node-policy v1",
+  "description": "What a node lets a hub start on it (remote plan step R9): the repositories it has registered, the engine profiles it offers, and how many sessions a hub may start on it in one UTC day. Written by the node's owner, on the node, in <HordeHome>/node/policy.json; never written from the link, and no verb carries any of it. Its LISTS are here and not in the engine configuration because a rule's set holds one value per key: a repository is an id mapped to a folder, which is a definition, not a setting. The permission ceiling is a setting and lives in the engine configuration (core/config-keys.json, remote.permissionCeiling: L1 and L4 only, lower-only), so it resolves through the one resolver like every other setting. core/NodePolicy.ps1 reads this file and enforces the rules a draft-07 schema cannot say: every path absolute and with no '..' segment, a worktree root that is not inside the clone, each repository id once, each profile once, and the spawn cap at most 1000.",
+  "type": "object",
+  "required": ["schemaVersion", "repos", "profiles", "dailySpawnCap"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "repos": {
+      "type": "array",
+      "description": "The registered clones. A spawn names a repository by id (link-verbs.v1 repo-id); one this list does not hold is refused.",
+      "items": {
+        "type": "object",
+        "required": ["repoId", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "repoId": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(/[A-Za-z0-9._-]+){1,4}$", "description": "As link-verbs.v1 repo-id: the normalised origin, host then owner then name." },
+          "path": { "type": "string", "pattern": "^[A-Za-z]:\\\\[^<>\"|?*\\x00-\\x1F]{1,240}$", "description": "The clone's folder, absolute. A spawn with no worktree runs here (decision of 2026-10-05: an orc may run in the registered clone)." },
+          "worktreeRoot": { "type": "string", "pattern": "^[A-Za-z]:\\\\[^<>\"|?*\\x00-\\x1F]{1,240}$", "description": "The folder that holds this repository's worktrees, absolute. A spawn naming a worktree runs in <worktreeRoot>\\<name> and nowhere else. Absent: the sibling folder <path>-worktrees, the convention every repository here follows." }
+        }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "description": "The engine profiles a hub may name in a spawn, by name. A profile not listed is refused even if the engine configuration defines it.",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" }
+    },
+    "dailySpawnCap": { "type": "integer", "minimum": 0, "description": "Sessions a hub may start on this node per UTC day, counted from the node's own request journal. 0 refuses every remote spawn." }
+  }
+}
