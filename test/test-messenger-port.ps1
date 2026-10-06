@@ -30,7 +30,7 @@ $script:asked = 0
 
 function Reg {
     param([string]$Name,
-          [scriptblock]$Post = { param($m) $script:posted++; New-HordeKnown -Value ([pscustomobject]@{ stage = "accepted"; at = [datetime]::UtcNow; reason = "" }) -ObservedAt ([datetime]::UtcNow) },
+          [scriptblock]$Post = { param($m) $script:posted++; New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "accepted"; at = [datetime]::UtcNow; reason = "" }) -ObservedAt ([datetime]::UtcNow) },
           [scriptblock]$Status = { param($id) $script:asked++; New-HordeAbsent -Note "fixture knows nothing" -ObservedAt ([datetime]::UtcNow) })
     return (Register-HordeMessenger -Folder (Join-Path $fx $Name) -Post $Post -Status $Status)
 }
@@ -99,6 +99,10 @@ $m = New-Msg; $m.PSObject.Properties.Remove("label")
 Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "CONTROL: label is optional"
 $m = New-Msg; $m.from.PSObject.Properties.Remove("label")
 Check (@(Test-HordeMessengerMessage -Message $m).Count -eq 0) "CONTROL: from.label is optional"
+$week = New-Msg; $week.ttlSeconds = 604800
+Check (@(Test-HordeMessengerMessage -Message $week).Count -eq 0) "CONTROL: a ttl of exactly 7 days is valid"
+$contractTtl = & { . (Join-Path $root "remote\Contract.ps1"); $script:HordeMailTtlMaxSeconds }
+Check ($contractTtl -eq 604800 -and $script:HordeMessengerTtlMaxSeconds -eq $contractTtl) ("the port's ttl ceiling is remote/Contract.ps1's (" + $contractTtl + ")")
 $big = New-Msg; $big.body = ("x" * 65536)
 Check (@(Test-HordeMessengerMessage -Message $big).Count -eq 0) "CONTROL: a body of exactly 65536 bytes is valid"
 
@@ -118,6 +122,9 @@ $cases = @(
     @{ change = { param($m) $m.body = ("x" * 65537) }; like = "65536"; what = "a body one byte over 64 KiB" },
     @{ change = { param($m) $m.body = (("x" * 65535) + [string][char]0x00E9) }; like = "65536"; what = "a body over 64 KiB only in UTF-8 bytes, not in characters" },
     @{ change = { param($m) $m.ttlSeconds = 0 }; like = "ttlSeconds"; what = "a ttl of zero" },
+    @{ change = { param($m) $m.ttlSeconds = 604801 }; like = "604800"; what = "a ttl one second over 7 days, the contract's ceiling (remote/Contract.ps1)" },
+    @{ change = { param($m) $m.messageId = @("0e000000-0000-4000-8000-000000000001") }; like = "messageId"; what = "a messageId that is a one-element list, not a string" },
+    @{ change = { param($m) $m.from.sessionId = @("33333333-4444-4555-8666-777777777777") }; like = "from.sessionId"; what = "a sender session id that is a one-element list, not a string" },
     @{ change = { param($m) $m.ttlSeconds = "3600" }; like = "ttlSeconds"; what = "a ttl given as text" },
     @{ change = { param($m) $m | Add-Member -NotePropertyName pane -NotePropertyValue 4 }; like = "pane"; what = "a message addressed by pane: a member outside the list" })
 foreach ($c in $cases) {
@@ -147,7 +154,7 @@ $a = Send-HordeMessengerMessage -Messenger $liar -Message (New-Msg)
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an answer")) "an adapter whose post is not a tristate answer is unknown, never read as sent"
 $a = Get-HordeMessengerStatus -Messenger $liar -MessageId "0e000000-0000-4000-8000-000000000001"
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an answer")) "an adapter whose status is not a tristate answer is unknown"
-$bad = Reg "fixture-badstage" -Post { param($m) New-HordeKnown -Value ([pscustomobject]@{ stage = "delivered"; at = [datetime]::UtcNow; reason = "" }) -ObservedAt ([datetime]::UtcNow) } -Status { param($id) New-HordeKnown -Value ([pscustomobject]@{ stage = "seen"; at = "yesterday"; reason = "" }) -ObservedAt ([datetime]::UtcNow) }
+$bad = Reg "fixture-badstage" -Post { param($m) New-HordeKnown -Value ([pscustomobject]@{ messageId = $m.messageId; stage = "delivered"; at = [datetime]::UtcNow; reason = "" }) -ObservedAt ([datetime]::UtcNow) } -Status { param($id) New-HordeKnown -Value ([pscustomobject]@{ messageId = $id; stage = "seen"; at = "yesterday"; reason = "" }) -ObservedAt ([datetime]::UtcNow) }
 $a = Send-HordeMessengerMessage -Messenger $bad -Message (New-Msg)
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("delivered")) "a stage outside accepted, handed-over, seen, expired and held is unknown, naming it"
 $a = Get-HordeMessengerStatus -Messenger $bad -MessageId "0e000000-0000-4000-8000-000000000001"
@@ -160,6 +167,65 @@ Check ($a.state -ceq "absent") "CONTROL: an adapter's absent status stays absent
 $before = $script:asked
 $a = Get-HordeMessengerStatus -Messenger $good -MessageId "not-an-id"
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("messageId") -and $script:asked -eq $before) "a status for an id that is not a message id is unknown, without asking the adapter"
+
+Write-Host ""
+Write-Host "--- an answer is about the message it was asked about, and says why wherever the contract needs a reason ---" -ForegroundColor Cyan
+
+# One adapter whose answers each case sets: $script:postValue and $script:statusValue build the value.
+$script:postValue = $null
+$script:statusValue = $null
+$scripted = Reg "fixture-scripted" -Post { param($m) New-HordeKnown -Value (& $script:postValue $m.messageId) -ObservedAt ([datetime]::UtcNow) } -Status { param($id) New-HordeKnown -Value (& $script:statusValue $id) -ObservedAt ([datetime]::UtcNow) }
+function Answer { param([hashtable]$Fields) $o = [ordered]@{}; foreach ($k in $Fields.Keys) { $o[$k] = $Fields[$k] }; return [pscustomobject]$o }
+$other = "0e000000-0000-4000-8000-0000000000ff"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "CONTROL: an answer naming the message it was asked about is read"
+Check ($a.state -ceq "known" -and $null -eq $a.value.PSObject.Properties["reason"]) "an empty reason is left out of the value, never written as '' (link-verbs delivery.reason requires text)"
+$script:postValue = { param($id) Answer @{ messageId = $other; stage = "seen"; at = [datetime]::UtcNow; reason = "" } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($other)) ("a post answered about another message is unknown, never that message's stage (" + $a.reason + ")")
+$script:postValue = { param($id) Answer @{ stage = "seen"; at = [datetime]::UtcNow; reason = "" } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("messageId")) "a post answer that names no message is unknown"
+$script:statusValue = { param($id) Answer @{ messageId = $other; stage = "seen"; at = [datetime]::UtcNow; reason = "" } }
+$a = Get-HordeMessengerStatus -Messenger $scripted -MessageId "0e000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($other)) "a status answered about another message is unknown"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "held"; at = [datetime]::UtcNow; reason = " " } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("held")) "held with no reason is unknown: held must say why it was not delivered"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "held"; at = [datetime]::UtcNow; reason = "the target's inbox is full" } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and "$($a.value.reason)" -ceq "the target's inbox is full") "CONTROL: held with its reason is read, reason and all"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "line one`nline two" } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("line break")) "a reason holding a line break is unknown"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ("r" * 1025) } }
+$a = Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("1024")) "a reason over the link's 1024-byte reasonBytes cap is unknown"
+$script:postValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = ("r" * 1024) } }
+Check ((Send-HordeMessengerMessage -Messenger $scripted -Message (New-Msg)).state -ceq "known") "CONTROL: a reason of exactly 1024 bytes is read"
+
+# THE PORT PASSES STAGES THROUGH AS THEY ARE. Forward-only receipts are remote/Messaging.ps1's rule
+# (Resolve-HordeMailReceipt), enforced in slice 4 against the message journal; the port does not
+# second-guess an adapter's order, so a backward move reaches slice 4 to be refused there.
+$script:statusValue = { param($id) Answer @{ messageId = $id; stage = "accepted"; at = [datetime]::UtcNow; reason = "" } }
+$a = Get-HordeMessengerStatus -Messenger $scripted -MessageId "0e000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "a stage that moved backward (seen, then accepted) is passed through as the adapter said it, not corrected by the port"
+
+Write-Host ""
+Write-Host "--- only a registered messenger is called ---" -ForegroundColor Cyan
+
+$script:fakeCalled = 0
+$fake = [pscustomobject]@{ PSTypeName = "Horde.Messenger"; name = "fixture-good"; folder = "x"; capabilities = $good.capabilities
+    post = { param($x) $script:fakeCalled++; New-HordeKnown -Value ([pscustomobject]@{ messageId = $x.messageId; stage = "seen"; at = [datetime]::UtcNow }) -ObservedAt ([datetime]::UtcNow) }
+    status = { param($i) $script:fakeCalled++; New-HordeKnown -Value ([pscustomobject]@{ messageId = $i; stage = "seen"; at = [datetime]::UtcNow }) -ObservedAt ([datetime]::UtcNow) } }
+$a = Send-HordeMessengerMessage -Messenger $fake -Message (New-Msg)
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not registered") -and $script:fakeCalled -eq 0) "a look-alike of a registered messenger is refused for a post, and never called"
+$a = Get-HordeMessengerStatus -Messenger $fake -MessageId "0e000000-0000-4000-8000-000000000001"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not registered") -and $script:fakeCalled -eq 0) "and for a status"
+$plain = [pscustomobject]@{ name = "unregistered"; post = $fake.post; status = $fake.status }
+Check ((Send-HordeMessengerMessage -Messenger $plain -Message (New-Msg)).state -ceq "unknown" -and $script:fakeCalled -eq 0) "an object that never registered is refused"
+Check ((Send-HordeMessengerMessage -Messenger $null -Message (New-Msg)).state -ceq "unknown") "no messenger at all is refused"
 
 Write-Host ""
 Write-Host "--- the memory messenger: one record per message id, and a repost returns the recorded stage ---" -ForegroundColor Cyan
