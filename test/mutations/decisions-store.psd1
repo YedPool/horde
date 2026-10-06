@@ -7,6 +7,9 @@
     Target = "decisions\Store.ps1"
     Suite  = "test\test-decisions-store.ps1"
     Mutations = @(
+        @{ Name = "file-in-place-of-the-store-reads-as-empty"
+           Find = 'if ([System.IO.File]::Exists($Root)) {'
+           Replace = 'if ($false) {' }
         @{ Name = "create-overwrites"
            Find = '[System.IO.FileMode]::CreateNew'
            Replace = '[System.IO.FileMode]::Create' }

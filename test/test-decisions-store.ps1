@@ -67,6 +67,14 @@ try {
     Check ((Add-Safely "relative\store" 1 "{}") -like "THREW:*absolute*") "and nothing is written to one"
     Check (-not (Test-Path -LiteralPath (Join-Path $script:work "relative"))) "CONTROL: no folder appeared under the current folder"
 } finally { [System.IO.Directory]::SetCurrentDirectory($cwdBefore) }
+# A FILE WHERE THE STORE FOLDER SHOULD BE IS NOT "NO STORE YET". Measured 2026-10-06, before the store
+# told the two apart: list answered "done, no questions" over a path every write then failed on.
+$asFile = New-TestStore
+[System.IO.File]::WriteAllText($asFile, "not a folder", $utf8)
+$got = Get-Safely $asFile
+Check ($got.state -ceq "unknown" -and $got.reason -like "*is a file, not a folder*" -and @($got.records).Count -eq 0) ("a file where the store folder should be reads as unknown, never as a store nobody has added to (" + $got.state + ")")
+Check ((Add-Safely $asFile 1 "{}") -like "THREW:*") "CONTROL: and nothing can be written there"
+Check ([System.IO.File]::ReadAllText($asFile) -ceq "not a folder") "the file is left exactly as it was"
 
 Write-Host ""
 Write-Host "--- a sequence number is taken once ---" -ForegroundColor Cyan

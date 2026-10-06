@@ -365,8 +365,19 @@ Write-Host "--- a store that cannot be written is unknown, not refused ---" -For
 $blocked = Join-Path $script:work "a-file-where-the-store-should-be"
 [System.IO.File]::WriteAllText($blocked, "not a folder", $utf8)
 $a = Add-Q $blocked
-Check ($a.state -ceq "unknown" -and $a.reason -like "*could not be written, so nothing changed*") "when the store folder cannot be made the answer is unknown, with the reason"
+Check ($a.state -ceq "unknown" -and $a.reason -like "*nothing was written*is a file, not a folder*") ("when a file is where the store folder should be, an add is unknown, with the reason (" + $a.state + ": " + $a.reason + ")")
+$a = Invoke-Op $blocked "list" @{}
+Check ($a.state -ceq "unknown" -and $a.reason -like "*is a file, not a folder*") ("and so is a list: it is not answered as a list with no questions (" + (Get-Outcome $a) + ")")
 Check ([System.IO.File]::ReadAllText($blocked) -ceq "not a folder") "and what was there is untouched"
+# THE WRITE ITSELF FAILING, after a read that worked. A file in the store's place is now refused at the
+# read, so it no longer reaches the write's own failure; a FOLDER where the next record's file must go
+# does: the read does not see it (it is not a file), and the create is denied.
+$s = New-TestStore
+$null = Add-Q $s
+New-Item -ItemType Directory -Path (Join-Path $s "0000000002.json") | Out-Null
+$a = Add-Q $s
+Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 could not be written, so nothing changed*") ("when the record itself cannot be created the answer is unknown, with the record's number - a failure to write is not a refusal (" + (Get-Outcome $a) + ")")
+Check ((Get-Files $s) -ceq "0000000001.json" -and (Get-Listed $s) -ceq "1:open") "and the list is as it was: one record, question 1"
 
 Write-Host ""
 Write-Host "--- without -Root the store is Horde's own, under HORDE_HOME, and nowhere else ---" -ForegroundColor Cyan

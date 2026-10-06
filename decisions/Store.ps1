@@ -123,7 +123,7 @@ function Get-HordeDecisionRecords {
     # Every record of the store, in sequence order, damaged ones included. Returns
     #   { state: ok | absent | unknown; reason; last; records }
     # state absent: there is no store folder, so nothing was ever added; records is empty and last is 0.
-    # state unknown: the folder is there and could not be listed; reason says why.
+    # state unknown: the folder is there and could not be listed, or a file is in its place; reason says why.
     # Each record is { sequence; file; kind: ok | missing | busy | torn | error; data; reason }, and
     # there is exactly one for every number from 1 to last: a number with no file is "missing", never
     # left out, because the order is what a question's number is worked out from.
@@ -135,6 +135,11 @@ function Get-HordeDecisionRecords {
     $absolute = [System.IO.Path]::IsPathRooted("$Root")
     if (-not $absolute) {
         return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store needs an absolute folder, not '" + $Root + "'"); last = [long]0; records = @() }
+    }
+    # A FILE of the store's name is not "no store yet": every write there fails, so a read that said
+    # "an empty list" would be an answer no write could ever agree with (measured 2026-10-06).
+    if ([System.IO.File]::Exists($Root)) {
+        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' is a file, not a folder"); last = [long]0; records = @() }
     }
     if (-not [System.IO.Directory]::Exists($Root)) { return $none }
     $names = $null
