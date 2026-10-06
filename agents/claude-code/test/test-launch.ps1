@@ -39,6 +39,11 @@ foreach ($lv in @("plan", "ask", "edits")) {
 }
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @("--permission-mode", "plan"); model = "model-x1"; name = ""; prompt = "" })
 Check ($a.state -eq "known" -and (@($a.value) -join " ") -ceq ("--session-id " + $sid + " --permission-mode plan --model model-x1")) "a pinned model is passed with --model; no name gives neither -n nor --remote-control; no prompt gives no prompt"
+$gd = "C:\h\node\spawned\" + $sid
+$a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @("--permission-mode", "plan"); model = $null; name = "E"; prompt = ""; addDirs = @($gd) })
+Check ($a.state -eq "known" -and (@($a.value) -join "|") -ceq ("--session-id|" + $sid + "|--add-dir|" + $gd + "|--permission-mode|plan|-n|E|--remote-control|E")) "a granted folder is passed with --add-dir right after the session id, where the next item is a flag"
+$a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = $null; name = ""; prompt = ""; addDirs = @("-x") })
+Check ($a.state -eq "unknown" -and $a.reason -like "*starts with '-'*") "a granted folder starting with '-' is refused"
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = "-p"; name = "E"; prompt = "" })
 Check ($a.state -eq "unknown" -and $a.reason -like "*model*starts with '-'*") "a model starting with '-' is refused (review of PR #98, F5)"
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = $null; name = "-p"; prompt = "" })

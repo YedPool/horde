@@ -413,8 +413,11 @@ E. Acting over the link
       before it. The cost is one model turn; the window is that one turn, which asks for nothing. If the
       mode cannot be read, or it is any other level than
       the one asked, the session is closed and the spawn refused, so a wrong mode never sees work. Only
-      then is the prompt typed as one line, or, holding a line break or too long, written to a file the
-      session is told to read (review of #104, F4). A session that cannot be ended is answered failed,
+      then is the prompt delivered, and always by file (review of #104, F4 and F9): it is written to
+      `<records>\<sessionId>\prompt.txt`, a folder only this user may open and that the session is
+      granted at launch (`--add-dir` for the harness, F10); the one line typed is "Read <that file> and
+      do what it says.", printable ASCII checked before anything starts. The hub's text is never typed,
+      since the input box reads `!`, `/`, `#` and `@` as modes. A session that cannot be ended is answered failed,
       recorded as still running, and alerted, never reported refused (F2).
     - **The owner's controls are live.** `policy.json`, `engine.json` (L1) and `engine-live.json` (L4)
       are read again inside every spawn, under the spawn lock: a cap of 0, a lowered ceiling or a
@@ -435,6 +438,8 @@ E. Acting over the link
       verified gone by pid and start time; the report lists it. And one measurement: whether a local
       slash command, typed instead of the no-op line, makes the harness write its transcript without a
       model turn. If it does, a later PR swaps it in for the no-op line.
+      And one more measured item: reading the prompt file in its granted folder causes no approval
+      prompt at plan and at ask.
     - **No engine environment.** A pane does not inherit its starter's environment (measured
       2026-10-05, issue #95), so until engines E10's launch stub a remote spawn allows only a profile on
       the harness's own login.

@@ -63,5 +63,11 @@
         @{ Name = "program-not-full-form"
            Find = '    return [bool]($full -ceq $Path)'
            Replace = '    return $true' }
+        @{ Name = "granted-folder-not-required"
+           Find = 'foreach ($dir in @($AddDirs)) { if (@($argv.value) -cnotcontains ("" + $dir)) {'
+           Replace = 'foreach ($dir in @()) { if (@($argv.value) -cnotcontains ("" + $dir)) {' }
+        @{ Name = "granted-folder-unchecked"
+           Find = 'foreach ($dir in @($AddDirs)) { if (-not (Test-HordeLaunchDirPath -Path ("" + $dir))) {'
+           Replace = 'foreach ($dir in @()) { if (-not (Test-HordeLaunchDirPath -Path ("" + $dir))) {' }
     )
 }

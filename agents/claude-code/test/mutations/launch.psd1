@@ -53,5 +53,8 @@
         @{ Name = "name-dash-passed"
            Find = 'if ($name.StartsWith("-")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "add-dir-dropped"
+           Find = '        $argv.Add("--add-dir"); $argv.Add("" + $dir)'
+           Replace = '' }
     )
 }

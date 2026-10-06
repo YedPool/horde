@@ -6,6 +6,11 @@
 #
 # THE ARGV, every flag read off --help 2.1.287 (agent.json cites each):
 #   --session-id <uuid>        the node chooses the id, so it can find the session afterwards
+#   --add-dir <folder>         once per folder the session is granted beyond its working folder: the
+#                              folder its prompt file is put in. Read 2026-10-06 from the 2.1.289
+#                              program's own option table: "--add-dir <directories...>", "Additional
+#                              directories to allow tool access to". It takes several values, so it is
+#                              placed right after --session-id, where the next item is a flag.
 #   <permission fragment>      from agent.json permissionLevels, through Get-HordePermissionArgs
 #   --model <id>               only when the resolution pinned one; otherwise the harness's own choice
 #   -n <name> --remote-control <name>
@@ -55,10 +60,15 @@ function Get-ClaudeCodeConfigDir {
 }
 
 function New-ClaudeCodeArgv {
-    # The argv for one start, as an answer. -Spec: { sessionId; permissionArgs; model; name; prompt }.
+    # The argv for one start, as an answer. -Spec: { sessionId; permissionArgs; model; name; prompt; addDirs }.
     param([Parameter(Mandatory = $true)]$Spec)
     $argv = New-Object System.Collections.Generic.List[string]
     $argv.Add("--session-id"); $argv.Add("" + $Spec.sessionId)
+    foreach ($dir in @($Spec.addDirs)) {
+        if ($null -eq $dir -or "" + $dir -eq "") { continue }
+        if (("" + $dir).StartsWith("-")) { return (New-HordeUnknown -Reason ("the folder '" + $dir + "' starts with '-', which the harness would read as a flag")) }
+        $argv.Add("--add-dir"); $argv.Add("" + $dir)
+    }
     foreach ($p in @($Spec.permissionArgs)) { if ($null -ne $p) { $argv.Add("" + $p) } }
     if ($null -ne $Spec.model -and "" + $Spec.model -ne "") {
         if (("" + $Spec.model).StartsWith("-")) { return (New-HordeUnknown -Reason ("the model '" + $Spec.model + "' starts with '-', which the harness would read as a flag")) }

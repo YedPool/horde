@@ -111,15 +111,6 @@
         @{ Name = "prompt-in-argv"
            Find = '-Name $name -Prompt "" -Resolve $resolveProgram'
            Replace = '-Name $name -Prompt $prompt -Resolve $resolveProgram' }
-        @{ Name = "prompt-before-mode-kept"
-           Find = '$gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart'
-           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -SessionId $sid -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart' }
-        @{ Name = "prompt-typed-raw"
-           Find = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'' -or $Prompt.Length -gt $script:HordeNodePromptTypedMax) {'
-           Replace = 'if ($Prompt.Length -gt $script:HordeNodePromptTypedMax) {' }
-        @{ Name = "prompt-long-typed"
-           Find = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'' -or $Prompt.Length -gt $script:HordeNodePromptTypedMax) {'
-           Replace = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'') {' }
         @{ Name = "prompt-failure-done"
            Find = 'if ($notSent -ne "") {'
            Replace = 'if ($false) {' }
@@ -162,5 +153,32 @@
         @{ Name = "no-op-unrecorded"
            Find = '$record.noOp = $script:HordeNodeNoOpLine; $record.noOpAt'
            Replace = '$record.noOp = ""; $record.noOpAt' }
+        @{ Name = "prompt-before-mode-kept"
+           Find = '$gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart'
+           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -PromptDir $pd -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart' }
+        @{ Name = "raw-prompt-typed"
+           Find = '    $r = & $Actor.send $Target $Handle $line $true'
+           Replace = '    $r = & $Actor.send $Target $Handle $Prompt $true' }
+        @{ Name = "typed-line-mode-prefix-allowed"
+           Find = 'return [bool]("!/#@".IndexOf($Line[0]) -lt 0)'
+           Replace = 'return $true' }
+        @{ Name = "typed-line-non-ascii-allowed"
+           Find = 'if ($Line -cnotmatch ''\A[\x20-\x7E]+\z'') { return $false }'
+           Replace = 'if ($Line -cmatch ''[\r\n]'') { return $false }' }
+        @{ Name = "prompt-folder-not-granted"
+           Find = '-Prompt "" -Resolve $resolveProgram -AddDirs @($pd.dir)'
+           Replace = '-Prompt "" -Resolve $resolveProgram' }
+        @{ Name = "records-root-granted"
+           Find = '-Prompt "" -Resolve $resolveProgram -AddDirs @($pd.dir)'
+           Replace = '-Prompt "" -Resolve $resolveProgram -AddDirs @($Context.records)' }
+        @{ Name = "prompt-folder-inherits"
+           Find = '$sec.SetAccessRuleProtection($true, $false)'
+           Replace = '$sec.SetAccessRuleProtection($false, $true)' }
+        @{ Name = "prompt-folder-chain-unchecked"
+           Find = '    if ($chain -ne "") { $out.reason = $chain; return $out }'
+           Replace = '' }
+        @{ Name = "untypeable-path-started"
+           Find = 'if (-not (Test-HordeNodeTypedLine -Line $line)) { $out.reason ='
+           Replace = 'if ($false) { $out.reason =' }
     )
 }

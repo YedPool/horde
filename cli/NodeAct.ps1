@@ -37,10 +37,10 @@
 #      Before the readback one fixed line that asks for nothing, "Reply with OK only.", is typed and
 #      submitted, so the harness writes its record of the mode (see $script:HordeNodeNoOpLine);
 #   8. only now the work: the session starts with NO prompt, so a session in the wrong mode is closed
-#      before it ever sees work (review of #104, F4: prevent, not detect). The prompt is typed as one
-#      line and submitted; a prompt holding a line break or any other control character, or too long
-#      to type, is written to <records>\<sessionId>.prompt.txt and the session is told in one typed
-#      line to read it - the text itself is never typed raw.
+#      before it ever sees work (review of #104, F4: prevent, not detect). The prompt is written to
+#      <records>\<sessionId>\prompt.txt - a folder only this user may open, granted to the session
+#      at launch - and the one line typed is "Read <that file> and do what it says." The hub's text
+#      is never typed (F9).
 # A pane whose harness never reports its process cannot be proven, so the host will not end it; the
 # spawn fails, and the record names the pane left open for a person.
 #
@@ -74,9 +74,15 @@
 $script:HordeNodeActCore = Split-Path -Parent $PSScriptRoot
 foreach ($f in @("Tristate", "Namespace", "NodePolicy", "EngineResolve", "AgentLaunch", "HostAct")) { . (Join-Path $script:HordeNodeActCore ("core\" + $f + ".ps1")) }
 $script:HordeNodeSpawnLockName = ".spawn.lock"
-# The longest prompt typed into a pane as one line. The host types at most 1024 characters a call
-# (hosts/<name>/Act.ps1); a longer prompt goes to a file the session is told to read.
-$script:HordeNodePromptTypedMax = 1000
+# EVERY PROMPT GOES BY FILE (review of #104, F9). A harness's input box reads its first character as a
+# mode - '!' a shell command run outside the permission mode just proven, '/' a command that can change
+# it, '#' memory, '@' a file - so a hub's text is never typed. It is written to
+# <records>\<sessionId>\prompt.txt, a folder of its own that only this user may open and that the
+# session is granted at launch (F10), and the one line typed is built from these constants and that
+# file's full path, then checked against Test-HordeNodeTypedLine before anything starts.
+$script:HordeNodePromptLead = "Read "
+$script:HordeNodePromptTail = " and do what it says."
+$script:HordeNodePromptFile = "prompt.txt"
 # The line typed before the mode is read back. A harness may keep its transcript in memory until the
 # first user turn: MEASURED 2026-10-06, read-only over 279 transcripts of the founder's harness
 # (versions 2.1.228 to 2.1.285), the file was created with the first user line in 192 of 199, lines timestamped up to 21
@@ -226,22 +232,57 @@ function Send-HordeNodeCloseText {
     return (New-HordeKnown -Value $true)
 }
 
+function Test-HordeNodeTypedLine {
+    # May this line be typed into a session's input? Printable ASCII only - no line or format character
+    # of any script - and not starting with a character the input box reads as a mode: ! / # @ (F9).
+    param([AllowEmptyString()][string]$Line)
+    if ($Line -cnotmatch '\A[\x20-\x7E]+\z') { return $false }
+    return [bool]("!/#@".IndexOf($Line[0]) -lt 0)
+}
+
+function Set-HordeNodeOwnerOnly {
+    # Make a folder this user's alone: inheritance cut, and one rule, full control for this user (F10).
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $sec = New-Object System.Security.AccessControl.DirectorySecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    [System.IO.Directory]::SetAccessControl($Path, $sec)
+}
+
+function New-HordeNodePromptDir {
+    # The folder a session's prompt is put in, made before the session starts so it can be granted at
+    # launch: { dir; file; line; reason }. reason is "" when the folder is made, this user's alone,
+    # inside the node's home with no junction on the way, and the line that names its file may be typed.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][string]$SessionId)
+    $out = [pscustomobject]@{ dir = ""; file = ""; line = ""; reason = "" }
+    $dir = Join-Path $Context.records $SessionId
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($dir) } catch { $out.reason = "the prompt folder " + $dir + " is not a path"; return $out }
+    if ($full -cne $dir -or -not [System.IO.Path]::IsPathRooted($dir)) { $out.reason = "the prompt folder " + $dir + " is not a full rooted path"; return $out }
+    $chain = Test-HordeNodeRecordsChain -HordeHome $Context.home -Dir $dir
+    if ($chain -ne "") { $out.reason = $chain; return $out }
+    $file = Join-Path $dir $script:HordeNodePromptFile
+    $line = $script:HordeNodePromptLead + $file + $script:HordeNodePromptTail
+    if (-not (Test-HordeNodeTypedLine -Line $line)) { $out.reason = "the line naming the prompt file, " + $file + ", could not be typed safely (printable ASCII only), so nothing is started"; return $out }
+    try { New-Item -ItemType Directory -Path $dir -Force | Out-Null; Set-HordeNodeOwnerOnly -Path $dir }
+    catch { $out.reason = "the prompt folder " + $dir + " could not be made this user's alone: " + $_.Exception.Message; return $out }
+    $out.dir = $dir; $out.file = $file; $out.line = $line
+    return $out
+}
+
 function Send-HordeNodePrompt {
-    # Deliver a session's first prompt once its mode is proven (step 8): "" when it is typed and
-    # submitted, else why not. Printable text is typed as one line with Enter (-Submit). A prompt
-    # holding any control character - a line break included - or longer than the typed maximum is
-    # written to <records>\<sessionId>.prompt.txt, and the session is told, in one typed line, to read
-    # that file: the text itself is never typed raw.
+    # Deliver a session's first prompt once its mode is proven (step 8): "" when it is written to its
+    # file and the one line naming that file is typed and submitted, else why not. The hub's text is
+    # never typed (F9).
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Actor, [Parameter(Mandatory = $true)]$Target,
-        [Parameter(Mandatory = $true)][string]$Handle, [Parameter(Mandatory = $true)][string]$SessionId, [AllowEmptyString()][string]$Prompt = "")
+        [Parameter(Mandatory = $true)][string]$Handle, [Parameter(Mandatory = $true)]$PromptDir, [AllowEmptyString()][string]$Prompt = "")
     if ($Prompt -eq "") { return "" }
-    $line = $Prompt
-    if ($Prompt -cmatch '[\x00-\x1F\x7F-\x9F]' -or $Prompt.Length -gt $script:HordeNodePromptTypedMax) {
-        $file = Join-Path $Context.records ($SessionId + ".prompt.txt")
-        try { [System.IO.File]::WriteAllText($file, $Prompt, (New-Object System.Text.UTF8Encoding($false))) }
-        catch { return ("the prompt could not be written for the session to read: " + $_.Exception.Message) }
-        $line = "Read the file " + $file + " and do what it says."
-    }
+    try { [System.IO.File]::WriteAllText($PromptDir.file, $Prompt, (New-Object System.Text.UTF8Encoding($false))) }
+    catch { return ("the prompt could not be written for the session to read: " + $_.Exception.Message) }
+    $line = $script:HordeNodePromptLead + $PromptDir.file + $script:HordeNodePromptTail
+    if (-not (Test-HordeNodeTypedLine -Line $line)) { return ("the line naming the prompt file could not be typed safely") }
     $r = & $Actor.send $Target $Handle $line $true
     if ($null -eq $r -or $r.state -ne "known") { return ("the prompt could not be typed into the session's pane: " + $(if ($null -ne $r) { $r.reason } else { "the host gave no answer" })) }
     return ""
@@ -338,12 +379,15 @@ function Invoke-HordeNodeSpawn {
         $prompt = ""
         if ($null -ne $a.prompt.PSObject.Properties["text"]) { $prompt = "" + $a.prompt.text }
         $resolveProgram = { param($n) & $actor.resolve $n }
+        # The prompt's own folder, this user's alone, granted to the session at launch (F10).
+        $pd = New-HordeNodePromptDir -Context $Context -SessionId $sid
+        if ($pd.reason -ne "") { return (New-HordeNodeOutcome -State "refused" -Reason $pd.reason) }
         # No prompt in the argv: the work is delivered only once the mode is proven (step 8).
-        $plan = New-HordeLaunchPlan -Resolution $res -Decision $d -SessionId $sid -Name $name -Prompt "" -Resolve $resolveProgram
+        $plan = New-HordeLaunchPlan -Resolution $res -Decision $d -SessionId $sid -Name $name -Prompt "" -Resolve $resolveProgram -AddDirs @($pd.dir)
         if ($plan.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $plan.reason) }
         $adapter = (Get-HordeLaunchAdapter -Name $plan.value.harness).value
         # 6. The pane, recorded before it starts, under the lock, so the count already holds it.
-        $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; hubId = $hubId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = (& $Context.now).ToUniversalTime().ToString("o"); pid = $null; procStart = ""; noOp = ""; noOpAt = ""; closedAt = ""; outcome = "starting" }
+        $record = [ordered]@{ sessionId = $sid; requestId = "" + $Act.requestId; hubId = $hubId; host = $actor.name; harness = $plan.value.harness; handle = ""; level = $d.level; name = $plan.value.name; workdir = $d.workdir; label = "" + $a.label; startedAt = (& $Context.now).ToUniversalTime().ToString("o"); pid = $null; procStart = ""; promptDir = $pd.dir; noOp = ""; noOpAt = ""; closedAt = ""; outcome = "starting" }
         Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
     } finally { $lock.Dispose() }
     # The pane inherits the environment of the spawn call (issue #95): every variable the harness owns
@@ -401,7 +445,7 @@ function Invoke-HordeNodeSpawn {
         return (New-HordeNodeOutcome -State "refused" -SessionId $sid -Reason $why)
     }
     # 8. The work, now that the mode is proven.
-    $notSent = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -SessionId $sid -Prompt $prompt
+    $notSent = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -PromptDir $pd -Prompt $prompt
     if ($notSent -ne "") {
         $record.outcome = "running-no-prompt"; Write-HordeNodeSpawnRecord -Dir $Context.records -Record $record
         return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ($notSent + "; the session runs at the level asked for, without its work: close it with this process"))

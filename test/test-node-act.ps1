@@ -47,7 +47,7 @@ $hub = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 $modeOf = @{ careful = "ask"; edit = "edits"; look = "plan" }
 
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
+    -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; if ("" + $s.prompt -ne "") { $a += @($s.prompt) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "no control file yet" } } `
     -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "no mode line yet" } } `
@@ -118,6 +118,9 @@ function SpawnAct {
 }
 # A close as the hub sends it; the context is the script's current $ctx.
 function CloseWith { param($CloseArgs, [string]$From = $hub) return (Invoke-HordeNodeActRequest -Act ([pscustomobject]@{ verb = "session.close"; args = $CloseArgs; requestId = [guid]::NewGuid().ToString(); hubId = $From }) -Context $ctx) }
+function PromptFile { param($Ctx, [string]$Sid) return (Join-Path (Join-Path $Ctx.records $Sid) "prompt.txt") }
+function PromptLine { param($Ctx, [string]$Sid) return ("Read " + (PromptFile $Ctx $Sid) + " and do what it says.") }
+function Typed { return @($script:sent | ForEach-Object { $_.text }) }
 function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Clear(); $script:reportMode = $null; $script:noIdentify = $false; $script:stubborn = $false; $script:reusedPid = $false; $script:noOwn = $false; $script:offByMicros = $false; $script:stopRefused = 0; $script:stopDenied = $false; $script:promptRefused = $false; $script:noOpRefused = $false; $script:alerts.Clear(); $script:readAt.Clear() }
 
 try {
@@ -129,8 +132,9 @@ $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx0
 Check ("$($o.state)" -ceq "done") ("a spawn the policy allows is done" + $(if ("$($o.state)" -cne "done") { " (" + $o.reason + ")" } else { "" }))
 $p = $script:panes[0]
 Check ($script:panes.Count -eq 1 -and $p.program -ceq "C:\bin\harness-a.exe" -and $p.cwd -ceq $clone -and $p.term -eq $fakeTerm) "one pane, in the terminal the host named, running the absolute .exe it resolved, in the registered clone (no worktree given)"
-Check ((@($p.argv) -join "|") -ceq ("--id|" + $o.sessionId + "|--mode|edit|--title|E client search orc")) "its argv is the launch plan's: the id the node chose, the level's flags, the name - and NO prompt (review of #104, F4)"
-Check ((@($script:sent | Where-Object { $_.handle -ceq $p.handle } | ForEach-Object { $_.text }) -join "|") -ceq ($noOp + "|<enter>|read the plan|<enter>")) "the prompt is typed into the pane as one line and submitted, once the mode was proven"
+Check ((@($p.argv) -join "|") -ceq ("--id|" + $o.sessionId + "|--grant|" + (Join-Path $ctx0.records $o.sessionId) + "|--mode|edit|--title|E client search orc")) "its argv is the launch plan's: the id the node chose, the level's flags, the name - and NO prompt (review of #104, F4)"
+Check ((@($script:sent | Where-Object { $_.handle -ceq $p.handle } | ForEach-Object { $_.text }) -join "|") -ceq ($noOp + "|<enter>|" + (PromptLine $ctx0 $o.sessionId) + "|<enter>")) "once the mode was proven, the one line typed names the prompt's file; the hub's text is never typed (review of #104, F9)"
+Check ([System.IO.File]::ReadAllText((PromptFile $ctx0 $o.sessionId)) -ceq "read the plan") "the file holds the prompt exactly"
 $k = $script:readAt[$o.sessionId]
 Check ($k -eq 2 -and (@($script:sent[0..($k - 1)] | ForEach-Object { $_.text }) -join "|") -ceq ($noOp + "|<enter>")) "before the mode is read, the only text typed is the fixed line that asks for nothing, and the prompt comes after"
 $rec0 = Read-HordeNodeSpawnRecord -Dir $ctx0.records -SessionId $o.sessionId
@@ -188,7 +192,7 @@ Reset
 $ctx = New-Context
 # A harness that never reports its mode: the session is closed when the bound passes.
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $a = @("--id", $s.sessionId) + @($s.permissionArgs); New-HordeKnown -Value ([string[]]$a) } `
+    -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = ""; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
     -ReadMode { param($id, $view) New-HordeAbsent -Note "no mode line yet" } -CloseText @("bye", "`r")
@@ -212,7 +216,7 @@ Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*never reported its pro
 Check ((Test-HordeNodeSameStart "133000000000000207" "133000000000000200") -eq $true -and (Test-HordeNodeSameStart "133000000000001200" "133000000000000200") -eq $false) "the same instant read to 100 ns matches; 100 microseconds apart does not"
 # Back to the reporting adapter for what follows.
 Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
-    -Argv { param($s) $a = @("--id", $s.sessionId) + @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
+    -Argv { param($s) $a = @("--id", $s.sessionId); foreach ($g in @($s.addDirs)) { if ("" + $g -ne "") { $a += @("--grant", ("" + $g)) } }; $a += @($s.permissionArgs); if ("" + $s.name -ne "") { $a += @("--title", $s.name) }; New-HordeKnown -Value ([string[]]$a) } `
     -Preconditions { param($n) @() } `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
     -ReadMode { param($id, $view) if (-not $script:readAt.ContainsKey($id)) { $script:readAt[$id] = $script:sent.Count }; if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "none" } } `
@@ -229,7 +233,7 @@ Check ("$($o.state)" -ceq "failed" -and $o.reason -like "*could NOT be ended*" -
 Check ($null -ne $o.expect -and $o.expect.pid -eq $x.pid -and "$($o.expect.procStart)" -ceq $script:procs[$x.pid]) "and the answer carries its process, so the hub can close it again"
 Check ("$($rec.value.outcome)" -ceq "unkept-running" -and "$($rec.value.closedAt)" -eq "") "the node records it as still running, with no time it was closed"
 Check (@($script:alerts | Where-Object { $_ -like "ALERT:*$($o.sessionId)*still running*" }).Count -eq 1) "and raises an alert naming it"
-Check (-not (@($script:sent | ForEach-Object { $_.text }) -ccontains "read the plan")) "it never saw its work"
+Check (@(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0 -and -not (Test-Path -LiteralPath (PromptFile $ctxU $o.sessionId))) "it never saw its work"
 $script:stubborn = $false; $script:stopDenied = $false
 $ctx = $ctxU
 $c = CloseWith ([pscustomobject]@{ sessionId = $o.sessionId; expect = $o.expect; reason = "close the unkept session" })
@@ -240,22 +244,51 @@ Write-Host "--- the work is delivered only after the mode is proven (review of #
 Reset; $script:reportMode = "plan"
 $ctxP = New-Context
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ prompt = [pscustomobject]@{ text = ("line one" + [char]10 + "line two") } }) -Context $ctxP
-Check ("$($o.state)" -ceq "refused" -and @($script:sent | Where-Object { $_.text -like "*line one*" -or $_.text -like "Read the file*" }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $ctxP.records -Filter "*.prompt.txt" -ErrorAction SilentlyContinue).Count -eq 0) "a session whose mode reads back wrong never receives its prompt, typed or as a file"
+Check ("$($o.state)" -ceq "refused" -and @(Typed | Where-Object { $_ -like "*line one*" -or $_ -clike "Read *" }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $ctxP.records -Recurse -Filter "prompt.txt" -ErrorAction SilentlyContinue).Count -eq 0) "a session whose mode reads back wrong never receives its prompt, typed or as a file"
+
+Write-Host ""
+Write-Host "--- every prompt goes by file; the hub's text never reaches the input box (review of #104, F9) ---" -ForegroundColor Cyan
+$cases = @("!whoami", "/permissions", "#remember this", "@C:\secret.txt summarise", ("a" + [char]0x2028 + "b"), ("line one" + [char]13 + [char]10 + "line two"), ("x" * 1500))
+$names = @("! (a shell command)", "/ (a command)", "# (memory)", "@ (a file)", "U+2028 (a line separator)", "a line break", "1500 characters")
+for ($i = 0; $i -lt $cases.Count; $i++) {
+    Reset
+    $ctxF = New-Context
+    $o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ prompt = [pscustomobject]@{ text = $cases[$i] } }) -Context $ctxF
+    $typed = Typed
+    $pf = PromptFile $ctxF $o.sessionId
+    Check ("$($o.state)" -ceq "done" -and ($typed -join "|") -ceq ($noOp + "|<enter>|" + (PromptLine $ctxF $o.sessionId) + "|<enter>") -and -not ($typed -ccontains $cases[$i])) ("a prompt starting with or holding " + $names[$i] + " never reaches send-text: the only lines typed are the constant no-op and the line naming its file")
+    Check ((Test-Path -LiteralPath $pf) -and [System.IO.File]::ReadAllText($pf, [System.Text.Encoding]::UTF8) -ceq $cases[$i]) ("and the file holds it exactly: " + $names[$i])
+}
+foreach ($bad in @("!x", "/x", "#x", "@x", ("Read a" + [char]0x2028), ("Read " + [char]0x00E9), ("Read a" + [char]10), "")) {
+    Check (-not (Test-HordeNodeTypedLine -Line $bad)) ("the typed-line check refuses '" + ($bad -replace '[^\x20-\x7E]', '?') + "'")
+}
+Check (Test-HordeNodeTypedLine -Line "Read C:\h\node\spawned\x\prompt.txt and do what it says.") "CONTROL: the line naming a plain path passes"
+
+Write-Host ""
+Write-Host "--- the prompt's folder: its own, this user's alone, granted to the session at launch (review of #104, F10) ---" -ForegroundColor Cyan
 Reset
-$ctxP = New-Context
-$multi = "line one" + [char]13 + [char]10 + "line two"
-$o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ prompt = [pscustomobject]@{ text = $multi } }) -Context $ctxP
-$pf = Join-Path $ctxP.records ($o.sessionId + ".prompt.txt")
-$texts = @($script:sent | ForEach-Object { $_.text })
-Check ("$($o.state)" -ceq "done" -and (Test-Path -LiteralPath $pf) -and [System.IO.File]::ReadAllText($pf) -ceq $multi) ("a prompt holding a line break is written whole to a file beside the records (" + $o.state + " " + $o.reason + ")")
-Check (($texts -join "|") -ceq ($noOp + "|<enter>|Read the file " + $pf + " and do what it says.|<enter>")) "and the session is told in one typed line to read it: the text itself is never typed raw"
+$ctxG = New-Context
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxG
+$pdir = Join-Path $ctxG.records $o.sessionId
+$argv = @($script:panes[0].argv)
+$gi = [array]::IndexOf($argv, "--grant")
+Check ($gi -ge 0 -and $argv[$gi + 1] -ceq $pdir -and @($argv | Where-Object { $_ -ceq "--grant" }).Count -eq 1 -and -not ($argv -ccontains $ctxG.records)) "the session is granted its own prompt folder, and only it: never the records folder"
+$acl = Get-Acl -LiteralPath $pdir
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+Check ($acl.AreAccessRulesProtected -and $rules.Count -ge 1 -and @($rules | Where-Object { $_.IdentityReference -ne $me }).Count -eq 0) ("the folder is this user's alone: inheritance cut, every rule this user's (" + $rules.Count + " rule(s))")
+$rec = Read-HordeNodeSpawnRecord -Dir $ctxG.records -SessionId $o.sessionId
+Check ("$($rec.value.promptDir)" -ceq $pdir) "the record names the prompt folder"
+$hU = Join-Path $work ("home-" + [char]0x00E9)
+New-Item -ItemType Directory -Path $hU -Force | Out-Null
 Reset
-$long = "x" * 1500
-$o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ prompt = [pscustomobject]@{ text = $long } }) -Context $ctxP
-Check ("$($o.state)" -ceq "done" -and -not (@($script:sent | ForEach-Object { $_.text }) -ccontains $long) -and [System.IO.File]::ReadAllText((Join-Path $ctxP.records ($o.sessionId + ".prompt.txt"))) -ceq $long) ("a prompt longer than one typed line goes to a file the same way (" + $o.state + " " + $o.reason + ")")
+$ctxU8 = New-Context; $ctxU8.home = $hU; $ctxU8.records = Join-Path $hU "spawned"
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxU8
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*could not be typed safely*" -and $script:panes.Count -eq 0) "a prompt folder whose path cannot be typed as printable ASCII refuses the spawn before anything starts"
+
 Reset; $script:noOpRefused = $true
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxP
-Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*could not be read back*" -and -not (@($script:sent | ForEach-Object { $_.text }) -ccontains "read the plan")) "a line that asks for nothing the host will not type is no readback: the session is closed and never sees its prompt"
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*could not be read back*" -and @(Typed | Where-Object { $_ -clike "Read *" }).Count -eq 0) "a line that asks for nothing the host will not type is no readback: the session is closed and never sees its prompt"
 Reset; $script:promptRefused = $true
 $ctxP = New-Context
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxP
@@ -458,7 +491,7 @@ $closeArgs = [pscustomobject]@{ sessionId = $s.sessionId; expect = $s.expect; re
 $c = Invoke-HordeNodeActRequest -Act ([pscustomobject]@{ verb = "session.close"; args = $closeArgs; requestId = [guid]::NewGuid().ToString(); hubId = $hub }) -Context $ctx
 $x = $script:sessions[$s.sessionId]
 Check ("$($c.state)" -ceq "done" -and -not $script:procs.ContainsKey($x.pid) -and "$($c.sessionId)" -ceq $s.sessionId) "a close ends the session: done, and no process has its pid and start time"
-Check ((@($script:sent | Where-Object { $_.handle -ceq $x.handle } | ForEach-Object { $_.text }) -join "|") -ceq ($noOp + "|<enter>|read the plan|<enter>|bye|<enter>") -and @($script:stopped).Count -eq 0) "it typed the harness's close text into that pane, then Enter by -Submit, and forced nothing"
+Check ((@($script:sent | Where-Object { $_.handle -ceq $x.handle } | ForEach-Object { $_.text }) -join "|") -ceq ($noOp + "|<enter>|" + (PromptLine $ctx $s.sessionId) + "|<enter>|bye|<enter>") -and @($script:stopped).Count -eq 0) "it typed the harness's close text into that pane, then Enter by -Submit, and forced nothing"
 $rec = Read-HordeNodeSpawnRecord -Dir $ctx.records -SessionId $s.sessionId
 Check ($rec.state -eq "known" -and "$($rec.value.closedAt)" -ne "") "the node's record says when it was closed"
 $c = Invoke-HordeNodeActRequest -Act ([pscustomobject]@{ verb = "session.close"; args = $closeArgs; requestId = [guid]::NewGuid().ToString(); hubId = $hub }) -Context $ctx
