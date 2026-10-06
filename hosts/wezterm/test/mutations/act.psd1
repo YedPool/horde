@@ -52,13 +52,13 @@
            Find = 'if ($m.Groups[1].Value -cne "" + $Target.guiPid -or $m.Groups[2].Value -cne "" + $Target.guiStart) {'
            Replace = 'if ($false) {' }
         @{ Name = "restarted-terminal-accepted"
-           Find = 'if ($null -eq $now -or -not (Test-HordeWeztermSameStart $now $Target.guiStart)) {'
+           Find = 'if (-not (Test-HordeWeztermSameStart $now $Target.guiStart)) {'
            Replace = 'if ($false) {' }
         @{ Name = "send-without-separator"
            Find = '$r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", "--", $Text)'
            Replace = '$r = Invoke-HordeWeztermCall -Rest @("send-text", "--pane-id", $pane.value, "--no-paste", $Text)' }
         @{ Name = "control-characters-typed"
-           Find = 'if ($Text -cmatch ''[\x00-\x1F\x7F]'') {'
+           Find = 'if ($Text -cmatch ''[\x00-\x1F\x7F-\x9F]'') {'
            Replace = 'if ($false) {' }
         @{ Name = "send-uncapped"
            Find = 'if ($Text.Length -gt $script:HordeWeztermSendMax) {'
@@ -90,5 +90,26 @@
         @{ Name = "own-mux-picks-first"
            Find = 'if ($socks.Count -gt 1) {'
            Replace = 'if ($false) {' }
+        @{ Name = "c1-typed"
+           Find = 'if ($Text -cmatch ''[\x00-\x1F\x7F-\x9F]'') {'
+           Replace = 'if ($Text -cmatch ''[\x00-\x1F\x7F]'') {' }
+        @{ Name = "pane-tie-skipped"
+           Find = 'if (-not $tie.value) { return (New-HordeUnknown -Reason ("nothing was ended: the expected process runs in another pane than " + $pane.value)) }'
+           Replace = '' }
+        @{ Name = "unreadable-pane-ends"
+           Find = 'if ($tie.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $tie.reason)) }'
+           Replace = '' }
+        @{ Name = "unlisted-pane-ended"
+           Find = 'if (@($listed.value | Where-Object { $_.pane -ceq $pane.value }).Count -eq 0) { return (New-HordeUnknown -Reason ("nothing was ended: the terminal lists no pane " + $pane.value)) }'
+           Replace = '' }
+        @{ Name = "live-without-tie"
+           Find = '    return (New-HordeKnown -Value ([bool]$tie.value))'
+           Replace = '    return (New-HordeKnown -Value $true)' }
+        @{ Name = "start-without-gui-check"
+           Find = '    if ($null -ne $gone) { return (New-HordeUnknown -Reason $gone) }'
+           Replace = '' }
+        @{ Name = "unreadable-gui-start-passes"
+           Find = 'if ($null -eq $now) { return ("the start time of the terminal'
+           Replace = 'if ($false) { return ("the start time of the terminal' }
     )
 }

@@ -105,7 +105,11 @@ if ($iso) {
                 Check ($in.state -eq "known" -and $in.value -eq $true) ("MEASURED: the pane's program is traced through its parents to this terminal's gui" + $(if ($in.state -ne "known") { " (" + $in.reason + ")" } else { "" }))
             }
             Check ($null -ne $e1 -and $null -ne $e1.procStart) "the program is running, with a pid and a start time"
-            if ($s1.state -eq "known" -and $null -ne $e1) { Check ((Test-HordeWeztermPaneLive -Target $T -Handle $s1.value.handle -Expect $e1).value -eq $true) "its pane is live, running that process" }
+            if ($s1.state -eq "known" -and $null -ne $e1) {
+                $pp = Get-HordeWeztermProcessPane -ProcessId $e1.pid
+                Check ($pp.state -eq "known" -and $pp.value -ceq ($s1.value.handle -split '\.')[2]) ("MEASURED: the program's own WEZTERM_PANE is its pane's id (" + $pp.state + " " + $pp.value + $pp.reason + ")")
+                Check ((Test-HordeWeztermPaneLive -Target $T -Handle $s1.value.handle -Expect $e1).value -eq $true) "its pane is live, running that process"
+            }
 
             Write-Host ""
             Write-Host "=== 3. a graceful close ends it, proven by pid and start time ===" -ForegroundColor Cyan
@@ -131,6 +135,9 @@ if ($iso) {
                 Check (-not (Test-Gone -Id $e2.pid -Start $e2.procStart)) "CONTROL: it ignored the close and is still running after the bound, so the check above can see a failure"
                 $wrong = Stop-HordeWeztermPane -Target $T -Handle $s2.value.handle -Expect ([pscustomobject]@{ pid = $e2.pid; procStart = "1" })
                 Check ($wrong.state -eq "unknown" -and -not (Test-Gone -Id $e2.pid -Start $e2.procStart)) "Stop given another start time than the program's ends nothing"
+                $other = ConvertTo-HordeWeztermHandle -Target $T -Pane "555"
+                $cross = Stop-HordeWeztermPane -Target $T -Handle $other -Expect $e2
+                Check ($cross.state -eq "unknown" -and $cross.reason -like "*another pane*" -and -not (Test-Gone -Id $e2.pid -Start $e2.procStart)) "Stop given a valid running process and an unrelated pane id (555) ends nothing (review of #96)"
                 # Measured again before anything is ended: this process is still pinned to the instance it
                 # started, and the named target is that instance. (Assert-HordeIsolated's one-window rule
                 # does not hold here: the spawns above opened windows of their own.)

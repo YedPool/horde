@@ -15,6 +15,17 @@
 # which one that is. Every call is also `cli --no-auto-start`, so a target that is not answering is
 # refused rather than a server started (wezfleet CONTRIBUTING 1).
 #
+# A PANE IS TIED TO ITS PROCESS BY THE PROCESS'S OWN ENVIRONMENT (review of #96, follow-up). The
+# terminal's pane list names no process (measured 2026-10-06, 20240203: window, tab, pane, size, title,
+# cwd, cursor, tty_name null), but the terminal sets WEZTERM_PANE=<pane id> in every pane program's
+# environment (measured: WEZTERM_PANE=1 in pane 1). So before a pane is ended, or called live, the
+# expected process's environment block is read - read-only, PROCESS_QUERY_INFORMATION and
+# PROCESS_VM_READ on a process of this user - and its WEZTERM_PANE must be the handle's pane. A valid
+# process with another pane's id ends nothing; an environment that cannot be read ends nothing.
+#
+# EVERY ACT RE-READS THE TERMINAL'S GUI before it acts: running, with the start time the target names.
+# A start time that cannot be read is named as such, and nothing is done.
+#
 # A HANDLE CARRIES ITS TERMINAL'S IDENTITY. A pane id is unique only within one mux's lifetime: after
 # the terminal restarts, "17" can name an unrelated pane (review of PR #96, finding 5). So a handle is
 # <gui pid>.<gui start ticks>.<pane id>, and every act on a handle first checks that the target is that
@@ -36,8 +47,8 @@
 # that (review of PR #96, finding 1). A value holds no NUL and has a length cap.
 #
 # TYPED TEXT IS ONE LINE OF PRINTABLE TEXT. send-text --no-paste delivers bytes as keystrokes, so a
-# control character in a body - CR, ESC, Ctrl-C, Ctrl-D - would act in the harness. Send refuses every
-# C0 control character and DEL, caps the length, passes the text after `--` so a body like --help is
+# control character in a body - CR, ESC, Ctrl-C, Ctrl-D, or a C1 control such as U+009B, a one-character
+# CSI - would act in the harness. Send refuses every C0 and C1 control character and DEL, caps the length, passes the text after `--` so a body like --help is
 # text and not a flag, and submits only when told to (-Submit), as a separate keystroke.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
@@ -107,6 +118,82 @@ function Test-HordeWeztermSameStart {
     return [bool]([decimal]::Floor($x / 10) -eq [decimal]::Floor($y / 10))
 }
 
+# Reads another process's environment block: the PEB's process parameters, then the block they point
+# at. 64-bit only; a process this user may open for query and read. Compiled once per process.
+$script:HordeWeztermProcEnvSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class HordeWeztermProcEnv {
+    [StructLayout(LayoutKind.Sequential)]
+    struct PBI { public IntPtr R1; public IntPtr Peb; public IntPtr R2a; public IntPtr R2b; public IntPtr Pid; public IntPtr R3; }
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, ref PBI pbi, int len, out int ret);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    static IntPtr ReadPtr(IntPtr h, IntPtr a) {
+        byte[] b = new byte[8]; IntPtr rd;
+        if (!ReadProcessMemory(h, a, b, (IntPtr)8, out rd)) { throw new InvalidOperationException("read"); }
+        return (IntPtr)BitConverter.ToInt64(b, 0);
+    }
+    public static string Read(int pid) {
+        if (IntPtr.Size != 8) { return null; }
+        IntPtr h = OpenProcess(0x0410, false, pid);
+        if (h == IntPtr.Zero) { return null; }
+        try {
+            PBI pbi = new PBI(); int ret;
+            if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf(typeof(PBI)), out ret) != 0) { return null; }
+            IntPtr pp = ReadPtr(h, IntPtr.Add(pbi.Peb, 0x20));
+            IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x80));
+            long size = (long)ReadPtr(h, IntPtr.Add(pp, 0x3F0));
+            if (size <= 0 || size > (1 << 22)) { size = 65536; }
+            byte[] buf = new byte[size]; IntPtr rd;
+            if (!ReadProcessMemory(h, env, buf, (IntPtr)size, out rd)) { return null; }
+            return Encoding.Unicode.GetString(buf, 0, (int)rd);
+        } catch { return null; }
+        finally { CloseHandle(h); }
+    }
+}
+'@
+
+function Get-HordeWeztermProcessPane {
+    # The pane id a process says it runs in - WEZTERM_PANE in its own environment block - as an answer:
+    # known id text, or unknown naming why it could not be read.
+    param([Parameter(Mandatory = $true)][long]$ProcessId)
+    if (-not ([System.Management.Automation.PSTypeName]"HordeWeztermProcEnv").Type) { Add-Type -TypeDefinition $script:HordeWeztermProcEnvSource }
+    $block = [HordeWeztermProcEnv]::Read([int]$ProcessId)
+    if ($null -eq $block) { return (New-HordeUnknown -Reason ("the environment of process " + $ProcessId + " could not be read, so which pane it runs in cannot be told")) }
+    foreach ($kv in $block.Split([char]0)) {
+        if ($kv.StartsWith("WEZTERM_PANE=", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $v = $kv.Substring(13)
+            if ($v -cmatch '\A[0-9]{1,9}\z') { return (New-HordeKnown -Value $v) }
+            return (New-HordeUnknown -Reason ("process " + $ProcessId + " names its pane '" + $v + "', which is not a pane id"))
+        }
+    }
+    return (New-HordeUnknown -Reason ("process " + $ProcessId + " has no WEZTERM_PANE in its environment, so it is in no pane this terminal can name"))
+}
+
+function Test-HordeWeztermPaneTie {
+    # Is the expected process in pane -Pane? Known true or false from its own WEZTERM_PANE; unknown
+    # when that cannot be read. -PaneOf replaces the reader in a test.
+    param([Parameter(Mandatory = $true)]$Expect, [Parameter(Mandatory = $true)][string]$Pane, [scriptblock]$PaneOf = $null)
+    $p = $null
+    if ($null -ne $PaneOf) { $p = & $PaneOf ([long]$Expect.pid) } else { $p = Get-HordeWeztermProcessPane -ProcessId ([long]$Expect.pid) }
+    if ($null -eq $p -or $p.state -ne "known") { return (New-HordeUnknown -Reason $(if ($null -ne $p) { $p.reason } else { "the pane of the expected process could not be read" })) }
+    return (New-HordeKnown -Value ([bool]("" + $p.value -ceq $Pane)))
+}
+
+function Test-HordeWeztermGuiAlive {
+    # $null when -Target's gui is running with the start time the target names; otherwise the reason,
+    # naming whether the start time could not be read or differs.
+    param([Parameter(Mandatory = $true)]$Target, [scriptblock]$ProcessStart = $null)
+    $now = $null
+    if ($null -ne $ProcessStart) { $now = & $ProcessStart ([long]$Target.guiPid) } else { $now = Get-HordeWeztermProcessStart -ProcessId ([long]$Target.guiPid) }
+    if ($null -eq $now) { return ("the start time of the terminal's gui " + $Target.guiPid + " could not be read: it is not running, or cannot be asked; nothing is done") }
+    if (-not (Test-HordeWeztermSameStart $now $Target.guiStart)) { return ("the terminal's gui " + $Target.guiPid + " now has another start time: it is another terminal than the one named; nothing is done") }
+    return $null
+}
+
 function Test-HordeWeztermTargetShape {
     # Is -Target a named terminal: { socket; guiPid; guiStart }, the socket absolute and named after its
     # gui? $null when it is, or the reason.
@@ -164,9 +251,8 @@ function Resolve-HordeWeztermHandle {
     $m = [regex]::Match($Handle, $script:HordeWeztermHandlePattern)
     if (-not $m.Success) { return (New-HordeUnknown -Reason ("'" + $Handle + "' is not a pane handle (<gui pid>.<gui start>.<pane>)")) }
     if ($m.Groups[1].Value -cne "" + $Target.guiPid -or $m.Groups[2].Value -cne "" + $Target.guiStart) { return (New-HordeUnknown -Reason ("the handle " + $Handle + " belongs to another terminal than the one named (gui " + $Target.guiPid + " started " + $Target.guiStart + ")")) }
-    $now = $null
-    if ($null -ne $ProcessStart) { $now = & $ProcessStart ([long]$Target.guiPid) } else { $now = Get-HordeWeztermProcessStart -ProcessId ([long]$Target.guiPid) }
-    if ($null -eq $now -or -not (Test-HordeWeztermSameStart $now $Target.guiStart)) { return (New-HordeUnknown -Reason ("the terminal of handle " + $Handle + " is no longer running with that start time; a pane id of another terminal is never acted on")) }
+    $gone = Test-HordeWeztermGuiAlive -Target $Target -ProcessStart $ProcessStart
+    if ($null -ne $gone) { return (New-HordeUnknown -Reason ("handle " + $Handle + ": " + $gone + "; a pane id of another terminal is never acted on")) }
     return (New-HordeKnown -Value $m.Groups[3].Value)
 }
 
@@ -257,9 +343,11 @@ function Start-HordeWeztermPane {
     # of -Target, in the folder -Cwd, with -Environment applied to the spawn. Returns an answer: known
     # { handle; program; cwd }, the handle carrying the terminal's identity; unknown with the reason.
     param($Target, [Parameter(Mandatory = $true)][string]$Program, [string[]]$Argv = @(), [Parameter(Mandatory = $true)][string]$Cwd,
-        [string]$WindowId = "", [hashtable]$Environment = @{}, [scriptblock]$Runner = $null)
+        [string]$WindowId = "", [hashtable]$Environment = @{}, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null)
     $bad = Test-HordeWeztermTargetShape -Target $Target
     if ($null -ne $bad) { return (New-HordeUnknown -Reason $bad) }
+    $gone = Test-HordeWeztermGuiAlive -Target $Target -ProcessStart $ProcessStart
+    if ($null -ne $gone) { return (New-HordeUnknown -Reason $gone) }
     if (-not [System.IO.Path]::IsPathRooted($Program) -or [System.IO.Path]::GetExtension($Program) -ine ".exe") { return (New-HordeUnknown -Reason ("the program must be a full path to an .exe, not '" + $Program + "'")) }
     if (-not [System.IO.Path]::IsPathRooted($Cwd)) { return (New-HordeUnknown -Reason ("the working folder must be absolute, not '" + $Cwd + "'")) }
     if ($WindowId -ne "" -and $WindowId -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason ("'" + $WindowId + "' is not a window id")) }
@@ -274,7 +362,7 @@ function Start-HordeWeztermPane {
 function Test-HordeWeztermSendText {
     # $null when -Text may be typed: printable, at most the cap; otherwise the reason.
     param([AllowEmptyString()][string]$Text)
-    if ($Text -cmatch '[\x00-\x1F\x7F]') { return "the text holds a control character (a line break, Escape, Ctrl-C or the like), which would act as a key in the harness; only printable text is typed, and Enter only by -Submit" }
+    if ($Text -cmatch '[\x00-\x1F\x7F-\x9F]') { return "the text holds a control character (a line break, Escape, Ctrl-C or the like), which would act as a key in the harness; only printable text is typed, and Enter only by -Submit" }
     if ($Text.Length -gt $script:HordeWeztermSendMax) { return ("the text is " + $Text.Length + " characters, over the cap of " + $script:HordeWeztermSendMax + "; a body goes by the harness's own message channel, never typed") }
     return $null
 }
@@ -351,7 +439,7 @@ function Test-HordeWeztermPaneLive {
     # the terminal is the same one, lists the pane, and the process is alive with that start time;
     # known false when the process is gone or the pane is not listed; unknown when the terminal cannot
     # say. A pane the terminal could not list is never called gone.
-    param($Target, [Parameter(Mandatory = $true)][string]$Handle, $Expect, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [object[]]$Table = $null)
+    param($Target, [Parameter(Mandatory = $true)][string]$Handle, $Expect, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [object[]]$Table = $null, [scriptblock]$PaneOf = $null)
     $pane = Resolve-HordeWeztermHandle -Target $Target -Handle $Handle -ProcessStart $ProcessStart
     if ($pane.state -ne "known") { return $pane }
     $r = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $Target -Runner $Runner
@@ -361,20 +449,32 @@ function Test-HordeWeztermPaneLive {
     if (@($l.value | Where-Object { $_.pane -ceq $pane.value }).Count -eq 0) { return (New-HordeKnown -Value $false) }
     $in = Test-HordeWeztermProcessInTerminal -Target $Target -Expect $Expect -Table $Table
     if ($in.state -ne "known") { return $in }
-    return (New-HordeKnown -Value ([bool]$in.value))
+    if (-not $in.value) { return (New-HordeKnown -Value $false) }
+    $tie = Test-HordeWeztermPaneTie -Expect $Expect -Pane $pane.value -PaneOf $PaneOf
+    if ($tie.state -ne "known") { return $tie }
+    return (New-HordeKnown -Value ([bool]$tie.value))
 }
 
 function Stop-HordeWeztermPane {
     # End the pane -Handle of -Target and whatever runs in it: the forced end, for a session that must
-    # not run or that ignored a graceful close. Done only when the terminal is the same one, the pane is
-    # listed, and the expected process is alive with its start time and descends from that terminal's
-    # gui; otherwise refused, and nothing is ended.
-    param($Target, [Parameter(Mandatory = $true)][string]$Handle, $Expect, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [object[]]$Table = $null)
+    # not run or that ignored a graceful close. Done only when all of these hold, and otherwise refused
+    # with nothing ended: the terminal is the same one, still running with its start time; the expected
+    # process is alive with its start time and descends from that terminal's gui; that process's own
+    # WEZTERM_PANE is the handle's pane; and the terminal lists that pane.
+    param($Target, [Parameter(Mandatory = $true)][string]$Handle, $Expect, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [object[]]$Table = $null, [scriptblock]$PaneOf = $null)
     $pane = Resolve-HordeWeztermHandle -Target $Target -Handle $Handle -ProcessStart $ProcessStart
     if ($pane.state -ne "known") { return $pane }
     $in = Test-HordeWeztermProcessInTerminal -Target $Target -Expect $Expect -Table $Table
     if ($in.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $in.reason)) }
     if (-not $in.value) { return (New-HordeUnknown -Reason "nothing was ended: the expected process is not running with its start time") }
+    $tie = Test-HordeWeztermPaneTie -Expect $Expect -Pane $pane.value -PaneOf $PaneOf
+    if ($tie.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $tie.reason)) }
+    if (-not $tie.value) { return (New-HordeUnknown -Reason ("nothing was ended: the expected process runs in another pane than " + $pane.value)) }
+    $lr = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $Target -Runner $Runner
+    $listed = $null
+    if ($lr.code -eq 0) { $listed = Read-HordeWeztermPaneList -Raw $lr.out }
+    if ($null -eq $listed -or $listed.state -ne "known") { return (New-HordeUnknown -Reason "nothing was ended: the terminal did not list its panes") }
+    if (@($listed.value | Where-Object { $_.pane -ceq $pane.value }).Count -eq 0) { return (New-HordeUnknown -Reason ("nothing was ended: the terminal lists no pane " + $pane.value)) }
     $r = Invoke-HordeWeztermCall -Rest @("kill-pane", "--pane-id", $pane.value) -Target $Target -Runner $Runner
     if ($r.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not end the pane (exit " + $r.code + "): " + ("" + $r.err).Trim())) }
     return (New-HordeKnown -Value $true)
