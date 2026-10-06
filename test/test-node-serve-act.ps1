@@ -82,13 +82,17 @@ $st = Linked
 $null = Invoke-HordeNodeFrame -State $st -Line (Line $q3) -Data (Data -Journal $jr)
 $r = Invoke-HordeNodeFrame -State $st -Line (Line $q3) -Data (Data -Journal $jr -Outcome ([pscustomobject]@{ state = "failed"; sessionId = $sid; expect = $null; reason = ("x" * 3000) }))
 Check ("$($r.reply.result.value.state)" -ceq "failed" -and (Sendable $r.reply)) "a failed spawn is answered failed, its long reason cut to the cap"
-$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line $q3) -Data (Data -Journal $jr -Outcome ([pscustomobject]@{ state = "weird"; sessionId = ""; expect = $null; reason = "" }))
-Check ("$($r.reply.result.value.state)" -ceq "failed") "CONTROL: a resend after the outcome is recorded replays it, whatever outcome the caller offers"
+# A failure here is a failed check, never only a thrown error: a mutant that lets a second outcome
+# through throws inside the journal, and that must read as caught (round 1 of the gate).
+$r = $null; $err = ""
+try { $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line $q3) -Data (Data -Journal $jr -Outcome ([pscustomobject]@{ state = "weird"; sessionId = ""; expect = $null; reason = "" })) } catch { $err = "$($_.Exception.Message)" }
+Check ($err -eq "" -and $null -ne $r -and "$($r.reply.result.value.state)" -ceq "failed") ("CONTROL: a resend after the outcome is recorded replays it, whatever outcome the caller offers" + $(if ($err) { " (threw: " + $err + ")" } else { "" }))
 
 Write-Host ""
 Write-Host "--- what is never acted on ---" -ForegroundColor Cyan
-$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn))) -Data (Data -Journal "")
-Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -like "*no request journal*" -and (Sendable $r.reply)) "a node with no request journal acts on nothing"
+$r = $null; $err = ""
+try { $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn))) -Data (Data -Journal "") } catch { $err = "$($_.Exception.Message)" }
+Check ($err -eq "" -and $null -ne $r -and $r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -like "*no request journal*" -and (Sendable $r.reply)) ("a node with no request journal acts on nothing" + $(if ($err) { " (threw: " + $err + ")" } else { "" }))
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn))) -Data (Data -Journal $jr -Acts $false)
 Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "unsupported-verb") "a node that serves no acts refuses an act verb as unsupported"
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn @{ prompt = [pscustomobject]@{ text = "a"; handoffRef = (New-HordeLinkFrameId) } }))) -Data (Data -Journal $jr)

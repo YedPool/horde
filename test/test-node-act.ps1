@@ -5,8 +5,7 @@
 # an act that touches the machine: policy, resolution, launch plan, the host's pane, the harness's own
 # record of its process and mode. Every machine-facing part is injected here - a fixture launch adapter
 # (harness-a), a fixture host actor and a fixture process table - so nothing is started and every
-# branch is reached. The real host is proven by hosts/wezterm/test/e2e/e2e-act.ps1, the real harness
-# by agents/claude-code/test/test-launch.ps1.
+# branch is reached. The real host and the real harness are proven by their own folders' suites.
 #
 # NEUTRAL NAMES ONLY (CONTRIBUTING 14).
 
@@ -46,7 +45,7 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -CloseText @("bye", "`r")
 
 # The fixture terminal: named explicitly by Own, as the real host names the node's own (review of #96).
-$fakeTerm = [pscustomobject]@{ socket = "C:\fake\gui-sock-1"; guiPid = 1; guiStart = "1" }
+$fakeTerm = [pscustomobject]@{ socket = "C:\fake\terminal-1"; guiPid = 1; guiStart = "1" }
 Register-HordeHostActor -Name "fakehost" `
     -Own { if ($script:noOwn) { New-HordeUnknown -Reason "2 terminals are running; which one is this node's own cannot be told" } else { New-HordeKnown -Value $fakeTerm } } `
     -Resolve { param($n) if ($n -ceq "harness-a") { New-HordeKnown -Value "C:\bin\harness-a.exe" } else { New-HordeUnknown -Reason ("no " + $n) } } `
@@ -192,6 +191,19 @@ Register-HordeLaunchAdapter -Name "harness-a" -Program "harness-a" `
     -Identify { param($id, $view) if ($script:sessions.ContainsKey($id) -and -not $script:noIdentify) { $x = $script:sessions[$id]; New-HordeKnown -Value ([pscustomobject]@{ pid = $x.pid; procStart = $x.procStart; name = $x.name; remoteControl = (New-HordeKnown -Value $true) }) } else { New-HordeAbsent -Note "none" } } `
     -ReadMode { param($id, $view) if ($script:sessions.ContainsKey($id) -and $null -ne $script:sessions[$id].mode) { New-HordeKnown -Value $script:sessions[$id].mode } else { New-HordeAbsent -Note "none" } } `
     -CloseText @("bye", "`r")
+
+Write-Host ""
+Write-Host "--- refused before anything starts: a profile that needs a key (round 1: this had no test) ---" -ForegroundColor Cyan
+Reset
+$keyed = [pscustomobject]@{ schemaVersion = 1; providers = @([pscustomobject]@{ name = "provider-k"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "env"; ref = "PROVIDER_K_TOKEN" } }); profiles = @([pscustomobject]@{ name = "keyed"; harness = "harness-a"; provider = "provider-k" }); rules = @() }
+$ctxK = New-Context
+$ctxK.layers = @($ctxK.layers) + @([pscustomobject]@{ layer = "L1"; source = "fixture L1 keyed"; doc = $keyed })
+$ctxK.policy = Read-HordeNodePolicyText -Text ($policyText.Replace('"profiles": ["alpha", "beta"]', '"profiles": ["alpha", "keyed"]'))
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ profile = "keyed" }) -Context $ctxK
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*provider-k needs a key*E10*" -and $script:panes.Count -eq 0) "a profile whose provider needs a key is refused until the launch stub exists: only the harness's own login is started remotely"
+Reset
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxK
+Check ("$($o.state)" -ceq "done") "CONTROL: the same node starts an own-login profile"
 
 Write-Host ""
 Write-Host "--- refused before anything starts: the node's own configuration and terminal ---" -ForegroundColor Cyan
