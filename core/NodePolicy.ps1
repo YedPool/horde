@@ -44,7 +44,12 @@ function Test-HordeNodePolicyPath {
     # that reads as inside a clone resolve outside it.
     param([string]$Path)
     if ($Path -cnotmatch '\A[A-Za-z]:\\') { return $false }
-    foreach ($seg in $Path.Substring(3).Split('\')) { if ($seg -ceq "." -or $seg -ceq "..") { return $false } }
+    foreach ($seg in $Path.Substring(3).Split('\')) {
+        if ($seg -ceq "." -or $seg -ceq "..") { return $false }
+        # Windows drops a segment's trailing dots and spaces, so C:\code\app.\trees is C:\code\app\trees
+        # (GetFullPath, measured in the review of PR #98): such a segment reads as one folder and is another.
+        if ($seg.EndsWith(".") -or $seg.EndsWith(" ")) { return $false }
+    }
     return $true
 }
 
@@ -63,6 +68,16 @@ function Get-HordeNodeWorktreeRoot {
     $wr = $Repo.PSObject.Properties["worktreeRoot"]
     if ($null -ne $wr -and "$($wr.Value)" -ne "") { return "$($wr.Value)".TrimEnd('\') }
     return ("$($Repo.path)".TrimEnd('\') + "-worktrees")
+}
+
+function ConvertTo-HordeNodeSpawnCap {
+    # The daily cap as an int from 0 to the maximum, or $null. Never a cast that throws: a value that
+    # overflows, or is not a whole number, is $null, which refuses - it never switches the cap off
+    # (review of PR #98, F2).
+    param($Value)
+    if ($Value -isnot [int] -and $Value -isnot [long]) { return $null }
+    if ($Value -lt 0 -or $Value -gt $script:HordeNodeSpawnCapMax) { return $null }
+    return [int]$Value
 }
 
 function Read-HordeNodePolicyText {
@@ -89,7 +104,7 @@ function Read-HordeNodePolicyText {
     }
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($p in @($doc.profiles)) { if ($null -ne $p -and -not $names.Add("" + $p)) { [void]$problems.Add("the profile " + $p + " is offered twice") } }
-    if ([long]$doc.dailySpawnCap -gt $script:HordeNodeSpawnCapMax) { [void]$problems.Add("the daily spawn cap " + $doc.dailySpawnCap + " is above " + $script:HordeNodeSpawnCapMax) }
+    if ($null -eq (ConvertTo-HordeNodeSpawnCap -Value $doc.dailySpawnCap)) { [void]$problems.Add("the daily spawn cap " + $doc.dailySpawnCap + " is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax) }
     if ($problems.Count -gt 0) { return (New-HordeUnknown -Reason ("the node policy is malformed: " + ($problems -join "; "))) }
     return (New-HordeKnown -Value $doc)
 }
@@ -116,6 +131,8 @@ function Resolve-HordeNodeWorkdir {
     # The link's worktree-name pattern already refuses a separator, '..' and a device name; this is the
     # second line, because a path built here is where a session will write.
     if ($name -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\z' -or $name.Contains("..") -or $name.EndsWith(".")) { return (New-HordeUnknown -Reason ("'" + $name + "' is not a worktree name")) }
+    # A DOS device name, with or without an extension, opens a device instead of a folder.
+    if ($name -imatch '\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?\z') { return (New-HordeUnknown -Reason ("'" + $name + "' is a device name, not a worktree name")) }
     $root = Get-HordeNodeWorktreeRoot -Repo $repo[0]
     $path = $root + "\" + $name
     if (-not (Test-HordeNodePathInside -Path $path -Root $root)) { return (New-HordeUnknown -Reason ("the worktree " + $name + " would not sit inside " + $root)) }
@@ -123,17 +140,44 @@ function Resolve-HordeNodeWorkdir {
 }
 
 function Get-HordeNodeCeiling {
-    # The ceiling for one resolution: { level; from; note }. From the winning rule when it is in L1 or
-    # L4; the default when no rule sets it; $null level when it cannot be told (a tie), which refuses.
+    # The ceiling for one resolution: { level; from; note; forged }. level $null refuses every spawn.
+    #
+    # A CEILING THE OWNER WROTE AND THE RESOLVER REJECTED NEVER FALLS BACK TO THE DEFAULT (review of PR
+    # #98, F1): the resolver answers absent when every candidate was refused, and the default is above
+    # plan and ask, so falling back would raise what the owner lowered. A rule of the node's own layers
+    # whose value is not a level - "Plan", "read-only", "" - refuses every spawn, naming the value.
+    #
+    # THE DEFAULT IS THE STARTING POINT AN L4 RULE LOWERS. The resolver's lower-only walk refuses an L4
+    # value with nothing below it to move from; here the default is that base, so engine-live.json
+    # saying plan or ask lowers the ceiling, and one saying more than the default changes nothing.
+    #
+    # forged is $true when the winning rule sits in a layer the ceiling may not come from; that refuses.
     param([Parameter(Mandatory = $true)]$Resolution, $Levels = $null)
     if ($null -eq $Levels) { $Levels = @(Get-HordePermissionLevels) }
-    $default = "" + @($Levels)[@($Levels).Count - 2].name
+    $names = @(@($Levels) | ForEach-Object { "" + $_.name })
+    $default = $names[$names.Count - 2]
     $s = $null
     if ($Resolution.settings.Contains("remote.permissionCeiling")) { $s = $Resolution.settings["remote.permissionCeiling"] }
-    if ($null -eq $s -or $s.answer.state -eq "absent") { return [pscustomobject]@{ level = $default; from = "default"; note = ("no rule sets the ceiling, so it is the default, " + $default) } }
-    if ($s.answer.state -ne "known") { return [pscustomobject]@{ level = $null; from = ""; note = ("the ceiling cannot be told: " + $s.answer.reason) } }
-    if ($script:HordeCeilingLayers -cnotcontains ("" + $s.layer)) { return [pscustomobject]@{ level = $default; from = "default"; note = ("the ceiling rule " + $s.rule + " is in " + $s.layer + ", and only the node's own layers (" + ($script:HordeCeilingLayers -join ", ") + ") may set it; the default " + $default + " is used") } }
-    return [pscustomobject]@{ level = ("" + $s.answer.value); from = ("" + $s.layer + " " + $s.rule); note = "" }
+    if ($null -eq $s) { return [pscustomobject]@{ level = $default; from = "default"; note = ("no rule sets the ceiling, so it is the default, " + $default); forged = $false } }
+    foreach ($r in @($s.refused)) {
+        if ($null -eq $r) { continue }
+        if ($script:HordeCeilingLayers -ccontains ("" + $r.layer) -and ($r.value -isnot [string] -or $names -cnotcontains ("" + $r.value))) {
+            return [pscustomobject]@{ level = $null; from = ("" + $r.layer + " " + $r.rule); note = ("the ceiling rule " + $r.rule + " (" + $r.source + ") sets '" + $r.value + "', which is not a permission level (" + ($names -join ", ") + "); every spawn is refused until it is fixed, never let through at the default"); forged = $false }
+        }
+    }
+    if ($s.answer.state -eq "unknown") { return [pscustomobject]@{ level = $null; from = ""; note = ("the ceiling cannot be told: " + $s.answer.reason); forged = $false } }
+    if ($s.answer.state -eq "known") {
+        if ($script:HordeCeilingLayers -cnotcontains ("" + $s.layer)) { return [pscustomobject]@{ level = $null; from = ("" + $s.layer + " " + $s.rule); note = ("the ceiling rule " + $s.rule + " is in " + $s.layer + ", and only the node's own layers (" + ($script:HordeCeilingLayers -join ", ") + ") may set it; every spawn is refused"); forged = $true } }
+        return [pscustomobject]@{ level = ("" + $s.answer.value); from = ("" + $s.layer + " " + $s.rule); note = ""; forged = $false }
+    }
+    # Absent: no rule, or only L4 rules refused for having nothing below them. The default is that base.
+    $l4 = @(@($s.refused) | Where-Object { $null -ne $_ -and ("" + $_.layer) -ceq "L4" -and $names -ccontains ("" + $_.value) })
+    $vals = @($l4 | ForEach-Object { "" + $_.value } | Select-Object -Unique)
+    if ($vals.Count -gt 1) { return [pscustomobject]@{ level = $null; from = "L4"; note = ("live rules disagree on the ceiling (" + ($vals -join ", ") + "); every spawn is refused"); forged = $false } }
+    if ($vals.Count -eq 1 -and [array]::IndexOf($names, $vals[0]) -lt [array]::IndexOf($names, $default)) {
+        return [pscustomobject]@{ level = $vals[0]; from = ("L4 " + $l4[0].rule); note = ("the live rule " + $l4[0].rule + " lowers the default " + $default + " to " + $vals[0]); forged = $false }
+    }
+    return [pscustomobject]@{ level = $default; from = "default"; note = ("no rule of the node's own sets the ceiling, so it is the default, " + $default); forged = $false }
 }
 
 function Test-HordeRemotePolicy {
@@ -157,7 +201,9 @@ function Test-HordeRemotePolicy {
     if ($null -ne $pol) {
         $profile = "" + $Request.profile
         if (@($pol.profiles) -cnotcontains $profile) { [void]$reasons.Add("this node does not offer the profile '" + $profile + "'") }
-        if ($SpawnsToday -ge [int]$pol.dailySpawnCap) { [void]$reasons.Add("this node's daily spawn cap of " + $pol.dailySpawnCap + " is reached (" + $SpawnsToday + " today)") }
+        $capN = ConvertTo-HordeNodeSpawnCap -Value $pol.dailySpawnCap
+        if ($null -eq $capN) { [void]$reasons.Add("this node's daily spawn cap '" + $pol.dailySpawnCap + "' is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax + ", so it starts nothing") }
+        elseif ($SpawnsToday -ge $capN) { [void]$reasons.Add("this node's daily spawn cap of " + $capN + " is reached (" + $SpawnsToday + " today)") }
         $wd = Resolve-HordeNodeWorkdir -Policy $pol -RepoId ("" + $Request.repoId) -Worktree $Request.worktree
         if ($wd.state -eq "known") { $out.workdir = $wd.value } else { [void]$reasons.Add($wd.reason) }
     }
@@ -174,8 +220,7 @@ function Test-HordeRemotePolicy {
     } else { $out.level = "" + $lv.answer.value }
     $cap = Get-HordeNodeCeiling -Resolution $Resolution -Levels $Levels
     $out.ceiling = $cap.level; $out.ceilingFrom = $cap.from
-    if ($null -eq $cap.level) { [void]$reasons.Add($cap.note) }
-    elseif ($cap.from -ceq "default" -and $cap.note -like "*only the node's own layers*") { [void]$reasons.Add($cap.note) }
+    if ($null -eq $cap.level -or $cap.forged) { [void]$reasons.Add($cap.note) }
     if ($null -ne $out.level -and $null -ne $cap.level) {
         $ok = Test-HordePermissionLevelAllowed -Requested $out.level -Ceiling $cap.level -Levels $Levels
         if ($ok.state -ne "known") { [void]$reasons.Add($ok.reason) }

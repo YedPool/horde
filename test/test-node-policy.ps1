@@ -59,10 +59,17 @@ function Bad { param([string]$Text, [string]$Like) $p = Read-HordeNodePolicyText
 Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "permissionCeiling": "bypass"')) "*permissionCeiling*") "a ceiling in the policy file is refused: the ceiling is a setting of the engine configuration, L1 and L4 only"
 Check (Bad ($policyText.Replace('"C:\\code\\lib"', '"C:\\code\\app"').Replace('example/lib', 'example/app')) "*registered twice*") "a repository registered twice is refused"
 Check (Bad ($policyText.Replace('"C:\\code\\app"', '"C:\\code\\..\\windows"')) "*'..'*") "a path with a '..' segment is refused"
+Check (Bad ($policyText.Replace('"D:\\trees\\lib"', '"C:\\code\\lib.\\trees"')) "*'..'*") "a segment with a trailing dot is refused: Windows drops it, so the folder is another (F5)"
+Check (Bad ($policyText.Replace('"D:\\trees\\lib"', '"C:\\code\\lib \\trees"')) "*'..'*") "a segment with a trailing space is refused too"
 Check (Bad ($policyText.Replace('"D:\\trees\\lib"', '"C:\\code\\lib\\trees"')) "*inside its clone*") "a worktree root inside its clone is refused"
 Check (Bad ($policyText.Replace('"C:\\code\\app"', '"code\\app"')) "*malformed*") "a relative path is refused"
 Check (Bad ($policyText.Replace('["alpha"]', '["alpha", "alpha"]')) "*offered twice*") "a profile offered twice is refused"
-Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 1001')) "*above 1000*") "a daily cap above 1000 is refused as a typo"
+Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 1001')) "*not a whole number from 0 to 1000*") "a daily cap above 1000 is refused as a typo"
+Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 99999999999999999999')) "*not a whole number from 0 to 1000*") "a daily cap that overflows is refused, never read as no cap (review of PR #98, F2)"
+$forgedPol = New-HordeKnown -Value ([pscustomobject]@{ repos = $policy.value.repos; profiles = @("alpha"); dailySpawnCap = [decimal]"99999999999999999999" })
+$d = Decide (Resolve @(Ask "ask")) -Pol $forgedPol -Today 500000
+Check (-not $d.allowed -and (Has $d "*not a whole number*starts nothing*")) "a cap that cannot be read refuses the spawn, even if the file reader was bypassed"
+Check ($null -eq (ConvertTo-HordeNodeSpawnCap -Value 1.5) -and $null -eq (ConvertTo-HordeNodeSpawnCap -Value "5") -and (ConvertTo-HordeNodeSpawnCap -Value 0) -eq 0) "a cap is a whole number, never a fraction or text; 0 is a real cap"
 Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "dailySpawnCap": 9')) "*") "a key repeated in one object is refused"
 Check (Bad ($policyText.Replace('example/app', ('example/' + [char]0x00E9))) "*not ASCII*") "a character that is not ASCII is refused"
 $missing = Get-HordeNodePolicy -Path (Join-Path $env:TEMP ("horde-no-policy-" + [guid]::NewGuid().ToString("N") + ".json"))
@@ -79,7 +86,7 @@ $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example
 Check ($wd.state -eq "known" -and $wd.value -ceq "C:\code\app-worktrees\act-a3") "a worktree, with no root declared: inside the sibling <clone>-worktrees folder"
 $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example/lib" -Worktree ([pscustomobject]@{ name = "fix-1" })
 Check ($wd.state -eq "known" -and $wd.value -ceq "D:\trees\lib\fix-1") "a worktree under a declared root: inside that root"
-foreach ($n in @("..", "a\b", "a/b", "x..y", "trailing.", "")) {
+foreach ($n in @("..", "a\b", "a/b", "x..y", "trailing.", "", "CON", "nul", "com1", "LPT9.txt", "aux.foo")) {
     $wd = Resolve-HordeNodeWorkdir -Policy $policy.value -RepoId "github.com/example/app" -Worktree ([pscustomobject]@{ name = $n })
     Check ($wd.state -eq "unknown") ("the worktree name '" + $n + "' is refused, so no path outside the root is ever built")
 }
@@ -129,11 +136,31 @@ Check (-not $d.allowed -and $d.ceiling -ceq "edits") "nor a run spec's (L3)"
 $forged = Resolve @(Ask "bypass")
 $forged.settings["remote.permissionCeiling"] = [pscustomobject]@{ key = "remote.permissionCeiling"; answer = (New-HordeKnown -Value "bypass"); layer = "L5"; source = "link"; rule = "forged"; beaten = @(); refused = @() }
 $d = Decide $forged
-Check (-not $d.allowed -and $d.ceiling -ceq "edits" -and (Has $d "*only the node's own layers*")) "a resolution whose ceiling comes from L5 is not believed: the default stands and the request is refused"
+Check (-not $d.allowed -and $null -eq $d.ceiling -and (Has $d "*only the node's own layers*")) "a resolution whose ceiling comes from L5 is not believed: the request is refused, the ceiling is no level"
+Check ((Get-HordeNodeCeiling -Resolution $forged).forged -eq $true) "and the ceiling says so by a field, not only in its reason"
 $tie = Resolve @(Ask "ask")
 $tie.settings["remote.permissionCeiling"] = [pscustomobject]@{ key = "remote.permissionCeiling"; answer = (New-HordeUnknown -Reason "two rules disagree"); layer = $null; source = $null; rule = $null; beaten = @(); refused = @() }
 $d = Decide $tie
 Check (-not $d.allowed -and (Has $d "*ceiling cannot be told*")) "a ceiling that cannot be told refuses every request"
+# A CEILING THE OWNER WROTE AND THE RESOLVER REJECTED NEVER FALLS TO THE DEFAULT (review of PR #98, F1).
+foreach ($badv in @("Plan", "read-only", "")) {
+    $d = Decide (Resolve @((Ceil "L1" $badv), (Ask "edits")))
+    Check (-not $d.allowed -and $null -eq $d.ceiling -and (Has $d ("*sets '" + $badv + "', which is not a permission level*"))) ("an owner's ceiling of '" + $badv + "' refuses every spawn, naming the value - never the default edits")
+    $d = Decide (Resolve @((Ceil "L1" $badv), (Ask "plan")))
+    Check (-not $d.allowed) ("and refuses even the lowest level under it ('" + $badv + "')")
+}
+$d = Decide (Resolve @((Ceil "L4" "Plan" "cli"), (Ask "plan")))
+Check (-not $d.allowed -and $null -eq $d.ceiling) "a live rule's ceiling that is not a level refuses every spawn too"
+$d = Decide (Resolve @((Ceil "L4" "plan" "cli"), (Ask "edits")))
+Check (-not $d.allowed -and $d.ceiling -ceq "plan" -and $d.ceilingFrom -like "L4*") "a live rule alone lowers the default: plan in engine-live.json refuses edits"
+$d = Decide (Resolve @((Ceil "L4" "ask" "cli"), (Ask "edits")))
+Check (-not $d.allowed -and $d.ceiling -ceq "ask") "and ask refuses edits"
+$d = Decide (Resolve @((Ceil "L4" "ask" "cli"), (Ask "ask")))
+Check ($d.allowed -and $d.ceiling -ceq "ask") "CONTROL: under a live ask ceiling, ask is allowed"
+$d = Decide (Resolve @((Ceil "L4" "bypass" "cli"), (Ask "bypass")))
+Check (-not $d.allowed -and $d.ceiling -ceq "edits") "a live rule alone cannot raise the default: bypass stays refused"
+$d = Decide (Resolve @((New-Layer "L4" (New-Doc @((New-Rule "c1" @{ "remote.permissionCeiling" = "plan" } @{} "cli"), (New-Rule "c2" @{ "remote.permissionCeiling" = "ask" } @{} "cli")))), (Ask "plan")))
+Check (-not $d.allowed -and $null -eq $d.ceiling) "two live rules that disagree on the ceiling refuse every spawn"
 # The environment moves nothing: the resolver reads no variable, so a variable named like the key
 # changes no answer. CONTROL: the L1 rule above did.
 $env:HORDE_REMOTE_PERMISSIONCEILING = "bypass"

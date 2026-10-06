@@ -60,7 +60,10 @@ function New-ClaudeCodeArgv {
     $argv = New-Object System.Collections.Generic.List[string]
     $argv.Add("--session-id"); $argv.Add("" + $Spec.sessionId)
     foreach ($p in @($Spec.permissionArgs)) { if ($null -ne $p) { $argv.Add("" + $p) } }
-    if ($null -ne $Spec.model -and "" + $Spec.model -ne "") { $argv.Add("--model"); $argv.Add("" + $Spec.model) }
+    if ($null -ne $Spec.model -and "" + $Spec.model -ne "") {
+        if (("" + $Spec.model).StartsWith("-")) { return (New-HordeUnknown -Reason ("the model '" + $Spec.model + "' starts with '-', which the harness would read as a flag")) }
+        $argv.Add("--model"); $argv.Add("" + $Spec.model)
+    }
     $name = "" + $Spec.name
     if ($name -ne "") {
         if ($name.StartsWith("-")) { return (New-HordeUnknown -Reason ("the session name '" + $name + "' starts with '-', which the harness would read as a flag")) }

@@ -9,20 +9,20 @@
            Find = 'if ($script:HordeCeilingLayers -cnotcontains ("" + $s.layer)) {'
            Replace = 'if ($false) {' }
         @{ Name = "default-ceiling-is-the-top"
-           Find = '$default = "" + @($Levels)[@($Levels).Count - 2].name'
-           Replace = '$default = "" + @($Levels)[@($Levels).Count - 1].name' }
+           Find = '$default = $names[$names.Count - 2]'
+           Replace = '$default = $names[$names.Count - 1]' }
         @{ Name = "above-ceiling-not-refused"
            Find = 'elseif (-not $ok.value) {'
            Replace = 'elseif ($false) {' }
         @{ Name = "forged-ceiling-not-refused"
-           Find = 'elseif ($cap.from -ceq "default" -and $cap.note -like "*only the node''s own layers*") {'
-           Replace = 'elseif ($false) {' }
+           Find = 'if ($null -eq $cap.level -or $cap.forged) {'
+           Replace = 'if ($null -eq $cap.level) {' }
         @{ Name = "profile-not-checked"
            Find = 'if (@($pol.profiles) -cnotcontains $profile) {'
            Replace = 'if ($false) {' }
         @{ Name = "cap-off-by-one"
-           Find = 'if ($SpawnsToday -ge [int]$pol.dailySpawnCap) {'
-           Replace = 'if ($SpawnsToday -gt [int]$pol.dailySpawnCap) {' }
+           Find = 'elseif ($SpawnsToday -ge $capN) {'
+           Replace = 'elseif ($SpawnsToday -gt $capN) {' }
         @{ Name = "no-level-defaults-to-allowed"
            Find = 'if ($null -eq $lv -or $lv.answer.state -ne "known") {'
            Replace = 'if ($false) {' }
@@ -47,5 +47,29 @@
         @{ Name = "only-first-reason"
            Find = '$out.reasons = $reasons.ToArray()'
            Replace = '$out.reasons = @($reasons.ToArray() | Select-Object -First 1)' }
+        @{ Name = "rejected-ceiling-falls-to-default"
+           Find = 'if ($script:HordeCeilingLayers -ccontains ("" + $r.layer) -and ($r.value -isnot [string] -or $names -cnotcontains ("" + $r.value))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "l4-lowering-ignored"
+           Find = 'if ($vals.Count -eq 1 -and [array]::IndexOf($names, $vals[0]) -lt [array]::IndexOf($names, $default)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "l4-may-raise"
+           Find = 'if ($vals.Count -eq 1 -and [array]::IndexOf($names, $vals[0]) -lt [array]::IndexOf($names, $default)) {'
+           Replace = 'if ($vals.Count -eq 1) {' }
+        @{ Name = "l4-disagreement-picks-one"
+           Find = 'if ($vals.Count -gt 1) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "cap-overflow-cast"
+           Find = 'if ($Value -isnot [int] -and $Value -isnot [long]) { return $null }'
+           Replace = 'if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [decimal] -and $Value -isnot [double]) { return $null }' }
+        @{ Name = "unreadable-cap-allows"
+           Find = 'if ($null -eq $capN) { [void]$reasons.Add('
+           Replace = 'if ($false) { [void]$reasons.Add(' }
+        @{ Name = "trailing-dot-segment-allowed"
+           Find = 'if ($seg.EndsWith(".") -or $seg.EndsWith(" ")) { return $false }'
+           Replace = '' }
+        @{ Name = "device-name-allowed"
+           Find = 'if ($name -imatch ''\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?\z'') {'
+           Replace = 'if ($false) {' }
     )
 }

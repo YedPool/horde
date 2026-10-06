@@ -47,5 +47,11 @@
         @{ Name = "close-without-enter"
            Find = '$script:ClaudeCodeCloseText = @("/exit", "`r")'
            Replace = '$script:ClaudeCodeCloseText = @("/exit")' }
+        @{ Name = "model-dash-passed"
+           Find = 'if (("" + $Spec.model).StartsWith("-")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "name-dash-passed"
+           Find = 'if ($name.StartsWith("-")) {'
+           Replace = 'if ($false) {' }
     )
 }

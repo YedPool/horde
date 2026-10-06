@@ -28,8 +28,8 @@
            Find = 'if ($Label -isnot [string] -or $Label -cnotmatch $script:HordeLabelPattern) {'
            Replace = 'if ($Label -isnot [string]) {' }
         @{ Name = "session-id-unchecked"
-           Find = 'if ($SessionId -cnotmatch $pattern) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($SessionId -cnotmatch $pattern -or'
+           Replace = 'if ($false -or' }
         @{ Name = "adapter-refusal-ignored"
            Find = 'if ($null -eq $argv -or $argv.state -ne "known") {'
            Replace = 'if ($null -eq $argv) {' }
@@ -39,5 +39,20 @@
         @{ Name = "no-close-text-accepted"
            Find = 'if (@($CloseText | Where-Object { "" + $_ -ne "" }).Count -eq 0) {'
            Replace = 'if ($false) {' }
+        @{ Name = "decision-not-checked"
+           Find = 'if ($Decision.allowed -ne $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "program-not-checked"
+           Find = 'if (-not [System.IO.Path]::IsPathRooted($path) -or [System.IO.Path]::GetExtension($path) -ine ".exe") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "program-by-name"
+           Find = 'program = $path;'
+           Replace = 'program = $a.program;' }
+        @{ Name = "metacharacters-kept"
+           Find = '$t = ([regex]::Replace($t, ''["&|^%<>!`]+'', " "))'
+           Replace = '$t = $t' }
+        @{ Name = "id-line-break-accepted"
+           Find = ' -or $SessionId -cmatch ''[\r\n]'''
+           Replace = '' }
     )
 }

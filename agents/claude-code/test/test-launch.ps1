@@ -23,20 +23,26 @@ $name = Format-HordeSessionName -Label "E" -Title "client search orc"
 Write-Host ""
 Write-Host "--- the argv ---" -ForegroundColor Cyan
 $res = Resolve-HordeEngine -Layers @(Get-HordeBuiltinLayer -Root $root) -Target @{ role = "orc" } -Descriptors @{ "claude-code" = $d }
-$p = New-HordeLaunchPlan -Resolution $res -Level "bypass" -SessionId $sid -Name $name -Prompt "read the plan"
+$exeOf = { param($n) New-HordeKnown -Value ("C:\tools\" + $n + ".exe") }
+function Allow { param([string]$Level) return [pscustomobject]@{ allowed = $true; level = $Level; reasons = @() } }
+$p = New-HordeLaunchPlan -Resolution $res -Decision (Allow "bypass") -SessionId $sid -Name $name -Prompt "read the plan" -Resolve $exeOf
 Check ($p.state -eq "known") ("CONTROL: the built-in engine gives a plan for an orc" + $(if ($p.state -ne "known") { " (" + $p.reason + ")" } else { "" }))
 $want = @("--session-id", $sid, "--dangerously-skip-permissions", "-n", "E client search orc", "--remote-control", "E client search orc", "read the plan")
 Check ((@($p.value.argv) -join "|") -ceq ($want -join "|")) ("the argv: the id, the level's fragment from agent.json, the name twice, the prompt last (" + (@($p.value.argv) -join " ") + ")")
-Check ($p.value.program -ceq "claude") "the program is the harness's command name"
+Check ($p.value.program -ceq "C:\tools\claude.exe") "the program is the absolute .exe the host resolved for the harness's command name"
 $i = [array]::IndexOf(@($p.value.argv), "--remote-control")
 Check ($i -ge 0 -and @($p.value.argv)[$i + 1] -ceq "E client search orc") "--remote-control is followed at once by the name, so it never takes the prompt as one (engines E9)"
 foreach ($lv in @("plan", "ask", "edits")) {
-    $pl = New-HordeLaunchPlan -Resolution $res -Level $lv -SessionId $sid -Name $name
+    $pl = New-HordeLaunchPlan -Resolution $res -Decision (Allow $lv) -SessionId $sid -Name $name -Resolve $exeOf
     $frag = (Get-HordePermissionArgs -Descriptor $d -Level $lv -EntryPoint "interactive").value
     Check ($pl.state -eq "known" -and (@($pl.value.argv) -join " ") -like ("*" + (@($frag) -join " ") + "*")) ("the " + $lv + " level carries its agent.json fragment (" + (@($frag) -join " ") + ")")
 }
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @("--permission-mode", "plan"); model = "model-x1"; name = ""; prompt = "" })
 Check ($a.state -eq "known" -and (@($a.value) -join " ") -ceq ("--session-id " + $sid + " --permission-mode plan --model model-x1")) "a pinned model is passed with --model; no name gives neither -n nor --remote-control; no prompt gives no prompt"
+$a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = "-p"; name = "E"; prompt = "" })
+Check ($a.state -eq "unknown" -and $a.reason -like "*model*starts with '-'*") "a model starting with '-' is refused (review of PR #98, F5)"
+$a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = $null; name = "-p"; prompt = "" })
+Check ($a.state -eq "unknown" -and $a.reason -like "*session name*starts with '-'*") "a name starting with '-' is refused here too, the second line behind Format-HordeSessionName's label"
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = $null; name = "E"; prompt = "-p rm" })
 Check ($a.state -eq "unknown" -and $a.reason -like "*starts with '-'*") "a prompt starting with '-' is refused: the harness would read it as a flag"
 $a = New-ClaudeCodeArgv -Spec ([pscustomobject]@{ sessionId = $sid; permissionArgs = @(); model = $null; name = "E"; prompt = ("x" * 16001) })

@@ -24,6 +24,16 @@
 #                  host types it; the caller then proves the process gone by pid and start time, and
 #                  ends the pane itself if it is not (a session showing a dialog does not read it).
 #
+# THE PROGRAM IS AN ABSOLUTE .EXE, NEVER A NAME LOOKED UP AT SPAWN TIME, NEVER A SCRIPT SHIM (review
+# of PR #98, F3). A .cmd or .bat is run by cmd.exe, which re-parses the whole command line, so a prompt
+# or name holding " & ^ % | would become commands (the BatBadBut class); and on a machine where npm
+# put claude.cmd ahead of claude.exe on PATH, a lookup at spawn time would pick the shim. So the plan
+# takes the host's -Resolve (name -> full path) and accepts only a rooted path ending in .exe; the host
+# runs that path as given. As a second line, cmd metacharacters never reach a session's name.
+#
+# THE LEVEL IS THE POLICY'S DECISION (F4). The plan takes Test-HordeRemotePolicy's decision itself, and
+# refuses unless it is allowed, so no caller can hand it a level the policy did not admit.
+#
 # THE NAME. Decision of 2026-10-05: label plus run title, as the web session names technique has it
 # (engines group I), capped. Format-HordeSessionName is the one place it is made; an adapter is
 # handed the name and never formats one. A harness whose session.remoteName capability is not yes gets
@@ -83,7 +93,10 @@ function Format-HordeSessionName {
     $t = ""
     if ($null -ne $Title) {
         # Every character outside printable ASCII becomes a space, and runs of spaces become one.
-        $t = ([regex]::Replace("" + $Title, '[^\x21-\x7E]+', " ")).Trim()
+        $t = ([regex]::Replace("" + $Title, '[^\x21-\x7E]+', " "))
+        # cmd.exe's metacharacters never reach a name, though no shell should ever see it (F3).
+        $t = ([regex]::Replace($t, '["&|^%<>!`]+', " "))
+        $t = ([regex]::Replace($t, ' +', " ")).Trim()
     }
     $name = $Label
     if ($t -ne "") { $name = $Label + " " + $t }
@@ -100,12 +113,15 @@ function New-HordeLaunchPlan {
     # The launch plan for one session, as an answer: known { harness; program; argv; level; model;
     # name; notes }, or unknown with the first reason it cannot be built. Pure but for what the
     # adapter's Preconditions block reads, which is read-only.
-    # -Resolution: Resolve-HordeEngine's. -Level: the permission level already admitted by
-    # Test-HordeRemotePolicy. -SessionId: the id the node chose. -Name: Format-HordeSessionName's
-    # answer. -Prompt: the first prompt's text, or "".
-    param([Parameter(Mandatory = $true)]$Resolution, [Parameter(Mandatory = $true)][string]$Level,
+    # -Resolution: Resolve-HordeEngine's. -Decision: Test-HordeRemotePolicy's, whose level is used and
+    # which must be allowed. -SessionId: the id the node chose. -Name: Format-HordeSessionName's answer.
+    # -Prompt: the first prompt's text, or "". -Resolve: the host's program lookup, name -> answer.
+    param([Parameter(Mandatory = $true)]$Resolution, [Parameter(Mandatory = $true)]$Decision,
         [Parameter(Mandatory = $true)][string]$SessionId, [Parameter(Mandatory = $true)]$Name,
-        [AllowEmptyString()][string]$Prompt = "", $Levels = $null)
+        [AllowEmptyString()][string]$Prompt = "", [Parameter(Mandatory = $true)][scriptblock]$Resolve, $Levels = $null)
+    if ($Decision.allowed -ne $true) { return (New-HordeUnknown -Reason ("the node's policy did not allow this session: " + (@($Decision.reasons) -join "; "))) }
+    $Level = "" + $Decision.level
+    if ($Level -eq "") { return (New-HordeUnknown -Reason "the policy's decision names no level") }
     if ($Resolution.binding.state -ne "known") { return (New-HordeUnknown -Reason ("the engine is not resolved: " + $Resolution.binding.reason)) }
     $b = $Resolution.binding.value
     $d = $Resolution.descriptor
@@ -114,7 +130,7 @@ function New-HordeLaunchPlan {
     if ($ad.state -ne "known") { return $ad }
     $a = $ad.value
     $pattern = "" + (Get-HordeAgentProp $d "sessionIdPattern")
-    if ($SessionId -cnotmatch $pattern) { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id the harness " + $b.harness + " takes")) }
+    if ($SessionId -cnotmatch $pattern -or $SessionId -cmatch '[\r\n]') { return (New-HordeUnknown -Reason ("'" + $SessionId + "' is not a session id the harness " + $b.harness + " takes")) }
 
     # PRECONDITIONS ARE VERIFIED, NOT CLAIMED (issue #67, item 1). The level's row names what must hold;
     # the adapter checks each against the real environment and returns only what it saw hold.
@@ -140,5 +156,13 @@ function New-HordeLaunchPlan {
         if ($null -ne $argv) { $why = $argv.reason }
         return (New-HordeUnknown -Reason $why)
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ harness = "" + $b.harness; program = $a.program; argv = [string[]]@($argv.value); level = $Level; model = $b.model; name = $nameText; notes = $notes.ToArray() }))
+    $prog = & $Resolve $a.program
+    if ($null -eq $prog -or $prog.state -ne "known") {
+        $why = "the host could not find the program " + $a.program
+        if ($null -ne $prog) { $why = "" + $prog.reason }
+        return (New-HordeUnknown -Reason $why)
+    }
+    $path = "" + $prog.value
+    if (-not [System.IO.Path]::IsPathRooted($path) -or [System.IO.Path]::GetExtension($path) -ine ".exe") { return (New-HordeUnknown -Reason ("the program must be an absolute path to an .exe, never a name looked up at spawn time or a script shim run by cmd.exe; the host gave '" + $path + "'")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ harness = "" + $b.harness; program = $path; argv = [string[]]@($argv.value); level = $Level; model = $b.model; name = $nameText; notes = $notes.ToArray() }))
 }
