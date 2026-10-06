@@ -116,6 +116,9 @@ function Get-HordeNodePolicy {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("this node has no policy file at " + $Path + ", so it lets a hub start nothing")) }
     $bytes = $null
     try { $bytes = [System.IO.File]::ReadAllBytes($Path) } catch { return (New-HordeUnknown -Reason ("the node policy could not be read: " + $_.Exception.Message)) }
+    # The bytes are checked before they are decoded: ASCII decoding maps every other byte to '?', so a
+    # file in another encoding would be refused for the wrong reason, or not at all (review of #109).
+    try { Assert-HordeAsciiBytes -Bytes $bytes -What ("the node policy at " + $Path) } catch { return (New-HordeUnknown -Reason ("the node policy is not plain ASCII: " + $_.Exception.Message)) }
     return (Read-HordeNodePolicyText -Text ([System.Text.Encoding]::ASCII.GetString($bytes)))
 }
 

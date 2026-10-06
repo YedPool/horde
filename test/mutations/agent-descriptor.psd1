@@ -149,5 +149,11 @@
         @{ Name = "vocabulary-flag-in-meaning-accepted"
            Find = 'elseif ($meaning -cmatch $script:HordeCapabilityFlagPattern)'
            Replace = 'elseif ($false)' }
+        @{ Name = "control-bytes-allowed"
+           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "tab-refused"
+           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
+           Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
     )
 }

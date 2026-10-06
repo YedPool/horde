@@ -59,6 +59,21 @@ Check ($p -like ("*" + $l4 + ": not ASCII - *byte-order mark*")) ("an engine-liv
 Check (@($e.layers | Where-Object { $_.layer -ceq "L4" }).Count -eq 0) "and its layer is not read"
 
 Write-Host ""
+Write-Host "--- a file that cannot be read refuses; it is never dropped (review of #109) ---" -ForegroundColor Cyan
+Clear-Layers
+[System.IO.File]::WriteAllText($l4, $good)
+$hold = [System.IO.File]::Open($l4, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+try { $e = Read-Layers } finally { $hold.Dispose() }
+$p = Joined $e
+Check ($p -like ("*" + $l4 + ": cannot be read - *") -and @($e.layers | Where-Object { $_.layer -ceq "L4" }).Count -eq 0) ("an engine-live.json held open by another process is a problem naming the file, never a layer quietly left out (" + $p + ")")
+$e = Read-Layers
+Check (@($e.problems).Count -eq 0 -and @($e.layers | Where-Object { $_.layer -ceq "L4" }).Count -eq 1) "CONTROL: released, the same file is read as L4"
+Clear-Layers
+[System.IO.File]::WriteAllBytes($l1, [System.Text.Encoding]::Unicode.GetBytes($good))
+$p = Joined (Read-Layers)
+Check ($p -like ("*" + $l1 + ": not ASCII - *control byte 0x00, as a file saved as UTF-16 does*") -and $p -notlike "*not JSON*") ("an engine.json saved as UTF-16 with no mark is named as such, not as JSON that does not parse (" + $p + ")")
+
+Write-Host ""
 Write-Host "--- a file that does not parse carries the parser's own words ---" -ForegroundColor Cyan
 Clear-Layers
 [System.IO.File]::WriteAllText($l1, "{ not json")

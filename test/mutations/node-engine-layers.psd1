@@ -27,5 +27,8 @@
         @{ Name = "policy-not-read"
            Find = '    $policy = Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $HordeHome)'
            Replace = '    $policy = [pscustomobject]@{ state = "known"; value = $null; reason = ""; note = "" }' }
+        @{ Name = "read-failure-dropped"
+           Find = 'catch { [void]$problems.Add($path + ": cannot be read - " + $_.Exception.Message); continue }'
+           Replace = 'catch { continue }' }
     )
 }

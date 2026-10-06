@@ -463,6 +463,19 @@ Reset
 $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $rc
 Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*engine-live.json: not ASCII*byte-order mark*" -and $script:panes.Count -eq 0) ("an engine-live.json with a byte-order mark refuses the next spawn, naming the file and the mark (" + $o.reason + ")")
 Remove-Item -LiteralPath (Join-Path $h1 "engine-live.json")
+# Held open by another process, it refuses too: a layer that cannot be read is never left out (review of #109).
+Set-Layer "engine-live.json" '{ "schemaVersion": 1, "rules": [] }'
+$hold = [System.IO.File]::Open((Join-Path $h1 "engine-live.json"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+Reset
+try { $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $rc } finally { $hold.Dispose() }
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*engine-live.json: cannot be read*" -and $script:panes.Count -eq 0) ("an engine-live.json that cannot be read refuses the next spawn, naming the file (" + $o.reason + ")")
+Remove-Item -LiteralPath (Join-Path $h1 "engine-live.json")
+# And a policy file saved with a byte-order mark refuses, naming the mark rather than "not JSON".
+[System.IO.File]::WriteAllBytes($polPath, [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes($policyText)))
+Reset
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $rc
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*not plain ASCII*byte-order mark*" -and $script:panes.Count -eq 0) ("a policy file with a byte-order mark refuses the next spawn, naming the cause (" + $o.reason + ")")
+Set-Pol 3
 Set-Layer "engine.json" '{ "schemaVersion": 1, "rules": [ { "id": "c", "match": {}, "set": { "remote.permissionCeiling": "edits" }, "writtenBy": "user" } ] }'
 $eng = Get-HordeNodeEngineLayers -Root $root -HordeHome $h1 -Descriptors $descriptors -Builtin $rc.builtin
 Check (@($eng.problems).Count -eq 0 -and @($eng.layers | Where-Object { $_.layer -ceq "L1" }).Count -eq 1) "CONTROL: a good engine.json is no problem, and is read as L1"

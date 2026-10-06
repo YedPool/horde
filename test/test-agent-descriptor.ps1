@@ -187,6 +187,12 @@ try {
     $accented = $goldenText.Replace("measured firing", ("measured fir" + [char]0x00EF + "ng"))
     [System.IO.File]::WriteAllBytes($file, [System.Text.Encoding]::UTF8.GetBytes($accented))
     Check ($accented -ne $goldenText -and (Throws { Read-HordeAgentDescriptor -Path $file } "not ASCII")) "refused: a descriptor holding a byte that is not ASCII (CONTRIBUTING 13)"
+    [System.IO.File]::WriteAllBytes($file, [System.Text.Encoding]::Unicode.GetBytes($goldenText))
+    Check (Throws { Read-HordeAgentDescriptor -Path $file } "control byte 0x00, as a file saved as UTF-16 does") "refused: a descriptor saved as UTF-16 with no byte-order mark, named as such"
+    [System.IO.File]::WriteAllBytes($file, [System.Text.Encoding]::ASCII.GetBytes($goldenText.Replace("measured firing", ("measured" + [char]7 + "firing"))))
+    Check (Throws { Read-HordeAgentDescriptor -Path $file } "control byte 0x07") "refused: a descriptor holding another control byte"
+    [System.IO.File]::WriteAllBytes($file, [System.Text.Encoding]::ASCII.GetBytes($goldenText.Replace("measured firing", ("measured" + [char]9 + "firing"))))
+    Check (-not (Throws { Read-HordeAgentDescriptor -Path $file } "control byte")) "CONTROL: a tab is no control byte to refuse, nor are the CR and LF the file is made of"
 
     Write-Host ""
     Write-Host "--- every agents/<name>/ folder has a descriptor ---" -ForegroundColor Cyan
