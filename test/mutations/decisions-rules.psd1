@@ -5,6 +5,10 @@
     Target = "decisions\Rules.ps1"
     Suite  = "test\test-decisions-rules.ps1"
     Mutations = @(
+        # --- who may write is the rules' list ---
+        @{ Name = "another-actor-may-write"
+           Find = '$script:HordeDecisionActors = @("warchief")'
+           Replace = '$script:HordeDecisionActors = @("warchief", "goblin")' }
         # --- a secret written as a field's name ---
         @{ Name = "secret-as-a-field-name-not-seen"
            Find = 'if ($nameKind -ne "") {'

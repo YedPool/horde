@@ -6,7 +6,7 @@
   "type": "object",
   "definitions": {
     "id": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The idempotency id of a request that writes: 32 lowercase hex digits, chosen by the caller and reused unchanged when the same request is sent again."},
-    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The role label of who is asking. The closed list is the actor enum of schema/decision-event.v1; a label it does not hold is refused."},
+    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The role label of who is asking. The closed list is the actors of decisions/Rules.ps1; a label it does not hold is refused."},
     "number": {"type": "integer", "minimum": 1, "description": "A question's permanent number."},
     "add": {
       "type": "object",

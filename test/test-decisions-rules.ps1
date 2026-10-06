@@ -76,6 +76,13 @@ Check ($unbacked.Count -eq 0) "and every kind's function exists"
 Check ((@($defs.kinds.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "yes-no,choice,value,parts,do-then-say") "the question kinds are the five of the design, from the one table"
 Check (@($defs.kinds.PSObject.Properties | Where-Object { "$($_.Value.label)".Trim() -eq "" -or "$($_.Value.means)".Trim() -eq "" }).Count -eq 0) "each with a label and one definition in a sentence"
 Check ((Get-HordeDecisionStates) -join "," -ceq "open,closed") "a question is open or closed in this slice"
+# WHO MAY WRITE is the rules' closed list, beside the states and the event kinds - not an enum in the
+# event schema, where a second actor would have been a change to "v1" that every older checkout then
+# read as an unreadable record.
+$actorNames = "THREW"
+try { $actorNames = (@(Get-HordeDecisionActors) -join ",") } catch { }
+Check ($actorNames -ceq "warchief") ("the actors of this slice are the rules' own list: the warchief alone (" + $actorNames + ")")
+Check ($null -eq $defs.eventSchema.properties.actor.PSObject.Properties["enum"] -and "$($defs.eventSchema.properties.actor.pattern)" -ne "") "and the event schema holds no list of them: only that an actor is one lowercase label"
 
 Write-Host ""
 Write-Host "--- a title must explain itself ---" -ForegroundColor Cyan
@@ -435,6 +442,22 @@ Check ((Get-Numbers $st) -ceq "1,2" -and $st.unreadable.Count -eq 1 -and $st.unr
 $st = Get-Fold @((New-Added 1 1), (New-RawRecord 2 "2" "question-added" ('{"number":999999999,"question":' + $wordsJson + '}')))
 Check ((Get-Numbers $st) -ceq "1,999999999" -and $st.unreadable.Count -eq 0) "CONTROL: 999999999 is the largest number a question can have, and a record holding it is read"
 Check ((Get-HordeDecisionMaxNumber) -eq 999999999) "CONTROL: the limit the rules give out is that number"
+
+Write-Host ""
+Write-Host "--- a record by an actor this version does not list is still a record ---" -ForegroundColor Cyan
+# A stored record is a fact. Who MAY write is asked of a request, before it is written; a record that
+# a later version wrote, under an actor added since, must not become unreadable here and cost a number.
+$byAnother = New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Answered and done." })
+$byAnother.data.actor = "founder"
+$st = Get-Fold @((New-Added 1 1), $byAnother, (New-Added 3 2))
+Check ($st.unreadable.Count -eq 0 -and $st.questions[1].state -ceq "closed" -and (Get-Numbers $st) -ceq "1,2") ("a close recorded by an actor outside this version's list is read and applied (" + $st.unreadable.Count + " unreadable)")
+Check ($st.questions[1].history.Count -eq 2 -and $st.questions[1].history[1].actor -ceq "founder") "and the history says who it was"
+foreach ($badActor in @("", "Two Words", "UPPER", "line`nbreak")) {
+    $odd = New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })
+    $odd.data.actor = $badActor
+    $st = Get-Fold @((New-Added 1 1), $odd)
+    Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*actor*" -and $st.questions[1].state -ceq "open") ("CONTROL: an actor that is not one lowercase label ('" + ($badActor -replace "`n", "\n") + "') is still the wrong shape, and that record is unreadable")
+}
 
 Write-Host ""
 Write-Host "--- one id, one record to answer from ---" -ForegroundColor Cyan

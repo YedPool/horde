@@ -54,6 +54,17 @@ $script:HordeDecisionEventKinds = [ordered]@{
 # find here except to show its name.
 $script:HordeDecisionStates = @("open", "closed")
 
+# WHO MAY WRITE to the list: role labels (core/roles.json names the roles), a closed list here beside
+# the states and the event kinds. Today only the warchief writes. It is HERE and not an enum in
+# schema/decision-event.v1 so that a second actor - the person answering - is one entry in this list
+# and not a change to a schema that says it is version 1; and so that a record written under an actor
+# this version does not list is still read. A stored record is a fact: the fold asks only that its
+# actor is one lowercase label (the schema's pattern). Whether an actor MAY write is asked of a
+# request, by decisions/Operations.ps1, before anything is written.
+# THE ACTOR IS WHAT THE CALLER SAYS IT IS. Nothing here proves it; a caller across a link must have it
+# set by the link, not taken from the request.
+$script:HordeDecisionActors = @("warchief")
+
 # THE FIELDS OF A QUESTION, in the order they are stored and shown. type: text, list (of texts) or
 # flag. oneLine: a line break is refused. wording: a change to it is a new wording, because it is what
 # a person reads before answering - an answer given to wording 2 must not be taken as given to
@@ -163,6 +174,7 @@ $script:HordeDecisionSecretSlashRunBits = 4.35
 
 function Get-HordeDecisionEventKinds { return @($script:HordeDecisionEventKinds.Keys) }
 function Get-HordeDecisionStates { return @($script:HordeDecisionStates) }
+function Get-HordeDecisionActors { return @($script:HordeDecisionActors) }
 function Get-HordeDecisionFieldNames { return @($script:HordeDecisionFields.Keys) }
 function Get-HordeDecisionMaxNumber { return $script:HordeDecisionMaxNumber }
 

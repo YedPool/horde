@@ -221,7 +221,7 @@ function Invoke-HordeDecisionWrite {
     $refuse = { param($why, $found, $list) return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "refused" -Reason $why -Findings $found -State $list) -Definitions $Definitions -Now $Now) }
 
     $actor = [string]$Request.actor
-    $actors = @($Definitions.eventSchema.properties.actor.enum)
+    $actors = @(Get-HordeDecisionActors)
     if ($actors -cnotcontains $actor) {
         $why = "'" + $actor + "' is not a role that may change the list; the roles that may are: " + ($actors -join ", ")
         return (& $refuse $why @($why) $null)
