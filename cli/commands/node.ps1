@@ -5,18 +5,36 @@ $HordeCommand = @{
     # 2026-10-02) and a busy background process is throttled about 7x after 3 s (core/Platform.ps1),
     # which could put a node past the hub's wait (review of PR #81, F2).
     sustained = $true
-    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly]"
-    summary = "serve this machine's sessions to the hub over the local link: hello, node.info, sessions.list, session.get and request.status, and session.spawn and session.close as this node's policy allows (-ReadOnly: no acts)"
+    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly] | node init | node rotate-key | node pin -Hub <hub id> -HostKey <key> [-Replace] [-Transport <name>]"
+    summary = "serve: answer the hub over the local link: hello, node.info, sessions.list, session.get and request.status, and session.spawn and session.close as this node's policy allows (-ReadOnly: no acts); init, rotate-key, pin: this node's link key and the hub's pinned host key (enrolment, remote plan R17b)"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve", "init", "rotate-key", "pin")][string]$Verb,
             # How many links to serve before stopping; 0, the default, serves until stopped.
             [int]$MaxLinks = 0,
             # How long a link may be silent before the node ends it.
             [int]$IdleSeconds = 120,
             # Serve the read verbs only, and refuse every act as unsupported.
-            [switch]$ReadOnly
+            [switch]$ReadOnly,
+            # pin: the hub's id and host key, as `horde hub init` printed them; -Replace a changed pin.
+            [string]$Hub = "",
+            [string]$HostKey = "",
+            [switch]$Replace,
+            # init, rotate-key, pin: which transport's enrolment, when more than one has any.
+            [string]$Transport = ""
         )
+        # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
+        $verbFlags = @{ serve = @("MaxLinks", "IdleSeconds", "ReadOnly"); pin = @("Hub", "HostKey", "Replace", "Transport"); init = @("Transport"); "rotate-key" = @("Transport") }
+        foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to node " + $Verb) } }
+        if ($Verb -ne "serve") {
+            $root = Get-HordeRoot
+            foreach ($f in @("Tristate", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+            . (Join-Path $root "transports\Port.ps1")
+            foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
+            . (Join-Path $root "cli\Enroll.ps1")
+            foreach ($l in @(Invoke-HordeNodeEnrollVerb -Verb $Verb -Hub $Hub -HostKey $HostKey -Replace:$Replace -Transport $Transport)) { Write-Output $l }
+            return
+        }
         # Loaded here, in the command's own scope, so the transports' helpers stay visible to the blocks
         # they register (transports/Port.ps1, the adapter contract).
         $root = Get-HordeRoot
