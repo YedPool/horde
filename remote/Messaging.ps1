@@ -32,7 +32,7 @@ function Resolve-HordeMailReceipt {
     # AFTER the receipt - the one asked for when it moved the record forward, the one already recorded when
     # it did not - and that is the stage the ack carries.
     param([string]$Recorded = "", [Parameter(Mandatory = $true)][string]$Asked)
-    if ($Recorded -eq "") { return [pscustomobject]@{ refused = "this node never returned a message with this id from mail.next"; stage = ""; changed = $false } }
+    if ($Recorded -eq "") { return [pscustomobject]@{ refused = "this node never returned from mail.next a message with this id"; stage = ""; changed = $false } }
     $receiptStages = @(@($script:HordeMailStageOrder) + @($script:HordeMailFinalStages) | Where-Object { $_ -cne "queued" })
     if ($receiptStages -cnotcontains $Asked) { return [pscustomobject]@{ refused = ("'" + $Asked + "' is not a receipt stage"); stage = $Recorded; changed = $false } }
     $have = Get-HordeMailStageRank -Stage $Recorded
@@ -60,7 +60,7 @@ function Select-HordeMailNext {
     # mail.next over an outbox: how many messages are unsettled, and the oldest of them by createdAt
     # (messageId breaks a tie, so the answer never depends on the order the records were read in).
     # Returns { pending; next }, next $null when none waits.
-    param([object[]]$Outbox = @())
+    param($Outbox = @())
     $waiting = @($Outbox | Where-Object { $null -ne $_ -and -not (Test-HordeMailSettled -Stage "$($_.stage)") })
     $next = $null
     if ($waiting.Count -gt 0) {
@@ -115,8 +115,8 @@ function Resolve-HordeDeliverTarget {
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
         [string]$Label = "",
-        [object[]]$Live = @(),
-        [object[]]$HubSpawned = @(),
+        $Live = @(),
+        $HubSpawned = @(),
         [string[]]$DeliverTo = @()
     )
     $live = @($Live | Where-Object { $null -ne $_ })

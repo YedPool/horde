@@ -6,8 +6,8 @@
     Suite  = "test\test-messaging-rules.ps1"
     Mutations = @(
         @{ Name = "receipt-for-unknown-message-accepted"
-           Find = 'if ($Recorded -eq "") { return [pscustomobject]@{ refused = "no outbound'
-           Replace = 'if ($false) { return [pscustomobject]@{ refused = "no outbound' }
+           Find = 'if ($Recorded -eq "") { return [pscustomobject]@{ refused = "this node never'
+           Replace = 'if ($false) { return [pscustomobject]@{ refused = "this node never' }
         @{ Name = "queued-receipt-accepted"
            Find = 'if ($receiptStages -cnotcontains $Asked) {'
            Replace = 'if ($false) {' }

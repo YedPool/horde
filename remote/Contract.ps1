@@ -440,8 +440,8 @@ function Test-HordeLinkFrameRules {
     # there would read as drift. remote/Protocol.ps1 applies both on send and on receive. Findings.
     param([Parameter(Mandatory = $true)]$Frame)
     $kind = "$(Get-HordeLinkProp $Frame 'kind')"
-    if ($kind -ceq "req") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path '$.args') }
-    if ($kind -ceq "res") {
+    if ("req" -ceq $kind) { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path '$.args') }
+    if ("res" -ceq $kind) {
         $answer = Get-HordeLinkProp $Frame "result"
         if ("$(Get-HordeLinkProp $answer 'state')" -ceq "known") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail") -Path '$.result.value.mail') }
     }

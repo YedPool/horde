@@ -167,8 +167,8 @@
            Find = '-gt $script:HordeMailTtlMaxSeconds) {'
            Replace = '-gt ($script:HordeMailTtlMaxSeconds * 2)) {' }
         @{ Name = "ttl-of-a-request-unchecked"
-           Find = 'if ($kind -ceq "req") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path ''$.args'') }'
-           Replace = 'if ($kind -ceq "req") { return @() }' }
+           Find = 'if ("req" -ceq $kind) { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path ''$.args'') }'
+           Replace = 'if ("req" -ceq $kind) { return @() }' }
         @{ Name = "ttl-of-a-result-unchecked"
            Find = 'return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail")'
            Replace = 'return @(); $null = @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail")' }
