@@ -85,7 +85,7 @@ Write-Host "--- the act path's read: policy and layers together ---" -Foreground
 Clear-Layers
 Set-Bytes $l4 $bom
 $c = Read-HordeNodeActConfig -Root $root -HordeHome $home1 -Descriptors $descriptors -Builtin $l0
-Check ($c.policy.state -ne "known" -and (@($c.problems) -join " ") -like "*byte-order mark*") "Read-HordeNodeActConfig returns the policy's answer and the layers' problems"
+Check ($c.policy.state -ne "known" -and ("" + $c.policy.reason) -like "*no policy file*" -and (@($c.problems) -join " ") -like "*byte-order mark*") "Read-HordeNodeActConfig returns the policy's answer and the layers' problems"
 } finally {
     if ((Split-Path -Leaf $home1) -match '^horde-engine-layers-[0-9a-f]{32}$') { Remove-Item -LiteralPath $home1 -Recurse -Force -ErrorAction SilentlyContinue }
 }

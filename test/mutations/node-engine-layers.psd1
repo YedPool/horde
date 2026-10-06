@@ -26,6 +26,6 @@
            Replace = 'foreach ($pair in @(,@("L1", "engine.json"))) {' }
         @{ Name = "policy-not-read"
            Find = '    $policy = Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $HordeHome)'
-           Replace = '    $policy = New-HordeKnown -Value $null' }
+           Replace = '    $policy = [pscustomobject]@{ state = "known"; value = $null; reason = ""; note = "" }' }
     )
 }
