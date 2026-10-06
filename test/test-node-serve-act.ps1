@@ -53,7 +53,7 @@ $st = Linked
 $q = Req "session.spawn" (Spawn)
 Check ((ConvertTo-HordeFrameBytes -Frame $q -Contract $contract).ok -eq $true) "CONTROL: the spawn request is well formed"
 $r1 = Invoke-HordeNodeFrame -State $st -Line (Line $q) -Data (Data -Journal $jr)
-Check ($r1.needAct -eq $true -and $null -eq $r1.reply -and "$($r1.act.verb)" -ceq "session.spawn" -and "$($r1.act.requestId)" -ceq $q.requestId -and "$($r1.act.args.label)" -ceq "E") "the first sight of a spawn is recorded and handed to the caller to act, with nothing sent yet"
+Check ($r1.needAct -eq $true -and $null -eq $r1.reply -and "$($r1.act.hubId)" -ceq "7c9e6679-7425-40de-944b-e07fc1f90ae7" -and "$($r1.act.verb)" -ceq "session.spawn" -and "$($r1.act.requestId)" -ceq $q.requestId -and "$($r1.act.args.label)" -ceq "E") "the first sight of a spawn is recorded and handed to the caller to act, with the hub that asked, and nothing sent yet"
 $e = Get-HordeJournalEntry -Root $jr -Id $q.requestId
 Check ($e.state -eq "known" -and "$($e.value.state)" -ceq "accepted") "the journal holds it as accepted before anything acts"
 $out = [pscustomobject]@{ state = "done"; sessionId = $sid; expect = $expect; reason = "" }

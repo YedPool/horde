@@ -49,6 +49,8 @@ $HordeCommand = @{
             $journalRoot = Initialize-HordeJournal -Root $journal -Kind "request"
             $ctx = New-HordeNodeActContext -Root $root -HordeHome $hordeHome -Namespace $ns
             Write-Host ("node acts as its policy allows: " + $ctx.note)
+            # Records a stopped node left starting are settled before any new act (review of #104, F5).
+            foreach ($l in @(Invoke-HordeNodeReconcile -Context $ctx)) { Write-Host ("reconcile: " + $l) }
             $act = { param($a) Invoke-HordeNodeActRequest -Act $a -Context $ctx }
         }
         elseif (Test-Path -LiteralPath $journal -PathType Container) { $journalRoot = $journal }

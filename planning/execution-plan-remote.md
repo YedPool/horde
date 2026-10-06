@@ -406,9 +406,25 @@ E. Acting over the link
       link carries can raise it.
     - **The name** is the label plus the run title, capped at 60 characters, given at birth with
       Remote Control on.
-    - **Fail closed on the mode.** After start the node reads the effective mode back from the
-      harness's own record; if it cannot, or it is above the level asked, the session is closed and the
-      spawn refused.
+    - **Fail closed on the mode, before any work.** The session starts with no prompt. The node reads
+      the effective mode back from the harness's own record; if it cannot, or it is any other level than
+      the one asked, the session is closed and the spawn refused, so a wrong mode never sees work. Only
+      then is the prompt typed as one line, or, holding a line break or too long, written to a file the
+      session is told to read (review of #104, F4). A session that cannot be ended is answered failed,
+      recorded as still running, and alerted, never reported refused (F2).
+    - **The owner's controls are live.** `policy.json`, `engine.json` (L1) and `engine-live.json` (L4)
+      are read again inside every spawn, under the spawn lock: a cap of 0, a lowered ceiling or a
+      deleted policy holds from the next spawn without a restart (review of #104, F1).
+    - **A session belongs to the hub that asked.** The node records the spawning hub's device id, and
+      a close from another hub is refused (F8). At serve start, records a stopped node left `starting`
+      are settled by pid and start time as running (alerted: the mode was never read back) or failed
+      (F5).
+    - **A spawn holds the node's serve loop**, which is single-threaded: up to about 160 s at the
+      default bounds (process 60 s, mode 60 s, and when the session is not kept, close 20 s and the
+      host's end 20 s). Pings and reads on other links wait meanwhile, so a hub waits at least that
+      long before judging the node gone (review of #104, F7). Acting asynchronously is later work.
+    - **No live acceptance before #99.** The live run waits for #99 (a pane tied to its process by
+      the pane id), as well as R17 and the founder's login.
     - **No engine environment.** A pane does not inherit its starter's environment (measured
       2026-10-05, issue #95), so until engines E10's launch stub a remote spawn allows only a profile on
       the harness's own login.

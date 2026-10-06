@@ -62,7 +62,7 @@ function New-HordeNodeServeState {
     # took 44 s and the hub's 60 s wait ran out. Every contract use below takes this one.
     param([Parameter(Mandatory = $true)][string]$NodeId, [Parameter(Mandatory = $true)][string]$NodeName, [Parameter(Mandatory = $true)][string]$HordeVersion, $Contract = $null)
     if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
-    return [pscustomobject]@{ helloDone = $false; protocol = 0; seq = 0; nodeId = $NodeId; nodeName = $NodeName; hordeVersion = $HordeVersion; closed = $false; contract = $Contract }
+    return [pscustomobject]@{ helloDone = $false; protocol = 0; seq = 0; peerId = ""; nodeId = $NodeId; nodeName = $NodeName; hordeVersion = $HordeVersion; closed = $false; contract = $Contract }
 }
 
 function Get-HordeNodeNextSeq {
@@ -307,7 +307,7 @@ function Invoke-HordeNodeAct {
         if ($null -eq $issued) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "the request's issuedAt is not a time this node can record")) }
         $o = Open-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)" -Verb $verb -Arguments $Frame.args -IssuedAt $issued
         switch ("$($o.decision)") {
-            "act" { return (New-HordeNodeReply -NeedAct $true -Act ([pscustomobject]@{ verb = $verb; args = $Frame.args; requestId = "$($Frame.requestId)" })) }
+            "act" { return (New-HordeNodeReply -NeedAct $true -Act ([pscustomobject]@{ verb = $verb; args = $Frame.args; requestId = "$($Frame.requestId)"; hubId = "$($State.peerId)" })) }
             "refuse" { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "$($o.reason)")) }
             "replay" {
                 $e = Get-HordeJournalEntry -Root $journal -Id "$($Frame.requestId)"
@@ -354,6 +354,9 @@ function Invoke-HordeNodeFrame {
         if ($null -ne $r.bye) { $null = Get-HordeNodeNextSeq $State; return (New-HordeNodeReply -Reply $r.bye -Close $true) }
         $State.helloDone = $true
         $State.protocol = $r.protocol
+        # The hub this link serves, handed with every act: a session is closed only by the hub that
+        # asked for it (review of #104, F8).
+        $State.peerId = "$($f.hello.id)"
         return (New-HordeNodeReply -Reply (New-HordeNodeHello -State $State))
     }
     if ($kind -ceq "bye") { return (New-HordeNodeReply -Close $true) }

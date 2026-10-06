@@ -30,5 +30,8 @@
         @{ Name = "acts-served-always"
            Find = 'if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) {'
            Replace = 'if ($script:HordeNodeActVerbs -ccontains $verb) {' }
+        @{ Name = "act-without-hub"
+           Find = 'requestId = "$($Frame.requestId)"; hubId = "$($State.peerId)" })) }'
+           Replace = 'requestId = "$($Frame.requestId)"; hubId = "" })) }' }
     )
 }

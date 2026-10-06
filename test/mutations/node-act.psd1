@@ -81,5 +81,74 @@
         @{ Name = "unread-count-allows"
            Find = 'if ($today.state -ne "known") { return (New-HordeNodeOutcome -State "refused" -Reason $today.reason) }'
            Replace = '' }
+        @{ Name = "config-read-once"
+           Find = 'try { $cfg = & $Context.readConfig $Context }'
+           Replace = 'try { if ($null -eq $script:HordeNodeCfgCache) { $script:HordeNodeCfgCache = & $Context.readConfig $Context }; $cfg = $script:HordeNodeCfgCache }' }
+        @{ Name = "context-config-frozen"
+           Find = 'readConfig = { param($c) Read-HordeNodeActConfig -Root $c.root -HordeHome $c.home -Descriptors $c.descriptors -Builtin $c.builtin }'
+           Replace = 'readConfig = { param($c) $now }.GetNewClosure()' }
+        @{ Name = "unkept-answered-refused"
+           Find = 'return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ($why + "; it could NOT be ended'
+           Replace = 'return (New-HordeNodeOutcome -State "refused" -SessionId $sid -Expect $expect -Reason ($why + "; it could NOT be ended' }
+        @{ Name = "unkept-without-process"
+           Find = 'return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Expect $expect -Reason ($why + "; it could NOT be ended'
+           Replace = 'return (New-HordeNodeOutcome -State "failed" -SessionId $sid -Reason ($why + "; it could NOT be ended' }
+        @{ Name = "unkept-recorded-closed"
+           Find = '$record.outcome = "unkept-running"; Write-HordeNodeSpawnRecord'
+           Replace = '$record.outcome = "unkept-running"; $record.closedAt = "x"; Write-HordeNodeSpawnRecord' }
+        @{ Name = "unkept-no-alert"
+           Find = '& $Context.alert ("ALERT: session " + $sid + " (pane " + $record.handle + ", pid " + $record.pid + ") is still running and could not be ended: " + $why)'
+           Replace = '' }
+        @{ Name = "not-json-dropped"
+           Find = 'catch { [void]$problems.Add($path + ": not JSON") }'
+           Replace = 'catch { }' }
+        @{ Name = "findings-dropped"
+           Find = 'foreach ($f in $findings) { [void]$problems.Add($f.source + " " + $f.path + ": " + $f.code + " - " + $f.detail) }'
+           Replace = '' }
+        @{ Name = "live-layer-unread"
+           Find = 'foreach ($pair in @(@("L1", "engine.json"), @("L4", "engine-live.json"))) {'
+           Replace = 'foreach ($pair in @(,@("L1", "engine.json"))) {' }
+        @{ Name = "prompt-in-argv"
+           Find = '-Name $name -Prompt "" -Resolve $resolveProgram'
+           Replace = '-Name $name -Prompt $prompt -Resolve $resolveProgram' }
+        @{ Name = "prompt-before-mode-kept"
+           Find = '$gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart'
+           Replace = '$null = Send-HordeNodePrompt -Context $Context -Actor $actor -Target $term -Handle $record.handle -SessionId $sid -Prompt $prompt; $gone = Stop-HordeNodeSession -Context $Context -Actor $actor -Target $term -Adapter $adapter -Handle $record.handle -ProcessId $record.pid -ProcStart $record.procStart' }
+        @{ Name = "prompt-typed-raw"
+           Find = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'' -or $Prompt.Length -gt $script:HordeNodePromptTypedMax) {'
+           Replace = 'if ($Prompt.Length -gt $script:HordeNodePromptTypedMax) {' }
+        @{ Name = "prompt-long-typed"
+           Find = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'' -or $Prompt.Length -gt $script:HordeNodePromptTypedMax) {'
+           Replace = 'if ($Prompt -cmatch ''[\x00-\x1F\x7F-\x9F]'') {' }
+        @{ Name = "prompt-failure-done"
+           Find = 'if ($notSent -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "reconcile-skipped"
+           Find = 'if ("" + $r.outcome -cne "starting") { continue }'
+           Replace = 'continue' }
+        @{ Name = "reconcile-all-running"
+           Find = 'if ($null -ne $pidv -and -not (Test-HordeNodeProcessGone -Context $Context -ProcessId $pidv -ProcStart $ps)) {'
+           Replace = 'if ($null -ne $pidv) {' }
+        @{ Name = "reconcile-believes-harness-without-start"
+           Find = 'if ($null -ne $live -and (Test-HordeNodeSameStart $live $i.value.procStart)) { $pidv = [long]$i.value.pid; $ps = "" + $i.value.procStart }'
+           Replace = '$pidv = [long]$i.value.pid; $ps = "" + $live' }
+        @{ Name = "reconcile-no-alert"
+           Find = '            & $Context.alert $msg'
+           Replace = '' }
+        @{ Name = "chain-leaf-only"
+           Find = 'foreach ($seg in $full.Substring($base.Length + 1).Split($sep)) {'
+           Replace = 'foreach ($seg in @()) {' }
+        @{ Name = "chain-after-folder"
+           Find = '$chain = Test-HordeNodeRecordsChain -HordeHome $Context.home -Dir $Context.records'
+           Replace = 'New-Item -ItemType Directory -Path $Context.records -Force | Out-Null; $chain = Test-HordeNodeRecordsChain -HordeHome $Context.home -Dir $Context.records' }
+        @{ Name = "chain-outside-home"
+           Find = 'if (-not $full.StartsWith($base + $sep, [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "close-any-hub"
+           Find = 'if ("" + $r.hubId -eq "" -or "" + $r.hubId -cne "" + $Act.hubId) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "spawn-without-hub"
+           Find = 'if ($hubId -eq "") { return (New-HordeNodeOutcome -State "refused" -Reason "the request names no hub, so no hub could close the session; nothing is started") }'
+           Replace = '' }
     )
 }
