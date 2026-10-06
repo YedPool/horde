@@ -26,6 +26,7 @@ function Get-HordeCommandGroups {
         metrics = "measuring the work"
         node = "serving this machine to the hub"
         hub = "the hub: its nodes and what it mirrors of them"
+        decisions = "questions waiting for a person"
     }
 }
 
