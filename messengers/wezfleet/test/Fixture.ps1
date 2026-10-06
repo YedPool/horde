@@ -8,6 +8,11 @@
 #
 # -Spaced puts the folder under a name with a space in it, so a test can see an argument with a space
 # arrive as one argument.
+#
+# HORDE_HOME IS MOVED TOO: the messenger writes each body into a folder under Horde's home, so New points
+# HORDE_HOME at a fresh temp folder and Remove puts the old value back - no case ever writes the real
+# ~\.horde. The folder the messenger is pointed at holds the marker files of a wezfleet checkout
+# (lib\Mail.ps1, lib\MailPost.ps1, commands\mail.ps1) as empty stubs; only wezfleet.ps1 runs.
 param([Parameter(Mandatory = $true)][string]$Root)
 return [pscustomobject]@{
     New = {
@@ -23,13 +28,23 @@ return [pscustomobject]@{
         # where no variable of this file survives.
         $fakeSource = Join-Path (Get-HordeMessenger -Name "wezfleet").folder "test\FakeWezfleet.ps1"
         Copy-Item -LiteralPath $fakeSource -Destination (Join-Path $dir "wezfleet.ps1")
+        foreach ($marker in @("lib\Mail.ps1", "lib\MailPost.ps1", "commands\mail.ps1")) {
+            $mp = Join-Path $dir $marker
+            [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $mp))
+            [System.IO.File]::WriteAllText($mp, "# a marker stub for the wezfleet messenger's tests`r`n")
+        }
+        $hordeHome = $dir + "-home"
+        [void](New-Item -ItemType Directory -Path $hordeHome)
+        $oldHome = $env:HORDE_HOME
+        $env:HORDE_HOME = $hordeHome
         Set-HordeWezfleetMessengerRoot -Path $dir -TimeoutSeconds 60
-        return @{ dir = $dir }
+        return @{ dir = $dir; home = $hordeHome; oldHome = $oldHome }
     }
     Remove = {
         param($State)
         Set-HordeWezfleetMessengerRoot -Path ""
-        if ($State.dir -and (Test-Path -LiteralPath $State.dir)) { Remove-Item -LiteralPath $State.dir -Recurse -Force }
+        $env:HORDE_HOME = $State.oldHome
+        foreach ($d in @($State.dir, $State.home)) { if ($d -and (Test-Path -LiteralPath $d)) { Remove-Item -LiteralPath $d -Recurse -Force } }
     }
     Observe = {
         param($State, $MessageId)
@@ -54,6 +69,14 @@ return [pscustomobject]@{
         $recPath = Join-Path (Join-Path $State.dir "store") ($MessageId.Replace("-", "") + ".json")
         $rec = [System.IO.File]::ReadAllText($recPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
         $rec.stage = "taken"
+        [System.IO.File]::WriteAllText($recPath, ($rec | ConvertTo-Json -Compress -Depth 4), [System.Text.Encoding]::UTF8)
+    }
+    # Plays wezfleet's Repair-WfMailbox after a compact: the record now sits in another session's mailbox.
+    Move = {
+        param($State, $MessageId, [string]$ToSessionId)
+        $recPath = Join-Path (Join-Path $State.dir "store") ($MessageId.Replace("-", "") + ".json")
+        $rec = [System.IO.File]::ReadAllText($recPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        $rec.to = $ToSessionId
         [System.IO.File]::WriteAllText($recPath, ($rec | ConvertTo-Json -Compress -Depth 4), [System.Text.Encoding]::UTF8)
     }
     # For test-wezfleet-messenger.ps1: how the fake misbehaves, and what it was handed.
