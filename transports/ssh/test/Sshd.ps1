@@ -11,7 +11,7 @@
 # runas /trustlevel:0x20000 one (Administrators deny-only), and authenticates the same user.
 #
 # WHY THE FOLDER'S ACL IS SET. Windows sshd refuses an authorized_keys file another principal can
-# read ("Bad permissions. Try removing permissions for user: ...\CodexSandboxUsers", measured
+# read ("Bad permissions. Try removing permissions for user: <a local group>", measured
 # 2026-10-05 on a file under TEMP), and ssh.exe refuses such a private key. The folder is made with a
 # protected ACL: this user, SYSTEM and Administrators only, inherited by everything in it.
 #
@@ -217,8 +217,15 @@ function Close-HordeTestSshd {
 }
 
 function Test-HordeTestSshdGone {
-    # Is no process left with the sshd's pid and start time?
+    # Is no process left with the sshd's pid and start time? Asked for up to 10 s: a process ended
+    # through its job is still listed for a moment after (a Mutate baseline read it alive once, measured
+    # 2026-10-06 in a Mutate baseline).
     param([Parameter(Mandatory = $true)]$Sshd)
-    $q = Get-Process -Id $Sshd.process.Id -ErrorAction SilentlyContinue
-    return ($null -eq $q -or $q.StartTime.ToUniversalTime().Ticks -ne $Sshd.startedAt)
+    $deadline = [datetime]::UtcNow.AddSeconds(10)
+    while ($true) {
+        $q = Get-Process -Id $Sshd.process.Id -ErrorAction SilentlyContinue
+        if ($null -eq $q -or $q.HasExited -or $q.StartTime.ToUniversalTime().Ticks -ne $Sshd.startedAt) { return $true }
+        if ([datetime]::UtcNow -ge $deadline) { return $false }
+        Start-Sleep -Milliseconds 200
+    }
 }
