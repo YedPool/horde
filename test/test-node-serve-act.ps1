@@ -114,4 +114,69 @@ Check ($r3.needAct -eq $false -and "$($r3.reply.result.value.state)" -ceq "done"
     if ((Split-Path -Leaf $jr) -match '^horde-serve-act-[0-9a-f]{32}$') { Remove-Item -LiteralPath $jr -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+
+Write-Host ""
+Write-Host "--- the loop: cli/NodeServe.ps1 acts once per request over a real link (memory transport) ---" -ForegroundColor Cyan
+. (Join-Path $root "transports\Port.ps1")
+foreach ($t in @(Get-HordeTransportFiles)) { . $t }
+. (Join-Path $root "cli\NodeServe.ps1")
+$fxs = Join-Path $root "test\fixtures\node-serve"
+function Start-ActNode {
+    param([string]$Outcome = "", [switch]$Throws, [string]$Journal)
+    $ready = New-Object System.Threading.ManualResetEventSlim($false)
+    $counter = [hashtable]::Synchronized(@{ views = 0; acts = 0 })
+    $ps = [PowerShell]::Create()
+    [void]$ps.AddCommand((Join-Path $fxs "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $device).AddParameter("ViewPath", (Join-Path $fxs "view.json")).AddParameter("JournalRoot", $Journal).AddParameter("MaxLinks", 1).AddParameter("Counter", $counter).AddParameter("Ready", $ready)
+    if ($Outcome -ne "") { [void]$ps.AddParameter("ActOutcome", $Outcome) }
+    if ($Throws) { [void]$ps.AddParameter("ActThrows", $true) }
+    $h = $ps.BeginInvoke()
+    $up = $ready.Wait(30000)
+    return [pscustomobject]@{ ps = $ps; h = $h; counter = $counter; up = $up }
+}
+function Stop-ActNode { param($Node) if ($Node.h.AsyncWaitHandle.WaitOne(40000)) { try { $null = $Node.ps.EndInvoke($Node.h) } catch { } } else { try { $Node.ps.Stop() } catch { } }; $Node.ps.Dispose() }
+function Talk {
+    param($Link, $Frame)
+    $null = Send-HordeLinkFrame -Link $Link -Frame (Line $Frame)
+    $got = Receive-HordeLinkFrame -Link $Link -TimeoutMs 30000
+    if ("$($got.state)" -cne "known") { return $null }
+    $d = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::ASCII.GetBytes("$($got.value)")) -Contract $contract
+    if (-not $d.ok) { Write-Host ("         refused: " + $d.reason) -ForegroundColor DarkYellow; return $null }
+    return $d.frame
+}
+$jr2 = Join-Path $env:TEMP ("horde-serve-act-" + [guid]::NewGuid().ToString("N"))
+Initialize-HordeJournal -Root $jr2 -Kind "request" | Out-Null
+try {
+    $node = Start-ActNode -Outcome "done" -Journal $jr2
+    $link = $null
+    try {
+        Check ($node.up -eq $true) "the node is listening, serving acts"
+        $open = Open-HordeTransportLink -Transport (Get-HordeTransport -Name "memory") -Endpoint $device -Role "hub"
+        $link = $open.value
+        $null = Talk $link (Hello)
+        $q = Req "session.spawn" (Spawn)
+        $a1 = Talk $link $q
+        Check ($null -ne $a1 -and "$($a1.result.value.state)" -ceq "done" -and "$($a1.result.value.sessionId)" -ceq $sid -and $a1.result.value.expect.pid -eq 4242) "a spawn over the link is acted on and answered done, with its session and process"
+        $a2 = Talk $link $q
+        Check ($null -ne $a2 -and "$($a2.result.value.state)" -ceq "done" -and [int]$node.counter["acts"] -eq 1) ("the same request sent again is answered from the journal: the act ran once (" + $node.counter["acts"] + ")")
+        $null = Send-HordeLinkFrame -Link $link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "done" -Seq 9))
+    } finally { if ($null -ne $link) { Close-HordeLink -Link $link } }
+    Stop-ActNode $node
+    $node = Start-ActNode -Throws -Journal $jr2
+    $link = $null
+    try {
+        $open = Open-HordeTransportLink -Transport (Get-HordeTransport -Name "memory") -Endpoint $device -Role "hub"
+        $link = $open.value
+        $null = Talk $link (Hello)
+        $q = Req "session.spawn" (Spawn)
+        $a = Talk $link $q
+        Check ($null -ne $a -and "$($a.result.value.state)" -ceq "failed" -and "$($a.result.value.reason)" -like "*failed while acting*") "an act that throws is answered failed, and the journal gets that outcome"
+        $e = Get-HordeJournalEntry -Root $jr2 -Id $q.requestId
+        Check ($e.state -eq "known" -and "$($e.value.state)" -ceq "failed") "so the request is never left accepted with no outcome"
+        $null = Send-HordeLinkFrame -Link $link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "done" -Seq 9))
+    } finally { if ($null -ne $link) { Close-HordeLink -Link $link } }
+    Stop-ActNode $node
+} finally {
+    if ((Split-Path -Leaf $jr2) -match '^horde-serve-act-[0-9a-f]{32}$') { Remove-Item -LiteralPath $jr2 -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Complete-HordeSuite -Success "the node acts on spawn and close once per request id, records each outcome, and answers it in frames the contract accepts"

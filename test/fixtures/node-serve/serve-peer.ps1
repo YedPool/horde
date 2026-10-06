@@ -8,6 +8,8 @@
 # -ViewThrowsWhenRead hands back a view that builds without error but throws when the answer is built
 # from it, so the throw comes from answering, past the view's own try. -ManifestTooLarge gives node.info
 # a manifest the link's writer refuses (over the caps), so its result cannot be sent.
+# -ActOutcome makes the node serve acts (the act path's A3) with a fixture act that counts itself in
+# -Counter["acts"] and returns that outcome state; -ActThrows makes the act throw instead.
 param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Endpoint,
@@ -18,6 +20,8 @@ param(
     [switch]$ThrowOnView,
     [switch]$ViewThrowsWhenRead,
     [switch]$ManifestTooLarge,
+    [string]$ActOutcome = "",
+    [switch]$ActThrows,
     $Counter = $null,
     $Ready = $null
 )
@@ -46,4 +50,14 @@ $getView = {
 }
 $signal = { if ($null -ne $Ready) { $Ready.Set() } }
 $transport = Get-HordeTransport -Name "memory"
-return (Invoke-HordeNodeServe -Transport $transport -Endpoint $deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $JournalRoot -MaxLinks $MaxLinks -AcceptTimeoutMs 30000 -IdleTimeoutMs $IdleTimeoutMs -OnListening $signal)
+$act = $null
+if ($ActOutcome -ne "" -or $ActThrows) {
+    $act = {
+        param($a)
+        if ($null -ne $Counter) { $Counter["acts"] = 1 + [int]$Counter["acts"] }
+        if ($ActThrows) { throw "the fixture act breaks on purpose" }
+        $ex = [pscustomobject]@{ ns = [pscustomobject]@{ device = $deviceId; space = "windows" }; pid = 4242; procStart = "134350994347710308" }
+        return [pscustomobject]@{ state = $ActOutcome; sessionId = "aaaaaaaa-1111-4222-8333-444444444444"; expect = $ex; reason = "" }
+    }
+}
+return (Invoke-HordeNodeServe -Transport $transport -Endpoint $deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $JournalRoot -Act $act -MaxLinks $MaxLinks -AcceptTimeoutMs 30000 -IdleTimeoutMs $IdleTimeoutMs -OnListening $signal)
