@@ -63,10 +63,12 @@ $script:HordeLinkResultWords = @("transcript", "transcripts", "tool", "tools", "
 # file that a reviewer reads. The table cannot loosen it: it lives here, not in the table.
 #
 # EACH VERB'S EFFECT CLASS IS PINNED HERE TOO, so a table cannot reclass a verb downwards. The class that
-# matters most is drive: session.deliver types into a running session, and the review of PR #40 found
-# that classing it write let it drive any session on the node, a bypass-permission one included. Its
-# class is drive, gated by the node's permission ceiling exactly like spawn (plan step R9), and it may
-# target only a session this hub spawned on that node - hub-owned in the session record (R19, R21).
+# matters most is drive: session.deliver hands a message to a running session, and the review of PR #40
+# found that classing it write let it drive any session on the node, a bypass-permission one included.
+# Its class is drive, and it may target only a session this hub spawned on that node or one whose label
+# the node's own remote.deliverTo lists (R21, 2026-10-05); R9 adds the permission ceiling on top, as for
+# spawn. mail.next and mail.receipt are the reverse path's pull: a read of the node's outbox and a write
+# to one outbox record, both hub to node, so a node still never asks the hub to drive anything.
 $script:HordeLinkVerbAllow = @{
     "node.info"       = @{ effect = "read";  args = @() }
     "request.status"  = @{ effect = "read";  args = @("requestId") }
@@ -79,18 +81,48 @@ $script:HordeLinkVerbAllow = @{
                           "worktree", "worktree.name", "worktree.branch", "worktree.base", "prompt", "prompt.text",
                           "prompt.handoffRef", "host", "closeOn") }
     "session.resume"  = @{ effect = "spawn"; args = @("sessionId", "reresolve", "model") }
-    "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "from", "from.deviceId", "from.sessionId", "from.label", "body",
+    "session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label", "from", "from.deviceId", "from.sessionId", "from.label", "body",
                           "ttlSeconds") }
     "session.close"   = @{ effect = "kill";  args = @("sessionId", "expect", "expect.ns", "expect.ns.device", "expect.ns.space", "expect.pid", "expect.procStart", "reason") }
     "worktree.create" = @{ effect = "write"; args = @("repoId", "name", "branch", "base") }
     "worktree.remove" = @{ effect = "kill";  args = @("repoId", "name") }
     "alert.raise"     = @{ effect = "write"; args = @("alertId", "sessionId", "label", "kind", "summary", "raisedAt") }
     "unowned.report"  = @{ effect = "read";  args = @("sessions", "sessions[].sessionId", "sessions[].harness", "sessions[].startedAt", "observedAt") }
+    "mail.next"       = @{ effect = "read";  args = @() }
+    "mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason") }
 }
 
 # The caps a result string may name. textBytes (a prompt, a message body) is for arguments only, so
 # the largest string a result can hold is a distilled summary.
 $script:HordeLinkResultCaps = @("nameBytes", "reasonBytes", "summaryBytes")
+
+# EACH VERB'S DIRECTION IS PINNED, as its effect class is (review of PR #97, F4). The reverse path of
+# messaging is safe because mail.next and mail.receipt travel hub to node: turned round, a node could
+# read the hub's outbox or write the hub's receipts, and no other rule would notice. A separate table
+# rather than a third member of each allowlist row, so a change to a verb's arguments and a change to
+# its direction are separate lines a reviewer reads. Every verb of the allowlist must be here.
+$script:HordeLinkVerbDirection = @{
+    "node.info" = "hub-to-node"; "request.status" = "hub-to-node"; "sessions.list" = "hub-to-node"; "session.get" = "hub-to-node"
+    "handoff.get" = "hub-to-node"; "clone.status" = "hub-to-node"; "delivery.status" = "hub-to-node"
+    "session.spawn" = "hub-to-node"; "session.resume" = "hub-to-node"; "session.deliver" = "hub-to-node"; "session.close" = "hub-to-node"
+    "worktree.create" = "hub-to-node"; "worktree.remove" = "hub-to-node"
+    "alert.raise" = "node-to-hub"; "unowned.report" = "node-to-hub"
+    "mail.next" = "hub-to-node"; "mail.receipt" = "hub-to-node"
+}
+
+# THE ORDER OF A MESSAGE'S STAGES (review of PR #97, F2 and F8). A record moves forward along
+# HordeMailStageOrder and stops at a final stage; remote/Messaging.ps1 decides receipts by these lists,
+# and the verb table is checked against them, so the schema's two stage lists - delivery's and
+# receipt-stage - cannot drift from each other or from this order. refused is a receipt's own stage, never
+# a delivery's: the hub refused to deliver, so no node-side delivery reached any stage.
+$script:HordeMailStageOrder = @("queued", "accepted", "handed-over", "seen")
+$script:HordeMailFinalStages = @("seen", "expired", "held", "refused")
+$script:HordeMailReceiptOnly = @("refused")
+
+# A TIME TO LIVE HAS A CEILING (review of PR #97, F7): 7 days, the request journal's replay window, so a
+# message is never live longer than the journal can prove it was not seen twice. Checked here because
+# core/Schema.ps1 implements no maximum.
+$script:HordeMailTtlMaxSeconds = 604800
 
 function Get-HordeLinkProp {
     # A property of a parsed JSON object, or $null when it is not there. Looked up, never dereferenced,
@@ -341,6 +373,9 @@ function Test-HordeLinkVerbTable {
             $allow = $script:HordeLinkVerbAllow[$name].args
             $pinned = $script:HordeLinkVerbAllow[$name].effect
             if ($effect -cne $pinned) { [void]$out.Add("$at is classed '" + $effect + "'; remote/Contract.ps1 classes it '" + $pinned + "', and a table cannot reclass a verb") }
+            $direction = "$(Get-HordeLinkProp $row 'direction')"
+            if (-not $script:HordeLinkVerbDirection.ContainsKey($name)) { [void]$out.Add("$at has no direction in remote/Contract.ps1's direction table: every allowed verb is pinned there") }
+            elseif ($direction -cne $script:HordeLinkVerbDirection[$name]) { [void]$out.Add("$at travels " + $direction + "; remote/Contract.ps1 pins it " + $script:HordeLinkVerbDirection[$name] + ", and a table cannot turn a verb round") }
         }
         else { [void]$out.Add("$at is not a verb of remote/Contract.ps1's allowlist: a verb is added there, by review, before any table may carry it") }
         $since = Get-HordeLinkProp $row "since"
@@ -368,7 +403,60 @@ function Test-HordeLinkVerbTable {
             }
         }
     }
+    foreach ($f in @(Test-HordeLinkStageLists -Verbs $Verbs)) { [void]$out.Add($f) }
     return @($out)
+}
+
+function Test-HordeLinkStageLists {
+    # The message stage lists of a verb table against this file's stage order (review of PR #97, F8):
+    # every delivery stage has a place in the order or among the final stages, and receipt-stage is
+    # exactly delivery's stages less queued, plus the receipt-only ones. Findings; empty when they agree.
+    param([Parameter(Mandatory = $true)]$Verbs)
+    $defs = Get-HordeLinkProp $Verbs "definitions"
+    $delivery = Get-HordeLinkProp $defs "delivery"
+    $receipt = Get-HordeLinkProp $defs "receipt-stage"
+    if ($null -eq $delivery -and $null -eq $receipt) { return @() }
+    if ($null -eq $delivery -or $null -eq $receipt) { return @("the table has one of delivery and receipt-stage without the other, so the two stage lists cannot be checked against each other") }
+    $out = New-Object System.Collections.ArrayList
+    $known = @($script:HordeMailStageOrder) + @($script:HordeMailFinalStages)
+    $deliveryStages = @(Get-HordeLinkProp (Get-HordeLinkProp (Get-HordeLinkProp $delivery "properties") "stage") "enum" | ForEach-Object { "$_" })
+    foreach ($st in $deliveryStages) {
+        if ($known -cnotcontains $st) { [void]$out.Add("the delivery stage '" + $st + "' has no place in remote/Contract.ps1's stage order") }
+        if ($script:HordeMailReceiptOnly -ccontains $st) { [void]$out.Add("the delivery stage '" + $st + "' is a receipt's own stage, never a delivery's") }
+    }
+    $want = @(@($deliveryStages | Where-Object { $_ -cne "queued" }) + @($script:HordeMailReceiptOnly) | Sort-Object -Unique)
+    $have = @(@(Get-HordeLinkProp $receipt "enum") | ForEach-Object { "$_" } | Sort-Object -Unique)
+    if ((@($have) -join ",") -cne (@($want) -join ",") -or @(Get-HordeLinkProp $receipt "enum").Count -ne $have.Count) {
+        [void]$out.Add("receipt-stage is not delivery's stages less queued, plus refused: it has [" + (@($have) -join ", ") + "], and should have [" + (@($want) -join ", ") + "]")
+    }
+    return @($out)
+}
+
+function Test-HordeLinkFrameRules {
+    # The rules of a frame that its shape cannot carry, checked AFTER Test-HordeLinkFrame passed it: today
+    # the ttl ceiling of a deliver and of outbound mail (review of PR #97, F7). A function of its own, not
+    # a step inside Test-HordeLinkFrame, because test/test-link-walk-suites.ps1 compares that function
+    # with its frozen reference (test/fixtures/link-walk/reference.ps1, never edited), and a rule added
+    # there would read as drift. remote/Protocol.ps1 applies both on send and on receive. Findings.
+    param([Parameter(Mandatory = $true)]$Frame)
+    $kind = "$(Get-HordeLinkProp $Frame 'kind')"
+    if ("req" -ceq $kind) { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path '$.args') }
+    if ("res" -ceq $kind) {
+        $answer = Get-HordeLinkProp $Frame "result"
+        if ("$(Get-HordeLinkProp $answer 'state')" -ceq "known") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail") -Path '$.result.value.mail') }
+    }
+    return @()
+}
+
+function Test-HordeLinkTtlCeiling {
+    # A ttlSeconds above the ceiling, where a verb carries one (review of PR #97, F7). Findings.
+    param($Value, [string]$Path)
+    $ttl = Get-HordeLinkProp $Value "ttlSeconds"
+    if ($null -eq $ttl) { return @() }
+    if (($ttl -is [int] -or $ttl -is [long] -or $ttl -is [double] -or $ttl -is [decimal]) -and $ttl -gt $script:HordeMailTtlMaxSeconds) {
+        return @($Path + ".ttlSeconds is " + $ttl + ", above the " + $script:HordeMailTtlMaxSeconds + "-second ceiling (7 days, the replay window)")
+    }
+    return @()
 }
 
 function Test-HordeLinkFrameContract {

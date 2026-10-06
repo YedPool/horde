@@ -138,5 +138,12 @@
         @{ Name = "writer-children-one-level-shallower"
            Find = '$order.Push(@(0, $item, ($d + 1)))'
            Replace = '$order.Push(@(0, $item, $d))' }
+        # Review of PR #97, F7: the frame rules are applied where frames are sent and received.
+        @{ Name = "frame-rules-unchecked-on-send"
+           Find = 'if ($found.Count -eq 0) { $found = @(Test-HordeLinkFrameRules -Frame $Frame) }'
+           Replace = '' }
+        @{ Name = "frame-rules-unchecked-on-receive"
+           Find = 'if ($found.Count -eq 0) { $found = @(Test-HordeLinkFrameRules -Frame $frame) }'
+           Replace = '' }
     )
 }

@@ -227,6 +227,19 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    deliver may target only a session this hub spawned on that node (hub-owned in the session record);
    any other target is refused, never forwarded. Tests first: a deliver to a session above the ceiling
    is refused with the reason, as a spawn is; a deliver to a session the hub did not spawn is refused.
+   **Amended 2026-10-05 (coordinator's decision, for cross-PC messaging, R21):** a deliver may also
+   target a session whose label the node's own `remote.deliverTo` lists. That key is read only from the
+   node's own L1, like `admission.*`, never from the link, and its default is no label. **Until R9
+   lands, hub-spawned or opted-in is the whole deliver gate.** What R9 changes: the permission ceiling
+   is checked on top of that rule, for an opted-in session exactly as for a hub-spawned one, so an
+   opted-in label running above the ceiling is refused with the reason; R9 does not widen the rule.
+   **The gate is applied to the resolved session** (review of PR #97, F1): the one the session id, or
+   the label it carries, led to on the node, never the one the hub meant. Hub-spawned status passes to a
+   new session id only through the process (pid and procStart, in R11's namespace), never through a
+   label, because labels are not unique and a session the hub never spawned can wear the label of one
+   that ended. A live session id wearing a label other than the one the deliver names is refused, never
+   retargeted. `remote/Messaging.ps1`'s `Resolve-HordeDeliverTarget` decides it, and R9's ceiling is
+   checked on the session it returns.
 
 B. Identity and the session record (PROJ; must merge before migration step 3.8)
 
@@ -405,15 +418,66 @@ E. Acting over the link
     a node outbox that drains in seq order on reconnect, alerts older than 24 h delivered marked
     stale. Tests first: a partition queues alerts and they drain in order; nothing is killed because
     of a partition.
-21. **R21. Delivery** (PHASE5; after lifecycle step 13). `session.deliver` and `delivery.status`, the
-    stages queued, accepted, handed-over, seen, expired, and the message journal. The node hands over
-    through **`Send-SessionMessage`, the session-message primitive lifecycle step 13 owns**
-    (`agents/<name>/Message.ps1` behind the engine port), the same primitive local wake messages and
-    the delivery half of `tell` use, never Claude's cross-machine route. `handed-over` records that
-    primitive's tristate receipt; `seen` is its `known: delivered` (the follower saw the marker as a
-    user turn). Tests first with a fake primitive for each outcome: a refusal whose reason is held is
-    `known not delivered: held`, never "failed"; a resend with the same messageId stops at `accepted`; an unheard
-    outcome is `unknown` naming the last stage. Ledger note above.
+21. **R21. Messaging over the link** (NOW; re-scoped 2026-10-05 at the founder's request, top priority:
+    M on this laptop messages an orchestrator on the always-on box and gets its reply, all through
+    Horde). It no longer waits on lifecycle step 13: the node hands a message over through a
+    **messenger port**, and the first messenger is the fleet's mail, whose delivery semantics are
+    ported, not re-built.
+    - **What the fleet's mail does, and what is kept** (wezfleet `lib/Mail.ps1`,
+      `hooks/wf-mail-deliver.mjs`, `commands/tell.ps1`, `commands/mail.ps1`): the body is written to the
+      target's inbox and never typed; the receiving session's own Stop hook hands it over at a turn
+      boundary and acks it only once its id is seen in that session's transcript (TAKEN); for an idle
+      target one short wake notice, carrying only the id, is typed through the guarded path; a mailbox
+      follows a session-id change by the process (pid and start time). Kept, all of it. The body is
+      never typed, on any path; there is no keystroke fallback.
+    - **The slices, one PR each, in order:**
+      1. wezfleet (its own repository): `wezfleet mail post` (queue under a caller-given id, then the
+         wake notice; a second post of the same id writes nothing and wakes nothing) and `wezfleet mail
+         status` (queued, handed-over, taken, unconfirmed, absent), both with `-Json`.
+      2. Contracts and this amendment: `mail.next` (hub to node, read: the node's oldest unsettled
+         outbound message and how many wait) and `mail.receipt` (hub to node, write: the stage of the
+         hub's delivery, written to that outbox record only); `session.deliver` gains an optional
+         `label`, the target's stable identity, followed by the node when the session id moved (a
+         compact or a /clear), never a pane. `link-verbs.v1` may still be edited until R17.
+      3. The messenger port, `core/Messenger.ps1` (post and status, tristate answers), with
+         `messengers/memory` (the test fake, in-process, declared unusable in production as the
+         in-process transport pair is) and `messengers/wezfleet`, which runs the two commands of slice
+         1. **Delivery code lives in `messengers/`, not `remote/`**: it starts a program, and `remote/`
+         stays pure under `tools/ExecScan.ps1`; `messengers/` gets its own allowlist, as `transports/`
+         has, and the node takes its messenger injected.
+      4. The node side: `node serve` answers `session.deliver` and `delivery.status` through the
+         message journal (R3, kind `message`, keyed by messageId with its argsHash: a resend returns the
+         recorded stage and posts nothing), and `mail.next` and `mail.receipt` from the node's outbox.
+         The gate above (hub-spawned or `remote.deliverTo`) is checked here, on the resolved session,
+         through `remote/Messaging.ps1` (landed with slice 2, after the review of PR #97): the deliver
+         target (`Resolve-HordeDeliverTarget`), the receipt (`Resolve-HordeMailReceipt`: forward only,
+         a final stage never overwritten, the ack carrying the recorded stage, a receipt for a message
+         never handed out refused) and the outbox (`Select-HordeMailNext`: every stage but queued
+         settles, so held never blocks the queue). A ttl above 7 days is refused by the contract.
+      5. The hub side and the CLI: `horde tell <device>/<label>` resolves the label through the mirror
+         and waits for TAKEN; `horde tell --status <messageId>`; `horde hub serve` drains every node's
+         outbox, delivers through its own node over `local` (one actuation path), and sends the receipt
+         back, so the sender on the node sees TAKEN too. The hub believes only the link about who
+         sent outbound mail: `from.deviceId` must be the link peer's enrolled device
+         (`Test-HordeMailSender`), or the receipt is refused; mail for a third device goes only through
+         that device's own node and its gate. Its end-to-end test measures the 5 s drain twice: with an
+         ordinary outbox, and with a held message at its head.
+    - **Stages.** queued (journaled on the node), accepted (in the target's mailbox), handed-over (the
+      receiving hook handed it to a turn), seen (TAKEN: confirmed in the target's own transcript),
+      expired, held (known not delivered, never "failed"). A mail receipt adds refused (the hub would not
+      deliver it: no live session wears the label, or the target's gate said no). An outcome nobody
+      heard is `unknown` naming the last stage.
+    - **Latency, decided 2026-10-05: pull, bounded.** When a node's outbox is non-empty, the hub drains
+      it within 5 s; the end-to-end test of slice 5 measures it and fails above the bound. **A node push
+      (a node-to-hub verb) is a later slice**, after R17 gives the link a node-initiated end.
+    - **Tested without a live session.** Every suite runs under a temp `WEZFLEET_ROOT` and a temp
+      HordeHome, and refuses to start if either is outside the temp folder. The wake notice is tested
+      only against a fake. The real Stop hook is run with a fake session id and a fake transcript, which
+      proves a message Horde posted is handed over and TAKEN. Over `local`, the end-to-end test runs two
+      node daemons, one playing the remote box; nothing waits for R17.
+    - **Later, unchanged in intent:** when lifecycle step 13's `Send-SessionMessage` lands, it becomes a
+      second messenger behind the same port, and the hub picks per target what that target supports.
+      Ledger note above (wezfleet `tell`'s duplicate guard) still applies when slice 5 replaces `tell`.
 22. **R22. Fleet adoption (D11)** (SPAWN and INSTALL; after R16 to R19 and overlay O1). A real second
     Windows device, enrolled, runs one real goblin through a working day, shadowed against the same
     work done locally. The PR records who used it, for what, how long, and what broke.
@@ -430,7 +494,8 @@ this desktop. The overlay never sees Horde keys, never edits sshd and never open
 
 ## What can start now
 
-The NOW set, in order, one PR each: R0 (before engines E2); R1; R2, R3 and R4; R6; R8. Overlay O1
+The NOW set, in order, one PR each: R0 (before engines E2); R1; R2, R3 and R4; R6; R8. Since
+2026-10-05, R21's five slices, at the founder's top priority. Overlay O1
 in its own repo after R1.
 
 ## What waits
@@ -441,7 +506,7 @@ in its own repo after R1.
   R11, R12 to R15, R20.
 - **INSTALL, awaiting the founder's OK**: R16, then R17.
 - **SPAWN**: R18, R19; R22 also needs INSTALL.
-- **PHASE5**: R21 (and lifecycle step 13).
+- **PHASE5**: none since 2026-10-05; R21 was re-scoped to NOW (see its line).
 - **Deferred**: Linux and macOS nodes (decision 6), until the tmux adapter exists and the node's code
   is proven under PowerShell 7, which is on no machine here (M-07).
 

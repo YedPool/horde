@@ -140,5 +140,37 @@
         @{ Name = "resend-of-any-kind"
            Find = 'if ("$(Get-HordeLinkProp $pair[1] ''kind'')" -cne "req") {'
            Replace = 'if ($false) {' }
+        # Messaging over the link (plan step R21, 2026-10-05): each new argument list is the allowlist.
+        @{ Name = "mail-receipt-may-name-a-session"
+           Find = '"mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason") }'
+           Replace = '"mail.receipt"    = @{ effect = "write"; args = @("messageId", "stage", "at", "reason", "sessionId") }' }
+        @{ Name = "mail-next-may-take-a-label"
+           Find = '"mail.next"       = @{ effect = "read";  args = @() }'
+           Replace = '"mail.next"       = @{ effect = "read";  args = @("label") }' }
+        @{ Name = "deliver-may-take-a-pane"
+           Find = '"session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label",'
+           Replace = '"session.deliver" = @{ effect = "drive"; args = @("messageId", "sessionId", "label", "pane",' }
+        # Review of PR #97: direction pinned (F4), stage lists in step (F8), the ttl ceiling (F7).
+        @{ Name = "direction-unpinned"
+           Find = 'elseif ($direction -cne $script:HordeLinkVerbDirection[$name]) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "mail-next-pinned-node-to-hub"
+           Find = '"mail.next" = "hub-to-node"; "mail.receipt" = "hub-to-node"'
+           Replace = '"mail.next" = "node-to-hub"; "mail.receipt" = "hub-to-node"' }
+        @{ Name = "mail-receipt-pinned-node-to-hub"
+           Find = '"mail.next" = "hub-to-node"; "mail.receipt" = "hub-to-node"'
+           Replace = '"mail.next" = "hub-to-node"; "mail.receipt" = "node-to-hub"' }
+        @{ Name = "stage-lists-unchecked"
+           Find = 'foreach ($f in @(Test-HordeLinkStageLists -Verbs $Verbs)) { [void]$out.Add($f) }'
+           Replace = '' }
+        @{ Name = "ttl-ceiling-doubled"
+           Find = '-gt $script:HordeMailTtlMaxSeconds) {'
+           Replace = '-gt ($script:HordeMailTtlMaxSeconds * 2)) {' }
+        @{ Name = "ttl-of-a-request-unchecked"
+           Find = 'if ("req" -ceq $kind) { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path ''$.args'') }'
+           Replace = 'if ("req" -ceq $kind) { return @() }' }
+        @{ Name = "ttl-of-a-result-unchecked"
+           Find = 'return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail")'
+           Replace = 'return @(); $null = @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail")' }
     )
 }

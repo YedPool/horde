@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "kind": "req",
+  "id": "0a000000-0000-4000-8000-000000000027",
+  "seq": 17,
+  "ts": "2026-10-05T12:02:00Z",
+  "verb": "session.deliver",
+  "requestId": "0b000000-0000-4000-8000-000000000027",
+  "issuedAt": "2026-10-05T12:02:00.000Z",
+  "args": {
+    "messageId": "0e000000-0000-4000-8000-000000000004",
+    "sessionId": "22222222-3333-4444-8555-666666666666",
+    "from": {
+      "deviceId": "0f000000-0000-4000-8000-000000000001",
+      "sessionId": "33333333-4444-4555-8666-777777777777"
+    },
+    "body": "A deliver with no label: the node delivers to this id or refuses, and follows nothing.",
+    "ttlSeconds": 604800
+  }
+}
