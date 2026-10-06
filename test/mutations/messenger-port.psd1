@@ -82,14 +82,10 @@
            Find = 'return [object]::ReferenceEquals($script:HordeMessengers[$n.Value], $Messenger)'
            Replace = 'return $true' }
         @{ Name = "send-skips-registration"
-           Find = '    param($Messenger, $Message)
-    if (-not (Test-HordeMessengerRegistered $Messenger)) {'
-           Replace = '    param($Messenger, $Message)
-    if ($false) {' }
+           Find = 'if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger ''" + (Get-HordeMessengerLabel $Messenger) + "'' is not registered through Register-HordeMessenger, so the post was not made")) }'
+           Replace = '' }
         @{ Name = "status-skips-registration"
-           Find = '    param($Messenger, [string]$MessageId)
-    if (-not (Test-HordeMessengerRegistered $Messenger)) {'
-           Replace = '    param($Messenger, [string]$MessageId)
-    if ($false) {' }
+           Find = 'if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger ''" + (Get-HordeMessengerLabel $Messenger) + "'' is not registered through Register-HordeMessenger, so its status was not asked")) }'
+           Replace = '' }
     )
 }

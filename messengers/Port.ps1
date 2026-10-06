@@ -311,7 +311,7 @@ function Get-HordeMessengerLabel {
 function Send-HordeMessengerMessage {
     # Hand one message to its session through -Messenger. A tristate answer, never a throw for the far end.
     param($Messenger, $Message)
-    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so it was not called")) }
+    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so the post was not made")) }
     $findings = @(Test-HordeMessengerMessage -Message $Message)
     if ($findings.Count -gt 0) { return (New-HordeUnknown -Reason ("the message was not handed to messenger '" + $Messenger.name + "': " + ($findings -join "; "))) }
     $id = "$((Get-HordeMessengerMember $Message 'messageId').value)"
@@ -323,7 +323,7 @@ function Send-HordeMessengerMessage {
 function Get-HordeMessengerStatus {
     # Where one message is, by its id, as -Messenger sees it. absent means it never took it.
     param($Messenger, [string]$MessageId)
-    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so it was not called")) }
+    if (-not (Test-HordeMessengerRegistered $Messenger)) { return (New-HordeUnknown -Reason ("messenger '" + (Get-HordeMessengerLabel $Messenger) + "' is not registered through Register-HordeMessenger, so its status was not asked")) }
     $p = Get-HordeMessengerPatterns
     if (-not (Test-HordeMessengerText $MessageId $p.uuid)) { return (New-HordeUnknown -Reason ("'" + $MessageId + "' is not a messageId (a lowercase uuid), so messenger '" + $Messenger.name + "' was not asked")) }
     try { $a = & $Messenger.status $MessageId }
