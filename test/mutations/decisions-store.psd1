@@ -10,12 +10,33 @@
         @{ Name = "file-in-place-of-the-store-reads-as-empty"
            Find = 'if ([System.IO.File]::Exists($Root)) {'
            Replace = 'if ($false) {' }
-        @{ Name = "create-overwrites"
-           Find = '[System.IO.FileMode]::CreateNew'
-           Replace = '[System.IO.FileMode]::Create' }
+        @{ Name = "move-overwrites"
+           Find = '[System.IO.File]::Move($tmpPath, $recPath)'
+           Replace = '[System.IO.File]::Copy($tmpPath, $recPath, $true)' }
         @{ Name = "taken-number-is-an-error"
-           Find = 'if ($script:HordeDecisionStoreExistsCodes -contains (Get-HordeDecisionStoreWin32Code $_)) { return "exists" }'
+           Find = 'if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }'
            Replace = '' }
+        @{ Name = "folder-of-the-record-name-reads-as-taken"
+           Find = 'if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }'
+           Replace = 'if ($script:HordeDecisionStoreExistsCodes -contains $code) { return "exists" }' }
+        @{ Name = "record-written-under-its-own-name"
+           Find = '$tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")'
+           Replace = '$tmpPath = $recPath' }
+        @{ Name = "loser-leaves-its-temporary-file"
+           Find = 'try { [System.IO.File]::Delete($tmpPath) } catch { }'
+           Replace = '' }
+        @{ Name = "dead-writers-file-never-swept"
+           Find = '$null = Remove-HordeDecisionStoreLeftovers -Root $Root'
+           Replace = '' }
+        @{ Name = "live-writers-file-swept"
+           Find = '.TotalMinutes -lt $script:HordeDecisionStoreTempStaleMinutes) { continue }'
+           Replace = '.TotalMinutes -lt 0) { continue }' }
+        @{ Name = "sweep-takes-names-that-are-not-its-own"
+           Find = 'if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }'
+           Replace = '' }
+        @{ Name = "sweep-fails-the-write-with-no-store"
+           Find = 'try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }'
+           Replace = '$found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part"))' }
         @{ Name = "name-of-nine-digits"
            Find = 'return ($Sequence.ToString("D10", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")'
            Replace = 'return ($Sequence.ToString("D9", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")' }
@@ -68,6 +89,6 @@
            Find = '$fs.Flush($true)'
            Replace = '$fs.Flush()'
            Expect = "survives"
-           Reason = "whether the bytes reached the disk before 'created' was returned can only be seen by cutting the power; no suite can observe it, and the line is kept on remote/Journal.ps1's reasoning" }
+           Reason = "whether the bytes reached the disk before the record took its name can only be seen by cutting the power; no suite can observe it, and the line is kept on remote/Journal.ps1's reasoning" }
     )
 }

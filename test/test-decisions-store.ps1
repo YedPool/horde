@@ -186,18 +186,68 @@ Check ((Kinds $got) -ceq "ok" -and [string]::Equals($got.records[0].data.title, 
 Check ($got.records[0].data.body.Length -eq 100000 -and [string]::Equals($got.records[0].data.body, $long, [System.StringComparison]::Ordinal)) "and all 100,000 characters read back"
 
 Write-Host ""
+Write-Host "--- a writer leaves nothing but its record, and what a dead writer left is swept ---" -ForegroundColor Cyan
+# The record is written whole under a temporary name and moved to its own (decisions/Store.ps1 says why,
+# with the measurement). These checks are on what is left in the folder; a writer really killed mid-write
+# is test/test-decisions-store-race.ps1's.
+function Get-Names { param([string]$Store) return (@(Get-ChildItem -LiteralPath $Store -Force | Sort-Object Name | ForEach-Object { $_.Name }) -join ",") }
+$s = New-TestStore
+$null = Add-Safely $s 1 '{"n":1}'
+Check ((Get-Names $s) -ceq "0000000001.json") ("after a create the folder holds the record and nothing else (" + (Get-Names $s) + ")")
+$null = Add-Safely $s 1 '{"n":1,"who":"second"}'
+Check ((Get-Names $s) -ceq "0000000001.json") ("after a create that was told exists, the loser's temporary file is gone (" + (Get-Names $s) + ")")
+# What a dead writer leaves: a temporary file of the store's own pattern, last written long ago.
+$stale = Join-Path $s ("writing-" + ("a" * 32) + ".part")
+$fresh = Join-Path $s ("writing-" + ("b" * 32) + ".part")
+$notOurs = @("writing-notes.part", ("writing-" + ("c" * 32) + ".part.bak"), ("x-writing-" + ("d" * 32) + ".part"), "notes.txt")
+foreach ($f in (@($stale, $fresh) + @($notOurs | ForEach-Object { Join-Path $s $_ }))) { [System.IO.File]::WriteAllText($f, '{"half":', $utf8) }
+$longAgo = [datetime]::UtcNow.AddDays(-400)
+foreach ($f in (@($stale, (Join-Path $s "0000000001.json")) + @($notOurs | ForEach-Object { Join-Path $s $_ }))) { [System.IO.File]::SetLastWriteTimeUtc($f, $longAgo) }
+$got = Get-Safely $s
+Check ((Kinds $got) -ceq "ok" -and $got.last -eq 1) ("a temporary file is never read as a record: the store is still record 1 (" + (Kinds $got) + ")")
+Check (Test-Path -LiteralPath $stale) "CONTROL: reading removes nothing"
+Check ((Add-Safely $s 2 '{"n":2}') -ceq "created") "the next write is made"
+Check (-not (Test-Path -LiteralPath $stale)) "and it swept the temporary file a dead writer left long ago"
+Check (Test-Path -LiteralPath $fresh) "a temporary file written a moment ago is left: its writer may be alive"
+Check (Test-Path -LiteralPath (Join-Path $s "0000000001.json")) "a RECORD is never swept, however old it is"
+Check (@($notOurs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $s $_)) }).Count -eq 0) "nor is any file whose name is not exactly the store's own temporary pattern"
+$removedNow = -1
+try { $removedNow = Remove-HordeDecisionStoreLeftovers -Root $s -Now ([datetime]::UtcNow.AddMinutes(11)) } catch { $removedNow = -2 }
+Check ($removedNow -eq 1 -and -not (Test-Path -LiteralPath $fresh)) ("eleven minutes on, that file is past the age and is swept too (" + $removedNow + " removed)")
+$removedNow = -1
+try { $removedNow = Remove-HordeDecisionStoreLeftovers -Root (New-TestStore) } catch { $removedNow = -2 }
+Check ($removedNow -eq 0) "sweeping a store that does not exist removes nothing and does not throw"
+# Text that cannot be written as UTF-8 (a lone surrogate) must leave nothing behind, not an empty record.
+$s = New-TestStore
+$null = Add-Safely $s 1 '{"n":1}'
+$unwritable = Add-Safely $s 2 ('{"t":"' + [char]0xD800 + '"}')
+Check ($unwritable -like "THREW:*" -and (Get-Names $s) -ceq "0000000001.json") ("text that is not valid Unicode throws and leaves no file of any name (" + (Get-Names $s) + ")")
+# A folder where the record's file must go is not "another writer took it".
+New-Item -ItemType Directory -Path (Join-Path $s "0000000002.json") | Out-Null
+Check ((Add-Safely $s 2 '{"n":2}') -like "THREW:*") "a folder of the record's name is a failure to write, not 'exists'"
+Check (@(Get-ChildItem -LiteralPath $s -Filter "*.part").Count -eq 0) "and the temporary file of that failed write is gone"
+
+Write-Host ""
 Write-Host "--- the store has no way to rewrite or delete a record ---" -ForegroundColor Cyan
 # Read from the syntax tree: a record that could be rewritten is not a write-once record, whatever the
-# tests above saw today. CONTROL: the same search finds the one create the file must have.
+# tests above saw today. The store may move and delete exactly these: its temporary file to the record's
+# name, and its own temporary files. CONTROL: the same search finds the calls the file must have.
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "decisions\Store.ps1"), [ref]$tokens, [ref]$errors)
 $members = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.MemberExpressionAst] }, $true) | ForEach-Object { "$($_.Member)" })
+$calls = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true) | ForEach-Object { "$($_.Member)(" + (@($_.Arguments | ForEach-Object { "$_" }) -join ", ") + ")" })
 $commands = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { "$($_.GetCommandName())" })
-$forbiddenMembers = @($members | Where-Object { @("Delete", "Move", "Replace", "Copy", "WriteAllText", "WriteAllBytes", "WriteAllLines", "AppendAllText", "Create", "OpenOrCreate", "Truncate", "Append", "SetLength") -ccontains $_ })
+$forbiddenMembers = @($members | Where-Object { @("Replace", "Copy", "WriteAllText", "WriteAllBytes", "WriteAllLines", "AppendAllText", "Create", "OpenOrCreate", "Truncate", "Append", "SetLength") -ccontains $_ })
 $forbiddenCommands = @($commands | Where-Object { @("Remove-Item", "Set-Content", "Add-Content", "Out-File", "Move-Item", "Rename-Item", "Clear-Content", "Copy-Item") -contains $_ })
-Check (@($errors).Count -eq 0 -and ($members -ccontains "CreateNew")) "CONTROL: the store file parses, and the search sees its CreateNew"
-Check ($forbiddenMembers.Count -eq 0) ("no call in the store can overwrite, move, truncate or delete a file" + $(if ($forbiddenMembers.Count) { " (found: " + ($forbiddenMembers -join ", ") + ")" } else { "" }))
+$moves = @($calls | Where-Object { $_ -clike "Move(*" })
+$deletes = @($calls | Where-Object { $_ -clike "Delete(*" })
+$opensForWriting = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { "$_" } | Where-Object { $_ -clike "*FileAccess]::Write*" -or $_ -clike "*FileAccess]::ReadWrite*" })
+Check (@($errors).Count -eq 0 -and ($members -ccontains "CreateNew") -and $moves.Count -ge 1) "CONTROL: the store file parses, and the search sees its CreateNew and its Move"
+Check ($forbiddenMembers.Count -eq 0) ("no call in the store can overwrite, copy over, truncate or append to a file" + $(if ($forbiddenMembers.Count) { " (found: " + ($forbiddenMembers -join ", ") + ")" } else { "" }))
 Check ($forbiddenCommands.Count -eq 0) ("and no cmdlet in it can either" + $(if ($forbiddenCommands.Count) { " (found: " + ($forbiddenCommands -join ", ") + ")" } else { "" }))
+Check (($moves -join " | ") -ceq 'Move($tmpPath, $recPath)') ("the one move is the temporary file to the record's name (" + ($moves -join " | ") + ")")
+Check ($deletes.Count -eq 2 -and @($deletes | Where-Object { @('Delete($tmpPath)', 'Delete($leftover)') -cnotcontains $_ }).Count -eq 0) ("the only deletes are of the writer's own temporary file and of a swept one (" + ($deletes -join " | ") + ")")
+Check ($opensForWriting.Count -eq 1 -and $opensForWriting[0] -clike 'New-Object System.IO.FileStream($tmpPath,*CreateNew*') ("the one file opened for writing is the temporary one, created new (" + $opensForWriting.Count + ")")
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-store-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

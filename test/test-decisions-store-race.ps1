@@ -8,15 +8,19 @@
 #   II. A WHOLE WRITE. Every racer adds questions of its own through decisions/Operations.ps1. Each
 #       must be told a sequence number and a question number of its own, and every question a racer
 #       was told is done must be in the store, under the number it was told.
+# And a third thing only a real process can show:
+#   III. A KILLED WRITER. A process that does nothing but write records is killed at a random moment,
+#       again and again. No kill may leave a record that cannot be read.
 #
 # A RACE THAT NEVER COLLIDES PROVES NOTHING, so each race has its controls, as test/test-journal-race.ps1
 # has:
 #   - CONTENTION, measured: in I, sequence numbers that more than one racer asked for and all but one
 #     was refused; in II, writes that say they took more than one try, which happens only when another
 #     writer took the sequence number first.
-#   - A BROKEN STORE: the same two races against a copy of the module whose create-if-new is replaced
-#     by create-or-overwrite. There the harness must see two racers told "created" for one number, and
-#     a question told done and gone - or it could not have seen them here.
+#   - A BROKEN STORE: the same two races against a copy of the module whose move-without-replace is
+#     replaced by a copy that overwrites. There the harness must see two racers told "created" for one
+#     number, and a question told done and gone - or it could not have seen them here. For III, a copy
+#     that writes the record under its own name, which a kill must be seen to damage.
 #
 # Every store is a fresh folder under %TEMP% that this suite made and removes (CONTRIBUTING 9). The
 # machine this was written on was throttled and short of memory (2026-10-06), so each race is 4
@@ -34,6 +38,11 @@ $storeTickMs = 40
 $perRacer = 8          # questions each racer adds in II
 $addTickMs = 250
 $total = $racers * $perRacer
+# Kills in III. Measured 2026-10-06: with the record written under its own name about 1 kill in 3 left it
+# empty, so 15 clean kills would be a 1-in-200 accident for that store; the control stops at the first
+# damaged record and gives up after 40 kills (1 in a million at that rate).
+$killRounds = 15
+$killControlRounds = 40
 $worker = Join-Path $root "test\fixtures\decisions\race-worker.ps1"
 $defs = Get-HordeDecisionDefinitions
 $script:work = Join-Path $env:TEMP ("horde-decisions-race-" + [guid]::NewGuid().ToString("N"))
@@ -133,6 +142,52 @@ function Get-AddRaceFacts {
         retries = [int](@($done | ForEach-Object { $_.attempts - 1 }) | Measure-Object -Sum).Sum }
 }
 
+function Invoke-KillRounds {
+    # Start a writer that does nothing but write records (the worker's loop mode), kill it at a random
+    # moment, and read what it left with the store's own reader; -Rounds times, each in a store of its
+    # own. Returns { problems; rounds; records; damaged; leftovers; strays }. -StopAtDamage ends at the
+    # first round that left a damaged record. Only the process this started is killed, by its handle.
+    param([string]$Name, [string]$Code, [int]$Rounds, [switch]$StopAtDamage)
+    $problems = New-Object System.Collections.ArrayList
+    $rand = New-Object System.Random(20261006)
+    $done = 0; $records = 0; $damaged = 0; $leftovers = 0; $strays = 0
+    for ($k = 1; $k -le $Rounds; $k++) {
+        $dir = Join-Path $script:work ($Name + "-" + $k)
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        $store = Join-Path $dir "home\store\decisions"
+        $ready = Join-Path $dir "ready"
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "powershell.exe"
+        $psi.Arguments = ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + $worker + "`" -Mode loop -CodePath `"" + $Code + "`" -Root `"" + $store +
+            "`" -GoFile `"" + (Join-Path $dir "go.txt") + "`" -ReadyFile `"" + $ready + "`" -LogFile `"" + (Join-Path $dir "log.txt") + "`" -Racer " + $k + " -Count 1000000 -TickMs 0")
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables["HORDE_HOME"] = (Join-Path $dir "home")
+        $p = [System.Diagnostics.Process]::Start($psi)
+        try {
+            $deadline = (Get-Date).AddSeconds(240)
+            while (-not (Test-Path -LiteralPath $ready) -and -not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 5 }
+            if (-not (Test-Path -LiteralPath $ready)) { [void]$problems.Add("writer " + $k + " was not ready within 240 s") }
+            Start-Sleep -Milliseconds ($rand.Next(150, 700))
+            if ($p.HasExited) { [void]$problems.Add("writer " + $k + " had ended by itself before it could be killed") }
+            else { try { $p.Kill() } catch { [void]$problems.Add("writer " + $k + " could not be killed: " + $_.Exception.Message) } }
+            if (-not $p.WaitForExit(30000)) { [void]$problems.Add("writer " + $k + " was still running 30 s after the kill") }
+        } finally { $p.Dispose() }
+        $done++
+        $loaded = Get-HordeDecisionRecords -Root $store
+        $records += @($loaded.records).Count
+        $bad = @($loaded.records | Where-Object { $_.kind -cne "ok" }).Count
+        $damaged += $bad
+        if (Test-Path -LiteralPath $store) {
+            $names = @(Get-ChildItem -LiteralPath $store -Force | ForEach-Object { $_.Name })
+            $leftovers += @($names | Where-Object { $_ -cmatch '\Awriting-[0-9a-f]{32}\.part\z' }).Count
+            $strays += @($names | Where-Object { $_ -cnotmatch '\Awriting-[0-9a-f]{32}\.part\z' -and $_ -cnotmatch '\A[0-9]{10}\.json\z' }).Count
+        }
+        if ($StopAtDamage -and $bad -gt 0) { break }
+    }
+    return [pscustomobject]@{ problems = @($problems); rounds = $done; records = $records; damaged = $damaged; leftovers = $leftovers; strays = $strays }
+}
+
 try {
 
 $storeCode = Join-Path $root "decisions\Store.ps1"
@@ -188,9 +243,9 @@ $broken = Join-Path $script:work "broken-tree"
 foreach ($folder in @("decisions", "core", "schema")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $broken $folder) -Recurse }
 $storeCopy = Join-Path $broken "decisions\Store.ps1"
 $src = [System.IO.File]::ReadAllText($storeCopy)
-$find = '[System.IO.FileMode]::CreateNew'
+$find = '[System.IO.File]::Move($tmpPath, $recPath)'
 Check (([regex]::Matches($src, [regex]::Escape($find))).Count -eq 1) "the control's edit matches exactly once in decisions/Store.ps1"
-[System.IO.File]::WriteAllText($storeCopy, $src.Replace($find, '[System.IO.FileMode]::Create'))
+[System.IO.File]::WriteAllText($storeCopy, $src.Replace($find, '[System.IO.File]::Copy($tmpPath, $recPath, $true)'))
 
 $bad = Invoke-Race -Name "store-broken" -Mode "store" -Code $storeCopy -Count $storeCount -TickMs $storeTickMs
 $badFacts = Get-StoreRaceFacts $bad
@@ -203,6 +258,31 @@ $badF2 = Get-AddRaceFacts $bad2
 Write-Host ("  overwriting store, race II: done " + @($badF2.done).Count + "; records in the store " + $badF2.loaded.last + "; lost " + @($badF2.lost).Count + "; sequence numbers told to two racers " + @($badF2.sharedSequence).Count) -ForegroundColor DarkGray
 Check (@($bad2.problems).Count -eq 0) "the control's racers ran cleanly in race II"
 Check ((@($badF2.sharedSequence).Count + @($badF2.lost).Count) -gt 0) ("CONTROL: race II sees the damage when the store allows it: " + @($badF2.sharedSequence).Count + " sequence number(s) told to two racers, " + @($badF2.lost).Count + " question(s) told done and lost")
+
+Write-Host ""
+Write-Host ("--- III. a writer killed while it writes: " + $killRounds + " kills, and what each left ---") -ForegroundColor Cyan
+# The store writes a record under a temporary name and moves it into place, so that a writer killed
+# part-way leaves no record at all, never an empty one (decisions/Store.ps1 has the measurement: 9 of 30
+# kills left an empty record when the record was created under its own name and then written).
+$kills = Invoke-KillRounds -Name "kill-real" -Code $storeCode -Rounds $killRounds
+Write-Host ("  real store: " + $kills.rounds + " kills, " + $kills.records + " records written, damaged " + $kills.damaged + ", temporary files left " + $kills.leftovers) -ForegroundColor DarkGray
+Check (@($kills.problems).Count -eq 0) "every writer started, was writing, and was killed by this suite"
+foreach ($pr in @($kills.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
+Check ($kills.records -ge $killRounds) ("CONTROL: the writers were writing when they were killed (" + $kills.records + " records in " + $kills.rounds + " kills)")
+Check ($kills.damaged -eq 0) ("no kill left a record that cannot be read: every record in every store is whole (" + $kills.damaged + " damaged)")
+Check ($kills.strays -eq 0) "and nothing but records and the store's own temporary files was left"
+# CONTROL: the same kills against a copy of the store that creates the record under its own name and
+# writes into it. It runs until a kill leaves a damaged record, or gives up; one is enough to show
+# these kills can land inside a write and that the reading above would have seen it.
+$inPlace = Join-Path $script:work "store-in-place.ps1"
+$nameFind = '$tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")'
+$moveFind = 'try { [System.IO.File]::Move($tmpPath, $recPath) }'
+Check (([regex]::Matches($src, [regex]::Escape($nameFind))).Count -eq 1 -and ([regex]::Matches($src, [regex]::Escape($moveFind))).Count -eq 1) "the kill control's two edits each match exactly once in decisions/Store.ps1"
+[System.IO.File]::WriteAllText($inPlace, $src.Replace($nameFind, '$tmpPath = $recPath').Replace($moveFind, 'try { }'))
+$badKills = Invoke-KillRounds -Name "kill-in-place" -Code $inPlace -Rounds $killControlRounds -StopAtDamage
+Write-Host ("  store that writes in place: " + $badKills.rounds + " kills, " + $badKills.records + " records written, damaged " + $badKills.damaged) -ForegroundColor DarkGray
+Check (@($badKills.problems).Count -eq 0) "the control's writers ran and were killed by this suite"
+Check ($badKills.damaged -gt 0) ("CONTROL: a kill does leave a damaged record when the record is written under its own name (after " + $badKills.rounds + " kill(s))")
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-race-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

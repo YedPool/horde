@@ -11,6 +11,9 @@
 #   own. This is the race that shows whether a whole write - read the list, check, take the next
 #   number, try again on losing - loses a record.
 #
+# -Mode loop: it writes records 1, 2, 3, ... through the store as fast as it can, with no tick and no
+#   log, until it is killed. This is the writer the suite kills mid-write, to see what a kill leaves.
+#
 # What it is TOLD goes to -LogFile, one line an attempt, fields separated by |:
 #   store:       index|created or exists or threw|reason
 #   operations:  index|state|outcome|number|sequence|attempts|reason
@@ -20,7 +23,7 @@
 # its coarse resolution (about 15.6 ms on Windows by default) makes the racers start together rather
 # than take turns.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet("store", "operations")][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet("store", "operations", "loop")][string]$Mode,
     [Parameter(Mandatory = $true)][string]$CodePath,
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$GoFile,
@@ -35,6 +38,15 @@ $ErrorActionPreference = "Stop"
 # Everything slow is done before the clock starts, so start-up is not part of the race.
 if ($Mode -ceq "operations") { $null = Get-HordeDecisionDefinitions }
 [System.IO.File]::WriteAllText($ReadyFile, "ready")
+
+if ($Mode -ceq "loop") {
+    # Nothing but writes, one record after another, until the suite kills this process: so that a kill
+    # at any moment is likely to land while a record is being written. It never ends by itself in the
+    # time a suite waits; -Count bounds it all the same, so a suite that forgot it leaves no process.
+    $text = '{"racer":' + $Racer + ',"body":"' + ("word " * 120) + '"}'
+    for ($seq = [long]1; $seq -le $Count; $seq++) { $null = Add-HordeDecisionRecord -Root $Root -Sequence $seq -Text $text }
+    exit 0
+}
 
 $deadline = [datetime]::UtcNow.AddSeconds(300)
 while (-not (Test-Path -LiteralPath $GoFile)) {

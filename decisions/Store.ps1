@@ -9,21 +9,42 @@
 #   0000000001.json, 0000000002.json, ...   one record each, named by its sequence number in ten digits.
 # Nothing else is kept: no index, no counter, no "current list". The folder is the single source of truth.
 #
-# THE RULES, and what makes each one hold. They are remote/Journal.ps1's, for the same reasons:
-#   - ONE RECORD PER SEQUENCE NUMBER, CREATED WITH FileMode.CreateNew. The operating system lets exactly
-#     one CreateNew of a path succeed; every other caller gets "file exists". So two writers, in any
-#     processes, at any moment, cannot both take sequence 7: the loser is told "exists" and its caller
-#     reads the list again. test/test-decisions-store-race.ps1 races separate processes, and runs a
-#     control store that overwrites instead, to show the race can see a lost record.
-#   - A RECORD IS NEVER REWRITTEN AND NEVER DELETED. There is no function here that does either.
-#   - THE RECORD IS ON DISK BEFORE THE WRITER IS TOLD "created": written through
-#     (FileOptions.WriteThrough, then Flush($true)) and closed.
-#   - A LIVE WRITER'S RECORD IS NEVER SEEN HALF-WRITTEN. It is held with FileShare.None while it is
-#     written, so a reader gets a sharing violation, waits, and reads it whole.
+# THE RULES, and what makes each one hold:
+#   - ONE RECORD PER SEQUENCE NUMBER, PUT IN PLACE BY A MOVE THAT DOES NOT REPLACE. The record is written
+#     whole into a temporary file of its own (writing-<32 hex>.part), and that file is then moved to the
+#     record's name. The operating system lets exactly one move to a name succeed; every other is told
+#     the name exists. So two writers, in any processes, at any moment, cannot both take sequence 7: the
+#     loser is told "exists" and its caller reads the list again. test/test-decisions-store-race.ps1
+#     races separate processes, and runs a control store that overwrites instead, to show the race can
+#     see a lost record.
+#   - A RECORD IS NEVER REWRITTEN AND NEVER DELETED. Nothing here opens a record for writing, and the
+#     only files deleted are this file's own temporary ones, by their name pattern.
+#   - THE RECORD'S BYTES ARE ON DISK BEFORE IT TAKES ITS NAME: written through
+#     (FileOptions.WriteThrough, then Flush($true)) and closed, and only then moved.
+#   - A RECORD IS NEVER SEEN HALF-WRITTEN. It has no name until it is whole.
+#
+# WHERE THIS DIFFERS FROM remote/Journal.ps1, AND WHY. The journal creates the record itself with
+# FileMode.CreateNew and writes into it; this store did the same at first. A writer killed between the
+# create and the write leaves an empty record under a real name, and here that costs for ever: the
+# record is reported on every list and one question number is never given. Measured 2026-10-06, a
+# writer doing nothing but writing 600-character records, killed at a random moment, the store then
+# read back, 30 kills each way:
+#     create-then-write   9 of 30 kills left an empty last record (11 of 30 with 400,000 characters)
+#     write-then-move     0 of 30, and 0 of 30; 18 and 19 temporary files left behind
+# (a control that tears on purpose was seen in 6 of 8, so the reading can see a tear). That is the rate
+# for a kill landing while a record is being written, not for a kill of a real command, which spends
+# about a second starting and milliseconds writing; what differs is what is left. A journal entry is
+# pruned after its replay window; a decision record is kept for good, so the damage is too.
+# WHAT THE MOVE DOES NOT GIVE: the rename itself is not written through (.NET Framework has no call
+# for it), so after a power cut in the seconds after a write the record may be absent - never torn -
+# though its writer was told "created". No test here can cut the power.
+#
+# TEMPORARY FILES LEFT BY A KILLED WRITER are swept at the start of the next write: only names of this
+# file's own pattern, and only ones older than the age below, so a live writer's file is never taken.
 #
 # WHAT A CRASH OR A DAMAGED DISK LEAVES, and what the reader says of each. The list is still handed
 # back, every time; the damaged record is in it, marked, with the reason:
-#   - torn      an empty file or cut JSON: its writer stopped while writing it.
+#   - torn      an empty file or cut JSON: it was damaged after it was written, or made by hand.
 #   - missing   a gap in the order: record 7 is not there and record 8 is. Someone deleted it.
 #   - busy      still open in another process after the wait below. A writer is slow, or stuck.
 #   - error     it could not be read at all (access denied, a disk error, bytes that are not UTF-8).
@@ -37,8 +58,9 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
-# Win32 error codes, read from the low 16 bits of an IOException's HResult: 80 ERROR_FILE_EXISTS (what
-# CreateNew raises), 183 ERROR_ALREADY_EXISTS; 32 ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION.
+# Win32 error codes, read from the low 16 bits of an IOException's HResult: 80 ERROR_FILE_EXISTS,
+# 183 ERROR_ALREADY_EXISTS (what a move onto a taken name raises, measured 2026-10-06, for a file and
+# for a folder alike); 32 ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION.
 $script:HordeDecisionStoreExistsCodes = @(80, 183)
 $script:HordeDecisionStoreBusyCodes = @(32, 33)
 # Strict: bytes that are not UTF-8 throw instead of becoming U+FFFD, so a damaged record is reported
@@ -50,6 +72,12 @@ $script:HordeDecisionStoreNamePattern = '\A([0-9]{10})\.json\z'
 # is a few kilobytes written through, which takes milliseconds, so a healthy writer is done long before.
 $script:HordeDecisionStoreBusyTries = 40
 $script:HordeDecisionStoreBusyWaitMs = 50
+# A writer's temporary file: the only other name this file makes, and the only kind it ever deletes.
+$script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
+# How old a temporary file must be before the next writer removes it. A live writer holds its file for
+# milliseconds (a few kilobytes, written through); ten minutes is far past any writer that is merely
+# slow, so what is removed was left by one that died.
+$script:HordeDecisionStoreTempStaleMinutes = 10
 
 function Get-HordeDecisionStoreWin32Code {
     param($ErrorRecord)
@@ -67,25 +95,53 @@ function Get-HordeDecisionRecordName {
     return ($Sequence.ToString("D10", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
 }
 
+function Remove-HordeDecisionStoreLeftovers {
+    # Remove the temporary files dead writers left in -Root. Returns how many were removed. Only a name
+    # of this file's own temporary pattern, and only one last written more than the stale age ago: a
+    # record is never a candidate, whatever its age, and a live writer's file is too young. A file
+    # that cannot be removed is left for the next write; this never fails a write.
+    param([Parameter(Mandatory = $true)][string]$Root, [datetime]$Now = [datetime]::UtcNow)
+    $removed = 0
+    $found = @()
+    try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }
+    foreach ($leftover in $found) {
+        if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }
+        try {
+            if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalMinutes -lt $script:HordeDecisionStoreTempStaleMinutes) { continue }
+            [System.IO.File]::Delete($leftover)
+            $removed++
+        } catch { }
+    }
+    return $removed
+}
+
 function Add-HordeDecisionRecord {
-    # Create record -Sequence holding -Text, which must not exist yet, write it through to disk, and
-    # close it. Returns "created" or "exists"; throws when the folder or the file cannot be made.
+    # Put record -Sequence, holding -Text, in the store: written whole into a temporary file, written
+    # through to disk, closed, and then moved to the record's name by a move that does not replace.
+    # Returns "created" or "exists"; throws when the folder or the file cannot be made.
     # "exists" is not an error: it is how a writer learns another one took that place in the order.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][long]$Sequence, [Parameter(Mandatory = $true)][string]$Text)
     if (-not [System.IO.Path]::IsPathRooted("$Root")) { throw ("the decisions store needs an absolute folder, not '" + $Root + "'") }
     [void][System.IO.Directory]::CreateDirectory($Root)
     $recPath = Join-Path $Root (Get-HordeDecisionRecordName -Sequence $Sequence)
+    $null = Remove-HordeDecisionStoreLeftovers -Root $Root
+    # Encoded before any file is made: text that cannot be written as UTF-8 throws here and leaves nothing.
+    $bytes = $script:HordeDecisionStoreUtf8.GetBytes($Text)
+    $tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")
+    $fs = New-Object System.IO.FileStream($tmpPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
     try {
-        $fs = New-Object System.IO.FileStream($recPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
-    } catch {
-        if ($script:HordeDecisionStoreExistsCodes -contains (Get-HordeDecisionStoreWin32Code $_)) { return "exists" }
-        throw
-    }
-    try {
-        $bytes = $script:HordeDecisionStoreUtf8.GetBytes($Text)
         $fs.Write($bytes, 0, $bytes.Length)
         $fs.Flush($true)
     } finally { $fs.Dispose() }
+    try { [System.IO.File]::Move($tmpPath, $recPath) }
+    catch {
+        $code = Get-HordeDecisionStoreWin32Code $_
+        try { [System.IO.File]::Delete($tmpPath) } catch { }
+        # "exists" only when a RECORD has the name. A folder of that name raises the same code, and
+        # answering "exists" for it would send the caller round its retry loop for nothing.
+        if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }
+        throw
+    }
     return "created"
 }
 
