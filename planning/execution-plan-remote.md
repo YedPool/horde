@@ -228,9 +228,17 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    any other target is refused, never forwarded. Tests first: a deliver to a session above the ceiling
    is refused with the reason, as a spawn is; a deliver to a session the hub did not spawn is refused.
    **Amended 2026-10-05 (coordinator's decision, for cross-PC messaging, R21):** a deliver may also
-   target a session whose label the node's own `remote.deliverTo` lists. That key is read only from the
-   node's own L1, like `admission.*`, never from the link, and its default is no label. **Until R9
-   lands, hub-spawned or opted-in is the whole deliver gate.** What R9 changes: the permission ceiling
+   target a session whose label the node's own `remote.deliverTo` lists. That key is the node owner's
+   exactly like `remote.permissionCeiling`: settable only in the node's own layers, L1
+   (`<HordeHome>\engine.json`) and L4 (`<HordeHome>\engine-live.json`), the engines plan's two files,
+   read by the node's one layer reader, `cli/NodeAct.ps1`'s `Get-HordeNodeEngineLayers` (A3), again
+   for every deliver as for every spawn - one source of truth for a node's configuration; never from
+   the link; and its default is no label. A live rule beats L1, and an empty value withdraws every
+   opt-in. The value is a bounded list: at most 64 hub labels, each `^[A-Z]{1,2}([1-9][0-9]{0,3})?$`,
+   none twice, and every refusal names the entry. **A node layer that fails its checks refuses every
+   deliver, exactly as it refuses every spawn** (coordinator's decision, 2026-10-06), a deliver to a
+   hub-spawned session included. **Until R9 lands, hub-spawned or opted-in is the whole deliver
+   gate.** What R9 changes: the permission ceiling
    is checked on top of that rule, for an opted-in session exactly as for a hub-spawned one, so an
    opted-in label running above the ceiling is refused with the reason; R9 does not widen the rule.
    **The gate is applied to the resolved session** (review of PR #97, F1): the one the session id, or
