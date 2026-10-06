@@ -68,6 +68,9 @@ $script:HordeConfigDirections = @("any", "lower-only", "raise-only")
 $script:HordeConfigValueKinds = @{
     name = '^[a-z][a-z0-9-]{0,39}$'
     model = '^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$'
+    # A comma-separated list of hub labels (link-verbs v1 label), for remote.deliverTo (remote plan R21):
+    # the labels of this node's sessions its owner opts in to remote delivery.
+    labels = '^[A-Z]{1,2}([1-9][0-9]{0,3})?(,[A-Z]{1,2}([1-9][0-9]{0,3})?){0,63}$'
 }
 # SHAPES OF A SECRET, each a pattern whose MATCH is the secret, so the same list both finds and
 # redacts. Each has a planted case in test-engine-config, and near misses (39 hex digits, the bare
