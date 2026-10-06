@@ -70,6 +70,22 @@ try {
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("wezfleet.ps1")) ("wezfleet missing from the folder is unknown, naming the script it looked for (" + $a.reason + ")")
 } finally { Remove-Item -LiteralPath $missing -Recurse -Force; Set-HordeWezfleetMessengerRoot -Path "" }
+# A FOLDER ON A DRIVE THAT IS NOT THERE - a removable or mapped drive, unplugged - is the same state as a
+# folder without the script, and must read the same. It did not: Join-Path raised "Cannot find drive", so
+# under ErrorActionPreference Stop the port reported "failed to post ... Cannot find drive", and under
+# Continue the error went to the caller's error stream and the reason was a null-binding message
+# (measured 2026-10-06). A missing letter is looked for, never assumed.
+$gone = @([char[]]"ZYXWVUTSRQ" | Where-Object { -not [System.IO.Directory]::Exists("$_" + ":\") }) | Select-Object -First 1
+Check ($null -ne $gone) "CONTROL: a drive letter from Q to Z is not in use here, so the next two checks ran against a drive that is not there"
+if ($null -ne $gone) {
+    try {
+        Set-HordeWezfleetMessengerRoot -Path ("$gone" + ":\fleet")
+        $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("wezfleet is not installed there")) ("a folder on a drive that is not there is unknown as not installed, not as a failure of the messenger (" + $a.reason + ")")
+        $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("wezfleet is not installed there")) ("and so is a status (" + $a.reason + ")")
+    } finally { Set-HordeWezfleetMessengerRoot -Path "" }
+}
 Check (Throws { Set-HordeWezfleetMessengerRoot -Path $tempRoot -TimeoutSeconds 0 } "TimeoutSeconds") "a timeout below 1 s is refused when it is set"
 
 Write-Host ""

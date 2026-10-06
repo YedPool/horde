@@ -15,6 +15,10 @@
         @{ Name = "climbing-root-used"
            Find = ' -or @($dir -split ''[\\/]'') -contains "..") {'
            Replace = ') {' }
+        # A folder with no script in it - here, one on a drive that is not there - must start nothing.
+        @{ Name = "missing-script-started"
+           Find = 'if ($path -eq "" -or -not [System.IO.File]::Exists($path)) {'
+           Replace = 'if ($false) {' }
         @{ Name = "timeout-floor-dropped"
            Find = 'if ($TimeoutSeconds -lt 1) { throw'
            Replace = 'if ($false) { throw' }

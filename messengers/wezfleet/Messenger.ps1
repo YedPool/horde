@@ -68,8 +68,14 @@ function Get-HordeWezfleetMessengerScriptPath {
     if (-not [System.IO.Path]::IsPathRooted($dir) -or $dir -notmatch '\A[A-Za-z]:\\' -or @($dir -split '[\\/]') -contains "..") {
         return [pscustomobject]@{ ok = $false; path = ""; reason = ("the wezfleet folder '" + $dir + "' is not an absolute local folder without .., so it was not used") }
     }
-    $path = Join-Path $dir $script:HordeWezfleetMessengerScript
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ ok = $false; path = ""; reason = ("wezfleet is not installed there: no " + $script:HordeWezfleetMessengerScript + " in '" + $dir + "'") } }
+    # THE FILE SYSTEM IS ASKED DIRECTLY, never through Join-Path and Test-Path: those resolve the drive
+    # first and raise "Cannot find drive" for a letter that is not there (a removable or mapped drive,
+    # unplugged), which left this function with an error instead of an answer - measured 2026-10-06, a
+    # post then read "failed to post ... Cannot find drive" under ErrorActionPreference Stop, and a
+    # null-binding message under Continue. File.Exists answers false for every path it cannot reach.
+    $path = ""
+    try { $path = [System.IO.Path]::Combine($dir, $script:HordeWezfleetMessengerScript) } catch { $path = "" }
+    if ($path -eq "" -or -not [System.IO.File]::Exists($path)) { return [pscustomobject]@{ ok = $false; path = ""; reason = ("wezfleet is not installed there: no " + $script:HordeWezfleetMessengerScript + " in '" + $dir + "'") } }
     return [pscustomobject]@{ ok = $true; path = $path; reason = "" }
 }
 
