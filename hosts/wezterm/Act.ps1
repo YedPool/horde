@@ -173,6 +173,13 @@ function Get-HordeWeztermProcessPane {
     return (New-HordeUnknown -Reason ("process " + $ProcessId + " has no WEZTERM_PANE in its environment, so it is in no pane this terminal can name"))
 }
 
+# The reason a Stop or a Live gives when the expected process is proven - alive with its start time,
+# descended from the terminal's gui - but its own WEZTERM_PANE names another pane. A session can set
+# that variable itself (measured by the review of #99: pane 5 set to 999 read back 999), so a caller
+# matches this name to escalate to ending the proven process itself (follow-up issue), rather than
+# trusting the refusal or calling the session gone.
+$script:HordeWeztermPaneClaimMismatch = "pane-claim-mismatch"
+
 function Test-HordeWeztermPaneTie {
     # Is the expected process in pane -Pane? Known true or false from its own WEZTERM_PANE; unknown
     # when that cannot be read. -PaneOf replaces the reader in a test.
@@ -438,7 +445,8 @@ function Test-HordeWeztermPaneLive {
     # Is the pane -Handle of -Target still there, running the expected process? Known true only when
     # the terminal is the same one, lists the pane, and the process is alive with that start time;
     # known false when the process is gone or the pane is not listed; unknown when the terminal cannot
-    # say. A pane the terminal could not list is never called gone.
+    # say. A pane the terminal could not list is never called gone, and neither is a proven process
+    # that names another pane (unknown, pane-claim-mismatch).
     param($Target, [Parameter(Mandatory = $true)][string]$Handle, $Expect, [scriptblock]$Runner = $null, [scriptblock]$ProcessStart = $null, [object[]]$Table = $null, [scriptblock]$PaneOf = $null)
     $pane = Resolve-HordeWeztermHandle -Target $Target -Handle $Handle -ProcessStart $ProcessStart
     if ($pane.state -ne "known") { return $pane }
@@ -452,7 +460,10 @@ function Test-HordeWeztermPaneLive {
     if (-not $in.value) { return (New-HordeKnown -Value $false) }
     $tie = Test-HordeWeztermPaneTie -Expect $Expect -Pane $pane.value -PaneOf $PaneOf
     if ($tie.state -ne "known") { return $tie }
-    return (New-HordeKnown -Value ([bool]$tie.value))
+    # A proven, running process that names another pane is never called gone: which pane holds it
+    # cannot be told (review of #99, finding 1).
+    if (-not $tie.value) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": the expected process runs in this terminal but names another pane than " + $pane.value + ", so whether this pane still holds it cannot be told")) }
+    return (New-HordeKnown -Value $true)
 }
 
 function Stop-HordeWeztermPane {
@@ -469,7 +480,7 @@ function Stop-HordeWeztermPane {
     if (-not $in.value) { return (New-HordeUnknown -Reason "nothing was ended: the expected process is not running with its start time") }
     $tie = Test-HordeWeztermPaneTie -Expect $Expect -Pane $pane.value -PaneOf $PaneOf
     if ($tie.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $tie.reason)) }
-    if (-not $tie.value) { return (New-HordeUnknown -Reason ("nothing was ended: the expected process runs in another pane than " + $pane.value)) }
+    if (-not $tie.value) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": nothing was ended: the expected process runs in another pane than " + $pane.value)) }
     $lr = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $Target -Runner $Runner
     $listed = $null
     if ($lr.code -eq 0) { $listed = Read-HordeWeztermPaneList -Raw $lr.out }

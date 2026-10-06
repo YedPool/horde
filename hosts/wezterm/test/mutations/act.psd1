@@ -94,7 +94,7 @@
            Find = 'if ($Text -cmatch ''[\x00-\x1F\x7F-\x9F]'') {'
            Replace = 'if ($Text -cmatch ''[\x00-\x1F\x7F]'') {' }
         @{ Name = "pane-tie-skipped"
-           Find = 'if (-not $tie.value) { return (New-HordeUnknown -Reason ("nothing was ended: the expected process runs in another pane than " + $pane.value)) }'
+           Find = 'if (-not $tie.value) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": nothing was ended: the expected process runs in another pane than " + $pane.value)) }'
            Replace = '' }
         @{ Name = "unreadable-pane-ends"
            Find = 'if ($tie.state -ne "known") { return (New-HordeUnknown -Reason ("nothing was ended: " + $tie.reason)) }'
@@ -103,13 +103,25 @@
            Find = 'if (@($listed.value | Where-Object { $_.pane -ceq $pane.value }).Count -eq 0) { return (New-HordeUnknown -Reason ("nothing was ended: the terminal lists no pane " + $pane.value)) }'
            Replace = '' }
         @{ Name = "live-without-tie"
-           Find = '    return (New-HordeKnown -Value ([bool]$tie.value))'
-           Replace = '    return (New-HordeKnown -Value $true)' }
+           Find = '    if (-not $tie.value) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": the expected process runs in this terminal'
+           Replace = '    if ($false) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": the expected process runs in this terminal' }
         @{ Name = "start-without-gui-check"
            Find = '    if ($null -ne $gone) { return (New-HordeUnknown -Reason $gone) }'
            Replace = '' }
         @{ Name = "unreadable-gui-start-passes"
            Find = 'if ($null -eq $now) { return ("the start time of the terminal'
            Replace = 'if ($false) { return ("the start time of the terminal' }
+        @{ Name = "live-mismatch-called-gone"
+           Find = '    if (-not $tie.value) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": the expected process runs in this terminal'
+           Replace = '    if (-not $tie.value) { return (New-HordeKnown -Value $false) }; if ($false) { return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": the expected process runs in this terminal' }
+        @{ Name = "stop-mismatch-unnamed"
+           Find = 'return (New-HordeUnknown -Reason ($script:HordeWeztermPaneClaimMismatch + ": nothing was ended: the expected process runs in another pane than " + $pane.value)) }'
+           Replace = 'return (New-HordeUnknown -Reason ("nothing was ended: the expected process runs in another pane than " + $pane.value)) }' }
+        @{ Name = "reader-key-missed"
+           Find = 'if ($kv.StartsWith("WEZTERM_PANE=", [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = 'if ($kv.StartsWith("WEZTERM_PANEX=", [System.StringComparison]::OrdinalIgnoreCase)) {' }
+        @{ Name = "reader-wrong-offset"
+           Find = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x80));'
+           Replace = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x88));' }
     )
 }

@@ -207,17 +207,45 @@ Write-Host "--- a pane is tied to its process by the process's own WEZTERM_PANE 
 $script:reply = [pscustomobject]@{ code = 0; out = $listed; err = ""; timedOut = $false }
 $script:calls.Clear()
 $r = Stop-HordeWeztermPane -Target $T -Handle ("4242." + $guiStart + ".555") -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf $in17
-Check ($r.state -eq "unknown" -and $r.reason -like "*runs in another pane than 555*" -and @($script:calls | Where-Object { $_[0] -ceq "kill-pane" }).Count -eq 0) "the reviewer's case: a valid process and an unrelated pane id (555) end nothing"
+Check ($r.state -eq "unknown" -and $r.reason -clike "pane-claim-mismatch: *runs in another pane than 555*" -and @($script:calls | Where-Object { $_[0] -ceq "kill-pane" }).Count -eq 0) "the reviewer's case: a valid process and an unrelated pane id (555) end nothing"
 $script:calls.Clear()
 $r = Stop-HordeWeztermPane -Target $T -Handle ("4242." + $guiStart + ".555") -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf { param($p) New-HordeKnown -Value "555" }
 Check ($r.state -eq "unknown" -and $r.reason -like "*lists no pane 555*" -and @($script:calls | Where-Object { $_[0] -ceq "kill-pane" }).Count -eq 0) "a process that names pane 555 when the terminal lists no pane 555 ends nothing"
 $script:calls.Clear()
 $r = Stop-HordeWeztermPane -Target $T -Handle $H -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf { param($p) New-HordeUnknown -Reason "the environment of process 5000 could not be read" }
 Check ($r.state -eq "unknown" -and $r.reason -like "*environment of process 5000 could not be read*" -and $script:calls.Count -eq 0) "an environment that cannot be read ends nothing, and the reason names it"
-Check ((Test-HordeWeztermPaneLive -Target $T -Handle $H -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf { param($p) New-HordeKnown -Value "18" }).value -eq $false) "a listed pane is not live with the expected process when that process says it runs in another pane"
+$lv = Test-HordeWeztermPaneLive -Target $T -Handle $H -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf { param($p) New-HordeKnown -Value "18" }
+Check ($lv.state -eq "unknown" -and $lv.reason -clike "pane-claim-mismatch: *") "a listed pane whose proven process names another pane is UNKNOWN, never called gone (review of #99, finding 1)"
 Check ((Test-HordeWeztermPaneLive -Target $T -Handle $H -Expect $ok -Runner $rec -ProcessStart $alive -Table $table -PaneOf { param($p) New-HordeUnknown -Reason "unreadable" }).state -eq "unknown") "and is unknown when the process's pane cannot be read"
-$me = Get-HordeWeztermProcessPane -ProcessId $PID
-Check ($me.state -ne "known" -or $me.value -cmatch '\A[0-9]+\z') ("CONTROL: the real reader reads this process's own environment and answers (" + $me.state + ": " + $me.reason + $me.value + ")")
+# THE REAL READER, against real children (review of #99, finding 3): one started with WEZTERM_PANE=4242
+# must read 4242, and one started without it must read unknown. Plain processes; no terminal is involved.
+function Start-PaneChild {
+    param([string]$Pane)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
+    $psi.Arguments = "-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60"
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    if ($psi.EnvironmentVariables.ContainsKey("WEZTERM_PANE")) { $psi.EnvironmentVariables.Remove("WEZTERM_PANE") }
+    if ($Pane -ne "") { $psi.EnvironmentVariables["WEZTERM_PANE"] = $Pane }
+    return [System.Diagnostics.Process]::Start($psi)
+}
+function Read-PaneOf {
+    param($Proc)
+    $r = $null
+    for ($i = 0; $i -lt 10; $i++) { $r = Get-HordeWeztermProcessPane -ProcessId $Proc.Id; if ($r.state -eq "known") { break }; Start-Sleep -Milliseconds 300 }
+    return $r
+}
+$withPane = $null; $without = $null
+try {
+    $withPane = Start-PaneChild "4242"
+    $without = Start-PaneChild ""
+    $rw = Read-PaneOf $withPane
+    Check ($rw.state -eq "known" -and "" + $rw.value -ceq "4242") ("the real reader reads WEZTERM_PANE=4242 from a child's own environment block (" + $rw.state + ": " + $rw.reason + $rw.value + ")")
+    $ro = Get-HordeWeztermProcessPane -ProcessId $without.Id
+    Check ($ro.state -eq "unknown" -and $ro.reason -like "*no WEZTERM_PANE*") ("and a child without the variable reads unknown, saying so (" + $ro.reason + ")")
+} finally {
+    foreach ($c in @($withPane, $without)) { if ($null -ne $c) { try { if (-not $c.HasExited) { $c.Kill() } } catch { }; $c.Dispose() } }
+}
 $script:calls.Clear()
 $r = Start-HordeWeztermPane -Target $T -Program $prog -Cwd "C:\w" -Runner $rec -ProcessStart { param($p) $null }
 Check ($r.state -eq "unknown" -and $r.reason -like "*start time of the terminal's gui 4242 could not be read*" -and $script:calls.Count -eq 0) "a start re-reads the gui: a start time that cannot be read refuses, naming it, before the terminal is asked"
