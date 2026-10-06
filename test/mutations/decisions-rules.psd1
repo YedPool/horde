@@ -135,6 +135,9 @@
         @{ Name = "reference-joined-to-its-number-counts-as-a-word"
            Find = 'tickets?|bugs?)(?!\p{L})'', '' '')'
            Replace = 'tickets?|bugs?)\b'', '' '')' }
+        @{ Name = "sentence-without-spaces-counted-as-one-word"
+           Find = '$words = [regex]::Matches($rest, ($script:HordeDecisionUnspacedLetter + ''|\p{L}[\p{L}\p{M}]*'')).Count'
+           Replace = '$words = [regex]::Matches($rest, ''\p{L}[\p{L}\p{M}]*'').Count' }
         @{ Name = "two-word-title-allowed"
            Find = '$script:HordeDecisionMinTitleWords = 3'
            Replace = '$script:HordeDecisionMinTitleWords = 2' }

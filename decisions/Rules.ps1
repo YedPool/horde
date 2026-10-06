@@ -119,6 +119,9 @@ $script:HordeDecisionMaxSequence = 9999999999
 $script:HordeDecisionNotTextInOneLine = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'
 $script:HordeDecisionNotTextInLines = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
+# In Chinese, Japanese, Thai, Lao, Khmer and Burmese a sentence is written with no spaces, so there
+# each letter is counted as a word: about what one carries in Chinese, generous in the others.
+$script:HordeDecisionUnspacedLetter = '[\p{IsCJKUnifiedIdeographs}\p{IsCJKUnifiedIdeographsExtensionA}\p{IsHiragana}\p{IsKatakana}\p{IsThai}\p{IsLao}\p{IsKhmer}\p{IsMyanmar}]'
 $script:HordeDecisionMinTitleWords = 3
 
 # WHAT LOOKS LIKE A SECRET. Names are what a finding says; the value is never repeated. Matched
@@ -374,7 +377,10 @@ function Get-HordeDecisionTitleProblem {
     # measurement). "press" and "bugfix" are still words: a letter follows.
     $rest = [regex]::Replace($rest, '(?i)\b(pull[\s-]*requests?|prs?|merge[\s-]*requests?|mrs?|issues?|tickets?|bugs?)(?!\p{L})', ' ')
     $rest = [regex]::Replace($rest, '#?[0-9]+', ' ')
-    $words = [regex]::Matches($rest, '\p{L}[\p{L}\p{M}]*').Count
+    # A letter of a script that writes no spaces between words counts as a word by itself; a run of any
+    # other letters is one word. Measured 2026-10-06, before this: a Chinese sentence of eleven
+    # characters was refused as one word.
+    $words = [regex]::Matches($rest, ($script:HordeDecisionUnspacedLetter + '|\p{L}[\p{L}\p{M}]*')).Count
     if ($words -eq 0) { return "the title is only a pull-request or issue reference: write the question in plain words, and put the reference in 'references'" }
     if ($words -lt $script:HordeDecisionMinTitleWords) {
         return ("the title is too short to explain itself: besides numbers and references it has " + $words + " word(s), and it needs at least " + $script:HordeDecisionMinTitleWords + ". Write the question so that someone with no other context understands it")

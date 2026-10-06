@@ -115,6 +115,19 @@ foreach ($good in @("Should the closing sound play when the assistant closes?", 
     Check ($f.Count -eq 0) ("CONTROL: accepted: a title in plain words" + $(if ($f.Count) { " (" + ($f -join "; ") + ")" } else { "" }))
 }
 
+# A SCRIPT THAT WRITES NO SPACES BETWEEN WORDS is judged by its letters. Measured 2026-10-06: a Chinese
+# sentence of eleven characters was refused as "1 word(s)", because a word was a run of letters.
+$chinese = "" + [char]0x6211 + [char]0x4EEC + [char]0x5E94 + [char]0x8BE5 + [char]0x5408 + [char]0x5E76 + [char]0x8FD9 + [char]0x4E2A + [char]0x4FEE + [char]0x590D + [char]0x5417 + "?"
+$japanese = "" + [char]0x3053 + [char]0x306E + [char]0x4FEE + [char]0x6B63 + [char]0x3092 + [char]0x30DE + [char]0x30FC + [char]0x30B8 + [char]0x3057 + [char]0x307E + [char]0x3059 + [char]0x304B + "?"
+$thai = "" + [char]0x0E04 + [char]0x0E27 + [char]0x0E23 + [char]0x0E23 + [char]0x0E27 + [char]0x0E21 + [char]0x0E44 + [char]0x0E2B + [char]0x0E21
+foreach ($good in @($chinese, $japanese, $thai)) {
+    $f = Get-Findings (New-Question @{ title = $good })
+    Check ($f.Count -eq 0) ("CONTROL: accepted: a title of " + $good.Length + " characters in a script that writes no spaces" + $(if ($f.Count) { " (" + ($f -join "; ") + ")" } else { "" }))
+}
+Check (Test-Says (Get-Findings (New-Question @{ title = ("" + [char]0x5408 + [char]0x5E76 + "?") })) "too short") "two such letters are still too short to explain anything"
+Check (Test-Says (Get-Findings (New-Question @{ title = ("PR 1469 " + [char]0x5408 + [char]0x5E76 + "?") })) "too short") "and a reference beside them does not help"
+Check (Test-Says (Get-Findings (New-Question @{ title = "Ship it?" })) "it has 2 word(s)") "CONTROL: a title in a script that does write spaces is still counted in words"
+
 Write-Host ""
 Write-Host "--- what a question must hold ---" -ForegroundColor Cyan
 Check ((Get-Findings (New-Question)).Count -eq 0) "CONTROL: the base question passes every rule"
