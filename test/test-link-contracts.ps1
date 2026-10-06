@@ -493,10 +493,25 @@ Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$alertAt].directi
 Refuses { param($v) $v.definitions.'receipt-stage'.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "refused") } "receipt-stage is not delivery's stages less queued, plus refused" "F8: a receipt stage list that drifts from delivery's is refused" @("mail.receipt")
 Refuses { param($v) $v.definitions.'delivery'.properties.stage.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "lost") } "has no place in remote/Contract.ps1's stage order" "F8: a delivery stage the stage order does not rank is refused" @("delivery.status")
 # F7: a time to live has a ceiling, the replay window's 7 days, for a deliver and for outbound mail.
-FrameRefuses "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604801 } "above the 604800-second ceiling" "F7: a deliver living longer than 7 days is refused"
-FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.ttlSeconds = 604801 } "above the 604800-second ceiling" "F7: outbound mail living longer than 7 days is refused"
-$f = @(Test-FrameWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604800 })
+function RulesWith {
+    # A golden frame with one change: its shape must still pass, and Test-HordeLinkFrameRules answers.
+    param([string]$Golden, [scriptblock]$Change)
+    $fr = Copy-Json (Read-Fx ("frames\" + $Golden))
+    $null = & $Change $fr
+    $shape = @(Test-HordeLinkFrame -Frame $fr -Contract $contract)
+    if ($shape.Count -gt 0) { return @("SHAPE: " + ($shape -join "; ")) }
+    return @(Test-HordeLinkFrameRules -Frame $fr)
+}
+$f = @(RulesWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604801 })
+Check (Says $f "above the 604800-second ceiling") "F7: a deliver living longer than 7 days is refused"; Show $f
+$f = @(RulesWith "res-mail-next-known.json" { param($x) $x.result.value.mail.ttlSeconds = 604801 })
+Check (Says $f "above the 604800-second ceiling") "F7: outbound mail living longer than 7 days is refused"; Show $f
+$f = @(RulesWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604800 })
 Check ($f.Count -eq 0) "F7 CONTROL: a deliver living exactly 7 days is accepted"; Show $f
+foreach ($g in $golden) {
+    $f = @(Test-HordeLinkFrameRules -Frame (Read-Data $g.FullName))
+    Check ($f.Count -eq 0) ("F7 CONTROL: golden frame " + $g.Name + " passes the frame rules"); Show $f
+}
 
 Write-Host ""
 Write-Host "--- H. the other contract documents ---" -ForegroundColor Cyan

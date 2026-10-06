@@ -31,8 +31,8 @@ function Resolve-HordeMailReceipt {
     # reason when the receipt is refused (and nothing is recorded); otherwise stage is the record's stage
     # AFTER the receipt - the one asked for when it moved the record forward, the one already recorded when
     # it did not - and that is the stage the ack carries.
-    param([AllowEmptyString()][string]$Recorded, [Parameter(Mandatory = $true)][string]$Asked)
-    if ($Recorded -eq "") { return [pscustomobject]@{ refused = "no outbound message with this id was ever returned from mail.next by this node"; stage = ""; changed = $false } }
+    param([string]$Recorded = "", [Parameter(Mandatory = $true)][string]$Asked)
+    if ($Recorded -eq "") { return [pscustomobject]@{ refused = "this node never returned a message with this id from mail.next"; stage = ""; changed = $false } }
     $receiptStages = @(@($script:HordeMailStageOrder) + @($script:HordeMailFinalStages) | Where-Object { $_ -cne "queued" })
     if ($receiptStages -cnotcontains $Asked) { return [pscustomobject]@{ refused = ("'" + $Asked + "' is not a receipt stage"); stage = $Recorded; changed = $false } }
     $have = Get-HordeMailStageRank -Stage $Recorded
@@ -60,7 +60,7 @@ function Select-HordeMailNext {
     # mail.next over an outbox: how many messages are unsettled, and the oldest of them by createdAt
     # (messageId breaks a tie, so the answer never depends on the order the records were read in).
     # Returns { pending; next }, next $null when none waits.
-    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Outbox)
+    param([object[]]$Outbox = @())
     $waiting = @($Outbox | Where-Object { $null -ne $_ -and -not (Test-HordeMailSettled -Stage "$($_.stage)") })
     $next = $null
     if ($waiting.Count -gt 0) {
@@ -77,7 +77,7 @@ function Select-HordeMailNext {
 function Test-HordeMailSender {
     # Is outbound mail from the device its link authenticated (F5)? The node's payload says who sent it;
     # the hub believes only the link. Findings; empty means the sender's device is the peer's.
-    param([Parameter(Mandatory = $true)]$Mail, [AllowEmptyString()][string]$PeerDeviceId)
+    param([Parameter(Mandatory = $true)]$Mail, [string]$PeerDeviceId = "")
     $claimed = "$(Get-HordeLinkProp (Get-HordeLinkProp $Mail 'from') 'deviceId')"
     if ($PeerDeviceId -eq "") { return @("the link peer's device is not known, so no mail from it can be attributed") }
     if (-not [string]::Equals($claimed, $PeerDeviceId, [System.StringComparison]::Ordinal)) {
@@ -114,10 +114,10 @@ function Resolve-HordeDeliverTarget {
     # procStart) for an id a compact or /clear changed, never by its label; or opted in by its own label.
     param(
         [Parameter(Mandatory = $true)][string]$SessionId,
-        [AllowEmptyString()][string]$Label,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Live,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$HubSpawned,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$DeliverTo
+        [string]$Label = "",
+        [object[]]$Live = @(),
+        [object[]]$HubSpawned = @(),
+        [string[]]$DeliverTo = @()
     )
     $live = @($Live | Where-Object { $null -ne $_ })
     $byId = @($live | Where-Object { [string]::Equals("$($_.sessionId)", $SessionId, [System.StringComparison]::Ordinal) })

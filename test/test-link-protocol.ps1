@@ -493,4 +493,21 @@ Write-Host ("         " + $cases + " cases: " + $accepted + " still valid frames
 Check ($bad -eq 0) ("every one of " + $cases + " damaged or random lines is either a valid canonical frame or refused with a code and a reason, and none throws")
 Check ($refused -gt $cases / 2) "and the generator really damages frames: most are refused"
 
+Write-Host ""
+Write-Host "--- the frame rules hold on the wire, both ends (review of PR #97, F7) ---" -ForegroundColor Cyan
+# A deliver whose time to live is a second over the 7-day ceiling has a valid shape, so only
+# Test-HordeLinkFrameRules can refuse it - here, where every frame is sent and received.
+$longDeliver = Copy-Json $golden["req-session-deliver.json"]
+$longDeliver.args.ttlSeconds = 604801
+Refused (ConvertTo-HordeFrameBytes -Frame $longDeliver -Contract $contract) "bad-frame" "above the 604800-second ceiling" "F7: a deliver living longer than 7 days is not sent"
+Refused (Decode (Line $longDeliver)) "bad-frame" "above the 604800-second ceiling" "F7: a deliver living longer than 7 days is refused on receipt"
+$longMail = Copy-Json $golden["res-mail-next-known.json"]
+$longMail.result.value.mail.ttlSeconds = 604801
+Refused (ConvertTo-HordeFrameBytes -Frame $longMail -Contract $contract) "bad-frame" "above the 604800-second ceiling" "F7: outbound mail living longer than 7 days is not sent"
+Refused (Decode (Line $longMail)) "bad-frame" "above the 604800-second ceiling" "F7: outbound mail living longer than 7 days is refused on receipt"
+$weekDeliver = Copy-Json $golden["req-session-deliver.json"]
+$weekDeliver.args.ttlSeconds = 604800
+$e = ConvertTo-HordeFrameBytes -Frame $weekDeliver -Contract $contract
+Check ($e.ok -and (Decode (Line $weekDeliver)).ok) "F7 CONTROL: a deliver living exactly 7 days is sent and received"
+
 Complete-HordeSuite -Success "the wire carries exactly a frame in printable ASCII, within every cap, and refuses everything else with a reason"

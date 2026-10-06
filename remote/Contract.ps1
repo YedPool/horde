@@ -432,6 +432,22 @@ function Test-HordeLinkStageLists {
     return @($out)
 }
 
+function Test-HordeLinkFrameRules {
+    # The rules of a frame that its shape cannot carry, checked AFTER Test-HordeLinkFrame passed it: today
+    # the ttl ceiling of a deliver and of outbound mail (review of PR #97, F7). A function of its own, not
+    # a step inside Test-HordeLinkFrame, because test/test-link-walk-suites.ps1 compares that function
+    # with its frozen reference (test/fixtures/link-walk/reference.ps1, never edited), and a rule added
+    # there would read as drift. remote/Protocol.ps1 applies both on send and on receive. Findings.
+    param([Parameter(Mandatory = $true)]$Frame)
+    $kind = "$(Get-HordeLinkProp $Frame 'kind')"
+    if ($kind -ceq "req") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $Frame "args") -Path '$.args') }
+    if ($kind -ceq "res") {
+        $answer = Get-HordeLinkProp $Frame "result"
+        if ("$(Get-HordeLinkProp $answer 'state')" -ceq "known") { return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp (Get-HordeLinkProp $answer "value") "mail") -Path '$.result.value.mail') }
+    }
+    return @()
+}
+
 function Test-HordeLinkTtlCeiling {
     # A ttlSeconds above the ceiling, where a verb carries one (review of PR #97, F7). Findings.
     param($Value, [string]$Path)
@@ -886,9 +902,7 @@ function Test-HordeLinkFrame {
     if ($kind -ceq "evt") { return @("no verb of link-verbs v1 streams events: '" + $Frame.verb + "' has none (observe.since and metrics.since bring them, plan steps R12 and R15)") }
     if ($kind -ceq "req") {
         $a = Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.args)" -Path '$.args'
-        $found = @(Test-HordeLinkValue -Value $Frame.args -Walk $a -Path '$.args')
-        if ($found.Count -gt 0) { return $found }
-        return @(Test-HordeLinkTtlCeiling -Value $Frame.args -Path '$.args')
+        return @(Test-HordeLinkValue -Value $Frame.args -Walk $a -Path '$.args')
     }
     if ($members -ccontains "result") {
         $answer = $Frame.result
@@ -896,9 +910,7 @@ function Test-HordeLinkFrame {
         if ($found.Count -gt 0) { return $found }
         if ("$($answer.state)" -ceq "known") {
             $r = Get-HordeLinkWalkTarget -Contract $Contract -Target "$($row.result)" -Path '$.result.value'
-            $found = @(Test-HordeLinkValue -Value $answer.value -Walk $r -Path '$.result.value')
-            if ($found.Count -gt 0) { return $found }
-            return @(Test-HordeLinkTtlCeiling -Value (Get-HordeLinkProp $answer.value "mail") -Path '$.result.value.mail')
+            return @(Test-HordeLinkValue -Value $answer.value -Walk $r -Path '$.result.value')
         }
     }
     return @()
