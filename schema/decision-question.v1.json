@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/decision-question.v1",
+  "title": "decision-question v1",
+  "description": "THE WORDS OF ONE QUESTION WAITING FOR A PERSON, as a caller gives them: the whole question when one is added, and any subset of these fields when one is changed (decisions/Operations.ps1, operations add and update). It is also the shape kept inside a stored question-added record (schema/decision-event.v1). It says SHAPE only. Which fields a new question must carry, what a title must say, that a choice needs options and that no field may hold a secret are rules, and live in decisions/Rules.ps1, because a change names only the fields it changes and a draft-07 'required' cannot say 'required when added'. The field list here and the field table in decisions/Rules.ps1 are compared by test/test-decisions-rules.ps1, so neither can gain a field the other lacks. Every text is stored exactly as given: nothing is trimmed, and a text of any language is kept character for character.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "title": {"type": "string", "description": "The question itself, in plain words, on one line. Never only a number or a pull-request or issue reference: a reader with no other context must understand what is asked."},
+    "kind": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "How the question is answered: one of the names in decisions/question-kinds.json, the one table every caller and every way of showing reads. The list is closed there, not here, so a new kind is one entry in that table."},
+    "options": {"type": "array", "items": {"type": "string"}, "description": "The choices of a question of kind choice, each on one line; at least two. Empty for every other kind."},
+    "parts": {"type": "array", "items": {"type": "string"}, "description": "The sub-points of a question of kind parts; at least two. Empty for every other kind."},
+    "whatItIs": {"type": "string", "description": "The background a person needs to answer. This or yesMeans must be given."},
+    "yesMeans": {"type": "string", "description": "What happens if the answer is yes. This or whatItIs must be given."},
+    "recommendation": {"type": "string", "description": "What the asker recommends. Empty when it has no view."},
+    "group": {"type": "string", "description": "The heading the question is listed under, on one line."},
+    "groupNote": {"type": "string", "description": "Background that belongs to the whole group. Optional."},
+    "askedBy": {"type": "string", "description": "Who asked, on one line."},
+    "waiting": {"type": "array", "items": {"type": "string"}, "description": "Who is blocked until this is answered, one name per item. Empty means nobody is blocked."},
+    "files": {"type": "array", "items": {"type": "string"}, "description": "Paths of files that give more detail, one per item. Paths only: nothing here is opened or run."},
+    "references": {"type": "array", "items": {"type": "string"}, "description": "Pull-request and issue numbers, as references only, one per item. A reference never stands in for the title."},
+    "needsSecret": {"type": "boolean", "description": "True when answering needs a login, a key or another secret. The secret itself is never stored here or in an answer; this flag is what lets a way of showing offer no box for it."}
+  }
+}

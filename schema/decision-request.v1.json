@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/decision-request.v1",
+  "title": "decision-request v1",
+  "description": "WHAT A CALLER HANDS TO ONE DECISIONS OPERATION (decisions/Operations.ps1, Invoke-HordeDecision): plain data, one definition per operation, named for it. The command line builds these today; a window and a link between machines are meant to send the same objects later, so nothing here assumes a console, a file or a person typing. A request is checked against its definition before anything is read or written, and one that does not match is refused with what is wrong. The top of this schema describes no value by itself: a caller always names the operation, and the operation table in decisions/Operations.ps1 names the definition. A new operation is a new definition here and a new entry in that table.",
+  "type": "object",
+  "definitions": {
+    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The idempotency id of a request that writes: 32 lowercase hex digits, chosen by the caller and reused unchanged when the same request is sent again."},
+    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The role label of who is asking. The closed list is the actor enum of schema/decision-event.v1; a label it does not hold is refused."},
+    "number": {"type": "integer", "minimum": 1, "description": "A question's permanent number."},
+    "add": {
+      "type": "object",
+      "required": ["id", "actor", "question"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "question": {"type": "object", "description": "The new question, schema/decision-question.v1."}
+      }
+    },
+    "update": {
+      "type": "object",
+      "required": ["id", "actor", "number", "changes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "changes": {"type": "object", "description": "The fields to change, schema/decision-question.v1; at least one."}
+      }
+    },
+    "close": {
+      "type": "object",
+      "required": ["id", "actor", "number", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "outcome": {"type": "string", "description": "What was done, in plain words."}
+      }
+    },
+    "reopen": {
+      "type": "object",
+      "required": ["id", "actor", "number", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "reason": {"type": "string", "description": "Why it is open again, on one line."}
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Which questions: a state name, or all. Absent means open. The states are the list in decisions/Rules.ps1."}
+      }
+    },
+    "show": {
+      "type": "object",
+      "required": ["number"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"$ref": "#/definitions/number"}
+      }
+    }
+  }
+}
