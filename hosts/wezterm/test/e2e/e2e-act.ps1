@@ -160,7 +160,7 @@ if ($iso) {
     Check ($result.socketRemoved -and -not (Test-Path -LiteralPath $iso.store)) "its socket and its throwaway store are removed"
     if ($null -ne $T) {
         $after = Resolve-HordeWeztermHandle -Target $T -Handle (ConvertTo-HordeWeztermHandle -Target $T -Pane "1")
-        Check ($after.state -eq "unknown" -and $after.reason -like "*no longer running*") "after teardown, a handle of that terminal is refused: its gui is gone"
+        Check ($after.state -eq "unknown" -and $after.reason -like "*start time of the terminal*gui*could not be read*") "after teardown, a handle of that terminal is refused: its gui is gone"
     }
 }
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
