@@ -102,7 +102,9 @@ $tree = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-startsites-" + [guid
 try {
     Copy-Item -LiteralPath (Join-Path $root "messengers") -Destination (Join-Path $tree "messengers") -Recurse
     Remove-Item -LiteralPath (Join-Path $tree "messengers\start-sites.txt")
-    $got = @(Test-HordeStartSites -Root $tree -Folder "messengers" -List "messengers\start-sites.txt")
+    # A throw is turned into a finding here, so a scan that read past a missing list fails this check
+    # rather than breaking the suite (a mutation run counts a broken suite as no catch).
+    $got = try { @(Test-HordeStartSites -Root $tree -Folder "messengers" -List "messengers\start-sites.txt") } catch { @("threw: " + $_.Exception.Message) }
     Check (Says $got "is missing") "with no list at all, the family is refused, not passed"
 } finally { if (Test-Path -LiteralPath $tree) { Remove-Item -LiteralPath $tree -Recurse -Force } }
 

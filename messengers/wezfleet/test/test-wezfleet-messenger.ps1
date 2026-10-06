@@ -33,6 +33,15 @@ function New-Msg {
     }
 }
 function N { param([string]$Id) return $Id.Replace("-", "") }
+function Why {
+    # An answer's reason, looked up: the port leaves an empty reason out of its value, and under strict
+    # mode reading a missing member throws - which a mutation run counts as a broken suite, not a catch.
+    param($Answer)
+    if ($Answer.state -cne "known") { return "" }
+    $r = $Answer.value.PSObject.Properties["reason"]
+    if ($null -eq $r) { return "" }
+    return "$($r.Value)"
+}
 function With-Fake {
     # Run Block with a fresh fake, and always remove it.
     param([scriptblock]$Block, [switch]$Spaced)
@@ -123,7 +132,7 @@ foreach ($c in @(
         & $fx.SetMode $st @{ post = $mode }
         $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
         $ok = ($a.state -ceq "known" -and $a.value.stage -ceq $c.want)
-        if ($c.ContainsKey("reason")) { $ok = $ok -and "$($a.value.reason)".Contains($c.reason) }
+        if ($c.ContainsKey("reason")) { $ok = $ok -and (Why $a).Contains($c.reason) }
         Check $ok ("wezfleet " + $c.stage + " (exit " + $c.exit + ") is the port's " + $c.want + $(if ($c.ContainsKey("reason")) { ", with wezfleet's reason" } else { "" }) + " (" + $(if ($a.state -ceq "known") { $a.value.stage } else { $a.reason }) + ")")
     }
 }
@@ -131,13 +140,13 @@ With-Fake {
     param($st)
     & $fx.SetMode $st @{ post = @{ stage = "unconfirmed"; exit = 0; reason = "" } }
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "known" -and $a.value.stage -ceq "expired" -and "$($a.value.reason)".Trim() -ne "") "unconfirmed with no reason from wezfleet still carries a reason"
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "expired" -and (Why $a).Trim() -ne "") "unconfirmed with no reason from wezfleet still carries a reason"
 }
 With-Fake {
     param($st)
     & $fx.SetMode $st @{ post = @{ stage = "refused"; exit = 2; reason = "" } }
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and "$($a.value.reason)".Trim() -ne "") "refused with no reason from wezfleet is still held with a reason"
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).Trim() -ne "") "refused with no reason from wezfleet is still held with a reason"
 }
 With-Fake {
     param($st)
