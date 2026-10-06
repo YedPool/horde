@@ -341,6 +341,10 @@ if (Test-Path -LiteralPath $jdir) {
 
 Write-Host ""
 Write-Host "--- the way to the records: no junction anywhere from the node's home down (review of #104, F6) ---" -ForegroundColor Cyan
+Reset
+$ctxC = New-Context; $ctxC.now = { [datetime]::SpecifyKind([datetime]::Parse("2026-10-05T12:00:00"), [System.DateTimeKind]::Local) }
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxC
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*clock in UTC*" -and $script:panes.Count -eq 0) ("a spawn whose day cannot be counted is refused, never counted as room (" + $o.reason + ")")
 $h6 = Join-Path $work "home-f6"
 $elsewhere = Join-Path $work "elsewhere-f6"
 New-Item -ItemType Directory -Path $h6, $elsewhere -Force | Out-Null
@@ -353,7 +357,9 @@ if (Test-Path -LiteralPath (Join-Path $h6 "node")) {
     Check (@(Get-ChildItem -LiteralPath $elsewhere -Force).Count -eq 0) "and nothing was created through it: the check comes before the lock file and the folder"
     [System.IO.Directory]::Delete((Join-Path $h6 "node"))
 } else { Check $false "CONTROL: a junction could be made for the test" }
-Check ((Test-HordeNodeRecordsChain -HordeHome $h6 -Dir (Join-Path $work "outside")) -like "*not inside this node's home*") "a records folder outside the node's home is refused"
+$outside = ""
+try { $outside = Test-HordeNodeRecordsChain -HordeHome $h6 -Dir (Join-Path $work "outside") } catch { $outside = "threw: " + $_.Exception.Message }
+Check ($outside -like "*not inside this node's home*") ("a records folder outside the node's home is refused (" + $outside + ")")
 Check ((Test-HordeNodeRecordsChain -HordeHome $h6 -Dir (Join-Path $h6 "node\spawned")) -eq "") "CONTROL: plain folders, or folders not made yet, pass"
 
 Write-Host ""

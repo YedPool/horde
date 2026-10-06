@@ -78,8 +78,8 @@ $script:HordeNodeSpawnLockName = ".spawn.lock"
 # (hosts/<name>/Act.ps1); a longer prompt goes to a file the session is told to read.
 $script:HordeNodePromptTypedMax = 1000
 # The line typed before the mode is read back. A harness may keep its transcript in memory until the
-# first user turn: MEASURED 2026-10-06, read-only over 279 transcripts of claude-code 2.1.228 to
-# 2.1.285, the file was created with the first user line in 192 of 199, lines timestamped up to 21
+# first user turn: MEASURED 2026-10-06, read-only over 279 transcripts of the founder's harness
+# (versions 2.1.228 to 2.1.285), the file was created with the first user line in 192 of 199, lines timestamped up to 21
 # minutes earlier written with it, so a session started with no prompt has no permission-mode line
 # on disk to read. One turn that asks for nothing makes it write one. A constant, never from the link;
 # its cost is one model turn, and its window is that one turn, before the mode is proven (decision of
