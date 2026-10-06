@@ -287,6 +287,18 @@ Write-Host "--- the port ---" -ForegroundColor Cyan
 $a = Get-HordeHostActor -Name "wezterm"
 Check ($a.state -eq "known" -and $null -ne $a.value.own) "the file registers itself as the wezterm host's actor, with a way to name this node's own terminal"
 Check (@(Get-HordeHostActorFiles -Root $root | Where-Object { $_ -like "*\hosts\wezterm\Act.ps1" }).Count -eq 1) "and is found by folder"
+$pp = Join-Path $env:TEMP ("horde-act-profile-" + [guid]::NewGuid().ToString("N"))
+try {
+    $m = & $a.value.ownMarker $pp 4242
+    Check ("" + $m -ceq (Join-Path $pp ".local\share\wezterm\gui-sock-4242")) "the port names the socket file that would make a terminal a profile's own"
+    $empty = & $a.value.own $pp @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+    Check ($empty.state -eq "unknown") "an empty profile has no terminal of its own, even with one running"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $m) -Force | Out-Null
+    New-Item -ItemType File -Path $m | Out-Null
+    $hit = & $a.value.own $pp @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+    Check ($hit.state -eq "known" -and $hit.value.socket -ceq $m -and "" + $hit.value.guiStart -ceq "134350994347710308") "the port's Own, given a profile and a running terminal, names the socket planted there"
+    Check ((& $a.value.own $pp @()).state -eq "unknown") "and none running: none is named, though the socket is there"
+} finally { if ((Split-Path -Leaf $pp) -match '^horde-act-profile-[0-9a-f]{32}$') { Remove-Item -LiteralPath $pp -Recurse -Force -ErrorAction SilentlyContinue } }
 
 Remove-HordePaneTool
 Complete-HordeSuite -Success "the WezTerm host makes exactly the calls it means, in the terminal it is told, and the program gets exactly what it is given"

@@ -230,11 +230,17 @@ function New-HordeWeztermTarget {
     return (New-HordeKnown -Value ([pscustomobject]@{ socket = $Socket; guiPid = $gp; guiStart = "" + $start }))
 }
 
+function Get-HordeWeztermSockDir {
+    # Where a profile's terminals keep their sockets: the user's own profile unless another is given.
+    param([string]$ProfileDir = $env:USERPROFILE)
+    return (Join-Path $ProfileDir ".local\share\wezterm")
+}
+
 function Resolve-HordeWeztermOwnMux {
     # THIS NODE'S OWN TERMINAL, named explicitly for a node that acts in it: the one gui of this user
     # with a socket in the terminal's socket folder. None, or more than one (an isolated test instance
     # beside the user's own counts), is refused: which one is meant cannot be told.
-    param([string]$SockDir = (Join-Path $env:USERPROFILE ".local\share\wezterm"), [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
+    param([string]$SockDir = (Get-HordeWeztermSockDir), [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
     $pids = @()
     if ($null -ne $Guis) { $pids = @(& $Guis) } else { $pids = @(Get-Process -Name "wezterm-gui" -ErrorAction SilentlyContinue | ForEach-Object { [long]$_.Id }) }
     $socks = @($pids | ForEach-Object { Join-Path $SockDir ("gui-sock-" + $_) } | Where-Object { Test-Path -LiteralPath $_ })
@@ -491,10 +497,27 @@ function Stop-HordeWeztermPane {
     return (New-HordeKnown -Value $true)
 }
 
+function Invoke-HordeWeztermOwn {
+    # The port's Own (core/HostAct.ps1). With no arguments, as a node calls it: this user's terminals now.
+    # Given a profile folder, the sockets under it; given running terminals ({ pid; start } each), those
+    # in place of the processes listed now - the isolation probe's control, which plants one and must
+    # find it (test-hub-act-local, the coordinator's condition for dropping its socket pin, 2026-10-06).
+    param([string]$ProfileDir = "", $Running = $null)
+    $pd = $ProfileDir
+    if ($pd -eq "") { $pd = $env:USERPROFILE }
+    $sd = Get-HordeWeztermSockDir -ProfileDir $pd
+    if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd) }
+    $list = @($Running)
+    $guis = { @($list | ForEach-Object { [long]$_.pid }) }.GetNewClosure()
+    $starts = { param($p) $hit = @($list | Where-Object { [long]$_.pid -eq [long]$p }); if ($hit.Count -eq 1) { "" + $hit[0].start } else { $null } }.GetNewClosure()
+    return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $guis -ProcessStart $starts)
+}
+
 # THE PORT (core/HostAct.ps1). A node reaches these functions only through it, so nothing outside
 # hosts/wezterm/ names the terminal (CONTRIBUTING 14). Own names this node's own terminal explicitly.
 Register-HordeHostActor -Name "wezterm" `
-    -Own { Resolve-HordeWeztermOwnMux } `
+    -Own { param($profileDir, $running) Invoke-HordeWeztermOwn -ProfileDir $profileDir -Running $running } `
+    -OwnMarker { param($profileDir, $guiPid) Join-Path (Get-HordeWeztermSockDir -ProfileDir $profileDir) ("gui-sock-" + $guiPid) } `
     -Resolve { param($n) Resolve-HordeWeztermProgram -Name $n } `
     -Start { param($target, $prog, $argv, $cwd, $envMap) if ($null -eq $envMap) { $envMap = @{} }; Start-HordeWeztermPane -Target $target -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap } `
     -Send { param($target, $h, $t, $submit) Send-HordeWeztermText -Target $target -Handle $h -Text $t -Submit:([bool]$submit) } `

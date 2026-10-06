@@ -123,5 +123,14 @@
         @{ Name = "reader-wrong-offset"
            Find = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x80));'
            Replace = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x88));' }
+        @{ Name = "own-probe-ignores-profile"
+           Find = '$sd = Get-HordeWeztermSockDir -ProfileDir $pd'
+           Replace = '$sd = Get-HordeWeztermSockDir' }
+        @{ Name = "own-probe-ignores-running"
+           Find = 'if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd) }'
+           Replace = 'return (Resolve-HordeWeztermOwnMux -SockDir $sd)' }
+        @{ Name = "own-marker-elsewhere"
+           Find = '-OwnMarker { param($profileDir, $guiPid) Join-Path (Get-HordeWeztermSockDir -ProfileDir $profileDir) ("gui-sock-" + $guiPid) }'
+           Replace = '-OwnMarker { param($profileDir, $guiPid) Join-Path $profileDir ("gui-sock-" + $guiPid) }' }
     )
 }
