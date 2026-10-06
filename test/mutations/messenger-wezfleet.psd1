@@ -59,6 +59,10 @@
         @{ Name = "foreign-id-read"
            Find = 'if ($j.id -cne $asked) {'
            Replace = 'if ($false) {' }
+        # Without its own branch, the fleet's documented exit 1 reads as "not an exit code of the fleet".
+        @{ Name = "fleet-failure-read-as-foreign-exit"
+           Find = 'if ([int]$Run.exit -eq 1) {'
+           Replace = 'if ($false) {' }
         @{ Name = "exit-outside-table-read"
            Find = 'if (-not $byExit.ContainsKey([int]$Run.exit)) {'
            Replace = 'if ($false) {' }

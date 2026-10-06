@@ -274,6 +274,26 @@ With-Fake {
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unexpected error: boom")) ("and so is a status (" + $a.reason + ")")
 }
+# EXIT 1 IS IN THE FLEET'S TABLE: it is how the fleet says it could not do it. The reason must say that,
+# with the stage the fleet gave - it read "exit 1, which is not an exit code of the fleet's post" for an
+# answer the fleet documents (measured 2026-10-06), which sends a reader looking for a version mismatch.
+foreach ($c in @(
+        @{ command = "post"; stage = "error" },
+        @{ command = "status"; stage = "error" })) {
+    With-Fake {
+        param($st)
+        & $fx.SetMode $st @{ $c.command = @{ throw = "boom" } }
+        $a = $(if ($c.command -ceq "post") { Send-HordeMessengerMessage -Messenger $m -Message (New-Msg) } else { Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001" })
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("the fleet could not do it") -and "$($a.reason)".Contains("stage '" + $c.stage + "'") -and -not "$($a.reason)".Contains("not an exit code")) ("exit 1 from " + $c.command + " reads as the fleet's own failure, with its stage, not as an exit code it does not have (" + $a.reason + ")")
+    }
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = ('{"id":"' + (N $msg.messageId) + '","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"); exit = 7 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an exit code")) "CONTROL: an exit code the fleet does not have still reads as one"
+}
 # A PARAMETER THE HOST ITSELF REJECTS never reaches the fleet's script: nothing on stdout, the host's
 # words on stderr, exit 1. The reason must carry those words, or the cause is lost.
 With-Fake {

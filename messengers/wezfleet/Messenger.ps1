@@ -11,6 +11,12 @@
 # reason }. post exits 0 when the mail is on disk, new or existing (woken false still exits 0), 1 on a
 # write failure, 2 when refused; status exits 0 when found, 2 for a malformed id, 3 when absent. A repost
 # of one id writes nothing and wakes nothing and reports the existing stage.
+# AS MERGED (wezfleet main 68ff08e, measured against a clone of it on 2026-10-06): exit 1 is the fleet's
+# "could not do it" for both commands - one line with the stage "error" when something threw, or "absent"
+# when post could not write - and it may come after the record was written, so it is unknown, never
+# held. A parameter the host itself rejects prints nothing on stdout and exits 1. post also refuses
+# (exit 2) a label over 64 characters or holding a control, format or line-separator character, and a
+# target that is not a mailbox name; the link's session id allows a colon and the fleet's does not.
 #
 # THE STAGES, mapped onto the port's (messengers/Port.ps1): queued is accepted, handed-over is
 # handed-over, taken is seen, unconfirmed is expired (with a reason), refused is held (with a reason), and
@@ -170,6 +176,9 @@ function Read-HordeWezfleetMessengerAnswer {
     # BOUND TO ITS MESSAGE (review of #102, finding 3): an answer about another id is never this one's.
     $asked = $MessageId.Replace("-", "")
     if ($j.id -cne $asked) { return (New-HordeUnknown -Reason ($what + " answered about " + (ConvertTo-HordeWezfleetMessengerLine $j.id) + ", not " + $asked)) }
+    # EXIT 1 IS THE FLEET SAYING IT COULD NOT, not a code outside its table: said so, with the stage it
+    # gave. Unknown and never held, because the record may already be on disk when the fleet fails.
+    if ([int]$Run.exit -eq 1) { return (New-HordeUnknown -Reason ($what + ": the fleet could not do it (stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "'): " + (ConvertTo-HordeWezfleetMessengerLine $j.reason))) }
     $byExit = $script:HordeWezfleetMessengerExits[$Command]
     if (-not $byExit.ContainsKey([int]$Run.exit)) { return (New-HordeUnknown -Reason ($what + ", which is not an exit code of the fleet's " + $Command + ": " + (ConvertTo-HordeWezfleetMessengerLine $j.reason))) }
     if (@($byExit[[int]$Run.exit]) -cnotcontains $j.stage) { return (New-HordeUnknown -Reason ($what + " with the stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "', which does not go with that exit code")) }
