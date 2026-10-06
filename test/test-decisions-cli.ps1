@@ -164,6 +164,13 @@ Check ($one.code -eq 0 -and @($one.lines | Where-Object { $_ -ceq "Question 1 - 
 Check (@($one.lines | Where-Object { $_ -ceq "  1. a tone" -or $_ -ceq "  2. a spoken line" }).Count -eq 2 -and @($one.lines | Where-Object { $_ -ceq "Recommendation: none given" }).Count -eq 1 -and @($one.lines | Where-Object { $_ -ceq "References: PR 1583" }).Count -eq 1) "its options are listed, a missing recommendation is said, and the reference is shown as a reference"
 
 Write-Host ""
+Write-Host "--- kinds: what each kind of question means ---" -ForegroundColor Cyan
+$kindsRun = Invoke-Decisions @("kinds")
+Check ($kindsRun.code -eq 0 -and $kindsRun.out -like "*yes-no: yes or no. Answered with yes or no.*" -and $kindsRun.out -like "*choice: a choice among options.*It needs at least two options.*") ("kinds prints each kind, its label, what it means and what it needs (exit " + $kindsRun.code + ")")
+$kindsJson = Get-JsonLine (Invoke-Decisions @("kinds", "-Json"))
+Check ($null -ne $kindsJson -and "$($kindsJson.value.kinds.parts.list)" -ceq "parts") "kinds -Json is the table as data"
+
+Write-Host ""
 Write-Host "--- refusals say why, exit 1, and write nothing ---" -ForegroundColor Cyan
 $refFile = Write-Json "reference.json" '{"title":"PR 1469?","kind":"yes-no","whatItIs":"See the pull request.","group":"voice","askedBy":"orc-b"}'
 $ref = Invoke-Decisions @("add", "-File", $refFile)

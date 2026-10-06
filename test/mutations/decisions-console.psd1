@@ -7,6 +7,9 @@
     Target = "decisions\Console.ps1"
     Suite  = "test\test-decisions-cli.ps1"
     Mutations = @(
+        @{ Name = "kinds-printed-without-what-they-need"
+           Find = 'if ("$($k.Value.list)" -ne "") { $needs ='
+           Replace = 'if ($false) { $needs =' }
         @{ Name = "key-given-twice-named"
            Find = 'One of each pair would be stored unseen, so nothing was read. The keys are not named here, because a name may hold what must not be printed")'
            Replace = '" + ($twice -join "; "))' }

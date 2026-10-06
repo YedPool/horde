@@ -65,6 +65,12 @@
       "properties": {
         "number": {"$ref": "#/definitions/number"}
       }
+    },
+    "kinds": {
+      "type": "object",
+      "description": "Asks for the table of question kinds. It takes nothing.",
+      "additionalProperties": false,
+      "properties": {}
     }
   }
 }

@@ -74,10 +74,26 @@ try {
 Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
-Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,list,show") "the operations of this slice are add, update, close, reopen, list and show"
+Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,list,show,kinds") "the operations of this slice are add, update, close, reopen, list, show and kinds"
 Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen") "and four of them write"
 $reqDefs = @($defs.requestSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
 Check (@($ops | Where-Object { $reqDefs -cnotcontains $_.name }).Count -eq 0) "each has its request definition in schema/decision-request.v1"
+
+Write-Host ""
+Write-Host "--- kinds: the table of question kinds, from the operations ---" -ForegroundColor Cyan
+# A caller that cannot read this checkout's files - one across a link - must still be able to say what
+# a kind means. So the table is an answer of the one API, not a file every caller opens.
+$a = Invoke-Op (New-TestStore) "kinds" @{}
+$kindNames = ""
+if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["kinds"]) { $kindNames = (@($a.value.kinds.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") }
+Check ((Get-Outcome $a) -ceq "done" -and $kindNames -ceq "yes-no,choice,value,parts,do-then-say") ("kinds answers with the five kinds of question, in the table's order (" + (Get-Outcome $a) + ": " + $kindNames + ")")
+Check ($kindNames -ne "" -and "$($a.value.kinds.choice.label)" -ceq "$($defs.kinds.choice.label)" -and "$($a.value.kinds.choice.means)" -ceq "$($defs.kinds.choice.means)" -and "$($a.value.kinds.choice.list)" -ceq "options" -and "$($a.value.kinds.'yes-no'.list)" -ceq "") "each with its label, what it means and the list it needs, as the one table has them"
+$whole = ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $a) -Depth 12 -Compress
+Check ($whole.Contains('"kinds":{"yes-no":{')) "and it is plain data: written as JSON it is the table"
+$fileInPlace = Join-Path $script:work "a-file-where-a-store-would-be-for-kinds"
+[System.IO.File]::WriteAllText($fileInPlace, "not a folder", $utf8)
+Check ((Get-Outcome (Invoke-Op $fileInPlace "kinds" @{})) -ceq "done") "it needs no store: it answers where a list could not"
+Check ((Get-Outcome (Invoke-Op (New-TestStore) "kinds" @{ state = "open" })) -ceq "refused") "CONTROL: it takes nothing, and a member it does not take is refused"
 
 Write-Host ""
 Write-Host "--- a request that is not what the operation takes is refused before anything is read ---" -ForegroundColor Cyan

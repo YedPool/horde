@@ -6,6 +6,13 @@
     Target = "decisions\Operations.ps1"
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
+        # --- kinds: the table, from the operations, with no store ---
+        @{ Name = "kinds-waits-on-the-store"
+           Find = 'if ($entry.ContainsKey("noStore")) { return (& $entry.read $plain $null $definitions $Now) }'
+           Replace = '' }
+        @{ Name = "kinds-answers-without-the-table"
+           Find = '-More ([ordered]@{ kinds = $Definitions.kinds })'
+           Replace = '-More ([ordered]@{ kinds = [pscustomobject]@{} })' }
         # --- list: the listed states in any case, and nothing else ---
         @{ Name = "state-in-capitals-refused"
            Find = '$want = ([string]$Request.state).ToLowerInvariant() }'

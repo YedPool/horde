@@ -55,6 +55,8 @@ $script:HordeDecisionOperations = [ordered]@{
     reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
+    # Answered from the definitions alone: no store is read, so it answers where a list could not.
+    kinds  = @{ writes = $false; read = "Get-HordeDecisionKindsAnswer"; noStore = $true }
 }
 # How many times a write tries for a sequence number before it says it cannot. Each failed try means
 # another writer's record was written, so 200 is 200 other writes landing first; a write that still
@@ -193,6 +195,15 @@ function Get-HordeDecisionShowAnswer {
     if ($null -ne $missing) { return $missing }
     $view = ConvertTo-HordeDecisionView -Question $State.questions[[int]$number]
     $value = New-HordeDecisionResult -Operation "show" -Outcome "done" -State $State -More ([ordered]@{ number = [int]$number; question = $view })
+    return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
+}
+
+function Get-HordeDecisionKindsAnswer {
+    # The table of question kinds (decisions/question-kinds.json, read by decisions/Definitions.ps1), as
+    # an answer. It is an operation so that every caller gets the one table from the one API: a caller
+    # across a link cannot open this checkout's file, and one that could would be a second reader of it.
+    param($Request, $State, $Definitions, [datetime]$Now)
+    $value = New-HordeDecisionResult -Operation "kinds" -Outcome "done" -More ([ordered]@{ kinds = $Definitions.kinds })
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
 
@@ -353,6 +364,7 @@ function Invoke-HordeDecision {
         return (New-HordeAbsent -Note ("there is no question " + $plain.number + ": no question has a number above " + (Get-HordeDecisionMaxNumber)))
     }
 
+    if ($entry.ContainsKey("noStore")) { return (& $entry.read $plain $null $definitions $Now) }
     if ($Root -eq "") {
         try { $Root = Get-HordeDecisionStoreRoot }
         catch { return (New-HordeUnknown -Reason "the decisions store could not be found" -ErrorRecord $_) }

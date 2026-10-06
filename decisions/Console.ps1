@@ -42,6 +42,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     reopen = @{ number = $true;  writes = $true;  flags = @("Reason", "Id", "Json") }
     list   = @{ number = $false; writes = $false; flags = @("State", "Json") }
     show   = @{ number = $true;  writes = $false; flags = @("Json") }
+    kinds  = @{ number = $false; writes = $false; flags = @("Json") }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the event schema does not list.
@@ -246,6 +247,14 @@ function Format-HordeDecisionAnswer {
     }
     elseif ($Verb -ceq "list") { foreach ($l in @(Format-HordeDecisionList -Value $value -Kinds $Kinds -Showing $Showing)) { [void]$lines.Add($l) } }
     elseif ($Verb -ceq "show") { foreach ($l in @(Format-HordeDecisionQuestion -Question $value.question -Kinds $Kinds)) { [void]$lines.Add($l) } }
+    elseif ($Verb -ceq "kinds") {
+        [void]$lines.Add("The kinds of question:")
+        foreach ($k in $value.kinds.PSObject.Properties) {
+            $needs = ""
+            if ("$($k.Value.list)" -ne "") { $needs = " It needs at least two " + $k.Value.list + "." }
+            [void]$lines.Add("  " + $k.Name + ": " + $k.Value.label + ". " + $k.Value.means + $needs)
+        }
+    }
     elseif ($value.outcome -ceq "replayed") {
         [void]$lines.Add("Question " + $value.number + ": this request was already recorded (record " + $value.sequence + "), so nothing was written again.")
     }
@@ -331,7 +340,14 @@ function Invoke-HordeDecisionCommand {
     $answer = Invoke-HordeDecision -Operation $Verb -Request $request
     $lines = @()
     if ($have.ContainsKey("Json") -and [bool]$have["Json"]) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
-    else { $lines = @(Format-HordeDecisionAnswer -Verb $Verb -Answer $answer -Kinds (Get-HordeDecisionDefinitions).kinds -Showing $showing) }
+    else {
+        # The kinds table comes from the operations, like everything else this caller knows of the
+        # list; if it cannot be had, a kind is shown by its name.
+        $kinds = $null
+        $table = Invoke-HordeDecision -Operation "kinds" -Request @{}
+        if ($table.state -ceq "known" -and $table.value.outcome -ceq "done") { $kinds = $table.value.kinds }
+        $lines = @(Format-HordeDecisionAnswer -Verb $Verb -Answer $answer -Kinds $kinds -Showing $showing)
+    }
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }

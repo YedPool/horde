@@ -1,11 +1,11 @@
 $HordeCommand = @{
     name    = "decisions"
     group   = "decisions"
-    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> -OutcomeFile <path> | -Outcome <one line> [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State open|closed|all] [-Json] | decisions show <number> [-Json]"
-    summary = "the standing list of questions waiting for a person. add: a new question from a JSON file, and print its permanent number; update: change the fields a JSON file names; close: record what was done; reopen: open it again under the same number; list and show: read the list or one question. A number is given once and never reused. Long text always comes from a file; -Json prints one line of data"
+    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> -OutcomeFile <path> | -Outcome <one line> [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State open|closed|all] [-Json] | decisions show <number> [-Json] | decisions kinds [-Json]"
+    summary = "the standing list of questions waiting for a person. add: a new question from a JSON file, and print its permanent number; update: change the fields a JSON file names; close: record what was done; reopen: open it again under the same number; list and show: read the list or one question; kinds: what each kind of question means. A number is given once and never reused. Long text always comes from a file; -Json prints one line of data"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("add", "update", "close", "reopen", "list", "show")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("add", "update", "close", "reopen", "list", "show", "kinds")][string]$Verb,
             [Parameter(Position = 1)][string]$Number,
             [string]$File,
             [string]$Id,
