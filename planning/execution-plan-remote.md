@@ -233,6 +233,13 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    lands, hub-spawned or opted-in is the whole deliver gate.** What R9 changes: the permission ceiling
    is checked on top of that rule, for an opted-in session exactly as for a hub-spawned one, so an
    opted-in label running above the ceiling is refused with the reason; R9 does not widen the rule.
+   **The gate is applied to the resolved session** (review of PR #97, F1): the one the session id, or
+   the label it carries, led to on the node, never the one the hub meant. Hub-spawned status passes to a
+   new session id only through the process (pid and procStart, in R11's namespace), never through a
+   label, because labels are not unique and a session the hub never spawned can wear the label of one
+   that ended. A live session id wearing a label other than the one the deliver names is refused, never
+   retargeted. `remote/Messaging.ps1`'s `Resolve-HordeDeliverTarget` decides it, and R9's ceiling is
+   checked on the session it returns.
 
 B. Identity and the session record (PROJ; must merge before migration step 3.8)
 
@@ -413,11 +420,20 @@ E. Acting over the link
       4. The node side: `node serve` answers `session.deliver` and `delivery.status` through the
          message journal (R3, kind `message`, keyed by messageId with its argsHash: a resend returns the
          recorded stage and posts nothing), and `mail.next` and `mail.receipt` from the node's outbox.
-         The gate above (hub-spawned or `remote.deliverTo`) is checked here.
+         The gate above (hub-spawned or `remote.deliverTo`) is checked here, on the resolved session,
+         through `remote/Messaging.ps1` (landed with slice 2, after the review of PR #97): the deliver
+         target (`Resolve-HordeDeliverTarget`), the receipt (`Resolve-HordeMailReceipt`: forward only,
+         a final stage never overwritten, the ack carrying the recorded stage, a receipt for a message
+         never handed out refused) and the outbox (`Select-HordeMailNext`: every stage but queued
+         settles, so held never blocks the queue). A ttl above 7 days is refused by the contract.
       5. The hub side and the CLI: `horde tell <device>/<label>` resolves the label through the mirror
          and waits for TAKEN; `horde tell --status <messageId>`; `horde hub serve` drains every node's
          outbox, delivers through its own node over `local` (one actuation path), and sends the receipt
-         back, so the sender on the node sees TAKEN too.
+         back, so the sender on the node sees TAKEN too. The hub believes only the link about who
+         sent outbound mail: `from.deviceId` must be the link peer's enrolled device
+         (`Test-HordeMailSender`), or the receipt is refused; mail for a third device goes only through
+         that device's own node and its gate. Its end-to-end test measures the 5 s drain twice: with an
+         ordinary outbox, and with a held message at its head.
     - **Stages.** queued (journaled on the node), accepted (in the target's mailbox), handed-over (the
       receiving hook handed it to a turn), seen (TAKEN: confirmed in the target's own transcript),
       expired, held (known not delivered, never "failed"). A mail receipt adds refused (the hub would not

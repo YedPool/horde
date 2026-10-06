@@ -69,5 +69,18 @@
         @{ Name = "receipt-ack-time-optional"
            Find = '"type": "object", "required": ["messageId", "stage", "recordedAt"], "additionalProperties": false,'
            Replace = '"type": "object", "required": ["messageId", "stage"], "additionalProperties": false,' }
+        # Review of PR #97: the rules the contract states, each pinned by a Contains check.
+        @{ Name = "deliver-gate-on-resolved-unstated"
+           Find = 'THE GATE IS APPLIED TO THE RESOLVED SESSION, the one'
+           Replace = 'The gate is applied, the one' }
+        @{ Name = "receipt-forward-only-unstated"
+           Find = 'Stages only move forward:'
+           Replace = 'Stages move:' }
+        @{ Name = "held-settles-unstated"
+           Find = 'So held settles too'
+           Replace = 'So held is retried' }
+        @{ Name = "sender-device-unstated"
+           Find = "from.deviceId must be the link peer's enrolled device"
+           Replace = 'from.deviceId names the sending device' }
     )
 }
