@@ -452,6 +452,17 @@ foreach ($case in @(@("not JSON", "{ not json"), @("the enum value 'Plan'", '{ "
     Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*fails its checks*" -and $script:panes.Count -eq 0) ("and the next spawn is refused for it: " + $case[0])
 }
 Check ((Real-Context).note -like "*ENGINE CONFIGURATION FAILS ITS CHECKS*") "the note a node prints as it starts serving says its configuration fails"
+# A file not saved as plain ASCII refuses too, named with its cause (the reader checks bytes first).
+[System.IO.File]::WriteAllBytes((Join-Path $h1 "engine.json"), [System.Text.Encoding]::UTF8.GetBytes('{ "schemaVersion": 1, "rules": [ { "id": "caf' + [char]0x00E9 + '", "match": {}, "set": { "remote.permissionCeiling": "edits" }, "writtenBy": "user" } ] }'))
+Reset
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $rc
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*engine.json: not ASCII*" -and $script:panes.Count -eq 0) ("a non-ASCII engine.json refuses the next spawn, naming the file and the cause (" + $o.reason + ")")
+Remove-Item -LiteralPath (Join-Path $h1 "engine.json")
+[System.IO.File]::WriteAllBytes((Join-Path $h1 "engine-live.json"), [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes('{ "schemaVersion": 1, "rules": [] }')))
+Reset
+$o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $rc
+Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*engine-live.json: not ASCII*byte-order mark*" -and $script:panes.Count -eq 0) ("an engine-live.json with a byte-order mark refuses the next spawn, naming the file and the mark (" + $o.reason + ")")
+Remove-Item -LiteralPath (Join-Path $h1 "engine-live.json")
 Set-Layer "engine.json" '{ "schemaVersion": 1, "rules": [ { "id": "c", "match": {}, "set": { "remote.permissionCeiling": "edits" }, "writtenBy": "user" } ] }'
 $eng = Get-HordeNodeEngineLayers -Root $root -HordeHome $h1 -Descriptors $descriptors -Builtin $rc.builtin
 Check (@($eng.problems).Count -eq 0 -and @($eng.layers | Where-Object { $_.layer -ceq "L1" }).Count -eq 1) "CONTROL: a good engine.json is no problem, and is read as L1"
