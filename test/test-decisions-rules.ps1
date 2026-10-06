@@ -1,0 +1,311 @@
+# DO THE DECISIONS RULES GIVE EVERY QUESTION ONE NUMBER FOR EVER, AND REFUSE WHAT MUST NOT BE WRITTEN?
+#
+# decisions/Rules.ps1 alone, with no store and no file but the module's own definitions: records are
+# built here as values and folded. This suite attacks:
+#   - THE NUMBER. The Nth question-added record is question N; closing, reopening and changing never
+#     move a number or free one; and a record that becomes unreadable AFTER later questions were added
+#     does not renumber them.
+#   - THE FOLD. A torn record, a record of another schema, a kind this version does not know and a
+#     record that contradicts the order are each reported and none stops the list.
+#   - A QUESTION EXPLAINS ITSELF. A title that is only a number or a reference, or too short, is
+#     refused; so is a question with neither background nor "what yes means".
+#   - NO SECRETS, AND NO ECHO. Every kind of credential is refused in any field, by name of the field,
+#     and the finding never repeats it. Controls show ordinary content is let through.
+# The secrets below are assembled from pieces at run time, so that no credential-shaped text sits in
+# this file for a scanner to find.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+Set-StrictMode -Version Latest
+. (Join-Path $root "decisions\Rules.ps1")
+. (Join-Path $root "decisions\Definitions.ps1")
+
+$defs = Get-HordeDecisionDefinitions
+$zeros = "0" * 64
+
+function New-Question {
+    # A question that passes every rule, with -Over replacing or adding fields.
+    param([hashtable]$Over = @{})
+    $q = @{ title = "Should the closing sound play when the assistant closes?"; kind = "yes-no"; whatItIs = "The app has no closing sound today."
+            group = "voice"; askedBy = "orc-b" }
+    foreach ($k in @($Over.Keys)) { $q[$k] = $Over[$k] }
+    return $q
+}
+function Get-Findings {
+    # The findings for a question given as a table; a throw becomes a finding, so a mutant that makes
+    # the rules throw fails a check instead of crashing the suite.
+    param([hashtable]$Question)
+    # Returned with the unary comma: no findings must arrive as an empty list, not as nothing.
+    $found = @()
+    try { $found = @(Test-HordeDecisionQuestion -Question (ConvertTo-HordeDecisionFields -Source $Question) -Kinds $defs.kinds) } catch { $found = @("THREW: " + $_.Exception.Message) }
+    return ,$found
+}
+function Test-Says { param($Findings, [string]$Text) return (@($Findings | Where-Object { "$_".Contains($Text) }).Count -gt 0) }
+function New-Record {
+    # One stored record as the store hands it over: the envelope written as JSON and read back.
+    param([long]$Seq, [string]$Kind, $Data, [string]$Id = "", [int]$Version = 1, [long]$SaysSeq = -1)
+    if ($Id -eq "") { $Id = $Seq.ToString("x32") }
+    if ($SaysSeq -lt 0) { $SaysSeq = $Seq }
+    $envelope = [ordered]@{ schemaVersion = $Version; sequence = $SaysSeq; id = $Id; kind = $Kind; at = ("2026-10-06T12:00:" + ($Seq % 60).ToString("00") + ".0000000Z"); actor = "warchief"; requestHash = $zeros; data = $Data }
+    return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "ok"; data = ((ConvertTo-Json -InputObject $envelope -Compress -Depth 12) | ConvertFrom-Json); reason = "" }
+}
+function New-Added { param([long]$Seq, [int]$Number, [string]$Title = "") if ($Title -eq "") { $Title = "Is question number $Number asked in plain words here?" }; return (New-Record -Seq $Seq -Kind "question-added" -Data ([ordered]@{ number = $Number; question = (ConvertTo-HordeDecisionFields -Source (New-Question @{ title = $Title })) })) }
+function New-Torn { param([long]$Seq) return [pscustomobject]@{ sequence = $Seq; file = ($Seq.ToString("D10") + ".json"); kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
+function Get-Fold {
+    param($Records)
+    try { return (ConvertTo-HordeDecisionState -Records $Records -Definitions $defs) } catch { Write-Host ("         the fold threw: " + $_.Exception.Message) -ForegroundColor Red; return (New-HordeDecisionState) }
+}
+function Get-Numbers { param($State) return (@($State.questions.Keys) -join ",") }
+
+Write-Host ""
+Write-Host "--- one definition of each thing ---" -ForegroundColor Cyan
+$schemaFields = @($defs.questionSchema.properties.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
+$tableFields = @(Get-HordeDecisionFieldNames | Sort-Object)
+Check (($schemaFields -join ",") -ceq ($tableFields -join ",")) "the rules' field table and schema/decision-question.v1 name the same fields"
+Check ($tableFields.Count -eq 14) ("CONTROL: there are fourteen fields (" + $tableFields.Count + ")")
+$viewFields = @($defs.resultSchema.definitions.view.properties.PSObject.Properties | ForEach-Object { $_.Name })
+Check (@($tableFields | Where-Object { $viewFields -cnotcontains $_ }).Count -eq 0) "and a question as shown (decision-result.v1) carries every one of them"
+$kindNames = @(Get-HordeDecisionEventKinds)
+$defNames = @($defs.eventSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
+Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened") "the event kinds of this slice are the four of the design"
+Check ((@($kindNames | Sort-Object) -join ",") -ceq (@($defNames | Sort-Object) -join ",")) "every event kind has its data definition in schema/decision-event.v1, and every definition has a kind"
+$unbacked = @($kindNames | Where-Object { $null -eq (Get-Command -Name $script:HordeDecisionEventKinds[$_].apply -CommandType Function -ErrorAction SilentlyContinue) })
+Check ($unbacked.Count -eq 0) "and every kind's function exists"
+Check ((@($defs.kinds.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "yes-no,choice,value,parts,do-then-say") "the question kinds are the five of the design, from the one table"
+Check (@($defs.kinds.PSObject.Properties | Where-Object { "$($_.Value.label)".Trim() -eq "" -or "$($_.Value.means)".Trim() -eq "" }).Count -eq 0) "each with a label and one definition in a sentence"
+Check ((Get-HordeDecisionStates) -join "," -ceq "open,closed") "a question is open or closed in this slice"
+
+Write-Host ""
+Write-Host "--- a title must explain itself ---" -ForegroundColor Cyan
+foreach ($bad in @("7", "#7?", "1469", "PR 1469?", "pr 1469", "pull request 1469", "Pull-request #1469?", "Issue 94?", "issues 94, 95", "PRs 12 and 13?")) {
+    $f = Get-Findings (New-Question @{ title = $bad })
+    Check ($f.Count -eq 1 -and ((Test-Says $f "only a pull-request or issue reference") -or (Test-Says $f "no letters") -or (Test-Says $f "too short"))) ("refused: '" + $bad + "'")
+}
+Check (Test-Says (Get-Findings (New-Question @{ title = "PR 1469?" })) "only a pull-request or issue reference") "'PR 1469?' is refused as only a reference, and told where a reference belongs"
+Check (Test-Says (Get-Findings (New-Question @{ title = "1469" })) "no letters") "a title that is only a number is refused as having no letters"
+Check (Test-Says (Get-Findings (New-Question @{ title = "???" })) "no letters") "so is a title of punctuation"
+Check (Test-Says (Get-Findings (New-Question @{ title = "Merge PR 1469?" })) "too short") "'Merge PR 1469?' is refused: one word beside the reference does not explain it"
+Check (Test-Says (Get-Findings (New-Question @{ title = "Close pull request 1469?" })) "too short") "the words 'pull request' do not count as explaining: 'Close pull request 1469?' is refused"
+Check (Test-Says (Get-Findings (New-Question @{ title = "Ship it?" })) "too short") "'Ship it?' is refused as too short"
+Check (Test-Says (Get-Findings (New-Question @{ title = "   " })) "'title' is missing or blank") "a blank title is missing"
+$hebrewTitle = "" + [char]0x05D4 + [char]0x05D0 + [char]0x05DD + " " + [char]0x05DC + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05D7 + " " + [char]0x05D0 + [char]0x05EA + " " + [char]0x05D4 + [char]0x05E7 + [char]0x05D5 + [char]0x05D1 + [char]0x05E5 + "?"
+foreach ($good in @("Should the closing sound play when the assistant closes?", "Fix the bug where one registration code can register two devices?", "Merge the zoom-limit fix (PR 1583) after it is tested on a device?", "Test near and far distances too?", "Write to them now?", $hebrewTitle)) {
+    $f = Get-Findings (New-Question @{ title = $good })
+    Check ($f.Count -eq 0) ("CONTROL: accepted: a title in plain words" + $(if ($f.Count) { " (" + ($f -join "; ") + ")" } else { "" }))
+}
+
+Write-Host ""
+Write-Host "--- what a question must hold ---" -ForegroundColor Cyan
+Check ((Get-Findings (New-Question)).Count -eq 0) "CONTROL: the base question passes every rule"
+Check (Test-Says (Get-Findings (New-Question @{ whatItIs = ""; yesMeans = "" })) "must explain itself") "a question with neither whatItIs nor yesMeans is refused"
+Check ((Get-Findings (New-Question @{ whatItIs = ""; yesMeans = "A short tone plays." })).Count -eq 0) "CONTROL: yesMeans alone is enough"
+foreach ($need in @("kind", "group", "askedBy")) {
+    Check (Test-Says (Get-Findings (New-Question @{ $need = "" })) ("'" + $need + "' is missing or blank")) ("a question with no " + $need + " is refused")
+}
+Check ((Get-Findings (New-Question @{ recommendation = ""; waiting = @(); groupNote = "" })).Count -eq 0) "CONTROL: no recommendation, nobody waiting and no group note are all allowed"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "maybe" })) "is not a kind of question") "a kind the table does not hold is refused, and the kinds are listed"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "choice" })) "needs at least two options") "a choice with no options is refused"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "choice"; options = @("only one") })) "needs at least two options") "a choice with one option is refused"
+Check ((Get-Findings (New-Question @{ kind = "choice"; options = @("Hebrew", "Spanish") })).Count -eq 0) "CONTROL: a choice with two options passes"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "choice"; options = @("same", "same") })) "names one item twice") "a choice naming one option twice is refused"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "parts"; parts = @("only one") })) "needs at least two parts") "a question in parts with one part is refused"
+Check ((Get-Findings (New-Question @{ kind = "parts"; parts = @("the wait starts when she listens", "any reply cancels the close") })).Count -eq 0) "CONTROL: two parts pass"
+Check (Test-Says (Get-Findings (New-Question @{ options = @("a", "b") })) "'options' is given, but a question of kind yes-no has none") "options on a yes-no question are refused, not stored and never shown"
+Check (Test-Says (Get-Findings (New-Question @{ kind = "choice"; options = @("a", "b"); parts = @("x", "y") })) "'parts' is given") "parts on a choice are refused"
+Check (Test-Says (Get-Findings (New-Question @{ waiting = @("orc-b", " ") })) "'waiting' (item 2) is blank") "a blank item in a list is refused, by its place"
+Check (Test-Says (Get-Findings (New-Question @{ title = "Should the closing sound`nplay when the assistant closes?" })) "'title' must be one line") "a title with a line break is refused"
+Check ((Get-Findings (New-Question @{ whatItIs = "Line one.`r`nLine two.`nLine three." })).Count -eq 0) "CONTROL: the background may have as many lines as it needs"
+$long = "word " * 20000
+Check ((Get-Findings (New-Question @{ whatItIs = $long })).Count -eq 0) "CONTROL: a 100,000-character background passes"
+$f = Get-Findings (New-Question @{ whatItIs = ("word " * 100000) + "!" })
+Check ((Test-Says $f "'whatItIs' is 500001 characters long") -and (Test-Says $f "never cut")) "a 500,001-character background is refused whole, with its length, and says it is not cut"
+Check (Test-Says (Get-Findings (New-Question @{ group = ("g" * 1001) })) "'group' is 1001 characters long") "a one-line field over 1,000 characters is refused"
+Check (Test-Says (Get-Findings (New-Question @{ waiting = @(1..101 | ForEach-Object { "orc-" + $_ }) })) "'waiting' has 101 items") "a list of more than 100 items is refused"
+$note = @(Test-HordeDecisionNote -Text "  " -Name "outcome")
+Check (Test-Says $note "'outcome' is blank") "a closing outcome must say something"
+Check (Test-Says @(Test-HordeDecisionNote -Text "one`ntwo" -Name "reason" -OneLine) "must be one line") "a reopening reason is one line"
+Check (@(Test-HordeDecisionNote -Text "Built and shipped.`nSecond line." -Name "outcome").Count -eq 0) "CONTROL: an outcome may have several lines"
+
+Write-Host ""
+Write-Host "--- no secrets, in any field, and never repeated ---" -ForegroundColor Cyan
+$secrets = [ordered]@{
+    "a private key" = ("-----BEGIN RSA PRIV" + "ATE KEY-----")
+    "an access token" = ("gh" + "p_" + ("Ab1" * 12))
+    "a signed web token" = ("ey" + "JhbGciOiJIUzI1NiJ9" + "." + "ey" + "JzdWIiOiIxMjM0In0" + "." + "c2ln")
+    "a bearer token" = ("Bea" + "rer " + ("a1b2c3d4e5" * 3))
+    "a password or key written as name=value" = ("pass" + "word=" + "hunter2")
+    "a password written after a colon" = ("Pass" + "word: " + "hunter2x")
+    "a long random-looking string" = ("Zx9Qm2Lp7Rt4Vb8Nc1Hd" + "6Jf3Kg5Ws0YaUe4Ti7Ro")
+}
+foreach ($name in $secrets.Keys) {
+    $secret = $secrets[$name]
+    $found = @(Find-HordeDecisionSecrets -Value ([pscustomobject]@{ question = [pscustomobject]@{ title = "A plain title"; whatItIs = ("The login is " + $secret + " for now.") } }))
+    Check ($found.Count -eq 1 -and (Test-Says $found "'whatItIs' holds what looks like") -and (Test-Says $found $name)) ("refused in whatItIs, named as " + $name)
+    Check (-not (Test-Says $found $secret) -and -not (Test-Says $found "hunter2") -and -not (Test-Says $found "Zx9Qm2")) "and the finding does not repeat it"
+}
+$more = @("gh" + "o_" + ("Cd2" * 12); "github" + "_pat_" + ("Ef3" * 10); "gl" + "pat-" + ("Gh4" * 8); "xo" + "xb-" + ("123456789012" * 2); "s" + "k-" + ("Ij5" * 10); "AK" + "IA" + "ABCDEFGHIJKLMNOP"; "AS" + "IA" + "QRSTUVWXYZ234567"; "AI" + "za" + ("Kl6" * 12); "api_" + "key = " + "abc"; "TOK" + "EN=" + "x"; "-----BEGIN PRIV" + "ATE KEY-----"; "-----BEGIN EC PRIV" + "ATE KEY-----")
+$missed = @($more | Where-Object { (Find-HordeDecisionSecretKind -Text ("see " + $_ + " here")) -eq "" })
+Check ($missed.Count -eq 0) ("twelve more credential shapes are each refused: other token prefixes, cloud key ids, name = value with spaces, other key headers (" + $missed.Count + " missed)")
+$deep = [pscustomobject]@{ id = "x"; question = [pscustomobject]@{ options = @("fine", ("use " + $secrets["an access token"])); files = @("a.txt") }; outcome = $secrets["a private key"] }
+$found = @(Find-HordeDecisionSecrets -Value $deep)
+Check ($found.Count -eq 2 -and (Test-Says $found "'options' (item 2)") -and (Test-Says $found "'outcome'")) "a secret is found wherever it sits: an item of a list, and a text beside the question"
+$ordinary = @(
+    "07af8361c2d4e5f60718293a4b5c6d7e8f901234"                       # a commit id: hex, one case
+    "0273216a-4aa6-420b-8bd6-b5d61a13d73d"                           # a UUID
+    "C:\work\horde-worktrees\decisions\test\fixtures\a-rather-long-file-name-for-a-fixture.json"
+    "work/horde-worktrees/decisions/test/fixtures/another-rather-long-file-name-2-for-a-fixture.json"
+    "A password is needed before this can be tested; it will be typed into the session."
+    "token: none yet"
+    "PASSWORD: ask whoever owns the test account"
+    "The secret of the fix is that the timer runs in the app."
+    "feature-decisions-store-first-slice-of-the-new-module"
+    "ThisIsAVeryLongCamelCaseIdentifierWithNoDigitsAtAllInIt"
+    ("word " * 20000)
+)
+$wrongly = @($ordinary | Where-Object { (Find-HordeDecisionSecretKind -Text $_) -ne "" })
+Check ($wrongly.Count -eq 0) ("CONTROL: ordinary content is let through: a commit id, a UUID, long paths, the words password, token and secret in a sentence, long names, 100,000 characters of words (" + $wrongly.Count + " refused" + $(if ($wrongly.Count) { ": " + (@($wrongly | ForEach-Object { $_.Substring(0, [Math]::Min(40, $_.Length)) }) -join " | ") } else { "" }) + ")")
+# THE STATED COST of favouring refusal (decisions/Rules.ps1): a long mixed-case name with a digit in it
+# looks like a key and is refused too. Pinned here so that it is a decision, not a surprise.
+Check ((Find-HordeDecisionSecretKind -Text "see AnotherRatherLongFileName2ForAFixtureOfThisSuite") -like "a long random-looking string*") "a 48-character mixed-case name with a digit is refused as random-looking: the stated cost of the threshold"
+
+Write-Host ""
+Write-Host "--- a request hashes by what it says, not how it was spelled ---" -ForegroundColor Cyan
+$h1 = Get-HordeDecisionHash -Value ([ordered]@{ a = 1; b = "x"; c = @("p", "q") })
+$h2 = Get-HordeDecisionHash -Value ('{"c":["p","q"],"b":"x","a":1}' | ConvertFrom-Json)
+Check ($h1 -cmatch '\A[0-9a-f]{64}\z') "the hash is 64 lowercase hex digits"
+Check ($h1 -ceq $h2) "key order does not change it, nor whether the value was a table or parsed JSON"
+Check ($h1 -cne (Get-HordeDecisionHash -Value ([ordered]@{ a = 1; b = "y"; c = @("p", "q") }))) "a changed text changes it"
+Check ($h1 -cne (Get-HordeDecisionHash -Value ([ordered]@{ a = 1; b = "x"; c = @("q", "p") }))) "a reordered list changes it: the order of options is part of the question"
+Check ($h1 -ceq (Get-HordeDecisionHash -Value ('{"a":1.0,"b":"x","c":["p","q"]}' | ConvertFrom-Json))) "1 and 1.0 hash the same"
+Check ((Get-HordeDecisionHash -Value @{ t = 'a"b' }) -cne (Get-HordeDecisionHash -Value @{ t = 'a\"b' })) "a quote and an escaped quote are different texts"
+Check (Throws { Get-HordeDecisionHash -Value @{ when = (Get-Date) } } "cannot be hashed") "a value that is not JSON data is refused, never hashed as its type name"
+
+Write-Host ""
+Write-Host "--- the Nth question-added record is question N ---" -ForegroundColor Cyan
+$records = @(
+    (New-Added 1 1), (New-Added 2 2),
+    (New-Record 3 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ recommendation = "yes, a short one" } })),
+    (New-Added 4 3),
+    (New-Record 5 "question-closed" ([ordered]@{ number = 2; outcome = "Built." })),
+    (New-Added 6 4),
+    (New-Record 7 "question-reopened" ([ordered]@{ number = 2; reason = "not finished" })),
+    (New-Added 8 5)
+)
+$st = Get-Fold $records
+Check ((Get-Numbers $st) -ceq "1,2,3,4,5") "five question-added records among eight are questions 1 to 5"
+Check (@(1..5 | Where-Object { $st.questions[$_].title -cne "Is question number $_ asked in plain words here?" }).Count -eq 0) "and each number is the question added at that place"
+Check ($st.lastSequence -eq 8 -and $st.lastNumber -eq 5 -and $st.unreadable.Count -eq 0 -and $st.ignored.Count -eq 0) "CONTROL: every record was read and applied"
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 6) "the next question would be 6"
+# The number of a question never changes as records are added after it: fold every prefix.
+$moved = New-Object System.Collections.ArrayList
+for ($k = 1; $k -le $records.Count; $k++) {
+    $part = Get-Fold @($records[0..($k - 1)])
+    foreach ($num in @($part.questions.Keys)) { if ($part.questions[$num].title -cne $st.questions[$num].title) { [void]$moved.Add("after record " + $k + ": " + $num) } }
+}
+Check ($moved.Count -eq 0) "folding the first 1, 2, ... 8 records never gives any question another number than it ends with"
+
+Write-Host ""
+Write-Host "--- closing and reopening never move a number or free one ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Added 2 2), (New-Record 3 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })))
+Check ($st.questions[1].state -ceq "closed" -and $st.questions[1].outcome -ceq "Done." -and $st.questions[1].closedAt -ne "") "a closed question is closed, with its outcome and when"
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3) "a closed question's number is not given again: the next question is 3, not 1"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })), (New-Record 3 "question-reopened" ([ordered]@{ number = 1; reason = "it came back" })), (New-Added 4 2))
+Check ($st.questions[1].state -ceq "open" -and $st.questions[1].outcome -eq "" -and $st.questions[1].closedAt -eq "" -and $st.questions[1].reopenReason -ceq "it came back") "a reopened question is open again under its own number, with the reason"
+Check ((Get-Numbers $st) -ceq "1,2" -and $st.questions[1].history.Count -eq 3) "it is the same question: its history holds the add, the close and the reopen"
+Check ((@($st.questions[1].history | ForEach-Object { $_.note }) -join ",") -ceq "added,closed,reopened") "in order"
+
+Write-Host ""
+Write-Host "--- a record that cannot apply is reported and changes nothing ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })), (New-Record 3 "question-closed" ([ordered]@{ number = 1; outcome = "Done again." })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 3 -and $st.ignored[0].reason -like "*already closed*" -and $st.questions[1].outcome -ceq "Done.") "a second close of a closed question is ignored by name; the first outcome stands"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-reopened" ([ordered]@{ number = 1; reason = "why" })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*only a closed question can be reopened*") "reopening an open question is ignored by name"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })), (New-Record 3 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ title = "Should something else entirely be asked here?" } })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*only an open question can be changed*" -and $st.questions[1].title -clike "Is question number 1*") "a change to a closed question is ignored by name, and its words stand"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 7; outcome = "Done." })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 7*") "a record about a number never given is ignored by name"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ group = "voice" } })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*it changes nothing*" -and $st.questions[1].history.Count -eq 1) "a change that changes nothing is not a change: no history line, and it is reported"
+
+Write-Host ""
+Write-Host "--- the wording version counts changes to what a person reads ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1),
+    (New-Record 2 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ recommendation = "yes"; waiting = @("orc-b"); files = @("a.txt"); group = "audio" } })),
+    (New-Record 3 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ yesMeans = "A short tone plays." } })),
+    (New-Record 4 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ kind = "choice"; options = @("tone", "spoken line") } })),
+    (New-Record 5 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ title = "Which closing signal should play when the assistant closes?"; whatItIs = "The app has no closing sound today." } })))
+$q = $st.questions[1]
+Check ($st.ignored.Count -eq 0 -and $q.history.Count -eq 5) "CONTROL: all four changes applied"
+Check ($q.history[1].note -ceq "changed recommendation, group, waiting, files") "a change to the recommendation, the group, who is waiting and the files is not a new wording"
+Check ($q.history[2].note -ceq "changed yesMeans (now wording 2)") "a change to yesMeans is wording 2"
+Check ($q.history[3].note -ceq "changed kind, options (now wording 3)") "a change to the options is wording 3"
+Check ($q.history[4].note -ceq "changed title (now wording 4)" -and $q.wordingVersion -eq 4) "a change to the title is wording 4, and a field given its old value is not counted as changed"
+Check ($q.group -ceq "audio" -and (@($q.options) -join "|") -ceq "tone|spoken line" -and $q.kind -ceq "choice") "and the question holds the latest value of every field"
+
+Write-Host ""
+Write-Host "--- an unreadable record never stops the list and never renumbers a question ---" -ForegroundColor Cyan
+# Record 2 cannot be read. Questions added AFTER it wrote their numbers down, so whether record 2 was a
+# question or not, they keep them.
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Added 3 2), (New-Added 4 3))
+Check ((Get-Numbers $st) -ceq "1,2,3" -and $st.unreadable.Count -eq 1 -and $st.unreadable[0].sequence -eq 2 -and $st.unreadable[0].file -ceq "0000000002.json") "the list loads around a torn record, which is named with its file"
+Check ($st.unreadable[0].reason -like "*not complete JSON*") "and its reason is the store's"
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Added 3 3), (New-Added 4 4))
+Check ((Get-Numbers $st) -ceq "1,3,4") "when the torn record was question 2, questions 3 and 4 are still 3 and 4: nothing shifts down into the gap"
+Check ((Get-HordeDecisionNumberStatus -State $st -Number 2) -ceq "unreadable" -and (Get-HordeDecisionNumberStatus -State $st -Number 3) -ceq "present" -and (Get-HordeDecisionNumberStatus -State $st -Number 5) -ceq "absent") "number 2 is known to be unreadable, not absent; 5 was never given"
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 5) "CONTROL: with every later record readable, the next number is 5"
+# At the END of the order nothing later says what an unreadable record was, so its number is left unused.
+$st = Get-Fold @((New-Added 1 1), (New-Added 2 2), (New-Torn 3))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 4) "after an unreadable last record the next question is 4, not 3: the record may have been question 3"
+Check ((Get-HordeDecisionNumberStatus -State $st -Number 3) -ceq "unreadable") "and number 3 reads as unreadable meanwhile"
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Torn 3), (New-Record 4 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 4 -and $st.questions[1].state -ceq "closed") "two unreadable records leave two numbers unused, and a readable record after them still applies"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-updated" ([ordered]@{ number = 2; changes = [ordered]@{ group = "x" } })), (New-Torn 3))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 2*") "CONTROL: a record about a number above every number given is about no question"
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Record 3 "question-closed" ([ordered]@{ number = 2; outcome = "Done." })))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*whose own record cannot be read*") "a record about a question whose own record is unreadable says exactly that"
+
+Write-Host ""
+Write-Host "--- a record that contradicts the order is not believed ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Added 2 2), (New-Added 3 2 "Is this second claim to number two shown at all?"))
+Check ((Get-Numbers $st) -ceq "1,2" -and $st.questions[2].title -clike "Is question number 2*") "a later record claiming a number already given does not replace that question"
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 3 -and $st.ignored[0].reason -like "*a number is never given twice*") "it is reported by name"
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 4) "and its place is counted when the next number is worked out, so the next question is 4"
+
+Write-Host ""
+Write-Host "--- a record of the wrong shape is unreadable, with the reason ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-added" ([ordered]@{ number = 2; question = (ConvertTo-HordeDecisionFields -Source (New-Question)) }) -Version 2), (New-Added 3 3))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*not a decision-event.v1 record*schemaVersion*" -and (Get-Numbers $st) -ceq "1,3") "a record of schema version 2 is not read as version 1: it is unreadable, and says which field"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "answer-recorded" ([ordered]@{ number = 1; words = "yes" })))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*its kind 'answer-recorded' is not one this version of Horde knows*") "a kind this version does not know is unreadable, named, and not guessed at"
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3) "and it leaves a number unused, since this version cannot tell whether it was a question"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1 })))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*its data is not what a question-closed record holds*outcome*" -and $st.questions[1].state -ceq "open") "a close with no outcome is unreadable, and the question stays open"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ title = 5 } })))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*changes.title should be string*") "a change whose title is not text is unreadable: the words inside a record are checked too"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ colour = "red" } })))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*colour*") "and so is one naming a field a question does not have"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." }) -SaysSeq 5))
+Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*it says it is record 5*" -and $st.questions[1].state -ceq "open") "a record that says it is record 5 in the place of record 2 is unreadable"
+$long400 = [pscustomobject]@{ sequence = [long]2; file = "0000000002.json"; kind = "error"; data = $null; reason = ("r" * 900) }
+$st = Get-Fold @((New-Added 1 1), $long400)
+Check ($st.unreadable[0].reason.Length -lt 450 -and $st.unreadable[0].reason -like "*reason cut at 400 characters*") "a very long reason is cut, and says it was"
+
+Write-Host ""
+Write-Host "--- one id, one record to answer from ---" -ForegroundColor Cyan
+$sameId = "ab" * 16
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." }) -Id $sameId), (New-Record 3 "question-reopened" ([ordered]@{ number = 1; reason = "again" }) -Id $sameId))
+Check ($st.ids[$sameId].sequence -eq 2 -and $st.ids[$sameId].kind -ceq "question-closed") "when two records carry one id, the first is the one a repost is answered from"
+Check ($st.ids.Count -eq 2 -and $st.ids[$sameId].number -eq 1 -and $st.ids[$sameId].applied -eq $true) "CONTROL: the list knows each id's record, its question and that it applied"
+
+Write-Host ""
+Write-Host "--- a question as shown ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })))
+$view = ConvertTo-HordeDecisionView -Question $st.questions[1]
+$found = @(Test-HordeSchema -Value $view -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
+Check ($found.Count -eq 0) ("a question of the list, as plain data, matches decision-result.v1's view" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
+$view.title = "changed by the caller"
+Check ($st.questions[1].title -clike "Is question number 1*") "and it is a copy: changing it does not reach the list"
+
+Complete-HordeSuite -Success "a question's number is permanent, an unreadable record is reported and renumbers nothing, and what must not be written is refused by name"
