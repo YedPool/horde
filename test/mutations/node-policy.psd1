@@ -14,9 +14,9 @@
         @{ Name = "above-ceiling-not-refused"
            Find = 'elseif (-not $ok.value) {'
            Replace = 'elseif ($false) {' }
-        @{ Name = "forged-ceiling-not-refused"
-           Find = 'if ($null -eq $cap.level -or $cap.forged) {'
-           Replace = 'if ($null -eq $cap.level) {' }
+        @{ Name = "forged-ceiling-believed"
+           Find = 'return [pscustomobject]@{ level = $null; from = ("" + $s.layer + " " + $s.rule); note = ("the ceiling rule " + $s.rule + " is in "'
+           Replace = 'return [pscustomobject]@{ level = ("" + $s.answer.value); from = ("" + $s.layer + " " + $s.rule); note = ("the ceiling rule " + $s.rule + " is in "' }
         @{ Name = "profile-not-checked"
            Find = 'if (@($pol.profiles) -cnotcontains $profile) {'
            Replace = 'if ($false) {' }
@@ -32,9 +32,6 @@
         @{ Name = "root-inside-clone-allowed"
            Find = 'elseif (Test-HordeNodePathInside -Path $root -Root ("" + $r.path)) {'
            Replace = 'elseif ($false) {' }
-        @{ Name = "dotdot-path-allowed"
-           Find = 'if ($seg -ceq "." -or $seg -ceq "..") { return $false }'
-           Replace = 'if ($false) { return $false }' }
         @{ Name = "repo-twice-allowed"
            Find = 'if (-not $ids.Add("" + $r.repoId)) {'
            Replace = 'if ($false) {' }

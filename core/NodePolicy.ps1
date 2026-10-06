@@ -45,8 +45,8 @@ function Test-HordeNodePolicyPath {
     param([string]$Path)
     if ($Path -cnotmatch '\A[A-Za-z]:\\') { return $false }
     foreach ($seg in $Path.Substring(3).Split('\')) {
-        if ($seg -ceq "." -or $seg -ceq "..") { return $false }
-        # Windows drops a segment's trailing dots and spaces, so C:\code\app.\trees is C:\code\app\trees
+        # A '.' or '..' segment ends in a dot, so this one rule refuses it too. And Windows drops a
+        # segment's trailing dots and spaces, so C:\code\app.\trees is C:\code\app\trees
         # (GetFullPath, measured in the review of PR #98): such a segment reads as one folder and is another.
         if ($seg.EndsWith(".") -or $seg.EndsWith(" ")) { return $false }
     }
@@ -220,7 +220,7 @@ function Test-HordeRemotePolicy {
     } else { $out.level = "" + $lv.answer.value }
     $cap = Get-HordeNodeCeiling -Resolution $Resolution -Levels $Levels
     $out.ceiling = $cap.level; $out.ceilingFrom = $cap.from
-    if ($null -eq $cap.level -or $cap.forged) { [void]$reasons.Add($cap.note) }
+    if ($null -eq $cap.level) { [void]$reasons.Add($cap.note) }
     if ($null -ne $out.level -and $null -ne $cap.level) {
         $ok = Test-HordePermissionLevelAllowed -Requested $out.level -Ceiling $cap.level -Levels $Levels
         if ($ok.state -ne "known") { [void]$reasons.Add($ok.reason) }

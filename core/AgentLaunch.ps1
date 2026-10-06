@@ -27,7 +27,7 @@
 # THE PROGRAM IS AN ABSOLUTE .EXE, NEVER A NAME LOOKED UP AT SPAWN TIME, NEVER A SCRIPT SHIM (review
 # of PR #98, F3). A .cmd or .bat is run by cmd.exe, which re-parses the whole command line, so a prompt
 # or name holding " & ^ % | would become commands (the BatBadBut class); and on a machine where npm
-# put claude.cmd ahead of claude.exe on PATH, a lookup at spawn time would pick the shim. So the plan
+# put a harness's .cmd shim ahead of its .exe on PATH, a lookup at spawn time would pick the shim. So the plan
 # takes the host's -Resolve (name -> full path) and accepts only a rooted path ending in .exe; the host
 # runs that path as given. As a second line, cmd metacharacters never reach a session's name.
 #
@@ -111,7 +111,7 @@ function Format-HordeSessionName {
 
 function Test-HordeLaunchProgramPath {
     # Is -Path a full, local, absolute path to an .exe? A drive letter, ":\", and the path equal to its
-    # own full form: C:claude.exe (drive-relative) and \claude.exe (rooted on the current drive) are
+    # own full form: C:tool.exe (drive-relative) and \tool.exe (rooted on the current drive) are
     # rooted to IsPathRooted but name a file relative to state the node does not control (re-review of
     # PR #98).
     param([AllowEmptyString()][string]$Path)
