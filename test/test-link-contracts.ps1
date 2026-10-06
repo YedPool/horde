@@ -61,7 +61,7 @@ Check ($contract.rows.Count -eq 17) "the v1 table has its 17 verbs: R1's 13, R12
 Check (@("sessions.list", "session.get" | Where-Object { $contract.rows.ContainsKey($_) -and "$($contract.rows[$_].effect)" -ceq "read" }).Count -eq 2) "sessions.list and session.get are read verbs"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
-Check ($golden.Count -eq 21) "there are 21 golden frames, one per kind and verb shape covered so far"
+Check ($golden.Count -eq 22) "there are 22 golden frames, one per kind and verb shape covered so far"
 foreach ($g in $golden) {
     $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
@@ -458,6 +458,45 @@ FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "delivered" } "
 FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "queued" } "is 'queued', not one of" "queued is the node's own stage, never a receipt the hub sends"
 FrameRefuses "res-mail-receipt.json" { param($x) $x.result.value.PSObject.Properties.Remove("recordedAt") } "has no 'recordedAt'" "a receipt's acknowledgement says when the node recorded it"
 FrameRefuses "req-session-deliver.json" { param($x) $x.args.label = "orc-1" } "label does not match" "a deliver label is a hub label, nothing else"
+
+# REVIEW OF #97, 2026-10-06. Each rule below is stated in the contract text AND, where it can be, held
+# by remote/Contract.ps1 or remote/Messaging.ps1, so slice 4 builds to it rather than choosing.
+$deliverDesc = "$($realVerbs.definitions.'session-deliver-args'.description)"
+# F1: following a label must not carry a session past the gate.
+Check ($deliverDesc.Contains("THE GATE IS APPLIED TO THE RESOLVED SESSION")) "F1: the deliver contract says the gate is applied to the session the label resolved to"
+Check ($deliverDesc.Contains("passes to a new session id only through the process (pid and procStart")) "F1: hub-spawned status passes to a new session id only through the process"
+Check ($deliverDesc.Contains("never through a label")) "F1: hub-spawned status never passes through a label"
+Check ($deliverDesc.Contains("a live sessionId whose label differs from label is refused")) "F1: a live session id wearing another label is refused, never retargeted"
+# F9: the deliver description's other sentences, pinned.
+Check ($deliverDesc.Contains("its default is no label")) "F9: the opt-in list defaults to no label"
+Check ($deliverDesc.Contains("Until step R9 lands")) "F9: the deliver contract says what holds until R9"
+Check ($deliverDesc.Contains("or refuses")) "F9: a label that resolves to no single live session is refused"
+# F2, F3 and F6: the receipt and settlement rules, stated.
+$receiptDesc = "$($realVerbs.definitions.'mail-receipt-args'.description)"
+Check ($receiptDesc.Contains("Stages only move forward")) "F2: the receipt contract says stages only move forward"
+Check ($receiptDesc.Contains("a final stage is never overwritten")) "F2: the receipt contract says a final stage is never overwritten"
+Check ($receiptDesc.Contains("records nothing and its ack carries the recorded stage")) "F2: a backward or late receipt records nothing and is answered with the recorded stage"
+Check ($receiptDesc.Contains("a receipt for a messageId this node never returned from mail.next is refused")) "F6: a receipt for a message the node never handed out is refused"
+Check ("$($realVerbs.definitions.'mail-receipt-ack'.description)".Contains("stage is the record's")) "F2: the ack's stage is the record's, not the one asked for"
+$nextDesc = "$($realVerbs.definitions.'mail-next'.description)"
+Check ($nextDesc.Contains("SETTLED is every stage but queued")) "F3: the contract says which stages settle a message"
+Check ($nextDesc.Contains("held settles")) "F3: a held message settles, so it never blocks the queue behind it"
+# F5: the sender's device is the link's, not the payload's.
+Check ("$($realVerbs.definitions.'outbound-mail'.description)".Contains("from.deviceId must be the link peer's enrolled device")) "F5: the contract says from.deviceId is checked against the link's peer"
+Check ("$($realVerbs.definitions.'outbound-mail'.description)".Contains("only through that device's own node and its gate")) "F5: mail for a third device goes only through that device's node and gate"
+# F4: the reverse path's safety is its DIRECTION, so direction is pinned like the effect class.
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$nextAt].direction = 'node-to-hub'")) "remote/Contract.ps1 pins it hub-to-node" "F4: a table that turns mail.next node to hub is refused" @("mail.next")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$receiptAt].direction = 'node-to-hub'")) "remote/Contract.ps1 pins it hub-to-node" "F4: a table that turns mail.receipt node to hub is refused" @("mail.receipt")
+$alertAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "alert.raise")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$alertAt].direction = 'hub-to-node'")) "remote/Contract.ps1 pins it node-to-hub" "F4: every verb's direction is pinned, alert.raise's included" @("alert.raise")
+# F8: the two stage lists stay in step, and every delivery stage has a place in the order.
+Refuses { param($v) $v.definitions.'receipt-stage'.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "refused") } "receipt-stage is not delivery's stages less queued, plus refused" "F8: a receipt stage list that drifts from delivery's is refused" @("mail.receipt")
+Refuses { param($v) $v.definitions.'delivery'.properties.stage.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "lost") } "has no place in remote/Contract.ps1's stage order" "F8: a delivery stage the stage order does not rank is refused" @("delivery.status")
+# F7: a time to live has a ceiling, the replay window's 7 days, for a deliver and for outbound mail.
+FrameRefuses "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604801 } "above the 604800-second ceiling" "F7: a deliver living longer than 7 days is refused"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.ttlSeconds = 604801 } "above the 604800-second ceiling" "F7: outbound mail living longer than 7 days is refused"
+$f = @(Test-FrameWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604800 })
+Check ($f.Count -eq 0) "F7 CONTROL: a deliver living exactly 7 days is accepted"; Show $f
 
 Write-Host ""
 Write-Host "--- H. the other contract documents ---" -ForegroundColor Cyan
