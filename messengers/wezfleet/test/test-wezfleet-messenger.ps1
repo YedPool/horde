@@ -227,4 +227,60 @@ With-Fake {
     Check ($i -ge 0 -and -not (Test-Path -LiteralPath "$($argv[$i + 1])")) "after an answer that could not be read, the message file is deleted too"
 }
 
+Write-Host ""
+Write-Host "--- E. the fleet's command as merged (wezfleet main 68ff08e): what it refuses is held with its words, what it could not do is unknown ---" -ForegroundColor Cyan
+
+# BELOW THE PORT, ON PURPOSE. The port's own patterns keep a long label, a line break and a dotted target
+# from ever reaching a messenger, so these call the messenger's post directly. The fleet's rule is the
+# second lock, and what it refuses must come back held with its reason, with nothing stored and nobody
+# woken. Each reason is the merged command's own, measured against a clone of it on 2026-10-06.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $a = Send-HordeWezfleetMessengerPost -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "CONTROL: called below the port, a message the fleet takes is accepted"
+}
+foreach ($c in @(
+        @{ what = "a sender's label of 65 characters"; label = ("L" * 65); to = ""; like = "the most is 64" },
+        @{ what = "a sender's label holding a line break"; label = "A`nB"; to = ""; like = "U+000A" },
+        @{ what = "a target made only of dots"; label = "M"; to = ".."; like = "missing or malformed" },
+        @{ what = "a target that is a device name"; label = "M"; to = "NUL"; like = "missing or malformed" })) {
+    With-Fake {
+        param($st)
+        $msg = New-Msg
+        $msg.from.label = $c.label
+        if ($c.to -ne "") { $msg.sessionId = $c.to }
+        $a = Send-HordeWezfleetMessengerPost -Message $msg
+        $o = & $fx.Observe $st $msg.messageId
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).Contains($c.like) -and $o.records -eq 0 -and @($o.typed).Count -eq 0) ("the fleet refuses " + $c.what + ": held with its reason, nothing stored, nobody woken (" + (Why $a) + ")")
+    }
+}
+# THE LINK'S SESSION ID IS WIDER THAN THE FLEET'S MAILBOX NAME: schema/link-verbs.v1 allows a colon and
+# the fleet's mailbox validator does not, so such a message passes the port and is refused by the fleet.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $msg.sessionId = "ab:cd"
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).Contains("missing or malformed")) ("a session id with a colon passes the port and is held by the fleet's refusal, never accepted (" + $(if ($a.state -ceq "known") { $a.value.stage } else { $a.reason }) + ")")
+}
+# AN ERROR NOBODY PLANNED FOR is one line with the stage "error" and exit 1 since the merge. It may come
+# after the record was written, so it is unknown - never held, which would say "known not delivered".
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ throw = "boom" }; status = @{ throw = "boom" } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unexpected error: boom")) ("a post the fleet answers with the stage error, exit 1, is unknown with the fleet's words (" + $a.reason + ")")
+    $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("unexpected error: boom")) ("and so is a status (" + $a.reason + ")")
+}
+# A PARAMETER THE HOST ITSELF REJECTS never reaches the fleet's script: nothing on stdout, the host's
+# words on stderr, exit 1. The reason must carry those words, or the cause is lost.
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ stdout = ""; stderr = "wezfleet.ps1 : Missing an argument for parameter MessageFile.`n"; exit = 1 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("exit 1") -and "$($a.reason)".Contains("Missing an argument for parameter MessageFile")) ("nothing on stdout and the host's words on stderr is unknown, carrying those words (" + $a.reason + ")")
+}
+
 Complete-HordeSuite -Success "the wezfleet messenger starts only the fixed PowerShell on the configured fleet script, hands the body only through a temp file, and reads nothing it was not told"

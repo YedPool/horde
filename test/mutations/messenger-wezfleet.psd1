@@ -36,6 +36,11 @@
         @{ Name = "many-lines-read"
            Find = 'if ($lines.Count -ne 1) {'
            Replace = 'if ($lines.Count -eq 0) {' }
+        # A parameter the host rejects prints nothing on stdout: the host's words on stderr are the only
+        # account of it (wezfleet main 68ff08e, measured 2026-10-06).
+        @{ Name = "stderr-words-dropped"
+           Find = '("$($Run.stdout)" + "`n" + "$($Run.stderr)")'
+           Replace = '("$($Run.stdout)")' }
         @{ Name = "non-json-read"
            Find = 'if ($null -eq $j -or $j -isnot [System.Management.Automation.PSCustomObject]) {'
            Replace = 'if ($false) {' }
