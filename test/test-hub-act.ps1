@@ -27,11 +27,11 @@ $contract = Get-HordeLinkContract
 $hub = [pscustomobject]@{ id = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; name = "fixture-hub"; hordeVersion = "0.1.0" }
 $entry = [pscustomobject]@{ deviceId = $device; endpoint = $device; transport = (Get-HordeTransport -Name "memory"); transportError = "" }
 function Start-ActNode {
-    param([string]$Outcome = "done", [string]$Journal, [int]$Links = 1)
+    param([string]$Outcome = "done", [string]$Journal, [int]$Links = 1, [int]$DelayMs = 0)
     $ready = New-Object System.Threading.ManualResetEventSlim($false)
     $counter = [hashtable]::Synchronized(@{ views = 0; acts = 0 })
     $ps = [PowerShell]::Create()
-    [void]$ps.AddCommand((Join-Path $fxs "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $device).AddParameter("ViewPath", (Join-Path $fxs "view.json")).AddParameter("JournalRoot", $Journal).AddParameter("MaxLinks", $Links).AddParameter("Counter", $counter).AddParameter("Ready", $ready).AddParameter("ActOutcome", $Outcome)
+    [void]$ps.AddCommand((Join-Path $fxs "serve-peer.ps1")).AddParameter("Root", $root).AddParameter("Endpoint", $device).AddParameter("ViewPath", (Join-Path $fxs "view.json")).AddParameter("JournalRoot", $Journal).AddParameter("MaxLinks", $Links).AddParameter("Counter", $counter).AddParameter("Ready", $ready).AddParameter("ActOutcome", $Outcome).AddParameter("ActDelayMs", $DelayMs)
     $h = $ps.BeginInvoke()
     $up = $ready.Wait(30000)
     return [pscustomobject]@{ ps = $ps; h = $h; counter = $counter; up = $up }
@@ -66,6 +66,8 @@ Write-Host ""
 Write-Host "--- a close is built from the process the spawn's answer named ---" -ForegroundColor Cyan
 $sp = Find-HordeHubSpawn -Dir $acts -SessionId "aaaaaaaa-1111-4222-8333-444444444444"
 Check ($sp.state -eq "known" -and $sp.value.answer.expect.pid -eq 4242 -and "$($sp.value.answer.expect.procStart)" -ceq "134350994347710308" -and "$($sp.value.answer.expect.ns.device)" -ceq $device) "the hub finds the spawn that started the session, with its process and namespace"
+Write-HordeHubActRecord -Dir $acts -Record ([pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = "session.spawn"; deviceId = $device; issuedAt = $issued; args = $spawnArgs; answer = [pscustomobject]@{ state = "refused"; verb = "session.spawn"; sessionId = "cccccccc-1111-4222-8333-444444444444"; reason = "the fixture node refused" }; error = $null; sentAt = @($issued) })
+Check ((Find-HordeHubSpawn -Dir $acts -SessionId "cccccccc-1111-4222-8333-444444444444").state -eq "absent") "a spawn the node refused started nothing: there is nothing to close by it"
 Check ((Find-HordeHubSpawn -Dir $acts -SessionId "bbbbbbbb-1111-4222-8333-444444444444").state -eq "absent") "a session the hub did not start is absent: there is nothing to close it by"
 Write-HordeHubActRecord -Dir $acts -Record ([pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = "session.spawn"; deviceId = $device; issuedAt = $issued; args = $spawnArgs; answer = $r1.result.value; error = $null; sentAt = @() })
 Check ((Find-HordeHubSpawn -Dir $acts -SessionId "aaaaaaaa-1111-4222-8333-444444444444").state -eq "unknown") "two records claiming one session are unknown, never one picked"
@@ -79,8 +81,20 @@ $none = Invoke-HordeHubAct -Entry ([pscustomobject]@{ deviceId = $device; endpoi
 Check (-not $none.answered -and $none.reason -like "*no transport*") "a node with no transport is unanswered, with the reason"
 $bad = Invoke-HordeHubAct -Entry $entry -Hub $hub -Contract $contract -Verb "session.deliver" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime)
 Check (-not $bad.answered -and $bad.reason -like "*does not send session.deliver*") "the hub sends only the act verbs of this step and request.status"
+
+Write-Host ""
+Write-Host "--- the wrong node, and an answer that never arrives ---" -ForegroundColor Cyan
+$jr2 = Join-Path $env:TEMP ("horde-hub-act-" + [guid]::NewGuid().ToString("N"))
+Initialize-HordeJournal -Root $jr2 -Kind "request" | Out-Null
+$slow = Start-ActNode -Journal $jr2 -Links 2 -DelayMs 4000
+Check ($slow.up -eq $true) "a second node is listening, slow to act"
+$other = Invoke-HordeHubAct -Entry ([pscustomobject]@{ deviceId = "22222222-3333-4444-8555-666666666666"; endpoint = $device; transport = (Get-HordeTransport -Name "memory"); transportError = "" }) -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime)
+Check (-not $other.answered -and $other.reason -like "*answered as device $device*" -and [int]$slow.counter["acts"] -eq 0) ("a node answering as another device is refused before anything is asked (" + $other.reason + ")")
+$lost = Invoke-HordeHubAct -Entry $entry -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 1500
+Check (-not $lost.answered -and $lost.reason -like "*whether the node acted is unknown*") ("an answer that does not arrive leaves the request unanswered, the node's act unknown (" + $lost.reason + ")")
+Stop-ActNode $slow
 } finally {
-    foreach ($d in @($jr, $acts)) { if ((Split-Path -Leaf $d) -match '^horde-hub-acts?-[0-9a-f]{32}$') { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }
+    foreach ($d in @($jr, $jr2, $acts)) { if ((Split-Path -Leaf $d) -match '^horde-hub-acts?-[0-9a-f]{32}$') { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }
 }
 
 Complete-HordeSuite -Success "the hub asks a node to act once per request, keeps what it answered, and closes by what it kept"
