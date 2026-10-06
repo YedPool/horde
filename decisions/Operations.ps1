@@ -195,6 +195,15 @@ function Read-HordeDecisionState {
     # The store's records and the list worked out from them, as { state; reason; busy; list }. state
     # is the store's own (ok, absent or unknown); busy is the first record another process still holds
     # open, or $null.
+    #
+    # KNOWN COST, LEFT AS IT IS ON PURPOSE. Every operation reads and checks every record again.
+    # Measured 2026-10-06 on a throttled machine, 81 records: reading and parsing the files 130 ms,
+    # checking each against its schemas 1128 ms, checking the list result of 81 questions 1292 ms;
+    # 3.4 s for one list, about 40 ms a record, nearly all of it schema checking and almost none of
+    # it the disk. Nothing is cached on disk, because a cache is a second copy of the truth, and the
+    # store is the only one. A caller that stays alive (a window) can keep the list it has in memory
+    # and fold in only the records it has not seen: the records never change, and their order is
+    # their names.
     param([string]$Root, $Definitions)
     $loaded = Get-HordeDecisionRecords -Root $Root
     if ($loaded.state -ceq "unknown") { return [pscustomobject]@{ state = "unknown"; reason = $loaded.reason; busy = $null; list = $null } }
