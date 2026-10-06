@@ -18,8 +18,15 @@
 # -Json IS ONE LINE OF ASCII. Every character outside printable ASCII is written as a \u escape, which
 # any JSON reader turns back into the same character. A console, a pipe and a log each re-encode
 # output in a code page of their own, and escaped text passes through all of them unchanged: text in
-# any alphabet comes back character for character. The plain-text output is for a person's eyes and is
-# written as it is; how it looks there is the terminal's doing.
+# any alphabet comes back character for character.
+#
+# THE PLAIN-TEXT OUTPUT IS UTF-8 WHEN IT GOES TO A PIPE. Typed at a terminal it is written as it is, and
+# how it looks is the terminal's doing. Redirected, Windows PowerShell 5.1 encodes it in the console's
+# code page, and the session that keeps the list reads these commands through a pipe: measured
+# 2026-10-06 from code page 437, a Hebrew title came out of `show` as "??? ????? ?? ??????", with
+# nothing to say so. So for the length of the print, and only when the output is redirected, the
+# console's output encoding is set to UTF-8 with no byte-order mark, and put back afterwards. This is
+# the decisions command's own doing; no other horde command is changed by it.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -247,6 +254,22 @@ function Format-HordeDecisionAnswer {
     }
     foreach ($l in @(Format-HordeDecisionProblems -Value $value)) { [void]$lines.Add($l) }
     return @($lines)
+}
+
+function Write-HordeDecisionLines {
+    # Print a command's lines. To a terminal: as they are. To a pipe or a file: as UTF-8 with no
+    # byte-order mark (see the header), the console's own encoding put back whatever happens.
+    # The lines are still written to the pipeline, one by one, so a caller in the same process gets
+    # them as it always did; each is on its way out before the encoding is put back.
+    param($Lines)
+    $piped = $false
+    try { $piped = [Console]::IsOutputRedirected } catch { }
+    if (-not $piped) { foreach ($line in @($Lines)) { Write-Output $line }; return }
+    $was = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        foreach ($line in @($Lines)) { Write-Output $line }
+    } finally { [Console]::OutputEncoding = $was }
 }
 
 function Invoke-HordeDecisionCommand {

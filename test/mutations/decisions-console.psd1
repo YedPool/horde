@@ -7,6 +7,15 @@
     Target = "decisions\Console.ps1"
     Suite  = "test\test-decisions-cli.ps1"
     Mutations = @(
+        @{ Name = "piped-output-left-in-the-console-code-page"
+           Find = '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)'
+           Replace = '' }
+        # No mutant for the byte-order mark: with UTF8Encoding($true) in that line Windows PowerShell 5.1
+        # still wrote none to a pipe (measured 2026-10-06, the mutant survived), so the suite's check
+        # that none opens the output guards against a host that would, and cannot be made to fail here.
+        @{ Name = "console-encoding-not-put-back"
+           Find = '} finally { [Console]::OutputEncoding = $was }'
+           Replace = '} finally { }' }
         @{ Name = "stray-files-not-shown"
            Find = 'if ($loose.Count -gt 0) {'
            Replace = 'if ($false) {' }

@@ -92,6 +92,66 @@ $j = Get-JsonLine $list
 Check ($list.code -eq 0 -and $list.out -cnotmatch '[^\x00-\x7F]' -and $null -ne $j -and @($j.value.questions).Count -eq 1 -and [string]::Equals($j.value.questions[0].title, $title, [System.StringComparison]::Ordinal)) "list -Json gives the same title, exactly, on one ASCII line"
 
 Write-Host ""
+Write-Host "--- the words a person reads, through a pipe: the bytes, from two code pages ---" -ForegroundColor Cyan
+# The session that keeps the list reads these commands through a pipe. Measured 2026-10-06, before the
+# console set its own encoding for the print: the Hebrew title above came out of `show` as
+# "??? ????? ?? ??????" - question marks, with nothing to say so. So the plain-text output is checked
+# as BYTES, taken from the process's own output stream and decoded here as UTF-8, from a console in
+# code page 437 and from one in 65001. cmd sets the code page (chcp) and starts the command in it.
+function Get-OutputBytes {
+    # Run a command line under cmd in code page -CodePage; returns { code; bytes }: what it wrote to
+    # its standard output, undecoded.
+    param([string]$CommandLine, [int]$CodePage)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    $psi.Arguments = "/d /c chcp " + $CodePage + " >nul & " + $CommandLine
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = $hordeHome
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $mem = New-Object System.IO.MemoryStream
+        $p.StandardOutput.BaseStream.CopyTo($mem)
+        $p.WaitForExit()
+        $null = $errTask.Result
+        return [pscustomobject]@{ code = $p.ExitCode; bytes = $mem.ToArray() }
+    } finally { $p.Dispose() }
+}
+function Test-HoldsBytes {
+    param([byte[]]$Hay, [byte[]]$Needle)
+    for ($i = 0; $i -le $Hay.Length - $Needle.Length; $i++) {
+        $same = $true
+        for ($k = 0; $k -lt $Needle.Length; $k++) { if ($Hay[$i + $k] -ne $Needle[$k]) { $same = $false; break } }
+        if ($same) { return $true }
+    }
+    return $false
+}
+$hordeLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $root "horde.ps1") + '" decisions '
+$titleBytes = $utf8.GetBytes($title)
+$strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+foreach ($page in @(437, 65001)) {
+    foreach ($verbLine in @("show 1", "list")) {
+        $got = Get-OutputBytes -CommandLine ($hordeLine + $verbLine) -CodePage $page
+        $decodes = $true
+        try { $null = $strictUtf8.GetString($got.bytes) } catch { $decodes = $false }
+        Check ($got.code -eq 0 -and (Test-HoldsBytes $got.bytes $titleBytes)) ("from a console in code page " + $page + ", '" + $verbLine + "' through a pipe carries the Hebrew title as its own UTF-8 bytes")
+        Check ($decodes -and -not (Test-HoldsBytes $got.bytes ([byte[]]@(0x3F, 0x3F, 0x3F)))) "and the whole output is valid UTF-8, with no run of question marks in it"
+        Check ($got.bytes.Length -ge 3 -and -not ($got.bytes[0] -eq 0xEF -and $got.bytes[1] -eq 0xBB -and $got.bytes[2] -eq 0xBF)) "and no byte-order mark opens it"
+    }
+}
+# CONTROL: the same letters written by a process that sets nothing, from code page 437, ARE question
+# marks - so the reading above can see the failure it guards against.
+$plainLine = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Write-Output ((' + (@($hebrew.ToCharArray() | ForEach-Object { "[char]" + [int]$_ }) -join "+") + '))"'
+$control = Get-OutputBytes -CommandLine $plainLine -CodePage 437
+Check ($control.code -eq 0 -and (Test-HoldsBytes $control.bytes ([byte[]]@(0x3F, 0x3F, 0x3F))) -and -not (Test-HoldsBytes $control.bytes ($utf8.GetBytes($hebrew)))) "CONTROL: a process that sets no encoding writes the same Hebrew as question marks from code page 437"
+# The encoding is put back: a command that prints after horde, in the same console, is not changed.
+$after = Get-OutputBytes -CommandLine ($hordeLine + 'list >nul & powershell.exe -NoProfile -Command "[Console]::OutputEncoding.CodePage"') -CodePage 437
+Check (([System.Text.Encoding]::ASCII.GetString($after.bytes)).Trim() -ceq "437") ("after the command, the console's code page is what it was (" + ([System.Text.Encoding]::ASCII.GetString($after.bytes)).Trim() + ")")
+
+Write-Host ""
 Write-Host "--- what a person reads ---" -ForegroundColor Cyan
 $text = Invoke-Decisions @("list")
 Check ($text.code -eq 0 -and @($text.lines | Where-Object { $_ -ceq "Decisions: 1 open, 0 closed." }).Count -eq 1) "list opens with how many questions are open and closed, in words"

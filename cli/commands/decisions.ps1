@@ -20,7 +20,7 @@ $HordeCommand = @{
         # decisions/, so this caller cannot come to differ from the next one.
         . (Join-Path (Get-HordeRoot) "decisions\Console.ps1")
         $result = Invoke-HordeDecisionCommand -Verb $Verb -Given $PSBoundParameters
-        $result.lines | ForEach-Object { Write-Output $_ }
+        Write-HordeDecisionLines -Lines $result.lines
         # Printed first, then failed: the lines say what was refused and why, and the throw gives a
         # script its non-zero exit (horde.ps1: a command fails by throwing).
         if ($result.failure -ne "") { throw $result.failure }
