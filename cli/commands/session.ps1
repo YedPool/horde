@@ -1,14 +1,14 @@
 $HordeCommand = @{
     name    = "session"
     group   = "hub"
-    usage   = "session spawn -Label <L> -Run <runId> -Repo <repoId> -Prompt <text> [-Node <device>] [-Role orc] [-Profile <p>] [-Title <t>] [-Permission <level>] [-Worktree <name> -Branch <b>] [-HostName <h>] | session close -SessionId <id> [-Node <device>] [-Reason <why>] | session status -RequestId <id> [-Node <device>] | any of them -Resend <requestId>"
+    usage   = "session spawn -Label <L> -Run <runId> -Profile <p> -Repo <repoId> -Prompt <text> [-Node <device>] [-Role orc] [-Title <t>] [-Permission <level>] [-Worktree <name> -Branch <b>] [-HostName <h>] | session close -SessionId <id> [-Node <device>] [-Reason <why>] | session status -RequestId <id> [-Node <device>] | any of them -Resend <requestId>"
     summary = "ask a node to start or close a session (remote plan R19): one request per id, written down before it is sent, so a request whose answer was lost is sent again with -Resend and acted on once"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("spawn", "close", "status")][string]$Verb,
             # The node: its device id or name; the hub's own node when not given.
             [string]$Node = "",
-            [string]$Label = "", [string]$Role = "orc", [string]$Run = "", [string]$Profile = "claude", [string]$Repo = "",
+            [string]$Label = "", [string]$Role = "orc", [string]$Run = "", [string]$Profile = "", [string]$Repo = "",
             [string]$Prompt = "", [string]$Title = "", [string]$Permission = "", [string]$Worktree = "", [string]$Branch = "",
             [string]$HostName = "", [ValidateSet("proof", "routed")][string]$CloseOn = "proof",
             [string]$SessionId = "", [string]$Reason = "closed by the hub", [string]$RequestId = "",
@@ -39,7 +39,7 @@ $HordeCommand = @{
             $target = $Node
             switch ($Verb) {
                 "spawn" {
-                    if ($Label -eq "" -or $Run -eq "" -or $Repo -eq "" -or $Prompt -eq "") { throw "session spawn needs -Label, -Run, -Repo and -Prompt" }
+                    if ($Label -eq "" -or $Run -eq "" -or $Profile -eq "" -or $Repo -eq "" -or $Prompt -eq "") { throw "session spawn needs -Label, -Run, -Profile, -Repo and -Prompt: the profile is one the node offers, named by the hub" }
                     $a = [ordered]@{ label = $Label; role = $Role; runId = $Run; profile = $Profile; repoId = $Repo; prompt = [pscustomobject]@{ text = $Prompt }; closeOn = $CloseOn }
                     if ($Title -ne "") { $a["title"] = $Title }
                     if ($Permission -ne "") { $a["permission"] = $Permission }

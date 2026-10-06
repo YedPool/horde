@@ -37,7 +37,7 @@ function Start-ActNode {
     return [pscustomobject]@{ ps = $ps; h = $h; counter = $counter; up = $up }
 }
 function Stop-ActNode { param($Node) if ($Node.h.AsyncWaitHandle.WaitOne(40000)) { try { $null = $Node.ps.EndInvoke($Node.h) } catch { } } else { try { $Node.ps.Stop() } catch { } }; $Node.ps.Dispose() }
-$spawnArgs = [pscustomobject][ordered]@{ label = "E"; role = "orc"; runId = "20261005-120000-act"; profile = "claude"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; title = "client search orc"; permission = "bypass" }
+$spawnArgs = [pscustomobject][ordered]@{ label = "E"; role = "orc"; runId = "20261005-120000-act"; profile = "alpha"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; title = "client search orc"; permission = "bypass" }
 
 $jr = Join-Path $env:TEMP ("horde-hub-act-" + [guid]::NewGuid().ToString("N"))
 $acts = Join-Path $env:TEMP ("horde-hub-acts-" + [guid]::NewGuid().ToString("N"))

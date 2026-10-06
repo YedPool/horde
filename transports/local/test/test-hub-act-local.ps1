@@ -52,7 +52,7 @@ function Invoke-HordeTestRun {
 
 try {
     New-Item -ItemType Directory -Path $homeDir, $profileDir, $clone, (Join-Path $homeDir "node") -Force | Out-Null
-    $policy = '{ "schemaVersion": 1, "repos": [ { "repoId": "github.com/example/app", "path": "' + $clone.Replace([string][char]92, ([string][char]92) * 2) + '" } ], "profiles": ["claude"], "dailySpawnCap": 0 }'
+    $policy = '{ "schemaVersion": 1, "repos": [ { "repoId": "github.com/example/app", "path": "' + $clone.Replace([string][char]92, ([string][char]92) * 2) + '" } ], "profiles": ["alpha"], "dailySpawnCap": 0 }'
     [System.IO.File]::WriteAllText((Join-Path $homeDir "node\policy.json"), $policy)
     $env:HORDE_HOME = $homeDir
     $env:USERPROFILE = $profileDir
@@ -66,7 +66,7 @@ try {
     Start-Sleep -Seconds 3
     Check (-not $node.HasExited) "the node is serving"
 
-    $sp = Invoke-HordeTestRun "session spawn -Label E -Run 20261005-120000-act -Repo github.com/example/app -Prompt hello -Title `"client search orc`" -Permission edits"
+    $sp = Invoke-HordeTestRun "session spawn -Label E -Run 20261005-120000-act -Profile alpha -Repo github.com/example/app -Prompt hello -Title `"client search orc`" -Permission edits"
     Check ($sp.code -eq 0 -and $sp.out -clike "REFUSED session.spawn request *daily spawn cap of 0 is reached*") ("the spawn crossed the real pipe and came back refused by the node's policy (" + $sp.out.Trim() + " " + $sp.err.Trim() + ")")
     $rid = ""
     $m = [regex]::Match($sp.out, 'request ([0-9a-f-]{36})')
