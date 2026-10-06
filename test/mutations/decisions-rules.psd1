@@ -5,6 +5,13 @@
     Target = "decisions\Rules.ps1"
     Suite  = "test\test-decisions-rules.ps1"
     Mutations = @(
+        # --- a secret written as a field's name ---
+        @{ Name = "secret-as-a-field-name-not-seen"
+           Find = 'if ($nameKind -ne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "secret-field-name-repeated-to-say-where"
+           Find = '$where = "a field whose name is not repeated here"'
+           Replace = '$where = "''" + $k + "''"' }
         # --- a number too large to be one is unreadable, never a throw ---
         @{ Name = "huge-question-number-cast"
            Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'

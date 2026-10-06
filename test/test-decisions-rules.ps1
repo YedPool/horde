@@ -151,6 +151,15 @@ Check ($missed.Count -eq 0) ("twelve more credential shapes are each refused: ot
 $deep = [pscustomobject]@{ id = "x"; question = [pscustomobject]@{ options = @("fine", ("use " + $secrets["an access token"])); files = @("a.txt") }; outcome = $secrets["a private key"] }
 $found = @(Find-HordeDecisionSecrets -Value $deep)
 Check ($found.Count -eq 2 -and (Test-Says $found "'options' (item 2)") -and (Test-Says $found "'outcome'")) "a secret is found wherever it sits: an item of a list, and a text beside the question"
+# A NAME IS TEXT TOO: a secret pasted where a field's name goes is found, and neither its own finding
+# nor the finding for the value under it repeats it.
+$tokenName = $secrets["an access token"]
+$found = @(Find-HordeDecisionSecrets -Value ([pscustomobject]@{ question = (('{"title":"A plain title","' + $tokenName + '":"x"}') | ConvertFrom-Json) }))
+Check ($found.Count -eq 1 -and (Test-Says $found "a field name in 'question' holds what looks like an access token")) ("a secret written as a field's name is found, and said to be a name (" + $found.Count + " finding(s))")
+Check (-not (Test-Says $found $tokenName)) "and the finding does not repeat it"
+$found = @(Find-HordeDecisionSecrets -Value ([pscustomobject]@{ question = (('{"' + $tokenName + '":"-----BEGIN PRIV' + 'ATE KEY-----"}') | ConvertFrom-Json) }))
+Check ($found.Count -eq 2 -and (Test-Says $found "a private key") -and -not (Test-Says $found $tokenName)) ("a secret under a secret name: both are found, and the value's finding does not say where by repeating the name (" + $found.Count + " finding(s))")
+Check (@(Find-HordeDecisionSecrets -Value ([pscustomobject]@{ question = [pscustomobject]@{ title = "A plain title"; colour = "red" } })).Count -eq 0) "CONTROL: an ordinary name the schema will refuse is not a secret"
 $ordinary = @(
     "07af8361c2d4e5f60718293a4b5c6d7e8f901234"                       # a commit id: hex, one case
     "0273216a-4aa6-420b-8bd6-b5d61a13d73d"                           # a UUID

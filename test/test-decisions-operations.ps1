@@ -157,6 +157,12 @@ foreach ($where in $cases.Keys) {
     $whole = ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $a) -Depth 12 -Compress
     Check (-not $whole.Contains($token) -and -not $whole.Contains("hunter2") -and -not $whole.Contains("PRIV" + "ATE KEY")) "and the answer does not repeat it anywhere"
 }
+# A SECRET WRITTEN AS A FIELD'S NAME. The schema's own finding for a member it does not allow names
+# the member, so before names were looked at the refusal repeated the token (measured 2026-10-06).
+$a = Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = (New-Question @{ $token = "x" }) }
+$whole = ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $a) -Depth 12 -Compress
+Check ((Test-Refused $a "a field name in 'question' holds what looks like an access token") -and (Get-Files $s) -ceq $filesBefore) ("a secret written as a field's name is refused as a secret, and nothing is written (" + (Get-Outcome $a) + ")")
+Check (-not $whole.Contains($token)) "and the answer does not repeat it anywhere"
 $a = Add-Q $s @{ needsSecret = $true; title = "Can a test account be provided for the signed-in pages?"; yesMeans = "The login is given outside this list: typed into the session, or as a file path." }
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.question.needsSecret -eq $true) "CONTROL: a question that NEEDS a secret, and holds none, is added and says so"
 $all = (@(Get-ChildItem -LiteralPath $s -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join "`n")

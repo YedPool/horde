@@ -222,8 +222,8 @@ function Find-HordeDecisionSecrets {
     # A finding for every text anywhere in a value that looks like a secret. THE FINDING NAMES THE
     # FIELD AND THE KIND OF SECRET, AND NEVER THE VALUE: a refusal is printed, logged and may travel,
     # and repeating the secret in it would be the leak the check exists to stop. Every text is
-    # looked at, in whatever member it sits, so a field or an event kind added later is covered
-    # without being listed here.
+    # looked at, in whatever member it sits, and so is every member's NAME, so a field or an event
+    # kind added later is covered without being listed here.
     param($Value, [string]$Path = "the request")
     $out = New-Object System.Collections.ArrayList
     if ($Value -is [string]) {
@@ -232,7 +232,19 @@ function Find-HordeDecisionSecrets {
     }
     elseif ($Value -is [System.Collections.IDictionary] -or $Value -is [System.Management.Automation.PSCustomObject]) {
         $map = Get-HordeObjectByKey $Value
-        foreach ($k in @($map.Keys)) { foreach ($f in @(Find-HordeDecisionSecrets -Value $map[$k] -Path ("'" + $k + "'"))) { [void]$out.Add($f) } }
+        foreach ($k in @($map.Keys)) {
+            # A NAME IS TEXT TOO, and the schema's finding for a member it does not allow repeats the
+            # name: a token pasted where a field's name goes came back in the refusal (measured
+            # 2026-10-06). So a name is looked at like any text, and one that looks like a secret is
+            # never used to say where anything is.
+            $where = "'" + $k + "'"
+            $nameKind = Find-HordeDecisionSecretKind -Text "$k"
+            if ($nameKind -ne "") {
+                $where = "a field whose name is not repeated here"
+                [void]$out.Add("a field name in " + $Path + " holds what looks like " + $nameKind + ". A secret is never stored in the list: leave it out, and mark the question needsSecret if answering needs one")
+            }
+            foreach ($f in @(Find-HordeDecisionSecrets -Value $map[$k] -Path $where)) { [void]$out.Add($f) }
+        }
     }
     elseif ($Value -is [System.Collections.IList]) {
         $i = 0
