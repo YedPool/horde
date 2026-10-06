@@ -51,7 +51,7 @@ Check ((Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-80
 foreach ($bad in @("relative\folder", ($tempRoot + "a\..\b"), "\\server\share\x")) {
     Set-HordeWezfleetMessengerRoot -Path $bad
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("folder")) ("a folder that is relative, climbs with .., or is a network share is refused (" + $bad + ")")
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an absolute local folder")) ("a folder that is relative, climbs with .., or is a network share is refused (" + $bad + ")")
 }
 $missing = Join-Path $tempRoot ("horde-wfm-missing-" + [guid]::NewGuid().ToString("N"))
 [void](New-Item -ItemType Directory -Path $missing)
@@ -134,6 +134,12 @@ With-Fake {
 }
 With-Fake {
     param($st)
+    & $fx.SetMode $st @{ post = @{ stage = "refused"; exit = 2; reason = "" } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and "$($a.value.reason)".Trim() -ne "") "refused with no reason from wezfleet is still held with a reason"
+}
+With-Fake {
+    param($st)
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-0000000000aa"
     Check ($a.state -ceq "absent") "status exit 3, absent, is the port's absent"
 }
@@ -146,13 +152,18 @@ $cases = @(
     @{ what = "output that is not JSON"; mode = @{ post = @{ stdout = "all good`n"; exit = 0 } }; like = "JSON" },
     @{ what = "two lines of JSON"; mode = @{ post = @{ stdout = '{"id":"x"}' + "`n" + '{"id":"y"}' + "`n"; exit = 0 } }; like = "one line" },
     @{ what = "nothing at all"; mode = @{ post = @{ stdout = ""; exit = 0 } }; like = "one line" },
-    @{ what = "a newer shape without woken"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","reason":""}' + "`n"; exit = 0 } }; like = "woken" },
+    @{ what = "a newer shape without woken"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","reason":""}' + "`n"; exit = 0 } }; like = "without 'woken'" },
+    @{ what = "a shape without to"; mode = @{ post = @{ stdout = '{"id":"ID","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "without 'to'" },
+    @{ what = "a shape with a field this messenger does not read"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":true,"reason":"","pane":4}' + "`n"; exit = 0 } }; like = "answered with 'pane'" },
+    @{ what = "woken that is not true or false"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":"yes","reason":""}' + "`n"; exit = 0 } }; like = "woken that is not true or false" },
+    @{ what = "a stage that is not text"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":5,"woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "stage that is not text" },
+    @{ what = "more output than one answer could be"; mode = @{ post = @{ stdout = ("x" * 70000); exit = 0 } }; like = "65536" },
     @{ what = "a stage wezfleet does not have"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"delivered","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "delivered" },
     @{ what = "an answer about another id"; mode = @{ post = @{ stdout = '{"id":"0e00000000004000800000000000ffff","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "0e00000000004000800000000000ffff" },
     @{ what = "exit 0 with stage refused"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"refused","woken":false,"reason":"r"}' + "`n"; exit = 0 } }; like = "refused" },
     @{ what = "exit 2 with stage queued"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":false,"reason":"r"}' + "`n"; exit = 2 } }; like = "exit 2" },
     @{ what = "a write failure, exit 1"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":false,"reason":"disk full"}' + "`n"; exit = 1 } }; like = "disk full" },
-    @{ what = "an exit code outside the table"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 7 } }; like = "exit 7" })
+    @{ what = "an exit code outside the table"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 7 } }; like = "not an exit code" })
 foreach ($c in $cases) {
     With-Fake {
         param($st)

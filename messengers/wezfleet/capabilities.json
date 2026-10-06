@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "messenger": "wezfleet",
+  "capabilities": {
+    "body.untyped": {
+      "support": "yes",
+      "evidence": "The body goes only through -MessageFile into the fleet's mailbox; test-messenger-conformance.ps1 reads the stored body back from the fake fleet command intact (two lines, a non-ASCII letter) and finds no typed text holding any line of it, and test-wezfleet-messenger.ps1 finds no argument holding it (2026-10-06)."
+    },
+    "idempotent.post": {
+      "support": "yes",
+      "evidence": "wezfleet #65's mail post writes nothing and wakes nothing for an id it holds; test-messenger-conformance.ps1 measures one record, no new wake and the later stage kept across reposts, read from the fake's store and typed log (2026-10-06)."
+    },
+    "receipt.receiver": {
+      "support": "yes",
+      "evidence": "taken, mapped to seen, is set only by the receiving session's own Stop hook once the id is in its transcript (wezfleet hooks/wf-mail-deliver.mjs, proved in wezfleet #65's suite); test-messenger-conformance.ps1 shows seen appears only after the receiving side acts (2026-10-06)."
+    },
+    "wake": {
+      "support": "yes",
+      "evidence": "wezfleet #65 types one wake notice carrying only the id into a registry-verified pane; test-messenger-conformance.ps1 reads exactly one wake from the fake's typed log, one line, no control characters, none of the body (2026-10-06)."
+    }
+  }
+}

@@ -43,6 +43,12 @@ function Get-HordeMemoryMessengerLog {
     return [pscustomobject]@{ posts = $script:HordeMemoryMessengerPosts; records = $records; typed = 0; wakes = 0 }
 }
 
+function Get-HordeMemoryMessengerRecords {
+    # Every record the store holds, as { message; stage; at; reason }: what the conformance fixture
+    # observes, the store itself rather than this messenger's counters.
+    return @($script:HordeMemoryMessengerStore.Values | ForEach-Object { [pscustomobject]$_ })
+}
+
 function ConvertTo-HordeMemoryMessengerAnswer {
     param($Record)
     return (New-HordeKnown -Value ([pscustomobject]@{ messageId = "$($Record.message.messageId)"; stage = $Record.stage; at = $Record.at; reason = $Record.reason }) -ObservedAt ([datetime]::UtcNow))

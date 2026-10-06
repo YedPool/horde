@@ -79,8 +79,13 @@ foreach ($c in $cases) {
 # refused, and the old line becomes stale.
 $got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('"WindowsPowerShell", "v1.0", "powershell.exe"', '"cmd.exe"') })
 Check ((Says $got "does not list") -and (Says $got "that is not there")) "pointing the one start at another program is refused, and its old list line is stale"
-$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace("function Start-HordeWezfleetProcess {", "function Start-HordeWezfleetProcess { }`r`nfunction Start-HordeWezfleetProcessMoved {") })
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace("function Start-HordeWezfleetMessengerProcess {", "function Start-HordeWezfleetMessengerProcess { }`r`nfunction Start-HordeWezfleetMessengerProcessMoved {") })
 Check (Says $got "does not list") "the same start moved into another function is refused"
+# ONE LINE IS ONE SITE: the same start written twice in its own function is a second start.
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('try { $p = [System.Diagnostics.Process]::Start($psi) }', '$q = [System.Diagnostics.Process]::Start($psi); try { $p = [System.Diagnostics.Process]::Start($psi) }') })
+Check (Says $got "does not list") "the one listed start written twice in its own function is refused: a line allows one site"
+$got = @(Test-Planted -File "" -Change $null -ListChange "messengers/memory/Messenger.ps1 | Get-X | command | Start-Process x |")
+Check (Says $got "does not say why") "a list line that does not say why is refused"
 $got = @(Test-Planted -File "" -Change $null -ListChange "messengers/memory/Messenger.ps1 | Get-X | command | Start-Process notepad.exe | a planted permission")
 Check (Says $got "that is not there") "a list line no site matches is refused: no stale permission waits for a later edit"
 $got = @(Test-Planted -File "" -Change $null -ListChange "messengers/memory/Messenger.ps1 | Get-X | spawn | x | y")
@@ -91,5 +96,12 @@ $got = @(Test-Planted -File "messengers\wezfleet\test\Planted.ps1" -Change { par
 Check ($got.Count -eq 0) "a file under a test folder is not read: tests start stand-in children on purpose"; Show $got
 $got = @(Test-Planted -File $mem -Change { param($t) $t + "`r`nfunction Get-X {" })
 Check (Says $got "does not parse") "a file that does not parse is a finding, never a pass"
+$tree = Join-Path ([System.IO.Path]::GetTempPath()) ("horde-startsites-" + [guid]::NewGuid().ToString("N").Substring(0, 10))
+try {
+    Copy-Item -LiteralPath (Join-Path $root "messengers") -Destination (Join-Path $tree "messengers") -Recurse
+    Remove-Item -LiteralPath (Join-Path $tree "messengers\start-sites.txt")
+    $got = @(Test-HordeStartSites -Root $tree -Folder "messengers" -List "messengers\start-sites.txt")
+    Check (Says $got "is missing") "with no list at all, the family is refused, not passed"
+} finally { if (Test-Path -LiteralPath $tree) { Remove-Item -LiteralPath $tree -Recurse -Force } }
 
 Complete-HordeSuite -Success "nothing under messengers/ can start a program, run a script block or load code except at the sites messengers/start-sites.txt lists"

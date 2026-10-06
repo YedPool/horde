@@ -1,0 +1,17 @@
+# Every place code under messengers/ may start a program, run a script block or load code (remote plan
+# R21, slice 3b, merge condition 2; review of #102). tools/StartSites.ps1 finds every such site and
+# test/test-start-sites.ps1 fails on one this list does not have, and on a line no site matches. A line
+# allows ONE site, matched by file, function, kind and its exact text with white space made single.
+# Folders named test are not read.
+#
+# file | function | kind | text | why
+messengers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1") | the port's loader line: core's answers
+messengers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1") | the port's loader line: core's schema reader
+messengers/Port.ps1 | Send-HordeMessengerMessage | call | & $Messenger.post $Message | the port calls the post of a messenger Register-HordeMessenger made, and no other
+messengers/Port.ps1 | Get-HordeMessengerStatus | call | & $Messenger.status $MessageId | the port calls the status of a messenger Register-HordeMessenger made, and no other
+messengers/wezfleet/Messenger.ps1 | Stop-HordeWezfleetMessengerProcess | type | [System.Diagnostics.Process] | the stop takes the one process the start made, by its handle
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | type | [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), (ConvertTo-HordeWezfleetMessengerCommandLine -Argv $all)) | THE ONE PROGRAM: the fixed PowerShell from the system folder, its arguments joined by the one quoting function
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | type | [System.Diagnostics.Process]::Start($psi) | THE ONE START, of the start info above
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | method | [System.Diagnostics.Process]::Start($psi) | the same start, seen as the method call it is
+messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Post parameter: a messenger registers its post as a script block, which only the port's call above runs
+messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Status parameter, likewise
