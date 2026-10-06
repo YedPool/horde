@@ -1,13 +1,18 @@
 # DOES THE WEZFLEET MESSENGER HAND THE FLEET'S COMMAND EXACTLY WHAT IT SHOULD, AND READ ONLY WHAT IT SAID?
 #
 # Remote plan R21, slice 3b (messengers/wezfleet). The messenger starts the fleet's `mail post` and
-# `mail status` (wezfleet PR #65) as a child and maps their one line of JSON onto the port's stages. Every
-# case here runs against test\FakeWezfleet.ps1 in a fresh temp folder, through test\Fixture.ps1, and reads
-# what happened from the fake's own records - never a real mail root, never a pane, never a session's
-# folders. The plan's merge conditions for this slice, and where each is proved:
+# `mail status` (wezfleet PR #65, as revised after its review) as a child and maps their one line of JSON
+# onto the port's stages. Every case here runs against test\FakeWezfleet.ps1 in a fresh temp folder,
+# through test\Fixture.ps1, which also moves HORDE_HOME into the temp folder, and reads what happened from
+# the fake's own records - never a real mail root, never a pane, never a session's folders. The plan's
+# merge conditions for this slice, and where each is proved:
 #   (1) real side effects, not the adapter's report ..... test-messenger-conformance.ps1, and section B
 #   (2) one fixed start site, separate argv elements ..... section B here, and test-start-sites.ps1
-#   (3) missing, wrong version or non-JSON is unknown .... sections A and D
+#   (3) missing, wrong version or non-JSON is unknown .... sections A and E
+# and the review of #106: the root is a real local checkout (A), the body files sit in a folder only
+# this user can open and are swept (F), a target or sender wezfleet cannot name is refused before any
+# process starts (B), the revised answer - detail, exits 4 and 5 - is read (C, D, E), and an answer
+# naming another target is not read as this one's (D).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
@@ -42,34 +47,71 @@ function Why {
     if ($null -eq $r) { return "" }
     return "$($r.Value)"
 }
+function Show-Answer { param($A) if ($A.state -ceq "known") { return ($A.value.stage + ": " + (Why $A)) } return ($A.state + ": " + $A.reason) }
 function With-Fake {
     # Run Block with a fresh fake, and always remove it.
     param([scriptblock]$Block, [switch]$Spaced)
     $st = & $fx.New -Spaced:$Spaced
     try { & $Block $st } finally { & $fx.Remove $st }
 }
+function Line {
+    # One answer line as the revised #65 prints it, for a scripted stdout.
+    param([string]$Id, [string]$To = "22222222-3333-4444-8555-666666666666", [string]$Stage = "queued", $Woken = $true, [string]$Reason = "woken", $Detail = "", [hashtable]$Extra = @{}, [string[]]$Drop = @())
+    $o = [ordered]@{ id = $Id; to = $To; stage = $Stage }
+    if ($null -ne $Woken) { $o["woken"] = $Woken }
+    $o["reason"] = $Reason
+    $o["detail"] = $Detail
+    foreach ($k in $Extra.Keys) { $o[$k] = $Extra[$k] }
+    foreach ($k in $Drop) { $o.Remove($k) }
+    return (([pscustomobject]$o | ConvertTo-Json -Compress) + "`n")
+}
 $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $fixedPs = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
+$other = "99999999-8888-4777-8666-555555555555"
 
 Write-Host ""
-Write-Host "--- A. where the fleet's command is: never a guess, never a relative or climbing path ---" -ForegroundColor Cyan
+Write-Host "--- A. where the fleet is: configured, absolute, local, no reparse point, a real checkout ---" -ForegroundColor Cyan
 
 Set-HordeWezfleetMessengerRoot -Path ""
 $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not configured")) "with no folder configured, a post is unknown: the messenger never guesses where the fleet is"
 Check ((Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001").state -ceq "unknown") "and so is a status"
-foreach ($bad in @("relative\folder", ($tempRoot + "a\..\b"), "\\server\share\x")) {
+foreach ($bad in @("relative\folder", ($tempRoot + "a\..\b"), "\\server\share\x", "\\?\C:\x")) {
     Set-HordeWezfleetMessengerRoot -Path $bad
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an absolute local folder")) ("a folder that is relative, climbs with .., or is a network share is refused (" + $bad + ")")
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an absolute local folder")) ("a folder that is relative, climbs with .., or is a network or device path is refused (" + $bad + ")")
 }
-$missing = Join-Path $tempRoot ("horde-wfm-missing-" + [guid]::NewGuid().ToString("N"))
-[void](New-Item -ItemType Directory -Path $missing)
-try {
-    Set-HordeWezfleetMessengerRoot -Path $missing
+Set-HordeWezfleetMessengerRoot -Path ""
+With-Fake {
+    param($st)
+    # A BARE FOLDER HOLDING ONLY A wezfleet.ps1 is not a checkout: each marker missing is named.
+    foreach ($marker in @("lib\MailPost.ps1", "lib\Mail.ps1", "commands\mail.ps1", "wezfleet.ps1")) {
+        $mp = Join-Path $st.dir $marker
+        $keep = [System.IO.File]::ReadAllBytes($mp)
+        Remove-Item -LiteralPath $mp
+        $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not a wezfleet checkout") -and "$($a.reason)".Contains($marker) -and @(& $fx.Runs $st).Count -eq 0) ("a folder without " + $marker + " is not a wezfleet checkout, and nothing is started (" + $a.reason + ")")
+        [System.IO.File]::WriteAllBytes($mp, $keep)
+    }
+    # A JUNCTION, as the folder itself or anywhere above it, is refused: the configured path must be the
+    # real one, not a pointer that can be re-aimed after it was configured.
+    $j = $st.dir + "-junction"
+    [void](New-Item -ItemType Junction -Path $j -Target $st.dir)
+    try {
+        Set-HordeWezfleetMessengerRoot -Path $j -TimeoutSeconds 60
+        $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("reparse point") -and @(& $fx.Runs $st).Count -eq 0) ("a junction to a real checkout is refused, and nothing is started (" + $a.reason + ")")
+        $up = $st.dir + "-up"
+        [void](New-Item -ItemType Junction -Path $up -Target (Split-Path -Parent $st.dir))
+        try {
+            Set-HordeWezfleetMessengerRoot -Path (Join-Path $up (Split-Path -Leaf $st.dir)) -TimeoutSeconds 60
+            $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+            Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("reparse point")) ("a junction ABOVE the folder is refused too (" + $a.reason + ")")
+        } finally { [System.IO.Directory]::Delete($up) }
+    } finally { [System.IO.Directory]::Delete($j); Set-HordeWezfleetMessengerRoot -Path $st.dir -TimeoutSeconds 60 }
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("wezfleet.ps1")) ("wezfleet missing from the folder is unknown, naming the script it looked for (" + $a.reason + ")")
-} finally { Remove-Item -LiteralPath $missing -Recurse -Force; Set-HordeWezfleetMessengerRoot -Path "" }
+    Check ($a.state -ceq "known") ("CONTROL: the real checkout itself is accepted (" + (Show-Answer $a) + ")")
+}
 Check (Throws { Set-HordeWezfleetMessengerRoot -Path $tempRoot -TimeoutSeconds 0 } "TimeoutSeconds") "a timeout below 1 s is refused when it is set"
 
 Write-Host ""
@@ -79,7 +121,7 @@ With-Fake {
     param($st)
     $msg = New-Msg
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
-    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") ("CONTROL: a post through the fake is known accepted (" + $(if ($a.state -ceq "known") { $a.value.stage } else { $a.reason }) + ")")
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") ("CONTROL: a post through the fake is known accepted (" + (Show-Answer $a) + ")")
     $runs = @(& $fx.Runs $st)
     Check ($runs.Count -eq 1) "the post started the fleet's command exactly once"
     $r = $runs[0]
@@ -91,10 +133,9 @@ With-Fake {
     Check ((@($argv) -join "|") -ceq ($want -join "|")) ("the arguments are exactly mail post -To -Id (32 hex) -MessageFile -FromLabel -FromSessionId -Json, each its own element (" + (@($argv) -join " ") + ")")
     $bodyLines = @($msg.body -split "`n")
     Check (@($argv | Where-Object { $a1 = "$_"; @($bodyLines | Where-Object { $a1.Contains($_) }).Count -gt 0 }).Count -eq 0) "no argument holds any line of the body: the body goes only through -MessageFile"
-    Check ($file.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) ("the message file was written under the temp folder (" + $file + ")")
-    Check (-not (Test-Path -LiteralPath $file)) "and is deleted once the post has answered"
+    Check (-not (Test-Path -LiteralPath $file)) "the message file is deleted once the post has answered"
     $o = & $fx.Observe $st $msg.messageId
-    Check (@($o.bodies).Count -eq 1 -and "$(@($o.bodies)[0])" -ceq $msg.body) "the fake read the body from the file exactly as sent, both lines"
+    Check (@($o.bodies).Count -eq 1 -and "$(@($o.bodies)[0])" -ceq $msg.body) "the fake read the body from the file exactly as sent, both lines and the non-ASCII letter"
     $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
     $runs = @(& $fx.Runs $st)
     Check ($s.state -ceq "known" -and $s.value.stage -ceq "accepted") "a status of it is known accepted"
@@ -102,51 +143,94 @@ With-Fake {
 }
 With-Fake -Spaced {
     param($st)
-    $msg = New-Msg
-    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     $runs = @(& $fx.Runs $st)
     Check ($a.state -ceq "known" -and $runs.Count -eq 1 -and "$($runs[0].argv[0])" -ceq "mail") "a fleet folder whose path holds a space still starts the script, its arguments intact"
 }
-$msgNoLabel = New-Msg
-$msgNoLabel.from.PSObject.Properties.Remove("label")
+# WHO WEZFLEET CAN NAME (review of #106, G6; decided 2026-10-06). wezfleet takes -To and -FromSessionId
+# only as lower-case session UUIDs, and -FromLabel only as a label. A sender whose session id is not one
+# is named by its label alone; a target wezfleet cannot name, or a sender with neither, is held here,
+# before any process starts.
 With-Fake {
     param($st)
-    $null = Send-HordeMessengerMessage -Messenger $m -Message $msgNoLabel
+    $msg = New-Msg
+    $msg.from.PSObject.Properties.Remove("label")
+    $null = Send-HordeMessengerMessage -Messenger $m -Message $msg
     $argv = @(@(& $fx.Runs $st)[0].argv)
     Check (-not ($argv -ccontains "-FromLabel")) "a sender with no label sends no -FromLabel, never an empty one"
 }
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $msg.from.sessionId = "agent-thread-7"
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $argv = @(@(& $fx.Runs $st)[0].argv)
+    Check ($a.state -ceq "known" -and -not ($argv -ccontains "-FromSessionId") -and ($argv -ccontains "-FromLabel")) ("a sender whose session id is not a UUID is named by its label alone; no -FromSessionId is passed (" + ($argv -join " ") + ")")
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $msg.from.sessionId = "agent-thread-7"
+    $msg.from.PSObject.Properties.Remove("label")
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-from") -and @(& $fx.Runs $st).Count -eq 0) ("a sender with neither a session UUID nor a label is held, bad-from, and nothing is started (" + (Show-Answer $a) + ")")
+    $msg = New-Msg
+    $msg.from.label = "orc-1"
+    $a = Send-HordeWezfleetMessengerPost -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-from") -and @(& $fx.Runs $st).Count -eq 0) ("a sender label that is not a hub label is held, bad-from, by the adapter itself (" + (Show-Answer $a) + ")")
+    foreach ($to in @("agent-not-a-uuid", "22222222-3333-4444-8555-66666666666G", "22222222-3333-4444-8555-66666666666A")) {
+        $msg = New-Msg
+        $msg.sessionId = $to
+        $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-to") -and @(& $fx.Runs $st).Count -eq 0) ("a target that is not a lower-case session UUID is held, bad-to, and nothing is started (" + $to + ")")
+    }
+}
 
 Write-Host ""
-Write-Host "--- C. the fleet's stages, mapped onto the port's ---" -ForegroundColor Cyan
+Write-Host "--- C. the fleet's stages and reasons, mapped onto the port's ---" -ForegroundColor Cyan
 
 foreach ($c in @(
-        @{ stage = "queued"; exit = 0; want = "accepted" },
-        @{ stage = "handed-over"; exit = 0; want = "handed-over" },
-        @{ stage = "taken"; exit = 0; want = "seen" },
-        @{ stage = "unconfirmed"; exit = 0; want = "expired"; reason = "no hook confirmed it within its window" },
-        @{ stage = "refused"; exit = 2; want = "held"; reason = "-MessageFile must name an existing file" })) {
+        @{ mode = @{}; want = "accepted"; why = "woken" },
+        @{ mode = @{ noWake = $true }; want = "accepted"; why = "no-registry-record: no registry record" },
+        @{ mode = @{ stage = "handed-over" }; want = "handed-over"; why = "woken" },
+        @{ mode = @{ stage = "taken" }; want = "seen"; why = "woken" },
+        @{ mode = @{ stage = "unconfirmed"; detail = "no hook confirmed it within its window" }; want = "expired"; why = "no hook confirmed it" })) {
     With-Fake {
         param($st)
-        $mode = @{ stage = $c.stage; exit = $c.exit }
-        if ($c.ContainsKey("reason")) { $mode.reason = $c.reason }
-        & $fx.SetMode $st @{ post = $mode }
+        & $fx.SetMode $st @{ post = $c.mode }
         $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-        $ok = ($a.state -ceq "known" -and $a.value.stage -ceq $c.want)
-        if ($c.ContainsKey("reason")) { $ok = $ok -and (Why $a).Contains($c.reason) }
-        Check $ok ("wezfleet " + $c.stage + " (exit " + $c.exit + ") is the port's " + $c.want + $(if ($c.ContainsKey("reason")) { ", with wezfleet's reason" } else { "" }) + " (" + $(if ($a.state -ceq "known") { $a.value.stage } else { $a.reason }) + ")")
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq $c.want -and (Why $a).Contains($c.why)) ("wezfleet " + (($c.mode.Keys | ForEach-Object { $_ + "=" + $c.mode[$_] }) -join " ") + " is the port's " + $c.want + ", reason with '" + $c.why + "' (" + (Show-Answer $a) + ")")
     }
 }
 With-Fake {
     param($st)
-    & $fx.SetMode $st @{ post = @{ stage = "unconfirmed"; exit = 0; reason = "" } }
+    & $fx.SetMode $st @{ post = @{ stage = "unconfirmed"; reason = ""; detail = "" } }
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "expired" -and (Why $a).Trim() -ne "") "unconfirmed with no reason from wezfleet still carries a reason"
 }
 With-Fake {
     param($st)
-    & $fx.SetMode $st @{ post = @{ stage = "refused"; exit = 2; reason = "" } }
-    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $false -Reason "bad-file" -Detail "-MessageFile must name an existing file"); exit = 2 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("bad-file: -MessageFile")) ("a refusal, exit 2, is held with wezfleet's reason code and detail (" + (Show-Answer $a) + ")")
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $false -Reason "" -Detail ""); exit = 2 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).Trim() -ne "") "refused with no reason from wezfleet is still held with a reason"
+}
+# STALE-SESSION, EXIT 4, IS HELD IN BOTH ITS SHAPES (decided 2026-10-06): nothing was written (absent),
+# or the mail was written under a session that no longer holds its pane (queued). Held is final: the hub
+# reports it to the sender, and a retry is a new message.
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ staleAbsent = $true } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (Why $a).Contains("re-resolve")) ("exit 4 with nothing written is held, stale-session, the detail carried (" + (Show-Answer $a) + ")")
+    & $fx.SetMode $st @{ post = @{ stalePane = $true } }
+    $msg = New-Msg
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (& $fx.Observe $st $msg.messageId).records -eq 1) ("exit 4 with the mail written but the pane held by another session is held too, never accepted (" + (Show-Answer $a) + ")")
 }
 With-Fake {
     param($st)
@@ -155,48 +239,108 @@ With-Fake {
 }
 
 Write-Host ""
-Write-Host "--- D. anything outside the table is unknown, with the reason: never a stage guessed ---" -ForegroundColor Cyan
+Write-Host "--- D. detail is read, never fatal; an answer about another target is not this one's ---" -ForegroundColor Cyan
+
+# DETAIL (review of #106, G4): one line, no control character, capped. A bad detail is cut or dropped,
+# and the answer it came with is kept.
+$detailCases = @(
+    @{ what = "a detail holding an escape sequence"; detail = ([string][char]27 + "[31mred" + [string][char]7); check = { param($w) -not ($w -cmatch '[\x00-\x1F\x7F]') -and $w.Contains("red") } },
+    @{ what = "a detail of two lines"; detail = "line one`nline two"; check = { param($w) $w.Contains("line one") -and -not $w.Contains("line two") } },
+    @{ what = "a detail of 5000 characters"; detail = ("d" * 5000); check = { param($w) [System.Text.Encoding]::UTF8.GetByteCount($w) -le 1024 -and $w.Contains("ddd") } },
+    @{ what = "a detail that is a number"; detail = 5; check = { param($w) $w -ceq "woken" } },
+    @{ what = "a detail that is null"; detail = $null; check = { param($w) $w -ceq "woken" } })
+foreach ($c in $detailCases) {
+    With-Fake {
+        param($st)
+        $msg = New-Msg
+        & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Detail $c.detail); exit = 0 } }
+        $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+        Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and (& $c.check (Why $a))) ("the answer is kept, its detail cut or dropped: " + $c.what + " (" + (Show-Answer $a) + ")")
+    }
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Drop @("detail")); exit = 0 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") "an answer with no detail at all is read"
+}
+# THE TARGET (review of #106, G7; decided 2026-10-06). A post's "to" must be the session it was asked to
+# post to - except for a repost, already-posted, where it names the mailbox the record is in now, which a
+# compact may have moved (wezfleet moves a mailbox only by pid and start time). A status's "to" is never
+# compared: the port asks it by id alone, and the target was journaled by slice 4, which compares.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -To $other); exit = 0 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($other)) ("a new post answered for another session is unknown, naming it (" + $a.reason + ")")
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $null = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    & $fx.Move $st $msg.messageId $other
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and (Why $a).Contains("followed to " + $other)) ("a repost of a record a compact moved is read, and says where it was followed to (" + (Show-Answer $a) + ")")
+    $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($s.state -ceq "known" -and $s.value.stage -ceq "accepted" -and (Why $s).Contains("at " + $other)) ("a status of the moved record is read, not compared with anything, and says where it is (" + (Show-Answer $s) + ")")
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -To "M" -Woken $false -Reason "already-posted"); exit = 0 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "unknown") ("a repost answered with a target that is not a session UUID is unknown (" + $a.reason + ")")
+    & $fx.SetMode $st @{ status = @{ stdout = (Line -Id (N $msg.messageId) -To "M" -Woken $null -Reason "found"); exit = 0 } }
+    $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($s.state -ceq "unknown") ("a status answered with a target that is not a session UUID is unknown (" + $s.reason + ")")
+    & $fx.SetMode $st @{ status = @{ stdout = (Line -Id (N $msg.messageId) -To "" -Woken $null -Reason "found"); exit = 0 } }
+    $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($s.state -ceq "known" -and $s.value.stage -ceq "accepted") "a status with no target is read"
+}
+
+Write-Host ""
+Write-Host "--- E. anything outside the table is unknown, with the reason: never a stage guessed ---" -ForegroundColor Cyan
 
 $cases = @(
-    @{ what = "a wezfleet too old to have mail post (its usage text, exit 1)"; mode = @{ post = @{ stdout = "wezfleet mail: unknown action 'post'. Use read, list, count or pump.`n"; exit = 1 } }; like = "exit 1" },
-    @{ what = "output that is not JSON"; mode = @{ post = @{ stdout = "all good`n"; exit = 0 } }; like = "JSON" },
-    @{ what = "two lines of JSON"; mode = @{ post = @{ stdout = '{"id":"x"}' + "`n" + '{"id":"y"}' + "`n"; exit = 0 } }; like = "one line" },
-    @{ what = "nothing at all"; mode = @{ post = @{ stdout = ""; exit = 0 } }; like = "one line" },
-    @{ what = "a newer shape without woken"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","reason":""}' + "`n"; exit = 0 } }; like = "without 'woken'" },
-    @{ what = "a shape without to"; mode = @{ post = @{ stdout = '{"id":"ID","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "without 'to'" },
-    @{ what = "a shape with a field this messenger does not read"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":true,"reason":"","pane":4}' + "`n"; exit = 0 } }; like = "answered with 'pane'" },
-    @{ what = "woken that is not true or false"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":"yes","reason":""}' + "`n"; exit = 0 } }; like = "woken that is not true or false" },
-    @{ what = "a stage that is not text"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":5,"woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "stage that is not text" },
-    @{ what = "more output than one answer could be"; mode = @{ post = @{ stdout = ("x" * 70000); exit = 0 } }; like = "65536" },
-    @{ what = "a stage wezfleet does not have"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"delivered","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "delivered" },
-    @{ what = "an answer about another id"; mode = @{ post = @{ stdout = '{"id":"0e00000000004000800000000000ffff","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 0 } }; like = "0e00000000004000800000000000ffff" },
-    @{ what = "exit 0 with stage refused"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"refused","woken":false,"reason":"r"}' + "`n"; exit = 0 } }; like = "refused" },
-    @{ what = "exit 2 with stage queued"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":false,"reason":"r"}' + "`n"; exit = 2 } }; like = "exit 2" },
-    @{ what = "a write failure, exit 1"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":false,"reason":"disk full"}' + "`n"; exit = 1 } }; like = "disk full" },
-    @{ what = "an exit code outside the table"; mode = @{ post = @{ stdout = '{"id":"ID","to":"T","stage":"queued","woken":true,"reason":""}' + "`n"; exit = 7 } }; like = "not an exit code" })
+    @{ what = "a wezfleet too old to have mail post (its usage text, exit 1)"; out = { param($id) "wezfleet mail: unknown action 'post'. Use read, list, count or pump.`n" }; exit = 1; like = "exit 1" },
+    @{ what = "output that is not JSON"; out = { param($id) "all good`n" }; exit = 0; like = "JSON" },
+    @{ what = "two lines of JSON"; out = { param($id) (Line -Id $id) + (Line -Id $id) }; exit = 0; like = "one line" },
+    @{ what = "nothing at all"; out = { param($id) "" }; exit = 0; like = "one line" },
+    @{ what = "the first #65 shape, without detail and with woken missing"; out = { param($id) Line -Id $id -Woken $null -Drop @("detail") }; exit = 0; like = "without 'woken'" },
+    @{ what = "a shape without to"; out = { param($id) Line -Id $id -Drop @("to") }; exit = 0; like = "without 'to'" },
+    @{ what = "a shape with a field this messenger does not read"; out = { param($id) Line -Id $id -Extra @{ pane = 4 } }; exit = 0; like = "answered with 'pane'" },
+    @{ what = "woken that is not true or false"; out = { param($id) Line -Id $id -Woken "yes" }; exit = 0; like = "woken that is not true or false" },
+    @{ what = "a stage that is not text"; out = { param($id) Line -Id $id -Extra @{ stage = 5 } }; exit = 0; like = "stage that is not text" },
+    @{ what = "more output than one answer could be"; out = { param($id) "x" * 70000 }; exit = 0; like = "65536" },
+    @{ what = "a stage wezfleet does not have"; out = { param($id) Line -Id $id -Stage "delivered" }; exit = 0; like = "delivered" },
+    @{ what = "an answer about another id"; out = { param($id) Line -Id "0e00000000004000800000000000ffff" }; exit = 0; like = "0e00000000004000800000000000ffff" },
+    @{ what = "exit 0 with stage refused"; out = { param($id) Line -Id $id -Stage "refused" -Woken $false -Reason "bad-file" }; exit = 0; like = "refused" },
+    @{ what = "exit 2 with stage queued"; out = { param($id) Line -Id $id -Woken $false }; exit = 2; like = "exit 2" },
+    @{ what = "exit 4 with stage taken"; out = { param($id) Line -Id $id -Stage "taken" -Woken $false -Reason "stale-session" }; exit = 4; like = "exit 4" },
+    @{ what = "a write failure, exit 1"; out = { param($id) Line -Id $id -Stage "absent" -Woken $false -Reason "write-failed" -Detail "the mail could not be written" }; exit = 1; like = "write-failed" },
+    @{ what = "an internal error, exit 5"; out = { param($id) Line -Id $id -Stage "unknown" -Woken $false -Reason "internal-error" -Detail "wezfleet threw: x" }; exit = 5; like = "internal-error" },
+    @{ what = "an exit code outside the table"; out = { param($id) Line -Id $id }; exit = 7; like = "not an exit code" })
 foreach ($c in $cases) {
     With-Fake {
         param($st)
         $msg = New-Msg
-        $mode = $c.mode
-        $mode.post.stdout = "$($mode.post.stdout)".Replace("ID", (N $msg.messageId))
-        & $fx.SetMode $st $mode
+        & $fx.SetMode $st @{ post = @{ stdout = (& $c.out (N $msg.messageId)); exit = $c.exit } }
         $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
         Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($c.like)) ("unknown: " + $c.what + " (" + $a.reason + ")")
     }
 }
 With-Fake {
     param($st)
-    & $fx.SetMode $st @{ status = @{ stdout = '{"id":"x","to":"","stage":"refused","reason":"-Id must be 32 lowercase hex"}' + "`n"; exit = 2 } }
+    & $fx.SetMode $st @{ status = @{ internal = $true } }
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
-    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("exit 2")) "a status refused as malformed, exit 2, is unknown"
-}
-With-Fake {
-    param($st)
-    & $fx.SetMode $st @{ status = @{ stdout = '{"id":"ID","to":"T","stage":"queued","reason":""}' + "`n"; exit = 3 } }
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("internal-error")) "a status internal error, exit 5, is unknown"
     $msg = New-Msg
-    $fxMode = @{ status = @{ stdout = ('{"id":"' + (N $msg.messageId) + '","to":"T","stage":"queued","reason":""}' + "`n"); exit = 3 } }
-    & $fx.SetMode $st $fxMode
+    & $fx.SetMode $st @{ status = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $null -Reason "bad-id"); exit = 2 } }
+    $a = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("exit 2")) "a status refused as malformed, exit 2, is unknown"
+    & $fx.SetMode $st @{ status = @{ stdout = (Line -Id (N $msg.messageId) -Woken $null -Reason "found"); exit = 3 } }
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
     Check ($a.state -ceq "unknown") "status exit 3 with a stage other than absent is unknown, never absent"
 }
@@ -216,15 +360,44 @@ With-Fake {
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("3 s") -and $took -lt 30) ("a hung command is unknown after its deadline (" + [int]$took + " s): " + $a.reason)
     Check ($childPid -gt 0 -and -not $alive) ("and the child it started was stopped (pid " + $childPid + ")")
 }
-# THE TEMP FILE NEVER OUTLIVES A FAILURE either.
+
+Write-Host ""
+Write-Host "--- F. the body files: a folder only this user can open, emptied after each post and swept at start ---" -ForegroundColor Cyan
+
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+function Test-UserOnly {
+    # Is the folder's access list protected from inheritance, with one rule: full control for this user?
+    param([string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+    return ($acl.AreAccessRulesProtected -and $rules.Count -eq 1 -and $rules[0].IdentityReference.Value -ceq $me.Value -and
+        $rules[0].AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+        ($rules[0].FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -eq [System.Security.AccessControl.FileSystemRights]::FullControl)
+}
 With-Fake {
     param($st)
-    & $fx.SetMode $st @{ post = @{ stdout = "garbage`n"; exit = 0 } }
+    $out = Join-Path $st.home "messengers\wezfleet\outgoing"
+    $msg = New-Msg
+    $null = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    $argv = @(@(& $fx.Runs $st)[0].argv)
+    $file = "$($argv[[array]::IndexOf($argv, '-MessageFile') + 1])"
+    Check ((Split-Path -Parent $file) -ieq $out) ("the body file was written in Horde's own folder, under HORDE_HOME (" + $file + ")")
+    Check (Test-UserOnly $out) "that folder's access list, read back, is protected and grants full control to this user alone"
+    Check (@(Get-ChildItem -LiteralPath $out -Force).Count -eq 0) "and it is empty after the post"
+}
+With-Fake {
+    param($st)
+    # A folder someone else made, inheriting its parent's access list, is put right before a body is written.
+    $out = Join-Path $st.home "messengers\wezfleet\outgoing"
+    [void](New-Item -ItemType Directory -Force -Path $out)
+    Check (-not (Test-UserOnly $out)) "CONTROL: a folder made by New-Item inherits a wider access list"
     $null = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    $runs = @(& $fx.Runs $st)
-    $argv = @($runs[0].argv)
-    $i = [array]::IndexOf($argv, "-MessageFile")
-    Check ($i -ge 0 -and -not (Test-Path -LiteralPath "$($argv[$i + 1])")) "after an answer that could not be read, the message file is deleted too"
+    Check (Test-UserOnly $out) "after a post, the folder's access list is this user's alone"
+    # SWEPT AT START: a node killed in the middle of a post leaves its body file behind.
+    foreach ($n in 1..2) { [System.IO.File]::WriteAllText((Join-Path $out ([guid]::NewGuid().ToString("N") + ".txt")), "a body a killed node left behind") }
+    $swept = Clear-HordeWezfleetMessengerOutgoing
+    Check ($swept -eq 2 -and @(Get-ChildItem -LiteralPath $out -Force).Count -eq 0) ("the start sweep removes every body file left behind (" + $swept + ")")
+    Check ((Clear-HordeWezfleetMessengerOutgoing) -eq 0) "and a sweep with nothing to do removes nothing"
 }
 
-Complete-HordeSuite -Success "the wezfleet messenger starts only the fixed PowerShell on the configured fleet script, hands the body only through a temp file, and reads nothing it was not told"
+Complete-HordeSuite -Success "the wezfleet messenger starts only the fixed PowerShell on a real local wezfleet checkout, hands the body only through a file only this user can open, and reads nothing it was not told"

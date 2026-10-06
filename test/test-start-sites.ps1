@@ -68,13 +68,29 @@ $cases = @(
     @{ file = $mem; add = "function Get-X { `$o.`$name() }"; like = "method start site"; what = "a method named by an expression" },
     @{ file = $mem; add = "function Get-X { . `$path }"; like = "dot start site"; what = "a dot-sourced file" },
     @{ file = $mem; add = "function Get-X { `$p = New-Object System.Diagnostics.ProcessStartInfo }"; like = "type start site"; what = "a ProcessStartInfo made with New-Object" },
-    @{ file = $mem; add = "function Get-X { ([wmiclass]'Win32_Process').Create('x') }"; like = "type start site"; what = "a WMI process create" })
+    @{ file = $mem; add = "function Get-X { ([wmiclass]'Win32_Process').Create('x') }"; like = "type start site"; what = "a WMI process create" },
+    @{ file = $mem; add = "function Get-X { Get-WmiObject Win32_Process }"; like = "command start site"; what = "a WMI query command" },
+    @{ file = $mem; add = "function Get-X { Invoke-CimMethod -ClassName Win32_Process -MethodName Create }"; like = "command start site"; what = "a CIM method call" },
+    @{ file = $mem; add = "function Get-X { `$s = New-Object -ComObject WScript.Shell }"; like = "command start site"; what = "a COM object" },
+    # The review of #106's four plants (G2): each changed what runs without changing a listed text.
+    @{ file = $mem; add = "function Get-X { Add-Type -TypeDefinition `$cs; [Q106]::G() }"; like = "command start site"; what = "Add-Type, which compiles code that could start anything" },
+    @{ file = $wf; add = "function Get-X { Start-HordeWezfleetMessengerProcess -Argv @('mail', 'read') }"; like = "starter start site"; what = "a call of the start function from a function the list does not name" })
 foreach ($c in $cases) {
     $add = $c.add
     $got = @(Test-Planted -File $c.file -Change ([scriptblock]::Create("param(`$t) return (`$t + `"`r`n`" + '" + $add.Replace("'", "''") + "')")))
     Check (Says $got $c.like) ("refused: " + $c.what)
     if (-not (Says $got $c.like)) { Show $got }
 }
+# A PROPERTY OF THE START INFO IS A SITE: the program, its arguments or how it runs can be changed after
+# the listed ::new without touching its text (review of #106, G2).
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShellExecute = $false', '    $psi.FileName = "C:\Windows\System32\cmd.exe"' + "`r`n" + '    $psi.UseShellExecute = $false') })
+Check (Says $got "assign start site") "the program named again after the listed ::new, by setting FileName, is refused"
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShellExecute = $false', '    $psi.Arguments = "-Command " + $x' + "`r`n" + '    $psi.UseShellExecute = $false') })
+Check (Says $got "assign start site") "the arguments replaced by one string, by setting Arguments, is refused"
+$got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('    $psi.UseShellExecute = $false', '    $psi.UseShellExecute = $true') })
+Check ((Says $got "assign start site") -and (Says $got "that is not there")) "a listed property set to another value is a site the list does not have"
+$got = @(Test-Planted -File $mem -Change { param($t) $t + "`r`nfunction Get-X { `$o.`$name = 1 }" })
+Check (Says $got "assign start site") "a property named by an expression and assigned is refused"
 # THE PROGRAM IS PART OF THE SITE'S TEXT: pointing the one start at another program is a changed site,
 # refused, and the old line becomes stale.
 $got = @(Test-Planted -File $wf -Change { param($t) $t.Replace('"WindowsPowerShell", "v1.0", "powershell.exe"', '"cmd.exe"') })
