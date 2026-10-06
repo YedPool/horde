@@ -45,10 +45,14 @@
 # WHAT A CRASH OR A DAMAGED DISK LEAVES, and what the reader says of each. The list is still handed
 # back, every time; the damaged record is in it, marked, with the reason:
 #   - torn      an empty file or cut JSON: it was damaged after it was written, or made by hand.
-#   - missing   a gap in the order: record 7 is not there and record 8 is. Someone deleted it.
+#   - missing   a gap in the order: record 7 is not there and record 8 is. Someone deleted it. A gap
+#               of several records is ONE entry, saying from where to where.
 #   - busy      still open in another process after the wait below. A writer is slow, or stuck.
 #   - error     it could not be read at all (access denied, a disk error, bytes that are not UTF-8).
 # This file never decides what a damaged record costs. It reports; Rules.ps1 decides.
+# And one thing that is not damage: a STRAY, a file with a record's kind of name that is too far past
+# the end of the order to be a record (see the gap limit below), or whose number is not ten digits or
+# is zero. A stray is reported by name and is not part of the order at all.
 #
 # NOT DONE HERE, AND WHY. remote/Journal.ps1 refuses a root reached through a junction and a name that
 # is not a plain file name, because its names come from the far end of a link. Every name here is ten
@@ -72,6 +76,18 @@ $script:HordeDecisionStoreNamePattern = '\A([0-9]{10})\.json\z'
 # is a few kilobytes written through, which takes milliseconds, so a healthy writer is done long before.
 $script:HordeDecisionStoreBusyTries = 40
 $script:HordeDecisionStoreBusyWaitMs = 50
+# Any name made only of digits: a record's name when it is exactly ten of them and not zero, a stray
+# otherwise. A name with anything else in it is somebody else's file and is not looked at.
+$script:HordeDecisionStoreDigitsPattern = '\A([0-9]+)\.json\z'
+# THE LARGEST GAP THAT IS BELIEVED. Records missing from the middle of the order may have been
+# questions, so each one costs a question number (Rules.ps1) - right for a handful of records deleted
+# by hand, and ruinous for a file that was never a record. Measured 2026-10-06, before this limit: ONE
+# file named 0000002000.json beside two records made a list take 11.6 s, report 1998 unreadable
+# records, and number the next question 2001 for good; one named 9999999999.json and the list never
+# came back. A hundred lost records in a row is not something a hand or a crash does to a folder of
+# small files; a stray copy or a mistyped name is. So a name more than this far past the last record
+# before it is a stray, and so is every name after it.
+$script:HordeDecisionStoreMaxGap = 100
 # A writer's temporary file: the only other name this file makes, and the only kind it ever deletes.
 $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 # How old a temporary file must be before the next writer removes it. A live writer holds its file for
@@ -177,43 +193,61 @@ function Read-HordeDecisionRecordFile {
 
 function Get-HordeDecisionRecords {
     # Every record of the store, in sequence order, damaged ones included. Returns
-    #   { state: ok | absent | unknown; reason; last; records }
+    #   { state: ok | absent | unknown; reason; last; records; strays }
     # state absent: there is no store folder, so nothing was ever added; records is empty and last is 0.
     # state unknown: the folder is there and could not be listed, or a file is in its place; reason says why.
-    # Each record is { sequence; file; kind: ok | missing | busy | torn | error; data; reason }, and
-    # there is exactly one for every number from 1 to last: a number with no file is "missing", never
-    # left out, because the order is what a question's number is worked out from.
+    # Each record is { sequence; span; file; kind: ok | missing | busy | torn | error; data; reason }.
+    # Every number from 1 to last is covered exactly once: by a record of span 1, or by ONE "missing"
+    # entry whose span is how many numbers in a row have no file. A gap is never left out, because the
+    # order is what a question's number is worked out from, and never walked number by number.
+    # last is the end of the order: the next record a writer makes is last + 1.
+    # strays is { file; reason } for every stray (see the gap limit above); none is in records or in last.
     #
-    # Files of any other name are not records and are not read: only this file's own ten-digit names
-    # are. They cannot be mistaken for a record, so they cannot change the list.
+    # Files whose name is not digits and .json are not looked at: they cannot be mistaken for a record.
     param([Parameter(Mandatory = $true)][string]$Root)
-    $none = [pscustomobject]@{ state = "absent"; reason = "there is no decisions store yet"; last = [long]0; records = @() }
+    $none = [pscustomobject]@{ state = "absent"; reason = "there is no decisions store yet"; last = [long]0; records = @(); strays = @() }
     $absolute = [System.IO.Path]::IsPathRooted("$Root")
     if (-not $absolute) {
-        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store needs an absolute folder, not '" + $Root + "'"); last = [long]0; records = @() }
+        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store needs an absolute folder, not '" + $Root + "'"); last = [long]0; records = @(); strays = @() }
     }
     # A FILE of the store's name is not "no store yet": every write there fails, so a read that said
     # "an empty list" would be an answer no write could ever agree with (measured 2026-10-06).
     if ([System.IO.File]::Exists($Root)) {
-        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' is a file, not a folder"); last = [long]0; records = @() }
+        return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' is a file, not a folder"); last = [long]0; records = @(); strays = @() }
     }
     if (-not [System.IO.Directory]::Exists($Root)) { return $none }
     $names = $null
     try { $names = [System.IO.Directory]::GetFiles($Root, "*.json") }
-    catch { return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @() } }
-    $last = [long]0
+    catch { return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @(); strays = @() } }
+    $strays = New-Object System.Collections.ArrayList
+    $numbered = New-Object 'System.Collections.Generic.List[long]'
     foreach ($full in $names) {
         $leaf = [System.IO.Path]::GetFileName($full)
-        if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern) { continue }
-        $seq = [long]$Matches[1]
-        if ($seq -gt $last) { $last = $seq }
+        if ($leaf -cnotmatch $script:HordeDecisionStoreDigitsPattern) { continue }
+        if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {
+            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = "its name is not a sequence number from 1 written in ten digits, so it is not a record" })
+            continue
+        }
+        $numbered.Add([long]$Matches[1])
     }
+    $numbered.Sort()
     $records = New-Object System.Collections.ArrayList
-    for ($seq = [long]1; $seq -le $last; $seq++) {
-        # Every number up to the last is read by its own name, so one with no file reads as "missing".
+    $last = [long]0
+    foreach ($seq in $numbered) {
         $leaf = Get-HordeDecisionRecordName -Sequence $seq
+        $gap = $seq - $last - 1
+        if ($gap -gt $script:HordeDecisionStoreMaxGap) {
+            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = ("it is " + $gap + " places past record " + $last + ", the last before it; more than " + $script:HordeDecisionStoreMaxGap + " is too far to be a record, so it is not read and not counted") })
+            continue
+        }
+        if ($gap -gt 0) {
+            $why = "it is not in the store folder, though a later record is: it was deleted"
+            if ($gap -gt 1) { $why = "records " + ($last + 1) + " to " + ($seq - 1) + " (" + $gap + " of them) are not in the store folder, though a later record is: they were deleted" }
+            [void]$records.Add([pscustomobject]@{ sequence = ($last + 1); span = $gap; file = (Get-HordeDecisionRecordName -Sequence ($last + 1)); kind = "missing"; data = $null; reason = $why })
+        }
         $read = Read-HordeDecisionRecordFile -Path (Join-Path $Root $leaf)
-        [void]$records.Add([pscustomobject]@{ sequence = $seq; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })
+        [void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })
+        $last = $seq
     }
-    return [pscustomobject]@{ state = "ok"; reason = ""; last = $last; records = @($records) }
+    return [pscustomobject]@{ state = "ok"; reason = ""; last = $last; records = @($records); strays = @($strays) }
 }

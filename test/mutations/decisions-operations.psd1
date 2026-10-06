@@ -6,6 +6,10 @@
     Target = "decisions\Operations.ps1"
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
+        # --- a stray file in the store is named in every result ---
+        @{ Name = "stray-files-not-named"
+           Find = 'foreach ($stray in @($loaded.strays)) { [void]$list.strays.Add($stray) }'
+           Replace = '' }
         # --- a number no question can have is answered, never cast ---
         @{ Name = "huge-request-number-cast"
            Find = 'if ((Test-HordeDecisionMember -Object $plain -Name "number") -and -not (Test-HordeDecisionCount -Value $plain.number -Most (Get-HordeDecisionMaxNumber))) {'
@@ -88,7 +92,7 @@
            Find = '$value["unreadable"] = $unreadable'
            Replace = '$value["unreadable"] = @()' }
         @{ Name = "refusal-blames-the-unwritten-record"
-           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored) }'
+           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays) }'
            Replace = '$before = $list' }
         @{ Name = "write-failure-reads-as-refused"
            Find = 'catch { return (New-HordeUnknown -Reason ("record " + $sequence + " could not be written, so nothing changed") -ErrorRecord $_) }'

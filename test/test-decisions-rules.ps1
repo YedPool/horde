@@ -287,6 +287,17 @@ Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no qu
 $st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Record 3 "question-closed" ([ordered]@{ number = 2; outcome = "Done." })))
 Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*whose own record cannot be read*") "a record about a question whose own record is unreadable says exactly that"
 
+# A GAP IS ONE ENTRY THAT COVERS SEVERAL NUMBERS (decisions/Store.ps1 hands it over with a span). Any of
+# the records it covers may have been a question, so it costs a question number for each, and it is
+# reported once.
+function New-Gap { param([long]$Seq, [long]$Span) return [pscustomobject]@{ sequence = $Seq; span = $Span; file = ($Seq.ToString("D10") + ".json"); kind = "missing"; data = $null; reason = ("records " + $Seq + " to " + ($Seq + $Span - 1) + " are not in the store folder") } }
+$st = Get-Fold @((New-Added 1 1), (New-Gap 2 3), (New-Added 5 5))
+Check ((Get-Numbers $st) -ceq "1,5" -and $st.unreadable.Count -eq 1 -and $st.unreadable[0].sequence -eq 2 -and $st.unreadable[0].reason -like "*records 2 to 4*") "a gap of three records is reported ONCE, from where to where, and the list loads around it"
+$st = Get-Fold @((New-Added 1 1), (New-Gap 2 3))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 5) ("three missing records at the end leave three numbers unused: the next question is 5 (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+Check ($st.lastSequence -eq 4) ("and the order ends at record 4, the last the gap covers (" + $st.lastSequence + ")")
+Check ((Get-HordeDecisionNumberStatus -State $st -Number 4) -ceq "unreadable" -and (Get-HordeDecisionNumberStatus -State $st -Number 5) -ceq "absent") "numbers 2 to 4 read as unreadable, and 5 as never given"
+
 Write-Host ""
 Write-Host "--- a record that contradicts the order is not believed ---" -ForegroundColor Cyan
 $st = Get-Fold @((New-Added 1 1), (New-Added 2 2), (New-Added 3 2 "Is this second claim to number two shown at all?"))

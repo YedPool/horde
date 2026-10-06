@@ -35,7 +35,7 @@ function Add-Safely {
 }
 function Get-Safely {
     param([string]$Store)
-    try { return (Get-HordeDecisionRecords -Root $Store) } catch { return [pscustomobject]@{ state = ("THREW: " + $_.Exception.Message); reason = ""; last = [long]-1; records = @() } }
+    try { return (Get-HordeDecisionRecords -Root $Store) } catch { return [pscustomobject]@{ state = ("THREW: " + $_.Exception.Message); reason = ""; last = [long]-1; records = @(); strays = @() } }
 }
 function Kinds { param($Got) return (@($Got.records | ForEach-Object { $_.kind }) -join ",") }
 function Base64 { param([string]$Path) return [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path)) }
@@ -169,6 +169,51 @@ foreach ($stray in @("notes.txt", "0000000001 - Copy.json", "abc.json", "0000000
 $got = Get-Safely $s
 Check ($got.state -ceq "ok" -and $got.last -eq 3 -and (Kinds $got) -ceq "ok,ok,ok") ("files of other names beside the records change nothing: still records 1 to 3 (last " + $got.last + ", " + (Kinds $got) + ")")
 Check ((Add-Safely $s 4 '{"n":4}') -ceq "created") "and the next number is still free to take"
+
+Write-Host ""
+Write-Host "--- a file too far ahead to be a record is a stray: named, not believed, not walked to ---" -ForegroundColor Cyan
+# Measured 2026-10-06, before the gap limit: 0000002000.json beside two records took a list 11.6 s,
+# reported 1998 missing records and moved the next record to 2001; 9999999999.json never came back.
+function Get-Strays { param($Got) if ($null -eq $Got.PSObject.Properties["strays"]) { return "(the store reports no strays)" }; return (@($Got.strays | ForEach-Object { $_.file } | Sort-Object) -join ",") }
+$s = New-TestStore
+foreach ($i in 1..5) { $null = Add-Safely $s $i ('{"n":' + $i + '}') }
+[System.IO.File]::WriteAllText((Join-Path $s "0000002000.json"), '{"n":2000}', $utf8)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$got = Get-Safely $s
+$sw.Stop()
+Check ($got.state -ceq "ok" -and $got.last -eq 5 -and (Kinds $got) -ceq "ok,ok,ok,ok,ok") ("with 0000002000.json beside records 1 to 5, the order still ends at 5 (last " + $got.last + ", " + @($got.records).Count + " entries)")
+Check ((Get-Strays $got) -ceq "0000002000.json") ("and that file is reported as a stray, by name (" + (Get-Strays $got) + ")")
+Check ($sw.ElapsedMilliseconds -lt 3000) ("the read did not walk to it (" + $sw.ElapsedMilliseconds + " ms)")
+[System.IO.File]::WriteAllText((Join-Path $s "9999999999.json"), '{"n":9999999999}', $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "00000000099.json"), '{"n":99}', $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "000000009.json"), '{"n":9}', $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000000.json"), '{"n":0}', $utf8)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$got = Get-Safely $s
+$sw.Stop()
+Check ($got.last -eq 5 -and (Kinds $got) -ceq "ok,ok,ok,ok,ok" -and $sw.ElapsedMilliseconds -lt 3000) ("the largest name there is, a name of eleven digits, one of nine and record zero change nothing either, and quickly (last " + $got.last + ", " + $sw.ElapsedMilliseconds + " ms)")
+Check ((Get-Strays $got) -ceq "0000000000.json,00000000099.json,000000009.json,0000002000.json,9999999999.json") ("each is a stray, by name (" + (Get-Strays $got) + ")")
+Check (@($got.strays | Where-Object { "$($_.reason)".Trim() -eq "" }).Count -eq 0 -and "$(@($got.strays | Where-Object { $_.file -ceq '0000002000.json' })[0].reason)" -like "*1994 places past record 5*") "every stray says why, and the far one says how far"
+Check ((Add-Safely $s 6 '{"n":6}') -ceq "created" -and (Get-Safely $s).last -eq 6) "and the next record is 6: writing goes on from the end of the order"
+# A record listed and then gone before it is read (deleted in between) reads as missing, not as an
+# error: asked of the reader itself, since a gap is now found from the names and not by reading.
+$gone = "THREW"
+try { $gone = (Read-HordeDecisionRecordFile -Path (Join-Path $s "0000000077.json")).kind } catch { }
+Check ($gone -ceq "missing") ("a record file that is not there reads as missing (" + $gone + ")")
+# THE LIMIT, on both sides: 100 missing records in a row are believed, 101 are not.
+$s = New-TestStore
+foreach ($i in 1..2) { $null = Add-Safely $s $i ('{"n":' + $i + '}') }
+$null = Add-Safely $s 103 '{"n":103}'
+$got = Get-Safely $s
+Check ($got.last -eq 103 -and (Kinds $got) -ceq "ok,ok,missing,ok" -and (Get-Strays $got) -ceq "") ("a record 100 places past the last is a record, after a gap (" + (Kinds $got) + ", last " + $got.last + ")")
+Check ($got.records[2].sequence -eq 3 -and $got.records[2].span -eq 100 -and $got.records[2].file -ceq "0000000003.json" -and $got.records[2].reason -like "*records 3 to 102 (100 of them)*") "the gap is ONE entry: from 3, a hundred long, saying from where to where"
+Check ($got.records[0].span -eq 1 -and $got.records[3].span -eq 1 -and $got.records[3].sequence -eq 103) "CONTROL: a record covers one number"
+$s = New-TestStore
+foreach ($i in 1..2) { $null = Add-Safely $s $i ('{"n":' + $i + '}') }
+$null = Add-Safely $s 104 '{"n":104}'
+$null = Add-Safely $s 105 '{"n":105}'
+$got = Get-Safely $s
+Check ($got.last -eq 2 -and (Kinds $got) -ceq "ok,ok" -and (Get-Strays $got) -ceq "0000000104.json,0000000105.json") ("a file 101 places past the last is a stray, and so is the one after it (last " + $got.last + "; strays " + (Get-Strays $got) + ")")
 
 Write-Host ""
 Write-Host "--- text is kept byte for byte ---" -ForegroundColor Cyan

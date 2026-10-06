@@ -173,6 +173,11 @@ Check ($warn.out -like "*WARNING: 1 record(s) in the store could not be read.*" 
 $warnJson = Invoke-Decisions @("list", "-State", "all", "-Json")
 $j = Get-JsonLine $warnJson
 Check ($null -ne $j -and @($j.value.unreadable).Count -eq 1 -and $j.value.unreadable[0].sequence -eq 5) "the data names it too"
+# A file far ahead of the order is a stray (decisions/Store.ps1): shown by name, and nothing else moves.
+[System.IO.File]::WriteAllText((Join-Path $store "0000002000.json"), '{"stray":true}', $utf8)
+$strayRun = Invoke-Decisions @("list", "-State", "all")
+Check ($strayRun.code -eq 0 -and $strayRun.out -like "*NOTE: 1 file(s) in the store folder are named like a record and are not part of the list:*" -and $strayRun.out -like "*0000002000.json: it is 1994 places past record 5*") "a stray file far ahead in the store is named where a person will see it, with how far"
+Check ($strayRun.out -like "*WARNING: 1 record(s) in the store could not be read.*") "and it is not counted among the records that could not be read: still one"
 
 Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan

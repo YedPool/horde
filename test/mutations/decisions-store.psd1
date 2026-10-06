@@ -79,12 +79,37 @@
         @{ Name = "other-names-read-as-records"
            Find = '$script:HordeDecisionStoreNamePattern = ''\A([0-9]{10})\.json\z'''
            Replace = '$script:HordeDecisionStoreNamePattern = ''([0-9]{10})\.json''' }
-        @{ Name = "last-record-left-out"
-           Find = 'for ($seq = [long]1; $seq -le $last; $seq++) {'
-           Replace = 'for ($seq = [long]1; $seq -lt $last; $seq++) {' }
         @{ Name = "damaged-record-keeps-no-reason"
-           Find = '[void]$records.Add([pscustomobject]@{ sequence = $seq; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })'
-           Replace = '[void]$records.Add([pscustomobject]@{ sequence = $seq; file = $leaf; kind = $read.kind; data = $read.data; reason = "" })' }
+           Find = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })'
+           Replace = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = "" })' }
+        # --- gaps and strays ---
+        @{ Name = "file-far-ahead-believed"
+           Find = 'if ($gap -gt $script:HordeDecisionStoreMaxGap) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "gap-limit-one-more"
+           Find = '$script:HordeDecisionStoreMaxGap = 100'
+           Replace = '$script:HordeDecisionStoreMaxGap = 101' }
+        @{ Name = "gap-limit-one-less"
+           Find = '$script:HordeDecisionStoreMaxGap = 100'
+           Replace = '$script:HordeDecisionStoreMaxGap = 99' }
+        @{ Name = "gap-of-several-covers-one-number"
+           Find = 'span = $gap;'
+           Replace = 'span = [long]1;' }
+        @{ Name = "gap-left-out"
+           Find = 'if ($gap -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "gap-does-not-say-how-far"
+           Find = 'if ($gap -gt 1) { $why ='
+           Replace = 'if ($false) { $why =' }
+        @{ Name = "number-of-another-width-read-as-a-record"
+           Find = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "record-zero-read"
+           Find = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {'
+           Replace = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern) {' }
+        @{ Name = "records-read-in-the-order-of-their-names-as-listed"
+           Find = '    $numbered.Sort()'
+           Replace = '    $numbered.Reverse()' }
         @{ Name = "not-written-through"
            Find = '$fs.Flush($true)'
            Replace = '$fs.Flush()'

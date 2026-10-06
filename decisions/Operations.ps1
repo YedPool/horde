@@ -75,17 +75,20 @@ function Get-HordeDecisionStoreRoot {
 function New-HordeDecisionResult {
     # The value of a known answer, schema/decision-result.v1. -State is the list the answer was worked
     # out from, or $null when the request was refused before the store was read; its unreadable and
-    # ignored records go into every result, so no caller can show a list without them.
+    # ignored records, and the store's stray files, go into every result, so no caller can show a list
+    # without them.
     param([string]$Operation, [string]$Outcome, [string]$Reason = "", $Findings = @(), $State = $null, $More = $null)
     $value = [ordered]@{ schemaVersion = 1; operation = $Operation; outcome = $Outcome; reason = $Reason; findings = [string[]]@($Findings) }
     if ($null -ne $More) { foreach ($k in @($More.Keys)) { $value[$k] = $More[$k] } }
-    $unreadable = @(); $ignored = @()
+    $unreadable = @(); $ignored = @(); $strays = @()
     if ($null -ne $State) {
+        $strays = @($State.strays | ForEach-Object { [pscustomobject]@{ file = "$($_.file)"; reason = "$($_.reason)" } })
         $unreadable = @($State.unreadable | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; file = $_.file; reason = $_.reason } })
         $ignored = @($State.ignored | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; file = $_.file; reason = $_.reason } })
     }
     $value["unreadable"] = $unreadable
     $value["ignored"] = $ignored
+    $value["strays"] = $strays
     return [pscustomobject]$value
 }
 
@@ -189,7 +192,9 @@ function Read-HordeDecisionState {
     $loaded = Get-HordeDecisionRecords -Root $Root
     if ($loaded.state -ceq "unknown") { return [pscustomobject]@{ state = "unknown"; reason = $loaded.reason; busy = $null; list = $null } }
     $busy = @($loaded.records | Where-Object { $_.kind -ceq "busy" }) | Select-Object -First 1
-    return [pscustomobject]@{ state = $loaded.state; reason = $loaded.reason; busy = $busy; list = (ConvertTo-HordeDecisionState -Records $loaded.records -Definitions $Definitions) }
+    $list = ConvertTo-HordeDecisionState -Records $loaded.records -Definitions $Definitions
+    foreach ($stray in @($loaded.strays)) { [void]$list.strays.Add($stray) }
+    return [pscustomobject]@{ state = $loaded.state; reason = $loaded.reason; busy = $busy; list = $list }
 }
 
 function Invoke-HordeDecisionWrite {
@@ -261,7 +266,7 @@ function Invoke-HordeDecisionWrite {
         $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = ($text | ConvertFrom-Json); reason = "" }
         # The list's problems as they stood, kept for a refusal: applying the record below adds the
         # unwritten record itself to them when it does not apply.
-        $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored) }
+        $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays) }
         $why = Add-HordeDecisionRecordToState -State $list -Record $record -Definitions $Definitions
         if ($why -ne "") { return (& $refuse ("nothing was written: " + $why) @($why) $before) }
         $question = $list.questions[[int]$data["number"]]

@@ -386,6 +386,9 @@ function New-HordeDecisionState {
         ids = (New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal))
         unreadable = (New-Object System.Collections.ArrayList)
         ignored = (New-Object System.Collections.ArrayList)
+        # Files the store would not believe were records. The rules do nothing with them: they are
+        # carried here so that every result worked out from this list can name them.
+        strays = (New-Object System.Collections.ArrayList)
         lastSequence = [long]0
     }
 }
@@ -522,11 +525,15 @@ function Test-HordeDecisionEvent {
 }
 
 function Add-HordeDecisionRecordToState {
-    # Apply one record of the store (decisions/Store.ps1: { sequence; file; kind; data; reason }) to the
-    # list. Returns "" when it applied, or why it did not; either way the list says so itself, in
+    # Apply one record of the store (decisions/Store.ps1: { sequence; span; file; kind; data; reason })
+    # to the list. Returns "" when it applied, or why it did not; either way the list says so itself, in
     # .unreadable or .ignored, so a caller that only shows the list still shows the problem.
+    # span is how many numbers of the order the entry covers: 1, or for a gap of missing records, all
+    # of them at once. An entry with no span covers one.
     param($State, $Record, $Definitions)
-    $State.lastSequence = [long]$Record.sequence
+    $span = [long]1
+    if (Test-HordeDecisionMember -Object $Record -Name "span") { $span = [long]$Record.span }
+    $State.lastSequence = [long]$Record.sequence + $span - 1
     $why = ""
     if ($Record.kind -cne "ok") { $why = "$($Record.reason)" }
     else {
@@ -538,7 +545,8 @@ function Add-HordeDecisionRecordToState {
         # A long reason is cut, and says so: a damaged record can produce findings of any length.
         if ($why.Length -gt 400) { $why = $why.Substring(0, 400) + " (reason cut at 400 characters)" }
         [void]$State.unreadable.Add([pscustomobject]@{ sequence = [long]$Record.sequence; file = "$($Record.file)"; reason = $why })
-        $State.pending = 1 + [int]$State.pending
+        # Any of the records an unreadable entry covers may have been a question: one number each.
+        $State.pending = [int]$span + [int]$State.pending
         return $why
     }
     $Ev = $Record.data

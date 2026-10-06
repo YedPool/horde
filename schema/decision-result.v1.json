@@ -4,7 +4,7 @@
   "title": "decision-result v1",
   "description": "WHAT ONE DECISIONS OPERATION GIVES BACK when it could say what happened (decisions/Operations.ps1): the value of a known answer in core/Tristate.ps1's sense. The three states of that answer mean, here: KNOWN - this object, whose outcome says the request was done, was replayed from an earlier record of the same id, or was refused with every reason; ABSENT - the store was read and there is no question of that number; UNKNOWN - the store, or the one record asked about, could not be read, with the reason. A refusal is a known fact, not an unknown: the caller is told exactly why nothing was written. EVERY result names the records that could not be read (unreadable) and the readable ones that did not apply (ignored), so a damaged record is never silently skipped by a caller that shows this. Plain data, checked against this schema before it is returned, so the command line, a window and a link between machines all receive one shape.",
   "type": "object",
-  "required": ["schemaVersion", "operation", "outcome", "reason", "findings", "unreadable", "ignored"],
+  "required": ["schemaVersion", "operation", "outcome", "reason", "findings", "unreadable", "ignored", "strays"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {"type": "integer", "enum": [1]},
@@ -18,8 +18,9 @@
     "question": {"$ref": "#/definitions/view"},
     "questions": {"type": "array", "items": {"$ref": "#/definitions/view"}, "description": "The questions a list asked for, in number order."},
     "counts": {"type": "object", "description": "How many questions are in each state, by state name, whatever the list was filtered to."},
-    "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a kind this version does not know, missing from the order, or open in another process. The list is still worked out from every other record."},
-    "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."}
+    "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a kind this version does not know, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
+    "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."},
+    "strays": {"type": "array", "items": {"$ref": "#/definitions/stray"}, "description": "Files in the store folder that are named like a record and are not one: too far past the end of the order (decisions/Store.ps1 has the limit and why), or a number not written in ten digits. They are not read, not counted and not part of the order; they are named here so that nobody has to find them."}
   },
   "definitions": {
     "problem": {
@@ -29,6 +30,15 @@
       "properties": {
         "sequence": {"type": "integer", "minimum": 1},
         "file": {"type": "string", "description": "The record's file name in the store folder."},
+        "reason": {"type": "string", "pattern": "\\S"}
+      }
+    },
+    "stray": {
+      "type": "object",
+      "required": ["file", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {"type": "string", "description": "The file's name in the store folder."},
         "reason": {"type": "string", "pattern": "\\S"}
       }
     },

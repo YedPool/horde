@@ -36,8 +36,14 @@
            Find = 'return ([int]$State.lastNumber + [int]$State.pending + 1)'
            Replace = 'return ([int]$State.lastNumber + 1)' }
         @{ Name = "unreadable-record-not-counted"
-           Find = '$State.pending = 1 + [int]$State.pending'
+           Find = '$State.pending = [int]$span + [int]$State.pending'
            Replace = '$State.pending = [int]$State.pending' }
+        @{ Name = "gap-of-several-records-costs-one-number"
+           Find = '$State.pending = [int]$span + [int]$State.pending'
+           Replace = '$State.pending = 1 + [int]$State.pending' }
+        @{ Name = "order-ends-where-a-gap-starts"
+           Find = '$State.lastSequence = [long]$Record.sequence + $span - 1'
+           Replace = '$State.lastSequence = [long]$Record.sequence' }
         @{ Name = "pending-kept-after-a-readable-add"
            Find = '    $State.pending = 0'
            Replace = '    $State.pending = [int]$State.pending' }

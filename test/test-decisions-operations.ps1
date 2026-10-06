@@ -299,6 +299,35 @@ Check ($a.value.unreadable[0].sequence -eq 2 -and $a.value.unreadable[0].reason 
 Check ($a.value.unreadable[1].sequence -eq 3 -and $a.value.unreadable[1].reason -like "*'answer-recorded' is not one this version of Horde knows*") "the unknown kind is named, not guessed at"
 
 Write-Host ""
+Write-Host "--- a stray file far ahead in the store: named, not believed, and no number moves ---" -ForegroundColor Cyan
+# Measured 2026-10-06, before the store's gap limit: 0000002000.json beside two records made a list take
+# 11.6 s with 1998 unreadable records and numbered the next question 2001; 9999999999.json hung it.
+$s = New-TestStore
+foreach ($i in 1..5) { $null = Add-Q $s @{ title = "Is question number $i of this test asked in plain words?" } }
+[System.IO.File]::WriteAllText((Join-Path $s "0000002000.json"), '{"stray":true}', $utf8)
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$a = Invoke-Op $s "list" @{ state = "all" }
+$sw.Stop()
+$strayNames = ""
+if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["strays"]) { $strayNames = (@($a.value.strays | ForEach-Object { $_.file }) -join ",") }
+Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3,4,5" -and @($a.value.unreadable).Count -eq 0) ("with 0000002000.json in the store, list gives questions 1 to 5 and no unreadable record (" + (Get-Outcome $a) + ", " + @($a.value.unreadable).Count + " unreadable)")
+Check ($strayNames -ceq "0000002000.json" -and "$($a.value.strays[0].reason)" -like "*too far to be a record*") ("and names the file as a stray, with the reason (" + $strayNames + ")")
+Check ($sw.ElapsedMilliseconds -lt 8000) ("in the time a list of five takes, not the time of walking to record 2000 (" + $sw.ElapsedMilliseconds + " ms)")
+[System.IO.File]::WriteAllText((Join-Path $s "9999999999.json"), '{"stray":true}', $utf8)
+$a = Add-Q $s @{ title = "Is the question added beside the strays given number six?" }
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 6 -and $a.value.sequence -eq 6) ("a question added now is number 6, record 6: the strays moved nothing (" + (Get-Outcome $a) + ")")
+Check ((@($a.value.strays | ForEach-Object { $_.file }) -join ",") -ceq "0000002000.json,9999999999.json") "and the write's own result names both strays"
+Check ((Get-Listed $s) -ceq "1:open,2:open,3:open,4:open,5:open,6:open") "CONTROL: the list is 1 to 6"
+# A GAP INSIDE THE LIMIT is still believed, as ONE finding, and still costs its numbers.
+$s = New-TestStore
+foreach ($i in 1..2) { $null = Add-Q $s }
+$kept = [System.IO.File]::ReadAllText((Join-Path $s "0000000002.json"))
+[System.IO.File]::WriteAllText((Join-Path $s "0000000006.json"), $kept.Replace('"sequence":2', '"sequence":6').Replace('"number":2', '"number":3'), $utf8)
+$a = Invoke-Op $s "list" @{ state = "all" }
+Check ((Get-Outcome $a) -ceq "done" -and @($a.value.unreadable).Count -eq 1 -and $a.value.unreadable[0].sequence -eq 3 -and $a.value.unreadable[0].reason -like "*records 3 to 5 (3 of them)*") ("three records missing in a row are ONE finding, saying from where to where (" + @($a.value.unreadable).Count + " finding(s))")
+Check ((@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3") "and the record after the gap is read: the list is 1, 2, 3"
+
+Write-Host ""
 Write-Host "--- a record holding a number no question can have: every operation still answers ---" -ForegroundColor Cyan
 $s = New-TestStore
 $null = Add-Q $s

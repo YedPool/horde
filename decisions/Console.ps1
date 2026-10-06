@@ -133,6 +133,12 @@ function Format-HordeDecisionProblems {
         [void]$lines.Add("NOTE: " + $off.Count + " record(s) were read and changed nothing:")
         foreach ($o in $off) { [void]$lines.Add("  record " + $o.sequence + " (" + $o.file + "): " + $o.reason) }
     }
+    $loose = @($Value.strays)
+    if ($loose.Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("NOTE: " + $loose.Count + " file(s) in the store folder are named like a record and are not part of the list:")
+        foreach ($l in $loose) { [void]$lines.Add("  " + $l.file + ": " + $l.reason) }
+    }
     return @($lines)
 }
 
