@@ -18,6 +18,10 @@
 #     page's host is refused; everything else goes to Invoke-HordeSurfaceRequest, which checks it.
 #   - developer tools, the context menu, the browser's own keys (reload, find, print), the status bar
 #     and saved form data are off.
+#   - a download is cancelled, and recorded as a refusal. Left to the engine, a page that makes a link
+#     with a download name and clicks it writes a file into the user's own Downloads folder, outside
+#     anything of Horde's (measured 2026-10-06 by the review of this adapter, in a real hidden window:
+#     the file was there).
 #
 # THE THREE PINNED FILES in lib/ are Microsoft's, under the licence beside them. They are checked
 # against lib/fingerprints.txt BEFORE anything is loaded (core/Fingerprints.ps1), and a mismatch
@@ -197,6 +201,7 @@ function Invoke-HordeWebView2Initialized {
         $core.add_NavigationStarting($h.navigation)
         $core.add_FrameNavigationStarting($h.frame)
         $core.add_NewWindowRequested($h.newWindow)
+        $core.add_DownloadStarting($h.download)
         $core.add_WebMessageReceived($h.message)
         $core.Navigate("https://" + $s.startHost + "/" + $s.spec.startFile)
         $s.opened = $true
@@ -228,6 +233,16 @@ function Invoke-HordeWebView2NewWindow {
     if ($null -eq $s) { return }
     $What.Handled = $true
     Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page asked for a new window, and none was opened"
+}
+
+function Invoke-HordeWebView2Download {
+    # A page may save no file: where the engine keeps downloads is the user's own folder, outside
+    # anything of Horde's (header).
+    param($Download)
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return }
+    $Download.Cancel = $true
+    Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page tried to save a file, and none was saved"
 }
 
 function Invoke-HordeWebView2Message {
@@ -307,6 +322,7 @@ function Get-HordeWebView2Handlers {
         navigation  = { param($From, $What) Invoke-HordeWebView2Navigation -What $What }
         frame       = { param($From, $What) Invoke-HordeWebView2Frame -Frame $What }
         newWindow   = { param($From, $What) Invoke-HordeWebView2NewWindow -What $What }
+        download    = { param($From, $What) Invoke-HordeWebView2Download -Download $What }
         message     = { param($From, $What) Invoke-HordeWebView2Message -What $What }
         tick        = { Invoke-HordeWebView2Tick }
         closed      = { Invoke-HordeWebView2Closed }
