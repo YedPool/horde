@@ -164,6 +164,18 @@ $settings = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Lang
 foreach ($off in @("AreDevToolsEnabled", "AreDefaultContextMenusEnabled", "AreBrowserAcceleratorKeysEnabled", "AreHostObjectsAllowed", "IsPasswordAutosaveEnabled", "IsGeneralAutofillEnabled", "IsStatusBarEnabled")) {
     Check ($settings -ccontains ($off + '=$false')) ($off + " is turned off")
 }
+Write-Host ""
+Write-Host "--- the screen's real scale is asked of its one owner ---" -ForegroundColor Cyan
+$commands = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+$adapterText = [System.IO.File]::ReadAllText((Join-Path $adapter "Surface.ps1"))
+Check ($commands -ccontains "Register-HordeSurface") "CONTROL: the adapter's commands are read from its syntax tree, and the one it must call is there"
+Check ($commands -ccontains "Enable-HordeWindowsRealScale" -and -not $adapterText.Contains("SetProcessDpiAwareness")) "the adapter asks platform/windows/Scale.ps1 for real pixels, and carries no call to Windows of its own for it"
+Check ((Get-HordeWebView2ScaleNote -Scale ([pscustomobject]@{ state = "applied"; awareness = "per-monitor-v2"; realScale = "yes"; reason = "Windows took it" })) -ceq "") "CONTROL: a process that draws at the screen's real scale is nothing to report"
+foreach ($notReal in @("no", "unknown")) {
+    $note = Get-HordeWebView2ScaleNote -Scale ([pscustomobject]@{ state = "already"; awareness = "system"; realScale = $notReal; reason = "the process already had an awareness" })
+    Check ($note -like "*not known to be drawn at the screen's real scale*" -and $note -like "*awareness system*" -and $note -like "*the process already had an awareness") ("real scale '" + $notReal + "' is said to the caller in words, with what the process is and why: it is decided on the real scale, never on whether the call was taken")
+}
+
 $bridgeJs = [System.IO.File]::ReadAllText((Join-Path $adapter "page\bridge.js"))
 Check ($bridgeJs.Contains("window.HordeBridge = { request: request, on: on, live:") -and -not $bridgeJs.Contains("hostObjects") -and -not $bridgeJs.Contains("eval(") -and -not $bridgeJs.Contains("innerHTML")) "the page's side of the bridge gives a page request, on and live, and uses no host object, no eval and no markup from data"
 

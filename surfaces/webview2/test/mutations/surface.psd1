@@ -107,6 +107,16 @@
         @{ Name = "an-unfinished-picture-is-saved"
            Find = 'if ($null -eq $s -or $null -eq $s.capture -or -not $s.capture.task.IsCompleted) { return }'
            Replace = 'if ($null -eq $s -or $null -eq $s.capture) { return }' }
+        # --- the screen's real scale
+        @{ Name = "real-scale-judged-by-whether-the-call-was-taken"
+           Find = 'if ("$($Scale.realScale)" -ceq "yes") { return "" }'
+           Replace = 'if ("$($Scale.state)" -cne "unavailable") { return "" }' }
+        @{ Name = "unknown-real-scale-read-as-yes"
+           Find = 'if ("$($Scale.realScale)" -ceq "yes") { return "" }'
+           Replace = 'if ("$($Scale.realScale)" -cne "no") { return "" }' }
+        @{ Name = "real-scale-only-read-never-asked-for"
+           Find = '$scale = Enable-HordeWindowsRealScale'
+           Replace = '$scale = Get-HordeWindowsScaleAwareness' }
         # --- a machine without the engine
         @{ Name = "no-engine-reads-as-an-engine"
            Find = 'if ("$Version".Trim() -ne "") { return "" }'
