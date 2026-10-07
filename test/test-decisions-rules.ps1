@@ -647,9 +647,17 @@ $st = Get-Fold @((New-Added 1 1), (New-Reworded 2 1 "Should the closing sound pl
 $t = Get-Thread $st 1
 Check ($st.questions[1].wordingVersion -eq 2 -and $t.count -eq 2) "CONTROL: the question is at wording 2, and both messages are in its thread"
 Check ((@($t.messages | ForEach-Object { "" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") -ceq "1:True,2:False") "the message said to wording 1 is flagged as said to an earlier wording; the one said to wording 2 is not"
-# The wording moves on AFTER the words were said: they now answer something the question no longer says.
-$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "yes" -Wording 1), (New-Reworded 3 1 "Should the closing sound play at the end of every session?"))
-Check ((Get-Thread $st 1).messages[0].saidToEarlierWording -eq $true -and (Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "yes" -Wording 1))) 1).messages[0].saidToEarlierWording -eq $false) "a message is flagged from the moment the wording is no longer the one it was said to, even when the change came after it"
+# JUDGED AT THE MOMENT THE WORDS WERE SAID, in store order - never against today's wording. Words said to
+# the wording the question had are not flagged, and a LATER rewording does not flag them: he answered
+# the question as it read. In both directions:
+$history = @((New-Added 1 1), (New-Said 2 1 -Text "yes, to the first wording" -Wording 1), (New-Reworded 3 1 "Should the closing sound play at the end of every session?"), (New-Said 4 1 -Text "still to the first wording" -Wording 1), (New-Said 5 1 -Text "to the second" -Wording 2), (New-Reworded 6 1 "Should a closing sound play at the end of every session, and how long?"), (New-Said 7 1 -Text "to the second, now old" -Wording 2), (New-Said 8 1 -Text "to the third" -Wording 3))
+$st = Get-Fold $history
+$t = Get-Thread $st 1
+Check ($st.questions[1].wordingVersion -eq 3 -and $t.count -eq 5) "CONTROL: the question has been reworded twice and is at wording 3, with five messages"
+Check ((@($t.messages | ForEach-Object { "" + $_.sequence + ":" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") -ceq "2:1:False,4:1:True,5:2:False,7:2:True,8:3:False") ("each message is flagged by the wording the question had WHEN IT WAS SAID: the two said to the wording of their moment are not flagged though the question was reworded afterwards, and the two said to a wording already left are (" + (@($t.messages | ForEach-Object { "" + $_.sequence + ":" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") + ")")
+$flags = New-Object System.Collections.ArrayList
+for ($i = 2; $i -le $history.Count; $i++) { [void]$flags.Add("" + (Get-Thread (Get-Fold @($history[0..($i - 1)])) 1).messages[0].saidToEarlierWording) }
+Check (($flags -join ",") -ceq "False,False,False,False,False,False,False") ("and the first message's flag never changes as the history grows: a later rewording does not reach back (" + ($flags -join ",") + ")")
 # A wording that does not exist yet cannot have been looked at.
 $st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "to a wording from the future" -Wording 2), (New-Said 3 1 -Text "to the real one" -Wording 1))
 Check ((Get-Thread $st 1).count -eq 1 -and $st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 2 -and $st.ignored[0].reason -like "*said to wording 2 of question 1, which has only reached wording 1*") "a record claiming a wording the question had not reached is reported as not applying, by name, and is not shown as said"
