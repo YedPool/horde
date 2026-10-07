@@ -4,16 +4,18 @@
 # suite opens the real one - hidden, at -32000,-32000, out of the taskbar, never taking the keyboard -
 # on a small page of its own (test/pages/probe) that behaves as a hostile page would, and holds three
 # things against each other: what the page saw from inside, what the surface recorded on the bridge,
-# and (for the listening-port check) a listener the suite itself opens on the loopback address.
+# and what reached a listener the suite itself opens on the loopback address to stand for "outside".
 # A handler the engine was never handed records nothing here, so this is also the check that each
 # lock is really given to the engine (review of 2026-10-06, finding A5).
 #
 # MACHINE-BOUND (test/lib/SuiteFiles.ps1): it needs the web engine installed and an interactive
 # logon, so it runs through the local gate and never on the remote test box.
 #
-# WHAT IT TOUCHES: one hidden window of this process; a profile folder and a picture under %TEMP%;
-# one listening socket on 127.0.0.1 at a port Windows picks, closed at the end. It writes nothing
-# under any Horde home. If the download lock ever fails, the page's file lands in the user's own
+# WHAT IT TOUCHES: three windows of this process, one after another - two hidden at -32000,-32000 and
+# one that stands free, put at -32000,-32000 by its caller, which has a place in the taskbar for the
+# second or so it lives; none takes the keyboard. A profile folder for each, a picture and a home of
+# its own under %TEMP%; one listening socket on 127.0.0.1 at a port Windows picks, closed at the end.
+# It reads and writes nothing under the real Horde home. If the download lock ever fails, the page's file lands in the user's own
 # Downloads folder under a name unique to this run, and this suite removes exactly that file.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
