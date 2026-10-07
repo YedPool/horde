@@ -62,6 +62,7 @@ foreach ($n in $goldenNames) { $golden[$n] = Read-Fx ("frames\" + $n) }
 
 
 if (Enter-HordeSuiteSection "escaping" "A. every character outside printable ASCII is escaped, and comes back as itself") {
+    trap { Register-HordeSuiteError $_; continue }
     Check ((ConvertTo-HordeWireString "abc") -ceq '"abc"') "plain ASCII is written as it is"
     Check ((ConvertTo-HordeWireString 'a"b\c') -ceq '"a\"b\\c"') "a quote and a backslash are escaped with a backslash"
     Check ((ConvertTo-HordeWireString ("caf" + [char]0xE9)) -ceq '"caf\u00e9"') "e-acute is \u00e9, lower-case hex"
@@ -158,6 +159,7 @@ if (Enter-HordeSuiteSection "escaping" "A. every character outside printable ASC
 }
 
 if (Enter-HordeSuiteSection "receiver" "B. the receiver refuses what is not a frame, each with its reason") {
+    trap { Register-HordeSuiteError $_; continue }
     $ping = Line $golden["ping.json"]
     $pingText = $ascii.GetString($ping)
     Check ((Decode $ping).ok) "CONTROL: the canonical ping line decodes"
@@ -218,6 +220,7 @@ if (Enter-HordeSuiteSection "receiver" "B. the receiver refuses what is not a fr
 
 $L = $contract.limits
 if (Enter-HordeSuiteSection "caps" "C. every cap holds: just under passes, just over is refused") {
+    trap { Register-HordeSuiteError $_; continue }
     function Limit-Case {
         # A frame built by Build with a string or list of Size, through the sender and the receiver.
         param([scriptblock]$Build, [int]$Size, $Contract = $contract)
@@ -296,6 +299,7 @@ function Read-All {
 }
 $three = @("hello-node.json", "req-node-info.json", "ping.json")
 if (Enter-HordeSuiteSection "stream" "D. a stream: line by line, LF or CRLF, a BOM only first, and the first non-frame closes it") {
+    trap { Register-HordeSuiteError $_; continue }
     $lf = Join-Bytes @($three | ForEach-Object { Join-Bytes @((Line $golden[$_]), [byte[]](10)) })
     $crlf = Join-Bytes @($three | ForEach-Object { Join-Bytes @((Line $golden[$_]), [byte[]](13, 10)) })
     $a = Read-All $lf
@@ -329,6 +333,7 @@ if (Enter-HordeSuiteSection "stream" "D. a stream: line by line, LF or CRLF, a B
 }
 
 if (Enter-HordeSuiteSection "ps51-pipe" "E. PowerShell 5.1 as it really writes a pipe, measured live") {
+    trap { Register-HordeSuiteError $_; continue }
     # A child powershell.exe writes frames the way a shim or a hub would, and the raw bytes are read back.
     # Measured 2026-09-30 (remote/Protocol.ps1's header): Write-Output ends lines CRLF, and a pipe into a
     # native program under a UTF-8 $OutputEncoding starts with a BOM. Each case asserts what it measured,
@@ -381,6 +386,7 @@ if (Enter-HordeSuiteSection "ps51-pipe" "E. PowerShell 5.1 as it really writes a
 }
 
 if (Enter-HordeSuiteSection "version" "F. version negotiation: the highest common version, or bye") {
+    trap { Register-HordeSuiteError $_; continue }
     Check ((Select-HordeLinkProtocol -Ours @(1) -Theirs @(1)) -eq 1) "both speak 1: 1"
     Check ((Select-HordeLinkProtocol -Ours @(1, 2) -Theirs @(2, 3)) -eq 2) "1,2 and 2,3: 2, the highest common"
     Check ((Select-HordeLinkProtocol -Ours @(1, 2, 3) -Theirs @(3, 1)) -eq 3) "order does not matter"
@@ -438,6 +444,7 @@ if (Enter-HordeSuiteSection "version" "F. version negotiation: the highest commo
 }
 
 if (Enter-HordeSuiteSection "damaged" "G. damaged frames, generated: nothing throws, nothing passes as what it is not") {
+    trap { Register-HordeSuiteError $_; continue }
     # Seeded, so a failure is reproducible: the seed and the case number are printed.
     $seed = 20260930
     $rng = New-Object System.Random $seed
@@ -491,6 +498,7 @@ if (Enter-HordeSuiteSection "damaged" "G. damaged frames, generated: nothing thr
 }
 
 if (Enter-HordeSuiteSection "frame-rules" "the frame rules hold on the wire, both ends (review of PR #97, F7)") {
+    trap { Register-HordeSuiteError $_; continue }
     # A deliver whose time to live is a second over the 7-day ceiling has a valid shape, so only
     # Test-HordeLinkFrameRules can refuse it - here, where every frame is sent and received.
     $longDeliver = Copy-Json $golden["req-session-deliver.json"]
