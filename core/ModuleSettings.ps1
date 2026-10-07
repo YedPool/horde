@@ -123,10 +123,11 @@
 # nothing; the document checked against a schema (core/Schema.ps1); the text function apart from the
 # file function. NOT followed, each for a reason:
 #   - That registry is ENGINE configuration: one list for the whole engine, resolved per session
-#     through layers L0 to L5, with kinds name, model and enum and no number. A module's milliseconds
-#     and pixels are per module, have one layer (the person's file over the defaults) and need numbers
-#     with ranges. So the table is declared by the module, in code, beside the code that uses it, and
-#     is not a row in a shared file that every module's pull request would have to edit.
+#     through layers L0 to L5, with kinds name, model, enum and labels (a list of hub labels written
+#     as one text; read on main 2026-10-07) and no number. A module's milliseconds and pixels are
+#     per module, have one layer (the person's file over the defaults) and need numbers with ranges.
+#     So the table is declared by the module, in code, beside the code that uses it, and is not a
+#     row in a shared file that every module's pull request would have to edit.
 #   - Its findings are { severity; code; source; path; detail } and a bad layer blocks resolution.
 #     Here a finding is one sentence, and a bad file blocks the module the same way: what downstream
 #     branches on is the answer's state, never a code inside a finding.
