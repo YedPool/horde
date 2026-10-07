@@ -152,6 +152,7 @@ $script:HordeDecisionWindowSettings = New-HordeModuleSettings -Module $script:Ho
     @{ name = "textPx"; kind = "whole"; default = 14; min = 10; max = 32; what = "The size of the page's letters, in pixels at the ordinary scale; drawn at the nearest whole number of the screen's own pixels." }
     @{ name = "linePx"; kind = "whole"; default = 22; min = 12; max = 64; what = "The height of a line of the page, in pixels at the ordinary scale." }
     @{ name = "smallTextPx"; kind = "whole"; default = 12; min = 9; max = 28; what = "The size of the page's small marks (its notice, its last line), in pixels at the ordinary scale." }
+    @{ name = "foldedGroups"; kind = "text"; default = "Parked"; min = 1; max = 400; what = "The groups whose questions are kept folded at the foot of the page, out of the way of answering: their names exactly as the list writes them, a semicolon between two." }
     @{ name = "smallLinePx"; kind = "whole"; default = 18; min = 10; max = 56; what = "The height of a line of small marks, in pixels at the ordinary scale." }
 )
 $script:HordeDecisionWindow = $null
@@ -426,6 +427,9 @@ function New-HordeDecisionWindowBridge {
                 look = [pscustomobject]@{ fontFamily = "$($v.fontFamily)"; textPx = [int]$v.textPx; linePx = [int]$v.linePx; smallTextPx = [int]$v.smallTextPx; smallLinePx = [int]$v.smallLinePx }
                 report = (Get-HordeDecisionWindowReportBounds -Bridge $State.bridge)
                 view = $State.view
+                # PARKED (TRIAL): a question set aside is, for now, a question whose group is one of
+                # these. A state of its own, with its own record, is the proper form and a later unit's.
+                foldedGroups = @("$($v.foldedGroups)" -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
                 findings = @($State.findings | ForEach-Object { "" + $_ })
             } } }
         "kinds" = @{ run = { param($Arguments, $State, $Window) return (Get-HordeDecisionWindowRecord -Operation "kinds") } }

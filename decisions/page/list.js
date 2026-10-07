@@ -15,6 +15,7 @@
 //                            (the very answer already drawn: nothing is touched) or "unread" (the
 //                            answer is not a list: what was drawn stays, and the caller says why)
 //   doc.setDim(fnOrNull)     fn(question) is true for a question to draw dimmed. DIMMED, NEVER HIDDEN
+//   doc.setParked(names)     the groups kept folded at the foot of the page, out of the run of answering
 //   doc.setUnfolded(numbers) these questions' context unfolded as well; doc.unfoldAll(); doc.foldAll()
 //   doc.reveal(number)       that question brought into view, if it is not wholly in it already
 //   doc.takeKeyboard()       the caret into the first unanswered question's field
@@ -140,6 +141,9 @@
     // Which headings have their note of background shown. FOLDED UNTIL ASKED FOR (seen 2026-10-07 in
     // a picture of the real window: two notes took 13 of the 26 lines in view).
     var noteShown = Object.create(null);
+    // PARKED: the groups whose questions stand at the foot of the page under one folded line. Folded,
+    // their fields are not in the run of Enter and Tab, nor is one of them "the first unanswered".
+    var parked = Object.create(null);
     var drawnHeads = [];
     var drawnLines = [];
     // What the reader has typed that is not saved, by question number; and, by question number, what
@@ -243,18 +247,18 @@
         key = (listed ? "group:" : "state:") + (listed ? textOf(q.group) : textOf(q.state));
         head = byKey[key];
         if (!head) {
-          head = { key: key, listed: listed, name: listed ? (textOf(q.group) || "No group") : capital(textOf(q.state)), note: "", qs: [] };
+          head = { key: key, listed: listed, parked: listed && parked[textOf(q.group)] === true, name: listed ? (textOf(q.group) || "No group") : capital(textOf(q.state)), note: "", qs: [] };
           byKey[key] = head;
           order.push(head);
         }
         if (listed && !head.note && textOf(q.groupNote)) { head.note = textOf(q.groupNote); }
         head.qs.push(q);
       }
-      return order.filter(function (h) { return h.listed; }).concat(order.filter(function (h) { return !h.listed; }));
+      return order.filter(function (h) { return h.listed && !h.parked; }).concat(order.filter(function (h) { return !h.listed; }), order.filter(function (h) { return h.parked; }));
     }
 
     function isFolded(head) {
-      return headFolded[head.key] === undefined ? !head.listed : headFolded[head.key];
+      return headFolded[head.key] === undefined ? (!head.listed || head.parked) : headFolded[head.key];
     }
 
     function place() {
@@ -319,6 +323,12 @@
       var at = shown.indexOf(line);
       var next = shown[at + step];
       if (at >= 0 && next) { enter(next); return true; }
+      // Past the last field in view: on to the folded line of what is parked, where a key unfolds it.
+      if (at >= 0 && step > 0) {
+        for (var i = 0; i < drawnHeads.length; i += 1) {
+          if (drawnHeads[i].head.parked && drawnHeads[i].folded) { drawnHeads[i].tri.focus(); onChange(); return true; }
+        }
+      }
       return false;
     }
     function takeKeyboard() {
@@ -529,9 +539,29 @@
         tri.tabIndex = -1;
         tri.setAttribute("aria-expanded", folded ? "false" : "true");
         tri.setAttribute("aria-label", (folded ? "Unfold " : "Fold ") + head.name);
-        var txt = make("span", "hd-txt", head.name);
+        var howMany = head.qs.length + (head.qs.length === 1 ? " question" : " questions");
+        var txt = make("span", "hd-txt", head.parked ? (head.name + ": " + howMany) : head.name);
         var suf = make("span", "hd-suf");
-        suf.appendChild(make("span", "hd-count", " - " + head.qs.length + (head.qs.length === 1 ? " question" : " questions")));
+        if (!head.parked) { suf.appendChild(make("span", "hd-count", " - " + howMany)); }
+        if (head.parked) {
+          // The one heading a key reaches (move, above): Enter, Space or F2 unfolds it and puts the
+          // caret in its first field; Shift+Tab goes back to the last field in view.
+          tri.tabIndex = 0;
+          tri.addEventListener("keydown", function (e) {
+            var shown, mine;
+            if (e.key === "Enter" || e.key === " " || e.key === "F2") {
+              e.preventDefault(); e.stopPropagation();
+              headFolded[head.key] = !isFolded(head);
+              draw();
+              mine = drawnLines.filter(function (l) { return l.q.group === head.qs[0].group && l.field.offsetParent !== null; });
+              if (mine.length) { enter(mine[0]); }
+            } else if (e.key === "Tab" && e.shiftKey) {
+              e.preventDefault(); e.stopPropagation();
+              shown = shownLines();
+              if (shown.length) { enter(shown[shown.length - 1]); }
+            }
+          });
+        }
         var note = null;
         if (head.note) {
           var more = make("span", "hd-more", " - ");
@@ -556,7 +586,7 @@
         for (var i = first; i < drawnLines.length; i += 1) { drawnLines[i].head = index; }
         group.appendChild(kids);
         root.appendChild(group);
-        drawnHeads.push({ head: head, txt: txt, folded: folded, group: group, note: note });
+        drawnHeads.push({ head: head, txt: txt, tri: tri, folded: folded, group: group, note: note });
       });
       drawnLines.forEach(function (line) { fit(line.field); });
       if (before) {
@@ -621,7 +651,7 @@
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "type") { if (line) { insert(line, textOf(step.text)); } }
         else if (step.do === "key") {
-          (line ? line.field : document.body).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
+          (line ? line.field : (document.activeElement || document.body)).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
         }
         else if (step.do === "settle") { return settle().then(next); }
         else if (step.do === "sleep") { return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, Math.min(Number(step.ms) || 0, 5000))); }).then(next); }
@@ -674,6 +704,11 @@
         dim = (typeof fn === "function") ? fn : null;
         drawnLines.forEach(function (line) { line.wrap.classList.toggle("dim", !!(dim && dim(line.q))); });
         onDraw();
+      },
+      setParked: function (names) {
+        parked = Object.create(null);
+        listOf(names).forEach(function (name) { parked[textOf(name)] = true; });
+        if (lastJson !== null) { draw(); }
       },
       setUnfolded: function (numbers) {
         listOf(numbers).forEach(function (n) { unfolded[n] = true; });
@@ -728,7 +763,7 @@
       snapshot: function (limits) {
         var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
-        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
+        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.parked === true, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
           if (out.lines.length >= limits.lines) { out.left.lines += 1; return; }
           out.lines.push({
@@ -745,7 +780,9 @@
           });
         });
         var has = focusedLine();
-        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem };
+        var onHead = "";
+        drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { onHead = h.txt.textContent; } });
+        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem };
         return out;
       },
       measure: function () {

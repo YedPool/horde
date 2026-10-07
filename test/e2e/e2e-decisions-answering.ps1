@@ -81,6 +81,7 @@ function Step { param([string]$Do, $Q = $null, [string]$Text = "", [string]$Key 
     $s = [ordered]@{ do = $Do }
     if ($null -ne $Q) { $s["q"] = [int]$Q }
     if ($Do -ceq "type") { $s["text"] = $Text }
+    if ($Do -ceq "sleep") { $s["ms"] = 500 }
     if ($Do -ceq "key") { $s["key"] = $Key; $s["shift"] = [bool]$Shift; $s["ctrl"] = [bool]$Ctrl }
     return [pscustomobject]$s
 }
@@ -241,6 +242,26 @@ $read = Wait-HordeProbeReport -Path $report -Process $script:open.process -Secon
 Check ((Get-Line $read 2).m -ceq "read by Thrall" -and (Get-Line $read 3).m -ceq "read by Thrall" -and (Get-Line $read 7).m -ceq "read by Thrall") "and every answer it printed now reads read by Thrall in the window"
 
 Write-Host ""
+Write-Host "=== the keeper of the list adds a question and parks one: the page shows both, with no reload ===" -ForegroundColor Cyan
+$q23 = Join-Path $script:work "q23.json"
+[System.IO.File]::WriteAllText($q23, '{"title":"Is a question asked while the window is open shown in it?","kind":"yes-no","whatItIs":"Asked at the command line.","recommendation":"yes","group":"The study","askedBy":"Orc B"}', $utf8)
+$add = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "add", "-File", $q23) -Env $cliEnv
+$grown = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @($x.drawn.lines).Count -eq 23 -and $x.drawn.answer.fields -eq 23 }
+Check ($add.code -eq 0 -and (Get-Line $grown 23).t -ceq "Is a question asked while the window is open shown in it?" -and (Get-Line $grown 23).p -ceq "yes" -and $grown.drawn.answer.fields -eq 23) "a 23rd question asked at the command line appears with its own field and suggestion"
+$park = Join-Path $script:work "park.json"
+[System.IO.File]::WriteAllText($park, '{"group":"Parked"}', $utf8)
+$parkedCli = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "update", "22", "-File", $park) -Env $cliEnv
+$aside = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @($x.drawn.headings | Where-Object { $_.parked }).Count -eq 1 }
+$heads = @($aside.drawn.headings)
+Check ($parkedCli.code -eq 0 -and (Get-Shown -Number 22).wordingVersion -eq 1 -and "$((Get-Shown -Number 22).group)" -ceq "Parked") "question 22 is parked with an ordinary update that changes only its group; its wording is still wording 1"
+Check ($heads[$heads.Count - 1].t -ceq "Parked: 1 question" -and $heads[$heads.Count - 1].folded -eq $true -and $heads[$heads.Count - 1].parked -eq $true) ("PARKED STANDS AT THE FOOT OF THE PAGE AS ONE FOLDED LINE (" + $heads[$heads.Count - 1].t + ")")
+Check (@($aside.drawn.lines).Count -eq 23 -and $aside.drawn.answer.fields -eq 22 -and $aside.handle -eq $first.handle -and $aside.pid -eq $first.pid) "all 23 questions are still drawn, 22 fields are in the run of answering, and it is the same window: nothing was reloaded"
+$r = Send-Steps @((Step "focus" -Q 21), (Step "key" -Key "Enter"), (Step "sleep"), (Step "key" -Key "Enter"))
+Check ($r.drawn.answer.focus -ceq "" -and $r.drawn.answer.focusHead -ceq "Parked: 1 question" -and @(Get-Said 22).Count -eq 0) "Enter runs from question 21 to 23 and then to the folded line, never into the parked question's field"
+$r = Send-Steps @((Step "key" -Key "F2"))
+Check ($r.drawn.answer.focus -ceq "22" -and $r.drawn.answer.fields -eq 23 -and @($r.drawn.headings | Where-Object { $_.parked })[0].folded -eq $false) "a key on that line unfolds it into the same row, with the caret in its field"
+
+Write-Host ""
 Write-Host "=== a half-typed answer survives the window being closed and opened again ===" -ForegroundColor Cyan
 $r = Send-Steps @((Step "focus" -Q 10), (Step "type" -Text "half typed, not yet ent"))
 Check ((Get-Line $r 10).a -ceq "half typed, not yet ent" -and @(Get-Said 10).Count -eq 0) "question 10 holds a half-typed answer that was never entered"
@@ -249,8 +270,9 @@ Check ($closed.asked -and $closed.exited -and -not $closed.killed -and $closed.c
 Check ($script:open.err.Result.Trim() -ceq "") "with nothing on the error stream"
 $report2 = Join-Path $script:work "report2.json"
 $again = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report2, "-ToldMarks", $toldFile) -Env $childEnv
-$back = Wait-HordeProbeReport -Path $report2 -Process $again.process -Seconds 150 -Until { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq 22 -and $null -ne $x.drawn.answer }
+$back = Wait-HordeProbeReport -Path $report2 -Process $again.process -Seconds 150 -Until { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq 23 -and $null -ne $x.drawn.answer }
 Check ($back.pid -eq $again.process.Id -and $back.pid -ne $first.pid) "opened again: a new window, a new process"
+Check ($back.drawn.answer.fields -eq 22 -and @($back.drawn.headings | Where-Object { $_.parked })[0].folded -eq $true) "what is parked is folded again, out of the way"
 Check ((Get-Line $back 10).a -ceq "half typed, not yet ent" -and (Get-Line $back 10).m -ceq "draft") "THE HALF-TYPED ANSWER IS IN ITS FIELD, marked as a draft"
 Check ((Get-Line $back 6).a -ceq $rec6 -and (Get-Line $back 8).a -clike "*ask me in person" -and $back.drawn.answer.drafts -eq 3) "and so are the other two drafts: three kept, by question number, in the page's own storage under the home"
 Check ((Get-Line $back 2).a -ceq "Second answer" -and (Get-Line $back 2).m -ceq "read by Thrall" -and (Get-Line $back 3).a -ceq "line one`nline two`nline three") "the saved answers stand in their fields with their marks, from the store"
@@ -264,8 +286,8 @@ Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $keepHome = $env:HORDE_HOME
 try { $env:HORDE_HOME = $hordeHome; $all = @((Invoke-HordeDecision -Operation "list" -Request @{ state = "all" }).value.questions) } finally { $env:HORDE_HOME = $keepHome }
 $counts = @($all | Sort-Object number | ForEach-Object { "" + $_.thread.count }) -join ","
-Check ($counts -ceq "2,1,1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0") ("the store holds exactly what was entered: five answers and one reply, each once (" + $counts + ")")
-Check (@(Get-ChildItem -LiteralPath $store -File).Count -eq 29) "29 records: 22 questions, 5 answers, 1 reply, 1 marking as read"
+Check ($counts -ceq "2,1,1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0") ("the store holds exactly what was entered: five answers and one reply, each once (" + $counts + ")")
+Check (@(Get-ChildItem -LiteralPath $store -File).Count -eq 31) "31 records: 23 questions, 5 answers, 1 reply, 1 marking as read, 1 change of group"
 
 } finally {
     foreach ($held in @($script:open, $again)) { if ($null -ne $held -and -not $held.process.HasExited) { try { $held.process.Kill() } catch { } } }

@@ -202,6 +202,7 @@
   bridge.request("setup").then(function (answer) {
     setup = answer;
     applyLook();
+    doc.setParked(answer.foldedGroups);
     notices.settings = (answer.findings && answer.findings.length) ? ("Settings: " + answer.findings.join(" ")) : "";
     return Promise.all([bridge.request("kinds"), bridge.request("list"), bridge.request("fleet"), bridge.request("attachment")]);
   }).then(function (answers) {
