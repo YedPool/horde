@@ -11,14 +11,17 @@
     Mutations = @(
         # --- say ---
         @{ Name = "words-not-held-to-the-rules-of-saying"
-           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"])) { [void]$found.Add($f) }'
+           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }'
            Replace = '' }
         @{ Name = "who-records-is-not-asked"
            Find = '-Actor ([string]$Request.actor) -Text $body["text"]'
            Replace = '-Actor (@((Get-HordeDecisionKindActors -Kind "question-added").roles)[0]) -Text $body["text"]' }
-        @{ Name = "wording-with-none-named-is-the-first"
-           Find = 'if (-not $Data.Contains("wordingVersion")) { $Data["wordingVersion"] = [int]$List.questions[[int]$Data["number"]].wordingVersion }'
-           Replace = 'if (-not $Data.Contains("wordingVersion")) { $Data["wordingVersion"] = 1 }' }
+        @{ Name = "wording-guessed-when-none-is-stated"
+           Find = '    $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"'
+           Replace = '    $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"; if (-not $stated) { $body["wordingVersion"] = 1 }' }
+        @{ Name = "rules-not-told-the-wording-is-unstated"
+           Find = '-Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }'
+           Replace = '-Text $body["text"] -WordingStated $true)) { [void]$found.Add($f) }' }
         @{ Name = "impossible-wording-thrown-on"
            Find = 'if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }'
            Replace = 'if ($true) { $body["wordingVersion"] = [int]$Request.wordingVersion }' }

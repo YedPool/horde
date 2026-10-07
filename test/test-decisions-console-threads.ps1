@@ -108,7 +108,7 @@ $shown = Run "show" @{ Number = "1" }
 # Each line of the words is printed after six spaces of indent, and is otherwise exactly itself.
 $at = [array]::IndexOf(@($shown.lines), "        two spaces lead this line")
 Check ($at -gt 0 -and @($shown.lines)[$at + 1] -ceq "      " -and @($shown.lines)[$at + 2] -ceq "      a blank line came before this one" -and @($shown.lines)[$at + 3] -ceq ("      " + "`t" + "and a tab leads the last, which ends in spaces  ")) "show prints every line of them as its own line, indented, in order: the blank one kept, nothing trimmed, nothing joined"
-Check ($at -gt 0 -and @($shown.lines)[$at - 1] -like "  the founder, recorded by the warchief from chat, 20* UTC (record 2, said to wording 1)") "under a line that says who said it, how it was recorded, when, in which record and to which wording"
+Check ($at -gt 0 -and @($shown.lines)[$at - 1] -like "  the founder, recorded by the warchief from chat, 20* UTC (record 2, wording not stated)") "under a line that says who said it, how it was recorded, when, in which record, and that the wording he saw was not stated"
 Check ((Test-Line $shown "Conversation: 1 message(s); 1 not yet read by the warchief; turn: the warchief") -and (Test-Line $shown "    (not yet read by the warchief)")) "the conversation is headed by its counts and whose turn it is, and the message says it is not yet read"
 $twoLines = Run "answer" @{ Number = "1"; Text = ("first line of it`nsecond line of it") }
 Check ($twoLines.failure -like "THREW: -Text is one line, and it has a line break*-File <path>*" -and $twoLines.failure -notlike "*first line of it*" -and (Get-Kinds $store) -ceq "added,said") "a -Text of two lines is refused and sent to -File, without being repeated, and nothing is written"
@@ -129,7 +129,7 @@ Check (@($listed.lines | Where-Object { $_.Trim() -ceq "conversation: 2 message(
 $shown = Run "show" @{ Number = "1" }
 $first = [array]::IndexOf(@($shown.lines), "      Which sound do you mean?")
 $second = [array]::IndexOf(@($shown.lines), "      The short one.")
-Check ($first -gt 0 -and $second -gt $first -and @($shown.lines)[$second - 1] -like "  the warchief, by command, 20* UTC (record 5, said to wording 1)" -and -not (Test-Line $shown "    (not yet read by the warchief)")) "show prints the thread in order, the reply named as the warchief's by command, and nothing marked unread"
+Check ($first -gt 0 -and $second -gt $first -and @($shown.lines)[$second - 1] -like "  the warchief, by command, 20* UTC (record 5, wording not stated)" -and -not (Test-Line $shown "    (not yet read by the warchief)")) "show prints the thread in order, the reply named as the warchief's by command, and nothing marked unread"
 Check ((Test-Line $shown "History:") -and @($shown.lines | Where-Object { $_ -like "*(by warchief, record *" }).Count -eq 1) "the question's history is still one record: what was said is the conversation, not the history"
 
 Write-Host ""
@@ -196,12 +196,13 @@ $null = Run "update" @{ Number = "1"; File = (Write-Words "change.json" '{"title
 $old = Run "answer" @{ Number = "1"; Text = "Yes to how it read before."; Wording = "1" }
 Check ($old.failure -eq "" -and (Test-Line $old "  NOTE: they were said to wording 1, and the question is now at wording 2. They are kept, and marked as said to an earlier wording.") -and (Read-Record $store 3).data.wordingVersion -eq 1) "words said to an earlier wording are recorded with that wording, and the command says they are marked as such"
 $now = Run "answer" @{ Number = "1"; Text = "Yes to how it reads now." }
-Check ($now.failure -eq "" -and @($now.lines).Count -eq 1 -and (Read-Record $store 4).data.wordingVersion -eq 2) "with no -Wording, the words are recorded against the wording the question has, and carry no note"
+Check ($now.failure -eq "" -and @($now.lines).Count -eq 1 -and $null -eq (Read-Record $store 4).data.PSObject.Properties["wordingVersion"]) "with no -Wording, the words are recorded with no wording at all - not stated, never guessed - and carry no note"
 $null = Run "close" @{ Number = "1"; Outcome = "Done: it plays at the end of every session." }
 $late = Run "answer" @{ Number = "1"; Text = "Wait - not on the first launch." }
 Check ($late.failure -eq "" -and (Test-Line $late "  NOTE: question 1 is closed. The words are kept under it, and it stays closed: saying something reopens nothing.") -and (Get-Kinds $store) -ceq "added,updated,said,said,closed,said") ("words said under a closed question are recorded, not refused, and the command says the question stays closed (" + (Get-Kinds $store) + ")")
 $box = Run "inbox" @{ Peek = $true }
 Check (@($box.lines | Where-Object { $_ -ceq "Question 1: Should the closing sound play at the end of every session? [closed]" }).Count -eq 3) "the inbox names the question as it reads now, and says it is closed"
+Check (@($box.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, 20* UTC (record 3, said to wording 1)" }).Count -eq 1 -and @($box.lines | Where-Object { $_ -like "*(record 4, wording not stated)" -or $_ -like "*(record 6, wording not stated)" }).Count -eq 2) "each message says which wording it was said to when that was stated, and 'wording not stated' when it was not"
 Check ((Test-Line $box "    NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.") -and (Test-Line $box "    NOTE: this was said to an earlier wording (wording 1). Check that it still answers the question as it reads now.")) "and carries both notes, each on the message it belongs to and on no other"
 $shown = Run "show" @{ Number = "1" }
 Check ((Test-Line $shown "Question 1 - closed (wording 2)") -and (Test-Line $shown "Conversation: 3 message(s); 3 not yet read by the warchief; turn: nobody") -and (Test-Line $shown "    NOTE: this was said to an earlier wording (wording 1; the question is now at wording 2). Check that it still answers the question as it reads now.")) "show says the same of the thread, with the wording the question is at now, and that it is nobody's turn"

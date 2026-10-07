@@ -339,8 +339,8 @@
            Replace = '' }
         # --- the conversation under a question: kept, in order, and changing nothing ---
         @{ Name = "words-under-a-closed-question-dropped"
-           Find = '    $seen = [int]$Ev.data.wordingVersion'
-           Replace = '    if ($question.state -cne "open") { return "the question is closed" }; $seen = [int]$Ev.data.wordingVersion' }
+           Find = '    if ($stated) { $seen = [int]$Ev.data.wordingVersion }'
+           Replace = '    if ($question.state -cne "open") { return "the question is closed" }; if ($stated) { $seen = [int]$Ev.data.wordingVersion }' }
         @{ Name = "words-under-a-closed-question-reopen-it"
            Find = '        arrivedAfterClosing = [bool]($question.state -cne "open")'
            Replace = '        arrivedAfterClosing = [bool]($question.state -cne "open"); reopened = [bool]($question.state = "open")' }
@@ -348,17 +348,32 @@
            Find = '        arrivedAfterClosing = [bool]($question.state -cne "open")'
            Replace = '        arrivedAfterClosing = $false' }
         @{ Name = "words-to-an-earlier-wording-dropped"
-           Find = 'if ($seen -gt [int]$question.wordingVersion) {'
-           Replace = 'if ($seen -ne [int]$question.wordingVersion) {' }
+           Find = 'if ($stated -and $seen -gt [int]$question.wordingVersion) {'
+           Replace = 'if ($stated -and $seen -ne [int]$question.wordingVersion) {' }
         @{ Name = "wording-not-yet-written-believed"
-           Find = 'if ($seen -gt [int]$question.wordingVersion) {'
+           Find = 'if ($stated -and $seen -gt [int]$question.wordingVersion) {'
            Replace = 'if ($false) {' }
         @{ Name = "earlier-wording-not-flagged"
-           Find = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)'
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
            Replace = '        saidToEarlierWording = $false' }
         @{ Name = "wording-of-the-moment-flagged-as-earlier"
-           Find = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)'
-           Replace = '        saidToEarlierWording = [bool]($seen -le [int]$question.wordingVersion)' }
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = [bool]($stated -and $seen -le [int]$question.wordingVersion)' }
+        @{ Name = "unstated-wording-flagged-as-earlier"
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)' }
+        @{ Name = "unstated-wording-said-to-be-stated"
+           Find = '        wordingStated = [bool]$stated'
+           Replace = '        wordingStated = $true' }
+        @{ Name = "record-without-a-wording-unreadable"
+           Find = 'if (-not (Test-HordeDecisionMember -Object $Ev.data -Name $member)) { continue }'
+           Replace = '' }
+        @{ Name = "window-need-not-state-its-wording"
+           Find = 'if ([bool]$routeEntry.statesWording -and -not $WordingStated) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "chat-must-state-a-wording-nobody-knows"
+           Find = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }'
+           Replace = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $true }' }
         @{ Name = "earlier-wording-judged-against-todays-wording"
            Find = 'saidToEarlierWording = [bool]$Message.saidToEarlierWording'
            Replace = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int](@($State.questions.Values | Where-Object { $_.thread -contains $Message })[0].wordingVersion))' }
@@ -457,11 +472,11 @@
            Find = 'if (@($routeEntry.actors) -cnotcontains $Actor) { [void]$out.Add('
            Replace = 'if ($false) { [void]$out.Add(' }
         @{ Name = "warchief-may-record-chat-as-its-own-typing"
-           Find = '    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window" }'
-           Replace = '    "window"        = @{ speakers = @("founder");  actors = @("founder", "warchief");  shown = "typed in the window" }' }
+           Find = '    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window";                statesWording = $true }'
+           Replace = '    "window"        = @{ speakers = @("founder");  actors = @("founder", "warchief");  shown = "typed in the window";                statesWording = $true }' }
         @{ Name = "chat-words-shown-as-typed"
-           Find = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat" }'
-           Replace = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "typed in the window" }' }
+           Find = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }'
+           Replace = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "typed in the window"; statesWording = $false }' }
         @{ Name = "blank-words-stored"
            Find = 'if ($Text.Trim().Length -eq 0) { [void]$out.Add("''text'' is blank: nothing was said") }'
            Replace = '' }

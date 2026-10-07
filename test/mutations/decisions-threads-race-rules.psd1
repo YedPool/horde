@@ -7,8 +7,8 @@
     Suite  = "test\test-decisions-threads-race.ps1"
     Mutations = @(
         @{ Name = "words-under-a-closed-question-dropped"
-           Find = '    $seen = [int]$Ev.data.wordingVersion'
-           Replace = '    if ($question.state -cne "open") { return "the question is closed" }; $seen = [int]$Ev.data.wordingVersion' }
+           Find = '    if ($stated) { $seen = [int]$Ev.data.wordingVersion }'
+           Replace = '    if ($question.state -cne "open") { return "the question is closed" }; if ($stated) { $seen = [int]$Ev.data.wordingVersion }' }
         @{ Name = "arrival-after-closing-not-flagged"
            Find = '        arrivedAfterClosing = [bool]($question.state -cne "open")'
            Replace = '        arrivedAfterClosing = $false' }
