@@ -31,7 +31,8 @@
 // THE KEYS, in a field (the owner's own list, 2026-10-07):
 //   Enter                 save what is typed and go to the next question; on an empty field, just go
 //   Tab                   an empty field that shows a grey suggestion: take it as editable text and
-//                         stay; any other field: as Enter. Shift+Tab: back one
+//                         stay; a field holding one character: move on and send nothing; any other
+//                         field: as Enter. Shift+Tab: back one
 //   Right arrow           in an empty field: take the suggestion, as Tab does
 //   Ctrl+Enter            in an empty field: the suggestion IS the answer; save it and go on
 //   Shift+Enter, Ctrl+J   a new line inside the answer
@@ -89,6 +90,11 @@
   // How long after the caret arrives in an empty field an Enter is taken for the tail of a doubled
   // key press. Longer than a key bounce or an accidental double tap; shorter than reading a question.
   var ARRIVAL_MS = 350;
+  // AFTER A SAVE, LONGER (the owner, 2026-10-07: he sent one answer twice, a minute apart, because
+  // the first Enter showed him nothing). An Enter that saved moves the caret on and the field it left
+  // says "saving" at once; an Enter repeated within this long, on the empty field the save moved him
+  // to, is the same press made again for want of a sign, and does nothing.
+  var SAVE_ECHO_MS = 3000;
   // How many lines a saved answer rests at while the caret is not in it (header, ROOM IS KEPT).
   var REST_LINES = 2;
   // The sub-lines of an unfolded question, in order: the field, the label before it ("" for none),
@@ -345,7 +351,7 @@
       line.field.focus({ preventScroll: true });
       var end = line.field.value.length;
       try { line.field.setSelectionRange(end, end); } catch (e) { /* a field not drawn has no caret */ }
-      arrived = { number: line.q.number, at: Date.now() };
+      arrived = { number: line.q.number, at: Date.now(), bySave: false };
       intoView(line);
       onChange();
     }
@@ -453,20 +459,29 @@
       if (key === "Enter" && e.ctrlKey) {
         e.preventDefault();
         if (blank) { if (!rec) { return; } setValue(line, rec); }
-        save(line); move(line, 1);
+        var accepted = save(line);
+        move(line, 1);
+        if (accepted) { arrived.bySave = true; }
         return;
       }
       if (key === "Enter" && plain) {
         e.preventDefault();
-        if (field.value === "" && arrived.number === q.number && Date.now() - arrived.at < ARRIVAL_MS) { return; }
-        save(line); move(line, 1);
+        if (field.value === "" && arrived.number === q.number && Date.now() - arrived.at < (arrived.bySave ? SAVE_ECHO_MS : ARRIVAL_MS)) { return; }
+        var sentNow = save(line);
+        move(line, 1);
+        if (sentNow) { arrived.bySave = true; }
         return;
       }
       if (key === "Tab" && e.shiftKey) { e.preventDefault(); move(line, -1); return; }
       if (key === "Tab" && plain) {
         e.preventDefault();
         if (field.value === "" && rec) { setValue(line, rec); return; }
-        save(line); move(line, 1);
+        // ONE CHARACTER IS NOT AN ANSWER TO SEND ON A TAB (the owner's question 28, 2026-10-07: he
+        // began "a ..." and a Tab stored the answer "a"). It stays, a draft, and the caret moves on.
+        if (field.value.trim().length === 1) { move(line, 1); return; }
+        var tabbed = save(line);
+        move(line, 1);
+        if (tabbed) { arrived.bySave = true; }
         return;
       }
       if (key === "ArrowRight" && plain && !e.shiftKey && field.value === "" && rec) { e.preventDefault(); setValue(line, rec); return; }

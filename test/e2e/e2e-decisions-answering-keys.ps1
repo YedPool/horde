@@ -222,9 +222,27 @@ Check ($r.handBack.asked -eq 1 -and $r.handBack.handed -eq 0 -and $r.handBack.la
 Check ((Get-Foreground) -eq $foregroundAtEscape -and $r.drawn.answer.focus -ceq "4" -and (Get-Line $r 4).a -ceq "x" -and $r.drawn.foot -cnotlike "*Esc*") "the desktop's foreground window is the one it was, the caret and the letter are where they were, and the last line does not offer Escape"
 
 Write-Host ""
+Write-Host "=== one character is not sent on a Tab; a save shows at once, and the same Enter made again does nothing ===" -ForegroundColor Cyan
+$r = Send-Probe -Steps @((Step "focus" -Q 4))
+$r = Send-Probe -Keys @((Key "Tab")) -Steps @((Step "settle"))
+Check ($r.drawn.answer.focus -ceq "5" -and (Get-Line $r 4).a -ceq "x" -and (Get-Line $r 4).m -ceq "draft" -and @(Get-Said 4).Count -eq 0) "A REAL TAB ON A FIELD HOLDING ONE CHARACTER moves on and sends nothing: the 'x' stays in question 4 as a draft"
+$r = Send-Probe -Steps @((Step "focus" -Q 8))
+$script:probeN++
+$script:pressed += (Get-KeyPresses -Keys @((Typed "eight"), (Key "Enter")))
+Write-Whole -Path $script:probeFile -Text (ConvertTo-Json -InputObject ([ordered]@{ n = $script:probeN; keys = @((Typed "eight"), (Key "Enter")); steps = @() }) -Depth 5 -Compress)
+$wantAck = $script:probeN
+$atOnce = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 40 -Until { param($x) $null -ne $x.drawn -and $x.drawn.answer.probe -eq $wantAck }
+Check ($atOnce.drawn.answer.focus -ceq "9" -and @("saving", "saved") -ccontains (Get-Line $atOnce 8).m -and (Get-Line $atOnce 8).a -ceq "eight") ("THE ENTER SHOWS AT ONCE: in the first report after it the caret is in question 9 and question 8 says '" + (Get-Line $atOnce 8).m + "'")
+$r = Send-Probe -Keys @((Key "Enter")) -Steps @((Step "settle"))
+Check ($r.drawn.answer.focus -ceq "9" -and @(Get-Said 8).Count -eq 1 -and @(Get-Said 9).Count -eq 0 -and (Get-Line $r 8).m -ceq "saved") ("AN ENTER MADE AGAIN within seconds of a save, on the empty field it moved to, does nothing: the caret stays in question 9 and question 8 holds one message (caret in " + $r.drawn.answer.focus + ")")
+Start-Sleep -Milliseconds 3200
+$r = Send-Probe -Keys @((Key "Enter")) -Steps @((Step "settle"))
+Check ($r.drawn.answer.focus -ceq "10" -and @(Get-Said 9).Count -eq 0) "CONTROL: an Enter on that empty field after those seconds moves on, saving nothing"
+
+Write-Host ""
 Write-Host "=== every key counted, nothing refused, nobody's keyboard taken ===" -ForegroundColor Cyan
 Check ($r.drawn.answer.realKeys -eq $script:pressed) ("the page counted " + $r.drawn.answer.realKeys + " key presses the engine vouches for; this scenario pressed " + $script:pressed)
-Check ($r.says -eq 5 -and $r.saysRefused -eq 0 -and $r.refused -eq 0 -and @($r.errors).Count -eq 0) ("five answers stored, nothing refused, nothing failed inside the window (" + (@($r.errors) -join " | ") + ")")
+Check ($r.says -eq 6 -and $r.saysRefused -eq 0 -and $r.refused -eq 0 -and @($r.errors).Count -eq 0) ("six answers stored, nothing refused, nothing failed inside the window (" + (@($r.errors) -join " | ") + ")")
 Check ((Get-Foreground) -ne $window) "the window never became the desktop's foreground window"
 $closed = Close-HordeProbeWindow -Process $script:open.process -Handle $window -Seconds 40
 Check ($closed.asked -and $closed.exited -and -not $closed.killed -and $closed.code -eq 0) "the window is closed as its close button would, and the command exits 0"
@@ -232,7 +250,7 @@ Check ($script:open.err.Result.Trim() -ceq "") "with nothing on the error stream
 $keepHome = $env:HORDE_HOME
 try { $env:HORDE_HOME = $hordeHome; $all = @((Invoke-HordeDecision -Operation "list" -Request @{ state = "all" }).value.questions) } finally { $env:HORDE_HOME = $keepHome }
 $counts = @($all | Sort-Object number | ForEach-Object { "" + $_.thread.count }) -join ","
-Check ($counts -ceq "1,1,1,0,1,0,1,0,0,0") ("the store holds exactly what was entered: five answers, each once (" + $counts + ")")
+Check ($counts -ceq "1,1,1,0,1,0,1,1,0,0") ("the store holds exactly what was entered: six answers, each once (" + $counts + ")")
 
 } finally {
     if ($null -ne $script:open -and -not $script:open.process.HasExited) { try { $script:open.process.Kill() } catch { } }
