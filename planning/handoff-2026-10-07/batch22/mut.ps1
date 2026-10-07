@@ -1,0 +1,3 @@
+# batch22 mutation specs on 7ed7cec: the pure specs #120, #138, #139, #146 touch, plus node-serve-loop and node-serve-messaging (serve loop moved).
+& 'C:\Users\yedid\AppData\Local\Temp\claude\C--Users-yedid-bin-wezfleet\38d41f80-e534-4f43-9b23-82b80979b435\scratchpad\msg\mut.ps1' -Repo 'C:\Users\yedid\bin\horde-worktrees\batch22' -Commit 7ed7cec -SpecList 'test\mutations\hub-dial.psd1;test\mutations\hub-serve.psd1;test\mutations\link-binding.psd1;test\mutations\node-dial-cli.psd1;test\mutations\node-dial.psd1;test\mutations\node-serve-act.psd1;test\mutations\node-serve-loop.psd1;test\mutations\node-serve-messaging.psd1;transports\ssh\test\mutations\listen.psd1;transports\ssh\test\mutations\transport.psd1' -Label batch22-mut -Minutes 90
+exit $LASTEXITCODE

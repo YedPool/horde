@@ -1,0 +1,2 @@
+& powershell -NoProfile -File 'C:\Users\yedid\AppData\Local\Temp\claude\C--Users-yedid-bin-wezfleet\38d41f80-e534-4f43-9b23-82b80979b435\scratchpad\batch22\mut.ps1' | Out-File -LiteralPath 'C:\Users\yedid\AppData\Local\Temp\claude\C--Users-yedid-bin-wezfleet\38d41f80-e534-4f43-9b23-82b80979b435\scratchpad\batch22\mut.log' -Encoding ascii
+Add-Content -LiteralPath 'C:\Users\yedid\AppData\Local\Temp\claude\C--Users-yedid-bin-wezfleet\38d41f80-e534-4f43-9b23-82b80979b435\scratchpad\batch22\mut.log' -Value ('DONE=' + $LASTEXITCODE) -Encoding ASCII
