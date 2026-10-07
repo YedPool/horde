@@ -141,6 +141,8 @@ try {
     if ((Split-Path -Leaf $fx) -match '^horde-specfind-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+$mapped = 0; foreach ($f in $specs) { $mapped += @((Import-PowerShellDataFile -LiteralPath $f.FullName).Mutations | Where-Object { $_.ContainsKey("Sections") }).Count }
+Check ($mapped -ge 40) ("CONTROL: the repository's specs map mutants to sections, so the map check has maps to check (" + $mapped + ")")
 $problems = @(Get-SpecProblems -Root $root -Specs $specs)
 foreach ($p in $problems) { Write-Host ("        " + $p) -ForegroundColor Red }
 Check ($problems.Count -eq 0) ("every mutant of every spec applies: its find string occurs exactly once in its target (" + $mutants + " mutants in " + $specs.Count + " specs, " + $problems.Count + " that do not)")
