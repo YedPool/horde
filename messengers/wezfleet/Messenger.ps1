@@ -12,6 +12,14 @@
 # 0 post on disk for a live session (woken or waiting) / status found; 1 post could not write; 2 refused
 # input, stage refused; 3 status no record; 4 post stale-session - stage absent when nothing was written,
 # queued when the mail was written under a session that no longer holds its pane; 5 internal-error.
+# WHICH WEZFLEET THAT IS (measured 2026-10-07 against checkouts in an isolated mail root). The revision
+# above is not on wezfleet's main. Its rebuild is wezfleet's open pull request 70 (head 288fae7), and it
+# differs in two places, both read here: exit 4 with nothing written carries the stage "refused", not
+# "absent"; and an internal error is exit 1 with the stage "error", there being no exit 5. wezfleet's
+# main at c49063b has the first shape of #65: the same fields without detail, a sentence where the code
+# is, and no exit 4. A REASON THAT IS NOT A CODE IS UNKNOWN, post or status: main answered a post to a
+# session no live process is with exit 0, queued, and a sentence, which read as accepted for ever. So
+# against main every post is unknown, and nothing is ever decided on a sentence.
 #
 # THE STAGES, mapped onto the port's (messengers/Port.ps1): queued is accepted, handed-over is
 # handed-over, taken is seen, unconfirmed is expired (with a reason), refused (exit 2) is held with the
@@ -77,10 +85,13 @@ $script:HordeWezfleetMessengerDetailChars = 600
 # wezfleet's session id (its -To and -FromSessionId), and Horde's hub label (its -FromLabel).
 $script:HordeWezfleetMessengerSessionPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeWezfleetMessengerLabelPattern = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'
+# A reason code: lower-case words joined by dashes (woken, already-posted, stale-session, ...). A
+# sentence is not one.
+$script:HordeWezfleetMessengerCodePattern = '\A[a-z]+(-[a-z]+)*\z'
 $script:HordeWezfleetMessengerStages = @{ "queued" = "accepted"; "handed-over" = "handed-over"; "taken" = "seen"; "unconfirmed" = "expired"; "refused" = "held" }
 # Which stages each exit code may carry, per command. Anything else is unknown.
 $script:HordeWezfleetMessengerExits = @{
-    post = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 2 = @("refused"); 4 = @("absent", "queued") }
+    post = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 2 = @("refused"); 4 = @("absent", "refused", "queued") }
     status = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 3 = @("absent") }
 }
 
@@ -273,13 +284,17 @@ function Read-HordeWezfleetMessengerAnswer {
     # BOUND TO ITS MESSAGE (review of #102, finding 3): an answer about another id is never this one's.
     $asked = $MessageId.Replace("-", "")
     if ($j.id -cne $asked) { return (New-HordeUnknown -Reason ($what + " answered about " + (ConvertTo-HordeWezfleetMessengerLine $j.id) + ", not " + $asked)) }
+    # A REASON IS A CODE OR NOTHING. A sentence there is the first shape of #65 (wezfleet's main), whose
+    # exit 0 does not mean what this table takes it to mean: unknown, whatever the stage says.
+    if ($j.reason -cne "" -and $j.reason -cnotmatch $script:HordeWezfleetMessengerCodePattern) { return (New-HordeUnknown -Reason ($what + " answered a reason that is not a code, so this is a wezfleet from before the reason codes this messenger reads: " + (ConvertTo-HordeWezfleetMessengerLine $j.reason))) }
     # EXIT 1 IS THE FLEET SAYING IT COULD NOT, not a code outside its table: said so, with the stage it
     # gave, its code and its detail. Unknown and never held, because the record may already be on disk
     # when the fleet fails.
     if ([int]$Run.exit -eq 1) {
         $failDetail = ""
         $failProp = $j.PSObject.Properties["detail"]
-        if ($null -ne $failProp -and $failProp.Value -is [string]) { $failDetail = ConvertTo-HordeWezfleetMessengerLine $failProp.Value -Max $script:HordeWezfleetMessengerDetailChars }
+        $failCap = $script:HordeWezfleetMessengerDetailChars
+        if ($null -ne $failProp -and $failProp.Value -is [string]) { $failDetail = ConvertTo-HordeWezfleetMessengerLine $failProp.Value -Max $failCap }
         return (New-HordeUnknown -Reason ($what + ": the fleet could not do it (stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "'): " + (ConvertTo-HordeWezfleetMessengerLine $j.reason) + $(if ($failDetail -ne "") { ": " + $failDetail } else { "" })))
     }
     $byExit = $script:HordeWezfleetMessengerExits[$Command]

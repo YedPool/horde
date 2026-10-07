@@ -245,10 +245,42 @@ With-Fake {
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (& $fx.Observe $st $msg.messageId).records -eq 1) ("exit 4 with the mail written but the pane held by another session is held too, never accepted (" + (Show-Answer $a) + ")")
 }
+# THE SHAPE THE FLEET'S OPEN PULL REQUEST GIVES EXIT 4 WITH NOTHING WRITTEN: the stage "refused", not
+# "absent" (wezfleet pull request 70, head 288fae7, measured against a checkout of it on 2026-10-07: a
+# post to a session no live process is answered exit 4, refused, stale-session). It is the same fact as
+# the first shape above and is held the same way; it read "exit 4 with the stage 'refused', which does
+# not go with that exit code", unknown, so a sender holding a stale id was never told so.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $false -Reason "stale-session" -Detail "no live process on this machine is session 22222222-3333-4444-8555-666666666666; nothing was written"); exit = 4 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (Why $a).Contains("no live process")) ("exit 4 with the stage refused is held, stale-session, the detail carried (" + (Show-Answer $a) + ")")
+}
 With-Fake {
     param($st)
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-0000000000aa"
     Check ($a.state -ceq "absent") "status exit 3, absent, is the port's absent"
+}
+# A REASON IS A CODE, NEVER PROSE. A wezfleet from before the reason codes (its main at c49063b) answers
+# the same fields with a sentence where the code is, and no exit 4: measured 2026-10-07, a post to a
+# session no live process is came back from it exit 0, queued, and was read as accepted, for ever. An
+# answer whose reason is not a code is from a fleet this messenger does not read, and is unknown - for a
+# post and for a status alike - so nothing is ever decided on a sentence. No reason at all is still read.
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    $n = N $msg.messageId
+    $old = '{"id":"' + $n + '","to":"' + $msg.sessionId + '","stage":"queued","woken":false,"reason":"no registry record for this session on this machine, so no pane can be verified; the mail waits for its next turn boundary"}' + "`n"
+    & $fx.SetMode $st @{ post = @{ stdout = $old; exit = 0 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not a code")) ("a post answered with a sentence for a reason is unknown, never accepted (" + (Show-Answer $a) + ")")
+    & $fx.SetMode $st @{ post = @{ stdout = $old.Replace("no registry record for this session on this machine, so no pane can be verified; the mail waits for its next turn boundary", "no-registry-record"); exit = 0 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted") ("CONTROL: the same answer with a code for its reason is accepted (" + (Show-Answer $a) + ")")
+    & $fx.SetMode $st @{ status = @{ stdout = ('{"id":"' + $n + '","to":"","stage":"absent","reason":"no record with this id under the mail root"}' + "`n"); exit = 3 } }
+    $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
+    Check ($s.state -ceq "unknown" -and "$($s.reason)".Contains("not a code")) ("a status answered with a sentence for a reason is unknown, never absent (" + (Show-Answer $s) + ")")
 }
 
 Write-Host ""
