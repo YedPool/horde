@@ -25,6 +25,12 @@ function Get-HordeMailStageRank {
     return -1
 }
 
+function Get-HordeMailReceiptStages {
+    # The stages a receipt may report: every stage of the order and every final one, less queued (the
+    # node's own stage before the hub took the message). Read by the outbox for the markers it accepts.
+    return @(@($script:HordeMailStageOrder) + @($script:HordeMailFinalStages) | Where-Object { $_ -cne "queued" } | Select-Object -Unique)
+}
+
 function Resolve-HordeMailReceipt {
     # What one receipt does to one outbox record (F2, F6). -Recorded is the record's stage, "" when the
     # node never returned this message from mail.next. Returns { refused; stage; changed }: refused is the
@@ -33,7 +39,7 @@ function Resolve-HordeMailReceipt {
     # it did not - and that is the stage the ack carries.
     param([string]$Recorded = "", [Parameter(Mandatory = $true)][string]$Asked)
     if ($Recorded -eq "") { return [pscustomobject]@{ refused = "this node never returned from mail.next a message with this id"; stage = ""; changed = $false } }
-    $receiptStages = @(@($script:HordeMailStageOrder) + @($script:HordeMailFinalStages) | Where-Object { $_ -cne "queued" })
+    $receiptStages = @(Get-HordeMailReceiptStages)
     if ($receiptStages -cnotcontains $Asked) { return [pscustomobject]@{ refused = ("'" + $Asked + "' is not a receipt stage"); stage = $Recorded; changed = $false } }
     $have = Get-HordeMailStageRank -Stage $Recorded
     if ($have -lt 0) { return [pscustomobject]@{ refused = ("the record holds '" + $Recorded + "', which is not a stage"); stage = $Recorded; changed = $false } }
@@ -74,6 +80,27 @@ function Select-HordeMailNext {
     return [pscustomobject]@{ pending = $waiting.Count; next = $next }
 }
 
+function Select-HordeMailRecordedStage {
+    # The stage an outbox record holds, from its stage markers (remote/Outbox.ps1 writes one file per
+    # receipt it records, never rewriting one). The markers are replayed through Resolve-HordeMailReceipt
+    # from queued, oldest first (by at, then stage, ordinally), so the record holds exactly what the
+    # receipts would have left it holding one at a time: forward only, and a first final stage that a
+    # racing late one never overwrites. Returns { stage; at }, at the time of the last change ("" when
+    # none).
+    param($Markers = @())
+    $list = @($Markers | Where-Object { $null -ne $_ })
+    $keys = [string[]]@($list | ForEach-Object { "$($_.at)" + "|" + "$($_.stage)" })
+    [Array]::Sort($keys, [System.StringComparer]::Ordinal)  # oldest marker first
+    $stage = "queued"
+    $at = ""
+    foreach ($k in $keys) {
+        $cut = $k.IndexOf("|")
+        $r = Resolve-HordeMailReceipt -Recorded $stage -Asked $k.Substring($cut + 1)
+        if ($r.refused -eq "" -and $r.changed) { $stage = $r.stage; $at = $k.Substring(0, $cut) }
+    }
+    return [pscustomobject]@{ stage = $stage; at = $at }
+}
+
 function Test-HordeMailSender {
     # Is outbound mail from the device its link authenticated (F5)? The node's payload says who sent it;
     # the hub believes only the link. Findings; empty means the sender's device is the peer's.
@@ -86,14 +113,27 @@ function Test-HordeMailSender {
     return @()
 }
 
+function Get-HordeDeliverIdentity {
+    # The four parts of a process's identity, as text: device, space, pid and procStart (R11). Any part the
+    # entry does not carry is "".
+    param($Entry)
+    $ns = Get-HordeLinkProp $Entry "ns"
+    return @("$(Get-HordeLinkProp $ns 'device')", "$(Get-HordeLinkProp $ns 'space')", "$(Get-HordeLinkProp $Entry 'pid')", "$(Get-HordeLinkProp $Entry 'procStart')")
+}
+
 function Test-HordeDeliverSameProcess {
-    # Are two session entries the same process: pid AND procStart, both present and equal? A pid alone is
-    # reused, and an empty start time proves nothing.
+    # Are two session entries the same process? Only when device, space, pid and procStart are all present
+    # and all equal (R11: a pid is looked up only in its own space - WSL beside Windows on one node gives
+    # the same pid number to two processes - and a pid alone is reused). An entry missing any part proves
+    # nothing.
     param($A, $B)
-    $ap = "$(Get-HordeLinkProp $A 'pid')"; $bp = "$(Get-HordeLinkProp $B 'pid')"
-    $as = "$(Get-HordeLinkProp $A 'procStart')"; $bs = "$(Get-HordeLinkProp $B 'procStart')"
-    if ($ap -eq "" -or $as -eq "" -or $bs -eq "") { return $false }
-    return ([string]::Equals($ap, $bp, [System.StringComparison]::Ordinal) -and [string]::Equals($as, $bs, [System.StringComparison]::Ordinal))
+    $a = @(Get-HordeDeliverIdentity $A)
+    $b = @(Get-HordeDeliverIdentity $B)
+    for ($i = 0; $i -lt 4; $i++) {
+        if ($a[$i] -eq "" -or $b[$i] -eq "") { return $false }
+        if (-not [string]::Equals($a[$i], $b[$i], [System.StringComparison]::Ordinal)) { return $false }
+    }
+    return $true
 }
 
 function New-HordeDeliverTarget {

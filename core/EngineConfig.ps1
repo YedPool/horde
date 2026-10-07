@@ -69,6 +69,14 @@ $script:HordeConfigValueKinds = @{
     name = '^[a-z][a-z0-9-]{0,39}$'
     model = '^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$'
 }
+# LIST KINDS: a value written as comma-separated entries, each checked on its own, so a refusal names
+# the entry it refuses. labels is remote.deliverTo's (remote plan R21): hub labels (link-verbs v1's label
+# pattern), at most maxEntries of them, none longer than maxChars, none twice. An
+# empty value is the empty list, so a live rule can withdraw every opt-in; an empty ENTRY is refused.
+$script:HordeConfigListKinds = @{
+    labels = @{ entry = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'; maxEntries = 64; maxChars = 6; what = "hub label" }
+}
+
 # SHAPES OF A SECRET, each a pattern whose MATCH is the secret, so the same list both finds and
 # redacts. Each has a planted case in test-engine-config, and near misses (39 hex digits, the bare
 # prefixes, a UUID, a model id, an endpoint, a variable name, a run id, a sentence) are controls.
@@ -153,7 +161,7 @@ function Read-HordeConfigKeysText {
             $seenV = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($x in $vals) { if (-not $seenV.Add("" + $x)) { [void]$problems.Add("the key " + $n + " lists the value " + $x + " twice, ignoring case") } }
         }
-        elseif (-not $script:HordeConfigValueKinds.ContainsKey("" + $kind)) { [void]$problems.Add("the key " + $n + " has the value kind '" + $kind + "'") }
+        elseif (-not $script:HordeConfigValueKinds.ContainsKey("" + $kind) -and -not $script:HordeConfigListKinds.ContainsKey("" + $kind)) { [void]$problems.Add("the key " + $n + " has the value kind '" + $kind + "'") }
         # DIRECTION (review of PR #73, F3; the coordinator's decision): which way a layer above the
         # first one that sets the key may move its value. lower-only is remote R9's ceiling, which an
         # agent-writable live rule must never raise. Meaningful only for an enum, written lowest first.
@@ -202,12 +210,34 @@ function Get-HordeBuiltinLayer {
     return $out
 }
 
+function Get-HordeConfigValueProblem {
+    # Why a value does not fit a registry entry's kind, or "" when it does. A list kind names the entry.
+    param($Entry, $Value)
+    $kind = "" + $Entry.value.kind
+    if ($Value -isnot [string]) { return ("it is not text") }
+    if ($kind -ceq "enum") { if (@($Entry.value.values) -ccontains $Value) { return "" }; return ("it is not one of " + (@($Entry.value.values) -join ", ")) }
+    if ($script:HordeConfigListKinds.ContainsKey($kind)) {
+        $lk = $script:HordeConfigListKinds[$kind]
+        if ($Value -eq "") { return "" }
+        $items = $Value.Split(",")
+        if ($items.Count -gt $lk.maxEntries) { return ("it lists " + $items.Count + " labels, and a " + $kind + " value holds at most " + $lk.maxEntries) }
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($it in $items) {
+            if ($it -eq "") { return ("it has an empty entry between commas") }
+            if ($it.Length -gt $lk.maxChars) { return ("the entry '" + $it + "' is longer than " + $lk.maxChars + " characters, the most a " + $lk.what + " has") }
+            if ($it -cnotmatch $lk.entry) { return ("the entry '" + $it + "' is not a " + $lk.what) }
+            if (-not $seen.Add($it)) { return ("the entry '" + $it + "' is listed twice") }
+        }
+        return ""
+    }
+    if ($Value -cmatch $script:HordeConfigValueKinds[$kind]) { return "" }
+    return ("it does not match the " + $kind + " pattern")
+}
+
 function Test-HordeConfigValue {
     # Does a value fit a registry entry's kind?
     param($Entry, $Value)
-    $kind = "" + $Entry.value.kind
-    if ($kind -ceq "enum") { return [bool]($Value -is [string] -and @($Entry.value.values) -ccontains $Value) }
-    return [bool]($Value -is [string] -and $Value -cmatch $script:HordeConfigValueKinds[$kind])
+    return [bool]((Get-HordeConfigValueProblem -Entry $Entry -Value $Value) -eq "")
 }
 
 function Test-HordeSecretShape {
@@ -362,7 +392,8 @@ function Test-HordeEngineConfig {
                 if (-not $keyByName.ContainsKey($p.Name)) { Add-Finding "unknown-key" $d.source ($at + '.set') ("the rule " + $r.id + " sets " + $p.Name + ", which is not a setting in core/config-keys.json"); continue }
                 $entry = $keyByName[$p.Name]
                 if (@($entry.layers) -cnotcontains $d.layer) { Add-Finding "key-layer" $d.source ($at + '.set') ("the rule " + $r.id + " sets " + $p.Name + " in " + $d.layer + "; it may be set only in " + (@($entry.layers) -join ", ")) }
-                if (-not (Test-HordeConfigValue -Entry $entry -Value $p.Value)) { Add-Finding "key-value" $d.source ($at + '.set') ("the rule " + $r.id + " sets " + $p.Name + " to '" + $p.Value + "', which is not a " + $entry.value.kind + " value it allows") }
+                $why = Get-HordeConfigValueProblem -Entry $entry -Value $p.Value
+                if ($why -ne "") { Add-Finding "key-value" $d.source ($at + '.set') ("the rule " + $r.id + " sets " + $p.Name + " to '" + $p.Value + "', which is not a " + $entry.value.kind + " value it allows: " + $why) }
             }
             $prof = $null
             $pn = Get-HordeAgentProp $r.set "profile"

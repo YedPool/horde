@@ -14,5 +14,27 @@
         @{ Name = "watchdog-left-out-of-the-job"
            Find = '[HordeTestJob]::Assign($job, $w.Handle)'
            Replace = '' }
+        # --- review of PR #103, H3 to H6 ---
+        @{ Name = "no-forcecommand"
+           Find = '("ForceCommand " + $ForceCommand)'
+           Replace = '("# ForceCommand " + $ForceCommand)' }
+        @{ Name = "watchdog-by-path-lookup"
+           Find = '$wsi = New-Object System.Diagnostics.ProcessStartInfo($script:HordeSshdPowerShellExe, '
+           Replace = '$wsi = New-Object System.Diagnostics.ProcessStartInfo("powershell.exe", ' }
+        @{ Name = "folder-print-blind"
+           Find = '$lines = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable unread | Sort-Object FullName | ForEach-Object { $_.FullName + " " + $_.Length + " " + $_.LastWriteTimeUtc.Ticks })'
+           Replace = '$lines = @()' }
+        @{ Name = "key-print-without-hash"
+           Find = '$_.FullName + " " + $_.Length + " " + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash'
+           Replace = '$_.FullName + " " + $_.Length' }
+        @{ Name = "stale-age-ignored"
+           Find = 'if ($d.CreationTimeUtc -ge $cut) { continue }'
+           Replace = '' }
+        @{ Name = "stale-name-unchecked"
+           Find = 'if ($d.Name -cnotmatch $script:HordeSshdRootPattern) { continue }'
+           Replace = 'if ($d.Name -cnotlike "horde-sshd-*") { continue }' }
+        @{ Name = "stale-never-swept"
+           Find = 'Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue'
+           Replace = '' }
     )
 }
