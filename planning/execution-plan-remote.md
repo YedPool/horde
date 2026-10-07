@@ -356,6 +356,12 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
     `test/test-transport-conformance.ps1`'s live ssh case, run locally (the suite is machine-bound)
     against the child sshd of R16's `transports/ssh/test/Sshd.ps1`. Until then it stays unverified,
     and `test-sshd-local.ps1` opens through the adapter, with a control that the port still refuses.
+    **The attach shim reads stdin through PowerShell's `$input`, never a .NET Console stream**
+    (`[Console]::In`, `[Console]::OpenStandardInput()`): under Windows sshd the Console stream never
+    returns the session's data and the session hangs, while `$input` streams (issue #100, measured
+    2026-10-06 on 9.5p1 and 9.5p2; review of PR #103, probe p8). The node writes every frame into that
+    stdin, so this is the shim's first case; R16 pins it with the mutant `echo-reads-console-stdin`
+    (`transports/ssh/test/mutations/sshd-live.psd1`).
     Gate, T3 against the same child sshd (R16; no `horde-test-sshd` service): `command=`, `restrict` and `expiry-time` are honoured
     (unmeasured on Win32 OpenSSH, so these are the first cases); a requested command and a port
     forward are refused; a revoked key is refused even with its line restored by hand; `hello`

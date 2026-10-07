@@ -69,7 +69,9 @@ try {
         # The forced command: say who it is, then echo each line of stdin back as it arrives. It reads
         # stdin through $input: under Windows sshd a .NET Console stream ([Console]::In,
         # Console.OpenStandardInput) never returns the session's data, while $input reads it and
-        # streams (measured 2026-10-06 on 9.5p1 here and 9.5p2 on the always-on box, issue #100).
+        # streams (measured 2026-10-06 on 9.5p1 here and 9.5p2 on the always-on box, issue #100). Pinned
+        # by the mutant echo-reads-console-stdin (mutations/sshd-live.psd1): with the Console stream the
+        # frame round trip fails (review of PR #103, H2, probe p8: it hangs).
         # LF only: the link's frames end at LF, and WriteLine would end them with CR LF.
         $echo = Join-Path $sshdRoot "echo.ps1"
         [System.IO.File]::WriteAllText($echo, "[Console]::Out.Write('horde-test-forced' + [char]10); [Console]::Out.Flush(); foreach (`$l in `$input) { [Console]::Out.Write(`$l + [char]10); [Console]::Out.Flush() }")
@@ -183,9 +185,16 @@ try {
         $ak = Join-Path $sshdRoot "authorized_keys"
         $plain = Invoke-Ssh @()
         Check ($plain.code -eq 0 -and $plain.out -ceq "horde-test-forced") ("CONTROL: the plain key opens a session that runs the forced command, not 'requested' (exit " + $plain.code + ", " + $plain.out + $plain.err + ")")
-        [System.IO.File]::WriteAllText($ak, ('expiry-time="20200101" ' + $clientPub + "`n"))
+        # One way of writing the option for both dates: a malformed option is refused with the same
+        # "Permission denied (publickey)" as an expired one (review of PR #103, H1, probe p4), so only a
+        # date to come, accepted, shows the refusal is the date's.
+        $expiryOption = { param([string]$Day) return ('expiry-time="' + $Day + '" ') }
+        [System.IO.File]::WriteAllText($ak, ((& $expiryOption "20200101") + $clientPub + "`n"))
         $expired = Invoke-Ssh @()
         Check ($expired.code -eq 255 -and $expired.err -match "(?i)permission denied") ("a key whose expiry-time has passed is refused (exit " + $expired.code + ", " + $expired.err + ")")
+        [System.IO.File]::WriteAllText($ak, ((& $expiryOption "20991231") + $clientPub + "`n"))
+        $future = Invoke-Ssh @()
+        Check ($future.code -eq 0 -and $future.out -ceq "horde-test-forced") ("CONTROL: the same option with a date still to come is accepted, so the refusal is the date's and not the option's form (exit " + $future.code + ", " + $future.out + $future.err + ")")
         $fwdPort = Get-HordeFreeLoopbackPort
         # No -N: the forced command ends when its stdin closes, so a session whose forward was allowed
         # ends by itself, and one whose forward was refused ends first, ExitOnForwardFailure exit 255.
