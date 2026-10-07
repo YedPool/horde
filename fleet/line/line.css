@@ -9,6 +9,10 @@
 .fl .fl-orc { color: var(--ink); }
 .fl .fl-orc.on { font-weight: 600; text-decoration: underline; }
 .fl .fl-head { overflow-wrap: anywhere; }
-.fl .fl-row { display: none; padding-left: 14px; overflow-wrap: anywhere; }
+/* An Orc's line runs to three or six lines in a narrow window, and eight of them one under another
+   with one left edge read as a single block of grey (seen 2026-10-07 in pictures of the real window,
+   567 device pixels wide, on eight real records). The lines after the first are set in by one step,
+   so that each Orc's name stands alone at the left edge and the eye finds where a line begins. */
+.fl .fl-row { display: none; padding-left: 28px; text-indent: -14px; overflow-wrap: anywhere; }
 .fl.open .fl-row { display: block; }
 .fl button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
