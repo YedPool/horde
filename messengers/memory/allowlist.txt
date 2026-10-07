@@ -1,0 +1,13 @@
+# The files outside messengers/memory/ that may name the memory messenger, and exactly how many times
+# (CONTRIBUTING rule 14; remote plan step R21, slice 3). A mention is one occurrence of any name in
+# names.txt, plus one if the file's path has one. tools/HostNames.ps1 fails test/test-host-names.ps1 on
+# a file not listed here, on a listed file that names the messenger more times than listed, and on an
+# entry that allows more than its file needs - and, once this list is on origin/main, on an entry
+# origin/main lacks or a count above its count. When a mention must be added, add or raise the entry
+# here AND append a line to growth.txt in this folder: path | old -> new | YYYY-MM-DD | reason.
+#
+# MEASURED, NOT WRITTEN BY HAND: the count below is the occurrences of MemoryMessenger in the file,
+# counted on 2026-10-05 when the messengers/ family came in, and test/test-host-names.ps1 checks it.
+#
+# path | mentions | why this file may name the messenger
+test/test-messenger-port.ps1 | 11 | the port suite drives the memory messenger through its test helpers (reset, move a stage, read the log) to prove a repost makes one record

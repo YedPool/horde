@@ -317,6 +317,12 @@ Half A writes only config files, so it can ship before Horde spawns anything.
 6. **E5. `core/Secrets.ps1`.** It resolves `env` and `harness-login` references, and nothing else. It
    answers `set`, `missing` or `unknown (why)`, and it gives the value only to the launch stub. The
    test finds no fake secret in any output, with a positive control.
+   **The layer files are named (the act path's A3, 2026-10-05).** A node reading its own engine layers
+   needed them before E6 and E7 exist, so their names are fixed now and E6 and E7 inherit them: L1, the
+   user's file, is `<HordeHome>\engine.json`; L4, the live rules, is `<HordeHome>\engine-live.json`.
+   Beside them, a node's policy (remote R9, `schema/node-policy.v1`) is `<HordeHome>\node\policy.json`.
+   `cli/NodeAct.ps1` (`Get-HordeNodeEngineLayers`) reads the two layer files today, checks them with
+   `Test-HordeEngineConfig`, and leaves out a file that fails, naming why.
 7. **E6. `horde config validate | explain | get`.** It uses the merged Phase 3 plan's
    `Get-HordeHome` (its step 1) and defines none of its own. `explain` has three forms: full
    provenance, `--brief` (one line: profile, harness, provider, pinned model, and `ok` or the first

@@ -26,6 +26,15 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/ReadShared.ps1, core/Home.ps1 and core/Transcript.ps1.
 
+# Move-HordeFileAtomic lives in core/FileAtomic.ps1, shared with the hub's mirror files (cli/HubServe.ps1).
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "Home.ps1")
+. (Join-Path $PSScriptRoot "Transcript.ps1")
+
+. (Join-Path $PSScriptRoot "FileAtomic.ps1")
+
 $script:HordeMetricsLevels = @("off", "usage")
 $script:HordeMetricsDefVersion = "m1"
 
@@ -196,26 +205,6 @@ function New-HordeTranscriptSummaryRecord {
         worker = (ConvertTo-HordeJsonSafe $Worker)
         orc = (ConvertTo-HordeJsonSafe $Orc)
     }
-}
-
-function Move-HordeFileAtomic {
-    # Rename -From over -To in ONE step: MoveFileEx with REPLACE_EXISTING and WRITE_THROUGH, a single
-    # rename on NTFS. Review of PR #70 measured why File.Replace is not enough: Win32 ReplaceFile works in
-    # steps, and one of 40 kills inside it left NO index - the new one only in its temp file. A rename is
-    # all or nothing: a kill leaves the old file or the new one, never neither. A reader holding the file
-    # without delete sharing makes the rename fail for a moment; it is tried again for up to 2 s.
-    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$To)
-    if (-not ([System.Management.Automation.PSTypeName]"HordeNative.FileMove").Type) {
-        Add-Type -Namespace HordeNative -Name FileMove -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
-    }
-    $err = 0
-    for ($i = 0; $i -lt 20; $i++) {
-        # 0x1 MOVEFILE_REPLACE_EXISTING, 0x8 MOVEFILE_WRITE_THROUGH.
-        if ([HordeNative.FileMove]::MoveFileEx($From, $To, 0x9)) { return }
-        $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        Start-Sleep -Milliseconds 100
-    }
-    throw (New-Object System.ComponentModel.Win32Exception($err))
 }
 
 function Write-HordeMetricsFile {

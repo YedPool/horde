@@ -66,19 +66,28 @@ $suites = $allSuites
 
 # NO SUITE OUTSIDE THE GATE. Any test-*.ps1 in the repository that the list above does not cover is a
 # suite nobody runs (test/fixtures/ is data and is skipped).
+# THE MACHINE-BOUND LIST NAMES REAL SUITES, each with its reason: a renamed suite would otherwise drop
+# off the list silently and be shipped to a box where it cannot pass (issue #89).
+$rootFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+$gateRel = @($allSuites | ForEach-Object { $_.FullName.Substring($rootFull.Length + 1).Replace('\', '/') })
+$bound = @(Get-HordeMachineBoundSuites)
+$unknown = @($bound | Where-Object { $gateRel -cnotcontains $_.path } | ForEach-Object { $_.path })
+Check ($bound.Count -ge 4 -and $unknown.Count -eq 0) ("every machine-bound suite is one the gate runs (" + $bound.Count + " listed" + $(if ($unknown.Count) { "; not suites: " + ($unknown -join ", ") } else { "" }) + ")")
+Check (@($bound | Where-Object { "$($_.why)".Trim() -eq "" }).Count -eq 0) "and each says why it is bound to this machine"
+Check ($gateRel -cnotcontains "test/test-no-such-suite.ps1" -and $gateRel -ccontains "test/test-suite.ps1") "CONTROL: the comparison sees this suite and not one that does not exist"
 $stray = @(Get-HordeStraySuiteFiles -Root $root)
 Check ($stray.Count -eq 0) ("every test-*.ps1 in the repository is one the gate runs" + $(if ($stray.Count) { " (outside it: " + ($stray -join ", ") + ")" } else { "" }))
 # CONTROL: the same check on a planted tree finds what it should and nothing else.
 $plant = Join-Path $env:TEMP ("horde-suitefiles-" + [guid]::NewGuid().ToString("N"))
 try {
-    foreach ($rel in @("test/test-a.ps1", "hosts/h/test/test-b.ps1", "transports/t/test/test-c.ps1", "agents/g/test/test-d.ps1",
+    foreach ($rel in @("test/test-a.ps1", "hosts/h/test/test-b.ps1", "transports/t/test/test-c.ps1", "agents/g/test/test-d.ps1", "messengers/m/test/test-e.ps1", "messengers/m/test/Fixture.ps1",
                        "test/fixtures/x/test-data.ps1", "tools/test-stray.ps1", "transports/t/test/deep/test-deeper.ps1", "transports/t/test-beside.ps1", "test/lib/test-lib.ps1", "test/test-notes.txt")) {
         $p = Join-Path $plant $rel
         New-Item -ItemType Directory -Path (Split-Path -Parent $p) -Force | Out-Null
         [System.IO.File]::WriteAllText($p, "# planted")
     }
     $plantedSuites = @(Get-HordeSuiteFiles -Root $plant | ForEach-Object { $_.Name })
-    Check (($plantedSuites -join ",") -ceq "test-a.ps1,test-b.ps1,test-c.ps1,test-d.ps1") ("CONTROL: in a planted tree the gate list is exactly the four suite folders' files (" + ($plantedSuites -join ",") + ")")
+    Check (($plantedSuites -join ",") -ceq "test-a.ps1,test-b.ps1,test-c.ps1,test-d.ps1,test-e.ps1") ("CONTROL: in a planted tree the gate list is exactly the five suite folders' test-*.ps1 files, a messenger's fixture not among them (" + ($plantedSuites -join ",") + ")")
     $plantedStray = @(Get-HordeStraySuiteFiles -Root $plant)
     Check (($plantedStray -join ",") -ceq "test/lib/test-lib.ps1,tools/test-stray.ps1,transports/t/test-beside.ps1,transports/t/test/deep/test-deeper.ps1") ("CONTROL: and the stray check names the four planted outside it, and not the fixture (" + ($plantedStray -join ",") + ")")
 } finally { if (Test-Path -LiteralPath $plant) { Remove-Item -LiteralPath $plant -Recurse -Force } }

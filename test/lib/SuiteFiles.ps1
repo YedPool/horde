@@ -12,12 +12,32 @@
 #   hosts/*/test/test-*.ps1         a host's own suites (D12)
 #   transports/*/test/test-*.ps1    a transport's own suites (remote design, decision 10)
 #   agents/*/test/test-*.ps1        an agent harness's own suites (engines plan, E1)
+#   messengers/*/test/test-*.ps1    a messenger's own suites (remote plan R21; review of #102). Its
+#                                   test/Fixture.ps1 is not a suite: only test-*.ps1 is run.
 #
 # NOT SUITES: anything under test/fixtures/. Those files are inputs that suites read or run as
 # fixtures - test/fixtures/ledger holds test-*.ps1 files on purpose, as the trees a ledger cites.
 
-$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")
+$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")
 $script:HordeSuiteDataFolder = "test/fixtures"
+
+# MACHINE-BOUND SUITES: the gate runs them, but only on a machine with the founder's interactive logon,
+# never on the remote test box (CONTRIBUTING 15, rule 5). Each is here because it was measured failing
+# there and passing here, or says so in its own header. Listed once, in the repository (issue #89).
+# Today only test/test-suite.ps1 reads it; the batch scripts and the remote gate do not yet.
+$script:HordeMachineBoundSuites = [ordered]@{
+    "transports/local/test/test-local.ps1" = "the local pipe and integrity levels; its Administrators-owned case runs only from an elevated token launched from PowerShell, and the suite exits 3 when it skips that case (issue #89)"
+    "transports/local/test/test-node-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "transports/local/test/test-hub-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "transports/ssh/test/test-sshd-local.ps1" = "this machine's own server for the transport, run as the suite's own child on 127.0.0.1 (remote plan R16)"
+    "transports/local/test/test-hub-act-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "test/test-transport-conformance.ps1" = "its [local] cases: on the always-on box its 27 [local] checks fail on main 54d97b3 exactly as on #85, and pass here (2026-10-05)"
+}
+
+function Get-HordeMachineBoundSuites {
+    # The machine-bound suites, as { path; why }, paths relative to the repository with forward slashes.
+    return @($script:HordeMachineBoundSuites.Keys | ForEach-Object { [pscustomobject]@{ path = $_; why = $script:HordeMachineBoundSuites[$_] } })
+}
 
 function Get-HordeSuiteFiles {
     # Every suite the gate runs, as FileInfo.

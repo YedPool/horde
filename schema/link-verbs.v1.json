@@ -2,11 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "horde/schema/link-verbs.v1",
   "title": "link-verbs v1",
-  "description": "Every verb of the Horde link protocol, version 1: the complete list of what one end may ask of the other. It is never a remote shell: there is no verb that takes a command line, a script, a program path, an environment map or a file path, and none that returns a transcript, tool output or any other raw worker context; remote/Contract.ps1 refuses a table that has one, and test/test-link-contracts.ps1 proves it refuses each. THE TABLE is x-horde-verbs, one row per verb: its name, which way it travels, its effect class (read, write, spawn or kill, lifecycle H13, and drive: input typed into a running session, which the node's permission ceiling gates exactly like spawn, plan step R9), since (the protocol version that introduced it), its args (a definition below, always a closed object) and its result (the value a KNOWN answer carries; a definition below or a whole schema by name). The table lives under an x- key because core/Schema.ps1 cannot say 'these arguments go with that verb'; remote/Contract.ps1 reads it, checks every row against definitions/verb-row, and checks each verb's arguments and result. EVERY STRING AND EVERY ARRAY NAMES ITS CAP with x-horde-cap, a key of schema/link-frame.v1's x-horde-limits: core/Schema.ps1 has no size keywords, so the caps are data here and remote/Protocol.ps1 enforces them (step R2). A result string may use nameBytes, reasonBytes or summaryBytes, never textBytes: the most one string in a result can hold is a distilled summary. A nested answer (answer-* below) follows core/tristate as schema/link-frame.v1's answer does: value present exactly when state is known, which remote/Contract.ps1 checks. DEFERRED, each to the step that builds it, because its shape rests on work not yet merged: sessions.list and session.get (the node projection, plan step R12 after step 2.2), binding.get (the binding record, R10), observe.since and metrics.since and the evt frames they stream (R12, R15), session.park and session.route (lifecycle H16, R19). Each is added to this file by its step, and passes the same checks. A change is a new file, link-verbs.v2, once any node could hold this one; until the first node ships (plan step R12) v1 may still be edited.",
+  "description": "Every verb of the Horde link protocol, version 1: the complete list of what one end may ask of the other. It is never a remote shell: there is no verb that takes a command line, a script, a program path, an environment map or a file path, and none that returns a transcript, tool output or any other raw worker context; remote/Contract.ps1 refuses a table that has one, and test/test-link-contracts.ps1 proves it refuses each. THE TABLE is x-horde-verbs, one row per verb: its name, which way it travels, its effect class (read, write, spawn or kill, lifecycle H13, and drive: input typed into a running session, which the node's permission ceiling gates exactly like spawn, plan step R9), since (the protocol version that introduced it), its args (a definition below, always a closed object) and its result (the value a KNOWN answer carries; a definition below or a whole schema by name). The table lives under an x- key because core/Schema.ps1 cannot say 'these arguments go with that verb'; remote/Contract.ps1 reads it, checks every row against definitions/verb-row, and checks each verb's arguments and result. EVERY STRING AND EVERY ARRAY NAMES ITS CAP with x-horde-cap, a key of schema/link-frame.v1's x-horde-limits: core/Schema.ps1 has no size keywords, so the caps are data here and remote/Protocol.ps1 enforces them (step R2). A result string may use nameBytes, reasonBytes or summaryBytes, never textBytes: the most one string in a result can hold is a distilled summary. A nested answer (answer-* below) follows core/tristate as schema/link-frame.v1's answer does: value present exactly when state is known, which remote/Contract.ps1 checks. DEFERRED, each to the step that builds it, because its shape rests on work not yet merged: binding.get (the binding record, R10), observe.since and metrics.since and the evt frames they stream (R12, R15), session.park and session.route (lifecycle H16, R19). Each is added to this file by its step, and passes the same checks. mail.next and mail.receipt were added by plan step R21 (re-scoped 2026-10-05): the reverse path of cross-PC messaging, an orc on a node writing to an orc on the hub's machine, is a PULL - the message waits in the node's outbox, the hub takes it with mail.next and reports with mail.receipt - so every drive still travels hub to node and a node never asks the hub to act. A node push is a later slice. sessions.list and session.get were added by plan step R12a: a fixed summary of each session from the node's own projection, each field a tristate answer, and the pid, procStart and project directory carrying their namespace (R11). The summary is a curated set on purpose: no transcript path, resume command or other raw worker context crosses. A change is a new file, link-verbs.v2, once a node on ANOTHER machine could hold this one - the first enrolment, plan step R17. Until then every node is the hub's own checkout serving its own machine (R12a serves the local link only), hub and node always update together, and v1 may still be edited: R12b adds observe.since and binding.get here, and the session summary may still grow. From R17 on, any change is v2.",
   "x-horde-protocol": 1,
   "x-horde-verbs": [
     { "name": "node.info",        "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/no-args",            "result": "node-manifest.v1" },
     { "name": "request.status",   "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/request-status-args", "result": "#/definitions/request-entry" },
+    { "name": "sessions.list",    "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/no-args",            "result": "#/definitions/session-list" },
+    { "name": "session.get",      "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/session-get-args",   "result": "#/definitions/session-summary" },
     { "name": "handoff.get",      "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/handoff-get-args",    "result": "#/definitions/handoff" },
     { "name": "clone.status",     "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/clone-status-args",   "result": "#/definitions/clone-status" },
     { "name": "delivery.status",  "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/delivery-status-args", "result": "#/definitions/delivery" },
@@ -17,7 +19,9 @@
     { "name": "worktree.create",  "direction": "hub-to-node", "effect": "write", "since": 1, "args": "#/definitions/worktree-create-args", "result": "#/definitions/request-entry" },
     { "name": "worktree.remove",  "direction": "hub-to-node", "effect": "kill",  "since": 1, "args": "#/definitions/worktree-remove-args", "result": "#/definitions/request-entry" },
     { "name": "alert.raise",      "direction": "node-to-hub", "effect": "write", "since": 1, "args": "#/definitions/alert-raise-args",    "result": "#/definitions/alert-receipt" },
-    { "name": "unowned.report",   "direction": "node-to-hub", "effect": "read",  "since": 1, "args": "#/definitions/unowned-report-args", "result": "#/definitions/report-receipt" }
+    { "name": "unowned.report",   "direction": "node-to-hub", "effect": "read",  "since": 1, "args": "#/definitions/unowned-report-args", "result": "#/definitions/report-receipt" },
+    { "name": "mail.next",        "direction": "hub-to-node", "effect": "read",  "since": 1, "args": "#/definitions/mail-next-args",      "result": "#/definitions/mail-next" },
+    { "name": "mail.receipt",     "direction": "hub-to-node", "effect": "write", "since": 1, "args": "#/definitions/mail-receipt-args",   "result": "#/definitions/mail-receipt-ack" }
   ],
   "definitions": {
     "verb-row": {
@@ -97,9 +101,9 @@
     },
     "session-spawn-args": {
       "type": "object",
-      "required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt", "closeOn"],
+      "required": ["label", "role", "runId", "profile", "repoId", "prompt", "closeOn"],
       "additionalProperties": false,
-      "description": "Everything the node needs to start one session, and nothing it could run: the program, its arguments and its environment come from the node's own profile, chosen here by name (engine-settings 2.3). prompt carries text or handoffRef, not both; the node refuses anything else (step R19), because this validator cannot say 'exactly one'.",
+      "description": "Everything the node needs to start one session, and nothing it could run: the program, its arguments and its environment come from the node's own profile, chosen here by name (engine-settings 2.3). prompt carries text or handoffRef, not both; the node refuses anything else (step R19), because this validator cannot say 'exactly one'. worktree is optional (decision of 2026-10-05): without one the session runs in the node's registered clone of repoId. title is the run's title, which the node joins to the label to name the session at birth, capped (decision 4). permission is the Horde level asked for (core/permission-levels.json); the node compiles it into its spawn layer and refuses it above its own ceiling, never lowering it (remote plan R9). No argument can carry the ceiling: it is the node's own setting.",
       "properties": {
         "label": { "$ref": "#/definitions/label" },
         "role": { "$ref": "#/definitions/role" },
@@ -125,6 +129,8 @@
           }
         },
         "host": { "$ref": "#/definitions/token" },
+        "title": { "type": "string", "pattern": "^[\\x20-\\x7E]{1,200}$", "x-horde-cap": "nameBytes" },
+        "permission": { "type": "string", "enum": ["plan", "ask", "edits", "bypass"] },
         "closeOn": { "type": "string", "enum": ["proof", "routed"] }
       }
     },
@@ -138,10 +144,11 @@
     },
     "session-deliver-args": {
       "type": "object", "required": ["messageId", "sessionId", "from", "body", "ttlSeconds"], "additionalProperties": false,
-      "description": "A message typed into a running session: effect class drive, because the session acts on it with whatever permissions it runs under, a prompts-bypassed one included. sessionId may name ONLY a session this hub spawned on this node - hub-owned in the session record; the node refuses a deliver to any other session, never forwarding it (steps R19 and R21), and R9's permission ceiling gates drive exactly as it gates spawn. remote/Contract.ps1 pins the class, so a table cannot reclass it write.",
+      "description": "A message handed to a running session: effect class drive, because the session acts on it with whatever permissions it runs under, a prompts-bypassed one included. The node hands it over through its messenger (step R21: today the fleet's mail, where the body never goes near the input box and only a one-line wake notice is typed), never by typing the body. THE TARGET may be ONLY a session this hub spawned on this node, or one whose label the node's own remote.deliverTo lists; that key is read only from the node's own configuration, never from the link, and its default is no label. The node refuses a deliver to any other session, never forwarding it. Until step R9 lands, that rule is the whole gate; R9 adds the node's permission ceiling on top, gating drive exactly as it gates spawn, so an opted-in label above the ceiling is refused too. remote/Contract.ps1 pins the class, so a table cannot reclass it write. label is the target's stable identity: sessionId is where the hub last saw it, and when that id is no longer live on the node (a compact or a /clear gives the same session a new id) the node follows the label to the one live session wearing it, or refuses; never a pane. THE GATE IS APPLIED TO THE RESOLVED SESSION, the one the id or the label led to, never to the session the hub meant. Hub-spawned status passes to a new session id only through the process (pid and procStart, in the R11 namespace), never through a label: labels are not unique, and a session the hub never spawned can wear the label of one that has ended. a live sessionId whose label differs from label is refused, never retargeted to the session that wears it. remote/Messaging.ps1's Resolve-HordeDeliverTarget decides all of this. ttlSeconds is at most 604800 (7 days, the replay window), which remote/Contract.ps1 checks because this validator has no maximum.",
       "properties": {
         "messageId": { "$ref": "#/definitions/uuid" },
         "sessionId": { "$ref": "#/definitions/session-id" },
+        "label": { "$ref": "#/definitions/label" },
         "from": {
           "type": "object", "required": ["deviceId", "sessionId"], "additionalProperties": false,
           "properties": {
@@ -213,6 +220,65 @@
       }
     },
 
+    "session-get-args": {
+      "type": "object", "required": ["sessionId"], "additionalProperties": false,
+      "description": "agent names the harness when two harnesses hold the same id: the projection keeps one record per (harness, id), so the id alone can name two sessions.",
+      "properties": { "sessionId": { "$ref": "#/definitions/session-id" }, "agent": { "$ref": "#/definitions/token" } }
+    },
+    "answer-bool": {
+      "type": "object", "required": ["state", "reason"], "additionalProperties": false,
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "boolean" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-time": {
+      "type": "object", "required": ["state", "reason"], "additionalProperties": false,
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "$ref": "#/definitions/time" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-pid": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A process id, placed: ns says which device's table and which space it belongs to (R11), so the hub never looks it up in its own.",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "integer", "minimum": 1 }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-proc-start": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A process's start, in file-time ticks, placed as the pid is (R11).",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "integer", "minimum": 0 }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "answer-place": {
+      "type": "object", "required": ["state", "reason", "ns"], "additionalProperties": false,
+      "description": "A directory on the node, placed (R11): displayed by the hub, never opened there.",
+      "properties": { "state": { "type": "string", "enum": ["known", "absent", "unknown"] }, "value": { "type": "string", "pattern": "^[\\x20-\\x7E]{1,255}$", "x-horde-cap": "nameBytes" }, "ns": { "$ref": "#/definitions/ns" }, "reason": { "type": "string", "x-horde-cap": "reasonBytes" }, "observedAt": { "$ref": "#/definitions/time" } }
+    },
+    "session-summary": {
+      "type": "object",
+      "required": ["sessionId", "agent", "fleetSessionId", "role", "label", "parent", "liveStatus", "workState", "startedAt", "lastActivity", "retired", "pid", "procStart", "projectCwd"],
+      "additionalProperties": false,
+      "description": "One session as the node's own projection sees it (plan step R12a). A fixed, curated set of fields, each a tristate answer: an unknown is carried with its reason, never dropped and never guessed. The session is (agent, sessionId): the same id under two harnesses is two sessions (core/Projection.ps1). fleetSessionId, startedAt and retired are what the hub's mirror (R13) keys and ages by.",
+      "properties": {
+        "sessionId": { "$ref": "#/definitions/session-id" },
+        "agent": { "$ref": "#/definitions/answer-token" },
+        "fleetSessionId": { "$ref": "#/definitions/answer-token" },
+        "role": { "$ref": "#/definitions/answer-token" },
+        "label": { "$ref": "#/definitions/answer-token" },
+        "parent": { "$ref": "#/definitions/answer-token" },
+        "liveStatus": { "$ref": "#/definitions/answer-token" },
+        "workState": { "$ref": "#/definitions/answer-token" },
+        "startedAt": { "$ref": "#/definitions/answer-time" },
+        "lastActivity": { "$ref": "#/definitions/answer-time" },
+        "retired": { "$ref": "#/definitions/answer-bool" },
+        "pid": { "$ref": "#/definitions/answer-pid" },
+        "procStart": { "$ref": "#/definitions/answer-proc-start" },
+        "projectCwd": { "$ref": "#/definitions/answer-place" }
+      }
+    },
+    "session-list": {
+      "type": "object", "required": ["complete", "sessions", "observedAt"], "additionalProperties": false,
+      "description": "Every session the node's projection sees. complete is known true only when every store the projection reads was readable; otherwise it is known false and its reason names the stores that were not, so a session missing from a partial list is never read as gone.",
+      "properties": {
+        "complete": { "$ref": "#/definitions/answer-bool" },
+        "sessions": { "type": "array", "x-horde-cap": "listItems", "items": { "$ref": "#/definitions/session-summary" } },
+        "observedAt": { "$ref": "#/definitions/time" }
+      }
+    },
     "request-entry": {
       "type": "object", "required": ["requestId", "verb", "state", "receivedAt"], "additionalProperties": false,
       "description": "The node's journal entry for one request (plan step R3). A resend of the same requestId returns it and acts nothing.",
@@ -224,6 +290,15 @@
         "receivedAt": { "$ref": "#/definitions/time" },
         "doneAt": { "$ref": "#/definitions/time" },
         "sessionId": { "$ref": "#/definitions/session-id" },
+        "expect": {
+          "type": "object", "additionalProperties": false, "required": ["ns", "pid", "procStart"],
+          "description": "For a session.spawn that is done: the started process as the node proved it, placed by its namespace (R11) - exactly what a later session.close carries back as its expect.",
+          "properties": {
+            "ns": { "$ref": "#/definitions/ns" },
+            "pid": { "type": "integer", "minimum": 1 },
+            "procStart": { "type": "string", "pattern": "^[0-9]{1,20}$", "x-horde-cap": "nameBytes" }
+          }
+        },
         "reason": { "$ref": "#/definitions/reason" }
       }
     },
@@ -262,6 +337,63 @@
         "stage": { "type": "string", "enum": ["queued", "accepted", "handed-over", "seen", "expired", "held"] },
         "at": { "$ref": "#/definitions/time" },
         "reason": { "$ref": "#/definitions/reason" }
+      }
+    },
+    "mail-next-args": {
+      "type": "object", "additionalProperties": false, "properties": {},
+      "description": "mail.next takes nothing: the node answers with the oldest message in its outbox that no receipt has settled yet, so there is no filter to trust."
+    },
+    "mail-next": {
+      "type": "object", "required": ["pending"], "additionalProperties": false,
+      "description": "How many outbound messages wait on this node, and the oldest of them when there is one. A message stays in the outbox, and mail.next keeps returning it, until a mail.receipt settles it, so a link dropped between the two loses nothing; the hub's own message journal, keyed by messageId, keeps the second sight of it from delivering twice. SETTLED is every stage but queued: accepted, handed-over, seen, expired, held and refused. So held settles too - the sender sees held, nothing retries it (a new message is the retry), and it never blocks the queue behind it; pending counts only unsettled messages. remote/Messaging.ps1's Select-HordeMailNext decides it.",
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0 },
+        "mail": { "$ref": "#/definitions/outbound-mail" }
+      }
+    },
+    "outbound-mail": {
+      "type": "object", "required": ["messageId", "from", "to", "body", "createdAt", "ttlSeconds"], "additionalProperties": false,
+      "description": "One message an orc on this node wrote to an orc elsewhere. to names the target by its stable identity, a label, and optionally the device it is on (the hub's own device when left out); never a session id the sender cannot know, and never a pane. body crosses in a RESULT, so it names summaryBytes, which is the same 64 KiB textBytes gives a deliver body. THE SENDER IS THE LINK'S, NOT THE PAYLOAD'S: from.deviceId must be the link peer's enrolled device, checked by the hub against the device the link authenticated (remote/Messaging.ps1's Test-HordeMailSender), and mail claiming any other device is refused. Mail whose to.deviceId names a third device is delivered only through that device's own node and its gate, never by the hub's own node. ttlSeconds is at most 604800, as for a deliver.",
+      "properties": {
+        "messageId": { "$ref": "#/definitions/uuid" },
+        "from": {
+          "type": "object", "required": ["deviceId", "sessionId"], "additionalProperties": false,
+          "properties": {
+            "deviceId": { "$ref": "#/definitions/uuid" },
+            "sessionId": { "$ref": "#/definitions/session-id" },
+            "label": { "$ref": "#/definitions/label" }
+          }
+        },
+        "to": {
+          "type": "object", "required": ["label"], "additionalProperties": false,
+          "properties": {
+            "label": { "$ref": "#/definitions/label" },
+            "deviceId": { "$ref": "#/definitions/uuid" }
+          }
+        },
+        "body": { "type": "string", "pattern": "\\S", "x-horde-cap": "summaryBytes" },
+        "createdAt": { "$ref": "#/definitions/time" },
+        "ttlSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "receipt-stage": { "type": "string", "enum": ["accepted", "handed-over", "seen", "expired", "held", "refused"], "description": "A mail receipt's stage: delivery's stages less queued, plus refused." },
+    "mail-receipt-args": {
+      "type": "object", "required": ["messageId", "stage", "at"], "additionalProperties": false,
+      "description": "Where the hub's delivery of one outbound message stands, written to that message's outbox record and nowhere else, so the sender on the node learns whether it was taken. The stages are delivery's, less queued (the node's own stage before the hub took it), plus refused (the hub would not deliver it: no live session wears the label, or the target's gate said no; the reason says which). seen is TAKEN: the receiving session's own hook confirmed it in that session's transcript. Stages only move forward: queued, then accepted, then handed-over, then seen; seen, expired, held and refused are final, and a final stage is never overwritten. A receipt that would move a record backwards, or off a final stage, records nothing and its ack carries the recorded stage; a replayed receipt, under any requestId, is answered the same way. a receipt for a messageId this node never returned from mail.next is refused, with the reason. remote/Messaging.ps1's Resolve-HordeMailReceipt decides all of this.",
+      "properties": {
+        "messageId": { "$ref": "#/definitions/uuid" },
+        "stage": { "$ref": "#/definitions/receipt-stage" },
+        "at": { "$ref": "#/definitions/time" },
+        "reason": { "$ref": "#/definitions/reason" }
+      }
+    },
+    "mail-receipt-ack": {
+      "type": "object", "required": ["messageId", "stage", "recordedAt"], "additionalProperties": false,
+      "description": "The node's answer to a receipt. Its stage is the record's, after this receipt: the stage asked for when the receipt moved the record forward, and the stage already recorded when it did not. recordedAt is when the record last changed.",
+      "properties": {
+        "messageId": { "$ref": "#/definitions/uuid" },
+        "stage": { "$ref": "#/definitions/receipt-stage" },
+        "recordedAt": { "$ref": "#/definitions/time" }
       }
     },
     "alert-receipt": {

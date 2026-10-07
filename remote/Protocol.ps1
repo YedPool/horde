@@ -294,6 +294,7 @@ function ConvertTo-HordeFrameBytes {
     if ($null -eq $Contract) { $Contract = Get-HordeLinkContract }
     $cap = Get-HordeFrameCap -Contract $Contract -FrameBytes $FrameBytes
     $found = @(Test-HordeLinkFrame -Frame $Frame -Contract $Contract)
+    if ($found.Count -eq 0) { $found = @(Test-HordeLinkFrameRules -Frame $Frame) }
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Reason ("not sent: " + ($found -join "; "))) }
     # Written before the caps are measured: a NUL or half a surrogate pair cannot be written, and the
     # caps measure strings as written, so the refusal is a bad-frame answer here, never a throw.
@@ -358,6 +359,7 @@ function ConvertFrom-HordeFrameBytes {
         return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ("the frame is not in the link's one spelling: it differs from Horde's encoding of it at offset " + $at))
     }
     $found = @(Test-HordeLinkFrame -Frame $frame -Contract $Contract)
+    if ($found.Count -eq 0) { $found = @(Test-HordeLinkFrameRules -Frame $frame) }
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "bad-frame" -Bom $bom -Reason ($found -join "; ")) }
     $found = @(Test-HordeProtocolLimits -Frame $frame -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeWireResult -Ok $false -Code "oversized" -Bom $bom -Reason ($found -join "; ")) }

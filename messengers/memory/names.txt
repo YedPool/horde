@@ -1,0 +1,11 @@
+# What identifies the in-process test messenger, memory. tools/HostNames.ps1 fails
+# test/test-host-names.ps1 when any of these appears in a file outside messengers/memory/ (and outside
+# the prose under planning/, by rule) that messengers/memory/allowlist.txt does not list, exactly as
+# often as it lists (CONTRIBUTING rule 14; remote plan step R21, slice 3). Each is matched as a
+# case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this messenger
+MemoryMessenger | the stem of every function and variable of this messenger, its test helpers included, the one thing nothing else names
+#
+# CONSIDERED AND LEFT OUT:
+#   memory - an ordinary word, meaning RAM or recall in many files, and also the in-process transport's folder.

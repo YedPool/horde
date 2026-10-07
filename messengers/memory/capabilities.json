@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "messenger": "memory",
+  "capabilities": {
+    "body.untyped": {
+      "support": "yes",
+      "evidence": "Messages are records in a table of this process; nothing is ever typed. test/test-messenger-conformance.ps1 posts and observes no typed body."
+    },
+    "idempotent.post": {
+      "support": "yes",
+      "evidence": "A second post of one messageId returns the recorded stage and makes no second record, in test/test-messenger-conformance.ps1 and test/test-messenger-port.ps1."
+    },
+    "receipt.receiver": {
+      "support": "declined",
+      "evidence": "An in-process store for tests: there is no receiving session, and seen is set by a test helper playing one. Declined so that Resolve-HordeNodeMessenger, which requires receipt.receiver, never picks it (test/test-messenger-port.ps1)."
+    },
+    "wake": {
+      "support": "no",
+      "evidence": "There is no session to wake; the store counts no wake (test/test-messenger-port.ps1)."
+    }
+  }
+}

@@ -42,10 +42,45 @@
            Find = '"token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",'
            Replace = '"token": { "type": "string", "pattern": "^.{1,64}$",' }
         @{ Name = "spawn-close-on-optional"
-           Find = '"required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt", "closeOn"],'
-           Replace = '"required": ["label", "role", "runId", "profile", "repoId", "worktree", "prompt"],' }
+           Find = '"required": ["label", "role", "runId", "profile", "repoId", "prompt", "closeOn"],'
+           Replace = '"required": ["label", "role", "runId", "profile", "repoId", "prompt"],' }
         @{ Name = "clone-status-branch-bare"
            Find = '"branch": { "$ref": "#/definitions/answer-token" },'
            Replace = '"branch": { "$ref": "#/definitions/token" },' }
+        # Messaging over the link (plan step R21, 2026-10-05).
+        @{ Name = "mail-next-classed-drive"
+           Find = '{ "name": "mail.next",        "direction": "hub-to-node", "effect": "read",'
+           Replace = '{ "name": "mail.next",        "direction": "hub-to-node", "effect": "drive",' }
+        @{ Name = "mail-receipt-classed-read"
+           Find = '{ "name": "mail.receipt",     "direction": "hub-to-node", "effect": "write",'
+           Replace = '{ "name": "mail.receipt",     "direction": "hub-to-node", "effect": "read",' }
+        @{ Name = "outbound-mail-body-raised-to-text"
+           Find = '"body": { "type": "string", "pattern": "\\S", "x-horde-cap": "summaryBytes" },'
+           Replace = '"body": { "type": "string", "pattern": "\\S", "x-horde-cap": "textBytes" },' }
+        @{ Name = "outbound-mail-target-label-optional"
+           Find = '"type": "object", "required": ["label"], "additionalProperties": false,'
+           Replace = '"type": "object", "required": [], "additionalProperties": false,' }
+        @{ Name = "mail-next-pending-optional"
+           Find = '"type": "object", "required": ["pending"], "additionalProperties": false,'
+           Replace = '"type": "object", "required": [], "additionalProperties": false,' }
+        @{ Name = "receipt-stage-queued-allowed"
+           Find = '"receipt-stage": { "type": "string", "enum": ["accepted", "handed-over", "seen", "expired", "held", "refused"],'
+           Replace = '"receipt-stage": { "type": "string", "enum": ["queued", "accepted", "handed-over", "seen", "expired", "held", "refused"],' }
+        @{ Name = "receipt-ack-time-optional"
+           Find = '"type": "object", "required": ["messageId", "stage", "recordedAt"], "additionalProperties": false,'
+           Replace = '"type": "object", "required": ["messageId", "stage"], "additionalProperties": false,' }
+        # Review of PR #97: the rules the contract states, each pinned by a Contains check.
+        @{ Name = "deliver-gate-on-resolved-unstated"
+           Find = 'THE GATE IS APPLIED TO THE RESOLVED SESSION, the one'
+           Replace = 'The gate is applied, the one' }
+        @{ Name = "receipt-forward-only-unstated"
+           Find = 'Stages only move forward:'
+           Replace = 'Stages move:' }
+        @{ Name = "held-settles-unstated"
+           Find = 'So held settles too'
+           Replace = 'So held is retried' }
+        @{ Name = "sender-device-unstated"
+           Find = "from.deviceId must be the link peer's enrolled device"
+           Replace = 'from.deviceId names the sending device' }
     )
 }

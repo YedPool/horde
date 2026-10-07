@@ -95,6 +95,16 @@ Write-Host "--- deciding whether panes look isolated ---" -ForegroundColor Cyan
 Check ((Test-HordeIsolationPanes -Panes @()) -like "*unknown, not empty*") "zero panes is refused as unknown, never treated as an empty terminal"
 Check ($null -eq (Test-HordeIsolationPanes -Panes @($panes[0], $panes[1]))) "panes in one window look like a fresh instance"
 Check ((Test-HordeIsolationPanes -Panes $panes) -like "*looks like the user's terminal*") "panes across two windows are refused as the user's terminal"
+
+Write-Host ""
+Write-Host "--- a pane's environment is proven from inside the pane (issue #95) ---" -ForegroundColor Cyan
+$want = @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg" }
+Check ($null -eq (Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg"; PATH = "x" } -Expect $want)) "CONTROL: a dump holding every expected variable, exactly, proves the pane's environment"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store" } -Expect $want) -like "*CFG_DIR is not set inside the pane*") "a variable missing inside the pane is refused, naming it - the 2026-10-05 failure"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\Users\real\cfg" } -Expect $want) -like "*CFG_DIR is set inside the pane to another value*") "a variable with another value inside the pane is refused"
+Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "c:\t\cfg" } -Expect $want) -like "*another value*") "values are compared exactly"
+Check ((Test-HordePaneEnvironment -Dump $null -Expect $want) -like "*unknown, not proven*") "no dump at all is unknown, never a pass"
+Check ((Test-HordePaneEnvironment -Dump @{ A = "1" } -Expect @{}) -like "*nothing was proven*") "expecting nothing proves nothing"
 $noWin = @([pscustomobject]@{ pane_id = 1 }, [pscustomobject]@{ pane_id = 2 })
 Check ((Test-HordeIsolationPanes -Panes $noWin) -like "*no window_id*") "a pane with no window_id is refused rather than counted as one window"
 
@@ -458,8 +468,10 @@ Check (-not ($harnessCode -match '& wezterm cli ')) "no other line calls the wez
 # by hand with a cli argument list. Starting a gui with `start` is allowed - the harness owns and
 # reaps it. Comments and strings are not commands, so they are not flagged.
 function Find-HordeRawWeztermCall {
-    # -> one row per call that bypasses the helper: { line; text }. $Text is a whole script.
-    param([string]$Text)
+    # -> one row per call that bypasses the helpers: { line; text }. $Text is a whole script. The two
+    # helpers are Isolation.ps1's Invoke-HordeWeztermCli and hosts/wezterm/Act.ps1's Invoke-HordeWeztermAct,
+    # which refuses any call that does not name its terminal (review of PR #96).
+    param([string]$Text, [string[]]$Helpers = @("Invoke-HordeWeztermCli", "Invoke-HordeWeztermAct"))
     $tok = $null; $err = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tok, [ref]$err)
     $rows = @()
@@ -468,10 +480,21 @@ function Find-HordeRawWeztermCall {
         if (-not $name -or (Split-Path -Leaf $name) -notmatch '^wezterm(\.exe)?$') { continue }
         $p = $c.Parent; $inHelper = $false
         while ($p) {
-            if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $p.Name -eq "Invoke-HordeWeztermCli") { $inHelper = $true; break }
+            if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Helpers -contains $p.Name) { $inHelper = $true; break }
             $p = $p.Parent
         }
         if (-not $inHelper) { $rows += [pscustomobject]@{ line = $c.Extent.StartLineNumber; text = $c.Extent.Text } }
+    }
+    # A ProcessStartInfo whose program is a variable naming the terminal's command ($script:HordeWeztermActExe):
+    # its arguments are built at run time, so it is a call wherever it stands outside a helper.
+    foreach ($a in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                                              $n.Left.Extent.Text -match '\.FileName$' -and $n.Right.Extent.Text -match '(?i)^\$\S*wezterm\S*$' }, $true))) {
+        $p = $a.Parent; $inHelper = $false
+        while ($p) {
+            if ($p -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Helpers -contains $p.Name) { $inHelper = $true; break }
+            $p = $p.Parent
+        }
+        if (-not $inHelper) { $rows += [pscustomobject]@{ line = $a.Extent.StartLineNumber; text = $a.Extent.Text } }
     }
     # A ProcessStartInfo for wezterm whose arguments reach the CLI.
     foreach ($a in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -497,6 +520,11 @@ Check (@(Find-HordeRawWeztermCall -Text $plantedRouted).Count -eq 0) "CONTROL: t
 Check (@(Find-HordeRawWeztermCall -Text "`$psi.FileName = `"wezterm`"`n`$psi.Arguments = `"cli list`"`n").Count -eq 1) "CONTROL: a hand-started process running the CLI is found"
 Check (@(Find-HordeRawWeztermCall -Text "`$psi.FileName = `"wezterm`"`n`$psi.Arguments = `"--skip-config start --always-new-process`"`n").Count -eq 0) "CONTROL: a hand-started gui (``start``) is not"
 Check (@(Find-HordeRawWeztermCall -Text "# & wezterm cli list`nWrite-Host `"& wezterm cli list`"`n").Count -eq 0) "CONTROL: a comment or a string naming the call is not"
+$plantedVar = "function Other {`n    `$psi = New-Object System.Diagnostics.ProcessStartInfo`n    `$psi.FileName = `$script:HordeWeztermActExe`n}`n"
+Check (@(Find-HordeRawWeztermCall -Text $plantedVar).Count -eq 1) "CONTROL: a process started from the terminal's command variable outside a helper is found (review of PR #96)"
+Check (@(Find-HordeRawWeztermCall -Text ($plantedVar -replace "function Other", "function Invoke-HordeWeztermAct")).Count -eq 0) "CONTROL: the same inside Invoke-HordeWeztermAct, which refuses an unnamed terminal, is not"
+$actText = [System.IO.File]::ReadAllText((Join-Path $root "hosts\wezterm\Act.ps1"))
+Check (@(Find-HordeRawWeztermCall -Text $actText -Helpers @("Invoke-HordeWeztermCli")).Count -eq 1) "CONTROL: the scan sees hosts/wezterm/Act.ps1's one call: with its helper not exempt, it is found"
 
 $allScripts = @(Get-ChildItem -Path $root -Recurse -Include *.ps1 -File | Where-Object { $_.FullName -notmatch '\\\.git\\' })
 $rawAnywhere = @()
@@ -508,7 +536,7 @@ foreach ($f in $allScripts) {
 foreach ($x in $rawAnywhere) { Write-Host ("         raw: " + $x) -ForegroundColor Red }
 Check ($allScripts.Count -gt 20) ("CONTROL: the repository scan reads real scripts ({0})" -f $allScripts.Count)
 Check (@($allScripts | Where-Object { $_.FullName -eq $harnessPath }).Count -eq 1) "CONTROL: and the harness, whose one raw call is inside the helper, is among them"
-Check ($rawAnywhere.Count -eq 0) "no script anywhere in the repository calls the wezterm CLI except through Invoke-HordeWeztermCli"
+Check ($rawAnywhere.Count -eq 0) "no script anywhere in the repository calls the wezterm CLI except through Invoke-HordeWeztermCli or Invoke-HordeWeztermAct"
 
 Write-Host ""
 Write-Host "--- every script that starts an instance also tears it down, by the real name ---" -ForegroundColor Cyan

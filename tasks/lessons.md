@@ -153,3 +153,19 @@ redirection. If it does not, prove isolation with the tool's own report of its c
 -G), with a control that shows the hazard, never by writing into the real profile. And refuse to
 start when a file the isolation depends on is missing, because a native tool's fallback is the
 user's own files.
+
+## A redirect dropped before the spawn is a redirect the pane never had
+
+On 2026-10-05 a probe set a harness's config redirect, a fake key and a closed endpoint, started an
+isolated terminal, then restored its own environment and only after that spawned the harness in panes.
+A pane gets the environment of the process that runs `cli spawn` (measured the same day, issue #95),
+so the panes ran on the user's own login: four real sessions opened Remote Control on the web and
+wrote into the real profile, and the probe even answered a folder-trust prompt - itself the sign it
+was on the real config. The first diagnosis blamed the terminal; a three-case measurement showed the
+probe had dropped its own redirect.
+
+**Rule:** keep every redirect set until the last pane is spawned, and before any harness starts in a
+pane, prove from inside a pane spawned the same way that the redirect is there
+(Assert-HordePaneEnvironment). A test never answers an interactive prompt it did not expect: an
+unexpected prompt fails the test. And a diagnosis of a dangerous failure is a claim to measure with a
+control, not the first explanation that fits.

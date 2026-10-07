@@ -4,7 +4,7 @@
   "measured": { "cliVersion": "2.1.287", "on": "2026-10-02" },
   "protocols": ["anthropic-messages"],
   "nativeProvider": "anthropic",
-  "sessionIdPattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+  "sessionIdPattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\z",
   "ownedEnv": [
     { "name": "ANTHROPIC_BASE_URL", "evidence": "the provider endpoint (engines P2); 117 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },
     { "name": "ANTHROPIC_AUTH_TOKEN", "evidence": "the provider token (engines P2); 70 occurrences in the installed 2.1.287 claude.exe, 2026-10-02" },

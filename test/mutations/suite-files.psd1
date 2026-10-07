@@ -6,11 +6,14 @@
     Suite  = "test\test-suite.ps1"
     Mutations = @(
         @{ Name = "transports-not-gated"
-           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")'
-           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "agents/*/test")' }
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "agents/*/test", "messengers/*/test")' }
         @{ Name = "agents-not-gated"
-           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")'
-           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test")' }
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "messengers/*/test")' }
+        @{ Name = "messengers-not-gated"
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")' }
         @{ Name = "fixtures-counted-as-stray"
            Find = 'if ($rel -like ".git/*" -or $rel -like ($script:HordeSuiteDataFolder + "/*")) { continue }'
            Replace = 'if ($rel -like ".git/*") { continue }' }
@@ -20,5 +23,8 @@
         @{ Name = "extension-not-exact"
            Find = 'foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "test-*.ps1" -File | Where-Object { $_.Extension -ceq ".ps1" })) { [void]$out.Add($f) }'
            Replace = 'foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter "test-*" -File)) { [void]$out.Add($f) }' }
+        @{ Name = "machine-bound-suite-renamed"
+           Find = '"transports/local/test/test-local.ps1" = '
+           Replace = '"transports/local/test/test-locals.ps1" = ' }
     )
 }

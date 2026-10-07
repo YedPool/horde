@@ -397,6 +397,7 @@ if ($Mode -eq "echo") {
     exit 0
 }
 if ($Mode -eq "fail") { $err.WriteLine("banner exchange: Connection to UNKNOWN port -1: Connection refused"); $err.WriteLine("second line"); exit 255 }
+if ($Mode -eq "fail-banner") { $err.WriteLine("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"); $err.WriteLine("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @"); exit 255 }
 if ($Mode -eq "frame-then-exit") { $b = [Text.Encoding]::ASCII.GetBytes("last`n"); $out.Write($b, 0, $b.Length); $out.Flush(); exit 0 }
 if ($Mode -eq "exit1") { $err.WriteLine("remote command failed"); exit 1 }
 if ($Mode -eq "hostile") {
@@ -438,6 +439,12 @@ if ($Mode -eq "flood") {
     $a = Receive-HordeLinkFrame -Link $l3 -TimeoutMs 20000
     Check ($a.state -ceq "unknown" -and "$($a.reason)" -like "*exit 255*" -and "$($a.reason)" -like "*Connection refused*" -and "$($a.reason)" -notlike "*second line*") ("exit 255 is unknown: a transport error, with stderr's first line and only that (" + $a.reason + ")")
     Close-HordeLink -Link $l3
+    # ssh.exe's changed-host-key warning opens with a border of '@': the reason is the first line that
+    # says something (remote plan R16, measured against a live Windows sshd).
+    $l3b = Stand-Link "fail-banner"
+    $a = Receive-HordeLinkFrame -Link $l3b -TimeoutMs 20000
+    Check ($a.state -ceq "unknown" -and "$($a.reason)" -like "*REMOTE HOST IDENTIFICATION HAS CHANGED*") ("a stderr that opens with a border line gives the line after it as the reason (" + $a.reason + ")")
+    Close-HordeLink -Link $l3b
 
     $l4 = Stand-Link "frame-then-exit"
     $a = Receive-HordeLinkFrame -Link $l4 -TimeoutMs 20000

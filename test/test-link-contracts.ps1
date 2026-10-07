@@ -57,10 +57,11 @@ $f = @(Test-HordeLinkFrameContract -Frame $realFrame)
 Check ($f.Count -eq 0) "schema/link-frame.v1 passes every static rule"; Show $f
 $f = @(Test-HordeLinkVerbTable -Verbs $realVerbs)
 Check ($f.Count -eq 0) "schema/link-verbs.v1 passes every static rule"; Show $f
-Check ($contract.rows.Count -eq 13) "the v1 table has the 13 verbs this step defines (the rest are named as deferred in its description)"
+Check ($contract.rows.Count -eq 17) "the v1 table has its 17 verbs: R1's 13, R12a's sessions.list and session.get, and R21's mail.next and mail.receipt (the rest are named as deferred in its description)"
+Check (@("sessions.list", "session.get" | Where-Object { $contract.rows.ContainsKey($_) -and "$($contract.rows[$_].effect)" -ceq "read" }).Count -eq 2) "sessions.list and session.get are read verbs"
 
 $golden = @(Get-ChildItem -LiteralPath (Join-Path $fx "frames") -Filter "*.json" | Sort-Object Name)
-Check ($golden.Count -eq 15) "there are 15 golden frames, one per kind and verb shape covered so far"
+Check ($golden.Count -eq 22) "there are 22 golden frames, one per kind and verb shape covered so far"
 foreach ($g in $golden) {
     $f = @(Test-HordeLinkFrame -Frame (Read-Data $g.FullName) -Contract $contract)
     Check ($f.Count -eq 0) ("golden frame " + $g.Name + " is valid"); Show $f
@@ -134,10 +135,14 @@ Refuses { param($v) Add-Row $v "alert.forward" "drive" "node-to-hub" } "never as
 # remote/Contract.ps1, so a table that reclasses it, or any verb, is refused.
 Check ("$($contract.rows['session.deliver'].effect)" -ceq "drive") "session.deliver is classed drive in the real table"
 Check (@($realVerbs.definitions.'verb-row'.properties.effect.enum) -ccontains "drive") "drive is an effect class of the verb-row definition"
-Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node")) "the deliver contract says it may target only a session this hub spawned on the node"
+Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("ONLY a session this hub spawned on this node, or one whose label the node's own remote.deliverTo lists")) "the deliver contract says it may target only a session this hub spawned on the node, or one the node's owner opted in by label"
+Check ("$($realVerbs.definitions.'session-deliver-args'.description)".Contains("never from the link")) "the deliver contract says the opt-in list is read only from the node's own configuration, never from the link"
 $deliverAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.deliver")
 Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$deliverAt].effect = 'write'")) "remote/Contract.ps1 classes it 'drive'" "a table that classes session.deliver write is refused: drive is pinned" @("session.deliver")
-Refuses { param($v) $v.'x-horde-verbs'[5].effect = "read" } "remote/Contract.ps1 classes it 'spawn'" "a table that reclasses session.spawn read is refused" @("session.spawn")
+# Found by name, not by place: R12a's rows moved session.spawn off index 5 and the check went red.
+$spawnAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "session.spawn")
+Check ($spawnAt -ge 0) "CONTROL: session.spawn is in the real table"
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$spawnAt].effect = 'read'")) "remote/Contract.ps1 classes it 'spawn'" "a table that reclasses session.spawn read is refused" @("session.spawn")
 Refuses { param($v) $v.'x-horde-verbs'[0].args = "#/definitions/nothing-here" } "which is not there" "a row whose args name no definition is refused"
 Refuses { param($v) $v.'x-horde-verbs'[0].result = "no-such-schema.v1" } "which is not there" "a row whose result names no schema is refused"
 # THE ROW RULES ARE THE REAL FILE'S. A table that loosens its own verb-row must not get a pass.
@@ -320,6 +325,22 @@ FrameRefuses "req-node-info.json" { param($x) $x.verb = "exec" } "unsupported-ve
 FrameRefuses "req-node-info.json" { param($x) $x.args | Add-Member -NotePropertyName argv -NotePropertyValue @("cmd.exe", "/c", "dir") } "$.args has 'argv', which the schema does not allow" "a req smuggling an argv into a verb's arguments is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree | Add-Member -NotePropertyName path -NotePropertyValue "C:\anything" } "$.args.worktree has 'path'" "a spawn smuggling a path into its worktree is refused"
 FrameRefuses "req-session-spawn.json" { param($x) $x.args.worktree.name = "..\..\elsewhere" } "$.args.worktree.name does not match" "a worktree name that climbs out of its root is refused"
+# THE ACT PATH'S FIRST VERSION (A3, decisions of 2026-10-05). A spawn may leave out its worktree (the
+# node's registered clone), may give the run's title (the session's name at birth) and the permission
+# level it asks for. Nothing a spawn carries can name the node's ceiling.
+$f = @(Test-FrameWith "req-session-spawn.json" { param($x) $x.args.PSObject.Properties.Remove("worktree") })
+Check ($f.Count -eq 0) "CONTROL: a spawn with no worktree is accepted: it runs in the node's registered clone"; Show $f
+$f = @(Test-FrameWith "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName title -NotePropertyValue "client search orc"; $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "bypass" })
+Check ($f.Count -eq 0) "CONTROL: a spawn naming its run title and the level it asks for is accepted"; Show $f
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "Bypass" } "$.args.permission" "a level is one of R0's names, exactly: Bypass is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permission -NotePropertyValue "root" } "$.args.permission" "a level R0 does not have is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName title -NotePropertyValue ("run" + [char]10 + "two lines") } "$.args.title does not match" "a title holding a line break is refused"
+FrameRefuses "req-session-spawn.json" { param($x) $x.args | Add-Member -NotePropertyName permissionCeiling -NotePropertyValue "bypass" } "$.args has 'permissionCeiling'" "a spawn cannot carry a ceiling: the ceiling is the node's own setting"
+$levelsEnum = @($realVerbs.definitions.'session-spawn-args'.properties.permission.enum)
+. (Join-Path $root "core\PermissionLevels.ps1")
+Check (($levelsEnum -join ",") -ceq (@(Get-HordePermissionLevels | ForEach-Object { "" + $_.name }) -join ",")) "the levels a spawn may ask for are R0's, in R0's order"
+$expectDef = $realVerbs.definitions.'request-entry'.properties.expect
+Check ($null -ne $expectDef -and (@($expectDef.required) -join ",") -ceq "ns,pid,procStart" -and $expectDef.additionalProperties -eq $false) "a spawn's journal entry can carry the started process, exactly the shape session.close expects back"
 # NAMES THAT BECOME FILE NAMES ON THE NODE (review of PR #40). Path.Combine("D:\h", "C:..") is "C:..",
 # a drive-relative path; "foo." is the folder foo; CON is the console device, with or without a dot.
 function Test-Def {
@@ -423,6 +444,90 @@ $f = @(Test-HordeLinkAnswer -Answer $wireObj -Path '$.result')
 Check ($f.Count -eq 0 -and -not (Test-HordeLinkHasProp $wireObj "value")) "core/tristate's stored form with its nulls left out is a valid wire answer"; Show $f
 $f = @(Test-HordeLinkAnswer -Answer ([pscustomobject]$rec) -Path '$.result')
 Check (Says $f "value is null") "and the stored form with its nulls written is refused, so there is one wire form"
+
+Write-Host ""
+Write-Host "--- M. messaging over the link: session.deliver, mail.next and mail.receipt (plan step R21) ---" -ForegroundColor Cyan
+
+# THE REVERSE PATH IS A PULL. A node never asks the hub to drive a session (section B), so an orc on a
+# node that writes to an orc on the hub's machine leaves its message in the node's outbox, and the hub
+# takes it with mail.next (a read) and reports how it went with mail.receipt (a write to that outbox
+# record only). Every drive stays hub to node; the hub delivers through its own local node.
+Check ("$($contract.rows['mail.next'].effect)" -ceq "read" -and "$($contract.rows['mail.next'].direction)" -ceq "hub-to-node") "mail.next is a read, hub to node"
+Check ("$($contract.rows['mail.receipt'].effect)" -ceq "write" -and "$($contract.rows['mail.receipt'].direction)" -ceq "hub-to-node") "mail.receipt is a write, hub to node"
+$nextAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "mail.next")
+$receiptAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "mail.receipt")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$nextAt].effect = 'drive'")) "remote/Contract.ps1 classes it 'read'" "a table that reclasses mail.next drive is refused: its class is pinned" @("mail.next")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$receiptAt].effect = 'read'")) "remote/Contract.ps1 classes it 'write'" "a table that reclasses mail.receipt read is refused: its class is pinned" @("mail.receipt")
+# A RECEIPT NAMES ITS MESSAGE AND NOTHING IT COULD BE REDIRECTED BY: no session, no label, no body.
+Refuses { param($v) $v.definitions.'mail-receipt-args'.properties | Add-Member -NotePropertyName "sessionId" -NotePropertyValue ('{ "$ref": "#/definitions/session-id" }' | ConvertFrom-Json) } "args has 'sessionId', which is not an argument mail.receipt may take" "a receipt that could name a session is refused by the allowlist" @("mail.receipt")
+Refuses { param($v) $v.definitions.'mail-next-args'.properties | Add-Member -NotePropertyName "label" -NotePropertyValue ('{ "$ref": "#/definitions/label" }' | ConvertFrom-Json) } "args has 'label', which is not an argument mail.next may take" "mail.next takes no argument: a filter would be one more thing to trust" @("mail.next")
+# THE TARGET IS A STABLE IDENTITY. session.deliver may carry the target's label, so a node can follow a
+# session whose id changed (a compact, a /clear) to the one session that wears that label; never a pane.
+Refuses { param($v) $v.definitions.'session-deliver-args'.properties | Add-Member -NotePropertyName "pane" -NotePropertyValue ('{ "type": "integer", "minimum": 0 }' | ConvertFrom-Json) } "args has 'pane', which is not an argument session.deliver may take" "a deliver addressed by pane number is refused" @("session.deliver")
+Check ("$($realVerbs.definitions.'outbound-mail'.properties.body.'x-horde-cap')" -ceq "summaryBytes") "an outbound mail body crossing in a result names the summaryBytes cap, the most a result string may hold"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.PSObject.Properties.Remove("pending") } "has no 'pending'" "mail.next always says how many are waiting"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.to | Add-Member -NotePropertyName pane -NotePropertyValue 4 } "has 'pane', which the schema does not allow" "an outbound mail addressed by pane is refused"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.to.PSObject.Properties.Remove("label") } "has no 'label'" "an outbound mail names its target by label"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.from.PSObject.Properties.Remove("deviceId") } "has no 'deviceId'" "an outbound mail says which device it came from"
+FrameRefuses "res-mail-next-known.json" { param($x) $x.result.value.mail.body = " " } "body does not match" "an outbound mail with a blank body is refused"
+FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "delivered" } "is 'delivered', not one of" "a receipt stage outside the delivery stages is refused"
+FrameRefuses "req-mail-receipt.json" { param($x) $x.args.stage = "queued" } "is 'queued', not one of" "queued is the node's own stage, never a receipt the hub sends"
+FrameRefuses "res-mail-receipt.json" { param($x) $x.result.value.PSObject.Properties.Remove("recordedAt") } "has no 'recordedAt'" "a receipt's acknowledgement says when the node recorded it"
+FrameRefuses "req-session-deliver.json" { param($x) $x.args.label = "orc-1" } "label does not match" "a deliver label is a hub label, nothing else"
+
+# REVIEW OF #97, 2026-10-06. Each rule below is stated in the contract text AND, where it can be, held
+# by remote/Contract.ps1 or remote/Messaging.ps1, so slice 4 builds to it rather than choosing.
+$deliverDesc = "$($realVerbs.definitions.'session-deliver-args'.description)"
+# F1: following a label must not carry a session past the gate.
+Check ($deliverDesc.Contains("THE GATE IS APPLIED TO THE RESOLVED SESSION")) "F1: the deliver contract says the gate is applied to the session the label resolved to"
+Check ($deliverDesc.Contains("passes to a new session id only through the process (pid and procStart")) "F1: hub-spawned status passes to a new session id only through the process"
+Check ($deliverDesc.Contains("never through a label")) "F1: hub-spawned status never passes through a label"
+Check ($deliverDesc.Contains("a live sessionId whose label differs from label is refused")) "F1: a live session id wearing another label is refused, never retargeted"
+# F9: the deliver description's other sentences, pinned.
+Check ($deliverDesc.Contains("its default is no label")) "F9: the opt-in list defaults to no label"
+Check ($deliverDesc.Contains("Until step R9 lands")) "F9: the deliver contract says what holds until R9"
+Check ($deliverDesc.Contains("or refuses")) "F9: a label that resolves to no single live session is refused"
+# F2, F3 and F6: the receipt and settlement rules, stated.
+$receiptDesc = "$($realVerbs.definitions.'mail-receipt-args'.description)"
+Check ($receiptDesc.Contains("Stages only move forward")) "F2: the receipt contract says stages only move forward"
+Check ($receiptDesc.Contains("a final stage is never overwritten")) "F2: the receipt contract says a final stage is never overwritten"
+Check ($receiptDesc.Contains("records nothing and its ack carries the recorded stage")) "F2: a backward or late receipt records nothing and is answered with the recorded stage"
+Check ($receiptDesc.Contains("a receipt for a messageId this node never returned from mail.next is refused")) "F6: a receipt for a message the node never handed out is refused"
+Check ("$($realVerbs.definitions.'mail-receipt-ack'.description)".Contains("stage is the record's")) "F2: the ack's stage is the record's, not the one asked for"
+$nextDesc = "$($realVerbs.definitions.'mail-next'.description)"
+Check ($nextDesc.Contains("SETTLED is every stage but queued")) "F3: the contract says which stages settle a message"
+Check ($nextDesc.Contains("held settles")) "F3: a held message settles, so it never blocks the queue behind it"
+# F5: the sender's device is the link's, not the payload's.
+Check ("$($realVerbs.definitions.'outbound-mail'.description)".Contains("from.deviceId must be the link peer's enrolled device")) "F5: the contract says from.deviceId is checked against the link's peer"
+Check ("$($realVerbs.definitions.'outbound-mail'.description)".Contains("only through that device's own node and its gate")) "F5: mail for a third device goes only through that device's node and gate"
+# F4: the reverse path's safety is its DIRECTION, so direction is pinned like the effect class.
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$nextAt].direction = 'node-to-hub'")) "remote/Contract.ps1 pins it hub-to-node" "F4: a table that turns mail.next node to hub is refused" @("mail.next")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$receiptAt].direction = 'node-to-hub'")) "remote/Contract.ps1 pins it hub-to-node" "F4: a table that turns mail.receipt node to hub is refused" @("mail.receipt")
+$alertAt = [array]::IndexOf(@($realVerbs.'x-horde-verbs' | ForEach-Object { "$($_.name)" }), "alert.raise")
+Refuses ([scriptblock]::Create("param(`$v) `$v.'x-horde-verbs'[$alertAt].direction = 'hub-to-node'")) "remote/Contract.ps1 pins it node-to-hub" "F4: every verb's direction is pinned, alert.raise's included" @("alert.raise")
+# F8: the two stage lists stay in step, and every delivery stage has a place in the order.
+Refuses { param($v) $v.definitions.'receipt-stage'.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "refused") } "receipt-stage is not delivery's stages less queued, plus refused" "F8: a receipt stage list that drifts from delivery's is refused" @("mail.receipt")
+Refuses { param($v) $v.definitions.'delivery'.properties.stage.enum = @("queued", "accepted", "handed-over", "seen", "expired", "held", "lost") } "has no place in remote/Contract.ps1's stage order" "F8: a delivery stage the stage order does not rank is refused" @("delivery.status")
+# F7: a time to live has a ceiling, the replay window's 7 days, for a deliver and for outbound mail.
+function RulesWith {
+    # A golden frame with one change: its shape must still pass, and Test-HordeLinkFrameRules answers.
+    param([string]$Golden, [scriptblock]$Change)
+    $fr = Copy-Json (Read-Fx ("frames\" + $Golden))
+    $null = & $Change $fr
+    $shape = @(Test-HordeLinkFrame -Frame $fr -Contract $contract)
+    if ($shape.Count -gt 0) { return @("SHAPE: " + ($shape -join "; ")) }
+    return @(Test-HordeLinkFrameRules -Frame $fr)
+}
+$f = @(RulesWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604801 })
+Check (Says $f "above the 604800-second ceiling") "F7: a deliver living longer than 7 days is refused"; Show $f
+$f = @(RulesWith "res-mail-next-known.json" { param($x) $x.result.value.mail.ttlSeconds = 604801 })
+Check (Says $f "above the 604800-second ceiling") "F7: outbound mail living longer than 7 days is refused"; Show $f
+$f = @(RulesWith "req-session-deliver.json" { param($x) $x.args.ttlSeconds = 604800 })
+Check ($f.Count -eq 0) "F7 CONTROL: a deliver living exactly 7 days is accepted"; Show $f
+foreach ($g in $golden) {
+    $f = @(Test-HordeLinkFrameRules -Frame (Read-Data $g.FullName))
+    Check ($f.Count -eq 0) ("F7 CONTROL: golden frame " + $g.Name + " passes the frame rules"); Show $f
+}
 
 Write-Host ""
 Write-Host "--- H. the other contract documents ---" -ForegroundColor Cyan

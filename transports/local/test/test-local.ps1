@@ -25,6 +25,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $here "LowIntegrity.ps1")
 
 $t = Get-HordeTransport -Name "local"
+$script:ownerCaseSkipped = $false
 $me = Get-HordeLocalUserSid
 function New-Id { return [guid]::NewGuid().ToString() }
 function Test-PipeListed { param([string]$Pipe) return (@([System.IO.Directory]::EnumerateFiles($script:HordeLocalPipeRoot, $Pipe)).Count -gt 0) }
@@ -188,12 +189,36 @@ try {
             $r = & $t.accept $state 15000
             Check ($r.ok -eq $false -and "$($r.reason)" -like "*integrity*") "the node refuses a client whose integrity is below its own, naming it"
             Check ("$($r.reason)" -like "*run the hub and node at the same integrity level*") "and says what to do about it"
+            # Issue #85: a refusal, not a broken listener - the next waiting instance holds the name, so
+            # node serve may keep this listener (review of PR #90, F1: nothing checked the flag here).
+            Check ($null -ne $r.PSObject.Properties["refused"] -and $r.refused -eq $true -and $null -ne $state.server) "the refusal is marked refused, and the listener still holds a waiting instance"
             if ($r.ok) { & $r.channel.close $r.channel }
+            $quiet = & $t.accept $state 300
+            Check ($quiet.ok -eq $false -and $quiet.refused -eq $false) ("CONTROL: an accept on the same listener that times out is not marked refused (" + $quiet.reason + ")")
             $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
             $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
             Check ($holdText -match "hold: CONNECTED") "CONTROL: the low client did reach the node past the low label"
         } finally { & $t.stop $state }
     }
+
+    # 3b. The same refusal when the next waiting instance could not be made (review of PR #90, F2): the
+    # listener no longer holds the name, so it is broken, not a listener that refused a peer, and the
+    # answer must not say refused. The instance maker is replaced for this case only.
+    $id = New-Id
+    $pipe = Get-HordeLocalPipeName -DeviceId $id
+    $h = [HordeLocalNative]::CreateServer(($script:HordeLocalPipeRoot + $pipe), $lowSddl, $true, 65536, [ref]$err)
+    if (-not $h.IsInvalid) {
+        $state = @{ pipe = $pipe; server = (New-Object System.IO.Pipes.NamedPipeServerStream([System.IO.Pipes.PipeDirection]::InOut, $true, $false, $h)); wait = $null; broken = "" }
+        $realMaker = ${function:New-HordeLocalServer}
+        try {
+            ${function:New-HordeLocalServer} = { param([string]$Pipe, [switch]$First) return [pscustomobject]@{ stream = $null; reason = "the test made the next instance fail" } }
+            $hold = Start-HordeLowChild -Mode "hold" -Pipe $pipe -Folder $lowDir
+            $r = & $t.accept $state 15000
+            Check ($r.ok -eq $false -and "$($r.reason)" -like "*integrity*" -and $null -eq $state.server -and "$($state.broken)" -like "*next instance fail*") ("CONTROL: the low client was refused and the next instance was not made (" + $r.reason + ")")
+            Check ($r.refused -eq $false) "a refusal that leaves no waiting instance is not marked refused: the listener is broken, and serve must restart it"
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
+        } finally { ${function:New-HordeLocalServer} = $realMaker; & $t.stop $state }
+    } else { Check $false "a low-labelled pipe for the broken-after-refusal case" }
 
     # 4. A process BELOW the node's level adds an instance to the node's live pipe (review of PR #42,
     # round 2). GetNamedPipeServerProcessId names the FIRST instance's creator, not the instance the hub
@@ -220,6 +245,44 @@ try {
             } finally { Stop-HordeTransportListener -Listener $listener }
             $null = Wait-HordeLowLine -Out $add.out -Pattern "done" -Ms 20000
         } else { Check $false "a listener for the instance-adder case" }
+    }
+
+    # 4b. A pipe owned by ANOTHER principal, served at this process's level by the node's own
+    # interpreter (this process): integrity and image both pass, so the owner check is the one that
+    # refuses it (issue #89 keeps this path pinned now that the attackers above own their pipes).
+    # Administrators is the one other owner this suite can give a pipe, and only from a token allowed
+    # to assign it (an elevated admin token); elsewhere the case is skipped, never green.
+    $id = New-Id
+    $ba = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $baPipe = $null
+    $baWhy = ""
+    $baCode = 0
+    try {
+        $sec = New-Object System.IO.Pipes.PipeSecurity
+        $sec.SetOwner($ba)
+        $sec.AddAccessRule((New-Object System.IO.Pipes.PipeAccessRule($me, [System.IO.Pipes.PipeAccessRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $baPipe = New-Object System.IO.Pipes.NamedPipeServerStream((Get-HordeLocalPipeName -DeviceId $id), [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::Asynchronous, 0, 0, $sec)
+    } catch {
+        $e = $_.Exception; while ($null -ne $e.InnerException) { $e = $e.InnerException }
+        $baWhy = $e.Message; $baCode = $e.HResult
+    }
+    # SKIPPED ONLY FOR THE ONE REASON IT MAY BE (review of PR #91, G2): HRESULT 0x8007051B,
+    # ERROR_INVALID_OWNER, "This security ID may not be assigned as the owner of this object" - measured
+    # 2026-10-05 from a runas /trustlevel:0x20000 token. Any other failure to make the pipe ("All pipe
+    # instances are busy", say) is a failure, never a quiet skip of the only end-to-end owner check.
+    if ($null -eq $baPipe -and $baCode -eq -2147023589) {
+        Write-Host ("  [SKIP] this token cannot make Administrators a pipe's owner (" + $baWhy + "), so the owner refusal is not shown end to end here; the decision is checked above. EXIT 3.") -ForegroundColor Yellow
+        $script:ownerCaseSkipped = $true
+    } elseif ($null -eq $baPipe) {
+        Check $false ("an Administrators-owned pipe for the owner case (" + $baWhy + ", HRESULT " + $baCode + ")")
+    } else {
+        try {
+            $read = $baPipe.GetAccessControl().GetOwner([System.Security.Principal.SecurityIdentifier])
+            Check ("$read" -ceq "$ba") ("CONTROL: the pipe's owner reads back as Administrators (" + $read + ")")
+            $o = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 5000
+            Check ($o.state -ceq "unknown" -and "$($o.reason)" -like ("*owned by '" + $ba + "', not by this user*")) ("the hub refuses a pipe owned by another principal, served by its own interpreter at its own level (" + $o.reason + ")")
+            if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        } finally { $baPipe.Dispose() }
     }
 
     # 5. A program that is not the node's interpreter, at THIS process's level, serves the pipe first.
@@ -351,4 +414,10 @@ if ($la.state -eq "known") {
 } else { Check $false "a listener for the DACL-order case" }
 $bad = New-Object Microsoft.Win32.SafeHandles.SafePipeHandle([IntPtr]::new(-1), $false)
 Check ([HordeLocalNative]::LabelSddl($bad) -ceq "") "the label of an invalid handle is empty, not this process's own label"
-Complete-HordeSuite -Success "the local pipe admits only its own user, and refuses a pipe it did not make"
+# A RUN THAT SKIPPED THE OWNER CASE IS NOT A PASS TO A GATE (review of PR #91, G1): it exits 3, as
+# test-projection does when it skips, so anything that expects 0 fails loudly, and tools\Mutate.ps1
+# accepts 3 only from a spec that declares it (PassCodes).
+$banner = "the local pipe admits only its own user, and refuses a pipe it did not make"
+$passCode = 0
+if ($script:ownerCaseSkipped) { $banner = "OWNER CASE SKIPPED (this token cannot make Administrators an owner), EXIT 3: " + $banner; $passCode = 3 }
+Complete-HordeSuite -Success $banner -PassCode $passCode

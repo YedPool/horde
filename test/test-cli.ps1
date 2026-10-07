@@ -127,6 +127,7 @@ Check (@($real.commands | Where-Object { $_.name -eq "version" }).Count -eq 1) "
 # starts about 3 s into sustained work, and loading the type costs about 0.2 s, so a quick command
 # pays nothing.
 Check (@($real.commands | Where-Object { $_.name -eq "metrics" -and $_.sustained -eq $true }).Count -eq 1) "metrics declares itself sustained"
+Check (@($real.commands | Where-Object { $_.name -eq "node" -and $_.sustained -eq $true }).Count -eq 1) "node declares itself sustained: node serve runs until stopped (review of PR #81, F2)"
 Check (@($real.commands | Where-Object { $_.name -eq "version" -and $_.sustained -eq $false }).Count -eq 1) "version does not, and reads as not sustained"
 $helpText = @(Format-HordeHelp)
 $notOnce = @($real.commands | Where-Object { $u = "    horde " + $_.usage; @($helpText | Where-Object { $_ -eq $u }).Count -ne 1 } | ForEach-Object { $_.name })

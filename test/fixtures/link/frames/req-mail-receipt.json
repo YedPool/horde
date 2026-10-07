@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "kind": "req",
+  "id": "0a000000-0000-4000-8000-000000000024",
+  "seq": 14,
+  "ts": "2026-10-05T12:00:05Z",
+  "verb": "mail.receipt",
+  "requestId": "0b000000-0000-4000-8000-000000000024",
+  "issuedAt": "2026-10-05T12:00:05.000Z",
+  "args": {
+    "messageId": "0e000000-0000-4000-8000-000000000001",
+    "stage": "seen",
+    "at": "2026-10-05T12:00:04.500Z",
+    "reason": "the receiving session's own hook confirmed it in its transcript"
+  }
+}

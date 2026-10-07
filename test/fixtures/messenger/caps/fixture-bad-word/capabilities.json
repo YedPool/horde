@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "fixture-bad-word",
+  "capabilities": {
+    "body.untyped": { "support": "maybe", "evidence": "A fixture." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture." },
+    "receipt.receiver": { "support": "yes", "evidence": "A fixture." },
+    "wake": { "support": "no", "evidence": "A fixture." }
+  }
+}
