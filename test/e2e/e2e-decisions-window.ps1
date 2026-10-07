@@ -35,6 +35,7 @@ New-Item -ItemType Directory -Path $script:work | Out-Null
 $hordeHome = Join-Path $script:work "home"
 $store = Join-Path $hordeHome "store\decisions"
 $report = Join-Path $script:work "report.json"
+$picture = Join-Path $script:work "window.png"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $childEnv = @{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet"); PSModulePath = $null }
 
@@ -82,7 +83,7 @@ New-Item -ItemType Directory -Path (Join-Path $hordeHome "fleet") -Force | Out-N
 Write-Host ""
 Write-Host "=== the window is opened, and its page says what it drew ===" -ForegroundColor Cyan
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
-$open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report) -Env $childEnv
+$open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report, "-Picture", $picture) -Env $childEnv
 $first = Wait-HordeProbeReport -Path $report -Process $open.process -Seconds 120 -Until { param($r) $null -ne $r.rendered -and $r.rendered.rows -eq 22 -and $r.rendered.entries -ge 5 }
 $secondsToRows = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
 Check ($null -ne $first -and $null -ne $first.rendered -and $first.rendered.rows -eq 22) ("the page reports, through the bridge, that it has drawn 22 rows (" + $secondsToRows + " s after the command was started)")
@@ -101,6 +102,25 @@ $engine = @(Get-EngineProcesses)
 $open.process.Refresh()
 Write-Host ("  measured: the hosting process holds " + [Math]::Round($open.process.WorkingSet64 / 1MB) + " MB and the engine's " + $engine.Count + " processes " + [Math]::Round((($engine | Measure-Object WorkingSetSize -Sum).Sum) / 1MB) + " MB") -ForegroundColor DarkGray
 Check ($engine.Count -ge 1) "CONTROL: the web engine's processes for this window are found, so their absence at the end means something"
+
+Write-Host ""
+Write-Host "=== a picture of the page, saved while nobody can see the window ===" -ForegroundColor Cyan
+# What a person would see, so that it can be looked at without that person. The window stands far
+# outside every screen; the engine draws the page all the same, and its own capture saves it.
+$pictured = Wait-HordeProbeReport -Path $report -Process $open.process -Seconds 60 -Until { param($r) $r.picture.saved -eq $true }
+Check ($pictured.picture.asked -eq $true -and $pictured.picture.saved -eq $true -and (Test-Path -LiteralPath $picture -PathType Leaf)) "the picture -Picture named was saved, and the report says so"
+$png = [System.IO.File]::ReadAllBytes($picture)
+Check ($png.Length -gt 20000 -and (($png[0..7] | ForEach-Object { $_.ToString("X2") }) -join "") -ceq "89504E470D0A1A0A") ("it is a PNG, and not an empty one (" + $png.Length + " bytes)")
+Add-Type -AssemblyName System.Drawing
+$bitmap = New-Object System.Drawing.Bitmap($picture)
+try {
+    $colours = New-Object "System.Collections.Generic.HashSet[int]"
+    for ($y = 0; $y -lt $bitmap.Height; $y += 7) { for ($x = 0; $x -lt $bitmap.Width; $x += 5) { [void]$colours.Add($bitmap.GetPixel($x, $y).ToArgb()) } }
+    $box = (Get-HordeProbeWindow -Handle ([long]$first.handle))
+    Check ($bitmap.Width -ge 300 -and $bitmap.Width -le ($box.right - $box.left) -and $bitmap.Height -ge 400 -and $bitmap.Height -le ($box.bottom - $box.top)) ("it is the size of the page inside the window (" + $bitmap.Width + " by " + $bitmap.Height + ", in a window of " + ($box.right - $box.left) + " by " + ($box.bottom - $box.top) + ")")
+    Check ($colours.Count -gt 24) ("and it is not blank: text, headers and marks give it many colours (" + $colours.Count + " distinct in the pixels sampled)")
+} finally { $bitmap.Dispose() }
+Check (@(Get-ChildItem -LiteralPath $script:work -File | Where-Object { $_.Name -like "window.png*" }).Count -eq 1) "no half-written copy is left beside it"
 
 Write-Host ""
 Write-Host "=== a second open finds the first ===" -ForegroundColor Cyan

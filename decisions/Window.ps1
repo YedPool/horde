@@ -37,7 +37,11 @@
 # starts it in the background. (A start at sign-in, and a command that returns at once, are later.)
 #
 # WHAT IT WRITES: the web engine's own profile, under <HordeHome>\cache\decisions-window, and the
-# file -Report names. Nothing else, and never the store.
+# files -Report and -Picture name. Nothing else, and never the store.
+#
+# -Picture SAVES A PICTURE OF THE PAGE AS IT IS DRAWN, once, when the page has reported what it drew
+# and been quiet for a moment: so that what a person would see can be looked at by a session, or by a
+# scenario, without that person. It is the surface's own capture; the page cannot ask for it.
 #
 # A CALLBACK TAKES WHAT IT NEEDS FROM ITS $State, never from a local of the function that wrote it
 # (surfaces/Port.ps1): the file watcher's handlers, which no surface calls, read the same object from
@@ -56,6 +60,9 @@ foreach ($finderFile in @(Get-HordeHostWindowFinderFiles)) { . $finderFile }
 
 # What a surface must be able to do to show this window.
 $script:HordeDecisionWindowNeeds = @("page.local", "page.locked", "requests.closed", "push", "window.native")
+# How long the page must have said nothing new before its picture is taken: a picture of a page that
+# is still being drawn shows half of it.
+$script:HordeDecisionWindowSettleMs = 700
 # The role whose session the window stands beside: the one that keeps the list.
 $script:HordeDecisionWindowRole = "warchief"
 # How long changes to the store are gathered before the list is asked for again.
@@ -131,7 +138,7 @@ function Resolve-HordeDecisionWindowAttachment {
 function New-HordeDecisionWindowBridge {
     # THE CLOSED LIST of what the page may ask, and of what it may be pushed (header). Each handler
     # reads the state it is handed; none takes anything from here.
-    return (New-HordeSurfaceBridge -Events @("list-changed", "fleet-changed", "attachment-changed") -Requests ([ordered]@{
+    return (New-HordeSurfaceBridge -Events @("list-changed", "fleet-changed", "attachment-changed", "show") -Requests ([ordered]@{
         "kinds" = @{ run = { param($Arguments, $State, $Window) return (Get-HordeDecisionWindowRecord -Operation "kinds") } }
         "list" = @{ run = { param($Arguments, $State, $Window)
             $record = Get-HordeDecisionWindowList
@@ -158,6 +165,7 @@ function New-HordeDecisionWindowBridge {
                 $State.rendered = [pscustomobject]@{ rows = $Arguments["rows"]; open = $Arguments["open"]; closed = $Arguments["closed"]; waiting = $Arguments["waiting"]; expanded = $Arguments["expanded"]
                                                     entries = $Arguments["entries"]; written = $Arguments["written"]; filter = $Arguments["filter"]; picked = $Arguments["picked"] }
                 $State.reports = [int]$State.reports + 1
+                $State.lastReportAt = [datetime]::UtcNow
                 $State.reportDue = $true
                 return $true }
         }
@@ -166,7 +174,7 @@ function New-HordeDecisionWindowBridge {
 
 function New-HordeDecisionWindowState {
     # The one object every callback and handler of an open window reads and writes.
-    param([string]$ReportPath = "", $Attachment = $null, [datetime]$Now = [datetime]::UtcNow)
+    param([string]$ReportPath = "", $Attachment = $null, [datetime]$Now = [datetime]::UtcNow, [string]$PicturePath = "")
     if ($null -eq $Attachment) { $Attachment = [pscustomobject]@{ attached = $false; handle = [long]0; reason = "" } }
     $storeRoot = ""
     try { $storeRoot = Get-HordeDecisionStoreRoot } catch { $storeRoot = "" }
@@ -176,6 +184,7 @@ function New-HordeDecisionWindowState {
         attachment = $Attachment; followed = $false; lost = $false
         reportPath = $ReportPath; reportDue = $true; rendered = $null; reports = 0; pushes = 0; changes = 0; errors = $null
         showEvent = $null; handle = [long]0; openedAt = $Now
+        picturePath = $PicturePath; pictureAsked = $false; pictureSeen = $false; lastReportAt = $null
     }
 }
 
@@ -220,6 +229,7 @@ function Write-HordeDecisionWindowReport {
         schemaVersion = 1; pid = $PID; handle = [long]$State.handle; title = $State.title
         attachment = [ordered]@{ attached = [bool]$State.attachment.attached; reason = "$($State.attachment.reason)"; target = [long]$State.attachment.handle; placed = $placed }
         rendered = $State.rendered; reports = [int]$State.reports; pushes = [int]$State.pushes
+        picture = [ordered]@{ path = "$($State.picturePath)"; asked = [bool]$State.pictureAsked; saved = [bool]($State.picturePath -ne "" -and (Test-Path -LiteralPath $State.picturePath -PathType Leaf)) }
         refused = [int]$State.bridge.refused; watching = ($null -ne $State.watcher); changes = [int]$State.changes
         errors = @($State.errors | Where-Object { $null -ne $_ } | Select-Object -Last 5 | ForEach-Object { "" + $_ })
         secondsToFirstReport = $null
@@ -300,6 +310,12 @@ function Invoke-HordeDecisionWindowTick {
         }
         $State.reportDue = $true
     }
+    # -Picture: once, when the page has reported what it drew and has then been quiet for a moment.
+    if ($State.picturePath -ne "" -and -not $State.pictureAsked -and $null -ne $State.lastReportAt -and ($now - $State.lastReportAt).TotalMilliseconds -ge $script:HordeDecisionWindowSettleMs) {
+        $State.pictureAsked = [bool](& $Window.capture $State.picturePath)
+        $State.reportDue = $true
+    }
+    if ($State.pictureAsked -and -not $State.pictureSeen -and (Test-Path -LiteralPath $State.picturePath -PathType Leaf)) { $State.pictureSeen = $true; $State.reportDue = $true }
     if ($State.reportDue) { Write-HordeDecisionWindowReport -State $State }
 }
 
@@ -312,9 +328,15 @@ function Invoke-HordeDecisionWindowClosed {
 function Open-HordeDecisionWindow {
     # `horde decisions open`. Writes its lines as it goes and returns when the window has been closed;
     # throws, in words, when the window could not be shown. -Report is a file to keep a one-line account
-    # of what the window shows in; -Hidden opens it where nobody sees it.
-    param([switch]$Hidden, [string]$Report = "")
+    # of what the window shows in; -Picture a .png to save a picture of the page in; -Hidden opens it
+    # where nobody sees it.
+    param([switch]$Hidden, [string]$Report = "", [string]$Picture = "")
     $hordeHome = Get-HordeHome
+    $picturePath = ""
+    if ($Picture -ne "") {
+        $picturePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Picture)
+        if ([System.IO.Path]::GetExtension($picturePath) -ine ".png") { throw "-Picture names the file a picture of the window is saved in, and it must end .png" }
+    }
     $reportPath = ""
     if ($Report -ne "") { $reportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
     $name = Get-HordeDecisionWindowName -HordeHome $hordeHome
@@ -331,7 +353,8 @@ function Open-HordeDecisionWindow {
         $surface = Resolve-HordeSurface -Requires $script:HordeDecisionWindowNeeds
         if ($null -eq $surface) { throw "no way of showing a window is part of this Horde on this machine, so the decisions window cannot be opened; horde decisions list prints the same list" }
         $attachment = Resolve-HordeDecisionWindowAttachment -Hidden:$Hidden
-        $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment
+        $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment -PicturePath $picturePath
+        if ($picturePath -ne "" -and -not (Test-HordeSurfaceCapability -Surface $surface -Capability "picture")) { throw "the way this Horde shows a window here cannot save a picture of it, so -Picture cannot be honoured" }
         $state.showEvent = $show
         $script:HordeDecisionWindow = $state
         $root = Split-Path -Parent $PSScriptRoot

@@ -1,7 +1,7 @@
 $HordeCommand = @{
     name    = "decisions"
     group   = "decisions"
-    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State <open, closed or all>] [-Json] | decisions show <number> [-Json] | decisions kinds [-Json] | decisions open [-Hidden] [-Report <file.json>]"
+    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State <open, closed or all>] [-Json] | decisions show <number> [-Json] | decisions kinds [-Json] | decisions open [-Hidden] [-Report <file.json>] [-Picture <file.png>]"
     summary = "the standing list of questions waiting for a person. add: a new question from a JSON file, and print its permanent number; update: change the fields a JSON file names; close: record what was done; reopen: open it again under the same number; list and show: read the list or one question; kinds: what each kind of question means; open: show the list in a window of its own, beside the terminal window of the session that keeps it, redrawn as the list changes - the command returns when the window is closed, and a second open brings the first forward. A number is given once and never reused. Long text always comes from a file; -Json prints one line of data"
     run     = {
         [CmdletBinding()] param(
@@ -15,7 +15,8 @@ $HordeCommand = @{
             [string]$State,
             [switch]$Json,
             [switch]$Hidden,
-            [string]$Report
+            [string]$Report,
+            [string]$Picture
         )
         # The usage above and the ValidateSet are decisions/Console.ps1's verbs table written out, because
         # this file's constants are read without running it; test/test-decisions-cli.ps1 holds them to it.
@@ -29,7 +30,7 @@ $HordeCommand = @{
         # is loaded only now, so no other verb pays for it.
         if ($result.opens) {
             . (Join-Path (Get-HordeRoot) "decisions\Window.ps1")
-            Open-HordeDecisionWindow -Hidden:$Hidden -Report "$Report"
+            Open-HordeDecisionWindow -Hidden:$Hidden -Report "$Report" -Picture "$Picture"
             return
         }
         Write-HordeDecisionLines -Lines $result.lines

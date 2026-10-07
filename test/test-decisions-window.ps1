@@ -65,7 +65,7 @@ Write-Host ""
 Write-Host "--- the closed list: five requests, each answered from the operations ---" -ForegroundColor Cyan
 $state = New-HordeDecisionWindowState -Attachment ([pscustomobject]@{ attached = $false; handle = [long]0; reason = "no session holds the role of warchief" })
 Check ((@($state.bridge.requests.Keys) -join ",") -ceq "kinds,list,fleet,attachment,rendered") "the page may ask five things: kinds, list, fleet, attachment, rendered"
-Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed") "and may be pushed three: list-changed, fleet-changed, attachment-changed"
+Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed,show") "and may be pushed four: list-changed, fleet-changed, attachment-changed, show"
 $window = New-FakeWindow
 $empty = Reply (Ask $state '{"v":1,"id":1,"request":"list"}' $window)
 Check ($empty.ok -eq $true -and $empty.value.state -ceq "known" -and $empty.value.value.outcome -ceq "done" -and @($empty.value.value.questions).Count -eq 0) "list, on a home with no store at all: a known, empty list"
