@@ -200,15 +200,45 @@
         @{ Name = "control-characters-allowed"
            Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
            Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cf}\p{Zl}\p{Zp}''' }
-        @{ Name = "direction-marks-and-joiners-refused"
-           Find = '$script:HordeDecisionTextKept = ''\r\n\u200C-\u200F'''
-           Replace = '$script:HordeDecisionTextKept = ''\r\n''' }
+        @{ Name = "direction-marks-and-joiners-refused-in-a-question-field"
+           Find = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200C-\u200F'''
+           Replace = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n''' }
+        @{ Name = "question-field-takes-what-a-message-takes"
+           Find = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200C-\u200F'''
+           Replace = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "embeddings-and-overrides-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "isolates-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u061C''' }
+        @{ Name = "zero-width-space-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200C-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "word-joiner-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C''' }
+        @{ Name = "byte-order-mark-taken-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C\uFEFF''' }
+        @{ Name = "line-separator-taken-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C\u2028''' }
+        @{ Name = "tab-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
         @{ Name = "tab-allowed-in-one-line"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionTextKept + '']]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionTextKept + '']]''' }
+           Find = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionQuestionFieldKeeps + '']]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionQuestionFieldKeeps + '']]''' }
         @{ Name = "tab-refused-in-several-lines"
-           Find = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionTextKept + '']]'''
-           Replace = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionTextKept + '']]''' }
+           Find = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionQuestionFieldKeeps + '']]'''
+           Replace = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionQuestionFieldKeeps + '']]''' }
+        @{ Name = "message-never-says-it-holds-direction-characters"
+           Find = '        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))'
+           Replace = '        holdsDirectionOrInvisibleCharacters = $false' }
+        @{ Name = "every-message-says-it-holds-direction-characters"
+           Find = '        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))'
+           Replace = '        holdsDirectionOrInvisibleCharacters = $true' }
         @{ Name = "one-line-field-held-to-the-rule-for-several-lines"
            Find = '$notText = Get-HordeDecisionCharProblem -Text "$text" -OneLine:([bool]$spec.oneLine)'
            Replace = '$notText = Get-HordeDecisionCharProblem -Text "$text"' }
@@ -474,11 +504,11 @@
            Find = 'if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "'
            Replace = 'if ($Text.Length -ge $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "' }
         @{ Name = "words-held-to-no-characters"
-           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text'
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
            Replace = '    $notWords = ""' }
-        @{ Name = "words-held-to-a-one-line-fields-characters"
-           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text'
-           Replace = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -OneLine' }
+        @{ Name = "words-held-to-a-question-fields-characters"
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
+           Replace = '    $notWords = Get-HordeDecisionCharProblem -Text $Text' }
         # --- a conversation record of the wrong shape, and what a kind is about ---
         @{ Name = "huge-wording-or-mark-cast"
            Find = 'if (-not (Test-HordeDecisionCount -Value (Get-HordeDecisionMember -Object $Ev.data -Name $member) -Most $most)) { return'

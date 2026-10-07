@@ -194,14 +194,33 @@ $script:HordeDecisionMaxNumber = 999999999
 # to be stored exactly, and the operations suite's own Hebrew title carries U+200F. None of the four
 # can reorder or hide other text. What reorders or hides IS refused: the embeddings, overrides and
 # isolates (U+202A to U+202E, U+2066 to U+2069), the zero-width space, the byte-order mark.
-# ONE DEFINITION, of which both patterns are made, so that what is not text is said once: the
-# classes that are refused, and the characters of those classes that are kept in every text.
+# TWO CLASSES, DEFINED HERE AND NOWHERE ELSE, EACH NAMED FOR WHAT IT IS FOR. Both start from the same
+# refusal - control, format, line-separator and paragraph-separator characters - and differ only in
+# what of it they keep.
+#   A QUESTION FIELD MUST NOT BE ABLE TO DISGUISE ITSELF. It is written by the session that keeps the
+#     list, it is what a person reads before answering, and it can be written again. So it keeps
+#     only what right-to-left and joined writing cannot do without: the two direction marks and the
+#     two joiners (U+200C to U+200F). A character that reorders or hides the text beside it - an
+#     embedding, an override, an isolate, a zero-width space - is refused.
+#   A SPOKEN MESSAGE MUST BE STORED EXACTLY AS TYPED. What a person said cannot be written again, and
+#     a phone's keyboard and a chat program put characters into right-to-left text that he never
+#     sees: embeddings and overrides (U+202A to U+202E), isolates (U+2066 to U+2069), the Arabic
+#     letter mark (U+061C), the zero-width space and the word joiner (U+200B, U+2060). Refusing
+#     those would refuse his words, or make whoever records them take characters out. So a message
+#     keeps them all - and says of itself that it holds such characters
+#     (holdsDirectionOrInvisibleCharacters), so that whatever shows it knows to isolate it.
+# BOTH still refuse a control character other than the line break (and, in more than a line, the
+# tab), the byte-order mark (U+FEFF) and the line and paragraph separators (U+2028, U+2029): none is
+# in anything a person typed, and the first is what a terminal obeys.
 $script:HordeDecisionNotTextClasses = '\p{Cc}\p{Cf}\p{Zl}\p{Zp}'
-$script:HordeDecisionTextKept = '\r\n\u200C-\u200F'
-$script:HordeDecisionNotTextInOneLine = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionTextKept + ']]'
-# A text of several lines keeps the tab as well. WORDS SAID UNDER A QUESTION ARE SUCH A TEXT, held to
-# this same pattern and no other: what a question's text refuses, a message refuses.
-$script:HordeDecisionNotTextInLines = '[' + $script:HordeDecisionNotTextClasses + '-[\t' + $script:HordeDecisionTextKept + ']]'
+$script:HordeDecisionQuestionFieldKeeps = '\r\n\u200C-\u200F'
+$script:HordeDecisionSpokenMessageKeeps = '\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'
+$script:HordeDecisionNotTextInOneLine = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionQuestionFieldKeeps + ']]'
+$script:HordeDecisionNotTextInLines = '[' + $script:HordeDecisionNotTextClasses + '-[\t' + $script:HordeDecisionQuestionFieldKeeps + ']]'
+$script:HordeDecisionNotTextInWords = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionSpokenMessageKeeps + ']]'
+# WHAT A MESSAGE IS SAID TO HOLD when it holds any of them: every format character, and the three that
+# older character tables do not yet call one.
+$script:HordeDecisionDirectionOrInvisible = '[\p{Cf}\u061C\u2066-\u2069]'
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
 # In Chinese, Japanese, Thai, Lao, Khmer and Burmese a sentence is written with no spaces, so there
 # each letter is counted as a word: about what one carries in Chinese, generous in the others.
@@ -465,9 +484,13 @@ function Get-HordeDecisionCharProblem {
     # Why a text holds something that is not text, as the end of a finding ("holds the character
     # U+001B ..."), or "". Only the first such character is named. The text is never cleaned: what is
     # stored is what was given, so what cannot be stored is refused whole.
-    param([string]$Text, [switch]$OneLine)
+    param([string]$Text, [switch]$OneLine, [switch]$Said)
     $pattern = $script:HordeDecisionNotTextInLines
     $takes = "a text of several lines takes line breaks and tabs, and no other control, format or separator character"
+    if ($Said) {
+        $pattern = $script:HordeDecisionNotTextInWords
+        $takes = "words said under a question are kept exactly as typed, direction characters included; they take no control character but the line break and the tab, no byte-order mark, and no line or paragraph separator"
+    }
     if ($OneLine) {
         $pattern = $script:HordeDecisionNotTextInOneLine
         $takes = "a one-line field takes no control, format or separator character, a tab included"
@@ -608,7 +631,7 @@ function Test-HordeDecisionSaying {
     }
     if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
     if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
-    $notWords = Get-HordeDecisionCharProblem -Text $Text
+    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said
     if ($notWords -ne "") { [void]$out.Add("'text' " + $notWords) }
     return @($out)
 }
@@ -957,6 +980,7 @@ function ConvertTo-HordeDecisionMessageView {
         route = "$($Message.route)"; routeShown = (Get-HordeDecisionRouteShown -Route "$($Message.route)")
         recordedBy = "$($Message.recordedBy)"
         text = [string]$Message.text
+        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))
         wordingStated = [bool]$Message.wordingStated
         wordingVersion = [int]$Message.wordingVersion
         saidToEarlierWording = [bool]$Message.saidToEarlierWording
