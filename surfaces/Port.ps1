@@ -121,8 +121,12 @@ $script:HordeSurfaceArgTypes = @("string", "integer", "boolean")
 $script:HordeSurfaceSmallestWidthPx = 200
 $script:HordeSurfaceSmallestHeightPx = 150
 $script:HordeSurfaceFastestTickMs = 50
-# How deep a value Horde hands a page may nest. A named constant and not a setting: it bounds
-# Horde's own data shapes, which only a change to Horde's code can deepen.
+# How deep a value Horde hands a page may nest: tables, objects and lists inside one another. A named
+# constant and not a setting: it bounds Horde's own data shapes, which only a change to Horde's code
+# can deepen. IT IS ENFORCED, NOT TRUSTED (Test-HordeSurfaceDepth): past its depth Windows PowerShell
+# 5.1 writes the rest of a value as the name of its type and says nothing (measured 2026-10-07: a
+# message whose value nests 16 deep is written whole, tables, objects and lists alike; at 18 the text
+# "System.Collections.Hashtable" stands where the data was).
 $script:HordeSurfaceJsonDepth = 16
 
 # THE SETTINGS OF THE MODULE "surface" (core/ModuleSettings.ps1): one table, read from
@@ -384,9 +388,28 @@ function Resolve-HordeSurface {
     return $null
 }
 
+function Test-HordeSurfaceDepth {
+    # Does -Value nest no more than -Most deep? A table, an object or a list is one level, and what it
+    # holds is the next. It stops at the first branch that is too deep, so a value that holds itself
+    # is answered no and never walked for ever. Text, numbers, true, false and nothing are no level.
+    param($Value, [Parameter(Mandatory = $true)][int]$Most)
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.ValueType]) { return $true }
+    $inside = $null
+    if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.Values) }
+    elseif ($Value -is [System.Management.Automation.PSCustomObject]) { $inside = @($Value.PSObject.Properties | ForEach-Object { , $_.Value }) }
+    elseif ($Value -is [System.Collections.IEnumerable]) { $inside = @($Value) }
+    else { return $true }
+    if ($Most -le 0) { return $false }
+    foreach ($one in $inside) { if (-not (Test-HordeSurfaceDepth -Value $one -Most ($Most - 1))) { return $false } }
+    return $true
+}
+
 function ConvertTo-HordeSurfaceJson {
-    # A value as one line of ASCII JSON (header, WHAT GOES BACK).
+    # A message as one line of ASCII JSON (header, WHAT GOES BACK). THROWS for a message whose value
+    # nests deeper than can be written whole: the message itself is one level, its value up to
+    # $script:HordeSurfaceJsonDepth more.
     param($Value)
+    if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 1))) { throw ("the value nests more than " + $script:HordeSurfaceJsonDepth + " levels deep, and a page is handed whole values only") }
     $json = ConvertTo-Json -InputObject $Value -Compress -Depth $script:HordeSurfaceJsonDepth
     return [regex]::Replace($json, '[^\x20-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") })
 }
@@ -569,8 +592,15 @@ function Invoke-HordeSurfaceRequest {
         $failLine = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = ("'" + $request.name + "' failed: " + $_.Exception.Message) })
         return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name }
     }
+    # An answer that cannot be written whole - it nests too deep - is the handler's failure, said to
+    # the page as one: never half a value, and never the name of a type where the data should be.
+    $line = ""
+    try { $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $true; $say.value = $value }) }
+    catch {
+        $unwritten = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = ("'" + $request.name + "' failed: its answer could not be handed over: " + $_.Exception.Message) })
+        return [pscustomobject]@{ reply = $unwritten; refused = ""; request = $request.name }
+    }
     $Bridge.answered = [int]$Bridge.answered + 1
-    $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $true; $say.value = $value })
     return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name }
 }
 
