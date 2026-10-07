@@ -19,11 +19,12 @@
 # "message-said" (someone said something under question N) and "messages-read" (a reader has read
 # what others said, up to a record). What they mean is worked out here, like everything else:
 #   - A MESSAGE IS KEPT, ALWAYS. Words said under a closed question are kept and flagged "arrived
-#     after closing"; words said to a wording that is not the question's wording now are kept and
-#     flagged "said to an earlier wording" - whether the wording had already moved on when they
-#     arrived, or was changed afterwards: either way they answer something the question no longer
-#     says. Neither is ever dropped, and neither changes the question: speaking never moves a number,
-#     a wording or a state, and reopens nothing.
+#     after closing"; words said to a wording the question had already left WHEN THEY WERE SAID are
+#     kept and flagged "said to an earlier wording". Both are judged at the moment of the record, in
+#     store order, never against today: a later rewording does not flag words said before it, and a
+#     later reopening does not unflag words that arrived while it was closed. Neither is ever
+#     dropped, and neither changes the question: speaking never moves a number, a wording or a
+#     state, and reopens nothing.
 #   - THE FLAGS, WHOSE TURN IT IS AND WHAT IS UNREAD ARE DERIVED, NEVER STORED. A record holds what was
 #     said, by whom, by what route, and the wording the speaker was looking at. Whether that wording
 #     was already old, whether the question was closed, whose turn it now is and whether the other
@@ -785,10 +786,10 @@ function Step-HordeDecisionSaid {
     # Someone said something under a question. The words are added to the question's thread, in store
     # order, and NOTHING ELSE of the question changes: not its number, its wording, its state, its
     # history or when it was last changed. Under a closed question they are kept all the same, and
-    # reopen nothing; that they arrived after closing is worked out here, from where the record
-    # stands in the order, and is a fact about their arrival that a later reopening does not undo.
-    # The record itself holds only the wording its speaker was looking at; whether that is still the
-    # question's wording is asked when the message is shown (ConvertTo-HordeDecisionMessageView).
+    # reopen nothing. That they arrived after closing, and that they were said to a wording the
+    # question had already left, are both worked out HERE, from where the record stands in the order:
+    # facts about the moment, which no later record undoes or adds. The record itself holds only the
+    # wording its speaker was looking at.
     param($State, $Ev)
     $target = Get-HordeDecisionTarget -State $State -Ev $Ev
     if ($null -eq $target.question) { return $target.why }
@@ -803,6 +804,7 @@ function Step-HordeDecisionSaid {
         # Exactly what the record holds: never trimmed, never re-wrapped.
         text = [string]$Ev.data.text
         wordingVersion = $seen
+        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)
         arrivedAfterClosing = [bool]($question.state -cne "open")
     })
     # The turn passes only under an open question, and only for a speaker this version lists.
@@ -951,14 +953,13 @@ function ConvertTo-HordeDecisionState {
 }
 
 function ConvertTo-HordeDecisionMessageView {
-    # One message as plain data, schema/decision-result.v1's message. -Question is the question it was
-    # said under, as the list has it now. TWO THINGS ARE DERIVED HERE, at the moment of showing:
-    # saidToEarlierWording, by setting the wording its speaker was looking at against the question's
-    # wording now; and unreadBy, from the readers' marks - the roles that have an inbox, other than
-    # the speaker, that have not read up to this record. speakerShown and routeShown are this file's
-    # words for the two labels, handed out so that every way of showing says "recorded by the
+    # One message as plain data, schema/decision-result.v1's message. ONE THING IS DERIVED HERE, at the
+    # moment of showing: unreadBy, from the readers' marks - the roles that have an inbox, other than
+    # the speaker, that have not read up to this record. The two flags were worked out in the fold, at
+    # the record's place in the order, and are only copied. speakerShown and routeShown are this
+    # file's words for the two labels, handed out so that every way of showing says "recorded by the
     # warchief from chat" in the same words.
-    param($Message, $Question, $State)
+    param($Message, $State)
     $unreadBy = New-Object 'System.Collections.Generic.List[string]'
     foreach ($reader in @(Get-HordeDecisionReaders)) {
         if ($reader -cne $Message.speaker -and [long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }
@@ -970,7 +971,7 @@ function ConvertTo-HordeDecisionMessageView {
         recordedBy = "$($Message.recordedBy)"
         text = [string]$Message.text
         wordingVersion = [int]$Message.wordingVersion
-        saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int]$Question.wordingVersion)
+        saidToEarlierWording = [bool]$Message.saidToEarlierWording
         arrivedAfterClosing = [bool]$Message.arrivedAfterClosing
         unreadBy = $unreadBy.ToArray()
     }
@@ -981,7 +982,7 @@ function ConvertTo-HordeDecisionThreadView {
     # reader has not read - and, with -Messages, the messages themselves in store order. A list gives
     # the counts; one question shown gives the whole thread.
     param($Question, $State, [switch]$Messages)
-    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -Question $Question -State $State })
+    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })
     $unread = New-Object System.Collections.ArrayList
     foreach ($reader in @(Get-HordeDecisionReaders)) {
         [void]$unread.Add([pscustomobject]@{ reader = $reader; readerShown = (Get-HordeDecisionSpeakerShown -Speaker $reader); count = @($views | Where-Object { $_.unreadBy -ccontains $reader }).Count })
