@@ -32,9 +32,13 @@
 # (GetDpiForWindow) so that margins and smallest sizes are the same physical size on every screen.
 # NOT MEASURED: a second monitor or a second scale - the measuring machine has one screen.
 #
-# WHAT WINDOWS DOES THAT A CALLER MUST KNOW: when the owner window is destroyed, Windows destroys the
-# windows it owns. So when the other window closes, ours closes with it. Following a session into a
-# new window, and standing free when there is none, are a later slice's.
+# WHAT A CALLER MUST KNOW ABOUT THE OTHER WINDOW GOING AWAY.
+#   - Its PROCESS ENDS: measured 2026-10-06 (the terminal process ended by its handle), our window
+#     stays, owned by nothing that exists. Update-HordeWindowFollow then answers "lost", and the
+#     caller stops following (Stop-HordeWindowFollow clears the owner) and says so.
+#   - Its WINDOW IS CLOSED while its process lives on: Windows documents that an owned window is
+#     destroyed with its owner. NOT MEASURED here - the test terminal asks before it closes a window.
+# Following a session into a new window is a later slice's.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -64,6 +68,9 @@ public static class HordeWindowFollowNative {
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. False when the process already has an awareness.
+    public static bool RealPixels() { try { return SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch (EntryPointNotFoundException) { return false; } }
 
     static IntPtr target = IntPtr.Zero, hook = IntPtr.Zero;
     static WinEventDelegate keep;       // held, or the delegate is collected while Windows still calls it
@@ -138,6 +145,19 @@ function Get-HordeWindowFollowPlacement {
 
 function Initialize-HordeWindowFollow {
     if ($null -eq ("HordeWindowFollowNative" -as [type])) { Add-Type -TypeDefinition $script:HordeWindowFollowSource }
+}
+
+function Enable-HordeWindowRealPixels {
+    # Make this process see real pixels on every screen, before it has made a window: a rectangle read
+    # while Windows is still scaling for the process is a scaled one, and a place worked out from it
+    # would be wrong by the screen's scale. (Measured 2026-10-06 with this called first, at one and a
+    # half times the ordinary scale: a terminal window at 60,60 of 1100 by 640 real pixels, and the
+    # companion standing at 644,132, 480 by 532 - exactly the place worked out for it. What it looked
+    # like in the first second, before it was followed, was not observed.) Returns
+    # whether Windows took it; false is not an error - the process already had its awareness, and a
+    # window's maker asks too.
+    Initialize-HordeWindowFollow
+    return [bool][HordeWindowFollowNative]::RealPixels()
 }
 
 function Get-HordeWindowRectangle {
