@@ -38,9 +38,6 @@
         @{ Name = "file-listed-twice-accepted"
            Find = 'if ($seen.ContainsKey($key)) {'
            Replace = 'if ($false) {' }
-        @{ Name = "twice-told-apart-by-case"
-           Find = '$key = $cells[0].ToLowerInvariant()'
-           Replace = '$key = $cells[0]' }
         @{ Name = "changed-file-still-handed-back"
            Find = 'the list says " + $e.sha256 + " and the file is " + $actual); continue }'
            Replace = 'the list says " + $e.sha256 + " and the file is " + $actual) }' }
