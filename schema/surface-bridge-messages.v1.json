@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/surface-bridge-messages.v1",
+  "title": "surface-bridge-messages v1",
+  "description": "The one definition of the messages that cross a surface's bridge: surfaces/bridge-messages.json. Each of the three shapes - a page's request, Horde's reply, an event Horde pushes - maps the part a member plays to its name on the wire. surfaces/Port.ps1 adds the rules a schema cannot say: within a shape no two parts share a name, and a reply and an event can be told apart by the one member each has that the other has not.",
+  "type": "object",
+  "required": ["schemaVersion", "protocol", "request", "reply", "event"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "description": { "type": "string" },
+    "protocol": { "type": "integer", "minimum": 1, "description": "The version of the shapes. Both sides send it and refuse any other." },
+    "request": {
+      "type": "object",
+      "description": "What a page sends.",
+      "required": ["version", "id", "name", "arguments"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/definitions/member" },
+        "id": { "$ref": "#/definitions/member", "description": "A whole number from 1 up that the page chose; the reply carries it back." },
+        "name": { "$ref": "#/definitions/member", "description": "Which request of the bridge's closed list." },
+        "arguments": { "$ref": "#/definitions/member", "description": "An object of the arguments that request declared; may be left out when it takes none." }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "description": "What Horde answers a request with: ok and value, or not ok and reason.",
+      "required": ["version", "id", "ok", "value", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/definitions/member" },
+        "id": { "$ref": "#/definitions/member", "description": "The id of the request this answers." },
+        "ok": { "$ref": "#/definitions/member" },
+        "value": { "$ref": "#/definitions/member" },
+        "reason": { "$ref": "#/definitions/member" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "description": "What Horde pushes without being asked.",
+      "required": ["version", "name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/definitions/member" },
+        "name": { "$ref": "#/definitions/member", "description": "Which event of the bridge's declared list." },
+        "value": { "$ref": "#/definitions/member" }
+      }
+    }
+  },
+  "definitions": {
+    "member": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9]{0,15}$" }
+  }
+}

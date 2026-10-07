@@ -13,7 +13,11 @@
 # table of named requests, each with the handful of arguments it takes and the function that answers
 # it. A message from the page is one JSON object, { v; id; request; args }, and it is checked HERE,
 # before any handler sees it: its size, that it is JSON and an object, its members, the name against the
-# table, each argument against what the request declared. Anything else is refused, counted and kept
+# table, each argument against what the request declared. THE SHAPES THEMSELVES - that one, the two
+# under WHAT GOES BACK, and the protocol number - ARE DEFINED ONCE, in surfaces/bridge-messages.json
+# (schema/surface-bridge-messages.v1). This file reads every member name from it, and so does the
+# page's side of the bridge, to which a surface serves that same file; the names written in this
+# header are that file's, quoted for the reader. Anything else is refused, counted and kept
 # in the bridge's short record of refusals, and answered - when it carried a usable id - with the fact
 # of the refusal and never with an echo of what was sent. No object of Horde's is ever handed to the
 # page to call; a surface that offers one is not a surface (capability requests.closed).
@@ -71,8 +75,12 @@ if ($null -eq (Get-Variable -Name HordeSurfaces -Scope Script -ErrorAction Silen
 $script:HordeSurfaceCapabilityNames = @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
 # What a caller may ask a page to be drawn in: the machine's own setting, or one of the two.
 $script:HordeSurfaceThemes = @("system", "light", "dark")
-# The version of the message shapes above. A page built for another is refused, not half understood.
-$script:HordeSurfaceProtocol = 1
+# THE MESSAGE SHAPES ARE WRITTEN ONCE, in the file beside this one, and read below when this file is
+# loaded: the protocol number and every member name. Nothing in this file, and nothing in a page's
+# side of the bridge, carries a copy (test/test-surface-port.ps1 hands the port another definition and
+# sees every message follow it).
+$script:HordeSurfaceMessagesFile = "bridge-messages.json"
+$script:HordeSurfaceMessagesSchema = "surface-bridge-messages.v1"
 # The most one message from the page may be, in characters. The largest thing a page sends today is a
 # few numbers; a later answer in a person's own words is capped by the decisions rules, far below this.
 # Checked before the text is parsed, so an oversized message costs nothing to refuse.
@@ -89,6 +97,47 @@ $script:HordeSurfaceOwnMount = "surface"
 $script:HordeSurfaceMountSuffix = ".horde.invalid"
 
 function Get-HordeSurfaceRoot { return $PSScriptRoot }
+
+function Get-HordeSurfaceMessagesPath {
+    # The file that defines the bridge's messages. A surface serves this very file to the page.
+    return (Join-Path (Get-HordeSurfaceRoot) $script:HordeSurfaceMessagesFile)
+}
+
+function Test-HordeSurfaceMessages {
+    # Findings for a parsed message definition: the schema's, plus the two rules a schema cannot say.
+    param($Messages)
+    $findings = @(Test-HordeSchema -Value $Messages -Schema (Get-HordeSchema -Name $script:HordeSurfaceMessagesSchema))
+    if ($findings.Count -gt 0) { return $findings }
+    foreach ($shape in @("request", "reply", "event")) {
+        # Compared exactly, as the wire compares them: a plain @{} would take "Id" and "id" for one name.
+        $seen = New-Object System.Collections.ArrayList
+        foreach ($part in $Messages.$shape.PSObject.Properties) {
+            if ($seen -ccontains $part.Value) { $findings += ("the " + $shape + " gives two parts the name '" + $part.Value + "'") }
+            [void]$seen.Add($part.Value)
+        }
+    }
+    # The page tells Horde's two kinds of message apart by the one member each has and the other has not.
+    $replyNames = @($Messages.reply.PSObject.Properties | ForEach-Object { $_.Value })
+    $eventNames = @($Messages.event.PSObject.Properties | ForEach-Object { $_.Value })
+    if ($eventNames -ccontains $Messages.reply.id -or $replyNames -ccontains $Messages.event.name) { $findings += "a reply and an event could not be told apart: the reply's id and the event's name must each be a member the other shape has not" }
+    return @($findings)
+}
+
+function Read-HordeSurfaceMessages {
+    # The definition at -Path, checked. THROWS, naming every finding, when it is missing or wrong: it
+    # is Horde's own file, and without it not one message can be read or written.
+    param([string]$Path = (Get-HordeSurfaceMessagesPath))
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw ("the definition of the bridge's messages is not there: " + $Path) }
+    $parsed = $null
+    try { $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { throw ("the definition of the bridge's messages at " + $Path + " is not JSON: " + $_.Exception.Message) }
+    $findings = @(Test-HordeSurfaceMessages -Messages $parsed)
+    if ($findings.Count -gt 0) { throw ("the definition of the bridge's messages at " + $Path + " is refused: " + ($findings -join "; ")) }
+    return $parsed
+}
+
+$script:HordeSurfaceMessages = Read-HordeSurfaceMessages
+
+function Get-HordeSurfaceMessages { return $script:HordeSurfaceMessages }
 
 function Get-HordeSurfaceOwnMount { return $script:HordeSurfaceOwnMount }
 
@@ -254,11 +303,15 @@ function Invoke-HordeSurfaceRequest {
     # refused is why it was refused, or ""; request is the request's name when it was one of the list.
     # It never throws for anything the page sent: a handler that throws is answered as a failure.
     param([Parameter(Mandatory = $true)]$Bridge, [AllowNull()][AllowEmptyString()][string]$Text, $State = $null, $Window = $null, [datetime]$Now = [datetime]::UtcNow)
+    # Every name below is the definition's (header, THE BRIDGE): $ask is a request's, $say a reply's.
+    $protocol = $script:HordeSurfaceMessages.protocol
+    $ask = $script:HordeSurfaceMessages.request
+    $say = $script:HordeSurfaceMessages.reply
     $refuse = {
         param([string]$Why, $Id)
         Add-HordeSurfaceRefusal -Bridge $Bridge -Reason $Why -Now $Now
         $line = ""
-        if ($null -ne $Id) { $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ v = $script:HordeSurfaceProtocol; reply = $Id; ok = $false; reason = ("refused: " + $Why) }) }
+        if ($null -ne $Id) { $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $Id; $say.ok = $false; $say.reason = ("refused: " + $Why) }) }
         return [pscustomobject]@{ reply = $line; refused = $Why; request = "" }
     }
     if ([string]::IsNullOrEmpty($Text)) { return (& $refuse "the message was empty" $null) }
@@ -267,22 +320,23 @@ function Invoke-HordeSurfaceRequest {
     try { $message = $Text | ConvertFrom-Json } catch { $message = $null }
     if ($null -eq $message -or $message -isnot [System.Management.Automation.PSCustomObject]) { return (& $refuse "the message was not one JSON object" $null) }
     # THE ID FIRST, so that every later refusal can be answered: a whole number the page chose.
-    $idProp = $message.PSObject.Properties["id"]
+    $idProp = $message.PSObject.Properties[$ask.id]
     $id = $null
     if ($null -ne $idProp -and ($idProp.Value -is [int] -or $idProp.Value -is [long]) -and [long]$idProp.Value -ge 1 -and [long]$idProp.Value -le [int]::MaxValue) { $id = [int]$idProp.Value }
-    if ($null -eq $id) { return (& $refuse "the message carried no id: a whole number from 1 up" $null) }
+    if ($null -eq $id) { return (& $refuse ("the message carried no " + $ask.id + ": a whole number from 1 up") $null) }
+    $members = @($ask.version, $ask.id, $ask.name, $ask.arguments)
     foreach ($p in $message.PSObject.Properties) {
-        if (@("v", "id", "request", "args") -cnotcontains $p.Name) { return (& $refuse "the message has a member that is not v, id, request or args" $id) }
+        if ($members -cnotcontains $p.Name) { return (& $refuse ("the message has a member that is not " + ($members[0..2] -join ", ") + " or " + $members[3]) $id) }
     }
-    $vProp = $message.PSObject.Properties["v"]
-    if ($null -eq $vProp -or ($vProp.Value -isnot [int] -and $vProp.Value -isnot [long]) -or [long]$vProp.Value -ne $script:HordeSurfaceProtocol) { return (& $refuse ("the message is not version " + $script:HordeSurfaceProtocol + " of the page's requests") $id) }
-    $nameProp = $message.PSObject.Properties["request"]
+    $vProp = $message.PSObject.Properties[$ask.version]
+    if ($null -eq $vProp -or ($vProp.Value -isnot [int] -and $vProp.Value -isnot [long]) -or [long]$vProp.Value -ne $protocol) { return (& $refuse ("the message is not version " + $protocol + " of the page's requests") $id) }
+    $nameProp = $message.PSObject.Properties[$ask.name]
     if ($null -eq $nameProp -or $nameProp.Value -isnot [string] -or $nameProp.Value -cnotmatch $script:HordeSurfaceNamePattern -or -not $Bridge.requests.Contains($nameProp.Value)) {
         return (& $refuse ("the message asked for something that is not on the list; the list is: " + (@($Bridge.requests.Keys) -join ", ")) $id)
     }
     $request = $Bridge.requests[$nameProp.Value]
     $given = $null
-    $argsProp = $message.PSObject.Properties["args"]
+    $argsProp = $message.PSObject.Properties[$ask.arguments]
     if ($null -ne $argsProp) { $given = $argsProp.Value }
     $checked = @{}
     $wrong = Test-HordeSurfaceArguments -Request $request -Given $given -Checked $checked
@@ -292,11 +346,11 @@ function Invoke-HordeSurfaceRequest {
     catch {
         # The handler is Horde's own code, so its message is Horde's words and may be shown; the page
         # is told the request failed, which is not a refusal and is not recorded as one.
-        $failLine = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ v = $script:HordeSurfaceProtocol; reply = $id; ok = $false; reason = ("'" + $request.name + "' failed: " + $_.Exception.Message) })
+        $failLine = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = ("'" + $request.name + "' failed: " + $_.Exception.Message) })
         return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name }
     }
     $Bridge.answered = [int]$Bridge.answered + 1
-    $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ v = $script:HordeSurfaceProtocol; reply = $id; ok = $true; value = $value })
+    $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $true; $say.value = $value })
     return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name }
 }
 
@@ -305,7 +359,8 @@ function ConvertTo-HordeSurfaceEvent {
     # an event nobody declared is a programming error, not something the page did.
     param([Parameter(Mandatory = $true)]$Bridge, [Parameter(Mandatory = $true)][string]$Name, $Value = $null)
     if (@($Bridge.events) -cnotcontains $Name) { throw ("'" + $Name + "' is not an event this bridge pushes; its events are: " + (@($Bridge.events) -join ", ")) }
-    return (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ v = $script:HordeSurfaceProtocol; event = $Name; value = $Value }))
+    $tell = $script:HordeSurfaceMessages.event
+    return (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $tell.version = $script:HordeSurfaceMessages.protocol; $tell.name = $Name; $tell.value = $Value }))
 }
 
 function New-HordeSurfaceSpec {

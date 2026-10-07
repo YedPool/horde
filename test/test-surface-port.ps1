@@ -121,6 +121,48 @@ $small = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { retur
 Check ($small.refused -eq 60 -and $small.refusals.Count -eq 50) "sixty refusals are all counted, and the last fifty are kept"
 
 Write-Host ""
+Write-Host "--- the shapes of the messages are written once, in a file both sides read ---" -ForegroundColor Cyan
+$shapes = Get-HordeSurfaceMessages
+Check ((Get-HordeSurfaceMessagesPath) -ceq (Join-Path $root "surfaces\bridge-messages.json") -and (Test-Path -LiteralPath (Get-HordeSurfaceMessagesPath) -PathType Leaf)) "the definition is one file beside the port"
+Check ($shapes.protocol -eq 1 -and ($shapes.request.version + "," + $shapes.request.id + "," + $shapes.request.name + "," + $shapes.request.arguments) -ceq "v,id,request,args") "CONTROL: it gives protocol 1 and a request's four members"
+Check (($shapes.reply.version + "," + $shapes.reply.id + "," + $shapes.reply.ok + "," + $shapes.reply.value + "," + $shapes.reply.reason) -ceq "v,reply,ok,value,reason" -and ($shapes.event.version + "," + $shapes.event.name + "," + $shapes.event.value) -ceq "v,event,value") "and a reply's five and an event's three"
+# THE PORT READS THE FILE, NOT A COPY OF IT: hand it another definition and every message it reads
+# and writes is in that vocabulary, and the shipped one is refused.
+$otherShapes = [ordered]@{ schemaVersion = 1; protocol = 7
+    request = [ordered]@{ version = "ver"; id = "n"; name = "ask"; arguments = "with" }
+    reply = [ordered]@{ version = "ver"; id = "re"; ok = "fine"; value = "got"; reason = "why" }
+    event = [ordered]@{ version = "ver"; name = "happened"; value = "got" } }
+function Write-Shapes { param($Shapes, [string]$Name) $p = Join-Path $work $Name; [System.IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $Shapes -Depth 5)); return $p }
+$shipped = $script:HordeSurfaceMessages
+try {
+    $script:HordeSurfaceMessages = Read-HordeSurfaceMessages -Path (Write-Shapes $otherShapes "other-shapes.json")
+    $inOther = Ask '{"ver":7,"n":3,"ask":"rendered","with":{"rows":4,"note":"other","whole":true}}'
+    $ov = Reply $inOther
+    Check ($inOther.refused -ceq "" -and @($ov.PSObject.Properties | ForEach-Object { $_.Name }) -join "," -ceq "ver,re,fine,got" -and $ov.ver -eq 7 -and $ov.re -eq 3 -and $ov.fine -eq $true) "given another definition, a request in its vocabulary is read, and the reply is written in it"
+    Check ($script:calls[$script:calls.Count - 1] -ceq "rendered 4 other True") "its arguments are found under that definition's name for them"
+    $inShipped = Ask '{"v":1,"id":3,"request":"list"}'
+    Check ($inShipped.refused -like "*carried no n:*" -and $inShipped.reply -ceq "") "and a message in the shipped vocabulary is refused: no name is written twice"
+    $wrongOther = Reply (Ask '{"ver":7,"n":4,"ask":"list","extra":1}')
+    Check ($wrongOther.fine -eq $false -and $wrongOther.why -like "refused: *a member that is not ver, n, ask or with") "a refusal names the members of the definition in force"
+    Check ((Reply (Ask '{"ver":1,"n":5,"ask":"list"}')).why -like "*is not version 7 of*") "and its protocol number"
+    $otherEvent = (ConvertTo-HordeSurfaceEvent -Bridge $bridge -Name "list-changed" -Value 5) | ConvertFrom-Json
+    Check (@($otherEvent.PSObject.Properties | ForEach-Object { $_.Name }) -join "," -ceq "ver,happened,got" -and $otherEvent.ver -eq 7 -and $otherEvent.happened -ceq "list-changed") "an event is written in it too"
+} finally { $script:HordeSurfaceMessages = $shipped }
+Check ((Reply (Ask '{"v":1,"id":41,"request":"list"}')).ok -eq $true) "CONTROL: with the shipped definition back, the shipped vocabulary is read again"
+function New-Shapes { param([scriptblock]$Change) $s = ConvertTo-Json -InputObject $otherShapes -Depth 5 | ConvertFrom-Json; & $Change $s; return $s }
+foreach ($bad in @(
+    @{ what = "a part left out"; says = "arguments"; change = { param($s) $s.request.PSObject.Properties.Remove("arguments") } }
+    @{ what = "a part nobody reads"; says = "extra"; change = { param($s) $s.event | Add-Member -NotePropertyName extra -NotePropertyValue "x" } }
+    @{ what = "a member name that is not a plain name"; says = "request"; change = { param($s) $s.request.name = "ask me" } }
+    @{ what = "no protocol number from 1 up"; says = "protocol"; change = { param($s) $s.protocol = 0 } }
+    @{ what = "two parts of one shape under one name"; says = "the request gives two parts the name 'n'"; change = { param($s) $s.request.name = "n" } }
+    @{ what = "a reply that could be taken for an event"; says = "a reply and an event could not be told apart"; change = { param($s) $s.event.name = "re" } }
+)) {
+    Check (Throws { Read-HordeSurfaceMessages -Path (Write-Shapes (New-Shapes $bad.change) "bad-shapes.json") } $bad.says) ("a definition with " + $bad.what + " is refused when it is read")
+}
+Check (Throws { Read-HordeSurfaceMessages -Path (Join-Path $work "no-such-shapes.json") } "is not there") "and so is one that is not there: without it nothing can cross"
+
+Write-Host ""
 Write-Host "--- what Horde sends ---" -ForegroundColor Cyan
 $he = ([string][char]0x05E9) + [char]0x05DC + [char]0x05D5 + [char]0x05DD
 $line = ConvertTo-HordeSurfaceEvent -Bridge $bridge -Name "list-changed" -Value ([pscustomobject]@{ title = $he + " <b>&'" })

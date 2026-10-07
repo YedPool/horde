@@ -21,8 +21,8 @@
            Find = 'while ($Bridge.refusals.Count -gt $script:HordeSurfaceRefusalsKept) { $Bridge.refusals.RemoveAt(0) }'
            Replace = '' }
         @{ Name = "refusal-answered-with-no-reason"
-           Find = 'ok = $false; reason = ("refused: " + $Why) })'
-           Replace = 'ok = $true; reason = ("refused: " + $Why) })' }
+           Find = '$say.ok = $false; $say.reason = ("refused: " + $Why) })'
+           Replace = '$say.ok = $true; $say.reason = ("refused: " + $Why) })' }
         # --- the message
         @{ Name = "oversized-message-read"
            Find = 'if ($Text.Length -gt $script:HordeSurfaceRequestChars) {'
@@ -37,11 +37,42 @@
            Find = '[long]$idProp.Value -ge 1 -and'
            Replace = '[long]$idProp.Value -ge 0 -and' }
         @{ Name = "unknown-member-ignored"
-           Find = 'if (@("v", "id", "request", "args") -cnotcontains $p.Name) {'
+           Find = 'if ($members -cnotcontains $p.Name) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-version-taken"
-           Find = ' -or [long]$vProp.Value -ne $script:HordeSurfaceProtocol) {'
+           Find = ' -or [long]$vProp.Value -ne $protocol) {'
            Replace = ') {' }
+        # --- the one definition of the message shapes
+        @{ Name = "the-id-is-read-under-a-name-of-the-ports-own"
+           Find = '$idProp = $message.PSObject.Properties[$ask.id]'
+           Replace = '$idProp = $message.PSObject.Properties["id"]' }
+        @{ Name = "the-version-is-read-under-a-name-of-the-ports-own"
+           Find = '$vProp = $message.PSObject.Properties[$ask.version]'
+           Replace = '$vProp = $message.PSObject.Properties["v"]' }
+        @{ Name = "the-request-is-read-under-a-name-of-the-ports-own"
+           Find = '$nameProp = $message.PSObject.Properties[$ask.name]'
+           Replace = '$nameProp = $message.PSObject.Properties["request"]' }
+        @{ Name = "the-arguments-are-read-under-a-name-of-the-ports-own"
+           Find = '$argsProp = $message.PSObject.Properties[$ask.arguments]'
+           Replace = '$argsProp = $message.PSObject.Properties["args"]' }
+        @{ Name = "the-protocol-number-is-the-ports-own"
+           Find = '$protocol = $script:HordeSurfaceMessages.protocol'
+           Replace = '$protocol = 1' }
+        @{ Name = "an-answer-is-written-under-names-of-the-ports-own"
+           Find = '([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $true; $say.value = $value })'
+           Replace = '([ordered]@{ v = $protocol; reply = $id; ok = $true; value = $value })' }
+        @{ Name = "an-event-is-written-under-names-of-the-ports-own"
+           Find = '([ordered]@{ $tell.version = $script:HordeSurfaceMessages.protocol; $tell.name = $Name; $tell.value = $Value })'
+           Replace = '([ordered]@{ v = $script:HordeSurfaceMessages.protocol; event = $Name; value = $Value })' }
+        @{ Name = "a-definition-is-not-checked-when-read"
+           Find = 'if ($findings.Count -gt 0) { throw ("the definition of the bridge''s messages at " + $Path + " is refused: " + ($findings -join "; ")) }'
+           Replace = '' }
+        @{ Name = "two-parts-may-share-a-name"
+           Find = 'if ($seen -ccontains $part.Value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-reply-may-pass-for-an-event"
+           Find = 'if ($eventNames -ccontains $Messages.reply.id -or $replyNames -ccontains $Messages.event.name) {'
+           Replace = 'if ($false) {' }
         # --- the arguments
         @{ Name = "undeclared-argument-passed-on"
            Find = 'foreach ($n in $names) { if (-not $Request.args.Contains($n)) {'
