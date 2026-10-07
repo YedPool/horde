@@ -14,36 +14,70 @@
 #       @{ name = "statusFolder"; kind = "folder";    default = "";                              what = "Where status files are; empty means the module's own place." }
 #   )
 #   $s = Get-HordeModuleSettings -Declaration $script:HordeProbeSettings
-#   foreach ($f in $s.findings) { Write-Warning $f }      # each one a plain sentence naming its key
-#   $width = $s.values.widthPx                            # every declared name is there, always
+#   if ($s.state -ceq "refused") {
+#       throw ($s.findings -join [Environment]::NewLine)   # the module does NOT proceed, and never retries with defaults
+#   }
+#   $width = $s.values.widthPx                             # "defaults" or "read": every declared name is there
 #
-# and a person overrides any of them in <HORDE_HOME>\settings\probe.json (schema/module-settings.v1):
+# A command throws the findings, as above, so horde prints them and exits 1; a port answers its
+# "cannot" state with them as the reason. Either way the person reads which file and which key are
+# wrong, and nothing ran on a setting they did not choose. A person overrides any setting in
+# <HORDE_HOME>\settings\probe.json (schema/module-settings.v1):
 #
 #   { "schemaVersion": 1, "settings": { "widthPx": 640, "theme": "dark" } }
 #
 # THE THREE ENTRY POINTS a module calls:
 #   New-HordeModuleSettings -Module <name> -Settings <table>          the declaration; THROWS on a
 #                                                                     malformed table, naming every problem
-#   Read-HordeModuleSettingsText -Declaration <it> -Text <text|$null> { values; findings }, PURE given
-#                                                                     the file's text; $null is "no file"
-#   Get-HordeModuleSettings -Declaration <it> [-HordeHome <path>]     { values; findings; path }: reads
-#                                                                     the one file and writes nothing
-# values is an object with one property per declared name ($s.values.widthPx): the file's value where it
-# gave a good one, the default everywhere else. findings is a list of sentences, empty when nothing is
-# wrong. A module decides what to do with a finding (print it, show it); this file never prints.
+#   Read-HordeModuleSettingsText -Declaration <it> -Text <text|$null> { state; values; findings; path },
+#                                [-File <the file's name or path>]    PURE given the file's text; $null
+#                                                                     is "no file"
+#   Get-HordeModuleSettings -Declaration <it> [-HordeHome <path>]     the same answer for the one file
+#                                                                     under the home; writes nothing
+# THE ANSWER, { state; values; findings; path }:
+#   state     "defaults"  there is no override file: values are the declared defaults.
+#             "read"      the file passed every check: values are the defaults with the file's over them.
+#             "refused"   the file failed a check: values is $null and findings names every problem.
+#   values    an object with one property per declared name ($s.values.widthPx), or $null when refused,
+#             so a caller that forgets to look at state cannot use a default by accident.
+#   findings  string[]; empty unless refused. Each is one sentence that names the file, says it is
+#             refused, and says why with the key at fault:
+#               the settings file '<file>' of probe is refused: its key 'widthPx' must be a whole number
+#               from 200 to 4000, written in digits only; it gives the whole number 9999
+#   path      the file the answer is about, whether or not it is there: the whole path from
+#             Get-HordeModuleSettings; from the text function what -File gave, or settings\<module>.json.
+# This file never prints and never throws for a bad file: the module refuses, with the findings.
 # Two more are for whatever will SHOW a module's settings, which is not built here:
 # Get-HordeModuleSettingRule (an entry's allowed range, in words) and Get-HordeModuleSettingsPath
 # (where the file is). The rest of the file is its own.
 #
-# WHAT IS WRONG IN A FILE IS SAID BY NAME, AND THE DEFAULT IS USED. A name the module did not declare, a
-# value of the wrong kind and a value outside the allowed range are one finding each, and that setting
-# is its default: never a throw, because a typo in a person's file must not stop a window opening, and
-# never a silent ignore, because a setting that quietly did nothing is the worst of the three. A file
-# that is not there is every default and no finding. A file that cannot be read as a whole - held by
-# another program, over 262144 bytes, not UTF-8, not JSON, a key written twice, not the shape of
-# schema/module-settings.v1 - is its findings and EVERY default: half of a file nobody can vouch for
-# is not used. Only a malformed DECLARATION throws, when it is declared: that is a programming error,
-# and the suite of the module that made it must fail.
+# AN OVERRIDE FILE THAT FAILS ITS CHECKS REFUSES WITH A REASON AND NEVER SILENTLY FALLS BACK TO THE
+# DEFAULTS. A name the module did not declare, a value of the wrong kind and a value outside the allowed
+# range are one finding each, and ANY finding refuses the whole file: no default stands in for the bad
+# value, and the good values beside it are not handed back either, because a module running on a
+# setting its person did not choose, while their file says otherwise, is the failure nobody sees.
+# EVERY problem is found in the one pass (three bad keys are three findings), so the file is mended
+# once. A file that cannot be used as a whole - held by another program, a folder in its place, over
+# 262144 bytes, not UTF-8, not JSON, a key written twice, not the shape of schema/module-settings.v1 -
+# is refused the same way. Only NO file is the defaults: a file, a settings folder or a home that is
+# not there is "defaults" with no finding. A malformed DECLARATION is the one thing that throws here,
+# when it is declared: that is a programming error, and the suite of the module that made it must fail.
+#
+# HOW THIS RELATES TO core/NodeEngineLayers.ps1. That file reads the engine's two override files under
+# the same home (engine.json as the default layer, engine-live.json as the live one) and this file takes
+# its rule: a file that is there and fails a check is never dropped and acted on without it; every
+# problem is named with its file; a file that is not there is no problem. What is checked against
+# differs: there, the engine's one registry (core/config-keys.json, through core/EngineConfig.ps1);
+# here, the table the module itself declared. And three things differ in how (its code was read for
+# this on 2026-10-07, not run):
+#   - It answers { layers; problems } and each caller refuses when problems is not empty, while layers
+#     still holds what did parse. Here a refusal hands back NO values, so the caller that forgets to
+#     look is stopped by the $null and not served a default.
+#   - It reads bytes that must be plain ASCII and passes the parser's own words on. Here the file is
+#     UTF-8 and nothing the parser says is passed on (two of the reasons further down).
+#   - It looks for a FILE of that name (Test-Path -PathType Leaf), so a folder standing in the file's
+#     place is "not there". Here a folder in the file's place is refused: something is there, and it
+#     is not a settings file.
 #
 # THE KINDS, and what "allowed range" means for each. min and max are inclusive.
 #   whole      A whole number, an Int32. min and max are required: no number here is unbounded. In the
@@ -94,7 +128,8 @@
 #     with ranges. So the table is declared by the module, in code, beside the code that uses it, and
 #     is not a row in a shared file that every module's pull request would have to edit.
 #   - Its findings are { severity; code; source; path; detail } and a bad layer blocks resolution.
-#     Here a finding is one sentence and the default is used: nothing downstream branches on a code.
+#     Here a finding is one sentence, and a bad file blocks the module the same way: what downstream
+#     branches on is the answer's state, never a code inside a finding.
 #   - Its files are plain ASCII and a byte-order mark is a finding. This file is a PERSON's, may hold a
 #     folder under a profile whose name is not ASCII, and is saved by editors that write a mark: it is
 #     UTF-8, a leading mark is skipped, and text values may hold any character but a control character.
@@ -335,10 +370,26 @@ function ConvertTo-HordeModuleSettingsPlain {
 }
 
 function Get-HordeModuleSettingsFileSentence {
-    # The one sentence for a file that cannot be used as a whole, whoever found out: the text reading
-    # or the file reading.
-    param([string]$Module, [string]$Problem)
-    return ("the settings file of " + $Module + " " + $Problem + "; every setting of " + $Module + " is its default")
+    # THE ONE SENTENCE OF A REFUSAL, whoever found the problem (the text reading or the file reading):
+    # the file, the module, that the file is refused, and why. -File goes through the same plain
+    # writing as every other part a person supplied (a home may be under a profile whose name is not
+    # ASCII); the words that say what was done stand before -Problem, where no cut reaches them.
+    param([string]$Module, [string]$File, [string]$Problem)
+    return ("the settings file '" + (ConvertTo-HordeModuleSettingsPlain -Text $File -Max $script:HordeModuleSettingsPartShown) + "' of " + $Module + " is refused: " + $Problem)
+}
+
+function New-HordeModuleSettingsAnswer {
+    # The answer of both readers: { state; values; findings; path }. -Values is a table of name to
+    # value, or $null for a refusal, which then HANDS BACK NO VALUES AT ALL. A NEW OBJECT EACH TIME,
+    # with a property per declared name: under strict mode a misspelt name is an error where a table
+    # would answer with nothing, and a caller that changes its answer changes only that.
+    param([string]$State, $Values, [string[]]$Findings, [string]$Path)
+    $object = $null
+    if ($null -ne $Values) {
+        $object = New-Object psobject
+        foreach ($name in @($Values.Keys)) { Add-Member -InputObject $object -NotePropertyName $name -NotePropertyValue $Values[$name] }
+    }
+    return [pscustomobject]@{ state = $State; values = $object; findings = [string[]]@($Findings); path = $Path }
 }
 
 function Assert-HordeModuleSettingsDeclaration {
@@ -348,8 +399,9 @@ function Assert-HordeModuleSettingsDeclaration {
 }
 
 function Read-HordeModuleSettingsDocument {
-    # The settings part of a file's text, or why the text cannot be read as a whole: { settings;
-    # problems }, one of them empty. Each problem finishes the sentence "the settings file of <module> ...".
+    # The settings part of a file's text, or why the text cannot be used as a whole: { settings;
+    # problems }, one of them empty. Each problem finishes the sentence "the settings file ... is
+    # refused: it ...".
     # IN THIS ORDER: the length before anything walks the text; what JSON is made of before the
     # duplicate scan, which reads only double-quoted keys; the duplicate scan before the parser, which
     # keeps one of two equal keys and throws on two that differ in case; the schema last.
@@ -374,52 +426,55 @@ function Read-HordeModuleSettingsDocument {
 }
 
 function Read-HordeModuleSettingsText {
-    # A module's settings from its file's TEXT: { values; findings }. PURE: the same declaration and
-    # text give the same answer on any machine, and nothing is read but Horde's own schema file. -Text
-    # is $null when there is no file, which is every default and no finding; "" is an empty file, which
-    # is a finding. The rules are in the header.
-    param([Parameter(Mandatory = $true)]$Declaration, [AllowNull()]$Text)
+    # A module's settings from its file's TEXT: { state; values; findings; path }. PURE: the same
+    # declaration, text and -File give the same answer on any machine, and nothing is read but Horde's
+    # own schema file. -Text is $null when there is no file, which is "defaults" and no finding; "" is
+    # an empty file, which is refused. -File is what the findings and the answer's path call the file
+    # (Get-HordeModuleSettings gives the whole path); it is only ever written, never opened, and
+    # without it the file is called by its place under any home, settings\<module>.json. ANY finding
+    # refuses: the answer then carries no values. The rules are in the header.
+    param([Parameter(Mandatory = $true)]$Declaration, [AllowNull()]$Text, [string]$File = "")
     Assert-HordeModuleSettingsDeclaration -Declaration $Declaration
     if ($null -ne $Text -and $Text -isnot [string]) { throw "-Text is the file's text, or `$null when there is no file" }
     $module = "" + $Declaration.module
+    $called = $File
+    if ($called -eq "") { $called = [System.IO.Path]::Combine($script:HordeModuleSettingsFolder, ($module + ".json")) }
     $byName = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
     $byNameAnyCase = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
     $values = [ordered]@{}
     foreach ($entry in @($Declaration.settings)) { $byName[$entry.name] = $entry; $byNameAnyCase[$entry.name] = $entry; $values[$entry.name] = $entry.default }
+    if ($null -eq $Text) { return (New-HordeModuleSettingsAnswer -State "defaults" -Values $values -Findings @() -Path $called) }
     $sentences = New-Object System.Collections.ArrayList
-    if ($null -ne $Text) {
-        # ONE LEADING BYTE-ORDER MARK IS SKIPPED, here and not only where the file is decoded, so the
-        # answer is the same whoever turned the bytes into text: .NET's GetString keeps the mark and
-        # 5.1's parser refuses it as "Invalid JSON primitive" (measured 2026-10-07).
-        $body = $Text
-        if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }
-        $doc = Read-HordeModuleSettingsDocument -Text $body
-        foreach ($problem in @($doc.problems)) { [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -Problem (ConvertTo-HordeModuleSettingsPlain -Text $problem -Max $script:HordeModuleSettingsPartShown))) }
-        if ($null -ne $doc.settings) {
-            # NAMES ARE COMPARED EXACTLY, so the file's keys go through an ordinal dictionary as the
-            # declaration's fields did: a property read on the parsed object would ignore case.
-            $given = Get-HordeObjectByKey $doc.settings
-            foreach ($key in @($given.Keys)) {
-                $shown = ConvertTo-HordeModuleSettingsPlain -Text $key -Max $script:HordeModuleSettingsNameShown
-                if (-not $byName.ContainsKey($key)) {
-                    $meant = ""
-                    if ($byNameAnyCase.ContainsKey($key)) { $meant = " (names are case-sensitive: '" + $byNameAnyCase[$key].name + "' is one)" }
-                    [void]$sentences.Add($module + " has no setting '" + $shown + "'" + $meant + "; it is not used")
-                    continue
-                }
-                $entry = $byName[$key]
-                $checked = Test-HordeModuleSettingValue -Entry $entry -Value $given[$key]
-                if ($checked.ok) { $values[$key] = $checked.value; continue }
-                $rule = ConvertTo-HordeModuleSettingsPlain -Text (Get-HordeModuleSettingRule -Entry $entry) -Max $script:HordeModuleSettingsPartShown
-                [void]$sentences.Add($module + " setting '" + $shown + "' must be " + $rule + "; the file gives " + (Get-HordeModuleSettingGiven -Value $given[$key]) + "; the default is used")
+    # ONE LEADING BYTE-ORDER MARK IS SKIPPED, here and not only where the file is decoded, so the
+    # answer is the same whoever turned the bytes into text: .NET's GetString keeps the mark and
+    # 5.1's parser refuses it as "Invalid JSON primitive" (measured 2026-10-07).
+    $body = $Text
+    if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }
+    $doc = Read-HordeModuleSettingsDocument -Text $body
+    foreach ($problem in @($doc.problems)) { [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -File $called -Problem ("it " + (ConvertTo-HordeModuleSettingsPlain -Text $problem -Max $script:HordeModuleSettingsPartShown)))) }
+    if ($null -ne $doc.settings) {
+        # NAMES ARE COMPARED EXACTLY, so the file's keys go through an ordinal dictionary as the
+        # declaration's fields did: a property read on the parsed object would ignore case.
+        $given = Get-HordeObjectByKey $doc.settings
+        foreach ($key in @($given.Keys)) {
+            $shown = ConvertTo-HordeModuleSettingsPlain -Text $key -Max $script:HordeModuleSettingsNameShown
+            if (-not $byName.ContainsKey($key)) {
+                $meant = ""
+                if ($byNameAnyCase.ContainsKey($key)) { $meant = " (names are case-sensitive: '" + $byNameAnyCase[$key].name + "' is one)" }
+                [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -File $called -Problem ("it has the key '" + $shown + "', which is no setting of " + $module + $meant)))
+                continue
             }
+            $entry = $byName[$key]
+            $checked = Test-HordeModuleSettingValue -Entry $entry -Value $given[$key]
+            if ($checked.ok) { $values[$key] = $checked.value; continue }
+            $rule = ConvertTo-HordeModuleSettingsPlain -Text (Get-HordeModuleSettingRule -Entry $entry) -Max $script:HordeModuleSettingsPartShown
+            [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -File $called -Problem ("its key '" + $shown + "' must be " + $rule + "; it gives " + (Get-HordeModuleSettingGiven -Value $given[$key]))))
         }
     }
-    # A NEW OBJECT EACH TIME, with a property per declared name: under strict mode a misspelt name is an
-    # error where a table would answer with nothing, and a caller that changes its answer changes only that.
-    $answer = New-Object psobject
-    foreach ($name in @($values.Keys)) { Add-Member -InputObject $answer -NotePropertyName $name -NotePropertyValue $values[$name] }
-    return [pscustomobject]@{ values = $answer; findings = [string[]]@($sentences.ToArray()) }
+    # ANY FINDING REFUSES, and a refusal hands back no values: not the good ones beside the bad one, and
+    # not a default in its place.
+    if ($sentences.Count -gt 0) { return (New-HordeModuleSettingsAnswer -State "refused" -Values $null -Findings @($sentences.ToArray()) -Path $called) }
+    return (New-HordeModuleSettingsAnswer -State "read" -Values $values -Findings @() -Path $called)
 }
 
 function Get-HordeModuleSettingsPath {
@@ -435,15 +490,17 @@ function Get-HordeModuleSettingsPath {
 }
 
 function Get-HordeModuleSettings {
-    # A module's settings from its file under the home: { values; findings; path }. READS THAT ONE
-    # FILE AND WRITES NOTHING: no home, no settings folder and no file is ever created here (core/Home.ps1:
-    # "a reader must not make folders"), so a module with no file leaves no trace of having asked.
-    # A file or folder that is not there is every default and no finding. A file that is there and
-    # cannot be used is ONE finding and every default: larger than the limit (its length is asked
-    # before a byte is read), held by another program for itself, a folder in its place, or bytes that
-    # are not UTF-8 - which is what Windows PowerShell 5.1's own > writes (UTF-16), so the finding
-    # says how to save it. The decoder throws on a bad byte; a lenient one would put U+FFFD in a
-    # folder's name and say nothing.
+    # A module's settings from its file under the home: { state; values; findings; path }, path being
+    # the whole path of that file. READS THAT ONE FILE AND WRITES NOTHING: no home, no settings folder
+    # and no file is ever created here (core/Home.ps1: "a reader must not make folders"), so a module
+    # with no file leaves no trace of having asked. A file, folder or home that is not there is
+    # "defaults" and no finding. A file that is there and cannot be opened and decoded is REFUSED with
+    # one finding: larger than the limit (its length is asked before a byte is read), held by another
+    # program for itself, a folder in its place, or bytes that are not UTF-8 - which is what Windows
+    # PowerShell 5.1's own > writes (UTF-16), so the finding says how to save it. The decoder throws on
+    # a bad byte; a lenient one would put U+FFFD in a folder's name and say nothing. Nothing here is
+    # retried and nothing falls back: a file held for a moment by an editor is a refusal the module
+    # passes on, and the person asks again.
     param([Parameter(Mandatory = $true)]$Declaration, [string]$HordeHome = "")
     $path = Get-HordeModuleSettingsPath -Declaration $Declaration -HordeHome $HordeHome
     $text = $null
@@ -464,8 +521,6 @@ function Get-HordeModuleSettings {
         $cause = $_.Exception.GetBaseException()
         if (-not ($cause -is [System.IO.FileNotFoundException] -or $cause -is [System.IO.DirectoryNotFoundException])) { $trouble = "cannot be read (" + $cause.GetType().Name + ")" }
     } finally { if ($null -ne $stream) { $stream.Dispose() } }
-    $read = Read-HordeModuleSettingsText -Declaration $Declaration -Text $text
-    $findings = $read.findings
-    if ($trouble -ne "") { $findings = [string[]]@(Get-HordeModuleSettingsFileSentence -Module $Declaration.module -Problem $trouble) }
-    return [pscustomobject]@{ values = $read.values; findings = $findings; path = $path }
+    if ($trouble -ne "") { return (New-HordeModuleSettingsAnswer -State "refused" -Values $null -Findings @(Get-HordeModuleSettingsFileSentence -Module $Declaration.module -File $path -Problem ("it " + $trouble)) -Path $path) }
+    return (Read-HordeModuleSettingsText -Declaration $Declaration -Text $text -File $path)
 }

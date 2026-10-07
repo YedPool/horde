@@ -3,13 +3,18 @@
 # Each breaks one rule of the declaration, of the pure reading of a file's text, or of the reading of the
 # file; test\test-module-settings.ps1 must fail a check for every one of them. A reading that throws is
 # turned into a failed check by the suite's own helpers, because "never a throw" is a rule here and
-# tools\Mutate.ps1 counts a crashed suite as nothing caught.
+# tools\Mutate.ps1 counts a crashed suite as nothing caught. THE RULE MOST OF THE LATER ONES ATTACK: a
+# file that fails a check is refused whole - state "refused", no values, every problem named with the
+# file - and never falls back to a default.
 #
 # NOT HERE, because nothing could tell them apart from the code as it is: the order of the checks of a
 # text (length, pieces, duplicates, parser, schema) where two of them refuse the same text in different
 # words - each check's own mutant is here instead - and the branch of the absolute-path test for a
 # system whose separator is not a backslash, which no suite on Windows reaches (the header of the
-# target says only Windows is tested).
+# target says only Windows is tested). And one that was here while a bad value was reported and its
+# default used, "wrong-value-used" (the value put among the values although its check failed): a failed
+# check now refuses and a refusal hands back no values, so where that value would have gone nobody can
+# look. What stands in its place is refusal-hands-back-values and findings-do-not-refuse.
 @{
     Target = "core\ModuleSettings.ps1"
     Suite  = "test\test-module-settings.ps1"
@@ -303,17 +308,41 @@
            Find = '$script:HordeModuleSettingsPartShown = 300'
            Replace = '$script:HordeModuleSettingsPartShown = 3000' }
         @{ Name = "file-problem-not-made-plain"
-           Find = '-Problem (ConvertTo-HordeModuleSettingsPlain -Text $problem -Max $script:HordeModuleSettingsPartShown)'
-           Replace = '-Problem $problem' }
+           Find = '(ConvertTo-HordeModuleSettingsPlain -Text $problem -Max $script:HordeModuleSettingsPartShown)'
+           Replace = '$problem' }
+        @{ Name = "file-problem-does-not-say-it"
+           Find = '-Problem ("it " + (ConvertTo-HordeModuleSettingsPlain -Text $problem'
+           Replace = '-Problem ("" + (ConvertTo-HordeModuleSettingsPlain -Text $problem' }
         @{ Name = "rule-not-made-plain"
            Find = '$rule = ConvertTo-HordeModuleSettingsPlain -Text (Get-HordeModuleSettingRule -Entry $entry) -Max $script:HordeModuleSettingsPartShown'
            Replace = '$rule = Get-HordeModuleSettingRule -Entry $entry' }
         @{ Name = "key-name-not-made-plain"
            Find = '$shown = ConvertTo-HordeModuleSettingsPlain -Text $key -Max $script:HordeModuleSettingsNameShown'
            Replace = '$shown = $key' }
-        @{ Name = "file-finding-does-not-say-defaults"
-           Find = '+ "; every setting of " + $Module + " is its default")'
-           Replace = '+ "")' }
+        @{ Name = "refusal-does-not-say-refused"
+           Find = '+ "'' of " + $Module + " is refused: " + $Problem)'
+           Replace = '+ "'' of " + $Module + ": " + $Problem)' }
+        @{ Name = "refusal-does-not-name-the-module"
+           Find = '+ "'' of " + $Module + " is refused: " + $Problem)'
+           Replace = '+ "'' is refused: " + $Problem)' }
+        @{ Name = "refusal-does-not-name-the-file"
+           Find = 'return ("the settings file ''" + (ConvertTo-HordeModuleSettingsPlain -Text $File -Max $script:HordeModuleSettingsPartShown) + "'' of "'
+           Replace = 'return ("the settings file" + " of "' }
+        @{ Name = "file-name-not-made-plain"
+           Find = '(ConvertTo-HordeModuleSettingsPlain -Text $File -Max $script:HordeModuleSettingsPartShown)'
+           Replace = '$File' }
+        @{ Name = "file-name-cut-as-a-key-is"
+           Find = '(ConvertTo-HordeModuleSettingsPlain -Text $File -Max $script:HordeModuleSettingsPartShown)'
+           Replace = '(ConvertTo-HordeModuleSettingsPlain -Text $File -Max $script:HordeModuleSettingsNameShown)' }
+        @{ Name = "refusal-hands-back-an-empty-object"
+           Find = '    if ($null -ne $Values) {'
+           Replace = '    if ($true) {' }
+        @{ Name = "path-left-out-of-the-answer"
+           Find = 'findings = [string[]]@($Findings); path = $Path }'
+           Replace = 'findings = [string[]]@($Findings); path = "" }' }
+        @{ Name = "state-left-out-of-the-answer"
+           Find = '[pscustomobject]@{ state = $State; values = $object;'
+           Replace = '[pscustomobject]@{ values = $object;' }
         @{ Name = "any-object-is-a-declaration"
            Find = 'if ($null -eq $Declaration -or $Declaration.PSObject.TypeNames -notcontains "Horde.ModuleSettings") {'
            Replace = 'if ($false) {' }
@@ -375,8 +404,47 @@
            Find = 'if ($null -ne $Text -and $Text -isnot [string]) {'
            Replace = 'if ($false) {' }
         @{ Name = "no-file-and-any-file-alike"
-           Find = '    if ($null -ne $Text) {'
-           Replace = '    if ($false) {' }
+           Find = 'if ($null -eq $Text) { return (New-HordeModuleSettingsAnswer -State "defaults"'
+           Replace = 'if ($true) { return (New-HordeModuleSettingsAnswer -State "defaults"' }
+        @{ Name = "no-file-read-as-a-file"
+           Find = 'if ($null -eq $Text) { return (New-HordeModuleSettingsAnswer -State "defaults"'
+           Replace = 'if ($false) { return (New-HordeModuleSettingsAnswer -State "defaults"' }
+        @{ Name = "no-file-called-read"
+           Find = 'New-HordeModuleSettingsAnswer -State "defaults" -Values $values'
+           Replace = 'New-HordeModuleSettingsAnswer -State "read" -Values $values' }
+        @{ Name = "no-file-is-a-refusal"
+           Find = 'New-HordeModuleSettingsAnswer -State "defaults" -Values $values'
+           Replace = 'New-HordeModuleSettingsAnswer -State "refused" -Values $null' }
+        @{ Name = "good-file-called-defaults"
+           Find = 'New-HordeModuleSettingsAnswer -State "read" -Values $values'
+           Replace = 'New-HordeModuleSettingsAnswer -State "defaults" -Values $values' }
+        @{ Name = "findings-do-not-refuse"
+           Find = 'if ($sentences.Count -gt 0) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "one-finding-does-not-refuse"
+           Find = 'if ($sentences.Count -gt 0) { return'
+           Replace = 'if ($sentences.Count -gt 1) { return' }
+        @{ Name = "refusal-called-read"
+           Find = '-State "refused" -Values $null -Findings @($sentences.ToArray())'
+           Replace = '-State "read" -Values $null -Findings @($sentences.ToArray())' }
+        @{ Name = "refusal-hands-back-values"
+           Find = '-State "refused" -Values $null -Findings @($sentences.ToArray())'
+           Replace = '-State "refused" -Values $values -Findings @($sentences.ToArray())' }
+        @{ Name = "refusal-names-only-the-first-problem"
+           Find = '-State "refused" -Values $null -Findings @($sentences.ToArray())'
+           Replace = '-State "refused" -Values $null -Findings @($sentences[0])' }
+        @{ Name = "refusal-names-no-problem"
+           Find = '-State "refused" -Values $null -Findings @($sentences.ToArray())'
+           Replace = '-State "refused" -Values $null -Findings @()' }
+        @{ Name = "file-called-by-the-module-alone"
+           Find = '$called = [System.IO.Path]::Combine($script:HordeModuleSettingsFolder, ($module + ".json"))'
+           Replace = '$called = $module' }
+        @{ Name = "given-file-name-ignored"
+           Find = 'if ($called -eq "") {'
+           Replace = 'if ($true) {' }
+        @{ Name = "answer-path-is-not-the-file-named"
+           Find = '-Findings @($sentences.ToArray()) -Path $called)'
+           Replace = '-Findings @($sentences.ToArray()) -Path "")' }
         @{ Name = "byte-order-mark-kept"
            Find = 'if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }'
            Replace = '' }
@@ -390,8 +458,11 @@
            Find = '$byName = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::Ordinal)'
            Replace = '$byName = New-Object ''System.Collections.Generic.Dictionary[string,object]'' ([System.StringComparer]::OrdinalIgnoreCase)' }
         @{ Name = "unknown-key-ignored-in-silence"
-           Find = '[void]$sentences.Add($module + " has no setting ''" + $shown + "''" + $meant + "; it is not used")'
+           Find = '[void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -File $called -Problem ("it has the key ''" + $shown + "'', which is no setting of " + $module + $meant)))'
            Replace = '$null = $shown' }
+        @{ Name = "unknown-key-finding-names-no-key"
+           Find = '-Problem ("it has the key ''" + $shown + "'', which is no setting of " + $module + $meant)'
+           Replace = '-Problem ("it has a key that is no setting of " + $module + $meant)' }
         @{ Name = "name-meant-not-said"
            Find = 'if ($byNameAnyCase.ContainsKey($key)) {'
            Replace = 'if ($false) {' }
@@ -399,11 +470,20 @@
            Find = '$meant = " (names are case-sensitive: ''" + $byNameAnyCase[$key].name + "'' is one)"'
            Replace = '$meant = " (names are case-sensitive: ''" + $key + "'' is one)"' }
         @{ Name = "wrong-value-ignored-in-silence"
-           Find = '[void]$sentences.Add($module + " setting ''" + $shown + "'' must be " + $rule + "; the file gives " + (Get-HordeModuleSettingGiven -Value $given[$key]) + "; the default is used")'
+           Find = '[void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -File $called -Problem ("its key ''" + $shown + "'' must be " + $rule + "; it gives " + (Get-HordeModuleSettingGiven -Value $given[$key]))))'
            Replace = '$null = $shown' }
-        @{ Name = "wrong-value-used"
-           Find = 'if ($checked.ok) { $values[$key] = $checked.value; continue }'
-           Replace = '$values[$key] = $given[$key]; if ($checked.ok) { continue }' }
+        @{ Name = "wrong-value-finding-names-no-key"
+           Find = '-Problem ("its key ''" + $shown + "'' must be " + $rule + "; it gives "'
+           Replace = '-Problem ("one of its keys must be " + $rule + "; it gives "' }
+        @{ Name = "wrong-value-finding-does-not-say-what-was-given"
+           Find = ' + "; it gives " + (Get-HordeModuleSettingGiven -Value $given[$key]))))'
+           Replace = ')))' }
+        @{ Name = "first-wrong-value-ends-the-reading"
+           Find = ' + "; it gives " + (Get-HordeModuleSettingGiven -Value $given[$key]))))'
+           Replace = ' + "; it gives " + (Get-HordeModuleSettingGiven -Value $given[$key])))); break' }
+        @{ Name = "first-unknown-key-ends-the-reading"
+           Find = '                continue'
+           Replace = '                break' }
         @{ Name = "good-value-not-used"
            Find = 'if ($checked.ok) { $values[$key] = $checked.value; continue }'
            Replace = 'if ($checked.ok) { continue }' }
@@ -461,8 +541,17 @@
         @{ Name = "undecodable-file-not-reported"
            Find = 'catch { $trouble = "is not UTF-8 text; save it as UTF-8" }'
            Replace = 'catch { }' }
-        @{ Name = "path-left-out-of-the-answer"
-           Find = 'findings = $findings; path = $path }'
-           Replace = 'findings = $findings; path = "" }' }
+        @{ Name = "file-trouble-called-read"
+           Find = '-State "refused" -Values $null -Findings @(Get-HordeModuleSettingsFileSentence'
+           Replace = '-State "read" -Values $null -Findings @(Get-HordeModuleSettingsFileSentence' }
+        @{ Name = "file-trouble-names-no-file"
+           Find = '-File $path -Problem ("it " + $trouble)) -Path $path)'
+           Replace = '-File "" -Problem ("it " + $trouble)) -Path $path)' }
+        @{ Name = "file-trouble-answer-without-its-path"
+           Find = '-File $path -Problem ("it " + $trouble)) -Path $path)'
+           Replace = '-File $path -Problem ("it " + $trouble)) -Path "")' }
+        @{ Name = "text-reading-not-given-the-path"
+           Find = '-Text $text -File $path)'
+           Replace = '-Text $text)' }
     )
 }
