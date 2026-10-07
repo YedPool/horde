@@ -25,6 +25,7 @@ foreach ($t in @(Get-HordeTransportFiles)) { . $t }
 . (Join-Path $root "remote\Mirror.ps1")
 . (Join-Path $root "cli\NodeServe.ps1")
 . (Join-Path $root "cli\HubServe.ps1")
+. (Join-Path $root "remote\Journal.ps1")
 
 $fx = Join-Path $root "test\fixtures\node-serve"
 $viewPath = Join-Path $fx "view.json"
@@ -39,10 +40,56 @@ New-Item -ItemType Directory -Path $work | Out-Null
 
 function Start-Dialler {
     # The node's dialling loop in a second runspace; it dials at once.
-    param([string]$HubEndpoint, [string]$As = $device, [AllowEmptyString()][string]$Preamble, [int]$MaxDials = 1)
+    param([string]$HubEndpoint, [string]$As = $device, [AllowEmptyString()][string]$Preamble, [int]$MaxDials = 1, [string]$JournalRoot = "", [switch]$Acts, [switch]$ReadOnly, [string]$MessagingHome = "", $Counter = $null)
     $ps = [PowerShell]::Create()
-    [void]$ps.AddCommand((Join-Path $fx "dial-peer.ps1")).AddParameter("Root", $root).AddParameter("HubEndpoint", $HubEndpoint).AddParameter("DeviceId", $As).AddParameter("ViewPath", $viewPath).AddParameter("Preamble", $Preamble).AddParameter("MaxDials", $MaxDials).AddParameter("IdleTimeoutMs", 20000)
+    [void]$ps.AddCommand((Join-Path $fx "dial-peer.ps1")).AddParameter("Root", $root).AddParameter("HubEndpoint", $HubEndpoint).AddParameter("DeviceId", $As).AddParameter("ViewPath", $viewPath).AddParameter("Preamble", $Preamble).AddParameter("MaxDials", $MaxDials).AddParameter("IdleTimeoutMs", 20000).AddParameter("JournalRoot", $JournalRoot).AddParameter("MessagingHome", $MessagingHome).AddParameter("Counter", $Counter)
+    if ($Acts) { [void]$ps.AddParameter("Acts", $true) }
+    if ($ReadOnly) { [void]$ps.AddParameter("ReadOnly", $true) }
     return [pscustomobject]@{ ps = $ps; h = $ps.BeginInvoke() }
+}
+# A fake hub's side of one dialled link, frame by frame (test/test-node-serve-act.ps1's helpers).
+function Hello {
+    $t = Get-HordeLinkTime
+    return [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = 1; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = $hubId; name = "fixture-hub"; protocols = @(1); verbsVersions = @(1); hordeVersion = "0.1.0"; t1 = $t } }
+}
+function Req {
+    param([string]$Verb, $ArgsObject)
+    return [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = $Verb; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = $ArgsObject }
+}
+function Spawn { return [pscustomobject][ordered]@{ label = "E"; role = "orc"; runId = "20261007-120000-dial"; profile = "alpha"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; title = "dialled orc"; permission = "bypass" } }
+function Deliver { return [pscustomobject][ordered]@{ messageId = (New-HordeLinkFrameId); sessionId = "aaaaaaaa-1111-4222-8333-444444444444"; label = "A12"; from = [pscustomobject][ordered]@{ deviceId = $hubId; sessionId = "bbbbbbbb-0000-4000-8000-000000000009"; label = "M" }; body = "hello over a dialled link"; ttlSeconds = 3600 } }
+function Line { param($Frame) $b = ConvertTo-HordeFrameBytes -Frame $Frame -Contract $contract; if (-not $b.ok) { throw ("not sendable: " + $b.reason) }; return [System.Text.Encoding]::ASCII.GetString($b.bytes, 0, $b.bytes.Length - 1) }
+function Talk {
+    param($Link, $Frame)
+    $null = Send-HordeLinkFrame -Link $Link -Frame (Line $Frame)
+    $got = Receive-HordeLinkFrame -Link $Link -TimeoutMs 30000
+    if ("$($got.state)" -cne "known") { return $null }
+    $d = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::ASCII.GetBytes("$($got.value)")) -Contract $contract
+    if (-not $d.ok) { return $null }
+    return $d.frame
+}
+function Ask-Dialled {
+    # Start a dialling node with -Opts, accept its link as a fake hub, say hello, send -Frame, and return
+    # { answer; node }.
+    param([hashtable]$Opts, $Frame)
+    $ep = "hub-ask-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
+    $listener = New-HubListener -Name $ep
+    $answer = $null
+    $nd = $null
+    try {
+        $node = Start-Dialler -HubEndpoint $ep -Preamble "" @Opts
+        $acc = Receive-HordeTransportLink -Listener $listener -TimeoutMs 20000
+        if ($acc.state -ceq "known") {
+            $link = $acc.value
+            try {
+                $null = Talk $link (Hello)
+                $answer = Talk $link $Frame
+                $null = Send-HordeLinkFrame -Link $link -Frame (Line (New-HordeLinkBye -Code "shutdown" -Reason "done" -Seq 9 -Contract $contract))
+            } finally { Close-HordeLink -Link $link }
+        }
+        $nd = Stop-Dialler $node
+    } finally { Stop-HordeTransportListener -Listener $listener }
+    return [pscustomobject]@{ answer = $answer; node = $nd }
 }
 function Stop-Dialler {
     param($Node)
@@ -138,6 +185,37 @@ try {
         Check ($said -clike "a dialled link was refused:*" -and $acc.value.closed) ("a refused dialled link is closed at the hub's end (" + $said + ")")
         Close-HordeLink -Link $o.value
     } finally { Stop-HordeTransportListener -Listener $listener }
+
+    Write-Host ""
+    Write-Host "--- a dialled link is served as an accepted one is: acts, read-only, messaging ---" -ForegroundColor Cyan
+    # Dial is the always-on box's production path: a node started -ReadOnly that dials in must not act
+    # (coordinator, 2026-10-07). A fake hub accepts the dialled link and asks for a spawn.
+    $jA = Join-Path $work "journal-acts"
+    Initialize-HordeJournal -Root $jA -Kind "request" | Out-Null
+    $count = [hashtable]::Synchronized(@{ acts = 0 })
+    $q = Req "session.spawn" (Spawn)
+    $r = Ask-Dialled -Opts @{ JournalRoot = $jA; Acts = $true; Counter = $count } -Frame $q
+    Check ($null -ne $r.answer -and "$($r.answer.result.value.state)" -ceq "done" -and [int]$count["acts"] -eq 1) ("CONTROL: a dialling node that serves acts acts on a spawn over its own link, once (" + $count["acts"] + " act(s); " + "$($r.answer.result.value.state)$($r.answer.error.code)" + ")")
+    Check ((Get-HordeJournalEntry -Root $jA -Id $q.requestId).state -ceq "known") "and records it in its journal"
+    $jR = Join-Path $work "journal-readonly"
+    Initialize-HordeJournal -Root $jR -Kind "request" | Out-Null
+    $count = [hashtable]::Synchronized(@{ acts = 0 })
+    $q = Req "session.spawn" (Spawn)
+    $r = Ask-Dialled -Opts @{ JournalRoot = $jR; Acts = $true; ReadOnly = $true; Counter = $count } -Frame $q
+    Check ($null -ne $r.answer -and "$($r.answer.error.code)" -ceq "refused" -and "$($r.answer.error.reason)" -clike "*read verbs only*") ("a dialling node started -ReadOnly refuses a spawn over its own link as read-only (" + "$($r.answer.error.code): $($r.answer.error.reason)" + ")")
+    Check ([int]$count["acts"] -eq 0) ("and acts on nothing (" + $count["acts"] + " act(s))")
+    Check ((Get-HordeJournalEntry -Root $jR -Id $q.requestId).state -cne "known") "and journals nothing"
+    # Messaging reaches a dialled link: with messaging built and no messenger named, a deliver is
+    # refused for that reason, which only the messaging object gives.
+    $mh = Join-Path $work "messaging-home"
+    [void][System.IO.Directory]::CreateDirectory($mh)
+    $r = Ask-Dialled -Opts @{ MessagingHome = $mh } -Frame (Req "session.deliver" (Deliver))
+    Check ($null -ne $r.answer -and "$($r.answer.error.code)" -ceq "refused" -and "$($r.answer.error.reason)" -clike "*no messenger was named*") ("a dialling node's messaging answers a deliver over its own link (" + "$($r.answer.error.code): $($r.answer.error.reason)" + ")")
+    $r = Ask-Dialled -Opts @{} -Frame (Req "session.deliver" (Deliver))
+    Check ($null -ne $r.answer -and "$($r.answer.error.reason)" -cnotlike "*no messenger was named*") ("CONTROL: with no messaging built the answer is another, so the check above sees the messaging object (" + "$($r.answer.error.code): $($r.answer.error.reason)" + ")")
+    # horde node serve -Dial hands the dial loop what it hands the listening loop.
+    $nodeCmd = [System.IO.File]::ReadAllText((Join-Path $root "cli\commands\node.ps1"))
+    Check ($nodeCmd -match 'Invoke-HordeNodeDial [^\r\n]*-Act \$act -Messaging \$messaging -ReadOnly:\$ReadOnly') "horde node serve -Dial passes the node's acts, messaging and -ReadOnly to the dial loop"
 
     Write-Host ""
     Write-Host "--- a hub that cannot be reached: the node dials again, waiting longer each time ---" -ForegroundColor Cyan

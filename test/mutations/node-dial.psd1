@@ -8,6 +8,14 @@
         @{ Name = "dialled-link-unserved"
            Find = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs'
            Replace = 'Close-HordeLink -Link $open.value; $ended = "closed by the protocol"' }
+        # Dial is the always-on box's production path (coordinator, 2026-10-07): a read-only node that
+        # dials in must not act, and a dialled link gets the node's messaging.
+        @{ Name = "dial-drops-readonly"
+           Find = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs'
+           Replace = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -IdleTimeoutMs $IdleTimeoutMs' }
+        @{ Name = "dial-drops-messaging"
+           Find = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs'
+           Replace = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs' }
         @{ Name = "backoff-flat"
            Find = '$wait = [int][Math]::Min($BackoffMaxMs, 1000 * [Math]::Pow(2, [Math]::Min(16, $streak - 1)))'
            Replace = '$wait = 1000' }
