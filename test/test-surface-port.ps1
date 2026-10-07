@@ -179,6 +179,32 @@ Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ } }) }
 Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ args = @{ x = @{ type = "object" } }; run = { } } }) } "not one of string, integer, boolean") "and an argument of a type that could carry anything"
 
 Write-Host ""
+Write-Host "--- a value too deep to be written whole is a failure, never half a value ---" -ForegroundColor Cyan
+# Past its depth, Windows PowerShell 5.1 writes the rest of a value as the NAME OF ITS TYPE and says
+# nothing: a page was handed the text "System.Collections.Hashtable" where its data should be (review
+# of 2026-10-06, finding A11).
+function New-Nested { param([int]$Levels, [string]$Kind = "table") $v = "leaf"; for ($i = 0; $i -lt $Levels; $i++) { if ($Kind -ceq "table") { $v = @{ a = $v } } elseif ($Kind -ceq "object") { $v = [pscustomobject]@{ a = $v } } else { $v = @($v, 0) } }; return , $v }
+$script:deep = $null
+$deepBridge = New-HordeSurfaceBridge -Events @("told") -Requests ([ordered]@{ "deep" = @{ run = { return , $script:deep } } })
+function AskDeep { return (Invoke-HordeSurfaceRequest -Bridge $deepBridge -Text '{"v":1,"id":5,"request":"deep"}') }
+foreach ($kind in @("table", "object", "list")) {
+    $script:deep = New-Nested 16 $kind
+    $fits = AskDeep
+    Check ($fits.refused -ceq "" -and $fits.reply -like '*"ok":true*' -and $fits.reply -like '*"leaf"*' -and $fits.reply -notlike "*System.*" -and $fits.reply -notlike "*@{*") ("CONTROL: a " + $kind + " nested 16 deep crosses whole")
+    $script:deep = New-Nested 17 $kind
+    $tooDeep = AskDeep
+    $said = $tooDeep.reply | ConvertFrom-Json
+    Check ($said.ok -eq $false -and $said.reply -eq 5 -and $said.reason -like "'deep' failed: its answer could not be handed over: the value nests more than 16 levels deep*" -and $tooDeep.refused -ceq "") ("a " + $kind + " nested 17 deep is answered as a failure of the request, in words")
+    Check ($tooDeep.reply -notlike "*leaf*" -and $tooDeep.reply -notlike "*System.*" -and $tooDeep.reply -notlike "*@{*") "and nothing of the value, and no type's name, is handed to the page"
+    Check (Throws { ConvertTo-HordeSurfaceEvent -Bridge $deepBridge -Name "told" -Value (New-Nested 17 $kind) } "nests more than 16 levels deep") ("an event carrying such a " + $kind + " is not pushed")
+}
+$loop = @{ name = "loop" }; $loop["self"] = $loop
+$script:deep = $loop
+$looped = AskDeep
+Check (($looped.reply | ConvertFrom-Json).ok -eq $false -and $looped.reply -like "*nests more than 16 levels deep*") "a value that holds itself is a failure too, and does not hang the window"
+Check ($deepBridge.refused -eq 0 -and $deepBridge.answered -eq 3) "none of these is a refusal - the page asked properly - and only the three that crossed count as answered"
+
+Write-Host ""
 Write-Host "--- a surface is registered, picked by what it can do, and only then opened ---" -ForegroundColor Cyan
 function New-FakeSurface {
     param([string]$Name, [string]$Native = "yes", [string]$Declared = "")

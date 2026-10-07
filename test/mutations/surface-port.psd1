@@ -68,6 +68,30 @@
         @{ Name = "a-spec-ignores-how-many-messages-to-read"
            Find = 'messagesPerSecond = [int]$Settings.values.messagesPerSecond'
            Replace = 'messagesPerSecond = 100' }
+        # --- a value too deep to be written whole
+        @{ Name = "a-value-too-deep-is-written-in-pieces"
+           Find = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 1))) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "a-value-one-level-too-deep-is-written"
+           Find = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 1))) { throw'
+           Replace = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 2))) { throw' }
+        @{ Name = "a-value-of-the-allowed-depth-is-refused"
+           Find = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 1))) { throw'
+           Replace = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most $script:HordeSurfaceJsonDepth)) { throw' }
+        @{ Name = "what-a-table-holds-is-not-looked-into"
+           Find = 'if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.Values) }'
+           Replace = 'if ($Value -is [System.Collections.IDictionary]) { $inside = @() }' }
+        @{ Name = "an-object-is-not-a-level"
+           Find = 'elseif ($Value -is [System.Management.Automation.PSCustomObject]) { $inside ='
+           Replace = 'elseif ($false) { $inside =' }
+        @{ Name = "a-list-is-not-a-level"
+           Find = 'elseif ($Value -is [System.Collections.IEnumerable]) { $inside = @($Value) }'
+           Replace = 'elseif ($false) { $inside = @($Value) }' }
+        @{ Name = "an-answer-that-could-not-be-written-is-said-to-be-fine"
+           Find = '$say.ok = $false; $say.reason = ("''" + $request.name + "'' failed: its answer could not be handed over: "'
+           Replace = '$say.ok = $true; $say.reason = ("''" + $request.name + "'' failed: its answer could not be handed over: "' }
+        # No mutant lets the walk go on past its limit: a value that holds itself would then be walked
+        # until the call stack gave out, and a suite that dies has caught nothing.
         # --- the module's settings
         @{ Name = "a-bridge-ignores-the-message-size-it-was-given"
            Find = 'messageChars = [int]$Settings.values.messageChars;'
