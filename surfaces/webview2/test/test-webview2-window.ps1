@@ -335,8 +335,9 @@ $otherShapes = [ordered]@{ schemaVersion = 1; protocol = 7
     event = [ordered]@{ version = "ver"; name = "happened"; value = "got" } }
 $otherShapesPath = Join-Path $work "bridge-messages.json"
 [System.IO.File]::WriteAllText($otherShapesPath, (ConvertTo-Json -InputObject $otherShapes -Depth 5))
-$echo = [pscustomobject]@{ bridge = $null; heard = (New-Object System.Collections.ArrayList); phase = "talk"; timedOut = ""; limitMs = 30000; clock = [System.Diagnostics.Stopwatch]::StartNew(); inForce = ""; errorsSeen = @() }
-$echo.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
+$echo = [pscustomobject]@{ bridge = $null; heard = (New-Object System.Collections.ArrayList); phase = "talk"; timedOut = ""; limitMs = 30000; clock = [System.Diagnostics.Stopwatch]::StartNew(); inForce = ""; errorsSeen = @()
+    burst = 10000; burstAtMs = 0; refusedBeforeBurst = 0; refusedByBurst = -1; floods = -1; lastTickMs = 0; longestGapMs = 0; answeredAfterMs = -1 }
+$echo.bridge = New-HordeSurfaceBridge -Events @("poke", "burst") -Requests ([ordered]@{
     "echo" = @{ args = @{ text = @{ type = "string"; most = 600 } }; run = { param($Arguments, $State, $Window) [void]$State.heard.Add($Arguments["text"]); return ("heard " + $Arguments["text"]) } }
     "done" = @{ run = { param($Arguments, $State, $Window) $State.phase = "push"; return $true } }
 })
@@ -349,7 +350,28 @@ function Step-Echo {
         & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "poke" -Value "again")
         $State.phase = "pushed"
     }
-    elseif ($State.phase -ceq "pushed" -and @($State.heard) -ccontains "pushed again") { $State.errorsSeen = @($Window.errors); & $Window.close }
+    elseif ($State.phase -ceq "pushed" -and @($State.heard) -ccontains "pushed again") {
+        # THE BURST (review of 2026-10-06, finding A8): the page is told to post ten thousand messages
+        # at once behind the bridge's back, and to ask one honest request a second and a half later.
+        $State.refusedBeforeBurst = [int]$State.bridge.refused
+        $State.burstAtMs = $State.clock.ElapsedMilliseconds
+        $State.lastTickMs = $State.burstAtMs
+        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "burst" -Value $State.burst)
+        $State.phase = "burst"
+    }
+    elseif ($State.phase -ceq "burst") {
+        # How long the window's own thread was held is the longest wait between two of its ticks.
+        $nowMs = $State.clock.ElapsedMilliseconds
+        if (($nowMs - $State.lastTickMs) -gt $State.longestGapMs) { $State.longestGapMs = $nowMs - $State.lastTickMs }
+        $State.lastTickMs = $nowMs
+        if (@($State.heard) -ccontains "after the burst") {
+            $State.answeredAfterMs = $nowMs - $State.burstAtMs
+            $State.refusedByBurst = [int]$State.bridge.refused - $State.refusedBeforeBurst
+            $State.floods = @($State.bridge.refusals | Where-Object { $_.reason -like "*is not listened to for the next second*" }).Count
+            $State.errorsSeen = @($Window.errors)
+            & $Window.close
+        }
+    }
 }
 # THIS WINDOW ALSO OPENS ON A HOME WHOSE SETTINGS FILE HAS A FAULT, written now: a name the module
 # never declared. The spec below reads the file itself, so the fault must reach the window's caller.
@@ -369,10 +391,16 @@ try {
 } finally { $script:HordeSurfaceMessages = $shippedShapes; $shapesPath = Join-Path $root "surfaces\bridge-messages.json" }
 Check ($echo.inForce -ceq "protocol 7, a request's id is 'n'" -and (Get-HordeSurfaceMessages).protocol -eq 1) ("CONTROL: while that window stood, the other definition was the one in force (" + $echo.inForce + "), and the shipped one is back")
 Check ($echoShown.state -ceq "closed" -and $echo.timedOut -ceq "") ("a second window opens in the same process after the first has closed, and the page finished talking (" + $echoShown.state + " " + $echoShown.reason + "; stopped in '" + $echo.timedOut + "')")
-Check (@($echo.heard).Count -eq 3 -and $echo.heard[0] -ceq "hello") ("a request crosses in the other vocabulary (" + (@($echo.heard) -join " || ") + ")")
-Check (@($echo.heard).Count -eq 3 -and $echo.heard[1] -like "heard hello | rejected: refused: *not on the list*") "so does the answer, and so does a refusal with its reason"
-Check (@($echo.heard).Count -eq 3 -and $echo.heard[2] -ceq "pushed again") "and an event pushed to the page"
-Check ($echo.bridge.answered -eq 4 -and $echo.bridge.refused -eq 1) ("nothing else was refused: " + $echo.bridge.answered + " answered, " + $echo.bridge.refused + " refused")
+Check (@($echo.heard).Count -eq 4 -and $echo.heard[0] -ceq "hello") ("a request crosses in the other vocabulary (" + (@($echo.heard) -join " || ") + ")")
+Check (@($echo.heard).Count -eq 4 -and $echo.heard[1] -like "heard hello | rejected: refused: *not on the list*") "so does the answer, and so does a refusal with its reason"
+Check (@($echo.heard).Count -eq 4 -and $echo.heard[2] -ceq "pushed again") "and an event pushed to the page"
+Check ($echo.bridge.answered -eq 5 -and $echo.refusedBeforeBurst -eq 1) ("nothing else was refused before the burst: " + $echo.bridge.answered + " answered in all, " + $echo.refusedBeforeBurst + " refused then")
+
+Write-Host ""
+Write-Host "--- a burst of messages does not hold the window ---" -ForegroundColor Cyan
+Check (@($echo.heard).Count -eq 4 -and $echo.heard[3] -ceq "after the burst") ("after " + $echo.burst + " messages posted at once, a request the page sends a second and a half later is answered, " + $echo.answeredAfterMs + " ms after the burst began")
+Check ($echo.floods -eq 1 -and $echo.refusedByBurst -ge 2 -and $echo.refusedByBurst -le 101) ("of the " + $echo.burst + " messages no more than a second's worth was read - each of those refused for what it was - and the rest is one record of a flood: " + $echo.refusedByBurst + " refusals in all, " + $echo.floods + " of them the flood")
+Check ($echo.longestGapMs -gt 0 -and $echo.longestGapMs -lt 1500) ("the window's own thread was never held long: the longest wait between two of its ticks through the burst was " + $echo.longestGapMs + " ms (measured 2026-10-07 on a slowed machine: 11535 to 14127 ms when every message was read, 3502 ms when each was handed over and dropped unread, about 230 ms now that a flood is not listened to)")
 Check ($echoSpec.tickMs -eq 60 -and @($echo.errorsSeen).Count -eq 1 -and $echo.errorsSeen[0] -like "a setting was not used: *colour*") ("that window took its pace from the person's settings file, and the one fault in the file reached its caller by name (" + (@($echo.errorsSeen) -join " | ") + ")")
 
 } finally {

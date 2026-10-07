@@ -250,7 +250,7 @@ Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"requ
 Write-Host ""
 Write-Host "--- the port's numbers are settings of the module 'surface', read from the home ---" -ForegroundColor Cyan
 $declared = Get-HordeSurfaceSettingsDeclaration
-Check ($declared.module -ceq "surface" -and (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") -ceq "widthPx=520 heightPx=760 tickMs=250 messageChars=65536 argumentChars=16384 refusalsKept=50 errorsKept=50") ("the module declares one table, with the defaults the port had (" + (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") + ")")
+Check ($declared.module -ceq "surface" -and (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") -ceq "widthPx=520 heightPx=760 tickMs=250 messageChars=65536 argumentChars=16384 refusalsKept=50 errorsKept=50 messagesPerSecond=100") ("the module declares one table, with the defaults the port had (" + (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") + ")")
 $limits = Get-HordeSurfaceLimits
 Check ($limits.smallestWidthPx -eq 200 -and $limits.smallestHeightPx -eq 150 -and $limits.fastestTickMs -eq 50) "what no setting may go below is the port's to say, once: 200 by 150 pixels, a tick every 50 ms"
 $floor = @{}; foreach ($e in $declared.settings) { $floor[$e.name] = $e.min }
@@ -293,6 +293,20 @@ Add-HordeSurfaceError -Errors $kept -Text "" -Kept 5
 Check ($kept.Count -eq 5 -and $kept[4] -ceq "failure 7") "an empty line is not an error, and pushes nothing out"
 [System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "errorsKept": 2 } }')
 Check ((New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work).errorsKept -eq 2) "and the number is the module's setting errorsKept"
+# A PAGE THAT FLOODS IS NOT READ. Ten thousand messages in one burst held a window's thread for 11 to
+# 14 seconds, every one of them parsed, refused and recorded (review of 2026-10-06, finding A8;
+# measured again 2026-10-07). The meter says, for each message as it arrives, whether it is read.
+Check ($defaultSpec.messagesPerSecond -eq 100) "CONTROL: a spec carries how many messages a second its surface reads, 100 unless a person's file says otherwise"
+$meter = New-HordeSurfaceMessageMeter
+$turns = @(0..6 | ForEach-Object { Test-HordeSurfaceMessageMeter -Meter $meter -NowMs (5000 + $_) -PerSecond 5 })
+Check (($turns -join ",") -ceq "read,read,read,read,read,refuse,drop") ("of seven messages in one second, a meter set to five reads five, says once that the rest are refused, and drops them (" + ($turns -join ",") + ")")
+Check ((Test-HordeSurfaceMessageMeter -Meter $meter -NowMs 5999 -PerSecond 5) -ceq "drop" -and $meter.dropped -eq 3) "to the end of that second everything more is dropped, and counted"
+Check ((Test-HordeSurfaceMessageMeter -Meter $meter -NowMs 6000 -PerSecond 5) -ceq "read") "a second after the first message of the burst, messages are read again"
+$again = @(1..6 | ForEach-Object { Test-HordeSurfaceMessageMeter -Meter $meter -NowMs 6001 -PerSecond 5 })
+Check (($again -join ",") -ceq "read,read,read,read,refuse,drop" -and $meter.dropped -eq 5) "and the next second is counted from nothing, with its own one refusal"
+Check ((Test-HordeSurfaceMessageMeter -Meter $meter -NowMs 100 -PerSecond 5) -ceq "read") "a clock that went backwards starts a new second rather than dropping for ever"
+[System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "messagesPerSecond": 7 } }')
+Check ((New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work).messagesPerSecond -eq 7) "and the number is the module's setting messagesPerSecond"
 $handed = New-HordeSurfaceBridge -Settings $set -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
 $handedSpec = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $handed -DataFolder $work -Settings $set
 Check ($handed.limits.messageChars -eq 2000 -and $handed.limits.refusalsKept -eq 3 -and $handedSpec.width -eq 640 -and @($handedSpec.findings).Count -eq 0) "a bridge and a spec that are handed settings use those and do not read the file again: one reading serves both, and its findings are the caller's to report once"

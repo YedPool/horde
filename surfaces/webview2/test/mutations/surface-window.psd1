@@ -43,6 +43,15 @@
         @{ Name = "what-was-wrong-in-the-settings-file-reaches-nobody"
            Find = 'foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale -Spec $Spec)) { Add-HordeSurfaceError -Errors $errors -Text $note -Kept $Spec.errorsKept }'
            Replace = '' }
+        # --- a flood, in the real engine
+        @{ Name = "a-flood-is-handed-over-by-the-real-engine"
+           Find = '$s.view.CoreWebView2.remove_WebMessageReceived($s.messageHandler)'
+           Replace = '' }
+        # No mutant hands the engine the script block instead of the kept delegate: the real engine
+        # still forgot it when asked with the delegate (measured 2026-10-07: it survived).
+        @{ Name = "the-real-engine-is-never-listened-to-again"
+           Find = '$listenTimer.add_Tick($handlers.listen)'
+           Replace = '' }
         # --- what the real engine does with them
         @{ Name = "a-new-window-opens-in-the-real-engine"
            Find = '$What.Handled = $true'
