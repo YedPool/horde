@@ -13,7 +13,7 @@
            Find = '$data.deliverToError = "$($got.error)"'
            Replace = '$data.deliverToError = ""' }
         @{ Name = "handed-out-mark-not-written-before-the-reply"
-           Find = '$w = Add-HordeOutboxMarker -Root $outboxRoot'
-           Replace = '$w = [pscustomobject]@{ state = "known" }; $null = $outboxRoot' }
+           Find = '$w = Add-HordeOutboxMarker -Root $outboxRoot -MessageId "$($r.write.messageId)" -Marker "$($r.write.marker)" -At "$($r.write.at)"'
+           Replace = '$w = [pscustomobject]@{ state = "known" }' }
     )
 }

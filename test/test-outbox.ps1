@@ -26,8 +26,13 @@ $id1 = "0e000000-0000-4000-8000-000000000201"
 try {
 Write-Host ""
 Write-Host "--- a folder is an outbox only once it is made one ---" -ForegroundColor Cyan
+# The folder exists first, so reading it can only answer: an outbox, or not one (a missing folder is
+# the second case below).
+[void][System.IO.Directory]::CreateDirectory($box)
 $g = Get-HordeOutbox -Root $box
-Check ($g.state -ceq "unknown" -and "$($g.reason)" -clike "*not an outbox*") "a folder that was never made an outbox is unknown, never an empty outbox"
+Check ($g.state -ceq "unknown" -and "$($g.reason)" -clike "*not an outbox*") "a folder that exists but was never made an outbox is unknown, never an empty outbox"
+$g = Get-HordeOutbox -Root (Join-Path $tmp "no-such-folder")
+Check ($g.state -ceq "unknown" -and "$($g.reason)" -clike "*not an outbox*") "a folder that does not exist is unknown too"
 $null = Initialize-HordeOutbox -Root $box
 $null = Initialize-HordeOutbox -Root $box
 $g = Get-HordeOutbox -Root $box
