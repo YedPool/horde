@@ -66,8 +66,8 @@
            Find = 'foreach ($l in @(Format-HordeDecisionProblems -Value $value)) { [void]$lines.Add($l) }'
            Replace = '' }
         @{ Name = "new-id-for-every-send"
-           Find = '            $id = "$($have[''Id''])"'
-           Replace = '            $id = [guid]::NewGuid().ToString("N")' }
+           Find = '        $id = "$($have[''Id''])"'
+           Replace = '        $id = [guid]::NewGuid().ToString("N")' }
         # --- records of a later kind are named where a person will see them ---
         @{ Name = "later-kinds-not-shown"
            Find = 'if ($later.Count -gt 0) {'
