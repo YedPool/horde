@@ -1,12 +1,13 @@
 $HordeCommand = @{
     name    = "session"
     group   = "hub"
-    usage   = "session spawn -Label <L> -Run <runId> -Profile <p> -Repo <repoId> -Prompt <text> [-Node <device>] [-Role orc] [-Title <t>] [-Permission <level>] [-Worktree <name> -Branch <b>] [-HostName <h>] | session close -SessionId <id> [-Node <device>] [-Reason <why>] | session status -RequestId <id> [-Node <device>] | any of them -Resend <requestId>"
+    usage   = "session spawn -Node <device> -Label <L> -Run <runId> -Profile <p> -Repo <repoId> -Prompt <text> [-Role orc] [-Title <t>] [-Permission <level>] [-Worktree <name> -Branch <b>] [-HostName <h>] | session close -SessionId <id> [-Node <device>] [-Reason <why>] | session status -RequestId <id> [-Node <device>] | any of them -Resend <requestId>"
     summary = "ask a node to start or close a session (remote plan R19): one request per id, written down before it is sent, so a request whose answer was lost is sent again with -Resend and acted on once"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("spawn", "close", "status")][string]$Verb,
-            # The node: its device id or name; the hub's own node when not given.
+            # The node: its device id or name. A spawn must name it (review of #126): no default to the hub's
+            # own machine. A close goes to the node the spawn record names; a status to the request's node.
             [string]$Node = "",
             [string]$Label = "", [string]$Role = "orc", [string]$Run = "", [string]$Profile = "", [string]$Repo = "",
             [string]$Prompt = "", [string]$Title = "", [string]$Permission = "", [string]$Worktree = "", [string]$Branch = "",
@@ -39,6 +40,7 @@ $HordeCommand = @{
             $target = $Node
             switch ($Verb) {
                 "spawn" {
+                    if ($Node -eq "") { throw "session spawn needs -Node: the node is always named, never defaulted to the hub's own machine" }
                     if ($Label -eq "" -or $Run -eq "" -or $Profile -eq "" -or $Repo -eq "" -or $Prompt -eq "") { throw "session spawn needs -Label, -Run, -Profile, -Repo and -Prompt: the profile is one the node offers, named by the hub" }
                     $a = [ordered]@{ label = $Label; role = $Role; runId = $Run; profile = $Profile; repoId = $Repo; prompt = [pscustomobject]@{ text = $Prompt }; closeOn = $CloseOn }
                     if ($Title -ne "") { $a["title"] = $Title }
@@ -57,7 +59,9 @@ $HordeCommand = @{
                     if ($sp.state -ne "known") { throw ("cannot close " + $SessionId + ": " + $sp.reason) }
                     $ex = $sp.value.answer.expect
                     $args2 = [pscustomobject][ordered]@{ sessionId = $SessionId; expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $ex.ns.device; space = "" + $ex.ns.space }; pid = [long]$ex.pid; procStart = "" + $ex.procStart }; reason = $Reason }
-                    if ($target -eq "") { $target = "" + $sp.value.deviceId }
+                    $ct = Resolve-HordeHubCloseTarget -Spawn $sp.value -Node $Node -Entries @(Get-HordeHubRegistry -Node $me)
+                    if ($ct.state -ne "known") { throw ("cannot close " + $SessionId + ": " + $ct.reason) }
+                    $target = "" + $ct.value
                 }
                 "status" {
                     if ($RequestId -eq "") { throw "session status needs -RequestId" }
@@ -67,10 +71,13 @@ $HordeCommand = @{
                 }
             }
             $entries = @(Get-HordeHubRegistry -Node $me)
-            if ($target -eq "") { $target = "" + $me.deviceId }
+            if ($target -eq "") { throw ("session " + $Verb + " cannot tell which node to ask: name it with -Node") }
             $match = @($entries | Where-Object { $_.deviceId -ceq $target -or $_.deviceName -ceq $target })
             if ($match.Count -ne 1) { throw ("the hub has no registered node '" + $target + "'; it knows " + (@($entries | ForEach-Object { $_.deviceName + " (" + $_.deviceId + ")" }) -join ", ")) }
             $verbName = @{ spawn = "session.spawn"; close = "session.close"; status = "request.status" }[$Verb]
+            # A request the contract refuses is refused here, before it is written down or sent.
+            $bad = Test-HordeHubActArgs -Contract $contract -Verb $verbName -Arguments $args2
+            if ($bad -ne "") { Write-Output ("REFUSED (by the hub, nothing written or sent): the link contract refuses the request: " + $bad); return }
             $rec = [pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = $verbName; deviceId = "" + $match[0].deviceId; issuedAt = (Get-HordeLinkTime); args = $args2; answer = $null; error = $null; sentAt = @() }
             if ($verbName -cne "request.status") { Write-HordeHubActRecord -Dir $actDir -Record $rec }
         }
@@ -91,6 +98,6 @@ $HordeCommand = @{
             Write-HordeHubActRecord -Dir $actDir -Record $rec
         }
         Write-Output (Format-HordeHubActAnswer -Res $res -RequestId $rec.requestId)
-        if (-not $res.answered) { Write-Output ("send it again with: horde session " + $Verb + " -Resend " + $rec.requestId) }
+        if (-not $res.answered -and -not $res.refusedHere) { Write-Output ("send it again with: horde session " + $Verb + " -Resend " + $rec.requestId) }
     }
 }

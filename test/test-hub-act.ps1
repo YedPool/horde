@@ -73,6 +73,46 @@ Write-HordeHubActRecord -Dir $acts -Record ([pscustomobject][ordered]@{ requestI
 Check ((Find-HordeHubSpawn -Dir $acts -SessionId "aaaaaaaa-1111-4222-8333-444444444444").state -eq "unknown") "two records claiming one session are unknown, never one picked"
 
 Write-Host ""
+Write-Host "--- review of #126: what a close may be sent for, and to whom ---" -ForegroundColor Cyan
+$acts2 = Join-Path $env:TEMP ("horde-hub-acts-" + [guid]::NewGuid().ToString("N"))
+$ex = [pscustomobject]@{ ns = [pscustomobject]@{ device = $device; space = "windows" }; pid = 4343; procStart = "134350994347710400" }
+function Spawned { param([string]$State, [string]$Sid, $Expect) Write-HordeHubActRecord -Dir $acts2 -Record ([pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = "session.spawn"; deviceId = $device; issuedAt = $issued; args = $spawnArgs; answer = [pscustomobject]@{ state = $State; verb = "session.spawn"; sessionId = $Sid; expect = $Expect; reason = "x" }; error = $null; sentAt = @($issued) }) }
+Spawned "failed" "dddddddd-1111-4222-8333-444444444444" $ex
+$f1 = Find-HordeHubSpawn -Dir $acts2 -SessionId "dddddddd-1111-4222-8333-444444444444"
+Check ($f1.state -eq "known" -and $f1.value.answer.expect.pid -eq 4343) "a spawn answered failed WITH its process - running at a level not asked, or without its work - can be closed with that process (F1)"
+Spawned "failed" "eeeeeeee-1111-4222-8333-444444444444" $null
+Check ((Find-HordeHubSpawn -Dir $acts2 -SessionId "eeeeeeee-1111-4222-8333-444444444444").state -eq "absent") "a failed spawn with no process started nothing to close"
+Spawned "refused" "ffffffff-1111-4222-8333-444444444444" $ex
+Check ((Find-HordeHubSpawn -Dir $acts2 -SessionId "ffffffff-1111-4222-8333-444444444444").state -eq "absent") "a refused spawn is never closable, whatever it carries"
+[System.IO.File]::WriteAllText((Join-Path $acts2 "torn.json"), "{ torn")
+$f2 = Find-HordeHubSpawn -Dir $acts2 -SessionId "dddddddd-1111-4222-8333-444444444444"
+Check ($f2.state -eq "unknown" -and $f2.reason -like "*torn.json cannot be read*") ("a record that cannot be read makes the lookup unknown, naming it: it could be a second claim (" + $f2.reason + ")")
+Remove-Item -LiteralPath (Join-Path $acts2 "torn.json")
+$regs = @([pscustomobject]@{ deviceId = $device; deviceName = "box" }, [pscustomobject]@{ deviceId = "22222222-3333-4444-8555-666666666666"; deviceName = "laptop" })
+$sp1 = $f1.value
+Check ((Resolve-HordeHubCloseTarget -Spawn $sp1 -Node "" -Entries $regs).value -ceq $device) "a close goes to the node that started the session"
+Check ((Resolve-HordeHubCloseTarget -Spawn $sp1 -Node "box" -Entries $regs).value -ceq $device) "CONTROL: naming that node by name is the same node"
+$ct = Resolve-HordeHubCloseTarget -Spawn $sp1 -Node "laptop" -Entries $regs
+Check ($ct.state -eq "unknown" -and $ct.reason -like ("*started on node " + $device + "*-Node names laptop (22222222-3333-4444-8555-666666666666)*")) ("a close naming another node is refused by the hub, naming both (" + $ct.reason + ")")
+
+Write-Host ""
+Write-Host "--- review of #126: a request the contract refuses is refused by the hub, nothing sent ---" -ForegroundColor Cyan
+$badArgs = [pscustomobject][ordered]@{ label = "E"; role = "orc"; runId = "20261005-120000-act"; profile = "alpha"; repoId = "github.com/example/app"; prompt = [pscustomobject]@{ text = "read the plan" }; closeOn = "proof"; permission = "Bypass" }
+Check ((Test-HordeHubActArgs -Contract $contract -Verb "session.spawn" -Arguments $badArgs) -ne "") "a permission level the contract does not take is refused by the hub's own check"
+Check ((Test-HordeHubActArgs -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs) -eq "") "CONTROL: the good arguments pass it"
+$nowhere = [pscustomobject]@{ deviceId = $device; endpoint = "33333333-2222-4333-8444-555555555555"; transport = (Get-HordeTransport -Name "memory"); transportError = "" }
+$lr = Invoke-HordeHubAct -Entry $nowhere -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $badArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 2000
+Check ($lr.refusedHere -and -not $lr.answered -and $lr.reason -like "*contract refuses*" -and $lr.reason -notlike "*could not open a link*") ("and Invoke refuses it before opening any link (" + $lr.reason + ")")
+Check ((Format-HordeHubActAnswer -Res $lr -RequestId "r9") -clike "REFUSED request r9 (by the hub, nothing sent):*") "the person reads REFUSED, never UNKNOWN with a resend that cannot succeed"
+
+Write-Host ""
+Write-Host "--- review of #126: a spawn names its node ---" -ForegroundColor Cyan
+. (Join-Path $root "test\lib\Cli.ps1")
+$cliHome = Join-Path $env:TEMP ("horde-hub-acts-" + [guid]::NewGuid().ToString("N"))
+$cr = Invoke-HordeCliProcess -Root $root -HordeArgs @("session", "spawn", "-Label", "E", "-Run", "20261005-120000-act", "-Profile", "alpha", "-Repo", "github.com/example/app", "-Prompt", "x") -Env @{ HORDE_HOME = $cliHome }
+Check ($cr.code -ne 0 -and ("" + $cr.out + $cr.err) -like "*needs -Node*" -and -not (Test-Path -LiteralPath (Join-Path $cliHome "hub\acts"))) ("horde session spawn with no -Node is refused before anything is written (exit " + $cr.code + ")")
+
+Write-Host ""
 Write-Host "--- a node that cannot be reached leaves the request unknown ---" -ForegroundColor Cyan
 $gone = Invoke-HordeHubAct -Entry ([pscustomobject]@{ deviceId = $device; endpoint = "11111111-2222-4333-8444-555555555555"; transport = (Get-HordeTransport -Name "memory"); transportError = "" }) -Hub $hub -Contract $contract -Verb "session.spawn" -Arguments $spawnArgs -RequestId (New-HordeLinkFrameId) -IssuedAt (Get-HordeLinkTime) -TimeoutMs 3000
 Check (-not $gone.answered -and $gone.reason -like "*could not open a link*") "no listener: the request is unanswered, with the reason"
@@ -94,7 +134,7 @@ $lost = Invoke-HordeHubAct -Entry $entry -Hub $hub -Contract $contract -Verb "se
 Check (-not $lost.answered -and $lost.reason -like "*whether the node acted is unknown*") ("an answer that does not arrive leaves the request unanswered, the node's act unknown (" + $lost.reason + ")")
 Stop-ActNode $slow
 } finally {
-    foreach ($d in @($jr, $jr2, $acts)) { if ((Split-Path -Leaf $d) -match '^horde-hub-acts?-[0-9a-f]{32}$') { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }
+    foreach ($d in @($jr, $jr2, $acts, $acts2, $cliHome)) { if ((Split-Path -Leaf $d) -match '^horde-hub-acts?-[0-9a-f]{32}$') { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue } }
 }
 
 Complete-HordeSuite -Success "the hub asks a node to act once per request, keeps what it answered, and closes by what it kept"

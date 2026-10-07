@@ -87,7 +87,10 @@ try {
     Start-Sleep -Seconds 3
     Check (-not $node.HasExited) "the node is serving"
 
-    $sp = Invoke-HordeTestRun "session spawn -Label E -Run 20261005-120000-act -Profile alpha -Repo github.com/example/app -Prompt hello -Title `"client search orc`" -Permission edits"
+    # The node is named, always (review of #126): this machine's own node id, from its node file.
+    $nodeId = ""
+    if (Test-Path -LiteralPath $nodeFile) { $nodeId = "" + ([System.IO.File]::ReadAllText($nodeFile) | ConvertFrom-Json).deviceId }
+    $sp = Invoke-HordeTestRun ("session spawn -Node " + $nodeId + " -Label E -Run 20261005-120000-act -Profile alpha -Repo github.com/example/app -Prompt hello -Title `"client search orc`" -Permission edits")
     Check ($sp.code -eq 0 -and $sp.out -clike "REFUSED session.spawn request *daily spawn cap of 0 is reached*") ("the spawn crossed the real pipe and came back refused by the node's policy (" + $sp.out.Trim() + " " + $sp.err.Trim() + ")")
     $rid = ""
     $m = [regex]::Match($sp.out, 'request ([0-9a-f-]{36})')

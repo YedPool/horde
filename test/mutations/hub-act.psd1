@@ -16,8 +16,8 @@
            Find = 'if ($hits.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $hits.Count + " of the hub''s records claim the session " + $SessionId)) }'
            Replace = '' }
         @{ Name = "refused-spawn-closable"
-           Find = 'if ("" + $r.answer.state -ceq "done" -and "" + $r.answer.sessionId -ceq $SessionId) { [void]$hits.Add($r) }'
-           Replace = 'if ("" + $r.answer.sessionId -ceq $SessionId) { [void]$hits.Add($r) }' }
+           Find = '$closable = (@("done", "failed") -ccontains ("" + $r.answer.state)) -and $null -ne $ex -and "" + $ex.pid -ne ""'
+           Replace = '$closable = $true' }
         @{ Name = "any-verb-sent"
            Find = 'if ($script:HordeHubActVerbs -cnotcontains $Verb) {'
            Replace = 'if ($false) {' }
@@ -30,5 +30,20 @@
         @{ Name = "status-names-itself"
            Find = '    if ("" + $v.requestId -ne "") { $rid = "" + $v.requestId }'
            Replace = '' }
+        @{ Name = "failed-spawn-unclosable"
+           Find = '$closable = (@("done", "failed") -ccontains ("" + $r.answer.state)) -and'
+           Replace = '$closable = (@("done") -ccontains ("" + $r.answer.state)) -and' }
+        @{ Name = "unreadable-record-skipped"
+           Find = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { return (New-HordeUnknown'
+           Replace = 'try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue; return (New-HordeUnknown' }
+        @{ Name = "close-other-node-allowed"
+           Find = '    if ($named -cne $own) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "contract-unchecked"
+           Find = '    if ($bad -ne "") { $res.refusedHere = $true;'
+           Replace = '    if ($false) { $res.refusedHere = $true;' }
+        @{ Name = "refusal-printed-unknown"
+           Find = '    if ($null -ne $Res.PSObject.Properties["refusedHere"] -and $Res.refusedHere) {'
+           Replace = '    if ($false) {' }
     )
 }

@@ -41,20 +41,51 @@ function Read-HordeHubActRecord {
 }
 
 function Find-HordeHubSpawn {
-    # The done spawn whose answer names -SessionId, as an answer: known record, absent, or unknown when
-    # two records claim it.
+    # The spawn whose answer names -SessionId and carries the process to expect, as an answer: known
+    # record, absent, or unknown when two records claim it or a record cannot be read. A spawn answered
+    # done or FAILED with its process is closable - #104 answers a session that runs at a level it was not
+    # asked for and could not be ended, or runs without its work, as failed with its process, to be closed
+    # again (review of #126, F1). A refused spawn, or one with no process, started nothing to close.
     param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$SessionId)
     if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return (New-HordeAbsent -Note "the hub has started no session") }
     $hits = New-Object System.Collections.ArrayList
     foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter "*.json" -File)) {
         $r = $null
-        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { continue }
+        # A record that cannot be read could be a second claim: the answer is unknown, never one picked.
+        try { $r = [System.IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json } catch { return (New-HordeUnknown -Reason ("the hub's record " + $f.Name + " cannot be read, so whether it claims the session " + $SessionId + " cannot be told: " + $_.Exception.Message)) }
         if ("" + $r.verb -cne "session.spawn" -or $null -eq $r.answer) { continue }
-        if ("" + $r.answer.state -ceq "done" -and "" + $r.answer.sessionId -ceq $SessionId) { [void]$hits.Add($r) }
+        $ex = Get-HordeLinkProp $r.answer "expect"
+        $closable = (@("done", "failed") -ccontains ("" + $r.answer.state)) -and $null -ne $ex -and "" + $ex.pid -ne ""
+        if ($closable -and "" + $r.answer.sessionId -ceq $SessionId) { [void]$hits.Add($r) }
     }
     if ($hits.Count -eq 0) { return (New-HordeAbsent -Note ("the hub has no record of starting the session " + $SessionId)) }
     if ($hits.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $hits.Count + " of the hub's records claim the session " + $SessionId)) }
     return (New-HordeKnown -Value $hits[0])
+}
+
+function Resolve-HordeHubCloseTarget {
+    # The node a close goes to, as an answer: the node the spawn record names. -Node, when given, must
+    # name that same node, by id or by name in -Entries; another node is refused here, naming both
+    # (review of #126).
+    param([Parameter(Mandatory = $true)]$Spawn, [string]$Node = "", $Entries = @())
+    $own = "" + $Spawn.deviceId
+    if ($Node -eq "") { return (New-HordeKnown -Value $own) }
+    $m = @(@($Entries) | Where-Object { "" + $_.deviceId -ceq $Node -or "" + $_.deviceName -ceq $Node })
+    $named = $Node
+    if ($m.Count -eq 1) { $named = "" + $m[0].deviceId }
+    if ($named -cne $own) { return (New-HordeUnknown -Reason ("the session was started on node " + $own + ", and -Node names " + $Node + $(if ($named -cne $Node) { " (" + $named + ")" } else { "" }) + "; a close goes only to the node that started it")) }
+    return (New-HordeKnown -Value $own)
+}
+
+function Test-HordeHubActArgs {
+    # "" when a request with these arguments passes the link contract, else the contract's reason. Checked
+    # before anything is written or sent, so a request the contract refuses is REFUSED here, never sent and
+    # never left for a resend that cannot succeed (review of #126).
+    param([Parameter(Mandatory = $true)]$Contract, [Parameter(Mandatory = $true)][string]$Verb, $Arguments)
+    $probe = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = 2; ts = (Get-HordeLinkTime); verb = $Verb; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = $Arguments }
+    $b = ConvertTo-HordeFrameBytes -Frame $probe -Contract $Contract
+    if ($b.ok) { return "" }
+    return ("" + $b.reason)
 }
 
 function Send-HordeHubActFrame {
@@ -85,8 +116,10 @@ function Invoke-HordeHubAct {
     param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract,
         [Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)]$Arguments,
         [Parameter(Mandatory = $true)][string]$RequestId, [Parameter(Mandatory = $true)][string]$IssuedAt, [int]$TimeoutMs = 240000)
-    $res = [pscustomobject]@{ answered = $false; result = $null; error = $null; reason = "" }
+    $res = [pscustomobject]@{ answered = $false; result = $null; error = $null; reason = ""; refusedHere = $false }
     if ($script:HordeHubActVerbs -cnotcontains $Verb) { $res.reason = "the hub does not send " + $Verb; return $res }
+    $bad = Test-HordeHubActArgs -Contract $Contract -Verb $Verb -Arguments $Arguments
+    if ($bad -ne "") { $res.refusedHere = $true; $res.reason = "the link contract refuses the request, so nothing was sent: " + $bad; return $res }
     if ($null -eq $Entry.transport) { $res.reason = "the hub has no transport for this node: " + $Entry.transportError; return $res }
     $open = Open-HordeTransportLink -Transport $Entry.transport -Endpoint "$($Entry.endpoint)" -Role "hub" -TimeoutMs 15000
     if ("$($open.state)" -cne "known") { $res.reason = "could not open a link: " + $open.reason; return $res }
@@ -138,6 +171,7 @@ function Invoke-HordeHubAct {
 function Format-HordeHubActAnswer {
     # One line a person reads: what the node did with the request.
     param([Parameter(Mandatory = $true)]$Res, [Parameter(Mandatory = $true)][string]$RequestId)
+    if ($null -ne $Res.PSObject.Properties["refusedHere"] -and $Res.refusedHere) { return ("REFUSED request " + $RequestId + " (by the hub, nothing sent): " + $Res.reason) }
     if (-not $Res.answered) { return ("UNKNOWN request " + $RequestId + ": " + $Res.reason) }
     if ($null -ne $Res.error) { return ("REFUSED request " + $RequestId + " (" + $Res.error.code + "): " + $Res.error.reason) }
     if ("" + $Res.result.state -cne "known") { return ("UNKNOWN request " + $RequestId + ": " + $Res.result.reason) }
