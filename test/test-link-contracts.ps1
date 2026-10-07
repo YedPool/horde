@@ -98,6 +98,7 @@ function Refuses {
     if (-not (Says $got $Text)) { Show $got }
 }
 if (Enter-HordeSuiteSection "controls" "A. CONTROLS: the real contract and every golden fixture are valid") {
+    trap { Register-HordeSuiteError $_; continue }
     $f = @(Test-HordeLinkFrameContract -Frame $realFrame)
     Check ($f.Count -eq 0) "schema/link-frame.v1 passes every static rule"; Show $f
     $f = @(Test-HordeLinkVerbTable -Verbs $realVerbs)
@@ -121,6 +122,7 @@ if (Enter-HordeSuiteSection "controls" "A. CONTROLS: the real contract and every
 }
 
 if (Enter-HordeSuiteSection "rows" "B. every row has an effect class, and the verbs the design leaves out are refused") {
+    trap { Register-HordeSuiteError $_; continue }
     Refuses { param($v) $v.'x-horde-verbs'[0].PSObject.Properties.Remove("effect") } "has no 'effect'" "a verb row without an effect class is refused"
     Refuses { param($v) $v.'x-horde-verbs'[0].effect = "delete" } "is 'delete', not one of" "an effect outside read, write, spawn and kill is refused"
     Refuses { param($v) $v.'x-horde-verbs'[0].PSObject.Properties.Remove("since") } "has no 'since'" "a verb row without since is refused"
@@ -158,6 +160,7 @@ if (Enter-HordeSuiteSection "rows" "B. every row has an effect class, and the ve
 
 $capped = '{ "type": "string", "pattern": "\\S", "x-horde-cap": "nameBytes" }'
 if (Enter-HordeSuiteSection "arguments" "C. no verb takes a command line, a program, a path or an environment, or an open object") {
+    trap { Register-HordeSuiteError $_; continue }
     function Add-ArgVerb {
         # A new verb whose args are no-args plus one property.
         param($Doc, [string]$Prop, [string]$Json)
@@ -188,6 +191,7 @@ if (Enter-HordeSuiteSection "arguments" "C. no verb takes a command line, a prog
 }
 
 if (Enter-HordeSuiteSection "allowlist" "C2. the verbs, and every argument each takes, are an allowlist in remote/Contract.ps1") {
+    trap { Register-HordeSuiteError $_; continue }
     # The word lists miss what nobody thought to list. The review of PR #40 found these verbs and these
     # argument names passing them; an allowlist refuses each without having heard of it.
     foreach ($novel in @("node.restart", "repo.push", "profile.define", "auth.login", "policy.set", "ceiling.raise")) {
@@ -203,6 +207,7 @@ if (Enter-HordeSuiteSection "allowlist" "C2. the verbs, and every argument each 
 }
 
 if (Enter-HordeSuiteSection "results" "D. no verb returns raw worker context: every result is closed and capped") {
+    trap { Register-HordeSuiteError $_; continue }
     function Add-ResultVerb {
         param($Doc, [string]$Prop, [string]$Json)
         Add-Def $Doc "probe-result" ('{ "type": "object", "required": [], "additionalProperties": false, "properties": { "' + $Prop + '": ' + $Json + ' } }')
@@ -229,6 +234,7 @@ if (Enter-HordeSuiteSection "results" "D. no verb returns raw worker context: ev
 }
 
 if (Enter-HordeSuiteSection "envelope" "E. the envelope's own rules") {
+    trap { Register-HordeSuiteError $_; continue }
     function Test-FrameContractWith {
         param([scriptblock]$Change)
         $fr = Copy-Json $realFrame
@@ -270,6 +276,7 @@ function FrameRefuses {
     if (-not (Says $got $Text)) { Show $got }
 }
 if (Enter-HordeSuiteSection "frame" "F. one frame against the contract") {
+    trap { Register-HordeSuiteError $_; continue }
     FrameRefuses "ping.json" { param($x) $x.v = 2 } "$.v is '2', not one of" "a frame of another version is refused, not read as v1"
     FrameRefuses "ping.json" { param($x) $x.kind = "exec" } "$.kind is 'exec'" "an unknown kind is refused"
     FrameRefuses "ping.json" { param($x) $x.id = $x.id.ToUpperInvariant() } "$.id does not match" "an id in upper case is refused: one id has one spelling"
@@ -405,6 +412,7 @@ if (Enter-HordeSuiteSection "frame" "F. one frame against the contract") {
 }
 
 if (Enter-HordeSuiteSection "answers" "G. every result is a core/tristate answer, typed by its verb") {
+    trap { Register-HordeSuiteError $_; continue }
     FrameRefuses "res-node-info-known.json" { param($x) $x.result = $x.result.value } "$.result has no 'state'" "a bare value as a result is refused: no bare value crosses"
     FrameRefuses "res-node-info-known.json" { param($x) $x.result.PSObject.Properties.Remove("value") } "is known and carries no value" "a known answer with no value is refused"
     FrameRefuses "res-node-info-known.json" { param($x) $x.result.value = $null } "value is null" "a known answer whose value is null is refused"
@@ -441,6 +449,7 @@ if (Enter-HordeSuiteSection "answers" "G. every result is a core/tristate answer
 }
 
 if (Enter-HordeSuiteSection "messaging" "M. messaging over the link: session.deliver, mail.next and mail.receipt (plan step R21)") {
+    trap { Register-HordeSuiteError $_; continue }
     # THE REVERSE PATH IS A PULL. A node never asks the hub to drive a session (section B), so an orc on a
     # node that writes to an orc on the hub's machine leaves its message in the node's outbox, and the hub
     # takes it with mail.next (a read) and reports how it went with mail.receipt (a write to that outbox
@@ -524,6 +533,7 @@ if (Enter-HordeSuiteSection "messaging" "M. messaging over the link: session.del
 }
 
 if (Enter-HordeSuiteSection "documents" "H. the other contract documents") {
+    trap { Register-HordeSuiteError $_; continue }
     function DocRefuses {
         param([string]$File, [string]$Schema, [scriptblock]$Change, [string]$Text, [string]$What)
         $d = Copy-Json (Read-Fx $File)
