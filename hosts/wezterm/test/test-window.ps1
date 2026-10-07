@@ -96,6 +96,15 @@ $zoomRows = @((Pane 1 1 1 "editor" $true $true), (Pane 2 2 2 "other"))
 $zoomed = Pick $zoomRows "1" @((Win 501 "[Z] editor"), (Win 502 "other"))
 Check ($zoomed.state -ceq "known" -and $zoomed.value.handle -eq 501) "a zoomed pane's window carries [Z] before its title, and is found by it"
 Check ((Pick $zoomRows "1" @((Win 501 "editor"), (Win 502 "other"))).state -ceq "unknown") "CONTROL: without the [Z] the title is not that window's, and nothing is guessed"
+# A ZOOMED PANE IN A WINDOW OF SEVERAL TABS: [Z] comes FIRST, then the tab count. Measured 2026-10-07
+# against an isolated instance (20240203-110809-5046fc22): a two-tab window whose front tab's active pane
+# was zoomed was titled "[Z] [1/2] PING.EXE". The finder had expected the other order, unmeasured
+# (review of 2026-10-06, finding C4), and so answered unknown for such a window.
+$zoomTabs = @((Pane 1 1 1 "editor" $true $true), (Pane 1 2 3 "logs"), (Pane 2 4 2 "other"))
+$zoomedTab = Pick $zoomTabs "1" @((Win 501 "[Z] [1/2] editor"), (Win 502 "other"))
+Check ($zoomedTab.state -ceq "known" -and $zoomedTab.value.handle -eq 501) ("in a window of two tabs the zoomed pane's window is titled [Z] and then the tab count, as the terminal was measured to write it (" + $zoomedTab.state + ")")
+Check ((Pick $zoomTabs "1" @((Win 501 "[1/2] [Z] editor"), (Win 502 "other"))).state -ceq "unknown") "and the other order, which the terminal does not write, is no window's title"
+Check ((Pick $zoomTabs "3" @((Win 501 "[2/2] logs"), (Win 502 "other"))).value.handle -eq 501) "CONTROL: with the tab that is not zoomed in front, the same window is titled by the count alone"
 
 Write-Host ""
 Write-Host "--- a title that changed while it was read ---" -ForegroundColor Cyan
