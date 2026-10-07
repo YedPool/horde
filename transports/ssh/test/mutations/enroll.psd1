@@ -63,9 +63,9 @@
         @{ Name = "no-restrict"
            Find = '''",restrict,expiry-time="'''
            Replace = '''",expiry-time="''' }
-        @{ Name = "quote-in-command-accepted"
-           Find = '-or $Command.Contains(''"'')) {'
-           Replace = ') {' }
+        @{ Name = "unprintable-command-accepted"
+           Find = 'if ($Command -cnotmatch ''\A[\x20-\x7E]{1,1000}\z'' -or $Command.Contains(''"'')) {'
+           Replace = 'if ($false) {' }
         @{ Name = "revoked-key-not-recorded"
            Find = 'Write-HordeSshLines -Path $lp.revoked -Lines (@(Read-HordeSshLines -Path $lp.revoked) + @($m.Groups["key"].Value))'
            Replace = '' }

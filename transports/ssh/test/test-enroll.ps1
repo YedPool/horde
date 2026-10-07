@@ -148,6 +148,12 @@ try {
     $shaped = @($all | Where-Object { $_ -cmatch ('\Acommand="' + [regex]::Escape($ps) + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\horde\\cli\\attach\.ps1 -Device (?<d>[0-9a-f-]{36})",restrict,expiry-time="[0-9]{8}" ssh-ed25519 [A-Za-z0-9+/]{68} horde-device-(?<e>[0-9a-f-]{36})\z') -and $Matches["d"] -ceq $Matches["e"] })
     Check ($all.Count -eq 2 -and $shaped.Count -eq 2) ("every enrolled line forces attach.ps1 for its own device and carries restrict (" + ($all -join " | ") + ")")
     Check ((Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId $dev) -ceq $cmd) "the forced command is System32's powershell.exe by full path running cli\attach.ps1 for the device"
+    $bad = ""; try { $null = Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId "not-a-device" } catch { $bad = $_.Exception.Message }
+    Check ($bad -clike "*not a device id*") "the builder itself refuses a device id that is not one"
+    # A root the builder passes but the key line cannot carry: outside printable ASCII. (A quote never
+    # gets this far; the builder refuses it first.)
+    $wide = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot ("C:\h" + [char]0x00F6 + "rde") -Now $now
+    Check (-not $wide.ok -and $wide.reason -clike "*printable ASCII*") ("a Horde root outside printable ASCII is refused by the line's own check (" + $wide.reason + ")")
     Check (-not (Remove-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2).ok) "revoking a device that is not enrolled is refused"
 
     Write-Host ""
