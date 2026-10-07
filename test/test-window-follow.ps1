@@ -321,6 +321,7 @@ try {
     Write-Host ""
     Write-Host "--- owned, and placed where the pure function says ---" -ForegroundColor Cyan
     Forget
+    Check (-not [FollowTestProbe]::IsAbove($mine, $other) -and [FollowTestProbe]::IsAbove($other, $mine)) "CONTROL: made first, the companion stands UNDER the other window until it is followed"
     $r = Start-HordeWindowFollow -Target $other -Companion $mine
     Look "the follow starts"
     Check ((Field $r "state") -ceq "following" -and (Field $r "reason") -ceq "" -and (Field $r "target") -eq $other -and (Field $r "companion") -eq $mine -and (Field $r "mode") -ceq "floating") "the follow starts: following, with both windows and the mode"
@@ -329,6 +330,7 @@ try {
     $pure = Get-HordeWindowFollowPlacement -Target $read.value -Scale $read.value.scale
     Check ((Placed $r) -ceq $want -and $pure.state -ceq "known" -and ("" + $pure.value.left + "," + $pure.value.top + " " + $pure.value.width + "x" + $pure.value.height) -ceq $want) ("the record says it was placed where the pure function says, which is where this suite works it out (" + (Placed $r) + " against " + $want + ")")
     Check ([FollowTestProbe]::Rect($mine) -ceq $want) ("and that is where the companion IS, in real pixels (" + [FollowTestProbe]::Rect($mine) + ")")
+    Check ([FollowTestProbe]::IsAbove($mine, $other)) "it stands above the other window, though it was made first and so stood under it"
     Check (-not (Told 1 $mine)) "owned, it is not a taskbar window"
     Check ((Field $r "placements") -eq 1) "it was placed once"
 
@@ -344,6 +346,7 @@ try {
     [void][FollowTestProbe]::Move($other, -31860, -31930, 1500, 520)
     $want = Expected $other
     Check ((WaitFor { [FollowTestProbe]::Rect($mine) -ceq $want })) ("the other window made 1500 by 520: the companion is resized to a third of it (" + [FollowTestProbe]::Rect($mine) + " against " + $want + ")")
+    Check ([FollowTestProbe]::IsAbove($mine, $other)) "and still stands above it"
     Look "after a resize"
     $placedBefore = Placed (Get-HordeWindowFollow)
     $asked = Get-HordeWindowFollow

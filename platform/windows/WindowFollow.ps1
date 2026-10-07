@@ -21,6 +21,9 @@
 #     passed all eight of its checks: placed on attach, above, after a move, a resize, a minimise, a
 #     restore and a maximise, above again, with the foreground window the same throughout.
 #   - EVERY PLACEMENT IS SWP_NOACTIVATE, so placing never takes the keyboard.
+#   - ABOVE IT FROM THE START: Windows orders an owned window above its owner when the owner is next
+#     activated, so a companion made before the other window is stood directly above it when the
+#     follow starts, and not at the top of every program's windows.
 #
 # WHERE IT IS PLACED is the port's pure function, Get-HordeWindowFollowPlacement, and nothing of this
 # file's: the native half only carries its answer to Windows. The numbers it works from are the module's
@@ -79,6 +82,7 @@ public static class HordeWindowsFollowV1 {
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
@@ -106,6 +110,13 @@ public static class HordeWindowsFollowV1 {
         target = new IntPtr(targetWindow);
         moved = onMoved;
         SetWindowLongPtr(new IntPtr(companion), -8, target);     // GWLP_HWNDPARENT: the other window owns ours
+        // Windows keeps an owned window above its owner from the owner's next activation on, NOT from
+        // the moment it is owned: a companion made before the other window stood under it (measured
+        // 2026-10-07). So it is stood directly above the other window now - under the window that was
+        // just above that one (GW_HWNDPREV), never at the top of every program's windows - and with
+        // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE, so nothing but the order changes.
+        IntPtr above = GetWindow(target, 3);
+        if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); }
         keep = new WinEventDelegate(OnEvent);
         // EVENT_OBJECT_LOCATIONCHANGE of the other window's process, delivered to this thread's message loop.
         hook = SetWinEventHook(0x800B, 0x800B, IntPtr.Zero, keep, ProcessOf(targetWindow), 0, 0);
