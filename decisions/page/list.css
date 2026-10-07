@@ -1,0 +1,37 @@
+/* decisions/page/list.css - the list of questions as a document (list.js): headings, one line per
+   question, sub-numbered lines under an unfolded one. No boxes, columns, chips or panels.
+
+   SHARP LETTERS (a measured complaint about the earlier page on a screen at one and a half times
+   the ordinary scale): no size is set here at all - the letters and the line height are the host
+   page's, which sets them in whole device pixels (decisions/window/frame.js) - and this file adds
+   weights 400 and 600 only, no letter-spacing, no transform, no opacity (a muted or dimmed line is a
+   colour, never a faded letter) and no clamp on a line's height. A line too long for its row ends in
+   an ellipsis until the question is unfolded, when it wraps in full.
+
+   The colours are the host page's variables: --ink, --muted, --faint, --dim. --line-px is the host's
+   line height, which the fold mark is centred in. */
+.hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
+.hd-head, .hd-q > .hd-row { cursor: pointer; }
+.hd-tri { flex: 0 0 14px; width: 14px; height: var(--line-px); align-self: flex-start; position: relative; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.hd-tri::before { content: ""; position: absolute; left: 4px; top: calc((var(--line-px) - 8px) / 2); border-left: 6px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+.hd-tri[aria-expanded="true"]::before { left: 2px; top: calc((var(--line-px) - 6px) / 2); border-top: 6px solid var(--faint); border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 0; }
+.hd-tri:focus-visible { outline: 1px solid var(--muted); }
+.hd-num { flex: 0 0 auto; min-width: 30px; color: var(--ink); font-weight: 600; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; }
+.hd-line > .hd-num { min-width: 0; color: var(--muted); font-weight: 400; }
+.hd-lab { flex: 0 0 auto; color: var(--muted); padding-right: 6px; }
+.hd-txt { flex: 0 1 auto; min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
+.hd-q.open > .hd-row > .hd-txt, .hd-body > .hd-txt { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.hd-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hd-suf { flex: 0 0 auto; max-width: 46%; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+.hd-q.open > .hd-row > .hd-suf { display: none; }
+.hd-group { margin-top: 10px; }
+.hd-group:first-child { margin-top: 0; }
+.hd-head > .hd-txt { font-weight: 600; }
+.hd-note { color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
+.hd-sub { padding-left: 58px; }
+.hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-suf, .hd-q.dim .hd-lab { color: var(--dim); }
+@media (max-width: 520px) {
+  .hd-sub { padding-left: 40px; }
+  .hd-suf { display: none; }
+}
