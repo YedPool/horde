@@ -175,6 +175,18 @@
         @{ Name = "the-timer-that-ends-the-silence-is-never-started"
            Find = '$s.listenTimer.Start()'
            Replace = '' }
+        @{ Name = "what-a-page-asks-the-machine-for-is-not-denied"
+           Find = '$What.State = "Deny"'
+           Replace = '$What.State = "Allow"' }
+        @{ Name = "what-a-page-asks-the-machine-for-is-not-recorded"
+           Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason ("the page asked the machine for something (the engine''s word for it: " + $word + "), and it was denied")'
+           Replace = '' }
+        @{ Name = "the-record-holds-whatever-the-engine-called-it"
+           Find = 'if (("" + $What.PermissionKind) -cmatch ''\A[A-Za-z]{1,40}\z'') { $word = "" + $What.PermissionKind }'
+           Replace = '$word = "" + $What.PermissionKind' }
+        @{ Name = "the-permission-handler-is-not-given-to-the-engine"
+           Find = '$core.add_PermissionRequested($h.permission)'
+           Replace = '' }
         # --- the handlers
         @{ Name = "a-failed-tick-closes-the-window-unrecorded"
            Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { Add-HordeWebView2Error -Text ("a tick failed: " + $_.Exception.Message) }'

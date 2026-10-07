@@ -284,7 +284,7 @@ Check ((& $naive) -eq $false) "CONTROL: a handler that reads a local of the func
 # THE ADAPTER'S HANDLERS are made by a function that has returned, and still find their window: they
 # read the one state object in the script scope.
 $handlers = Get-HordeWebView2Handlers
-Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,listen,message,navigation,newWindow,resource,shown,tick") "the adapter hands .NET eleven handlers"
+Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,listen,message,navigation,newWindow,permission,resource,shown,tick") "the adapter hands .NET twelve handlers"
 $nav = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $nav
 Check ($nav.Cancel -eq $true -and $liveBridge.refused -eq 5 -and $liveBridge.refusals[4].reason -like "*an address that is not its own*") "its navigation handler, called after the function that made it returned, cancels a navigation elsewhere and records it"
@@ -331,6 +331,14 @@ $script:HordeWebView2.errors.Clear()
 $save = [pscustomobject]@{ ResultFilePath = "C:\elsewhere\saved.txt"; Cancel = $false; Handled = $false }
 if ($handlers.ContainsKey("download")) { & $handlers.download $null $save }
 Check ($save.Cancel -eq $true -and $liveBridge.refused -eq 11 -and $liveBridge.refusals[10].reason -like "*save a file*") "a download is cancelled, so a page writes no file anywhere, and recorded"
+# WHAT A PAGE ASKS THE MACHINE FOR IS DENIED: its place, camera, microphone, clipboard, notices.
+$refusedSoFar = [int]$liveBridge.refused
+$wish = [pscustomobject]@{ PermissionKind = "Geolocation"; State = "Default"; Uri = ($at + "/shell/index.html") }
+& $handlers.permission $null $wish
+Check ($wish.State -ceq "Deny" -and $liveBridge.refused -eq ($refusedSoFar + 1) -and $liveBridge.refusals[$liveBridge.refusals.Count - 1].reason -like "*asked the machine for something (the engine's word for it: Geolocation), and it was denied") "what a page asks the machine for is denied and recorded, with the engine's word for what was asked"
+$oddWish = [pscustomobject]@{ PermissionKind = "<b>Camera</b>"; State = "Default" }
+& $handlers.permission $null $oddWish
+Check ($oddWish.State -ceq "Deny" -and $liveBridge.refusals[$liveBridge.refusals.Count - 1].reason -like "*for it: something)*") "and a word that is not one plain word is never put in the record"
 $script:ticked = 0
 $tickSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $liveBridge -DataFolder (Join-Path $work "data") -State ([pscustomobject]@{ n = 5 }) -OnTick { param($Window, $State) $script:ticked += $State.n; if ($script:ticked -ge 10) { throw "a tick that fails" } }
 $script:HordeWebView2.spec = $tickSpec
@@ -379,6 +387,7 @@ Check ($calls -cnotcontains "SetVirtualHostNameToFolderMapping") "no folder is m
 $browserArgs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$props.AdditionalBrowserArguments' }, $true) | ForEach-Object { $_.Right.Extent.Text })
 Check ($browserArgs.Count -eq 1 -and $browserArgs[0] -ceq '$script:HordeWebView2NoNetwork' -and $script:HordeWebView2NoNetwork -ceq "--proxy-server=http://0.0.0.0:0 --proxy-bypass-list=<-loopback>") "the engine is started with every connection sent to an address nothing can listen at, loopback included"
 Check ($calls -ccontains "add_DownloadStarting") "the handler that cancels a download is given to the engine: a handler nobody was handed cancels nothing"
+Check ($calls -ccontains "add_PermissionRequested") "and so is the one that denies what a page asks the machine for"
 Check (@($calls | Where-Object { $_ -like "AddHostObject*" -or $_ -like "*ExecuteScript*" -or $_ -ceq "NavigateToString" -or $_ -ceq "AddScriptToExecuteOnDocumentCreatedAsync" }).Count -eq 0) "it never adds a host object, never runs script it built in the page, and never shows text as a page"
 $settings = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -like '$core.Settings.*' }, $true) | ForEach-Object { $_.Left.Extent.Text.Substring(15) + "=" + $_.Right.Extent.Text })
 foreach ($off in @("AreDevToolsEnabled", "AreDefaultContextMenusEnabled", "AreBrowserAcceleratorKeysEnabled", "AreHostObjectsAllowed", "IsPasswordAutosaveEnabled", "IsGeneralAutofillEnabled", "IsStatusBarEnabled")) {

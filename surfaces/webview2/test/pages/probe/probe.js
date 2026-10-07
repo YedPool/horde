@@ -93,7 +93,10 @@
         document.body.appendChild(a);
         a.click();
         return wait(700).then(function () { return "clicked"; });
-      }]
+      }],
+      // --- what a page may ask the person's machine for: nothing
+      ["ask-place", function () { return new Promise(function (resolve) { navigator.geolocation.getCurrentPosition(function () { resolve("GIVEN A PLACE"); }, function (e) { resolve("denied code " + e.code); }, { timeout: 4000 }); }); }],
+      ["ask-notify", function () { return Notification.requestPermission().then(function (answer) { return "answered " + answer; }, blocked); }]
     ];
   }
 
