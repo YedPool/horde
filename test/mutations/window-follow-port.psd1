@@ -17,11 +17,11 @@
            Find = 'top = [int]($top + $marginTop); width'
            Replace = 'top = [int]$top; width' }
         @{ Name = "half-the-width"
-           Find = 'widthShare = (1.0 / 3);'
-           Replace = 'widthShare = (1.0 / 2);' }
+           Find = 'default = (1.0 / 3); min = 0.1;'
+           Replace = 'default = (1.0 / 2); min = 0.1;' }
         @{ Name = "no-smallest-width"
-           Find = '$width = [Math]::Max([int][Math]::Round($targetWidth * [double]$f.widthShare), $smallestWidth)'
-           Replace = '$width = [int][Math]::Round($targetWidth * [double]$f.widthShare)' }
+           Find = '$width = [Math]::Max([int][Math]::Round($targetWidth * [double]$f.floatingWidthShare), $smallestWidth)'
+           Replace = '$width = [int][Math]::Round($targetWidth * [double]$f.floatingWidthShare)' }
         @{ Name = "wider-than-the-other-window"
            Find = '$width = [Math]::Min($width, [Math]::Max($targetWidth - 2 * $marginRight, 1))'
            Replace = '' }
@@ -32,17 +32,17 @@
            Find = '[Math]::Min($smallestHeight, [Math]::Max($targetHeight - $marginTop, 1)))'
            Replace = '$smallestHeight)' }
         @{ Name = "margins-not-scaled"
-           Find = '$marginBottom = [int][Math]::Round($f.marginBottom * $Scale)'
-           Replace = '$marginBottom = [int]$f.marginBottom' }
+           Find = '$marginBottom = [int][Math]::Round($f.floatingMarginBottomPx * $Scale)'
+           Replace = '$marginBottom = [int]$f.floatingMarginBottomPx' }
         @{ Name = "smallest-width-not-scaled"
-           Find = '$smallestWidth = [int][Math]::Round($f.minWidth * $Scale);'
-           Replace = '$smallestWidth = [int]$f.minWidth;' }
+           Find = '$smallestWidth = [int][Math]::Round($f.floatingMinWidthPx * $Scale)'
+           Replace = '$smallestWidth = [int]$f.floatingMinWidthPx' }
         @{ Name = "smallest-height-not-scaled"
-           Find = '$smallestHeight = [int][Math]::Round($f.minHeight * $Scale)'
-           Replace = '$smallestHeight = [int]$f.minHeight' }
+           Find = '$smallestHeight = [int][Math]::Round($f.floatingMinHeightPx * $Scale)'
+           Replace = '$smallestHeight = [int]$f.floatingMinHeightPx' }
         @{ Name = "top-margin-of-another-size"
-           Find = 'marginTop = 48;'
-           Replace = 'marginTop = 24;' }
+           Find = 'default = 48;'
+           Replace = 'default = 24;' }
         @{ Name = "any-mode-placed-as-floating"
            Find = 'if (@(Get-HordeWindowFollowModes) -cnotcontains $Mode) { return (New-HordeUnknown -Reason ('
            Replace = 'if ($false) { return (New-HordeUnknown -Reason (' }
@@ -67,6 +67,45 @@
         @{ Name = "a-table-is-not-read"
            Find = 'if ($From -is [System.Collections.IDictionary]) { if ($From.Contains($Name)) { $value = $From[$Name] } }'
            Replace = 'if ($false) { }' }
+        @{ Name = "the-right-margin-is-the-top-one"
+           Find = '$marginRight = [int][Math]::Round($f.floatingMarginRightPx * $Scale)'
+           Replace = '$marginRight = [int][Math]::Round($f.floatingMarginTopPx * $Scale)' }
+        @{ Name = "the-bottom-margin-is-the-right-one"
+           Find = '$marginBottom = [int][Math]::Round($f.floatingMarginBottomPx * $Scale)'
+           Replace = '$marginBottom = [int][Math]::Round($f.floatingMarginRightPx * $Scale)' }
+        @{ Name = "the-smallest-height-is-the-smallest-width"
+           Find = '$smallestHeight = [int][Math]::Round($f.floatingMinHeightPx * $Scale)'
+           Replace = '$smallestHeight = [int][Math]::Round($f.floatingMinWidthPx * $Scale)' }
+        @{ Name = "settings-handed-in-are-ignored"
+           Find = '    $f = $Settings'
+           Replace = '    $f = $null' }
+        @{ Name = "a-setting-that-is-text-is-taken"
+           Find = 'if ($null -eq $field -or ($field.Value -isnot [int] -and $field.Value -isnot [double])) {'
+           Replace = 'if ($null -eq $field) {' }
+        @{ Name = "a-follow-starts-with-the-defaults-whatever-the-file-says"
+           Find = '$with = $read.values;'
+           Replace = '$with = (Read-HordeModuleSettingsText -Declaration (Get-HordeWindowFollowSettingsDeclaration) -Text $null).values;' }
+        @{ Name = "what-is-wrong-in-the-file-is-dropped"
+           Find = '    $record.findings = $found'
+           Replace = '' }
+        @{ Name = "settings-handed-in-are-not-checked-at-the-start"
+           Find = 'if ($fault -ne "") { return (New-HordeWindowFollowRecord -State "failed" -Reason $fault) }'
+           Replace = '' }
+        @{ Name = "a-home-that-cannot-be-one-is-thrown"
+           Find = 'try { $read = Get-HordeWindowFollowSettings } catch { return (New-HordeWindowFollowRecord -State "failed" -Reason ("the settings could not be read: " + $_.Exception.Message)) }'
+           Replace = '$read = Get-HordeWindowFollowSettings' }
+        @{ Name = "the-module-has-another-name"
+           Find = 'New-HordeModuleSettings -Module "window-follow"'
+           Replace = 'New-HordeModuleSettings -Module "follow"' }
+        @{ Name = "a-share-of-the-whole-width-is-allowed"
+           Find = 'min = 0.1; max = 0.9;'
+           Replace = 'min = 0.1; max = 1.0;' }
+        @{ Name = "a-margin-below-nothing-is-allowed"
+           Find = 'min = 0;   max = 2000; what = "Floating: gap between the other'
+           Replace = 'min = -9;  max = 2000; what = "Floating: gap between the other' }
+        @{ Name = "a-smallest-width-of-nothing-is-allowed"
+           Find = 'default = 320;       min = 100;'
+           Replace = 'default = 320;       min = 1;' }
         @{ Name = "a-mode-not-built-is-started"
            Find = 'if (@(Get-HordeWindowFollowModes) -cnotcontains $Mode) { return (New-HordeWindowFollowRecord -State "failed"'
            Replace = 'if ($false) { return (New-HordeWindowFollowRecord -State "failed"' }
@@ -113,7 +152,7 @@
            Find = 'if (@(Get-HordeWindowFollowStates) -cnotcontains $State) { throw'
            Replace = 'if ($false) { throw' }
         @{ Name = "a-record-with-a-field-missing-is-taken"
-           Find = 'foreach ($field in @("state", "reason", "target", "companion", "mode", "placed", "placements", "events")) {'
+           Find = 'foreach ($field in @("state", "reason", "target", "companion", "mode", "placed", "placements", "events", "findings")) {'
            Replace = 'foreach ($field in @("state")) {' }
         @{ Name = "a-state-in-another-case-is-taken"
            Find = 'if ($got.state -isnot [string] -or @(Get-HordeWindowFollowStates) -cnotcontains $got.state) { return'

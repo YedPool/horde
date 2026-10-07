@@ -23,7 +23,8 @@
 #   - EVERY PLACEMENT IS SWP_NOACTIVATE, so placing never takes the keyboard.
 #
 # WHERE IT IS PLACED is the port's pure function, Get-HordeWindowFollowPlacement, and nothing of this
-# file's: the native half only carries its answer to Windows.
+# file's: the native half only carries its answer to Windows. The numbers it works from are the module's
+# settings, which the port hands to Start and this file keeps for as long as the follow lasts.
 #
 # PIXELS ARE REAL PIXELS only when the process draws at each screen's real scale, and asking Windows
 # for that has ONE owner, platform/windows/Scale.ps1, loaded here and handed to the port as this
@@ -55,7 +56,7 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Platform.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\WindowFollowPort.ps1")
 
-# The one follow of this process: { target; companion; mode; state; reason; placed; placements }, or
+# The one follow of this process: { target; companion; mode; settings; state; reason; placed; placements }, or
 # nothing. Kept across a second load of this file.
 if ($null -eq (Get-Variable -Name HordeWindowsFollow -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWindowsFollow = $null }
 
@@ -160,7 +161,7 @@ function Update-HordeWindowsFollow {
     if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {
         $beside = Get-HordeWindowsFollowRectangle -Handle $s.target
         if ($beside.state -ceq "known") {
-            $at = Get-HordeWindowFollowPlacement -Target $beside.value -Scale $beside.value.scale -Mode $s.mode
+            $at = Get-HordeWindowFollowPlacement -Target $beside.value -Scale $beside.value.scale -Mode $s.mode -Settings $s.settings
             if ($at.state -ceq "known") {
                 [void][HordeWindowsFollowV1]::Place($s.companion, $at.value.left, $at.value.top, $at.value.width, $at.value.height)
                 $s.placed = $at.value
@@ -174,7 +175,7 @@ function Update-HordeWindowsFollow {
 function Start-HordeWindowsFollow {
     # The port's Start. The port has already refused a mode that is not built, a handle that is not
     # above zero and a window beside itself.
-    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [Parameter(Mandatory = $true)][string]$Mode)
+    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [Parameter(Mandatory = $true)][string]$Mode, [Parameter(Mandatory = $true)]$Settings)
     Initialize-HordeWindowsFollowType
     if ($null -ne $script:HordeWindowsFollow) { [void](Stop-HordeWindowsFollow) }
     if (-not [HordeWindowsFollowV1]::Exists($Target)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to stand beside does not exist") }
@@ -188,7 +189,7 @@ function Start-HordeWindowsFollow {
         [HordeWindowsFollowV1]::Disown($Companion)
         return (New-HordeWindowFollowRecord -State "failed" -Reason "Windows would not report the other window's moves, so it cannot be followed")
     }
-    $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; state = "following"; reason = ""; placed = $null; placements = 0 }
+    $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; settings = $Settings; state = "following"; reason = ""; placed = $null; placements = 0 }
     return (Update-HordeWindowsFollow -Place $true)
 }
 
@@ -217,7 +218,7 @@ function Register-HordeWindowsFollower {
         Applies   = { Test-HordeIsWindows }
         RealScale = { Enable-HordeWindowsRealScale }
         Rectangle = { param($Handle) Get-HordeWindowsFollowRectangle -Handle $Handle }
-        Start     = { param($Target, $Companion, $Mode) Start-HordeWindowsFollow -Target $Target -Companion $Companion -Mode $Mode }
+        Start     = { param($Target, $Companion, $Mode, $Settings) Start-HordeWindowsFollow -Target $Target -Companion $Companion -Mode $Mode -Settings $Settings }
         Update    = { param($Place) Update-HordeWindowsFollow -Place $Place }
         Release   = { Disconnect-HordeWindowsFollow }
         Stop      = { Stop-HordeWindowsFollow }

@@ -17,6 +17,9 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "core\WindowFollowPort.ps1")
+# A home of this run's own, which is never made: a follow started with no settings handed in reads the
+# person's file, and the person's real one is not this suite's to read.
+$env:HORDE_HOME = Join-Path $env:TEMP ("horde-follow-port-home-" + [guid]::NewGuid().ToString("N"))
 
 function Rect { param([int]$L, [int]$T, [int]$R, [int]$B) return [pscustomobject]@{ left = $L; top = $T; right = $R; bottom = $B } }
 function Field {
@@ -109,6 +112,65 @@ Check (Refused (Get-HordeWindowFollowPlacement -Target ([pscustomobject]@{ left 
 Check (Refused (Get-HordeWindowFollowPlacement -Target ([pscustomobject]@{ left = 0; top = 0; right = "100"; bottom = 100 })) "is not four whole numbers") "and one whose side is text"
 
 Write-Host ""
+Write-Host "--- the numbers are the module's settings, which a person may change in one file ---" -ForegroundColor Cyan
+$declared = Safe { Get-HordeWindowFollowSettingsDeclaration }
+Check ((Field $declared "module") -ceq "window-follow") "the module's settings are declared under its own name, window-follow"
+$want = [ordered]@{ floatingMarginTopPx = 48; floatingMarginRightPx = 24; floatingMarginBottomPx = 24; floatingWidthShare = (1.0 / 3); floatingMinWidthPx = 320; floatingMinHeightPx = 200 }
+$names = @(@(Field $declared "settings") | ForEach-Object { Field $_ "name" })
+Check (($names -join ",") -ceq (@($want.Keys) -join ",")) ("six settings, each named for the mode it belongs to and the unit it is in (" + ($names -join ", ") + ")")
+$homeDir = Join-Path $env:TEMP ("horde-follow-home-" + [guid]::NewGuid().ToString("N"))
+try {
+    $none = Safe { Get-HordeWindowFollowSettings -HordeHome $homeDir }
+    $same = $true
+    foreach ($name in $want.Keys) { if ((Field (Field $none "values") $name) -ne $want[$name]) { $same = $false } }
+    Check ($same -and @(Field $none "findings").Count -eq 0) "with no file every setting is its default, and nothing is found wrong"
+    Check ((Field $none "path") -ceq (Join-Path $homeDir "settings\window-follow.json") -and -not (Test-Path -LiteralPath $homeDir)) "the file is <home>\settings\window-follow.json, and asking made neither it nor the home"
+    $byDefault = Place (Rect 120 90 1120 730)
+    $given = Safe { Get-HordeWindowFollowPlacement -Target (Rect 120 90 1120 730) -Settings (Field $none "values") }
+    Check ((Test-HordeAnswer $given) -and $given.state -ceq "known" -and (Is $given.value $byDefault.left $byDefault.top $byDefault.width $byDefault.height)) "a place worked out with no settings handed in is the place the defaults give"
+
+    New-Item -ItemType Directory -Path (Join-Path $homeDir "settings") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "settings\window-follow.json"), '{ "schemaVersion": 1, "settings": { "floatingMarginTopPx": 100, "floatingMarginRightPx": 10, "floatingMarginBottomPx": 0, "floatingWidthShare": 0.5, "floatingMinWidthPx": 600, "floatingMinHeightPx": 100 } }')
+    $own = Safe { Get-HordeWindowFollowSettings -HordeHome $homeDir }
+    $ownValues = Field $own "values"
+    Check (@(Field $own "findings").Count -eq 0 -and (Field $ownValues "floatingMarginTopPx") -eq 100 -and (Field $ownValues "floatingWidthShare") -eq 0.5) "a person's file changes them"
+    function PlaceWith {
+        # The place worked out with settings handed in, shown as text: "left,top widthxheight", or why not.
+        param($Target, $With, [double]$Scale = 1.0)
+        $answer = Safe { Get-HordeWindowFollowPlacement -Target $Target -Scale $Scale -Settings $With }
+        if ((Test-HordeAnswer $answer) -and $answer.state -ceq "known") { return (Show $answer.value) }
+        return ("no place: " + $(if (Test-HordeAnswer $answer) { $answer.reason } else { $answer }))
+    }
+    $at = PlaceWith (Rect 120 90 1120 730) $ownValues
+    Check ($at -ceq "510,190 600x540") ("and the place follows them: 10 in from the right, 100 down, the smallest width of 600 over half the width, the whole height below the top margin (" + $at + ")")
+    $at = PlaceWith (Rect 0 0 2000 150) $ownValues
+    Check ($at -ceq "990,100 1000x50") ("on a wide, low window: half its width, and its own smallest height gives way to the other window's bottom (" + $at + ")")
+    $at = PlaceWith (Rect 0 0 2000 190) $ownValues
+    Check ($at -ceq "990,100 1000x90") ("a height between: the other window's height less the top margin, where the smallest height of 100 would not fit (" + $at + ")")
+    $at = PlaceWith (Rect 0 0 2000 1000) $ownValues 2.0
+    Check ($at -ceq "780,200 1200x800") ("and at twice the scale each pixel setting is twice as many pixels, the share the same share (" + $at + ")")
+    $bottom = [pscustomobject]@{ floatingMarginTopPx = 0; floatingMarginRightPx = 0; floatingMarginBottomPx = 70; floatingWidthShare = 0.25; floatingMinWidthPx = 100; floatingMinHeightPx = 100 }
+    $at = PlaceWith (Rect 0 0 1000 800) $bottom
+    Check ($at -ceq "750,0 250x730") ("no top or right margin and a bottom one of 70: flush to the top right corner, a quarter wide, 70 short of the bottom (" + $at + ")")
+
+    [System.IO.File]::WriteAllText((Join-Path $homeDir "settings\window-follow.json"), '{ "schemaVersion": 1, "settings": { "floatingMarginTopPx": -1, "floatingWidthShare": 0.95, "floatingMinWidthPx": 10, "marginTop": 5 } }')
+    $bad = Safe { Get-HordeWindowFollowSettings -HordeHome $homeDir }
+    $said = @(Field $bad "findings") -join " | "
+    Check (@(Field $bad "findings").Count -eq 4 -and $said -like "*'floatingMarginTopPx'*" -and $said -like "*'floatingWidthShare'*" -and $said -like "*'floatingMinWidthPx'*" -and $said -like "*'marginTop'*") ("a margin below nothing, a share over nine tenths, a smallest width under 100 and a name that is not one are each said by name (" + $said + ")")
+    $badValues = Field $bad "values"
+    Check ((Field $badValues "floatingMarginTopPx") -eq 48 -and (Field $badValues "floatingWidthShare") -eq (1.0 / 3) -and (Field $badValues "floatingMinWidthPx") -eq 320) "and each of those is its default"
+
+    $lacking = [pscustomobject]@{ floatingMarginTopPx = 48; floatingMarginRightPx = 24; floatingMarginBottomPx = 24; floatingWidthShare = 0.3; floatingMinWidthPx = 320 }
+    $at = PlaceWith (Rect 0 0 1000 800) $lacking
+    Check ($at -like "no place: *floatingMinHeightPx*") ("settings handed in with one missing give no place, and the reason names it (" + $at + ")")
+    $wrong = [pscustomobject]@{ floatingMarginTopPx = "48"; floatingMarginRightPx = 24; floatingMarginBottomPx = 24; floatingWidthShare = 0.3; floatingMinWidthPx = 320; floatingMinHeightPx = 200 }
+    $at = PlaceWith (Rect 0 0 1000 800) $wrong
+    Check ($at -like "no place: *floatingMarginTopPx*") ("nor do settings one of which is not a number (" + $at + ")")
+} finally {
+    if (Test-Path -LiteralPath $homeDir) { [System.IO.Directory]::Delete($homeDir, $true) }
+}
+
+Write-Host ""
 Write-Host "--- with no follower loaded, every verb answers that nothing can follow a window here ---" -ForegroundColor Cyan
 $files = @(Get-HordeWindowFollowerFiles -Root $root)
 Check (@($files | Where-Object { $_ -like "*\platform\windows\WindowFollow.ps1" }).Count -eq 1) "the Windows follower's file is found by folder"
@@ -145,7 +207,7 @@ function New-TestFollower {
     Register-HordeWindowFollower -Name $Name -Applies $Applies `
         -RealScale { [void]$script:asked.Add("realScale"); [pscustomobject]@{ state = "applied"; awareness = "per-monitor-v2"; realScale = "yes"; reason = "taken" } } `
         -Rectangle { param($Handle) [void]$script:asked.Add("rectangle " + $Handle); if ($Handle -eq 7) { New-HordeAbsent -Note "no such window" } else { New-HordeKnown -Value ([pscustomobject]@{ left = 10; top = 20; right = 610; bottom = 420; scale = 1.5 }) } } `
-        -Start { param($Target, $Companion, $Mode) [void]$script:asked.Add("start " + $Target + " " + $Companion + " " + $Mode); $script:follow = New-HordeWindowFollowRecord -State "following" -Target $Target -Companion $Companion -Mode $Mode -Placed ([pscustomobject]@{ left = 1; top = 2; width = 3; height = 4 }) -Placements 1; $script:follow } `
+        -Start { param($Target, $Companion, $Mode, $Settings) [void]$script:asked.Add("start " + $Target + " " + $Companion + " " + $Mode + " top=" + (Field $Settings "floatingMarginTopPx")); $script:follow = New-HordeWindowFollowRecord -State "following" -Target $Target -Companion $Companion -Mode $Mode -Placed ([pscustomobject]@{ left = 1; top = 2; width = 3; height = 4 }) -Placements 1; $script:follow } `
         -Update { param($Place) [void]$script:asked.Add("update " + $Place); $script:follow } `
         -Release { [void]$script:asked.Add("release"); $script:follow = New-HordeWindowFollowRecord -State "free" -Reason "let go" -Target $script:follow.target -Companion $script:follow.companion; $script:follow } `
         -Stop { [void]$script:asked.Add("stop"); $script:follow = New-HordeWindowFollowRecord -State "none"; $script:follow }
@@ -183,7 +245,37 @@ $r = Disconnect-HordeWindowFollow
 Check ((Field $r "state") -ceq "free" -and (Field $r "reason") -ceq "let go" -and (Field $r "companion") -eq 200) "letting go: free, with the follower's reason"
 $r = Stop-HordeWindowFollow
 Check ((Field $r "state") -ceq "none") "stopping: none"
-Check (($script:asked -join "; ") -ceq "realScale; rectangle 4242; rectangle 7; start 100 200 floating; update False; update True; release; stop") ("each verb asked exactly its block, once, in order - asking moves nothing, placing again does (" + ($script:asked -join "; ") + ")")
+Check (($script:asked -join "; ") -ceq "realScale; rectangle 4242; rectangle 7; start 100 200 floating top=48; update False; update True; release; stop") ("each verb asked exactly its block, once, in order - asking moves nothing, placing again does (" + ($script:asked -join "; ") + ")")
+
+Write-Host ""
+Write-Host "--- a follow is started with the person's settings ---" -ForegroundColor Cyan
+$startHome = Join-Path $env:TEMP ("horde-follow-start-" + [guid]::NewGuid().ToString("N"))
+$savedHome = $env:HORDE_HOME
+try {
+    New-Item -ItemType Directory -Path (Join-Path $startHome "settings") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $startHome "settings\window-follow.json"), '{ "schemaVersion": 1, "settings": { "floatingMarginTopPx": 100, "nonsuch": 1 } }')
+    $env:HORDE_HOME = $startHome
+    $script:asked.Clear()
+    $r = Safe { Start-HordeWindowFollow -Target 100 -Companion 200 }
+    Check ((Field $r "state") -ceq "following" -and ($script:asked -join "; ") -ceq "start 100 200 floating top=100") ("started with no settings handed in, the follower is given the ones in the person's file (" + ($script:asked -join "; ") + ")")
+    Check (@(Field $r "findings").Count -eq 1 -and "$(@(Field $r 'findings')[0])" -like "*'nonsuch'*") "and what is wrong in that file comes back with the answer, by name"
+    $script:asked.Clear()
+    $mine = [pscustomobject]@{ floatingMarginTopPx = 7; floatingMarginRightPx = 24; floatingMarginBottomPx = 24; floatingWidthShare = 0.3; floatingMinWidthPx = 320; floatingMinHeightPx = 200 }
+    $r = Safe { Start-HordeWindowFollow -Target 100 -Companion 200 -Settings $mine }
+    Check ((Field $r "state") -ceq "following" -and ($script:asked -join "; ") -ceq "start 100 200 floating top=7" -and @(Field $r "findings").Count -eq 0) ("settings handed in are the ones the follower is given, and no file is read for them (" + ($script:asked -join "; ") + ")")
+    $script:asked.Clear()
+    $r = Safe { Start-HordeWindowFollow -Target 100 -Companion 200 -Settings ([pscustomobject]@{ floatingMarginTopPx = 7 }) }
+    Check ((Field $r "state") -ceq "failed" -and "$(Field $r 'reason')" -like "*floatingMarginRightPx*" -and $script:asked.Count -eq 0) "settings handed in with one missing: failed, naming it, before any follower is asked"
+    $env:HORDE_HOME = "not-a-rooted-path"
+    $r = Safe { Start-HordeWindowFollow -Target 100 -Companion 200 }
+    Check ((Field $r "state") -ceq "failed" -and "$(Field $r 'reason')" -like "*HORDE_HOME must be an absolute path*" -and $script:asked.Count -eq 0) "a home that cannot be one: failed, in the home's own words, and never a throw"
+    $r = Safe { Get-HordeWindowFollow }
+    Check (@(Field $r "findings").Count -eq 0 -and (Field $r "findings") -isnot [string]) "CONTROL: a record that read no file carries an empty list of findings"
+} finally {
+    $env:HORDE_HOME = $savedHome
+    if (Test-Path -LiteralPath $startHome) { [System.IO.Directory]::Delete($startHome, $true) }
+}
+[void](Stop-HordeWindowFollow)
 
 Write-Host ""
 Write-Host "--- a follower that fails is answered for, never thrown through ---" -ForegroundColor Cyan
@@ -207,9 +299,9 @@ Register-HordeWindowFollower -Name "here" -Applies { $true } -RealScale { $scrip
 $shapes = [ordered]@{
     "nothing" = $null
     "a word" = "following"
-    "a record with no state" = [pscustomobject]@{ reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0; events = 0 }
-    "a state that is not one" = [pscustomobject]@{ state = "Following"; reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0; events = 0 }
-    "a record with a field missing" = [pscustomobject]@{ state = "following"; reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0 }
+    "a record with no state" = [pscustomobject]@{ reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0; events = 0; findings = @() }
+    "a state that is not one" = [pscustomobject]@{ state = "Following"; reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0; events = 0; findings = @() }
+    "a record with a field missing" = [pscustomobject]@{ state = "following"; reason = ""; target = 1; companion = 2; mode = "floating"; placed = $null; placements = 0; findings = @() }
 }
 foreach ($name in $shapes.Keys) {
     $script:nonsense = $shapes[$name]

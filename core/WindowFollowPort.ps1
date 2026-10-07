@@ -29,12 +29,12 @@
 #       Where another window is: a core/Tristate.ps1 answer. known { left; top; right; bottom; scale }
 #       in real pixels, scale being its screen's (1 is the ordinary scale, 1.5 one and a half times);
 #       absent when there is no such window; unknown, with the reason, when it cannot be asked here.
-#   Get-HordeWindowFollowPlacement -Target <rectangle> [-Scale <n>] [-Mode <name>]
+#   Get-HordeWindowFollowPlacement -Target <rectangle> [-Scale <n>] [-Mode <name>] [-Settings <values>]
 #       Where the companion stands: a core/Tristate.ps1 answer, known { left; top; width; height } in
 #       real pixels, or unknown with the reason (a mode that is not built, an empty rectangle, a scale
 #       no screen has). PURE: no window is read or moved, on any system, so a caller can work out the
 #       place before its window exists, and every platform's follower places by the same rule.
-#   Start-HordeWindowFollow -Target <n> -Companion <n> [-Mode <name>]
+#   Start-HordeWindowFollow -Target <n> -Companion <n> [-Mode <name>] [-Settings <values>]
 #       Make the window -Companion (this process's own) the companion of the window -Target
 #       (anyone's): owned by it, placed, and placed again whenever it moves or is resized. Call it on
 #       the thread that runs the companion's message loop. Answers a FOLLOW RECORD (below) whose state
@@ -82,7 +82,7 @@
 #   Applies   ()                              exactly $true when this is the system it is for
 #   RealScale ()                              { state; awareness; realScale; reason }
 #   Rectangle ($handle)                       a core/Tristate.ps1 answer, as Get-HordeWindowFollowRectangle
-#   Start     ($target, $companion, $mode)    a follow record; the port has already refused a mode that
+#   Start     ($target, $companion, $mode, $settings)   a follow record; the port has already refused a mode that
 #                                             is not built, a handle that is not above zero and a
 #                                             window beside itself
 #   Update    ($place)                        a follow record; places again only when $place is $true
@@ -91,12 +91,24 @@
 # A follower places by Get-HordeWindowFollowPlacement and by nothing of its own. The first registered
 # follower whose Applies is true is the one asked.
 #
+# THE SETTINGS are the module's own, declared here once (core/ModuleSettings.ps1, module
+# "window-follow") and changed by a person in <home>\settings\window-follow.json:
+#   Get-HordeWindowFollowSettings [-HordeHome <path>]   { values; findings; path }
+# A caller reads them once, says each finding, and hands .values to the placement and to Start, so the
+# place it works out before its window exists is the place the follower then keeps. Start with no
+# -Settings reads the file itself and answers what was wrong in it in the record's findings.
+# THEY SAY WHERE A COMPANION STANDS BY DEFAULT, as gaps from the other window's top right corner in
+# pixels at the ordinary scale, and are never written by Horde. A place the person drags the companion
+# to is not a setting: it is something a later unit remembers, as an offset from that same corner in
+# the same scale-free pixels, and hands to the placement beside these. Not built.
+#
 # ONE MODE IS BUILT: floating, at the top right of the other window. A mode is a name the pure
 # function refuses unless it knows it, which is the seam for the next ones (side by side; a small
 # tab): each is a branch there and nothing in a caller.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). It runs under -Version Latest.
 . (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ModuleSettings.ps1")
 
 # Kept across a second load: a follower's file loads this file too, after the caller has.
 if ($null -eq (Get-Variable -Name HordeWindowFollowers -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWindowFollowers = New-Object System.Collections.ArrayList }
@@ -108,11 +120,42 @@ function Get-HordeWindowFollowStates {
     return @("none", "following", "lost", "free", "failed", "unavailable")
 }
 
-function Get-HordeWindowFollowFloating {
-    # The floating mode's numbers, in pixels at the ordinary scale; each is multiplied by the other
-    # window's scale. The margins are the proof's of 2026-10-06: 24 from the right edge, and 48 from the
-    # top so that the other window's title and tab bar stay visible above the companion.
-    return @{ marginTop = 48; marginRight = 24; marginBottom = 24; widthShare = (1.0 / 3); minWidth = 320; minHeight = 200 }
+function Get-HordeWindowFollowSettingsDeclaration {
+    # THE MODULE'S SETTINGS, declared once (core/ModuleSettings.ps1): where a companion stands by
+    # default. Each pixel setting is in pixels at the ordinary scale and is multiplied by the other
+    # window's scale, so it is the same physical size on every screen. The defaults are the proof's of
+    # 2026-10-06: 24 from the right edge, and 48 from the top so that the other window's title and tab
+    # bar stay visible above the companion. Each name begins with its mode: the next mode adds its own
+    # and changes none of these.
+    return (New-HordeModuleSettings -Module "window-follow" -Settings @(
+        @{ name = "floatingMarginTopPx";    kind = "whole";    default = 48;        min = 0;   max = 2000; what = "Floating: gap between the other window's top edge and the companion's, in pixels at the ordinary scale." },
+        @{ name = "floatingMarginRightPx";  kind = "whole";    default = 24;        min = 0;   max = 2000; what = "Floating: gap between the companion's right edge and the other window's, in pixels at the ordinary scale." },
+        @{ name = "floatingMarginBottomPx"; kind = "whole";    default = 24;        min = 0;   max = 2000; what = "Floating: gap between the companion's bottom edge and the other window's, in pixels at the ordinary scale." },
+        @{ name = "floatingWidthShare";     kind = "fraction"; default = (1.0 / 3); min = 0.1; max = 0.9;  what = "Floating: the share of the other window's width the companion takes." },
+        @{ name = "floatingMinWidthPx";     kind = "whole";    default = 320;       min = 100; max = 4000; what = "Floating: the smallest width of the companion, in pixels at the ordinary scale." },
+        @{ name = "floatingMinHeightPx";    kind = "whole";    default = 200;       min = 100; max = 4000; what = "Floating: the smallest height of the companion, in pixels at the ordinary scale." }
+    ))
+}
+
+function Get-HordeWindowFollowSettings {
+    # The module's settings as the person has them: { values; findings; path }. It reads the one file
+    # <home>\settings\window-follow.json and writes nothing; what is wrong in the file is a finding by
+    # name and that setting is its default. A HORDE_HOME that is not an absolute path is the home's own
+    # throw, passed on (core/ModuleSettings.ps1).
+    param([string]$HordeHome = "")
+    return (Get-HordeModuleSettings -Declaration (Get-HordeWindowFollowSettingsDeclaration) -HordeHome $HordeHome)
+}
+
+function Get-HordeWindowFollowSettingsFault {
+    # What is wrong with settings handed in, in words, or "" when each declared name is there and is a
+    # number: a caller hands in the values object Get-HordeWindowFollowSettings answered.
+    param($Settings)
+    foreach ($entry in @((Get-HordeWindowFollowSettingsDeclaration).settings)) {
+        $field = $null
+        if ($null -ne $Settings) { $field = $Settings.PSObject.Properties[$entry.name] }
+        if ($null -eq $field -or ($field.Value -isnot [int] -and $field.Value -isnot [double])) { return ("the settings handed in are not this module's: '" + $entry.name + "' is not there, or is not a number") }
+    }
+    return ""
 }
 
 function Get-HordeWindowFollowWhole {
@@ -133,8 +176,14 @@ function Get-HordeWindowFollowPlacement {
     # FLOATING: the right edge a margin in from the other window's, the top a margin down from its
     # top, a share of its width and all of its height but the margins - never smaller than the
     # smallest size, nor wider or lower than the other window allows.
-    param($Target, [double]$Scale = 1.0, [string]$Mode = "floating")
+    #
+    # -Settings is the values object of Get-HordeWindowFollowSettings; left out, the declared defaults
+    # are used and no file is read: this function is pure either way.
+    param($Target, [double]$Scale = 1.0, [string]$Mode = "floating", $Settings = $null)
     if (@(Get-HordeWindowFollowModes) -cnotcontains $Mode) { return (New-HordeUnknown -Reason ("'" + $Mode + "' is not a way a window is followed; the ways built are: " + (@(Get-HordeWindowFollowModes) -join ", "))) }
+    $f = $Settings
+    if ($null -eq $f) { $f = (Read-HordeModuleSettingsText -Declaration (Get-HordeWindowFollowSettingsDeclaration) -Text $null).values }
+    else { $fault = Get-HordeWindowFollowSettingsFault -Settings $f; if ($fault -ne "") { return (New-HordeUnknown -Reason $fault) } }
     # Half the ordinary scale to ten times it: wider than any screen sold, and it keeps a wrong number
     # (a zero, a dots-per-inch figure handed in as a scale) from being multiplied into a place.
     if ([double]::IsNaN($Scale) -or $Scale -lt 0.5 -or $Scale -gt 10) { return (New-HordeUnknown -Reason ("" + $Scale + " is not a screen's scale")) }
@@ -142,12 +191,14 @@ function Get-HordeWindowFollowPlacement {
     $right = Get-HordeWindowFollowWhole -From $Target -Name "right"; $bottom = Get-HordeWindowFollowWhole -From $Target -Name "bottom"
     if ($null -eq $left -or $null -eq $top -or $null -eq $right -or $null -eq $bottom) { return (New-HordeUnknown -Reason "the other window's rectangle is not four whole numbers, so there is nowhere to work out") }
     if ($right -le $left -or $bottom -le $top) { return (New-HordeUnknown -Reason "the other window's rectangle is empty, so there is nowhere beside it") }
-    $f = Get-HordeWindowFollowFloating
     # Whole pixels, rounded once per number, so that two placements from one rectangle are the same.
-    $marginTop = [int][Math]::Round($f.marginTop * $Scale); $marginRight = [int][Math]::Round($f.marginRight * $Scale); $marginBottom = [int][Math]::Round($f.marginBottom * $Scale)
-    $smallestWidth = [int][Math]::Round($f.minWidth * $Scale); $smallestHeight = [int][Math]::Round($f.minHeight * $Scale)
+    $marginTop = [int][Math]::Round($f.floatingMarginTopPx * $Scale)
+    $marginRight = [int][Math]::Round($f.floatingMarginRightPx * $Scale)
+    $marginBottom = [int][Math]::Round($f.floatingMarginBottomPx * $Scale)
+    $smallestWidth = [int][Math]::Round($f.floatingMinWidthPx * $Scale)
+    $smallestHeight = [int][Math]::Round($f.floatingMinHeightPx * $Scale)
     $targetWidth = [int]($right - $left); $targetHeight = [int]($bottom - $top)
-    $width = [Math]::Max([int][Math]::Round($targetWidth * [double]$f.widthShare), $smallestWidth)
+    $width = [Math]::Max([int][Math]::Round($targetWidth * [double]$f.floatingWidthShare), $smallestWidth)
     # Never wider than the other window less a margin each side: on a narrow window it shrinks with it.
     $width = [Math]::Min($width, [Math]::Max($targetWidth - 2 * $marginRight, 1))
     $height = [Math]::Max($targetHeight - $marginTop - $marginBottom, [Math]::Min($smallestHeight, [Math]::Max($targetHeight - $marginTop, 1)))
@@ -156,9 +207,9 @@ function Get-HordeWindowFollowPlacement {
 
 function New-HordeWindowFollowRecord {
     # A follow record (header), for a follower to answer with and for this file to answer when none can.
-    param([Parameter(Mandatory = $true)][string]$State, [string]$Reason = "", [long]$Target = 0, [long]$Companion = 0, [string]$Mode = "", $Placed = $null, [int]$Placements = 0, [int]$Events = 0)
+    param([Parameter(Mandatory = $true)][string]$State, [string]$Reason = "", [long]$Target = 0, [long]$Companion = 0, [string]$Mode = "", $Placed = $null, [int]$Placements = 0, [int]$Events = 0, [string[]]$Findings = @())
     if (@(Get-HordeWindowFollowStates) -cnotcontains $State) { throw ("'" + $State + "' is not a state of a followed window") }
-    return [pscustomobject]@{ state = $State; reason = $Reason; target = $Target; companion = $Companion; mode = $Mode; placed = $Placed; placements = $Placements; events = $Events }
+    return [pscustomobject]@{ state = $State; reason = $Reason; target = $Target; companion = $Companion; mode = $Mode; placed = $Placed; placements = $Placements; events = $Events; findings = [string[]]@($Findings) }
 }
 
 function Register-HordeWindowFollower {
@@ -220,7 +271,7 @@ function ConvertTo-HordeWindowFollowRecord {
     if (-not $Asked.asked) { return (New-HordeWindowFollowRecord -State "unavailable" -Reason $Asked.reason) }
     $got = $Asked.value
     if ($null -eq $got) { return (New-HordeWindowFollowRecord -State "unavailable" -Reason $Asked.reason) }
-    foreach ($field in @("state", "reason", "target", "companion", "mode", "placed", "placements", "events")) { if ($null -eq $got.PSObject.Properties[$field]) { return (New-HordeWindowFollowRecord -State "unavailable" -Reason $Asked.reason) } }
+    foreach ($field in @("state", "reason", "target", "companion", "mode", "placed", "placements", "events", "findings")) { if ($null -eq $got.PSObject.Properties[$field]) { return (New-HordeWindowFollowRecord -State "unavailable" -Reason $Asked.reason) } }
     if ($got.state -isnot [string] -or @(Get-HordeWindowFollowStates) -cnotcontains $got.state) { return (New-HordeWindowFollowRecord -State "unavailable" -Reason $Asked.reason) }
     return $got
 }
@@ -252,12 +303,23 @@ function Get-HordeWindowFollowRectangle {
 
 function Start-HordeWindowFollow {
     # Make -Companion the companion of -Target (header). Never throws; answers a follow record.
-    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [string]$Mode = "floating")
+    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [string]$Mode = "floating", $Settings = $null)
     if (@(Get-HordeWindowFollowModes) -cnotcontains $Mode) { return (New-HordeWindowFollowRecord -State "failed" -Reason ("'" + $Mode + "' is not a way a window is followed")) }
     if ($Target -le 0) { return (New-HordeWindowFollowRecord -State "failed" -Reason "no window to stand beside was named") }
     if ($Companion -le 0) { return (New-HordeWindowFollowRecord -State "failed" -Reason "no window to place was named") }
     if ($Target -eq $Companion) { return (New-HordeWindowFollowRecord -State "failed" -Reason "a window cannot stand beside itself") }
-    return (ConvertTo-HordeWindowFollowRecord -Asked (Invoke-HordeWindowFollower -Verb "start" -With @($Target, $Companion, $Mode)))
+    $found = [string[]]@()
+    $with = $Settings
+    if ($null -eq $with) {
+        # No settings handed in: the person's own, read here, and what is wrong in their file is
+        # answered with the record, so that a caller who read nothing still cannot lose a finding.
+        try { $read = Get-HordeWindowFollowSettings } catch { return (New-HordeWindowFollowRecord -State "failed" -Reason ("the settings could not be read: " + $_.Exception.Message)) }
+        $with = $read.values; $found = [string[]]@($read.findings)
+    }
+    else { $fault = Get-HordeWindowFollowSettingsFault -Settings $with; if ($fault -ne "") { return (New-HordeWindowFollowRecord -State "failed" -Reason $fault) } }
+    $record = ConvertTo-HordeWindowFollowRecord -Asked (Invoke-HordeWindowFollower -Verb "start" -With @($Target, $Companion, $Mode, $with))
+    $record.findings = $found
+    return $record
 }
 
 function Get-HordeWindowFollow {

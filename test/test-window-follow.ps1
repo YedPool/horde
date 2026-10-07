@@ -11,6 +11,9 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "core\WindowFollowPort.ps1")
+# A home of this run's own, which is never made: a follow started with no settings handed in reads the
+# person's file, and the person's real one is not this suite's to read.
+$env:HORDE_HOME = Join-Path $env:TEMP ("horde-follow-home-" + [guid]::NewGuid().ToString("N"))
 
 function Field {
     # A field of an object, or the text "<none>" when it is not there - so that a missing field fails a
