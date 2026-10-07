@@ -52,6 +52,22 @@
 # Nothing tells this file the moment the other window goes: a caller learns "lost" by asking, on its
 # own timer. Following a session into a new window is a later slice's.
 #
+# HOW A COMPANION IS MADE TO STAND FREE, when it is let go or the other window is lost. Each line is
+# what test/test-window-follow.ps1 measures, reading what Windows tells the taskbar (first 2026-10-07):
+#   - Clearing the owner is NOT enough. Windows tells the taskbar nothing, and the window - made to be
+#     a companion, so made out of the taskbar - stays out of it: a window the person cannot find.
+#   - Windows tells the taskbar when a window is SHOWN. So the free window is given WS_EX_APPWINDOW,
+#     which makes any visible window a taskbar window (a tool window too), and is hidden and shown
+#     again with SW_SHOWNA, which shows without activating: the foreground window and this thread's
+#     active window are the same before and after. It flickers once.
+#   - A companion whose other window was MINIMISED when its process ended is left HIDDEN by Windows,
+#     for good. The same showing brings it back.
+#   - Only a companion that had been SEEN - visible when the follow started, or at any look since - is
+#     shown. One its maker never showed is set free unseen; its maker's own showing announces it.
+#   - Followed again, the style is taken off: an owned window that kept it would be a taskbar window.
+# A FREE WINDOW IS NOT A WINDOW THAT REFUSES THE KEYBOARD: the person clicks it and types. It is only
+# never GIVEN the keyboard by being set free. Stop does none of this: it is for a window that is closing.
+#
 # ONE FOLLOW AT A TIME: the native half keeps one hook and one target, so starting a second follow
 # ends the first.
 #
@@ -65,7 +81,7 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Platform.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\WindowFollowPort.ps1")
 
-# The one follow of this process: { target; companion; mode; settings; state; reason; placed; placements }, or
+# The one follow of this process: { target; companion; mode; settings; state; reason; placed; placements; seen }, or
 # nothing. Kept across a second load of this file.
 if ($null -eq (Get-Variable -Name HordeWindowsFollow -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWindowsFollow = $null }
 
@@ -82,6 +98,9 @@ public static class HordeWindowsFollowV1 {
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
@@ -99,6 +118,7 @@ public static class HordeWindowsFollowV1 {
     }
     public static bool Exists(long h) { return IsWindow(new IntPtr(h)); }
     public static bool Minimised(long h) { return IsIconic(new IntPtr(h)); }
+    public static bool Visible(long h) { return IsWindowVisible(new IntPtr(h)); }
     public static uint ProcessOf(long h) { uint pid; GetWindowThreadProcessId(new IntPtr(h), out pid); return pid; }
     public static int Dpi(long h) { try { uint d = GetDpiForWindow(new IntPtr(h)); return d == 0 ? 96 : (int)d; } catch (EntryPointNotFoundException) { return 96; } }
     public static int[] Rect(long h) { RECT r; if (!GetWindowRect(new IntPtr(h), out r)) return null; return new int[] { r.Left, r.Top, r.Right, r.Bottom }; }
@@ -128,7 +148,7 @@ public static class HordeWindowsFollowV1 {
         keep = new WinEventDelegate(OnEvent);
         // EVENT_OBJECT_LOCATIONCHANGE of the other window's process, delivered to this thread's message loop.
         hook = SetWinEventHook(0x800B, 0x800B, IntPtr.Zero, keep, ProcessOf(targetWindow), 0, 0);
-        if (hook != IntPtr.Zero) { return new int[] { 0, 0 }; }
+        if (hook != IntPtr.Zero) { TaskbarStyle(new IntPtr(companion), false); return new int[] { 0, 0 }; }
         // Not followed after all: ours goes back to the owner it had, and nothing is listened for.
         SetWindowLongPtr(new IntPtr(companion), -8, ownerBefore);
         Unhook();
@@ -140,6 +160,23 @@ public static class HordeWindowsFollowV1 {
     public static void Unhook() {
         if (hook != IntPtr.Zero) { UnhookWinEvent(hook); hook = IntPtr.Zero; }
         target = IntPtr.Zero; moved = null;
+    }
+    // WS_EX_APPWINDOW (0x40000) in GWL_EXSTYLE (-20): a visible window that carries it is a taskbar
+    // window whatever else it is - a tool window too. Put on a window that stands free and taken off
+    // one that is followed again, or Windows would show a button for an owned companion.
+    static void TaskbarStyle(IntPtr window, bool on) {
+        long style = GetWindowLongPtr(window, -20).ToInt64();
+        long wanted = on ? (style | 0x40000L) : (style & ~0x40000L);
+        if (wanted != style) { SetWindowLongPtr(window, -20, new IntPtr(wanted)); }
+    }
+    // The companion stands free: owned by nothing, a taskbar window, and - when it had been seen -
+    // visible, without being given the keyboard. See the header for what was measured.
+    public static void StandFree(long companion, bool seen) {
+        IntPtr window = new IntPtr(companion);
+        if (!IsWindow(window)) { return; }
+        SetWindowLongPtr(window, -8, IntPtr.Zero);
+        TaskbarStyle(window, true);
+        if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }     // SW_HIDE, then SW_SHOWNA: shown, not activated
     }
     public static void Disown(long companion) {
         if (IsWindow(new IntPtr(companion))) { SetWindowLongPtr(new IntPtr(companion), -8, IntPtr.Zero); }
@@ -179,11 +216,12 @@ function Get-HordeWindowsFollowRectangle {
 }
 
 function Set-HordeWindowsFollowFree {
-    # The companion stands free: Windows is told to stop reporting, and ours is no longer owned.
+    # The companion stands free (header): Windows is told to stop reporting, and ours is owned by
+    # nothing, a taskbar window, and visible if it had been seen - never activated.
     param([Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][string]$Reason)
     $s = $script:HordeWindowsFollow
     [HordeWindowsFollowV1]::Unhook()
-    [HordeWindowsFollowV1]::Disown($s.companion)
+    [HordeWindowsFollowV1]::StandFree($s.companion, [bool]$s.seen)
     $s.state = $State; $s.reason = $Reason
 }
 
@@ -198,6 +236,9 @@ function Update-HordeWindowsFollow {
         Set-HordeWindowsFollowFree -State "lost" -Reason "the window it stood beside no longer exists"
         return (Get-HordeWindowsFollowRecord)
     }
+    # Seen once is seen: Windows hides a companion whose other window is minimised, and that is not its
+    # maker keeping it out of sight. The first look is the one a start ends with.
+    if (-not $s.seen -and [HordeWindowsFollowV1]::Visible($s.companion)) { $s.seen = $true }
     if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {
         $beside = Get-HordeWindowsFollowRectangle -Handle $s.target
         if ($beside.state -ceq "known") {
@@ -226,7 +267,7 @@ function Start-HordeWindowsFollow {
     $attached = [HordeWindowsFollowV1]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
     $started = ConvertTo-HordeWindowsFollowStart -Code $attached[0] -ErrorCode $attached[1]
     if ($started.state -cne "following") { return (New-HordeWindowFollowRecord -State "failed" -Reason $started.reason) }
-    $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; settings = $Settings; state = "following"; reason = ""; placed = $null; placements = 0 }
+    $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; settings = $Settings; state = "following"; reason = ""; placed = $null; placements = 0; seen = $false }
     return (Update-HordeWindowsFollow -Place $true)
 }
 
