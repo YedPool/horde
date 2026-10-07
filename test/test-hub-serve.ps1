@@ -295,6 +295,30 @@ try {
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*afresh*" -or $_ -clike "*kept aside*" }).Count -eq 0 -and @(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1) "CONTROL: a readable mirror is used as it is: no note, nothing new kept aside"
 
+    # A GOOD MIRROR HELD OPEN IS NOT A BAD ONE (review of PR #88): a reader that holds the file without
+    # sharing read made it unreadable for a moment, and the round moved the good mirror aside and wrote
+    # a fresh one over its name. Held without read share, or with nothing shared, the file is left as
+    # it is and the node's round is skipped, said so; nothing is moved aside.
+    $marker = [System.IO.File]::ReadAllText($f8Path)
+    foreach ($share in @([System.IO.FileShare]::Delete, [System.IO.FileShare]::None)) {
+        $held = [System.IO.File]::Open($f8Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        try { $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000) } finally { $held.Dispose() }
+        Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*held open*left as it is*" }).Count -eq 1) ("a mirror held open (share " + $share + ") is left as it is, and the round says so (" + ($rounds[0].outcomes -join " | ") + ")")
+        Check (@(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1 -and [System.IO.File]::ReadAllText($f8Path) -ceq $marker) "and nothing is moved aside or written over it"
+    }
+
+    # KEPT ASIDE, BUT NOT WITHOUT END (review of PR #88): a mirror unreadable round after round left one
+    # more copy each round (5 rounds, 5 copies). The newest three are kept; older ones are removed, said so.
+    foreach ($i in 1..5) {
+        [System.IO.File]::WriteAllText($f8Path, ("garbage " + $i))
+        $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+        Start-Sleep -Milliseconds 20
+    }
+    $kept = @(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*" | Sort-Object Name)
+    Check ($kept.Count -eq 3) ("five unreadable rounds keep the newest three copies aside, not six (" + $kept.Count + ")")
+    Check ($kept.Count -ge 1 -and [System.IO.File]::ReadAllText($kept[-1].FullName) -ceq "garbage 5") "the newest copy is the last one moved aside"
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*older cop*removed*" }).Count -eq 1) ("and the round says older copies were removed (" + ($rounds[0].outcomes -join " | ") + ")")
+
     Write-Host ""
     Write-Host "--- one hub at a time (issue #87, F9) ---" -ForegroundColor Cyan
     $f9 = Join-Path $work "f9"

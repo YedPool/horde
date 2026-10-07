@@ -31,6 +31,8 @@
 
 # The one transport a node is served on before enrolment (cli/commands/node.ps1 serves on it).
 $script:HordeHubOwnTransport = "local"
+# How many copies of an unusable mirror are kept aside per node, newest first (review of PR #88).
+$script:HordeHubAsideKept = 3
 # HRESULT 0x80070020, ERROR_SHARING_VIOLATION: another process holds the hub's run lock.
 $script:HordeHubSharingViolation = -2147024864
 # Each node's part of a round is bounded (issue #87, F10). 45 s: a node's sessions.list builds its
@@ -101,7 +103,16 @@ function Read-HordeHubMirror {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no mirror file at " + $Path)) }
     $m = $null
     try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }
-    catch { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_) }
+    catch {
+        # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
+        # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the
+        # round leaves the file as it is rather than moving it aside and writing over its name.
+        $inner = $_.Exception; while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
+        $u = New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_
+        $isHeld = ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException]))
+        $u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld
+        return $u
+    }
     if ($null -eq $m) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read: it is empty")) }
     $found = @(Test-HordeHubMirror -Mirror $m -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read as a mirror: " + ($found -join "; "))) }
@@ -162,13 +173,22 @@ function Write-HordeHubMirror {
 }
 
 function Move-HordeHubMirrorAside {
-    # Rename an unusable mirror to <name>.bad-<UTC stamp> beside it, and say where. Never deleted: it is
-    # the only copy of what the hub last knew of that node.
+    # Rename an unusable mirror to <name>.bad-<UTC stamp> beside it, and say where. The newest
+    # $script:HordeHubAsideKept copies are kept and older ones removed, said so: a mirror unreadable
+    # round after round left one more copy each round, without end (review of PR #88: 5 rounds, 5 copies).
     param([Parameter(Mandatory = $true)][string]$Path)
     $aside = $Path + ".bad-" + [datetime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
     try { [System.IO.File]::Move($Path, $aside) }
     catch { return ("it could not be kept aside, and is overwritten: " + $_.Exception.Message) }
-    return ("kept aside as " + (Split-Path -Leaf $aside))
+    $said = "kept aside as " + (Split-Path -Leaf $aside)
+    # The stamp sorts as time does: one fixed-width format.
+    $copies = @(Get-ChildItem -LiteralPath (Split-Path -Parent $Path) -File -Filter ((Split-Path -Leaf $Path) + ".bad-*") | Sort-Object Name -Descending)
+    $old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)
+    if ($old.Count -gt 0) {
+        foreach ($c in $old) { Remove-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue }
+        $said = $said + "; " + $old.Count + " older cop" + $(if ($old.Count -eq 1) { "y" } else { "ies" }) + " removed, the newest " + $script:HordeHubAsideKept + " kept"
+    }
+    return $said
 }
 
 function Send-HordeHubFrame {
@@ -310,6 +330,10 @@ function Update-HordeHubNode {
         $mirrorPath = Get-HordeHubMirrorPath -Root $Root -DeviceId "$($Entry.deviceId)"
         $old = Read-HordeHubMirror -Path $mirrorPath -DeviceId "$($Entry.deviceId)" -Contract $Contract
         $m = $null
+        # A mirror another process holds open is left as it is: this node's round is skipped, said so.
+        if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {
+            return ($who + ": its mirror is held open by another process (" + $old.reason + "); left as it is, nothing pulled or written this round")
+        }
         if ($old.state -ceq "known") { $m = $old.value }
         else {
             $m = New-HordeNodeMirror -DeviceId "$($Entry.deviceId)" -DeviceName "$($Entry.deviceName)"

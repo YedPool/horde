@@ -104,5 +104,14 @@
         @{ Name = "node-bound-ignored"
            Find = '$bound = New-HordeHubBound -BudgetMs $BudgetMs'
            Replace = '$bound = New-HordeHubBound -BudgetMs 0' }
+        @{ Name = "held-mirror-moved-aside"
+           Find = 'if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "held-mirror-not-told-apart"
+           Find = '$u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld'
+           Replace = '$u | Add-Member -NotePropertyName held -NotePropertyValue $false' }
+        @{ Name = "aside-copies-uncapped"
+           Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
+           Replace = '$old = @()' }
     )
 }
