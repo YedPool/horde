@@ -57,7 +57,7 @@ function Invoke-HordeNodeEnrollVerb {
             return @("A new link key is made; the old one is kept as .previous and no longer offered.", "On the hub, revoke the old key and enrol the new one:", ('  horde hub revoke -Device ' + $parts[0]), ('  horde hub enroll -Device ' + $parts[0] + ' -Key "' + $parts[1] + '"'))
         }
         "pin" {
-            if ($Hub -eq "" -or $HostKey -eq "") { throw "node pin needs -Hub <hub id> and -HostKey `"ssh-ed25519 ...`", as horde hub init printed them" }
+            if ($Hub -eq "" -or $HostKey -eq "") { throw "node pin needs -Hub <hub id> and -HostKey `"<key>`", exactly as horde hub init printed them" }
             $r = Invoke-HordeEnrollStep -Op $e.nodePin -ArgList @($hh, $Hub, $HostKey, [bool]$Replace)
             return @(("hub " + $Hub + " is pinned: " + $r.line))
         }
@@ -79,7 +79,7 @@ function Invoke-HordeHubEnrollVerb {
             return @(("hub " + $node.deviceName + " (" + $node.deviceId + ") has a listener host key."), "On each node, run:", ('  horde node pin -Hub ' + $parts[0] + ' -HostKey "' + $parts[1] + '"'))
         }
         "enroll" {
-            if ($Device -eq "" -or $Key -eq "") { throw "hub enroll needs -Device <device id> and -Key `"ssh-ed25519 ...`", as horde node init printed them" }
+            if ($Device -eq "" -or $Key -eq "") { throw "hub enroll needs -Device <device id> and -Key `"<key>`", exactly as horde node init printed them" }
             $r = Invoke-HordeEnrollStep -Op $e.hubEnroll -ArgList @($hh, $Device, $Key, (Get-HordeAttachCommand -Root $Root -DeviceId $Device), $Days)
             return @(("device " + $Device + " is enrolled until " + ([regex]::Match($r.line, 'expiry-time="([0-9]{8})"').Groups[1].Value) + "."))
         }
