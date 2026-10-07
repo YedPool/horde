@@ -123,6 +123,9 @@ $refused = @(
     @{ what = "another version"; text = (Drawn { param($d) $d.v = 2 }) }
     @{ what = "no lines at all"; text = (Drawn { param($d) $d.Remove("lines") }) }
     @{ what = "lines that are not a list"; text = (Drawn { param($d) $d.lines = "all of them" }) }
+    @{ what = "one good line given bare, not in a list"; text = (Drawn { param($d) $d.lines = [ordered]@{ n = "1"; t = "q"; s = ""; g = 0; open = $false; dim = $false } }) }
+    @{ what = "no counts"; text = (Drawn { param($d) $d.Remove("counts") }) }
+    @{ what = "no account of what was left out"; text = (Drawn { param($d) $d.Remove("left") }) }
     @{ what = "more lines than the bound"; text = (Drawn { param($d) $d.lines = @(1..401 | ForEach-Object { [ordered]@{ n = "$_"; t = "q"; s = ""; g = 0; open = $false; dim = $false } }) }) }
     @{ what = "a line longer than the bound"; text = (Drawn { param($d) $d.lines[0].t = ("x" * 401) }) }
     @{ what = "a line whose number is words"; text = (Drawn { param($d) $d.lines[0].n = "one" }) }
@@ -137,7 +140,9 @@ $refused = @(
     @{ what = "no scale"; text = (Drawn { param($d) $d.text.Remove("ratio") }) }
 )
 foreach ($case in $refused) {
-    $r = ConvertFrom-HordeDecisionWindowDrawn -Text $case.text
+    # A throw is a failed check here, not a stopped suite: the function is promised to answer.
+    $r = $null
+    try { $r = ConvertFrom-HordeDecisionWindowDrawn -Text $case.text } catch { $r = [pscustomobject]@{ ok = "threw"; value = $null; reason = ("THREW: " + $_.Exception.Message) } }
     Check ($r.ok -eq $false -and $null -eq $r.value -and $r.reason -like "the page's report *") ("refused: " + $case.what + " (" + $r.reason + ")")
 }
 $sent = Ask $state "report" @{ text = (Drawn) }
@@ -286,7 +291,7 @@ $state.errors = $window.errors; $state.handle = 77
 Write-HordeDecisionWindowReport -State $state
 $file = [System.IO.File]::ReadAllText($state.reportPath) | ConvertFrom-Json
 Check ($file.schemaVersion -eq 2 -and $file.pid -eq $PID -and $file.handle -eq 77 -and $file.title -ceq $state.title) "one JSON object: version 2, this process, the window's handle and title"
-Check ($file.drawn.lines[0].n -ceq "1" -and $file.drawn.lines[0].t -ceq "Is the first question drawn?" -and $file.drawn.headings[0].t -ceq "__proto__" -and $file.reports -eq 1 -and $file.reportsRefused -eq 1) "what the page drew, as the page sent it, and how many reports were taken and refused"
+Check ($null -ne $file.drawn -and $file.drawn.lines[0].n -ceq "1" -and $file.drawn.lines[0].t -ceq "Is the first question drawn?" -and $file.drawn.headings[0].t -ceq "__proto__" -and $file.reports -eq 1 -and $file.reportsRefused -eq 1) "what the page drew, as the page sent it, and how many reports were taken and refused"
 Check ($file.pushes -eq 2 -and $file.rereads -eq 1 -and $file.watchFailures -eq 1 -and $file.askedForward -eq 1 -and $file.refused -eq $state.bridge.refused) "what the window did: lists pushed, the list read again in silence, the watch's failures, times asked to come forward, messages refused"
 Check ((@($file.errors) -join ",") -ceq "e3,e4,e5,e6,e7" -and (@($file.findings) -join "|") -ceq "a finding of the suite's") "the newest five of the surface's errors, and what was wrong in the settings"
 Check ($file.attachment.attached -eq $false -and $file.attachment.follow -cne "") "and whether it stands beside a window, with the follow's own state"
