@@ -42,6 +42,37 @@
         @{ Name = "any-version-taken"
            Find = ' -or [long]$vProp.Value -ne $protocol) {'
            Replace = ') {' }
+        # --- which file an address names
+        @{ Name = "a-mount-matched-without-case"
+           Find = 'if (@($Mounts.Keys) -cnotcontains $mount) {'
+           Replace = 'if (@($Mounts.Keys) -notcontains $mount) {' }
+        @{ Name = "a-device-name-is-opened"
+           Find = 'foreach ($s in $steps) { if ($s -imatch $script:HordeSurfaceDeviceNamePattern) {'
+           Replace = 'foreach ($s in $steps) { if ($false) {' }
+        @{ Name = "a-device-name-in-capitals-is-opened"
+           Find = 'foreach ($s in $steps) { if ($s -imatch $script:HordeSurfaceDeviceNamePattern) {'
+           Replace = 'foreach ($s in $steps) { if ($s -cmatch $script:HordeSurfaceDeviceNamePattern) {' }
+        @{ Name = "any-kind-of-file-is-served"
+           Find = 'if (@($script:HordeSurfaceFileTypes.Keys) -cnotcontains $extension) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-kind-matched-without-case"
+           Find = 'if (@($script:HordeSurfaceFileTypes.Keys) -cnotcontains $extension) {'
+           Replace = 'if (@($script:HordeSurfaceFileTypes.Keys) -notcontains $extension) {' }
+        @{ Name = "a-file-name-matched-without-case"
+           Find = '$exact = @($found | Where-Object { [System.IO.Path]::GetFileName($_) -ceq $steps[$i] })'
+           Replace = '$exact = @($found | Where-Object { [System.IO.Path]::GetFileName($_) -eq $steps[$i] })' }
+        @{ Name = "an-address-may-go-one-step-deeper"
+           Find = '$script:HordeSurfacePathSteps = 8'
+           Replace = '$script:HordeSurfacePathSteps = 9' }
+        @{ Name = "a-name-may-end-in-a-dot"
+           Find = '$script:HordeSurfacePathStep = ''[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?'''
+           Replace = '$script:HordeSurfacePathStep = ''[A-Za-z0-9][A-Za-z0-9._-]{0,63}''' }
+        @{ Name = "the-surface-own-mount-serves-the-wrong-definition"
+           Find = '$script:HordeSurfaceMessagesFile = (Get-HordeSurfaceMessagesPath) })'
+           Replace = '$script:HordeSurfaceMessagesFile = $BridgeScript })' }
+        @{ Name = "a-refused-address-is-still-handed-a-file"
+           Find = '$no = { param([string]$Why) return [pscustomobject]@{ file = ""; type = ""; reason = $Why } }'
+           Replace = '$no = { param([string]$Why) return [pscustomobject]@{ file = $Path; type = ""; reason = $Why } }' }
         # --- the one definition of the message shapes
         @{ Name = "the-id-is-read-under-a-name-of-the-ports-own"
            Find = '$idProp = $message.PSObject.Properties[$ask.id]'
