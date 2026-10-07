@@ -1,0 +1,52 @@
+<!doctype html>
+<!--
+  decisions/window/index.html - the frame of the decisions window: one quiet page holding the list of
+  questions as a document and, at its foot, the fleet as one folded line. This file and frame.js are
+  the only place the two parts meet: the document (decisions/page/, the mount "list") and the fleet
+  line (fleet/line/, the mount "fleet") each know nothing of the other.
+
+  EVERY FILE IS NAMED BY A RELATIVE ADDRESS (surfaces/Port.ps1, WHERE A PAGE FINDS A FILE): a file
+  beside this one by its name, a file of another mount as ../<mount>/<file>, the page's side of the
+  bridge as ../surface/bridge.js. Nothing here says where the mounts stand, so any surface can show it.
+
+  NOTHING FROM OUTSIDE, AND NO SCRIPT WRITTEN INTO THE PAGE. The surface refuses every load that is
+  not a file of a mount; the policy line below is the second layer, and is what stops a script or a
+  style written INTO the page: it allows the page's own files and nothing inline. There is no inline
+  script and no inline style in this file.
+
+  READ-ONLY. There is nothing here to type in, drag or press that changes the list: the last line
+  says answering comes next.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open decisions</title>
+<link rel="stylesheet" href="frame.css">
+<link rel="stylesheet" href="../list/list.css">
+<link rel="stylesheet" href="../fleet/line.css">
+</head>
+<body>
+<div id="top">
+  <span class="title">Open decisions</span>
+  <span class="counts" id="counts"></span>
+  <span class="grow"></span>
+  <button type="button" id="menuBtn" aria-label="Options" aria-expanded="false" aria-controls="menu">...</button>
+</div>
+<div id="menu" hidden>
+  <div><button type="button" class="link" id="unfoldAll">Unfold all</button> | <button type="button" class="link" id="foldAll">Fold all</button></div>
+  <div class="hint">Light or dark follows this computer's own setting.</div>
+</div>
+<div id="doc">
+  <div id="notice" hidden></div>
+  <div id="list"></div>
+  <div id="fleet"></div>
+  <div id="foot">Read-only: answering here comes next. Until then, answer by number in chat. A number belongs to one question for ever.</div>
+</div>
+<script src="../surface/bridge.js"></script>
+<script src="../list/list.js"></script>
+<script src="../fleet/line.js"></script>
+<script src="frame.js"></script>
+</body>
+</html>

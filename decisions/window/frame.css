@@ -1,0 +1,41 @@
+/* decisions/window/frame.css - the frame of the decisions window: its colours, its letters, the thin
+   bar at the top, the small menu, and the two small lines (a notice above the list, the last line
+   below it). The list and the fleet line bring their own files.
+
+   SHARP LETTERS. The earlier page was measured soft on a screen at one and a half times the ordinary
+   scale: sizes of 10 to 13 pixels, line heights given as ratios, weights of 700 and 800. Here:
+   - NO SIZE IS WRITTEN IN THIS FILE. The four below are variables that frame.js sets from the
+     module's settings (decisions/Window.ps1: 14 and 12 pixels, on lines of 22 and 18), each moved to
+     the nearest size that is a WHOLE number of the screen's own pixels at the scale the window is
+     drawn at. 14 and 12 are whole as they are at 100 percent (14 and 12 device pixels), 150 (21 and
+     18) and 200 (28 and 24). At 125 percent 12 is whole (15) and 14 is not (17.5), nor is its line
+     (27.5): there the body is drawn at 14.4 CSS pixels on a line of 22.4, which are 18 and 28 device
+     pixels. Until the settings arrive nothing is drawn, so no letter is ever drawn at another size.
+   - line heights are pixels, never a ratio; weights are 400 and 600 only; there is no
+     letter-spacing, no transform, no filter and no opacity anywhere (muted and dimmed text is a
+     colour); nothing clamps a line's height.
+   - the family is the module's setting too (--font).
+
+   LIGHT OR DARK FOLLOWS THE SYSTEM: the surface is asked for the system's theme, and the second set
+   of colours answers it. */
+:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #9aa1ab; --line: #e3e6ea; --accent: #1f5fae; --dim: #b4bac2; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #6c7480; --line: #2c3037; --accent: #8ab8f5; --dim: #555c66; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font-family: var(--font); font-size: var(--text-px); line-height: var(--line-px); font-weight: 400; }
+button { font: inherit; color: inherit; }
+#top { position: fixed; left: 0; right: 0; top: 0; height: calc(var(--line-px) + 6px); background: var(--bg); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; padding: 0 14px; z-index: 5; }
+#top .title { font-weight: 600; white-space: nowrap; }
+#top .counts { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#top .grow { flex: 1 1 auto; }
+#menuBtn { color: var(--muted); cursor: pointer; background: none; border: 0; padding: 0 4px; }
+#menu { position: fixed; right: 10px; top: calc(var(--line-px) + 8px); background: var(--bg); border: 1px solid var(--line); padding: 6px 12px; z-index: 6; }
+#menu .hint { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); padding-top: 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.link { color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; }
+#doc { max-width: 760px; margin: 0 auto; padding: calc(var(--line-px) + 14px) 16px 40px 6px; }
+#notice { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); padding: 0 0 8px 14px; overflow-wrap: anywhere; }
+#foot { color: var(--faint); font-size: var(--small-px); line-height: var(--small-line-px); padding: 10px 0 0 28px; }
+button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
