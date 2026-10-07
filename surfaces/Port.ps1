@@ -148,6 +148,90 @@ function Get-HordeSurfaceMountHost {
     return ($Mount + $script:HordeSurfaceMountSuffix)
 }
 
+# WHAT A PAGE IS MADE OF: the kinds of file a surface serves from a mount, each with the type it is
+# served as. A closed list, the port's and not any one surface's, so that a page shown by one
+# surface is shown the same by the next. Compared exactly: index.HTML is not on it.
+$script:HordeSurfaceFileTypes = [ordered]@{
+    ".html" = "text/html; charset=utf-8"; ".css" = "text/css; charset=utf-8"; ".js" = "text/javascript; charset=utf-8"
+    ".json" = "application/json; charset=utf-8"; ".txt" = "text/plain; charset=utf-8"; ".svg" = "image/svg+xml"
+    ".png" = "image/png"; ".jpg" = "image/jpeg"; ".gif" = "image/gif"; ".webp" = "image/webp"; ".ico" = "image/x-icon"; ".woff2" = "font/woff2"
+}
+# One step of an address: a plain name that begins and ends with a letter or a digit. No dot in
+# front (hidden files), none at the end (Windows reads "a.js." as "a.js"), no colon (a second stream
+# of a file), no percent sign (an escape is never decoded: an address that needs one is refused), no
+# slash of either kind.
+$script:HordeSurfacePathStep = '[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?'
+# How many steps may follow the mount's name: folders inside a mount, and the file. A page of plain
+# files is a few folders deep; the bound keeps one address from walking a tree.
+$script:HordeSurfacePathSteps = 8
+# Names Windows keeps for devices, with any extension: opening shell\nul.js opens the device.
+$script:HordeSurfaceDeviceNamePattern = '\A(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|\z)'
+# The two files of the surface's own mount (header, WHERE A PAGE FINDS A MOUNT).
+$script:HordeSurfaceBridgeScript = "bridge.js"
+
+function Get-HordeSurfaceFileTypes {
+    # extension -> the type a file of that kind is served as (a copy).
+    $copy = [ordered]@{}
+    foreach ($k in @($script:HordeSurfaceFileTypes.Keys)) { $copy[$k] = $script:HordeSurfaceFileTypes[$k] }
+    return $copy
+}
+
+function Get-HordeSurfaceOwnFiles {
+    # The surface's own mount, as file name -> full path: -BridgeScript, that surface's own page side
+    # of the bridge, under the name every page asks for it by; and the port's one definition of the
+    # messages, which that script reads. A closed list of two: nothing else is served from it.
+    param([Parameter(Mandatory = $true)][string]$BridgeScript)
+    return ([ordered]@{ $script:HordeSurfaceBridgeScript = $BridgeScript; $script:HordeSurfaceMessagesFile = (Get-HordeSurfaceMessagesPath) })
+}
+
+function Resolve-HordeSurfacePageFile {
+    # Which file -Path names among -Mounts, for a surface that is asked for one: { file; type; reason }.
+    # file is its full path and type what to serve it as; or both are "" and reason says, in Horde's
+    # own words and never with the address, why nothing is served. PURE but for looking at the disk.
+    #
+    # -Mounts is name -> folder, or name -> a table of file name -> full path (a mount that is a closed
+    # list of files, as the surface's own is). -Path is the address's path exactly as it arrived,
+    # "/<mount>/<step>/.../<file>", NOT decoded and NOT tidied by anything first: the rule is applied
+    # to what was asked, so there is no second reading of it for an escape or a dot-dot to hide in.
+    # A NAME IS MATCHED EXACTLY, letter case included, although Windows would not mind: a page that
+    # only worked because this file system forgives would break on the next surface.
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Mounts, [AllowNull()][AllowEmptyString()][string]$Path)
+    $no = { param([string]$Why) return [pscustomobject]@{ file = ""; type = ""; reason = $Why } }
+    $step = $script:HordeSurfacePathStep
+    if ("$Path" -cnotmatch ('\A/(' + $step + ')((?:/' + $step + '){1,' + $script:HordeSurfacePathSteps + '})\z')) { return (& $no "the page asked for an address that is not a file of a mount") }
+    $mount = $Matches[1]
+    $steps = @($Matches[2].Substring(1) -split "/")
+    # Exactly: the table a caller made with [ordered] would take SHELL for shell.
+    if (@($Mounts.Keys) -cnotcontains $mount) { return (& $no "the page asked for a file of a mount that was not given") }
+    foreach ($s in $steps) { if ($s -imatch $script:HordeSurfaceDeviceNamePattern) { return (& $no "the page asked for a name Windows keeps for a device") } }
+    $extension = [System.IO.Path]::GetExtension($steps[$steps.Count - 1])
+    if (@($script:HordeSurfaceFileTypes.Keys) -cnotcontains $extension) { return (& $no "the page asked for something that is not a kind of file a page is made of") }
+    $missing = "the page asked for a file that is not there"
+    $held = $null
+    foreach ($k in @($Mounts.Keys)) { if ($k -ceq $mount) { $held = $Mounts[$k] } }
+    $file = ""
+    if ($held -is [System.Collections.IDictionary]) {
+        if ($steps.Count -ne 1 -or @($held.Keys) -cnotcontains $steps[0]) { return (& $no $missing) }
+        foreach ($k in @($held.Keys)) { if ($k -ceq $steps[0]) { $file = "" + $held[$k] } }
+        if ($file -eq "" -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { return (& $no $missing) }
+    }
+    else {
+        $at = "" + $held
+        for ($i = 0; $i -lt $steps.Count; $i++) {
+            $last = ($i -eq $steps.Count - 1)
+            # The entry's own name, as the disk spells it: a step has no wildcard in it, so this finds
+            # one entry or none, and its letter case is then compared exactly.
+            $found = @()
+            try { if ($last) { $found = @([System.IO.Directory]::GetFiles($at, $steps[$i])) } else { $found = @([System.IO.Directory]::GetDirectories($at, $steps[$i])) } } catch { $found = @() }
+            $exact = @($found | Where-Object { [System.IO.Path]::GetFileName($_) -ceq $steps[$i] })
+            if ($exact.Count -ne 1) { return (& $no $missing) }
+            $at = $exact[0]
+        }
+        $file = $at
+    }
+    return [pscustomobject]@{ file = $file; type = $script:HordeSurfaceFileTypes[$extension]; reason = "" }
+}
+
 function Get-HordeSurfaceFiles {
     # Every surface's Surface.ps1, for the caller to dot-source:
     #   foreach ($f in @(Get-HordeSurfaceFiles)) { . $f }

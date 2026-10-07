@@ -242,6 +242,72 @@ Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.h
 Check ($spec.theme -ceq "system" -and (New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "dark").theme -ceq "dark") "a spec follows the machine's theme unless it is given one"
 Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"request":"capture","args":{"path":"C:\\x.png"}}').refused -like "*not on the list*") "a picture is not something a page can ask for: capture is no request"
 
+Write-Host ""
+Write-Host "--- which file an address names: only a file of a mount, of a kind a page is made of ---" -ForegroundColor Cyan
+$tree = Join-Path $work "tree"
+$shellDir = Join-Path $tree "shell"; $otherDir = Join-Path $tree "other"; $surfaceDir = Join-Path $tree "adapter"
+foreach ($d in @($shellDir, (Join-Path $shellDir "img\deep"), $otherDir, $surfaceDir)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+foreach ($f in @("shell\index.html", "shell\Look.css", "shell\img\dot.png", "shell\img\deep\a.svg", "shell\tool.exe", "shell\notes.md", "shell\nul.js", "other\data.json", "other\other.js", "adapter\bridge.js", "adapter\secret.js", "secret.txt")) {
+    try { [System.IO.File]::WriteAllText((Join-Path $tree $f), "x") } catch { }
+}
+$own = Get-HordeSurfaceOwnFiles -BridgeScript (Join-Path $surfaceDir "bridge.js")
+Check ((@($own.Keys) -join ",") -ceq "bridge.js,bridge-messages.json" -and $own["bridge-messages.json"] -ceq (Get-HordeSurfaceMessagesPath) -and $own["bridge.js"] -ceq (Join-Path $surfaceDir "bridge.js")) "the surface's own mount is two named files: its side of the bridge, and the port's definition of the messages"
+$served = [ordered]@{ shell = $shellDir; other = $otherDir; surface = $own }
+function Find { param([string]$Path) return (Resolve-HordeSurfacePageFile -Mounts $served -Path $Path) }
+foreach ($ok in @(
+    @{ path = "/shell/index.html"; file = (Join-Path $shellDir "index.html"); type = "text/html; charset=utf-8" }
+    @{ path = "/shell/Look.css"; file = (Join-Path $shellDir "Look.css"); type = "text/css; charset=utf-8" }
+    @{ path = "/shell/img/dot.png"; file = (Join-Path $shellDir "img\dot.png"); type = "image/png" }
+    @{ path = "/shell/img/deep/a.svg"; file = (Join-Path $shellDir "img\deep\a.svg"); type = "image/svg+xml" }
+    @{ path = "/other/data.json"; file = (Join-Path $otherDir "data.json"); type = "application/json; charset=utf-8" }
+    @{ path = "/other/other.js"; file = (Join-Path $otherDir "other.js"); type = "text/javascript; charset=utf-8" }
+    @{ path = "/surface/bridge.js"; file = (Join-Path $surfaceDir "bridge.js"); type = "text/javascript; charset=utf-8" }
+    @{ path = "/surface/bridge-messages.json"; file = (Get-HordeSurfaceMessagesPath); type = "application/json; charset=utf-8" }
+)) {
+    $got = Find $ok.path
+    Check ($got.file -ceq $ok.file -and $got.type -ceq $ok.type -and $got.reason -ceq "") ("CONTROL: " + $ok.path + " is a file of a mount, served as " + $ok.type)
+}
+foreach ($no in @(
+    @{ path = ""; says = "not a file of a mount"; what = "nothing" }
+    @{ path = "/"; says = "not a file of a mount"; what = "the root" }
+    @{ path = "/shell"; says = "not a file of a mount"; what = "a mount with no file" }
+    @{ path = "/shell/"; says = "not a file of a mount"; what = "a mount's folder" }
+    @{ path = "shell/index.html"; says = "not a file of a mount"; what = "a path with no leading slash" }
+    @{ path = "//shell/index.html"; says = "not a file of a mount"; what = "a doubled slash in front" }
+    @{ path = "/shell//index.html"; says = "not a file of a mount"; what = "an empty step" }
+    @{ path = "/shell/index.html/"; says = "not a file of a mount"; what = "a file used as a folder" }
+    @{ path = "/shell/../secret.txt"; says = "not a file of a mount"; what = "a climb out of the mount" }
+    @{ path = "/shell/..%2fsecret.txt"; says = "not a file of a mount"; what = "a climb written with an escape" }
+    @{ path = "/shell/%2e%2e/secret.txt"; says = "not a file of a mount"; what = "dots written with escapes" }
+    @{ path = "/shell/..\secret.txt"; says = "not a file of a mount"; what = "a climb with the other slash" }
+    @{ path = "/shell/img\dot.png"; says = "not a file of a mount"; what = "the other slash" }
+    @{ path = "/shell/index.html:stream"; says = "not a file of a mount"; what = "a second stream of a file" }
+    @{ path = "/shell/index.html."; says = "not a file of a mount"; what = "a name ending in a dot, which Windows reads as the name without it" }
+    @{ path = "/shell/.index.html"; says = "not a file of a mount"; what = "a name beginning with a dot" }
+    @{ path = "/shell/a/b/c/d/e/f/g/h/i.js"; says = "not a file of a mount"; what = "a path nine steps deep" }
+    @{ path = "/SHELL/index.html"; says = "a mount that was not given"; what = "a mount in other letter case" }
+    @{ path = "/fleet/panel.js"; says = "a mount that was not given"; what = "a mount nobody gave" }
+    @{ path = "/shell/tool.exe"; says = "not a kind of file a page is made of"; what = "a program" }
+    @{ path = "/shell/notes.md"; says = "not a kind of file a page is made of"; what = "a kind nobody listed" }
+    @{ path = "/shell/index.HTML"; says = "not a kind of file a page is made of"; what = "a kind in other letter case" }
+    @{ path = "/shell/nul.js"; says = "a name Windows keeps for a device"; what = "a device name" }
+    @{ path = "/shell/img/COM1.png"; says = "a name Windows keeps for a device"; what = "a device name in a folder, in capitals" }
+    @{ path = "/shell/missing.js"; says = "a file that is not there"; what = "a file that is not there" }
+    @{ path = "/shell/look.css"; says = "a file that is not there"; what = "a name in other letter case than the file's own" }
+    @{ path = "/shell/IMG/dot.png"; says = "a file that is not there"; what = "a folder in other letter case than its own" }
+    @{ path = "/shell/img"; says = "not a kind of file a page is made of"; what = "a folder, which has no kind" }
+    @{ path = "/shell/img/deep.svg"; says = "a file that is not there"; what = "a name that is a folder beside the file" }
+    @{ path = "/surface/secret.js"; says = "a file that is not there"; what = "a file beside the surface's own two" }
+    @{ path = "/surface/sub/bridge.js"; says = "a file that is not there"; what = "a folder under the surface's own mount" }
+)) {
+    $got = Find $no.path
+    Check ($got.file -ceq "" -and $got.type -ceq "" -and $got.reason -like ("*" + $no.says + "*")) ($no.what + " is refused (" + $no.path + ")")
+    Check ($no.path.Length -lt 6 -or -not $got.reason.Contains($no.path.Substring(1))) "and the reason does not repeat the address"
+}
+$types = Get-HordeSurfaceFileTypes
+Check ((@($types.Keys | Sort-Object) -join " ") -ceq ".css .gif .html .ico .jpg .js .json .png .svg .txt .webp .woff2") "the kinds of file a page is made of are one closed list, the port's"
+Check (@($types.Values | Where-Object { $_ -notmatch '\A[a-z]+/[a-z0-9.+-]+(; charset=utf-8)?\z' }).Count -eq 0) "each with the type it is served as"
+
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-surface-port-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
 }
