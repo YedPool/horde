@@ -126,6 +126,9 @@
         @{ Name = "a-message-from-anywhere-is-read"
            Find = 'if (-not (Test-HordeWebView2Address -Uri $Source -StartMount $s.spec.startMount)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "what-a-failed-request-said-does-not-reach-the-caller"
+           Find = '    Add-HordeWebView2Error -Text $answer.failed'
+           Replace = '' }
         @{ Name = "a-message-from-elsewhere-not-recorded"
            Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "a message came from an address that is not the page''s own, and was not read"'
            Replace = '' }

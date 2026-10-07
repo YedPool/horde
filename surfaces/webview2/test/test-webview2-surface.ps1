@@ -215,6 +215,15 @@ $fromOtherMount = Receive-HordeWebView2Message -Json '{"v":1,"id":5,"request":"l
 Check ($fromOtherMount -ceq "" -and $script:asked -eq 1 -and $liveBridge.refused -eq 3) "and one from a file of another mount: only the page's own mount speaks"
 $unknown = Receive-HordeWebView2Message -Json '{"v":1,"id":6,"request":"open-file"}' -Source ($at + "/shell/index.html")
 Check (($unknown | ConvertFrom-Json).ok -eq $false -and $liveBridge.refused -eq 4) "a request off the list, from the page itself, is refused by the bridge and recorded"
+Check ($script:HordeWebView2.errors.Count -eq 0) "CONTROL: an answer and four refusals put nothing in the errors the caller reads"
+# A REQUEST WHOSE HANDLER FAILS: the page is told that it failed and no more, and what the handler said
+# goes where the window's caller reads errors (surfaces/Port.ps1, A REQUEST THAT FAILS).
+$failingBridge = New-HordeSurfaceBridge -Requests ([ordered]@{ "breaks" = @{ run = { throw "C:\made-up\place\store.json is held by another process" } } })
+$script:HordeWebView2.spec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $failingBridge -DataFolder (Join-Path $work "data")
+$failedReply = Receive-HordeWebView2Message -Json '{"v":1,"id":7,"request":"breaks"}' -Source ($at + "/shell/index.html")
+Check (($failedReply | ConvertFrom-Json).reason -ceq "the request 'breaks' failed" -and $failedReply -notlike "*made-up*") ("a request whose handler throws is answered with the port's one sentence, and nothing the handler said (" + $failedReply + ")")
+Check ($script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -ceq "the request 'breaks' failed: C:\made-up\place\store.json is held by another process") ("and what it said is in the errors the window's caller reads (" + ($script:HordeWebView2.errors -join "; ") + ")")
+$script:HordeWebView2.spec = $liveSpec; $script:HordeWebView2.errors.Clear()
 
 Write-Host ""
 Write-Host "--- a window never takes the keyboard unless its caller asked ---" -ForegroundColor Cyan

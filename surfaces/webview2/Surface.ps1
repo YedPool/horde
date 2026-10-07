@@ -337,7 +337,11 @@ function Receive-HordeWebView2Message {
         Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "a message came from an address that is not the page's own, and was not read"
         return ""
     }
-    return (Invoke-HordeSurfaceRequest -Bridge $s.spec.bridge -Text $Json -State $s.spec.state -Window $s.window).reply
+    $answer = Invoke-HordeSurfaceRequest -Bridge $s.spec.bridge -Text $Json -State $s.spec.state -Window $s.window
+    # What a handler said as it failed is for the caller of this window, never for the page
+    # (surfaces/Port.ps1, A REQUEST THAT FAILS): the reply holds none of it. "" is no error.
+    Add-HordeWebView2Error -Text $answer.failed
+    return $answer.reply
 }
 
 function Invoke-HordeWebView2Shown {

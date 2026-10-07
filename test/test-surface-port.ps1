@@ -28,7 +28,7 @@ $bridge = New-HordeSurfaceBridge -Events @("list-changed") -Requests ([ordered]@
     "list"     = @{ run = { param($Arguments, $State, $Window) [void]$script:calls.Add("list"); return [pscustomobject]@{ questions = @(1, 2, 3); who = $State.who } } }
     "rendered" = @{ args = @{ rows = @{ type = "integer"; most = 100000 }; note = @{ type = "string"; most = 20 }; whole = @{ type = "boolean" } }
                     run = { param($Arguments, $State, $Window) [void]$script:calls.Add("rendered " + $Arguments["rows"] + " " + $Arguments["note"] + " " + $Arguments["whole"]); return $true } }
-    "breaks"   = @{ run = { param($Arguments, $State, $Window) throw "the store could not be read" } }
+    "breaks"   = @{ run = { param($Arguments, $State, $Window) throw "the store could not be read: C:\made-up\place\store.json is held by another process" } }
 })
 $state = [pscustomobject]@{ who = "the caller's own state" }
 function Ask { param([string]$Text) return (Invoke-HordeSurfaceRequest -Bridge $bridge -Text $Text -State $state -Now ([datetime]::new(2026, 10, 7, 9, 0, 0, [System.DateTimeKind]::Utc))) }
@@ -49,8 +49,15 @@ Check ((Reply $c).ok -eq $true) "a request that takes no argument may give an em
 Check ($bridge.answered -eq 3 -and $bridge.refused -eq 0) "CONTROL: three answered, none refused so far"
 $f = Ask '{"v":1,"id":10,"request":"breaks"}'
 $fv = Reply $f
-Check ($fv.ok -eq $false -and $fv.reply -eq 10 -and $fv.reason -ceq "'breaks' failed: the store could not be read" -and $f.refused -ceq "") "a handler that throws is answered as a failure with its own words, and is not a refusal"
-Check ($bridge.refused -eq 0) "and it is not counted as one"
+# WHAT A HANDLER SAID AS IT FAILED IS NOT THE PAGE'S TO READ (review of 2026-10-06, finding A11): its
+# words are whatever the code under it threw, the path of a file among them, and a page may quote
+# anything a session wrote. The page is told one fixed sentence; the words stay on Horde's side.
+Check ($fv.ok -eq $false -and $fv.reply -eq 10 -and $fv.reason -ceq "the request 'breaks' failed" -and $f.refused -ceq "") ("a handler that throws is answered as a failure, in one fixed sentence that names the request and nothing else (" + $fv.reason + "), and is not a refusal")
+Check ($f.reply -notlike "*store*" -and $f.reply -notlike "*made-up*" -and $f.reply -notlike "*another process*") ("nothing the handler said - the path of a file least of all - is in what the page is handed (" + $f.reply + ")")
+Check ($f.failed -ceq "the request 'breaks' failed: the store could not be read: C:\made-up\place\store.json is held by another process") ("what it said is handed to the surface whole, for the errors its caller reads (" + $f.failed + ")")
+Check ($bridge.failed -eq 1 -and $bridge.failures.Count -eq 1 -and $bridge.failures[0].reason -ceq $f.failed -and $bridge.failures[0].at -ceq "2026-10-07T09:00:00.0000000Z") "and it is kept on the bridge's own record with when it happened, which is where it is read when there is no window"
+Check ($bridge.refused -eq 0 -and $bridge.answered -eq 3) "it is not counted as a refusal, nor as answered"
+Check ($a.failed -ceq "" -and (Invoke-HordeSurfaceRequest -Bridge (New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })) -Text '{"v":1,"id":11,"request":"nope"}').failed -ceq "") "CONTROL: a request that is answered, and one that is refused, say nothing failed"
 
 Write-Host ""
 Write-Host "--- a request that is not on the list ---" -ForegroundColor Cyan
@@ -194,15 +201,16 @@ foreach ($kind in @("table", "object", "list")) {
     $script:deep = New-Nested 17 $kind
     $tooDeep = AskDeep
     $said = $tooDeep.reply | ConvertFrom-Json
-    Check ($said.ok -eq $false -and $said.reply -eq 5 -and $said.reason -like "'deep' failed: its answer could not be handed over: the value nests more than 16 levels deep*" -and $tooDeep.refused -ceq "") ("a " + $kind + " nested 17 deep is answered as a failure of the request, in words")
+    Check ($said.ok -eq $false -and $said.reply -eq 5 -and $said.reason -ceq "the request 'deep' failed" -and $tooDeep.refused -ceq "") ("a " + $kind + " nested 17 deep is answered as a failure of the request, in the one sentence a page is told (" + $said.reason + ")")
+    Check ($tooDeep.failed -like "the request 'deep' failed: its answer could not be handed over: the value nests more than 16 levels deep*" -and $deepBridge.failures[$deepBridge.failures.Count - 1].reason -ceq $tooDeep.failed) ("and why is said on Horde's side, in words (" + $tooDeep.failed + ")")
     Check ($tooDeep.reply -notlike "*leaf*" -and $tooDeep.reply -notlike "*System.*" -and $tooDeep.reply -notlike "*@{*") "and nothing of the value, and no type's name, is handed to the page"
     Check (Throws { ConvertTo-HordeSurfaceEvent -Bridge $deepBridge -Name "told" -Value (New-Nested 17 $kind) } "nests more than 16 levels deep") ("an event carrying such a " + $kind + " is not pushed")
 }
 $loop = @{ name = "loop" }; $loop["self"] = $loop
 $script:deep = $loop
 $looped = AskDeep
-Check (($looped.reply | ConvertFrom-Json).ok -eq $false -and $looped.reply -like "*nests more than 16 levels deep*") "a value that holds itself is a failure too, and does not hang the window"
-Check ($deepBridge.refused -eq 0 -and $deepBridge.answered -eq 3) "none of these is a refusal - the page asked properly - and only the three that crossed count as answered"
+Check (($looped.reply | ConvertFrom-Json).ok -eq $false -and ($looped.reply | ConvertFrom-Json).reason -ceq "the request 'deep' failed" -and $looped.failed -like "*nests more than 16 levels deep*") "a value that holds itself is a failure too, said the same two ways, and does not hang the window"
+Check ($deepBridge.refused -eq 0 -and $deepBridge.answered -eq 3 -and $deepBridge.failed -eq 4) "none of these is a refusal - the page asked properly - and only the three that crossed count as answered, the other four as failed"
 
 Write-Host ""
 Write-Host "--- a surface is registered, picked by what it can do, and only then opened ---" -ForegroundColor Cyan
@@ -336,6 +344,13 @@ Add-HordeSurfaceError -Errors $kept -Text "" -Kept 5
 Check ($kept.Count -eq 5 -and $kept[4] -ceq "failure 7") "an empty line is not an error, and pushes nothing out"
 [System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "errorsKept": 2 } }')
 Check ((New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work).errorsKept -eq 2) "and the number is the module's setting errorsKept"
+# THE BRIDGE'S RECORD OF FAILED REQUESTS IS HELD TO THE SAME NUMBER: a handler that fails every time
+# a page asks must not grow the process either.
+$script:failing = 0
+$breaking = New-HordeSurfaceBridge -Requests ([ordered]@{ "breaks" = @{ run = { $script:failing++; throw ("failure " + $script:failing) } } })
+Check ($breaking.limits.errorsKept -eq 2 -and $bridge.limits.errorsKept -eq 50) "a bridge keeps as many failed requests as the setting was when it was made (2 now, 50 for the bridge made before any file)"
+1..5 | ForEach-Object { [void](Invoke-HordeSurfaceRequest -Bridge $breaking -Text ('{"v":1,"id":' + $_ + ',"request":"breaks"}')) }
+Check ($breaking.failed -eq 5 -and $breaking.failures.Count -eq 2 -and $breaking.failures[0].reason -ceq "the request 'breaks' failed: failure 4" -and $breaking.failures[1].reason -ceq "the request 'breaks' failed: failure 5") "five failed requests are all counted, and the last two kept, oldest first"
 # A PAGE THAT FLOODS IS NOT READ. Ten thousand messages in one burst held a window's thread for 11 to
 # 14 seconds, every one of them parsed, refused and recorded (review of 2026-10-06, finding A8;
 # measured again 2026-10-07). The meter says, for each message as it arrives, whether it is read.

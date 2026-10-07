@@ -41,8 +41,8 @@
            Find = 'if ("$Text" -eq "") { return }'
            Replace = '' }
         @{ Name = "a-spec-ignores-how-many-errors-to-keep"
-           Find = 'errorsKept = [int]$Settings.values.errorsKept'
-           Replace = 'errorsKept = 50' }
+           Find = 'errorsKept = [int]$Settings.values.errorsKept; messagesPerSecond'
+           Replace = 'errorsKept = 50; messagesPerSecond' }
         # --- a page that floods is not read
         @{ Name = "a-flood-is-read"
            Find = 'if ($Meter.read -lt $PerSecond) {'
@@ -87,9 +87,46 @@
         @{ Name = "a-list-is-not-a-level"
            Find = 'elseif ($Value -is [System.Collections.IEnumerable]) { $inside = @($Value) }'
            Replace = 'elseif ($false) { $inside = @($Value) }' }
-        @{ Name = "an-answer-that-could-not-be-written-is-said-to-be-fine"
-           Find = '$say.ok = $false; $say.reason = ("''" + $request.name + "'' failed: its answer could not be handed over: "'
-           Replace = '$say.ok = $true; $say.reason = ("''" + $request.name + "'' failed: its answer could not be handed over: "' }
+        @{ Name = "why-an-answer-could-not-be-written-is-not-kept"
+           Find = 'catch { return (& $fail ("its answer could not be handed over: " + $_.Exception.Message)) }'
+           Replace = 'catch { return (& $fail "") }' }
+        # --- a request that fails: one fixed sentence for the page, the handler's words kept on Horde's side
+        @{ Name = "a-failed-request-is-said-to-be-fine"
+           Find = '$say.ok = $false; $say.reason = $told })'
+           Replace = '$say.ok = $true; $say.reason = $told })' }
+        @{ Name = "the-page-is-handed-what-the-handler-said"
+           Find = '$say.ok = $false; $say.reason = $told })'
+           Replace = '$say.ok = $false; $say.reason = $kept })' }
+        @{ Name = "what-a-handler-said-is-not-kept"
+           Find = 'catch { return (& $fail ("" + $_.Exception.Message)) }'
+           Replace = 'catch { return (& $fail "") }' }
+        @{ Name = "only-that-it-failed-is-kept"
+           Find = '$kept = $told + ": " + $What'
+           Replace = '$kept = $told' }
+        @{ Name = "a-failure-is-not-recorded-on-the-bridge"
+           Find = '        Add-HordeSurfaceFailure -Bridge $Bridge -Reason $kept -Now $Now'
+           Replace = '' }
+        @{ Name = "a-failure-is-recorded-at-another-time"
+           Find = '        Add-HordeSurfaceFailure -Bridge $Bridge -Reason $kept -Now $Now'
+           Replace = '        Add-HordeSurfaceFailure -Bridge $Bridge -Reason $kept' }
+        @{ Name = "a-failure-is-not-handed-to-the-surface"
+           Find = 'request = $request.name; failed = $kept }'
+           Replace = 'request = $request.name; failed = "" }' }
+        @{ Name = "a-failure-is-not-counted"
+           Find = '$Bridge.failed = [int]$Bridge.failed + 1'
+           Replace = '' }
+        @{ Name = "the-record-of-failures-grows-for-ever"
+           Find = 'while ($Bridge.failures.Count -gt $Bridge.limits.errorsKept) { $Bridge.failures.RemoveAt(0) }'
+           Replace = '' }
+        @{ Name = "failures-are-kept-by-the-refusals-number"
+           Find = 'errorsKept = [int]$Settings.values.errorsKept }'
+           Replace = 'errorsKept = [int]$Settings.values.refusalsKept }' }
+        @{ Name = "an-answered-request-says-it-failed"
+           Find = 'return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name; failed = "" }'
+           Replace = 'return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name; failed = "it failed" }' }
+        @{ Name = "a-refused-request-says-it-failed"
+           Find = 'return [pscustomobject]@{ reply = $line; refused = $Why; request = ""; failed = "" }'
+           Replace = 'return [pscustomobject]@{ reply = $line; refused = $Why; request = ""; failed = "it failed" }' }
         # No mutant lets the walk go on past its limit: a value that holds itself would then be walked
         # until the call stack gave out, and a suite that dies has caught nothing.
         # --- the module's settings
@@ -100,8 +137,8 @@
            Find = 'argumentChars = [int]$Settings.values.argumentChars;'
            Replace = 'argumentChars = 16384;' }
         @{ Name = "a-bridge-ignores-how-many-refusals-to-keep"
-           Find = 'refusalsKept = [int]$Settings.values.refusalsKept }'
-           Replace = 'refusalsKept = 50 }' }
+           Find = 'refusalsKept = [int]$Settings.values.refusalsKept;'
+           Replace = 'refusalsKept = 50;' }
         @{ Name = "an-argument-with-no-length-of-its-own-is-unbounded"
            Find = '$most = [long]$limits.argumentChars'
            Replace = '$most = [long][int]::MaxValue' }
@@ -252,8 +289,8 @@
            Replace = 'if ($false) {' }
         # --- the answer
         @{ Name = "handler-failure-counted-as-a-refusal"
-           Find = 'return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name }'
-           Replace = 'return [pscustomobject]@{ reply = $failLine; refused = "the request failed"; request = $request.name }' }
+           Find = 'return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name; failed = $kept }'
+           Replace = 'return [pscustomobject]@{ reply = $failLine; refused = "the request failed"; request = $request.name; failed = $kept }' }
         @{ Name = "non-ascii-sent-raw"
            Find = 'return [regex]::Replace($json, ''[^\x20-\x7E]'', { param($m) ''\u'' + ([int][char]$m.Value).ToString("x4") })'
            Replace = 'return $json' }

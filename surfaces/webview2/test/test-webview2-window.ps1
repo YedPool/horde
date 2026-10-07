@@ -172,6 +172,8 @@ $probe.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
     "report" = @{ args = @{ key = @{ type = "string"; most = 64 }; value = @{ type = "string"; most = 1600 } }
                   run = { param($Arguments, $State, $Window) Add-ProbeResult -State $State -Key $Arguments["key"] -Value $Arguments["value"]; return $true } }
     "done"   = @{ run = { param($Arguments, $State, $Window) $State.phase = "push"; return $true } }
+    # A handler that fails as real ones do: with the path of a file in what it says.
+    "breaks" = @{ run = { param($Arguments, $State, $Window) throw "C:\made-up\place\store.json is held by another process" } }
 })
 $spec = New-HordeSurfaceSpec -Title "surface probe" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe"); other = (Join-Path $pages "other") }) -Start "probe/index.html" `
     -Bridge $probe.bridge -DataFolder (Join-Path $work "data") -Hidden -Width 480 -Height 360 -TickMs 50 -State $probe `
@@ -185,7 +187,7 @@ $tookMs = $probe.clock.ElapsedMilliseconds
 Receive-ProbeConnections -State $probe
 $r = $probe.results
 function Saw { param([string]$Key) if ($r.Contains($Key)) { return $r[$Key] }; return [pscustomobject]@{ value = "<the page never reported " + $Key + ">"; refusals = -1; reasons = @() } }
-$steps = @("where", "bridge", "unknown-request", "host-objects", "raw-message",
+$steps = @("where", "bridge", "unknown-request", "failed-request", "host-objects", "raw-message",
     "own-fetch", "other-script", "other-fetch", "definition-fetch",
     "in-missing", "in-kind", "in-above", "in-escaped", "in-dots", "in-backslash", "in-port-file",
     "out-script", "out-style", "out-image", "out-fetch", "out-fetch-blind", "out-xhr", "out-beacon", "out-events", "out-font", "out-socket", "out-worker",
@@ -196,7 +198,7 @@ Write-Host "--- the window opened, ran the whole probe and closed ---" -Foregrou
 Check ($shown.state -ceq "closed" -and $shown.reason -ceq "" -and $probe.closed -eq $true) ("the surface showed the page and says it was closed (" + $shown.state + " " + $shown.reason + "), " + $tookMs + " ms; the engine was up after " + $probe.openedMs + " ms")
 Check ($probe.timedOut -ceq "") ("no step of the probe ran out of time (stopped in: '" + $probe.timedOut + "')")
 Check ((@($r.Keys) -join ",") -ceq ($steps -join ",")) ("the page reported every step, in order (" + (@($r.Keys) -join ",") + ")")
-Check (@($probe.errorsAtEnd).Count -eq 0) ("the window recorded no error of its own (" + (@($probe.errorsAtEnd) -join "; ") + ")")
+Check (@($probe.errorsAtEnd).Count -eq 1 -and @($probe.errorsAtEnd)[0] -like "the request 'breaks' failed: *") ("the window recorded no error of its own but the one request this suite makes fail (" + (@($probe.errorsAtEnd) -join "; ") + ")")
 Check ($probe.heldAtOpen -eq 0) ("the engine started with its three pinned files held open by the surface - it could read them, nothing could change them - and once it was up the surface had let go of all of them (" + $probe.heldAtOpen + " still held)")
 
 Write-Host ""
@@ -253,6 +255,10 @@ Write-Host "--- requests.closed: only the list, only as text ---" -ForegroundCol
 $unknown = Saw "unknown-request"
 Check ($unknown.value -like "rejected: refused: *not on the list*" -and $unknown.value -notlike "*win.ini*" -and $unknown.value -notlike "*open-file*") ("a request off the list is refused in the real window, and the refusal repeats nothing the page sent (" + $unknown.value + ")")
 Check ($unknown.refusals -eq 1 -and @($unknown.reasons)[0] -like "*not on the list*") "and it is recorded on the bridge, once"
+# A REQUEST THAT FAILS (surfaces/Port.ps1): what the handler said stays on Horde's side of the window.
+$failedAsk = Saw "failed-request"
+Check ($failedAsk.value -ceq "rejected: the request 'breaks' failed" -and $failedAsk.refusals -eq 0) ("a request whose handler throws is rejected in the real page with one fixed sentence - not the handler's words, not the path in them - and is no refusal (" + $failedAsk.value + "; " + $failedAsk.refusals + ")")
+Check (@($probe.errorsAtEnd) -ccontains "the request 'breaks' failed: C:\made-up\place\store.json is held by another process" -and $probe.bridge.failed -eq 1 -and $probe.bridge.failures[0].reason -ceq @($probe.errorsAtEnd)[0]) ("what the handler said is whole in the errors the window's caller reads, and on the bridge's record (" + (@($probe.errorsAtEnd) -join "; ") + ")")
 Check ((Saw "host-objects").value -like "none*") ("the page finds no object of Horde's to call (" + (Saw "host-objects").value + ")")
 $rawSeen = Saw "raw-message"
 Check ($rawSeen.refusals -eq 1 -and @($rawSeen.reasons)[0] -like "*not one JSON object*") "text posted behind the bridge's back is refused and recorded, not read"

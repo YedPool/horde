@@ -25,6 +25,20 @@
 # Invoke-HordeSurfaceRequest IS A PURE FUNCTION of the bridge and the text: it opens no window and
 # needs none, so every case of it is tested without one (test/test-surface-port.ps1).
 #
+# A REQUEST THAT FAILS - its handler threw, or its answer could not be written whole - IS SAID TO THE
+# PAGE IN ONE FIXED SENTENCE, "the request '<name>' failed", and nothing more. What a handler says as
+# it fails is whatever the code under it threw: the path of a file, a line of somebody's data. The
+# page is text that may quote anything a session wrote, so those words are not its to read (review of
+# 2026-10-06, finding A11: they were handed over as they were). THEY STAY ON HORDE'S SIDE, IN TWO PLACES:
+#   - THE BRIDGE'S OWN RECORD, always: failed counts every one, and failures keeps the last errorsKept
+#     as { at; reason }, as refusals are kept. This function is handed no list of a window's and needs
+#     no window, so with none - a test, a surface that shows no window - this record is where the
+#     words are.
+#   - THE ERRORS A SURFACE KEEPS FOR ITS CALLER ($Window.errors, below): the answer of
+#     Invoke-HordeSurfaceRequest carries the same words as failed, and a surface adds them to that
+#     list with Add-HordeSurfaceError, so a caller that reports reads them there with every other failure.
+# A failure is not a refusal - the page asked properly - and is counted as neither refused nor answered.
+#
 # WHAT GOES BACK is one line of ASCII JSON: { v; reply; ok; value } or { v; reply; ok; reason }, and for
 # an event Horde pushes, { v; event; value }. Every character outside printable ASCII is a \u escape,
 # which the page's JSON reader turns back into the same character, so text in any alphabet crosses
@@ -87,7 +101,8 @@
 #     a mount that name.
 #
 # WHAT A CALLBACK IS HANDED, as $Window. EVERY surface gives these five:
-#   errors     the list the surface adds to when a callback, a message or a load fails. A failure
+#   errors     the list the surface adds to when a callback, a message, a load or a request's
+#              handler fails (A REQUEST THAT FAILS, above). A failure
 #              inside a surface has no console to be printed on, so a caller that reports must be able
 #              to read it. It holds the last errorsKept of them, oldest first.
 #   post       & $Window.post <one line from ConvertTo-HordeSurfaceEvent>: push an event to the page
@@ -167,7 +182,7 @@ $script:HordeSurfaceSettings = New-HordeModuleSettings -Module "surface" -Settin
     @{ name = "messageChars"; kind = "whole"; default = 65536; min = 1024; max = 1048576; what = "The most characters one message from a page may be; a longer one is refused before it is read." }
     @{ name = "argumentChars"; kind = "whole"; default = 16384; min = 64; max = 1048576; what = "The longest text one argument of a request may hold, unless the request itself says less." }
     @{ name = "refusalsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many refusals a bridge remembers; every one is counted, the oldest are dropped." }
-    @{ name = "errorsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many of its own errors a surface keeps for its caller to read; the oldest are dropped." }
+    @{ name = "errorsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many of its own errors a surface keeps for its caller to read, and how many failed requests a bridge remembers; the oldest are dropped." }
     @{ name = "messagesPerSecond"; kind = "whole"; default = 100; min = 1; max = 10000; what = "The most messages a surface reads from a page within one second; the rest of that second are dropped unread." }
 )
 
@@ -438,11 +453,12 @@ function New-HordeSurfaceBridge {
     # -Events is the names Horde may push. A malformed table is a programming error and throws.
     # -Settings is the answer of Get-HordeSurfaceSettings; without it the file is read here. A
     # refused file THROWS its findings and no bridge is made (Resolve-HordeSurfaceSettings). Either
-    # way the bridge keeps the three limits it was made with: the most a message may be, the longest
-    # an argument may be unless it says less, and how many refusals are remembered.
+    # way the bridge keeps the four limits it was made with: the most a message may be, the longest
+    # an argument may be unless it says less, how many refusals are remembered and how many failed
+    # requests (errorsKept: what a handler said as it failed is an error of Horde's own).
     param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Requests, [string[]]$Events = @(), $Settings = $null)
     $Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no bridge from a refused file
-    $limits = [pscustomobject]@{ messageChars = [int]$Settings.values.messageChars; argumentChars = [int]$Settings.values.argumentChars; refusalsKept = [int]$Settings.values.refusalsKept }
+    $limits = [pscustomobject]@{ messageChars = [int]$Settings.values.messageChars; argumentChars = [int]$Settings.values.argumentChars; refusalsKept = [int]$Settings.values.refusalsKept; errorsKept = [int]$Settings.values.errorsKept }
     $table = [ordered]@{}
     foreach ($name in @($Requests.Keys)) {
         if ("$name" -cnotmatch $script:HordeSurfaceNamePattern) { throw ("'" + $name + "' is not a request name: lowercase letters and hyphens") }
@@ -472,6 +488,9 @@ function New-HordeSurfaceBridge {
         refused = 0
         refusals = (New-Object System.Collections.ArrayList)
         answered = 0
+        # The same for requests whose handler failed (header, A REQUEST THAT FAILS): what it said, and when.
+        failed = 0
+        failures = (New-Object System.Collections.ArrayList)
     }
 }
 
@@ -482,6 +501,16 @@ function Add-HordeSurfaceRefusal {
     $Bridge.refused = [int]$Bridge.refused + 1
     [void]$Bridge.refusals.Add([pscustomobject]@{ at = $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture); reason = $Reason })
     while ($Bridge.refusals.Count -gt $Bridge.limits.refusalsKept) { $Bridge.refusals.RemoveAt(0) }
+}
+
+function Add-HordeSurfaceFailure {
+    # Record one failed request on the bridge (header, A REQUEST THAT FAILS): the count goes up, and
+    # what was said joins the short record. Unlike a refusal's reason, -Reason holds the handler's own
+    # words, so nothing of this record is ever handed to a page.
+    param([Parameter(Mandatory = $true)]$Bridge, [Parameter(Mandatory = $true)][string]$Reason, [datetime]$Now = [datetime]::UtcNow)
+    $Bridge.failed = [int]$Bridge.failed + 1
+    [void]$Bridge.failures.Add([pscustomobject]@{ at = $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture); reason = $Reason })
+    while ($Bridge.failures.Count -gt $Bridge.limits.errorsKept) { $Bridge.failures.RemoveAt(0) }
 }
 
 function Add-HordeSurfaceError {
@@ -555,9 +584,11 @@ function Test-HordeSurfaceArguments {
 }
 
 function Invoke-HordeSurfaceRequest {
-    # Answer one message from the page. -Text is exactly what arrived. Returns { reply; refused; request }:
+    # Answer one message from the page. -Text is exactly what arrived. Returns { reply; refused; request; failed }:
     # reply is the line to hand back to the page, or "" when the message carried no id to answer;
-    # refused is why it was refused, or ""; request is the request's name when it was one of the list.
+    # refused is why it was refused, or ""; request is the request's name when it was one of the list;
+    # failed is what went wrong inside Horde when the request failed, or "" - the handler's own words,
+    # for the surface's list of errors and never for the page (header, A REQUEST THAT FAILS).
     # It never throws for anything the page sent: a handler that throws is answered as a failure.
     param([Parameter(Mandatory = $true)]$Bridge, [AllowNull()][AllowEmptyString()][string]$Text, $State = $null, $Window = $null, [datetime]$Now = [datetime]::UtcNow)
     # Every name below is the definition's (header, THE BRIDGE): $ask is a request's, $say a reply's.
@@ -569,7 +600,17 @@ function Invoke-HordeSurfaceRequest {
         Add-HordeSurfaceRefusal -Bridge $Bridge -Reason $Why -Now $Now
         $line = ""
         if ($null -ne $Id) { $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $Id; $say.ok = $false; $say.reason = ("refused: " + $Why) }) }
-        return [pscustomobject]@{ reply = $line; refused = $Why; request = "" }
+        return [pscustomobject]@{ reply = $line; refused = $Why; request = ""; failed = "" }
+    }
+    # A request that failed (header, A REQUEST THAT FAILS): the page is told the one sentence, and
+    # -What - the handler's words - goes on the bridge's record and back to the surface.
+    $fail = {
+        param([string]$What)
+        $told = "the request '" + $request.name + "' failed"
+        $kept = $told + ": " + $What
+        Add-HordeSurfaceFailure -Bridge $Bridge -Reason $kept -Now $Now
+        $failLine = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = $told })
+        return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name; failed = $kept }
     }
     if ([string]::IsNullOrEmpty($Text)) { return (& $refuse "the message was empty" $null) }
     if ($Text.Length -gt $Bridge.limits.messageChars) { return (& $refuse ("the message was " + $Text.Length + " characters, more than the " + $Bridge.limits.messageChars + " one may be; it was not read") $null) }
@@ -600,22 +641,14 @@ function Invoke-HordeSurfaceRequest {
     if ($wrong -ne "") { return (& $refuse ("'" + $request.name + "' was asked wrongly: " + $wrong) $id) }
     $value = $null
     try { $value = & $request.run $checked $State $Window }
-    catch {
-        # The handler is Horde's own code, so its message is Horde's words and may be shown; the page
-        # is told the request failed, which is not a refusal and is not recorded as one.
-        $failLine = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = ("'" + $request.name + "' failed: " + $_.Exception.Message) })
-        return [pscustomobject]@{ reply = $failLine; refused = ""; request = $request.name }
-    }
+    catch { return (& $fail ("" + $_.Exception.Message)) }
     # An answer that cannot be written whole - it nests too deep - is the handler's failure, said to
     # the page as one: never half a value, and never the name of a type where the data should be.
     $line = ""
     try { $line = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $true; $say.value = $value }) }
-    catch {
-        $unwritten = ConvertTo-HordeSurfaceJson -Value ([ordered]@{ $say.version = $protocol; $say.id = $id; $say.ok = $false; $say.reason = ("'" + $request.name + "' failed: its answer could not be handed over: " + $_.Exception.Message) })
-        return [pscustomobject]@{ reply = $unwritten; refused = ""; request = $request.name }
-    }
+    catch { return (& $fail ("its answer could not be handed over: " + $_.Exception.Message)) }
     $Bridge.answered = [int]$Bridge.answered + 1
-    return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name }
+    return [pscustomobject]@{ reply = $line; refused = ""; request = $request.name; failed = "" }
 }
 
 function ConvertTo-HordeSurfaceEvent {

@@ -49,6 +49,7 @@
       ["where", function () { return Promise.resolve(window.location.href); }],
       ["bridge", function () { return Promise.resolve(typeof B.request + " " + typeof B.on + " live=" + B.live); }],
       ["unknown-request", function () { return B.request("open-file", { path: "C:\\Windows\\win.ini" }).then(function () { return "ANSWERED"; }, function (e) { return "rejected: " + e.message; }); }],
+      ["failed-request", function () { return B.request("breaks", {}).then(function () { return "ANSWERED"; }, function (e) { return "rejected: " + e.message; }); }],
       ["host-objects", function () {
         try { var h = raw.hostObjects; var v = (h && h.sync) ? h.sync.horde : undefined; return Promise.resolve((v === undefined || v === null) ? "none" : "AN OBJECT"); }
         catch (e) { return Promise.resolve("none (" + e.name + ")"); }
