@@ -27,6 +27,12 @@
 # core/ReadShared.ps1, core/Home.ps1 and core/Transcript.ps1.
 
 # Move-HordeFileAtomic lives in core/FileAtomic.ps1, shared with the hub's mirror files (cli/HubServe.ps1).
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "Home.ps1")
+. (Join-Path $PSScriptRoot "Transcript.ps1")
+
 . (Join-Path $PSScriptRoot "FileAtomic.ps1")
 
 $script:HordeMetricsLevels = @("off", "usage")

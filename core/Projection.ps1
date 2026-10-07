@@ -196,16 +196,6 @@ function ConvertFrom-HordeIsoTime {
 
 function ConvertTo-HordeIsoText { param([datetime]$Time) return $Time.ToUniversalTime().ToString("o") }
 
-function Get-HordeStoredField {
-    # An ENGINE field of a wezfleet record, translated the way schema/session-record.v1 says: a
-    # field that is not there, null, or an empty string is ABSENT - the store was read and holds
-    # none - because wezfleet writes "" for none (fleetSessionId, lastTool, owner).
-    param($Record, [string]$Name, [string]$What = "the record")
-    $p = $Record.PSObject.Properties[$Name]
-    if ($null -eq $p -or $null -eq $p.Value -or ($p.Value -is [string] -and $p.Value -eq "")) { return (New-HordeAbsent -Note ($What + " has no " + $Name)) }
-    return (New-HordeKnown -Value $p.Value)
-}
-
 function Get-HordeAgentField {
     # An AGENT field from a file that is not the agent's own control file: missing is unknown.
     param($Record, [string]$Name)

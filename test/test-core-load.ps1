@@ -29,6 +29,33 @@ Check (@($f | Where-Object { $_.file -ceq "core/Loader.ps1" }).Count -eq 0) "CON
 Check (@($f | Where-Object { $_.file -ceq "core/Broken.ps1" -and $_.name -ceq "<load error>" }).Count -eq 1) "a file that throws while loading is a finding, never a pass"
 
 Write-Host ""
+Write-Host "--- a registry survives a second load of its file (review of #114) ---" -ForegroundColor Cyan
+# Loaded in a runspace of its own, as a node would: register, then load a file that loads the
+# registry's file again, and ask the registry.
+$ps = [PowerShell]::Create()
+try {
+    $core = Join-Path $root "core"
+    [void]$ps.AddScript(
+        ". '" + (Join-Path $core "Transcript.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "Schedule.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "AgentLaunch.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "HostAct.ps1").Replace("'", "''") + "'`n" +
+        "Register-HordeTranscriptAdapter -Name 'fixture-t' -Claim { `$false } -Read { `$null }`n" +
+        "Register-HordeScheduler -Name 'fixture-s' -Available { `$false } -Install { } -Remove { `$false } -Status { `$null }`n" +
+        "[void]`$script:HordeLaunchAdapters.Add([pscustomobject]@{ name = 'fixture-l' })`n" +
+        "[void]`$script:HordeHostActors.Add([pscustomobject]@{ name = 'fixture-h' })`n" +
+        ". '" + (Join-Path $core "MetricsCollect.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "AgentLaunch.ps1").Replace("'", "''") + "'`n" +
+        ". '" + (Join-Path $core "HostAct.ps1").Replace("'", "''") + "'`n" +
+        "[pscustomobject]@{ t = @(Get-HordeTranscriptAdapters | ForEach-Object { `$_.name }) -join ','; s = @(`$script:HordeSchedulers | ForEach-Object { `$_.name }) -join ','; l = @(`$script:HordeLaunchAdapters | ForEach-Object { `$_.name }) -join ','; h = @(`$script:HordeHostActors | ForEach-Object { `$_.name }) -join ',' }")
+    $got = @($ps.Invoke())
+    $err = $(if ($ps.Streams.Error.Count -gt 0) { "" + $ps.Streams.Error[0] } else { "" })
+    $g = $null; if ($got.Count -gt 0) { $g = $got[-1] }
+    Check ($err -eq "" -and $null -ne $g -and ("" + $g.t) -clike "*fixture-t*" -and ("" + $g.s) -clike "*fixture-s*") ("a transcript adapter and a scheduler registered before MetricsCollect.ps1 is loaded again are still registered (" + $(if ($g) { "t=" + $g.t + " s=" + $g.s } else { $err }) + ")")
+    Check ($null -ne $g -and ("" + $g.l) -ceq "fixture-l" -and ("" + $g.h) -ceq "fixture-h") ("and so are a launch adapter and a host actor after their files load again (" + $(if ($g) { "l=" + $g.l + " h=" + $g.h } else { $err }) + ")")
+} finally { $ps.Dispose() }
+
+Write-Host ""
 Write-Host "--- every core file of this tree ---" -ForegroundColor Cyan
 $legacy = @{}
 foreach ($line in @([System.IO.File]::ReadAllLines((Join-Path $root "tools\core-load-legacy.txt")))) {
