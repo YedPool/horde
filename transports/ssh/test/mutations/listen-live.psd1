@@ -1,8 +1,10 @@
 # Mutations of the hub listener's live half (transports/ssh/Listen.ps1, remote plan R17a): what only a
 # running sshd shows. Run locally, one at a time, through the local gate (the suite is machine-bound):
 #   powershell -File tools\Mutate.ps1 -Spec transports\ssh\test\mutations\listen-live.psd1
-# transports\ssh\test\test-listen-local.ps1 must fail for each, except the one declared to survive. Every process a mutant leaves behind is
-# in the suite's own kill-on-close job, so nothing outlives the run.
+# transports\ssh\test\test-listen-local.ps1 must fail for each, except the one declared to survive.
+# A process a mutant leaves behind is NOT reliably in the suite's own job: under sshd-outside-the-job an
+# sshd escaped it, held the suite's stdout and hung Mutate for 900 s (2026-10-07, round 2). So the
+# suite's teardown stops every process carrying its marker, by pid and creation time, and fails.
 @{
     Target = "transports\ssh\Listen.ps1"
     Suite  = "transports\ssh\test\test-listen-local.ps1"

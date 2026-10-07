@@ -113,3 +113,20 @@ function Get-ListenText {
     if ($Task.Wait($Ms)) { return ("" + $Task.Result) }
     return ("(the stream was still open after " + $Ms + " ms: another process holds it)")
 }
+
+function Stop-ListenLeftovers {
+    # Every live process whose command line holds one of -Markers, stopped by its own pid and creation
+    # time, and returned as "<name> <pid>" lines. A leftover is still a failure - the caller checks
+    # the list is empty - but it is never left running: a mutant that kept sshd out of its job left one
+    # listening after the suite, holding the suite's stdout (2026-10-07, Mutate round 2).
+    param([Parameter(Mandatory = $true)][string[]]$Markers)
+    $found = @()
+    foreach ($m in $Markers) { $found += @(Get-ListenProcesses -Marker $m) }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($p in @($found | Sort-Object ProcessId -Unique)) {
+        $live = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $p.ProcessId) -ErrorAction SilentlyContinue
+        if ($null -ne $live -and $live.CreationDate -eq $p.CreationDate) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { } }
+        [void]$out.Add($p.Name + " " + $p.ProcessId)
+    }
+    return @($out)
+}

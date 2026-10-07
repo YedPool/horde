@@ -272,25 +272,42 @@ try {
         $src = [System.IO.File]::ReadAllText((Join-Path $root "cli\attach.ps1")) + [System.IO.File]::ReadAllText((Join-Path $root "transports\local\Relay.ps1"))
         $code = @($src -split "`n" | Where-Object { $_.TrimStart() -notlike "#*" }) -join "`n"
         Check (-not $code.Contains("OpenStandardInput") -and -not $code.Contains("[Console]::In") -and $code.Contains('$input')) "attach and its relay read stdin through `$input only, never a Console stream"
+
+        Write-Host ""
+        Write-Host "--- horde listen killed with a session open: its sshd and the session's attach die with it ---" -ForegroundColor Cyan
+        # Killed, not asked: only the listener's own job stands between a dead horde listen and an sshd,
+        # and a session, left running. Measured on purpose with a live session, because a process that
+        # sshd starts is in that job only if nothing it inherits lets it break away.
+        $pair = Open-Pair
+        Check ($null -ne $pair) "a session is open"
+        if ($null -ne $pair) {
+            try {
+                $pre = Receive-HordeLinkFrame -Link $pair.hub -TimeoutMs (Left 20000)
+                Check ($pre.state -ceq "known" -and (Get-AttachCount) -eq 1) "CONTROL: its preamble arrived and its attach runs"
+                try { $listen.process.Kill() } catch { }
+                $null = $listen.process.WaitForExit(15000)
+                $d = [datetime]::UtcNow.AddSeconds(15)
+                while (@(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -gt 0 -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 250 }
+                Check (@(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -eq 0) "killing horde listen ends its sshd: the job it held closed"
+                Check (Wait-AttachGone -Ms (Left 15000)) "and the open session's attach ends too: it was in the same job"
+                $c = Receive-HordeLinkFrame -Link $pair.node -TimeoutMs (Left 15000)
+                Check ($c.state -ceq "unknown") ("and the node's link reads closed (" + $c.reason + ")")
+                $listen = $null
+            } finally { Close-HordeLink -Link $pair.node; Close-HordeLink -Link $pair.hub }
+        }
     }
 } finally {
     Write-Host ""
     Write-Host "--- teardown: nothing of this suite survives, and the machine is as it was ---" -ForegroundColor Cyan
-    if ($null -ne $listen) {
-        # Killed, not asked: the listener's own job must end its sshd and every session when it dies.
-        try { $listen.process.Kill() } catch { }
-        $null = $listen.process.WaitForExit(15000)
-        $d = [datetime]::UtcNow.AddSeconds(15)
-        while (@(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -gt 0 -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 250 }
-        Check (@(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -eq 0) "killing horde listen ends its sshd: the job it held closed"
-    }
+    # A run that stopped early leaves horde listen to kill here; the case above kills it on the way.
+    if ($null -ne $listen) { try { $listen.process.Kill() } catch { }; $null = $listen.process.WaitForExit(15000) }
     if ($null -ne $hubListener) { Stop-HordeTransportListener -Listener $hubListener }
     if ($null -ne $job) { $job.Dispose() }
     $env:HORDE_HOME = $savedHome
     if ($skipped -eq "") {
         Start-Sleep -Milliseconds 500
-        Check (@(Get-ListenProcesses -Marker ("attach.ps1 -Device " + $nodeDev)).Count -eq 0) "no attach process survives"
-        Check (@(Get-ListenProcesses -Marker $work).Count -eq 0) "no sshd, listen or probe process of this suite survives"
+        $left = @(Stop-ListenLeftovers -Markers @(("attach.ps1 -Device " + $nodeDev), $work))
+        Check ($left.Count -eq 0) ("no attach, sshd, listen or probe process of this suite survives" + $(if ($left.Count -gt 0) { " (found and stopped: " + ($left -join ", ") + ")" } else { "" }))
         foreach ($p in $ports) { Check ((Get-ListenListeners -Port $p) -eq 0) ("nothing listens on port " + $p + " any more") }
     }
     if ($work -ne "" -and (Split-Path -Leaf $work) -match '^horde-listen-[0-9a-f]{12}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
