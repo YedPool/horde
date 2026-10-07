@@ -204,7 +204,31 @@ try {
         if (-not $ok) { Show $f }
     }
     RefusesPinnedOutsideAPort
-    Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
+    # ONLY A PROGRAM LIBRARY IS EVER LEFT UNREAD. A list names files by name alone, so a script could be
+    # listed with its own fingerprint: the review of the surfaces pull request (2026-10-06) did that to
+    # a .ps1 holding a look-alike letter, and the scan passed it. The control is the same script with
+    # no list: whatever it is refused for then, it must still be refused for when a list names it.
+    function RefusesPinnedScript {
+        $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes("# caf" + [char]0x00E9 + ": start a zorbcode process`n")
+        $scriptHasher = [System.Security.Cryptography.SHA256]::Create()
+        $scriptSha = -join ($scriptHasher.ComputeHash($scriptBytes) | ForEach-Object { $_.ToString("x2") })
+        $scriptHasher.Dispose()
+        $plain = @(Scan "script-unlisted" { Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes })
+        Check ($plain.Count -ge 1 -and (Says $plain "not printable ASCII")) ("CONTROL: a script in a port's folder with a byte that is not ASCII is refused when no list names it (" + $plain.Count + " finding(s))")
+        $listed = @(Scan "script-listed" { Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ("helper.ps1 | " + $scriptSha + " | a script listed with its own fingerprint, to get it past the scan`n") })
+        $kept = @($plain | Where-Object { $was = $_; @($listed | Where-Object { $_.path -ceq $was.path -and $_.problem -ceq $was.problem }).Count -eq 1 })
+        $ok = ($kept.Count -eq $plain.Count)
+        Check $ok "a fingerprint list cannot excuse a script: listed with its true fingerprint, it is still read as text and refused for everything it was refused for"
+        if (-not $ok) { Show $listed }
+        $named = ((Says $listed "is not a program library") -and $listed.Count -eq ($plain.Count + 1))
+        Check $named "and the list is refused for naming it: only a program library is ever left unread"
+        if (-not $named) { Show $listed }
+        $both = @(Scan "script-beside-library" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes
+            Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ($libLine + "helper.ps1 | " + $scriptSha + " | a script listed beside a real library`n") })
+        Check ((Says $both "not printable ASCII") -and (Says $both "is not a program library") -and -not (Says $both "zorb.dll")) "beside a real library the script is still refused, and the library is still left unread"
+    }
+    RefusesPinnedScript
+    Passes "git"{ Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
     # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already
     # named the host, and a count of lines did not move. Each occurrence of each name counts.
