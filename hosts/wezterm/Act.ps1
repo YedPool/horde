@@ -571,9 +571,11 @@ function Invoke-HordeWeztermOwn {
     $why = Test-HordeWeztermRunningList -Running $Running
     if ($why -ne "") { return (New-HordeUnknown -Reason $why) }
     $list = @($Running)
-    $guis = { @($list | ForEach-Object { [long]$_.pid }) }.GetNewClosure()
+    # Not $guis: that is the [scriptblock]$Guis parameter (names ignore case), which this would overwrite
+    # (tools/ParamShadow.ps1, PR #111).
+    $runningGuis = { @($list | ForEach-Object { [long]$_.pid }) }.GetNewClosure()
     $starts = { param($p) $hit = @($list | Where-Object { [long]$_.pid -eq [long]$p }); if ($hit.Count -eq 1) { "" + $hit[0].start } else { $null } }.GetNewClosure()
-    return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $guis -ProcessStart $starts)
+    return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $runningGuis -ProcessStart $starts)
 }
 
 # THE PORT (core/HostAct.ps1). A node reaches these functions only through it, so nothing outside
