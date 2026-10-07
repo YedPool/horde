@@ -58,6 +58,9 @@
         @{ Name = "standing-above-takes-the-keyboard"
            Find = 'if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); }'
            Replace = 'if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002); }' }
+        @{ Name = "reports-counted-across-follows"
+           Find = 'Events = 0;     // the reports counted are'
+           Replace = '// the reports counted are' }
         @{ Name = "placing-takes-the-keyboard"
            Find = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004 | 0x0010); }'
            Replace = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004); }' }

@@ -432,6 +432,7 @@ try {
     Look "the follow starts again"
     $want = Expected $other
     Check ((Field $r "state") -ceq "following" -and [FollowTestProbe]::Owner($mine) -eq $other -and [FollowTestProbe]::Rect($mine) -ceq $want) ("the free window is made a companion again: owned, and placed beside the other window where it now is (" + [FollowTestProbe]::Rect($mine) + ")")
+    Check ((Field $r "events") -eq 0) ("the reports counted are this follow's own: none yet, where the last follow had counted " + $countedBefore + " (" + (Field $r "events") + ")")
     Look "after the second follow"
 
     Write-Host ""
