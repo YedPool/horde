@@ -218,7 +218,7 @@ try {
     $node = Start-Node
     $p = Invoke-HordeHubPull -Entry (Entry -Expect $other) -Hub $hub -Contract $contract -TimeoutMs 30000
     $served = Stop-Node $node
-    Check ($p.ok -eq $false -and $p.reason -clike ("*answered as device " + $device + "*not " + $other + "*")) ("a node that answers as another device is refused, naming both (" + $p.reason + ")")
+    Check ($p.ok -eq $false -and $p.reason -clike ("*answered as device " + $device + "*bound to " + $other + "*")) ("a node that answers as another device is refused, naming both (" + $p.reason + ")")
     Check ($null -ne $served -and $served.served -eq 1 -and "$(@($served.endings)[0])" -clike "*closed by the protocol*") "and the hub says bye rather than ask it anything"
 
     $node = Start-Node -ThrowOnView

@@ -5,7 +5,7 @@ $HordeCommand = @{
     # projection (11.4 s measured 2026-10-02); a busy background process is throttled about 7x after
     # 3 s (core/Platform.ps1), which could put a round past the link's 60 s silence window.
     sustained = $true
-    usage   = "hub serve [-Rounds <n>] [-IntervalSeconds <s>] | hub init | hub enroll -Device <id> -Key <key> [-Days <n>] | hub revoke -Device <id> [-Transport <name>]"
+    usage   = "hub serve [-Rounds <n>] [-IntervalSeconds <s>] [-Listen] | hub init | hub enroll -Device <id> -Key <key> [-Days <n>] | hub revoke -Device <id> [-Transport <name>]"
     summary = "serve: pull every registered node's sessions each round into one mirror file per node, read-only on the nodes; init, enroll, revoke: the listener's host key and which node keys it admits (enrolment, remote plan R17b)"
     run     = {
         [CmdletBinding()] param(
@@ -14,6 +14,8 @@ $HordeCommand = @{
             [int]$Rounds = 0,
             # How long a round waits for the next; 20 s keeps a heard node inside the 60 s window.
             [int]$IntervalSeconds = 20,
+            # serve: also take links nodes dial, on the hub pipe, between rounds (remote plan R17c).
+            [switch]$Listen,
             # enroll, revoke: the node's device id and, for enroll, its key, as `horde node init` printed them.
             [string]$Device = "",
             [string]$Key = "",
@@ -23,7 +25,7 @@ $HordeCommand = @{
             [string]$Transport = ""
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
-        $verbFlags = @{ serve = @("Rounds", "IntervalSeconds"); init = @("Transport"); enroll = @("Device", "Key", "Days", "Transport"); revoke = @("Device", "Transport") }
+        $verbFlags = @{ serve = @("Rounds", "IntervalSeconds", "Listen"); init = @("Transport"); enroll = @("Device", "Key", "Days", "Transport"); revoke = @("Device", "Transport") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to hub " + $Verb) } }
         if ($Verb -ne "serve") {
             $root = Get-HordeRoot
@@ -59,7 +61,18 @@ $HordeCommand = @{
         $contract = Get-HordeLinkContract
         # Write-Host, not Write-Output: the block runs inside the loop, whose output is its rounds.
         $say = { param($Round) foreach ($o in $Round.outcomes) { Write-Host ($Round.at + " " + $o) } }
-        $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say)
+        $listener = $null
+        if ($Listen) {
+            # The hub pipe: the hub's own transport, at the endpoint R17a's attach dials.
+            $lt = Resolve-HordeLinkTransport -Name $script:HordeHubOwnTransport
+            if ($lt.state -cne "known") { throw ("the hub cannot listen: " + $lt.reason) }
+            $l = Start-HordeTransportListener -Transport $lt.value -Endpoint (Get-HordeHubListenEndpoint -HubId $hub.id)
+            if ($l.state -cne "known") { throw ("the hub cannot listen for dialled links: " + $l.reason) }
+            $listener = $l.value
+            Write-Host ("hub listening for dialled links at " + $listener.endpoint)
+        }
+        try { $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say -Listener $listener) }
+        finally { if ($null -ne $listener) { Stop-HordeTransportListener -Listener $listener } }
         Write-Output ("hub ran " + $done.Count + " round(s); mirrors in " + $mirrorRoot)
     }
 }

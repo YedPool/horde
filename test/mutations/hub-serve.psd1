@@ -9,8 +9,12 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "node-of-another-device-accepted"
-           Find = 'elseif ("$($f.hello.id)" -cne "$($Entry.deviceId)") {'
-           Replace = 'elseif ($false) {' }
+           Find = 'else { $refusal = Test-HordeHubHelloBound -Frame $f -BoundDeviceId "$($Entry.deviceId)" }'
+           Replace = 'else { $refusal = "" }' }
+        # R17c: the binding stand-in itself (swapped for R17a's Test-HordeHelloBinding when it lands).
+        @{ Name = "hello-binding-ignored"
+           Find = 'if ("$($Frame.hello.id)" -cne $BoundDeviceId) {'
+           Replace = 'if ($false) {' }
         @{ Name = "refusal-without-bye"
            Find = '$null = Send-HordeHubFrame -Link $link -Frame (New-HordeLinkBye -Code "refused" -Reason $refusal -Seq $seq -Contract $Contract) -Contract $Contract'
            Replace = '' }
