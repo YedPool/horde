@@ -31,6 +31,7 @@ $script:HordeMachineBoundSuites = [ordered]@{
     "transports/local/test/test-hub-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
     "transports/ssh/test/test-sshd-local.ps1" = "this machine's own server for the transport, run as the suite's own child on 127.0.0.1 (remote plan R16)"
     "transports/local/test/test-hub-act-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "transports/ssh/test/test-listen-local.ps1" = "horde listen runs this machine's own server for the transport as the suite's child on 127.0.0.1, and the hub's end is the real local pipe (remote plan R17a)"
     "test/test-transport-conformance.ps1" = "its [local] cases: on the always-on box its 27 [local] checks fail on main 54d97b3 exactly as on #85, and pass here (2026-10-05)"
 }
 
