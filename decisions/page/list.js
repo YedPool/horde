@@ -196,7 +196,11 @@
       }
       // Groups in the order of the lowest-numbered question shown in each, as the command line lists them.
       var groups = [];
-      var byGroup = {};
+      // A TABLE WITH NO INHERITED MEMBERS. A group is text a session wrote, and in an ordinary object the
+      // name __proto__ is not a key: each question so named replaced the one before it, and the group
+      // was drawn once per question (seen 2026-10-06 in a picture of the window: question 5 missing,
+      // question 6 twice, while the counts said eight).
+      var byGroup = Object.create(null);
       for (i = 0; i < shown.length; i += 1) {
         var g = shown[i].group;
         if (!Object.prototype.hasOwnProperty.call(byGroup, g)) { byGroup[g] = []; groups.push(g); }
