@@ -12,6 +12,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\SuiteFiles.ps1")
+. (Join-Path $root "test\lib\SuiteSections.ps1")
 
 function Get-FindCount {
     param([string]$Text, [string]$Find)
@@ -34,7 +35,18 @@ function Get-SpecProblems {
         $suitePath = Join-Path $rootFull "$($s.Suite)"
         if ("$($s.Suite)" -match "[\x00-\x1F]" -or -not (Test-Path -LiteralPath $suitePath -PathType Leaf)) { [void]$out.Add($rel + ": its suite " + ("$($s.Suite)" -replace "[\x00-\x1F]", "?") + " does not exist") }
         $text = [System.IO.File]::ReadAllText($target)
+        # A SECTION MAP NAMES ONLY SECTIONS THE SUITE DECLARES. tools\Mutate.ps1 refuses a wrong map too,
+        # but only when that spec is run; a suite whose section is renamed would leave every spec mapped
+        # to it broken until then. The rule is test\lib\SuiteSections.ps1's, shared with the tool.
+        $declared = $null
+        if (@($s.Mutations | Where-Object { $_ -is [hashtable] -and $_.ContainsKey("Sections") }).Count -gt 0 -and (Test-Path -LiteralPath $suitePath -PathType Leaf)) {
+            $declared = Get-HordeSuiteSectionIds -Path $suitePath
+        }
         foreach ($m in @($s.Mutations)) {
+            if ($null -ne $declared -and $m.ContainsKey("Sections")) {
+                $why = Get-HordeMutantSectionProblem -Mutant $m -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $s.Environment
+                if ($why) { [void]$out.Add($rel + " :: " + $m.Name + ": " + $why) }
+            }
             # tools\Mutate.ps1 refuses a find that spans lines, since line endings differ by checkout;
             # it would occur once here and still not apply (review of PR #62, probe Q4).
             if ("$($m.Find)" -match "[\r\n]") { [void]$out.Add($rel + " :: " + $m.Name + ": its find string spans lines, which tools\Mutate.ps1 refuses"); continue }
@@ -99,6 +111,32 @@ try {
     Check (@($planted2 | Where-Object { $_ -match 'fixture-data' }).Count -eq 0) "CONTROL: a mutations folder under test\fixtures is data, not a spec"
     Check (@($planted2 | Where-Object { $_ -match 'sub\\nested\.psd1 :: nested-twice: its find string occurs 2 times' }).Count -eq 1) "a spec in a subfolder of mutations is checked too"
     Check (@($planted2 | Where-Object { $_ -match 'multiline\.psd1 :: spans: its find string spans lines' }).Count -eq 1) "a find string that spans lines is refused, as tools\Mutate.ps1 refuses it"
+    # SECTION MAPS (perf/mutate-sections): a name the suite does not declare, a map on a suite that
+    # declares none, and an empty map are each reported; a good map is not.
+    [System.IO.File]::WriteAllText((Join-Path $fx "sec.ps1"), "Register-HordeSuiteSections -Ids @(`"alpha`", `"beta`")`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\mapped.psd1"), "@{ Target = 't.ps1'; Suite = 'sec.ps1'; Mutations = @(@{ Name = 'map-good'; Find = 'function C2'; Replace = 'function Z'; Sections = @('beta') }, @{ Name = 'map-typo'; Find = 'function B'; Replace = 'function Y'; Sections = @('alpha', 'btea') }, @{ Name = 'map-empty'; Find = 'function A'; Replace = 'function X'; Sections = @() }) }")
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\mapped-nowhere.psd1"), "@{ Target = 't.ps1'; Suite = 's.ps1'; Mutations = @(@{ Name = 'map-nowhere'; Find = 'function C2'; Replace = 'function Z'; Sections = @('alpha') }) }")
+    $planted4 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
+    Check (@($planted4 | Where-Object { $_ -match "mapped\.psd1 :: map-typo: section 'btea' is not one sec\.ps1 declares" }).Count -eq 1) "a mapped section the suite does not declare is reported"
+    Check (@($planted4 | Where-Object { $_ -match 'mapped\.psd1 :: map-empty: its Sections names no section' }).Count -eq 1) "an empty section map is reported"
+    Check (@($planted4 | Where-Object { $_ -match 'mapped-nowhere\.psd1 :: map-nowhere: its suite s\.ps1 declares no sections' }).Count -eq 1) "a map on a suite that declares no sections is reported"
+    Check (@($planted4 | Where-Object { $_ -match ':: map-good:' }).Count -eq 0) "CONTROL: a map that names a declared section is not"
+    # A SECTION LIST THE TEXT CANNOT ANSWER is refused, not guessed at: one built at run time, one
+    # declared twice, one given without -Ids. And a map outside the spec's own HORDE_SECTIONS names a
+    # section no whole run of that spec ever tries.
+    [System.IO.File]::WriteAllText((Join-Path $fx "dyn.ps1"), "Register-HordeSuiteSections -Ids @(`"alpha`", `$more)`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $fx "twice.ps1"), "Register-HordeSuiteSections -Ids @(`"alpha`")`r`nRegister-HordeSuiteSections -Ids @(`"alpha`")`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $fx "positional.ps1"), "Register-HordeSuiteSections @(`"alpha`")`r`n")
+    foreach ($pair in @(@("dyn", "dyn.ps1"), @("twice", "twice.ps1"), @("positional", "positional.ps1"))) {
+        [System.IO.File]::WriteAllText((Join-Path $fx ("test\mutations\read-" + $pair[0] + ".psd1")), ("@{ Target = 't.ps1'; Suite = '" + $pair[1] + "'; Mutations = @(@{ Name = 'read-" + $pair[0] + "'; Find = 'function C2'; Replace = 'function Z'; Sections = @('alpha') }) }"))
+    }
+    [System.IO.File]::WriteAllText((Join-Path $fx "test\mutations\filtered.psd1"), "@{ Target = 't.ps1'; Suite = 'sec.ps1'; Environment = @{ HORDE_SECTIONS = 'alpha' }; Mutations = @(@{ Name = 'map-outside'; Find = 'function C2'; Replace = 'function Z'; Sections = @('beta') }, @{ Name = 'map-inside'; Find = 'function B'; Replace = 'function Y'; Sections = @('alpha') }) }")
+    $planted5 = @(Get-SpecProblems -Root $fx -Specs @(Get-HordeMutationSpecFiles -Root $fx))
+    Check (@($planted5 | Where-Object { $_ -match 'read-dyn: its suite dyn\.ps1 builds its section list at run time' }).Count -eq 1) "a section list built at run time is refused, not guessed at"
+    Check (@($planted5 | Where-Object { $_ -match 'read-twice: its suite twice\.ps1 declares its sections 2 times' }).Count -eq 1) "a suite that declares its sections twice is refused"
+    Check (@($planted5 | Where-Object { $_ -match 'read-positional: its suite positional\.ps1 declares its sections without -Ids' }).Count -eq 1) "a section list given without -Ids is refused"
+    Check (@($planted5 | Where-Object { $_ -match "filtered\.psd1 :: map-outside: section 'beta' is outside the spec's own HORDE_SECTIONS \(alpha\)" }).Count -eq 1) "a map outside the spec's own section filter is reported"
+    Check (@($planted5 | Where-Object { $_ -match ':: map-inside:' }).Count -eq 0) "CONTROL: a map inside it is not"
 } finally {
     if ((Split-Path -Leaf $fx) -match '^horde-specfind-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $fx)) { Remove-Item -LiteralPath $fx -Recurse -Force -ErrorAction SilentlyContinue }
 }
