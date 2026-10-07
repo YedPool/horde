@@ -270,10 +270,11 @@ function Get-HordeWebView2Handlers {
 function Get-HordeWebView2Window {
     # What a caller's callbacks are handed (surfaces/Port.ps1, THE SURFACE CONTRACT). Its script blocks
     # read the state object like every handler.
-    param([Parameter(Mandatory = $true)]$Form)
+    param([Parameter(Mandatory = $true)]$Form, [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Errors)
     return [pscustomobject]@{
         handle = [long]$Form.Handle
         sync = $Form
+        errors = $Errors
         post = { param($Json) Send-HordeWebView2Json -Json $Json }
         setTitle = { param($Text) if ($null -ne $script:HordeWebView2) { $script:HordeWebView2.form.Text = "" + $Text } }
         show = { if ($null -ne $script:HordeWebView2 -and -not $script:HordeWebView2.spec.hidden) { [HordeSurfaceNative]::BringForward($script:HordeWebView2.form.Handle) } }
@@ -324,12 +325,13 @@ function Open-HordeWebView2Surface {
     $mounts[(Get-HordeSurfaceOwnMount)] = (Join-Path $script:HordeWebView2Folder "page")
 
     $handlers = Get-HordeWebView2Handlers
+    $errors = New-Object System.Collections.ArrayList
     $script:HordeWebView2 = [pscustomobject]@{
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
         startHost = (Get-HordeSurfaceMountHost -Mount $Spec.startMount)
-        window = (Get-HordeWebView2Window -Form $form)
+        window = (Get-HordeWebView2Window -Form $form -Errors $errors)
         opened = $false; failure = ""; realPixels = $realPixels
-        errors = (New-Object System.Collections.ArrayList)
+        errors = $errors
     }
     $state = $script:HordeWebView2
     try {
