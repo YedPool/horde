@@ -57,7 +57,9 @@ $HordeCommand = @{
         $manifest = New-HordeNodeManifest -Root $root -Node $node -Space $platform.processSpace
         $tr = Resolve-HordeLinkTransport -Name "local"
         if ($tr.state -cne "known") { throw ("this machine cannot serve on the local link: " + $tr.reason) }
-        $transport = $tr.value
+        # Not $transport: that is the -Transport parameter (names ignore case), and its [string] type
+        # would turn the transport into text (PR #111; tools/ParamShadow.ps1).
+        $localTransport = $tr.value
         $hordeHome = Get-HordeHome
         $journal = Join-Path $hordeHome "node\requests"
         $journalRoot = ""
@@ -76,7 +78,7 @@ $HordeCommand = @{
         # functions loaded above; these run in this scope, where they are.
         $getView = { ConvertTo-HordeSessionViewDocument -Projection (Get-HordeProjection -Platform $platform) }
         $say = { Write-Host ("node " + $node.deviceId + " listening on the local link") }
-        $r = Invoke-HordeNodeServe -Transport $transport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say
+        $r = Invoke-HordeNodeServe -Transport $localTransport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say
         Write-Output ("served " + $r.served + " link(s)")
         foreach ($e in $r.endings) { Write-Output ("  " + $e) }
         if ($r.refused -gt 0) { Write-Output ("refused " + $r.refused + " peer(s), the listener kept each time") }
