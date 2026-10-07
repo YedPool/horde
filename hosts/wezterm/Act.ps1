@@ -503,8 +503,9 @@ function Test-HordeWeztermProfileDir {
     # network), already in full form (no '..'), and with no junction or link on any folder that exists
     # from the drive down to the socket folder inside it (review of #108; issue #119: a junction at the
     # profile's .local was adopted, and a mapped network drive passed). -DriveType stands in for the
-    # drive's type in a test: root -> type name.
-    param([AllowEmptyString()][string]$Path, [scriptblock]$DriveType = $null)
+    # drive's type in a test: root -> type name. -ItemOf stands in for Get-Item in a test: path -> item.
+    # A folder that exists but cannot be read is refused: whether it is a junction cannot be told.
+    param([AllowEmptyString()][string]$Path, [scriptblock]$DriveType = $null, [scriptblock]$ItemOf = $null)
     if ($Path -cnotmatch '\A[A-Za-z]:\\') { return ("the profile folder '" + $Path + "' is not a full path on a local drive") }
     $driveRoot = $Path.Substring(0, 3)
     $kind = ""
@@ -515,7 +516,12 @@ function Test-HordeWeztermProfileDir {
     if ($full.TrimEnd('\') -cne $Path.TrimEnd('\')) { return ("the profile folder '" + $Path + "' is not in full form (it reads as " + $full + ")") }
     $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd('\')).TrimEnd('\')
     while ($p.Length -gt 3) {
-        if ((Test-Path -LiteralPath $p) -and (((Get-Item -LiteralPath $p -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { return ("the profile folder '" + $Path + "' passes through " + $p + ", a junction or link") }
+        if (Test-Path -LiteralPath $p) {
+            $it = $null
+            try { if ($null -ne $ItemOf) { $it = & $ItemOf $p } else { $it = Get-Item -LiteralPath $p -Force -ErrorAction Stop } } catch { $it = $null }
+            if ($null -eq $it) { return ("the profile folder '" + $Path + "' passes through " + $p + ", which cannot be read, so whether it is a junction or link cannot be told") }
+            if (($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return ("the profile folder '" + $Path + "' passes through " + $p + ", a junction or link") }
+        }
         $p = Split-Path -Parent $p
     }
     return ""
@@ -553,7 +559,13 @@ function Invoke-HordeWeztermOwn {
     param([string]$ProfileDir = "", $Running = $null, [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
     $pd = $ProfileDir
     if ($pd -ne "") { $why = Test-HordeWeztermProfileDir -Path $pd; if ($why -ne "") { return (New-HordeUnknown -Reason $why) } }
-    if ($pd -eq "") { $pd = $env:USERPROFILE }
+    if ($pd -eq "") {
+        # The node's own path gets the same checks (review of #131): its own profile, on a local drive,
+        # with no junction or link from the drive down to its socket folder.
+        $pd = "" + $env:USERPROFILE
+        $why = Test-HordeWeztermProfileDir -Path $pd
+        if ($why -ne "") { return (New-HordeUnknown -Reason ("this user's profile cannot be trusted for its terminals: " + $why)) }
+    }
     $sd = Get-HordeWeztermSockDir -ProfileDir $pd
     if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart) }
     $why = Test-HordeWeztermRunningList -Running $Running
