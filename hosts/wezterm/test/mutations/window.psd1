@@ -79,6 +79,28 @@
         @{ Name = "no-window-on-screen-not-said"
            Find = 'if ($titles.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal''s process has no terminal window on screen, so there is none to stand beside") }'
            Replace = '' }
+        # --- the settings (core/ModuleSettings.ps1): one table, one file, and a refused file is the answer
+        @{ Name = "the-persons-file-is-not-read"
+           Find = 'if ($null -eq $Settings) { $Settings = Get-HordeWeztermWindowSettings }'
+           Replace = 'if ($null -eq $Settings) { $Settings = Read-HordeModuleSettingsText -Declaration $script:HordeWeztermWindowSettings -Text $null }' }
+        @{ Name = "the-socket-folder-setting-ignored"
+           Find = 'if ($Configured -ne "") { return $Configured }'
+           Replace = '' }
+        @{ Name = "the-terminals-own-place-is-not-the-hosts"
+           Find = 'return (Get-HordeWeztermSockDir)'
+           Replace = 'return (Get-HordeWeztermSockDir -ProfileDir $env:TEMP)' }
+        @{ Name = "the-retry-wait-is-not-waited"
+           Find = 'if ($try -gt 1) { Wait-HordeWeztermWindowMoment -Milliseconds $Values.retryWaitMs -Wait $Wait }'
+           Replace = '' }
+        @{ Name = "a-refused-settings-file-is-read-past"
+           Find = 'if ("" + $Settings.state -cne "defaults" -and "" + $Settings.state -cne "read") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-refused-settings-file-falls-back-to-the-defaults"
+           Find = 'return (New-HordeUnknown -Reason ("the finder''s settings are refused, so no terminal was asked: " + (@($Settings.findings) -join "; ")))'
+           Replace = '$Settings = Read-HordeModuleSettingsText -Declaration $script:HordeWeztermWindowSettings -Text $null' }
+        @{ Name = "a-refusal-does-not-say-which-file-and-key"
+           Find = ' + (@($Settings.findings) -join "; ")))'
+           Replace = '))' }
         # --- from the record to the terminal
         @{ Name = "any-text-is-a-pane"
            Find = 'if ($Pane -cnotmatch ''\A[0-9]{1,9}\z'') {'
@@ -88,12 +110,12 @@
            Replace = 'if ($Instance -eq "") {' }
         @{ Name = "a-terminal-that-is-not-running-is-asked"
            Find = 'if ($target.state -cne "known") { return (New-HordeUnknown -Reason ("the session''s terminal is not running: " + $target.reason)) }'
-           Replace = 'if ($target.state -cne "known") { $target = New-HordeKnown -Value ([pscustomobject]@{ socket = (Join-Path $SockDir $Instance); guiPid = 4242; guiStart = "133000000000000000" }) }' }
+           Replace = 'if ($target.state -cne "known") { $target = New-HordeKnown -Value ([pscustomobject]@{ socket = (Join-Path (Get-HordeWeztermWindowSockDir -Configured $Values.socketFolder) $Instance); guiPid = 4242; guiStart = "133000000000000000" }) }' }
         @{ Name = "a-failed-listing-is-read-anyway"
            Find = 'if ($call.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit "'
            Replace = 'if ($false) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit "' }
         @{ Name = "a-title-out-of-step-is-not-read-again"
-           Find = 'for ($try = 1; $try -le [Math]::Max($Attempts, 1); $try++) {'
+           Find = 'for ($try = 1; $try -le $Values.attempts; $try++) {'
            Replace = 'for ($try = 1; $try -le 1; $try++) {' }
         @{ Name = "every-unknown-is-read-again"
            Find = 'if ($last.state -ceq "known" -or $last.reason -notlike "none of the terminal''s*") { return $last }'

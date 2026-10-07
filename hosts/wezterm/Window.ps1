@@ -45,16 +45,50 @@
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\HostAct.ps1")
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\HostWindow.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 . (Join-Path $PSScriptRoot "Act.ps1")
+
+# THE FINDER'S SETTINGS, declared once (core/ModuleSettings.ps1). A person overrides any of them in
+# <HORDE_HOME>\settings\wezterm-window.json. A FILE THAT FAILS A CHECK IS REFUSED, AND THE FINDER THEN
+# ANSWERS UNKNOWN WITHOUT ASKING THE TERMINAL ANYTHING: its reason is the settings' own findings, which
+# name the file and each key that is wrong. It never reads a terminal with the defaults in a bad
+# file's place - a person who set a number and mistyped it would be told a window, or told none, by
+# numbers that are not theirs. Nothing else in this file holds one of these numbers.
+$script:HordeWeztermWindowSettings = New-HordeModuleSettings -Module "wezterm-window" -Settings @(
+    @{ name = "attempts";     kind = "whole";  default = 3;   min = 1; max = 10;   what = "How many times the windows and the listing are read before a title that fits nothing is believed." },
+    @{ name = "retryWaitMs";  kind = "whole";  default = 200; min = 0; max = 5000; what = "Milliseconds waited before the windows and the listing are read again." },
+    @{ name = "socketFolder"; kind = "folder"; default = "";                       what = "Folder the terminal keeps its sockets in; left out, the terminal's own place under the user's profile." }
+)
+
+function Get-HordeWeztermWindowSettings {
+    # The settings as { state; values; findings; path }, from the one file under Horde's home; nothing is
+    # written. state is defaults (no file), read, or refused, and a refusal carries no values.
+    param([string]$HordeHome = "")
+    return (Get-HordeModuleSettings -Declaration $script:HordeWeztermWindowSettings -HordeHome $HordeHome)
+}
+
+function Get-HordeWeztermWindowSockDir {
+    # WHERE THE TERMINAL'S SOCKETS ARE, for this file: the folder a person set, or the terminal's own.
+    # The terminal's own place has ONE owner in this host, Get-HordeWeztermSockDir in the act file, and
+    # the default is handed to it: the place is written nowhere here (review of 2026-10-06, finding C7:
+    # it was written in two files), and the suite checks that it is not.
+    param([AllowEmptyString()][string]$Configured = "")
+    if ($Configured -ne "") { return $Configured }
+    return (Get-HordeWeztermSockDir)
+}
+
+function Wait-HordeWeztermWindowMoment {
+    # The finder's one way of waiting: -Wait in a test, which is told how long and need not sleep.
+    param([int]$Milliseconds, [scriptblock]$Wait = $null)
+    if ($Milliseconds -le 0) { return }
+    if ($null -ne $Wait) { [void](& $Wait $Milliseconds) } else { Start-Sleep -Milliseconds $Milliseconds }
+}
 
 # A TERMINAL WINDOW IS A VISIBLE, UNOWNED TOP-LEVEL WINDOW OF THE GUI PROCESS. Its other top-level windows
 # - a probing window per terminal window, the input method's - are hidden or owned (measured
 # 2026-10-06: 16 visible unowned windows, 16 hidden probing windows, 2 owned). NOT BY WINDOW CLASS: the
 # class is whatever the terminal was started with (--class), and the first run against an isolated
 # instance, started with a class of its own, found no window at all by the default class.
-# How many times the windows and the listing are read before a title that fits nothing is believed.
-$script:HordeWeztermWindowAttempts = 3
-$script:HordeWeztermWindowRetryMs = 200
 
 $script:HordeWeztermWindowSource = @'
 using System;
@@ -202,22 +236,34 @@ function Select-HordeWeztermSessionWindow {
 }
 
 function Find-HordeWeztermSessionWindow {
-    # The native window showing pane -Pane of the terminal -Instance, as an answer (header). -SockDir,
-    # -Runner, -Windows and -ProcessStart replace the socket folder, the terminal's command, the window
-    # reader and the process clock in a test; -ReadAs says which code page a runner's answer was read
-    # in, and the real call's is always this process's own.
-    param([AllowEmptyString()][string]$Pane, [AllowEmptyString()][string]$Instance,
-        [string]$SockDir = (Join-Path $env:USERPROFILE ".local\share\wezterm"),
-        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [scriptblock]$ProcessStart = $null, [System.Text.Encoding]$ReadAs = $null,
-        [int]$Attempts = $script:HordeWeztermWindowAttempts, [int]$RetryMs = $script:HordeWeztermWindowRetryMs)
+    # The native window showing pane -Pane of the terminal -Instance, as an answer (header). -Settings
+    # is what Get-HordeWeztermWindowSettings gives, for a caller that read them already; without it
+    # they are read from Horde's home. Settings that were refused are the answer: unknown, with their
+    # findings, and nothing is read (see THE FINDER'S SETTINGS). -Runner, -Windows, -ProcessStart and -Wait replace the
+    # terminal's command, the window reader, the process clock and the sleep in a test; -ReadAs says
+    # which code page a runner's answer was read in, and the real call's is always this process's own.
+    param([AllowEmptyString()][string]$Pane, [AllowEmptyString()][string]$Instance, $Settings = $null,
+        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [scriptblock]$ProcessStart = $null, [System.Text.Encoding]$ReadAs = $null, [scriptblock]$Wait = $null)
+    if ($null -eq $Settings) { $Settings = Get-HordeWeztermWindowSettings }
+    # Anything but the two states that carry values is a refusal: the finder goes on only with values it was given.
+    if ("" + $Settings.state -cne "defaults" -and "" + $Settings.state -cne "read") {
+        return (New-HordeUnknown -Reason ("the finder's settings are refused, so no terminal was asked: " + (@($Settings.findings) -join "; ")))
+    }
+    return (Find-HordeWeztermSessionWindowWith -Pane $Pane -Instance $Instance -Values $Settings.values -Runner $Runner -Windows $Windows -ProcessStart $ProcessStart -ReadAs $ReadAs -Wait $Wait)
+}
+
+function Find-HordeWeztermSessionWindowWith {
+    # Find-HordeWeztermSessionWindow's work, with the settings' values in hand (-Values).
+    param([AllowEmptyString()][string]$Pane, [AllowEmptyString()][string]$Instance, [Parameter(Mandatory = $true)]$Values,
+        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [scriptblock]$ProcessStart = $null, [System.Text.Encoding]$ReadAs = $null, [scriptblock]$Wait = $null)
     if ($Pane -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason "the session's record names a pane this terminal does not number that way, so it is not one of this terminal's") }
     # The leaf name only: a record never chooses the folder the socket is looked for in.
     if ($Instance -cnotmatch $script:HordeWeztermSocketLeaf) { return (New-HordeUnknown -Reason "the session's record does not name one of this terminal's instances (gui-sock-<pid>)") }
-    $target = New-HordeWeztermTarget -Socket (Join-Path $SockDir $Instance) -ProcessStart $ProcessStart
+    $target = New-HordeWeztermTarget -Socket (Join-Path (Get-HordeWeztermWindowSockDir -Configured $Values.socketFolder) $Instance) -ProcessStart $ProcessStart
     if ($target.state -cne "known") { return (New-HordeUnknown -Reason ("the session's terminal is not running: " + $target.reason)) }
     $last = $null
-    for ($try = 1; $try -le [Math]::Max($Attempts, 1); $try++) {
-        if ($try -gt 1 -and $RetryMs -gt 0) { Start-Sleep -Milliseconds $RetryMs }
+    for ($try = 1; $try -le $Values.attempts; $try++) {
+        if ($try -gt 1) { Wait-HordeWeztermWindowMoment -Milliseconds $Values.retryWaitMs -Wait $Wait }
         $before = $null; $after = $null
         if ($null -ne $Windows) { $before = @(& $Windows ([long]$target.value.guiPid)) } else { $before = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$target.value.guiPid)) }
         $readIn = $ReadAs
