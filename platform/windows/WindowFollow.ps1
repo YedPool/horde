@@ -12,7 +12,7 @@
 # window shows or how the first one was found.
 #
 # HOW, as the proof of 2026-10-06 measured it against a window of another program started for the
-# purpose:
+# purpose, and as test/test-window-follow.ps1 measures on every run with two plain windows of its own:
 #   - THE OTHER WINDOW IS MADE THE OWNER of ours (GWLP_HWNDPARENT), which Windows allows across
 #     programs. An owned window always stands above its owner, is hidden when the owner is minimised
 #     and returns when it is restored; Windows does all three, and nothing here polls for them.
@@ -39,12 +39,16 @@
 # scale (GetDpiForWindow, over 96) so that margins and smallest sizes are the same physical size on
 # every screen. NOT MEASURED: a second monitor or a second scale - the measuring machine has one screen.
 #
-# WHAT A CALLER MUST KNOW ABOUT THE OTHER WINDOW GOING AWAY.
-#   - Its PROCESS ENDS: measured 2026-10-06 (the other program ended by its handle), our window
-#     stays, owned by nothing that exists. The next ask answers "lost".
+# WHAT A CALLER MUST KNOW ABOUT THE OTHER WINDOW GOING AWAY. Both are measured on every run by
+# test/test-window-follow.ps1, against a plain window of another process (first 2026-10-06 and
+# 2026-10-07; not against a terminal's window):
+#   - Its PROCESS ENDS (ended by its handle): our window stays, and Windows reads its owner back as
+#     none. The next ask answers "lost".
 #   - Its WINDOW IS CLOSED while its process lives on: Windows documents that an owned window is
-#     destroyed with its owner. NOT MEASURED here.
-# Following a session into a new window is a later slice's.
+#     destroyed with its owner. THAT IS NOT WHAT HAPPENS ACROSS PROGRAMS: ours is not destroyed. It
+#     stays, its owner read back as none, and the next ask answers "lost".
+# Nothing tells this file the moment the other window goes: a caller learns "lost" by asking, on its
+# own timer. Following a session into a new window is a later slice's.
 #
 # ONE FOLLOW AT A TIME: the native half keeps one hook and one target, so starting a second follow
 # ends the first.
