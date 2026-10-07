@@ -188,6 +188,9 @@ function Invoke-HordeWebView2Initialized {
         $core.Settings.AreHostObjectsAllowed = $false
         # DenyCors: a page on one mount may use a script or a style sheet of another, as a page uses a
         # file beside it, and may not read another mount's files as data.
+        # The page has a light and a dark look and follows the machine's setting unless the caller chose.
+        if ($s.spec.theme -ceq "dark") { $core.Profile.PreferredColorScheme = [Microsoft.Web.WebView2.Core.CoreWebView2PreferredColorScheme]::Dark }
+        elseif ($s.spec.theme -ceq "light") { $core.Profile.PreferredColorScheme = [Microsoft.Web.WebView2.Core.CoreWebView2PreferredColorScheme]::Light }
         $kind = [Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind]::DenyCors
         foreach ($mount in @($s.mounts.Keys)) { $core.SetVirtualHostNameToFolderMapping((Get-HordeSurfaceMountHost -Mount $mount), $s.mounts[$mount], $kind) }
         $h = $s.handlers
@@ -237,9 +240,52 @@ function Invoke-HordeWebView2Message {
     } catch { [void]$s.errors.Add("a message from the page could not be answered: " + $_.Exception.Message) }
 }
 
+function Start-HordeWebView2Capture {
+    # Ask the engine for a picture of the page as it is drawn now, to be saved at -Path (absolute, a
+    # PNG). Answers whether it was asked. The engine draws it in its own time; the tick finishes it
+    # (Complete-HordeWebView2Capture), and the file is moved into place whole. One at a time: a second
+    # ask while one is being drawn is not taken. ONLY HORDE'S SIDE CALLS THIS: it is no request of
+    # the bridge, so nothing a page sends can make a picture or choose where one is written.
+    param([AllowEmptyString()][string]$Path)
+    $s = $script:HordeWebView2
+    if ($null -eq $s -or -not $s.opened -or $null -eq $s.view -or $null -eq $s.view.CoreWebView2 -or $null -ne $s.capture) { return $false }
+    if (-not [System.IO.Path]::IsPathRooted("$Path") -or [System.IO.Path]::GetExtension("$Path") -ine ".png") { [void]$s.errors.Add("a picture is saved at an absolute path ending .png, and none was made"); return $false }
+    $stream = $null
+    try {
+        $temp = $Path + "." + $PID + ".tmp"
+        $stream = [System.IO.File]::Open($temp, [System.IO.FileMode]::Create, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        $task = $s.view.CoreWebView2.CapturePreviewAsync([Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat]::Png, $stream)
+        $s.capture = [pscustomobject]@{ path = $Path; temp = $temp; stream = $stream; task = $task }
+        return $true
+    } catch {
+        if ($null -ne $stream) { $stream.Dispose() }
+        [void]$s.errors.Add("a picture could not be asked for: " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Complete-HordeWebView2Capture {
+    # Finish a picture the engine has drawn: close it, and move it into place over any older one.
+    $s = $script:HordeWebView2
+    if ($null -eq $s -or $null -eq $s.capture -or -not $s.capture.task.IsCompleted) { return }
+    $c = $s.capture
+    $s.capture = $null
+    try {
+        $c.stream.Dispose()
+        if ($c.task.IsFaulted -or $c.task.IsCanceled) { throw "the engine did not draw it" }
+        if (Test-Path -LiteralPath $c.path -PathType Leaf) { [System.IO.File]::Replace($c.temp, $c.path, [NullString]::Value) } else { [System.IO.File]::Move($c.temp, $c.path) }
+        $s.pictures = [int]$s.pictures + 1
+    } catch {
+        [void]$s.errors.Add("a picture could not be saved: " + $_.Exception.Message)
+        try { if (Test-Path -LiteralPath $c.temp) { [System.IO.File]::Delete($c.temp) } } catch { }
+    }
+}
+
 function Invoke-HordeWebView2Tick {
     $s = $script:HordeWebView2
-    if ($null -eq $s -or $null -eq $s.spec.onTick) { return }
+    if ($null -eq $s) { return }
+    Complete-HordeWebView2Capture
+    if ($null -eq $s.spec.onTick) { return }
     # A tick that throws is recorded and the window stays: it will be asked again a moment later, and
     # a window that closed on one bad tick would lose what the person was reading.
     try { & $s.spec.onTick $s.window $s.spec.state } catch { [void]$s.errors.Add("a tick failed: " + $_.Exception.Message) }
@@ -276,6 +322,7 @@ function Get-HordeWebView2Window {
         sync = $Form
         errors = $Errors
         post = { param($Json) Send-HordeWebView2Json -Json $Json }
+        capture = { param($Path) return (Start-HordeWebView2Capture -Path $Path) }
         setTitle = { param($Text) if ($null -ne $script:HordeWebView2) { $script:HordeWebView2.form.Text = "" + $Text } }
         show = { if ($null -ne $script:HordeWebView2 -and -not $script:HordeWebView2.spec.hidden) { [HordeSurfaceNative]::BringForward($script:HordeWebView2.form.Handle) } }
         close = { if ($null -ne $script:HordeWebView2) { $script:HordeWebView2.form.Close() } }
@@ -330,7 +377,7 @@ function Open-HordeWebView2Surface {
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
         startHost = (Get-HordeSurfaceMountHost -Mount $Spec.startMount)
         window = (Get-HordeWebView2Window -Form $form -Errors $errors)
-        opened = $false; failure = ""; realPixels = $realPixels
+        opened = $false; failure = ""; realPixels = $realPixels; capture = $null; pictures = 0
         errors = $errors
     }
     $state = $script:HordeWebView2

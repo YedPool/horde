@@ -36,6 +36,8 @@
 #   start      "<mount>/<file>": the page to show
 #   bridge     a bridge from New-HordeSurfaceBridge
 #   dataFolder where the surface may keep its own files (a web engine's profile)
+#   theme      system, light or dark: which of its two looks the page is drawn in; system is the
+#              machine's own setting
 #   hidden     shown where nobody sees it and out of the taskbar: a start that must not interrupt, a test
 #   companion  it belongs beside another window: out of the taskbar, and shown without taking the
 #              keyboard from whatever has it
@@ -54,7 +56,10 @@
 # the native window handle (capability window.native), sync an object events can be marshalled through
 # to the window's own thread, errors the list the surface adds to when a callback or a message fails
 # (a failure inside a window has no console to be printed on, so a caller that reports must be able
-# to read it), and the rest are script blocks. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
+# to read it), and the rest are script blocks. With the capability picture there is one more, capture:
+# & $Window.capture <absolute path.png> asks the surface to save a picture of the page as it is drawn
+# now, and answers whether it was asked; the file appears, whole, a moment later. ONLY HORDE CAN ASK:
+# capture is not a request, and no message from the page reaches it. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
 # never from the variables of the function that wrote it: Windows PowerShell 5.1 does not keep them
 # (the first surface's own Surface.ps1 says what was measured, and its suite measures it on every run).
 #
@@ -63,7 +68,9 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
 
 if ($null -eq (Get-Variable -Name HordeSurfaces -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeSurfaces = @{} }
-$script:HordeSurfaceCapabilityNames = @("page.local", "page.locked", "requests.closed", "push", "window.native")
+$script:HordeSurfaceCapabilityNames = @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
+# What a caller may ask a page to be drawn in: the machine's own setting, or one of the two.
+$script:HordeSurfaceThemes = @("system", "light", "dark")
 # The version of the message shapes above. A page built for another is refused, not half understood.
 $script:HordeSurfaceProtocol = 1
 # The most one message from the page may be, in characters. The largest thing a page sends today is a
@@ -310,7 +317,7 @@ function New-HordeSurfaceSpec {
         [Parameter(Mandatory = $true)][string]$Start,
         [Parameter(Mandatory = $true)]$Bridge,
         [Parameter(Mandatory = $true)][string]$DataFolder,
-        [switch]$Hidden, [switch]$Companion, $Left = $null, $Top = $null, [int]$Width = 520, [int]$Height = 760,
+        [switch]$Hidden, [switch]$Companion, $Left = $null, $Top = $null, [int]$Width = 520, [int]$Height = 760, [string]$Theme = "system",
         $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, [int]$TickMs = 250, [scriptblock]$OnClosed = $null
     )
     $mountTable = [ordered]@{}
@@ -329,10 +336,11 @@ function New-HordeSurfaceSpec {
     if (-not [System.IO.Path]::IsPathRooted($DataFolder)) { throw "the surface's data folder must be an absolute path" }
     if ($Width -lt 200 -or $Height -lt 150 -or $TickMs -lt 50) { throw "a surface is at least 200 by 150 pixels, and ticks no faster than every 50 ms" }
     if (($null -eq $Left) -ne ($null -eq $Top)) { throw "a surface is given both its left and its top, or neither" }
+    if ($script:HordeSurfaceThemes -cnotcontains $Theme) { throw ("'" + $Theme + "' is not a theme; the themes are: " + ($script:HordeSurfaceThemes -join ", ")) }
     return [pscustomobject]@{
         PSTypeName = "Horde.SurfaceSpec"
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
-        hidden = [bool]$Hidden; companion = [bool]$Companion; left = $Left; top = $Top; width = $Width; height = $Height
+        hidden = [bool]$Hidden; companion = [bool]$Companion; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
     }
 }
