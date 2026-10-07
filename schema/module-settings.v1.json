@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/module-settings.v1",
+  "title": "module-settings v1",
+  "description": "One module's settings as a person overrides them: the file <HORDE_HOME>/settings/<module>.json, read by core/ModuleSettings.ps1 and written by a person, never by Horde. It holds only the settings that differ from the module's declared defaults; a missing file means every default. This schema is the file's ENVELOPE. What each setting may hold - its kind and its allowed range - is declared by the module in code (New-HordeModuleSettings) and checked there, because it differs per module and because the subset of draft-07 that core/Schema.ps1 implements has no maximum, no length and no way to refuse 1.0 where a whole number is asked for. A file that does not fit this envelope is not read at all: every finding is reported and every setting is its default.",
+  "type": "object",
+  "required": ["schemaVersion", "settings"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "settings": { "type": "object", "description": "Setting name to value. Names are the module's declared names, lower camel case, compared exactly. A name the module did not declare, a value of the wrong kind and a value outside the allowed range are each reported by name, and that setting is its default." }
+  },
+  "x-horde-file": {
+    "directory": "<HORDE_HOME>/settings",
+    "name": "<module>.json, the module's declared name: lower-case letters, digits and hyphens",
+    "encoding": "UTF-8, with or without a byte-order mark; a text value may hold any character but a control character",
+    "readers": "core/ModuleSettings.ps1 (Get-HordeModuleSettings), which never creates the file or its folder",
+    "writers": "a person. Nothing in Horde writes it."
+  }
+}
