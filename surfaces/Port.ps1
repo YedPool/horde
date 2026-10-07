@@ -50,6 +50,10 @@
 #              says otherwise); never smaller than Get-HordeSurfaceLimits says
 #   tickMs     how often onTick runs; with none, the module's setting (250 ms)
 #   errorsKept how many of its own errors the surface keeps (the module's setting, 50)
+#   messagesPerSecond   the most messages the surface reads from the page in one second (the module's
+#              setting, 100): a page that sends more has the rest of that second dropped unread and
+#              unanswered - a request() the page made in it never settles - and the flood recorded
+#              once as a refusal (Test-HordeSurfaceMessageMeter)
 #   state      anything: handed back, untouched, to every callback
 #   onOpened   param($Window, $State) once the page's engine is up; onTick the same, every tickMs
 #   onClosed   param($Window, $State) as the window goes
@@ -143,6 +147,7 @@ $script:HordeSurfaceSettings = New-HordeModuleSettings -Module "surface" -Settin
     @{ name = "argumentChars"; kind = "whole"; default = 16384; min = 64; max = 1048576; what = "The longest text one argument of a request may hold, unless the request itself says less." }
     @{ name = "refusalsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many refusals a bridge remembers; every one is counted, the oldest are dropped." }
     @{ name = "errorsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many of its own errors a surface keeps for its caller to read; the oldest are dropped." }
+    @{ name = "messagesPerSecond"; kind = "whole"; default = 100; min = 1; max = 10000; what = "The most messages a surface reads from a page within one second; the rest of that second are dropped unread." }
 )
 
 # The mount every surface serves itself (header, WHERE A PAGE FINDS A FILE).
@@ -449,6 +454,37 @@ function Add-HordeSurfaceError {
     while ($Errors.Count -gt $Kept) { $Errors.RemoveAt(0) }
 }
 
+# The length of the "second" messages are counted in. A named constant: the setting is how many
+# messages it may hold, and a surface that stops listening to a flood does so for this long.
+$script:HordeSurfaceMeterWindowMs = 1000
+
+function Get-HordeSurfaceMeterWindowMs { return $script:HordeSurfaceMeterWindowMs }
+
+function New-HordeSurfaceMessageMeter {
+    # A count of the messages a surface has read in the second now running (Test-HordeSurfaceMessageMeter).
+    return [pscustomobject]@{ startedMs = [long]-1; read = 0; told = $false; dropped = 0 }
+}
+
+function Test-HordeSurfaceMessageMeter {
+    # What a surface does with one message that has just arrived, BEFORE it looks at it: "read" it;
+    # "refuse" - the first past -PerSecond in this second, to be recorded once as a flood and not
+    # read; or "drop" - every one after that, not read and not recorded. A second runs from the first
+    # message read in it. -NowMs is the surface's own clock, in milliseconds from any start.
+    # WHY BEFORE: reading is the cost. Ten thousand messages posted at once, each parsed, refused and
+    # recorded, held a window's own thread for 11 to 14 seconds (measured 2026-10-07; the review of
+    # 2026-10-06 measured 29.5 s, finding A8). An honest page sends a handful a second and never meets
+    # this; a page that floods has what it sends in the rest of that second unanswered, its own
+    # requests among them. A SURFACE SHOULD STOP LISTENING on "refuse", not go on being handed
+    # messages to drop: for the window surface the hand-over itself was a third of the cost.
+    param([Parameter(Mandatory = $true)]$Meter, [Parameter(Mandatory = $true)][long]$NowMs, [Parameter(Mandatory = $true)][int]$PerSecond)
+    # A clock that went backwards starts a new second rather than dropping for ever.
+    if ($Meter.startedMs -lt 0 -or ($NowMs - $Meter.startedMs) -ge $script:HordeSurfaceMeterWindowMs -or $NowMs -lt $Meter.startedMs) { $Meter.startedMs = $NowMs; $Meter.read = 0; $Meter.told = $false }
+    if ($Meter.read -lt $PerSecond) { $Meter.read = $Meter.read + 1; return "read" }
+    $Meter.dropped = $Meter.dropped + 1
+    if (-not $Meter.told) { $Meter.told = $true; return "refuse" }
+    return "drop"
+}
+
 function Test-HordeSurfaceArguments {
     # Why -Given is not what -Request takes, in words, or "" when it is. -Checked is filled with the
     # arguments as a plain table for the handler. A name is never repeated back unless it is one the
@@ -587,7 +623,7 @@ function New-HordeSurfaceSpec {
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
         hidden = [bool]$Hidden; companion = [bool]$Companion; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
-        errorsKept = [int]$Settings.values.errorsKept
+        errorsKept = [int]$Settings.values.errorsKept; messagesPerSecond = [int]$Settings.values.messagesPerSecond
     }
 }
 

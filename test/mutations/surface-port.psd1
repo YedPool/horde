@@ -43,6 +43,31 @@
         @{ Name = "a-spec-ignores-how-many-errors-to-keep"
            Find = 'errorsKept = [int]$Settings.values.errorsKept'
            Replace = 'errorsKept = 50' }
+        # --- a page that floods is not read
+        @{ Name = "a-flood-is-read"
+           Find = 'if ($Meter.read -lt $PerSecond) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "one-message-too-many-is-read"
+           Find = 'if ($Meter.read -lt $PerSecond) {'
+           Replace = 'if ($Meter.read -le $PerSecond) {' }
+        @{ Name = "a-flood-is-recorded-once-a-message"
+           Find = 'if (-not $Meter.told) { $Meter.told = $true; return "refuse" }'
+           Replace = 'if ($true) { $Meter.told = $true; return "refuse" }' }
+        @{ Name = "a-second-never-ends"
+           Find = '($NowMs - $Meter.startedMs) -ge $script:HordeSurfaceMeterWindowMs -or '
+           Replace = '' }
+        @{ Name = "a-clock-that-went-backwards-drops-for-ever"
+           Find = ' -or $NowMs -lt $Meter.startedMs) {'
+           Replace = ') {' }
+        @{ Name = "what-is-dropped-is-not-counted"
+           Find = '$Meter.dropped = $Meter.dropped + 1'
+           Replace = '' }
+        @{ Name = "the-second-is-half-a-second"
+           Find = '$script:HordeSurfaceMeterWindowMs = 1000'
+           Replace = '$script:HordeSurfaceMeterWindowMs = 500' }
+        @{ Name = "a-spec-ignores-how-many-messages-to-read"
+           Find = 'messagesPerSecond = [int]$Settings.values.messagesPerSecond'
+           Replace = 'messagesPerSecond = 100' }
         # --- the module's settings
         @{ Name = "a-bridge-ignores-the-message-size-it-was-given"
            Find = 'messageChars = [int]$Settings.values.messageChars;'

@@ -159,6 +159,46 @@ $unknown = Receive-HordeWebView2Message -Json '{"v":1,"id":6,"request":"open-fil
 Check (($unknown | ConvertFrom-Json).ok -eq $false -and $liveBridge.refused -eq 4) "a request off the list, from the page itself, is refused by the bridge and recorded"
 
 Write-Host ""
+Write-Host "--- a page that floods is not read ---" -ForegroundColor Cyan
+# The window's own clock and meter, stood in for: a clock the suite moves by hand.
+$script:read = 0
+$floodBridge = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { $script:read++; return 1 } } })
+$floodSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $floodBridge -DataFolder (Join-Path $work "data")
+$fakeClock = [pscustomobject]@{ ElapsedMilliseconds = [long]7000 }
+$kept = $script:HordeWebView2
+$script:engineCalls = New-Object System.Collections.ArrayList
+$fakeCore = [pscustomobject]@{ Environment = $fakeEnvironment }
+$fakeCore | Add-Member -MemberType ScriptMethod -Name remove_WebMessageReceived -Value { param($Handler) [void]$script:engineCalls.Add("forget " + $Handler) }
+$fakeCore | Add-Member -MemberType ScriptMethod -Name add_WebMessageReceived -Value { param($Handler) [void]$script:engineCalls.Add("listen " + $Handler) }
+$fakeTimer = [pscustomobject]@{ running = $false }
+$fakeTimer | Add-Member -MemberType ScriptMethod -Name Start -Value { $this.running = $true }
+$fakeTimer | Add-Member -MemberType ScriptMethod -Name Stop -Value { $this.running = $false }
+$script:HordeWebView2 = [pscustomobject]@{ spec = $floodSpec; mounts = $servedMounts; window = $null; opened = $false; view = ([pscustomobject]@{ CoreWebView2 = $fakeCore }); failure = ""; errors = (New-Object System.Collections.ArrayList)
+    meter = (New-HordeSurfaceMessageMeter); clock = $fakeClock; messageHandler = "the-one-handler"; deaf = $false; listenTimer = $fakeTimer }
+$script:looked = 0
+function New-FloodMessage {
+    # One message as the engine hands it over, counting each time its text is asked for.
+    $m = [pscustomobject]@{ Source = ($at + "/shell/index.html") }
+    $m | Add-Member -MemberType ScriptProperty -Name WebMessageAsJson -Value { $script:looked++; return '{"v":1,"id":1,"request":"list"}' }
+    return $m
+}
+$floodHandlers = Get-HordeWebView2Handlers
+1..130 | ForEach-Object { & $floodHandlers.message $null (New-FloodMessage) }
+Check ($floodSpec.messagesPerSecond -eq 100 -and $script:read -eq 100 -and $script:looked -eq 100) ("of 130 messages inside one second, 100 are read and answered; the other 30 are not even looked at (" + $script:read + " answered, " + $script:looked + " looked at)")
+Check ($floodBridge.refused -eq 1 -and $floodBridge.refusals[0].reason -like "*more than 100 messages within a second*dropped unread*") "and the flood is recorded once for that second, not once a message"
+Check ($script:HordeWebView2.meter.dropped -eq 30) "what was dropped is counted"
+Check (($script:engineCalls -join ",") -ceq "forget the-one-handler" -and $script:HordeWebView2.deaf -eq $true -and $fakeTimer.running -eq $true) "at the first message too many the engine is told, once, to stop handing messages over - by the very handler it was given - and the timer that ends the silence is started"
+Check ((Get-HordeSurfaceMeterWindowMs) -eq 1000) "the silence lasts the meter's own second"
+$fakeClock.ElapsedMilliseconds = [long]8000
+& $floodHandlers.listen
+Check (($script:engineCalls -join ",") -ceq "forget the-one-handler,listen the-one-handler" -and $script:HordeWebView2.deaf -eq $false -and $fakeTimer.running -eq $false) "when the timer fires the engine is handed the same handler again, and the timer stops"
+& $floodHandlers.listen
+Check ($script:engineCalls.Count -eq 2) "a second firing hands it nothing twice"
+& $floodHandlers.message $null (New-FloodMessage)
+Check ($script:read -eq 101 -and $floodBridge.refused -eq 1) "and the page is read again"
+$script:HordeWebView2 = $kept
+
+Write-Host ""
 Write-Host "--- an event handler does not keep the variables of the function that wrote it ---" -ForegroundColor Cyan
 # THE TRAP, measured here each run. A script block handed to a .NET event runs later, when the function
 # that wrote it has returned. Written the obvious way it reads that function's local variable and
@@ -169,7 +209,7 @@ Check ((& $naive) -eq $false) "CONTROL: a handler that reads a local of the func
 # THE ADAPTER'S HANDLERS are made by a function that has returned, and still find their window: they
 # read the one state object in the script scope.
 $handlers = Get-HordeWebView2Handlers
-Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,message,navigation,newWindow,resource,shown,tick") "the adapter hands .NET ten handlers"
+Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,listen,message,navigation,newWindow,resource,shown,tick") "the adapter hands .NET eleven handlers"
 $nav = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $nav
 Check ($nav.Cancel -eq $true -and $liveBridge.refused -eq 5 -and $liveBridge.refusals[4].reason -like "*an address that is not its own*") "its navigation handler, called after the function that made it returned, cancels a navigation elsewhere and records it"

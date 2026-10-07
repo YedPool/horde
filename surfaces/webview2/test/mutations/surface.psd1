@@ -135,6 +135,22 @@
         @{ Name = "the-download-handler-is-not-given-to-the-engine"
            Find = '$core.add_DownloadStarting($h.download)'
            Replace = '' }
+        # --- a page that floods
+        @{ Name = "a-flooding-page-is-still-read"
+           Find = 'if ($turn -cne "read") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-flood-is-neither-recorded-nor-shut-out"
+           Find = 'if ($turn -ceq "refuse") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-flood-goes-on-being-handed-over"
+           Find = '$s.view.CoreWebView2.remove_WebMessageReceived($s.messageHandler)'
+           Replace = '' }
+        @{ Name = "the-silence-after-a-flood-never-ends"
+           Find = '$s.view.CoreWebView2.add_WebMessageReceived($s.messageHandler)'
+           Replace = '' }
+        @{ Name = "the-timer-that-ends-the-silence-is-never-started"
+           Find = '$s.listenTimer.Start()'
+           Replace = '' }
         # --- the handlers
         @{ Name = "a-failed-tick-closes-the-window-unrecorded"
            Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { Add-HordeWebView2Error -Text ("a tick failed: " + $_.Exception.Message) }'

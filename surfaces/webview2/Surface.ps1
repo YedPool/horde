@@ -299,7 +299,12 @@ function Invoke-HordeWebView2Initialized {
         $core.add_FrameNavigationStarting($h.frame)
         $core.add_NewWindowRequested($h.newWindow)
         $core.add_DownloadStarting($h.download)
-        $core.add_WebMessageReceived($h.message)
+        # ONE delegate, made here and kept: the engine is asked to forget the handler it was handed,
+        # so it is handed and asked with the same object. (Measured 2026-10-07 in the real window:
+        # passing the script block itself both times was also honoured; keeping the object means that
+        # does not rest on how Windows PowerShell turns a script block into a delegate.)
+        $s.messageHandler = [System.EventHandler[Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs]]$h.message
+        $core.add_WebMessageReceived($s.messageHandler)
         $core.Navigate($script:HordeWebView2Origin + "/" + $s.spec.startMount + "/" + $s.spec.startFile)
         $s.opened = $true
         if ($null -ne $s.spec.onOpened) { & $s.spec.onOpened $s.window $s.spec.state }
@@ -373,10 +378,51 @@ function Invoke-HordeWebView2Message {
     param($What)
     $s = $script:HordeWebView2
     if ($null -eq $s) { return }
+    # METERED BEFORE IT IS LOOKED AT (surfaces/Port.ps1, Test-HordeSurfaceMessageMeter). The first
+    # message past what a second may hold is recorded as a flood, and THE ENGINE IS NO LONGER LISTENED
+    # TO FOR A SECOND (Suspend-HordeWebView2Listening): merely being handed a message costs this
+    # window's thread, so a flood must stop arriving, not only stop being read.
+    $turn = Test-HordeSurfaceMessageMeter -Meter $s.meter -NowMs $s.clock.ElapsedMilliseconds -PerSecond $s.spec.messagesPerSecond
+    if ($turn -cne "read") {
+        if ($turn -ceq "refuse") {
+            Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason ("the page sent more than " + $s.spec.messagesPerSecond + " messages within a second, and is not listened to for the next second: what it sends until then is dropped unread and unanswered")
+            Suspend-HordeWebView2Listening
+        }
+        return
+    }
     try {
         $reply = Receive-HordeWebView2Message -Json ("" + $What.WebMessageAsJson) -Source ("" + $What.Source)
         if ("$reply" -ne "") { Send-HordeWebView2Json -Json $reply }
     } catch { Add-HordeWebView2Error -Text ("a message from the page could not be answered: " + $_.Exception.Message) }
+}
+
+function Suspend-HordeWebView2Listening {
+    # Take the message handler back from the engine, and start the one-second timer that returns it.
+    # WHY NOT JUST IGNORE THE MESSAGES: measured 2026-10-07 in a real window, 10,000 messages posted at
+    # once. Each read, refused and recorded: the window's thread held 11.5 to 14.1 s. Each handed to
+    # this adapter and dropped at once, unread: still 3.5 s, because the hand-over itself - the engine
+    # calling into PowerShell - is the cost, and a page can post faster than that for ever. With the
+    # handler taken back the engine has nobody to call, and the figures are in this adapter's
+    # real-window suite, which measures them on every run.
+    $s = $script:HordeWebView2
+    if ($null -eq $s -or $s.deaf) { return }
+    try {
+        $s.view.CoreWebView2.remove_WebMessageReceived($s.messageHandler)
+        $s.deaf = $true
+        $s.listenTimer.Start()
+    } catch { Add-HordeWebView2Error -Text ("a flood of messages could not be shut out: " + $_.Exception.Message) }
+}
+
+function Resume-HordeWebView2Listening {
+    # The second is over: the engine is handed the message handler again.
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return }
+    $s.listenTimer.Stop()
+    if (-not $s.deaf) { return }
+    try {
+        $s.view.CoreWebView2.add_WebMessageReceived($s.messageHandler)
+        $s.deaf = $false
+    } catch { Add-HordeWebView2Error -Text ("the page could not be listened to again: " + $_.Exception.Message) }
 }
 
 function Start-HordeWebView2Capture {
@@ -449,6 +495,7 @@ function Get-HordeWebView2Handlers {
         newWindow   = { param($From, $What) Invoke-HordeWebView2NewWindow -What $What }
         download    = { param($From, $What) Invoke-HordeWebView2Download -Download $What }
         message     = { param($From, $What) Invoke-HordeWebView2Message -What $What }
+        listen      = { Resume-HordeWebView2Listening }
         tick        = { Invoke-HordeWebView2Tick }
         closed      = { Invoke-HordeWebView2Closed }
     }
@@ -507,6 +554,9 @@ function Open-HordeWebView2Surface {
     $form.Controls.Add($view)
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = [int]$Spec.tickMs
+    # How long a page that flooded is not listened to: the meter's own second (surfaces/Port.ps1).
+    $listenTimer = New-Object System.Windows.Forms.Timer
+    $listenTimer.Interval = Get-HordeSurfaceMeterWindowMs
 
     # The caller's mounts, and the surface's own: this adapter's page side of the bridge, and the
     # port's definition of the messages it reads.
@@ -520,6 +570,8 @@ function Open-HordeWebView2Surface {
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
         window = (Get-HordeWebView2Window -Form $form -Errors $errors)
         opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
+        meter = (New-HordeSurfaceMessageMeter); clock = [System.Diagnostics.Stopwatch]::StartNew()
+        messageHandler = $null; deaf = $false; listenTimer = $listenTimer
         errors = $errors
     }
     foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale)) { Add-HordeSurfaceError -Errors $errors -Text $note -Kept $Spec.errorsKept }
@@ -529,11 +581,13 @@ function Open-HordeWebView2Surface {
         $form.add_Shown($handlers.shown)
         $form.add_FormClosed($handlers.closed)
         $timer.add_Tick($handlers.tick)
+        $listenTimer.add_Tick($handlers.listen)
         [System.Windows.Forms.Application]::Run($form)
     }
     catch { if ($state.failure -eq "") { $state.failure = ("the window stopped: " + $_.Exception.Message) } }
     finally {
         $timer.Stop(); $timer.Dispose()
+        $listenTimer.Stop(); $listenTimer.Dispose()
         try { $view.Dispose() } catch { }
         try { $form.Dispose() } catch { }
         $script:HordeWebView2 = $null
