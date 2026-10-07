@@ -1,11 +1,11 @@
 $HordeCommand = @{
     name    = "decisions"
     group   = "decisions"
-    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State <open, closed or all>] [-Json] | decisions show <number> [-Json] | decisions kinds [-Json] | decisions answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json] | decisions reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json] | decisions inbox [-Peek] [-Id <32 hex>] [-Json]"
-    summary = "the standing list of questions waiting for a person. add: a new question from a JSON file, and print its permanent number; update: change the fields a JSON file names; close: record what was done; reopen: open it again under the same number; list and show: read the list or one question; kinds: what each kind of question means; answer: write down, in his exact words, what the founder said in chat under a question; reply: say something under a question; inbox: print what the founder has said that was not yet read, then mark it read up to the last message printed (-Peek marks nothing; with -Json the one line says whether and up to where it marked). A number is given once and never reused. Long text always comes from a file; -Json prints one line of data"
+    usage   = "decisions add -File <question.json> [-Id <32 hex>] [-Json] | decisions update <number> -File <changes.json> [-Id <32 hex>] [-Json] | decisions close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json] | decisions reopen <number> -Reason <one line> [-Id <32 hex>] [-Json] | decisions list [-State <open, closed or all>] [-Json] | decisions show <number> [-Json] | decisions kinds [-Json] | decisions answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json] | decisions reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json] | decisions inbox [-Peek] [-Id <32 hex>] [-Json] | decisions mark-read -UpTo <record> [-Id <32 hex>] [-Json]"
+    summary = "the standing list of questions waiting for a person. add: a new question from a JSON file, and print its permanent number; update: change the fields a JSON file names; close: record what was done; reopen: open it again under the same number; list and show: read the list or one question; kinds: what each kind of question means; answer: write down, in his exact words, what the founder said in chat under a question; reply: say something under a question; inbox: print what the founder has said that was not yet read, then mark it read up to the last message printed (-Peek marks nothing; -Json never marks: its one line says so and names the last record it showed); mark-read: record that everything said up to a record has been read, which is how a caller of inbox -Json marks. A number is given once and never reused. Long text always comes from a file; -Json prints one line of data"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("add", "update", "close", "reopen", "list", "show", "kinds", "answer", "reply", "inbox")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("add", "update", "close", "reopen", "list", "show", "kinds", "answer", "reply", "inbox", "mark-read")][string]$Verb,
             [Parameter(Position = 1)][string]$Number,
             [string]$File,
             [string]$Id,
@@ -16,6 +16,7 @@ $HordeCommand = @{
             [string]$Text,
             [string]$Wording,
             [switch]$Peek,
+            [string]$UpTo,
             [switch]$Json
         )
         # The usage above and the ValidateSet are decisions/Console.ps1's verbs table written out, because
