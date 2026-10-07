@@ -16,6 +16,8 @@
 #   - THE OTHER WINDOW IS MADE THE OWNER of ours (GWLP_HWNDPARENT), which Windows allows across
 #     programs. An owned window always stands above its owner, is hidden when the owner is minimised
 #     and returns when it is restored; Windows does all three, and nothing here polls for them.
+#     WHETHER WINDOWS DID IT IS READ BACK: a follow whose owner was not set is "failed" with Windows'
+#     error, never "following".
 #   - WINDOWS REPORTS EVERY MOVE AND RESIZE of the other window's process (SetWinEventHook,
 #     EVENT_OBJECT_LOCATIONCHANGE, out of context), and ours is placed again each time. The proof
 #     passed all eight of its checks: placed on attach, above, after a move, a resize, a minimise, a
@@ -102,11 +104,19 @@ public static class HordeWindowsFollowV1 {
     public static int[] Rect(long h) { RECT r; if (!GetWindowRect(new IntPtr(h), out r)) return null; return new int[] { r.Left, r.Top, r.Right, r.Bottom }; }
     // SWP_NOZORDER (4) | SWP_NOACTIVATE (0x10): the size and the place, never the order, never the keyboard.
     public static bool Place(long h, int x, int y, int cx, int cy) { return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004 | 0x0010); }
-    public static bool Attach(long targetWindow, long companion, Action onMoved) {
+    // { code, error }: 0 the other window owns ours and its moves are reported; 1 Windows did not make
+    // it the owner, error being its last error; 2 Windows would not report its moves.
+    public static int[] Attach(long targetWindow, long companion, Action onMoved) {
         Unhook();
+        IntPtr ownerBefore = GetWindow(new IntPtr(companion), 4);     // GW_OWNER
+        SetWindowLongPtr(new IntPtr(companion), -8, new IntPtr(targetWindow));     // GWLP_HWNDPARENT: the other window owns ours
+        int error = Marshal.GetLastWin32Error();
+        // THE RESULT IS READ BACK, not assumed: the call's own return is the owner before, which is
+        // nothing both for a window that had none and for a refusal. Windows refuses, for one, an
+        // owner that is itself owned by our window (error 87, measured 2026-10-07).
+        if (GetWindow(new IntPtr(companion), 4) != new IntPtr(targetWindow)) { return new int[] { 1, error }; }
         target = new IntPtr(targetWindow);
         moved = onMoved;
-        SetWindowLongPtr(new IntPtr(companion), -8, target);     // GWLP_HWNDPARENT: the other window owns ours
         // Windows keeps an owned window above its owner from the owner's next activation on, NOT from
         // the moment it is owned: a companion made before the other window stood under it (measured
         // 2026-10-07). So it is stood directly above the other window now - under the window that was
@@ -117,7 +127,11 @@ public static class HordeWindowsFollowV1 {
         keep = new WinEventDelegate(OnEvent);
         // EVENT_OBJECT_LOCATIONCHANGE of the other window's process, delivered to this thread's message loop.
         hook = SetWinEventHook(0x800B, 0x800B, IntPtr.Zero, keep, ProcessOf(targetWindow), 0, 0);
-        return hook != IntPtr.Zero;
+        if (hook != IntPtr.Zero) { return new int[] { 0, 0 }; }
+        // Not followed after all: ours goes back to the owner it had, and nothing is listened for.
+        SetWindowLongPtr(new IntPtr(companion), -8, ownerBefore);
+        Unhook();
+        return new int[] { 2, 0 };
     }
     // The delegate is NOT let go here: this may be called from inside it, when a report of a move
     // finds the other window gone, and Windows is still on its way back through it. The next Attach
@@ -134,6 +148,16 @@ public static class HordeWindowsFollowV1 {
 
 function Initialize-HordeWindowsFollowType {
     if (-not ("HordeWindowsFollowV1" -as [type])) { Add-Type -TypeDefinition (Get-HordeWindowsFollowSource) -ErrorAction Stop }
+}
+
+function ConvertTo-HordeWindowsFollowStart {
+    # PURE. What the native half answered a start, as { state; reason }. -Code is 0, 1 or 2 as Attach
+    # gives it; -ErrorCode is Windows' last error and counts only when the owner was not set.
+    param([Parameter(Mandatory = $true)][int]$Code, [int]$ErrorCode = 0)
+    if ($Code -eq 0) { return [pscustomobject]@{ state = "following"; reason = "" } }
+    if ($Code -eq 1) { return [pscustomobject]@{ state = "failed"; reason = ("Windows would not make the other window the owner of ours (error " + $ErrorCode + "), so it is not followed") } }
+    if ($Code -eq 2) { return [pscustomobject]@{ state = "failed"; reason = "Windows would not report the other window's moves, so it cannot be followed" } }
+    return [pscustomobject]@{ state = "failed"; reason = ("the native half answered " + $Code + ", which is not an answer it has") }
 }
 
 function Get-HordeWindowsFollowRecord {
@@ -198,12 +222,9 @@ function Start-HordeWindowsFollow {
     if ([HordeWindowsFollowV1]::ProcessOf($Companion) -ne [uint32]$PID) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place is not this process's own, and only its own window is ever moved") }
     # One line, calling a named function that reads the state below: a script block given to .NET does
     # not keep the variables of the function that wrote it.
-    $hooked = [HordeWindowsFollowV1]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
-    if (-not $hooked) {
-        [HordeWindowsFollowV1]::Unhook()
-        [HordeWindowsFollowV1]::Disown($Companion)
-        return (New-HordeWindowFollowRecord -State "failed" -Reason "Windows would not report the other window's moves, so it cannot be followed")
-    }
+    $attached = [HordeWindowsFollowV1]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
+    $started = ConvertTo-HordeWindowsFollowStart -Code $attached[0] -ErrorCode $attached[1]
+    if ($started.state -cne "following") { return (New-HordeWindowFollowRecord -State "failed" -Reason $started.reason) }
     $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; settings = $Settings; state = "following"; reason = ""; placed = $null; placements = 0 }
     return (Update-HordeWindowsFollow -Place $true)
 }

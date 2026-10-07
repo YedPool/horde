@@ -66,6 +66,18 @@ Check ($scaleText.Contains("SetProcessDpiAwarenessContext") -and $followText.Con
 Check (-not $followText.Contains("SetProcessDpiAwarenessContext")) "the follower does not ask Windows for the awareness in words of its own"
 Check ($null -eq (Get-Command -Name "Enable-HordeWindowRealPixels" -ErrorAction SilentlyContinue) -and $null -ne (Get-Command -Name "Enable-HordeWindowsRealScale" -ErrorAction SilentlyContinue)) "and loading it brings the one owner's function, not a second one"
 
+Write-Host ""
+Write-Host "--- what Windows answered a start, turned into what the caller is told ---" -ForegroundColor Cyan
+$s = ConvertTo-HordeWindowsFollowStart -Code 0 -ErrorCode 0
+Check ((Field $s "state") -ceq "following" -and (Field $s "reason") -ceq "") "owned and reported: following, with nothing to say"
+$s = ConvertTo-HordeWindowsFollowStart -Code 0 -ErrorCode 87
+Check ((Field $s "state") -ceq "following") "following whatever error number an earlier call left behind"
+$s = ConvertTo-HordeWindowsFollowStart -Code 1 -ErrorCode 87
+Check ((Field $s "state") -ceq "failed" -and (Field $s "reason") -ceq "Windows would not make the other window the owner of ours (error 87), so it is not followed") "the owner was not set: failed, with Windows' error number"
+$s = ConvertTo-HordeWindowsFollowStart -Code 2 -ErrorCode 0
+Check ((Field $s "state") -ceq "failed" -and (Field $s "reason") -ceq "Windows would not report the other window's moves, so it cannot be followed") "no reports of its moves: failed, in words"
+$s = ConvertTo-HordeWindowsFollowStart -Code 9 -ErrorCode 0
+Check ((Field $s "state") -ceq "failed" -and "$(Field $s 'reason')" -like "*9*") "an answer this file does not know is failed, never following"
 
 if (-not (Test-HordeIsWindows)) {
     Write-Host "  [SKIP] everything that asks Windows: this is not Windows" -ForegroundColor Yellow
@@ -317,6 +329,20 @@ try {
     $r = Start-HordeWindowFollow -Target $other -Companion 2147480003
     Check ((Field $r "state") -ceq "failed" -and (Field $r "reason") -ceq "the window to place does not exist") "a companion that is no window: failed"
 
+    Write-Host ""
+    Write-Host "--- a follow that could not own is failed, not assumed ---" -ForegroundColor Cyan
+    # Windows refuses to make a window the owner of the window that owns it (error 87, measured
+    # 2026-10-07). So a hidden window the companion owns is a window that exists and cannot own it.
+    $owned = New-TestWindow -Title "horde follow test: owned by the companion" -Top -29000 -Hidden
+    [void][FollowTestProbe]::SetOwner($owned.Handle.ToInt64(), $mine)
+    $ownerBefore = [FollowTestProbe]::Owner($mine)
+    Check ([FollowTestProbe]::Owner($owned.Handle.ToInt64()) -eq $mine) "CONTROL: a hidden window of this suite's is owned by the companion"
+    $r = Start-HordeWindowFollow -Target $owned.Handle.ToInt64() -Companion $mine
+    Check ((Field $r "state") -ceq "failed" -and "$(Field $r 'reason')" -like "Windows would not make the other window the owner of ours (error *), so it is not followed") ("Windows refuses that owner, and the follow says so: failed (" + (Field $r "state") + ": " + (Field $r "reason") + ")")
+    Check ([FollowTestProbe]::Owner($mine) -eq $ownerBefore -and (Field (Get-HordeWindowFollow) "state") -ceq "none") "the companion's owner is what it was, and nothing is being followed"
+    [void](Stop-HordeWindowFollow)
+    [void][FollowTestProbe]::SetOwner($owned.Handle.ToInt64(), 0)
+    Look "after the refusals"
 
     Write-Host ""
     Write-Host "--- owned, and placed where the pure function says ---" -ForegroundColor Cyan
