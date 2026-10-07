@@ -415,9 +415,7 @@ Write-Host ""
 Write-Host "--- a record of the wrong shape is unreadable, with the reason ---" -ForegroundColor Cyan
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-added" ([ordered]@{ number = 2; question = (ConvertTo-HordeDecisionFields -Source (New-Question)) }) -Version 2), (New-Added 3 3))
 Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*not a decision-event.v1 record*schemaVersion*" -and (Get-Numbers $st) -ceq "1,3") "a record of schema version 2 is not read as version 1: it is unreadable, and says which field"
-$st = Get-Fold @((New-Added 1 1), (New-Record 2 "answer-recorded" ([ordered]@{ number = 1; words = "yes" })))
-Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*its kind 'answer-recorded' is not one this version of Horde knows*") "a kind this version does not know is unreadable, named, and not guessed at"
-Check ((Get-HordeDecisionNextNumber -State $st) -eq 3) "and it leaves a number unused, since this version cannot tell whether it was a question"
+# A KIND THIS VERSION DOES NOT KNOW is not damage: see "a record of a later kind" below.
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1 })))
 Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*its data is not what a question-closed record holds*outcome*" -and $st.questions[1].state -ceq "open") "a close with no outcome is unreadable, and the question stays open"
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-updated" ([ordered]@{ number = 1; changes = [ordered]@{ title = 5 } })))
@@ -471,6 +469,49 @@ foreach ($badActor in @("", "Two Words", "UPPER", "line`nbreak")) {
     $st = Get-Fold @((New-Added 1 1), $odd)
     Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].reason -like "*actor*" -and $st.questions[1].state -ceq "open") ("CONTROL: an actor that is not one lowercase label ('" + ($badActor -replace "`n", "\n") + "') is still the wrong shape, and that record is unreadable")
 }
+
+Write-Host ""
+Write-Host "--- a record of a later kind is set aside: not understood, and never a possible question ---" -ForegroundColor Cyan
+# THE COMPATIBILITY CONTRACT (decisions/Rules.ps1): a record whose envelope is well formed and whose
+# kind this version does not know was written by a later version. It cannot have been a question -
+# "question-added" is a kind every version knows, and a kind's name never changes meaning - so it
+# costs no question number. Measured 2026-10-07, before this was the rule: one such record between two
+# questions made the next question 4 instead of 3, and a store with a hundred of them would have
+# left a hundred numbers unused.
+function Get-NotUnderstood { param($State) if ($null -eq $State.PSObject.Properties["notUnderstood"]) { return "(the list keeps no such thing)" }; return (@($State.notUnderstood.Values | ForEach-Object { "" + $_.kind + " x" + $_.count + " " + $_.first + "-" + $_.last }) -join "; ") }
+$later = @(
+    (New-Added 1 1),
+    (New-Record 2 "seen-by-founder" ([ordered]@{ upTo = 1 })),
+    (New-Record 3 "answer-recorded" ([ordered]@{ number = 1; words = "yes" })),
+    (New-Added 4 2),
+    (New-Record 5 "answer-recorded" ([ordered]@{ number = 2; words = "no"; anything = @{ at = "all" } })),
+    (New-Record 6 "answer-recorded" ([ordered]@{ number = 2 }))
+)
+$st = Get-Fold $later
+Check ((Get-Numbers $st) -ceq "1,2") ("with four records of two later kinds among them, the questions are 1 and 2 (" + (Get-Numbers $st) + ")")
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3) ("and the next question is 3: a record of a later kind leaves no number unused (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+Check ($st.unreadable.Count -eq 0 -and $st.ignored.Count -eq 0) ("none of them is reported as unreadable or as not applying: they are not damage (" + $st.unreadable.Count + " unreadable)")
+Check ((Get-NotUnderstood $st) -ceq "seen-by-founder x1 2-2; answer-recorded x3 3-6") ("they are set aside by kind, each kind once, with how many and from which record to which (" + (Get-NotUnderstood $st) + ")")
+Check ($st.lastSequence -eq 6 -and $st.questions[1].state -ceq "open" -and @($st.questions[1].history).Count -eq 1) "the order still runs to record 6, and no question was changed by a record this version cannot read the meaning of"
+# Every prefix: at no point does a later-kind record move a number.
+$moved = New-Object System.Collections.ArrayList
+for ($i = 1; $i -le $later.Count; $i++) { $part = Get-Fold @($later[0..($i - 1)]); $want = 2; if ($i -ge 4) { $want = 3 }; if ((Get-HordeDecisionNextNumber -State $part) -ne $want) { [void]$moved.Add("after record " + $i + ": " + (Get-HordeDecisionNextNumber -State $part)) } }
+Check ($moved.Count -eq 0) ("after every record of that history the next number is what it would be without them" + $(if ($moved.Count) { " (" + ($moved -join "; ") + ")" } else { "" }))
+# ITS ID IS STILL SEEN: the envelope is readable, so a repost of that id is known to have been recorded.
+$laterId = ([long]3).ToString("x32")
+Check ($st.ids.ContainsKey($laterId) -and $st.ids[$laterId].sequence -eq 3 -and $st.ids[$laterId].kind -ceq "answer-recorded" -and $st.ids[$laterId].applied -eq $false -and $st.ids.Count -eq 6) "the list knows the id of a record it did not understand, with its record and its kind"
+# CONTROL: DAMAGE KEEPS THE CONSERVATIVE RULE. A record that cannot be read at all, or whose envelope is
+# not this schema's, may have been a question, and still leaves a number unused.
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Added 3 3))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 4 -and $st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a torn record is still unreadable and still costs a number: it may have been a question"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "answer-recorded" ([ordered]@{ number = 1 }) -Version 2))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3 -and $st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a later kind in an envelope that is not this schema's is unreadable, not set aside: nothing about it can be trusted"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "answer-recorded" ([ordered]@{ number = 1 }) -SaysSeq 7))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3 -and $st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a later kind that says it is another record than its place is unreadable, not set aside"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-added" ([ordered]@{ number = 2 })))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3 -and $st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a KNOWN kind with data that is not its own is damage, as before"
+$st = Get-Fold @((New-Added 1 1), (New-Record 2 "Answer Recorded" ([ordered]@{ number = 1 })))
+Check ($st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a kind that is not a kind's name at all fails the envelope, and is unreadable"
 
 Write-Host ""
 Write-Host "--- one id, one record to answer from ---" -ForegroundColor Cyan

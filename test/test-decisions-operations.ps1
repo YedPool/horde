@@ -64,6 +64,7 @@ function Invoke-Op {
     return $answer
 }
 function Add-Q { param([string]$Store, [hashtable]$Over = @{}, [string]$Id = "") if ($Id -eq "") { $Id = New-Id }; return (Invoke-Op $Store "add" @{ id = $Id; actor = "warchief"; question = (New-Question $Over) }) }
+function Get-NotUnderstood { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; if ($null -eq $Answer.value.PSObject.Properties["notUnderstood"]) { return "(the result names no such thing)" }; return (@($Answer.value.notUnderstood | ForEach-Object { "" + $_.kind + " x" + $_.count + " " + $_.first + "-" + $_.last }) -join "; ") }
 function Get-Outcome { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; return "$($Answer.value.outcome)" }
 function Test-Refused { param($Answer, [string]$Text) return ($Answer.state -ceq "known" -and $Answer.value.outcome -ceq "refused" -and @($Answer.value.findings | Where-Object { "$_".Contains($Text) }).Count -gt 0) }
 function Get-Files { param([string]$Store) if (-not (Test-Path -LiteralPath $Store)) { return "" }; return (@(Get-ChildItem -LiteralPath $Store -File | Sort-Object Name | ForEach-Object { $_.Name }) -join ",") }
@@ -324,9 +325,47 @@ Check ($v2 -cne $good -and $v2.Contains('"schemaVersion":2')) "CONTROL: the plan
 [System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), $v2, $utf8)
 [System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), '{"schemaVersion":1,"sequence":3,"id":"' + ("c" * 32) + '","kind":"answer-recorded","at":"2026-10-06T12:00:00Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":1,"words":"yes"}}', $utf8)
 $a = Invoke-Op $s "list" @{ state = "all" }
-Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 2) "the list loads with question 1, and both records are reported"
+Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 1) "the list loads with question 1, and the record of another schema is reported as unreadable"
 Check ($a.value.unreadable[0].sequence -eq 2 -and $a.value.unreadable[0].reason -like "*not a decision-event.v1 record*schemaVersion*") "the version 2 record is not read as version 1, and the reason names the field"
-Check ($a.value.unreadable[1].sequence -eq 3 -and $a.value.unreadable[1].reason -like "*'answer-recorded' is not one this version of Horde knows*") "the unknown kind is named, not guessed at"
+Check ((Get-NotUnderstood $a) -ceq "answer-recorded x1 3-3") ("the record of an unknown kind is not damage: it is named apart, as not understood by this version (" + (Get-NotUnderstood $a) + ")")
+
+Write-Host ""
+Write-Host "--- records of a later kind between questions: no number moves, and every operation works ---" -ForegroundColor Cyan
+# The compatibility contract of decisions/Rules.ps1, through the operations: a store that a later
+# version has also written to. Measured 2026-10-07, before it: with these four records the next
+# question was numbered 7, not 3.
+function New-LaterRecord { param([long]$Sequence, [string]$Kind, [string]$Data, [string]$Id = "") if ($Id -eq "") { $Id = $Sequence.ToString("x32") }; return ('{"schemaVersion":1,"sequence":' + $Sequence + ',"id":"' + $Id + '","kind":"' + $Kind + '","at":"2026-10-07T09:00:00Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":' + $Data + '}') }
+$s = New-TestStore
+$null = Add-Q $s                                                                                    # record 1, question 1
+$laterId = "f" * 32
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), (New-LaterRecord 2 "message-said" '{"number":1,"speaker":"founder","text":"yes"}' $laterId), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), (New-LaterRecord 3 "messages-read" '{"reader":"warchief","upTo":2}'), $utf8)
+$a = Add-Q $s @{ title = "Is the second question still the second after later records?" }           # record 4
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 2 -and $a.value.sequence -eq 4) ("after two records of later kinds the next question is 2, in record 4: no number was left unused (" + (Get-Outcome $a) + ", number " + $(if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["number"]) { $a.value.number } else { "none" }) + ")")
+[System.IO.File]::WriteAllText((Join-Path $s "0000000005.json"), (New-LaterRecord 5 "message-said" '{"number":2,"speaker":"warchief","text":"noted"}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000006.json"), (New-LaterRecord 6 "message-said" '{"number":2,"speaker":"founder","text":"good"}'), $utf8)
+$a = Add-Q $s @{ title = "Is the third question the third, whatever a later version wrote?" }      # record 7
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and $a.value.sequence -eq 7) ("and the one after is 3, in record 7 (" + (Get-Outcome $a) + ")")
+Check ((Get-NotUnderstood $a) -ceq "message-said x3 2-6; messages-read x1 3-3" -and @($a.value.unreadable).Count -eq 0 -and @($a.value.ignored).Count -eq 0) ("the write's own result names them once per kind, with how many and from which record to which, and calls none of them unreadable (" + (Get-NotUnderstood $a) + ")")
+$listed = Invoke-Op $s "list" @{ state = "all" }
+Check ((Get-Outcome $listed) -ceq "done" -and (@($listed.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3" -and (Get-NotUnderstood $listed) -ceq "message-said x3 2-6; messages-read x1 3-3") "list shows questions 1, 2 and 3 and the same one finding per kind"
+$shown = Invoke-Op $s "show" @{ number = 2 }
+Check ((Get-Outcome $shown) -ceq "done" -and $shown.value.question.title -ceq "Is the second question still the second after later records?" -and @($shown.value.question.history).Count -eq 1) "show 2 is the second question, with a history of one record: the later records about it changed nothing this version shows"
+$closed = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." }
+Check ((Get-Outcome $closed) -ceq "done" -and (Get-Listed $s) -ceq "1:closed,2:open,3:open") "and close, like every write, goes on working around them"
+$closedAgain = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done again." }
+Check ((Get-Outcome $closedAgain) -ceq "refused" -and (Get-NotUnderstood $closedAgain) -ceq "message-said x3 2-6; messages-read x1 3-3") ("a refusal names them too: no result leaves them out (" + (Get-NotUnderstood $closedAgain) + ")")
+Check (@($listed.value.notUnderstood | Where-Object { "$($_.reason)" -notlike "*later version*" -or "$($_.reason)" -notlike "*no question number*" }).Count -eq 0) "each finding says in words what it is: written by a later version, kept, and costing no question number"
+# A REPOST OF AN ID A LATER-KIND RECORD CARRIES DOES NOT WRITE AGAIN: the envelope is readable, so the id is seen.
+$before = Get-Files $s
+$again = Add-Q $s @{ title = "Is an id a later version used ever written under twice?" } $laterId
+Check ((Get-Outcome $again) -ceq "refused" -and (Test-Refused $again ("the id " + $laterId + " was already used")) -and (Test-Refused $again "record 2, message-said") -and (Get-Files $s) -ceq $before) ("a request under the id of a record this version did not understand is refused, naming that record and its kind, and writes nothing (" + (Get-Outcome $again) + ")")
+# CONTROL: damage keeps the conservative rule - a torn record between questions still costs a number.
+$s = New-TestStore
+$null = Add-Q $s
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), '{"schemaVersion":1,"sequence":2,"id":"', $utf8)
+$a = Add-Q $s @{ title = "Is a number still left unused after a torn record?" }
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and (Get-NotUnderstood $a) -ceq "" -and @($a.value.unreadable).Count -eq 1) ("CONTROL: a torn record is unreadable, not 'not understood', and the next question is 3: it may have been question 2 (" + (Get-Outcome $a) + ")")
 
 Write-Host ""
 Write-Host "--- a stray file far ahead in the store: named, not believed, and no number moves ---" -ForegroundColor Cyan

@@ -283,6 +283,12 @@ Check ($null -ne $j -and @($j.value.unreadable).Count -eq 1 -and $j.value.unread
 $strayRun = Invoke-Decisions @("list", "-State", "all")
 Check ($strayRun.code -eq 0 -and $strayRun.out -like "*NOTE: 1 file(s) in the store folder are named like a record and are not part of the list:*" -and $strayRun.out -like "*0000002000.json: it is 1994 places past record 5*") "a stray file far ahead in the store is named where a person will see it, with how far"
 Check ($strayRun.out -like "*WARNING: 1 record(s) in the store could not be read.*") "and it is not counted among the records that could not be read: still one"
+# A record of a kind a later version wrote is not damage: it is named apart, once for its kind.
+[System.IO.File]::WriteAllText((Join-Path $store "0000000006.json"), ('{"schemaVersion":1,"sequence":6,"id":"' + ("e" * 32) + '","kind":"message-said","at":"2026-10-07T09:00:00Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":{"number":1,"text":"yes"}}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $store "0000000007.json"), ('{"schemaVersion":1,"sequence":7,"id":"' + ("d" * 32) + '","kind":"message-said","at":"2026-10-07T09:00:01Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":{"number":1,"text":"and more"}}'), $utf8)
+$laterRun = Invoke-Decisions @("list", "-State", "all")
+Check ($laterRun.code -eq 0 -and $laterRun.out -like "*NOTE: 2 record(s) are of a kind this version of Horde does not understand. A later version wrote them; they are kept, and cost no question number:*" -and $laterRun.out -like "*  message-said: 2 record(s), records 6 to 7*") ("records of a later kind are named where a person will see them, once for the kind, with how many and which (exit " + $laterRun.code + ")")
+Check ($laterRun.out -like "*WARNING: 1 record(s) in the store could not be read.*") "and they are not counted among the records that could not be read: still one"
 
 Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan

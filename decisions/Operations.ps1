@@ -89,8 +89,12 @@ function New-HordeDecisionResult {
     param([string]$Operation, [string]$Outcome, [string]$Reason = "", $Findings = @(), $State = $null, $More = $null)
     $value = [ordered]@{ schemaVersion = 1; operation = $Operation; outcome = $Outcome; reason = $Reason; findings = [string[]]@($Findings) }
     if ($null -ne $More) { foreach ($k in @($More.Keys)) { $value[$k] = $More[$k] } }
-    $unreadable = @(); $ignored = @(); $strays = @()
+    $unreadable = @(); $ignored = @(); $strays = @(); $later = @()
     if ($null -ne $State) {
+        # Records of a kind this version does not know, once for each kind (decisions/Rules.ps1, THE
+        # COMPATIBILITY CONTRACT): reported, never hidden, and never called unreadable.
+        $later = @($State.notUnderstood.Values | ForEach-Object { [pscustomobject]@{ kind = "$($_.kind)"; count = [int]$_.count; first = [long]$_.first; last = [long]$_.last
+            reason = ("its kind '" + $_.kind + "' is not one this version of Horde knows. A later version wrote it: it is kept, it changes nothing this version shows, and it costs no question number") } })
         $strays = @($State.strays | ForEach-Object { [pscustomobject]@{ file = "$($_.file)"; reason = "$($_.reason)" } })
         $unreadable = @($State.unreadable | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; file = $_.file; reason = $_.reason } })
         $ignored = @($State.ignored | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; file = $_.file; reason = $_.reason } })
@@ -98,6 +102,7 @@ function New-HordeDecisionResult {
     $value["unreadable"] = $unreadable
     $value["ignored"] = $ignored
     $value["strays"] = $strays
+    $value["notUnderstood"] = $later
     return [pscustomobject]$value
 }
 
@@ -303,7 +308,7 @@ function Invoke-HordeDecisionWrite {
         $record = [pscustomobject]@{ sequence = $sequence; file = (Get-HordeDecisionRecordName -Sequence $sequence); kind = "ok"; data = ($text | ConvertFrom-Json); reason = "" }
         # The list's problems as they stood, kept for a refusal: applying the record below adds the
         # unwritten record itself to them when it does not apply.
-        $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays) }
+        $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }
         $why = Add-HordeDecisionRecordToState -State $list -Record $record -Definitions $Definitions
         if ($why -ne "") { return (& $refuse ("nothing was written: " + $why) @($why) $before) }
         $question = $list.questions[[int]$data["number"]]

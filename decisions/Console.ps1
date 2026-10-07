@@ -167,6 +167,18 @@ function Format-HordeDecisionProblems {
         [void]$lines.Add("NOTE: " + $off.Count + " record(s) were read and changed nothing:")
         foreach ($o in $off) { [void]$lines.Add("  record " + $o.sequence + " (" + $o.file + "): " + $o.reason) }
     }
+    $later = @($Value.notUnderstood)
+    if ($later.Count -gt 0) {
+        $total = 0
+        foreach ($k in $later) { $total += [int]$k.count }
+        [void]$lines.Add("")
+        [void]$lines.Add("NOTE: " + $total + " record(s) are of a kind this version of Horde does not understand. A later version wrote them; they are kept, and cost no question number:")
+        foreach ($k in $later) {
+            $where = "record " + $k.first
+            if ([long]$k.last -ne [long]$k.first) { $where = "records " + $k.first + " to " + $k.last }
+            [void]$lines.Add("  " + $k.kind + ": " + $k.count + " record(s), " + $where)
+        }
+    }
     $loose = @($Value.strays)
     if ($loose.Count -gt 0) {
         [void]$lines.Add("")

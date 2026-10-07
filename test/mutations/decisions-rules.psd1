@@ -299,5 +299,30 @@
         @{ Name = "view-shares-the-list"
            Find = 'return [pscustomobject]$view'
            Replace = 'return $Question' }
+        # --- the compatibility contract: a record of a later kind is set aside, never a possible question ---
+        @{ Name = "later-kind-read-as-damage"
+           Find = 'elseif ($null -eq $script:HordeDecisionEventKinds["$($Record.data.kind)"]) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "later-kind-costs-a-question-number"
+           Find = '            $later = "$($Record.data.kind)"'
+           Replace = '            $later = "$($Record.data.kind)"; $State.pending = [int]$State.pending + 1' }
+        @{ Name = "later-kind-reported-once-a-record"
+           Find = 'if ($State.notUnderstood.Contains($later)) { $seen ='
+           Replace = 'if ($false) { $seen =' }
+        @{ Name = "later-kind-range-ends-at-its-first-record"
+           Find = '$seen.count = [int]$seen.count + 1; $seen.last = [long]$Record.sequence }'
+           Replace = '$seen.count = [int]$seen.count + 1 }' }
+        @{ Name = "id-of-a-later-kind-not-seen"
+           Find = 'if (-not $State.ids.ContainsKey("$($Record.data.id)")) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "later-kind-in-another-envelope-set-aside"
+           Find = 'if ($cover.Count -gt 0) { $why = $cover[0] }'
+           Replace = 'if ($false) { $why = $cover[0] }' }
+        @{ Name = "later-kind-out-of-its-place-set-aside"
+           Find = 'elseif ([long]$Record.data.sequence -ne [long]$Record.sequence) { $why ='
+           Replace = 'elseif ($false) { $why =' }
+        @{ Name = "known-kind-with-bad-data-not-checked"
+           Find = '            if ($shape.Count -gt 0) { $why = $shape[0] }'
+           Replace = '' }
     )
 }

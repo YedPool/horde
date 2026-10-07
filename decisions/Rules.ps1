@@ -32,6 +32,28 @@
 # With every record readable both rules reduce to "the Nth question-added is question N", and
 # test/test-decisions-rules.ps1 holds them to that.
 #
+# THE COMPATIBILITY CONTRACT, FOR EVERY LATER EVENT KIND. A store outlives the version that wrote to
+# it, and two versions may write to one store. So a record whose ENVELOPE is well formed - it matches
+# schema/decision-event.v1, and says it is the record its place says - but whose KIND this version
+# does not know is not damage. A later version wrote it. It is "not understood by this version":
+#   - it is SET ASIDE from the fold: it changes no question, and is not reported as unreadable;
+#   - it is REPORTED, once for its kind, with how many records and from which to which, in every
+#     result, so nobody can show the list without saying that part of the store was not understood;
+#   - IT NEVER COUNTS AS A POSSIBLE QUESTION, and so leaves no question number unused. This is safe
+#     because of two promises every version makes: "question-added" is a kind every version knows,
+#     and A KIND'S NAME NEVER CHANGES MEANING - a new meaning is a new name. A record of any other
+#     name therefore cannot have added a question. Measured 2026-10-07, before this rule: one record
+#     of a later kind between two questions numbered the next one 4 instead of 3, for good;
+#   - ITS ID IS STILL SEEN: the envelope is readable, so a request sent again under that id is known
+#     to have been recorded, and is not written a second time.
+# What this asks of whoever adds a kind: never reuse a kind's name for another meaning; never make an
+# existing kind's record mean something only together with a later kind's (an older version sees the
+# first without the second); and keep the envelope as it is - a change to the envelope is a new
+# schema version, which an older version reads as unreadable, with the conservative rule below.
+# A RECORD THAT IS DAMAGED KEEPS THE CONSERVATIVE RULE: torn, missing, held, not this schema's
+# envelope, out of its place, or of a KNOWN kind with data that is not that kind's. Any of those may
+# have been a question, and each still leaves one number unused.
+#
 # STORED RECORDS ARE FACTS, NOT REQUESTS. The fold checks a record's SHAPE (its schemas) and whether it
 # applies, never the wording rules below: a title rule tightened next month must not make last month's
 # question unreadable. The wording rules are for what is about to be written.
@@ -480,6 +502,10 @@ function New-HordeDecisionState {
         # Files the store would not believe were records. The rules do nothing with them: they are
         # carried here so that every result worked out from this list can name them.
         strays = (New-Object System.Collections.ArrayList)
+        # Records of a kind this version does not know (see THE COMPATIBILITY CONTRACT), by kind, in
+        # the order each kind was first met: { kind; count; first; last }, first and last being
+        # sequence numbers.
+        notUnderstood = (New-Object System.Collections.Specialized.OrderedDictionary)
         lastSequence = [long]0
     }
 }
@@ -595,14 +621,24 @@ function Step-HordeDecisionReopened {
     return ""
 }
 
+function Test-HordeDecisionEnvelope {
+    # Findings for a parsed record's ENVELOPE alone: that it matches schema/decision-event.v1 and its
+    # sequence number is one a record can have. Nothing is asked of its kind or its data. Empty means
+    # the envelope can be trusted: its sequence, its id and its kind's NAME are what they say.
+    param($Ev, $Definitions)
+    $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
+    if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
+    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) { return @("its sequence number is beyond " + $script:HordeDecisionMaxSequence + ", the largest a record can have") }
+    return @()
+}
+
 function Test-HordeDecisionEvent {
     # Findings for a parsed record's SHAPE: the envelope, its kind, and its kind's data, each against
     # its schema. Empty means the record can be applied. One function, used for a stored record and for
     # a record about to be written, so nothing is ever written that the reader would call unreadable.
     param($Ev, $Definitions)
-    $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
-    if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
-    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) { return @("its sequence number is beyond " + $script:HordeDecisionMaxSequence + ", the largest a record can have") }
+    $found = @(Test-HordeDecisionEnvelope -Ev $Ev -Definitions $Definitions)
+    if ($found.Count -gt 0) { return $found }
     $entry = $script:HordeDecisionEventKinds["$($Ev.kind)"]
     if ($null -eq $entry) { return @("its kind '" + $Ev.kind + "' is not one this version of Horde knows; a newer version may have written it") }
     $dataSchema = Get-HordeDecisionMember -Object $Definitions.eventSchema.definitions -Name $entry.data
@@ -628,9 +664,27 @@ function Add-HordeDecisionRecordToState {
     $why = ""
     if ($Record.kind -cne "ok") { $why = "$($Record.reason)" }
     else {
-        $shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions)
-        if ($shape.Count -gt 0) { $why = $shape[0] }
+        # The envelope first, and the record's place: only a record that passes both is believed about
+        # anything, its kind's name included.
+        $cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions)
+        if ($cover.Count -gt 0) { $why = $cover[0] }
         elseif ([long]$Record.data.sequence -ne [long]$Record.sequence) { $why = "it says it is record " + $Record.data.sequence + ", which is not its place in the store" }
+        elseif ($null -eq $script:HordeDecisionEventKinds["$($Record.data.kind)"]) {
+            # NOT UNDERSTOOD BY THIS VERSION (the compatibility contract in the header): set aside, counted
+            # under its kind, its id remembered - and never a possible question, so nothing is added to
+            # the numbers left unused.
+            $later = "$($Record.data.kind)"
+            if ($State.notUnderstood.Contains($later)) { $seen = $State.notUnderstood[$later]; $seen.count = [int]$seen.count + 1; $seen.last = [long]$Record.sequence }
+            else { $State.notUnderstood[$later] = [pscustomobject]@{ kind = $later; count = 1; first = [long]$Record.sequence; last = [long]$Record.sequence } }
+            if (-not $State.ids.ContainsKey("$($Record.data.id)")) {
+                $State.ids["$($Record.data.id)"] = [pscustomobject]@{ sequence = [long]$Record.sequence; kind = $later; requestHash = "$($Record.data.requestHash)"; number = 0; applied = $false }
+            }
+            return ""
+        }
+        else {
+            $shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions)
+            if ($shape.Count -gt 0) { $why = $shape[0] }
+        }
     }
     if ($why -ne "") {
         # A long reason is cut, and says so: a damaged record can produce findings of any length.

@@ -68,5 +68,12 @@
         @{ Name = "new-id-for-every-send"
            Find = '            $id = "$($have[''Id''])"'
            Replace = '            $id = [guid]::NewGuid().ToString("N")' }
+        # --- records of a later kind are named where a person will see them ---
+        @{ Name = "later-kinds-not-shown"
+           Find = 'if ($later.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "later-kinds-shown-without-their-records"
+           Find = '[void]$lines.Add("  " + $k.kind + ": " + $k.count + " record(s), " + $where)'
+           Replace = '[void]$lines.Add("  " + $k.kind)' }
     )
 }

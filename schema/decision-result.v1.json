@@ -4,7 +4,7 @@
   "title": "decision-result v1",
   "description": "WHAT ONE DECISIONS OPERATION GIVES BACK when it could say what happened (decisions/Operations.ps1): the value of a known answer in core/Tristate.ps1's sense. The three states of that answer mean, here: KNOWN - this object, whose outcome says the request was done, was replayed from an earlier record of the same id, or was refused with every reason; ABSENT - the store was read and there is no question of that number; UNKNOWN - the store, or the one record asked about, could not be read, with the reason. A refusal is a known fact, not an unknown: the caller is told exactly why nothing was written. EVERY result names the records that could not be read (unreadable) and the readable ones that did not apply (ignored), so a damaged record is never silently skipped by a caller that shows this. Plain data, checked against this schema before it is returned, so the command line, a window and a link between machines all receive one shape.",
   "type": "object",
-  "required": ["schemaVersion", "operation", "outcome", "reason", "findings", "unreadable", "ignored", "strays"],
+  "required": ["schemaVersion", "operation", "outcome", "reason", "findings", "unreadable", "ignored", "strays", "notUnderstood"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {"type": "integer", "enum": [1]},
@@ -19,11 +19,25 @@
     "questions": {"type": "array", "items": {"$ref": "#/definitions/view"}, "description": "The questions a list asked for, in number order."},
     "counts": {"type": "object", "description": "How many questions are in each state, by state name, whatever the list was filtered to."},
     "kinds": {"type": "object", "description": "The table of question kinds, as the kinds operation gives it: by kind name, each with label (how a list names it), means (one sentence) and list (which list of a question it needs: options, parts, or none). It is decisions/question-kinds.json's table, handed out here so that no caller needs the file."},
-    "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a kind this version does not know, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
+    "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a known kind with data that is not that kind's, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
     "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."},
+    "notUnderstood": {"type": "array", "items": {"$ref": "#/definitions/laterKind"}, "description": "Records whose envelope is well formed and whose kind this version does not know: a later version wrote them. One entry for each kind. They are not damage and are never in unreadable: they are set aside, change nothing this version shows, and cost no question number (decisions/Rules.ps1, the compatibility contract)."},
     "strays": {"type": "array", "items": {"$ref": "#/definitions/stray"}, "description": "Files in the store folder that are named like a record and are not one: too far past the end of the order (decisions/Store.ps1 has the limit and why), or a number not written in ten digits. They are not read, not counted and not part of the order; they are named here so that nobody has to find them."}
   },
   "definitions": {
+    "laterKind": {
+      "type": "object",
+      "description": "The records of ONE kind this version does not know: one entry for the kind, however many records it has.",
+      "required": ["kind", "count", "first", "last", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "description": "The kind's name, as the records give it."},
+        "count": {"type": "integer", "minimum": 1, "description": "How many records of that kind the store holds."},
+        "first": {"type": "integer", "minimum": 1, "description": "The sequence number of the first of them."},
+        "last": {"type": "integer", "minimum": 1, "description": "The sequence number of the last of them. Records of other kinds may lie between the two."},
+        "reason": {"type": "string", "pattern": "\\S"}
+      }
+    },
     "problem": {
       "type": "object",
       "required": ["sequence", "file", "reason"],

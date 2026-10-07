@@ -116,7 +116,7 @@
            Find = '$value["unreadable"] = $unreadable'
            Replace = '$value["unreadable"] = @()' }
         @{ Name = "refusal-blames-the-unwritten-record"
-           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays) }'
+           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }'
            Replace = '$before = $list' }
         @{ Name = "write-failure-reads-as-refused"
            Find = 'catch { return (New-HordeUnknown -Reason ("record " + $sequence + " could not be written, so nothing changed") -ErrorRecord $_) }'
@@ -146,5 +146,12 @@
         @{ Name = "home-error-thrown-at-the-caller"
            Find = 'catch { return (New-HordeUnknown -Reason "the decisions store could not be found" -ErrorRecord $_) }'
            Replace = 'catch { throw }' }
+        # --- records of a later kind are in every result, once for each kind ---
+        @{ Name = "later-kinds-left-out-of-results"
+           Find = '$value["notUnderstood"] = $later'
+           Replace = '$value["notUnderstood"] = @()' }
+        @{ Name = "later-kinds-left-out-of-a-refusal"
+           Find = 'strays = @($list.strays); notUnderstood = $list.notUnderstood }'
+           Replace = 'strays = @($list.strays); notUnderstood = (New-Object System.Collections.Specialized.OrderedDictionary) }' }
     )
 }
