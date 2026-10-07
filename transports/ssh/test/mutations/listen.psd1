@@ -42,8 +42,8 @@
            Find = 'if (-not (Test-Path -LiteralPath $files.hostKey -PathType Leaf)) {'
            Replace = 'if ($false) {' }
         @{ Name = "keys-not-checked"
-           Find = 'if ($found.Count -gt 0) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($found.Count -gt 0) { return (New-HordeSshListenResult'
+           Replace = 'if ($false) { return (New-HordeSshListenResult' }
         # --- the configuration ---
         @{ Name = "listens-on-every-address"
            Find = '"ListenAddress 127.0.0.1",'

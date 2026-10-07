@@ -42,7 +42,7 @@ try {
     $private:nodeFile = Join-Path (Get-HordeHome) "node\node.json"
     if (-not (Test-Path -LiteralPath $nodeFile -PathType Leaf)) { throw ("this hub has no device id yet (" + $nodeFile + " is missing)") }
     $private:hubId = (Read-HordeNodeFile -Path $nodeFile).deviceId
-    # ONE LINK PER DEVICE (issue #147, item 2). sshd's MaxSessions bounds sessions per connection, not
+    # ONE LINK PER DEVICE (issue #147, item 2). The listener's MaxSessions bounds sessions per connection, not
     # connections per key, so an enrolled peer could open many, each a PowerShell. A device has one link
     # to its hub at a time (the hub pulls it over that one link), so a second attach for the same device
     # ends at once. A named mutex, held for this process's life: Windows frees it when the process ends,

@@ -47,6 +47,15 @@ $script:HordeSshListenDevicePattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 $script:HordeSshListenKeyPattern = '\Acommand="(?<cmd>[^"]+)",restrict(?:,expiry-time="[0-9]{8}")? ssh-ed25519 [A-Za-z0-9+/]{68} horde-device-(?<dev>' + $script:HordeSshListenDevicePattern + ')\z'
 # How long sshd has to answer on its port before Start gives up and reports its log.
 $script:HordeSshListenStartMs = 15000
+# THE MEMORY ANY ONE PROCESS OF THE LISTENER MAY COMMIT (issue #147, item 1). attach reads stdin through
+# $input, which holds a line until its LF arrives, so a peer that never sends one would grow attach
+# without end; the cap ends it there. Measured 2026-10-07 on this machine (Windows PowerShell 5.1,
+# OpenSSH 9.5p1), private commit through the real listener: attach peaks at 150 MB starting up and at
+# 207 MB while relaying twelve 4 MiB frames (the ceiling) back to back; each sshd process stays under
+# 4 MB; a line with no LF grows attach by about 2 bytes per byte sent (16 MB per 8 MiB, UTF-16), from
+# 81 MB idle to 200 MB after 64 MiB. 320 MiB leaves about 1.5 times the relaying peak, and a never-ending
+# line reaches it after roughly 120 MiB.
+$script:HordeSshListenProcessBytes = 320MB
 
 function Get-HordeSshListenFiles {
     # Where the listener's files live, all under Horde's home (the layout enrolment writes, R17b).
@@ -193,6 +202,8 @@ function Start-HordeSshListener {
     $handed = $false
     $proc = $null
     try {
+        # No process of the listener may commit more than the cap (Native.ps1, LimitProcessMemory).
+        [HordeSshNative]::LimitProcessMemory($job, [long]$script:HordeSshListenProcessBytes)
         $proc = Start-HordeSshServer -Config $files.config -Job $job
         $listener = [pscustomobject]@{ process = $proc; startedAt = $proc.StartTime.ToUniversalTime().Ticks; job = $job; log = $proc.StandardError.ReadToEndAsync(); port = $port; config = $files.config; authorized = $files.authorized; root = "$($Request.root)" }
         $null = $proc.StandardOutput.ReadToEndAsync()

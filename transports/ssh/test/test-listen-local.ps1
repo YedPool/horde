@@ -42,7 +42,7 @@ foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root (
 . (Join-Path $root "remote\LinkBinding.ps1")
 . (Join-Path $here "ListenFixture.ps1")
 
-$limitSeconds = 240
+$limitSeconds = 480
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 function Left { param([int]$Ms) return [int][Math]::Max(1, [Math]::Min($Ms, ($limitSeconds * 1000) - $clock.ElapsedMilliseconds - 10000)) }
 $tl = Get-HordeTransport -Name "local"
@@ -238,8 +238,8 @@ try {
         Write-Host "--- what a client asks for: never a command of its choosing, never a forward ---" -ForegroundColor Cyan
         function Start-RawSsh {
             # ssh.exe itself, with the node's key and pin and -Extra before the destination.
-            param([string[]]$Extra, [string[]]$After)
-            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + (Join-Path $nodeDir "link_ed25519") + '"'),
+            param([string[]]$Extra, [string[]]$After, [string]$Identity = (Join-Path $nodeDir "link_ed25519"))
+            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + $Identity + '"'),
                 "-o", ('UserKnownHostsFile="' + (Join-Path $nodeDir "known_hosts") + '"'), "-o", "GlobalKnownHostsFile=none", "-o", "StrictHostKeyChecking=yes", "-o", ("HostKeyAlias=horde-hub-" + $hubId),
                 "-o", "ConnectTimeout=10", "-p", "$p2") + @($Extra) + @(($user + "@127.0.0.1")) + @($After)
             return (Start-ListenChild -Exe $script:ListenSshExe -Arguments (Join-HordeSshCommandLine -Argv $argv) -Job $job)
@@ -320,6 +320,50 @@ try {
             $null = Wait-AttachGone -Ms (Left 15000)
         } else { Check $false "a first link for the one-per-device case" }
 
+
+        Write-Host ""
+        Write-Host "--- a never-ending line: the job's memory cap ends that attach, and nothing else (issue #147) ---" -ForegroundColor Cyan
+        # A second enrolled device keeps a session open beside the one that sends an endless line, so
+        # the case can show the cap ends one process, not the listener or another session.
+        $dev2 = [guid]::NewGuid().ToString()
+        $pub2 = New-ListenKey -Path (Join-Path $work "client2_ed25519")
+        [System.IO.File]::AppendAllText($files.authorized, ('command="' + (Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $dev2) + '",restrict ' + $pub2 + " horde-device-" + $dev2 + "`n"))
+        $other = Start-RawSsh -Extra @() -After @() -Identity (Join-Path $work "client2_ed25519")
+        $ao = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
+        $endless = $null; $ae = $null
+        try {
+            $po = $null; if ($ao.state -ceq "known") { $po = Receive-HordeLinkFrame -Link (Get-HordeValue $ao) -TimeoutMs (Left 15000) }
+            Check ($null -ne $po -and "$($po.value)" -ceq ("horde-attach 1 " + $dev2)) "CONTROL: a second device's session is open"
+            $endless = Start-RawSsh -Extra @() -After @()
+            $ae = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
+            $pe = $null; if ($ae.state -ceq "known") { $pe = Receive-HordeLinkFrame -Link (Get-HordeValue $ae) -TimeoutMs (Left 15000) }
+            Check ($null -ne $pe -and "$($pe.value)" -ceq ("horde-attach 1 " + $nodeDev)) "and the device that will send the endless line has its own"
+            $victim = @(Get-ListenProcesses -Marker ("attach.ps1 -Device " + $nodeDev) | Where-Object { $_.Name -ieq "powershell.exe" })
+            $chunk = [System.Text.Encoding]::ASCII.GetBytes("z" * 1048576)
+            $sent = 0
+            $gone = $false
+            # 200 MiB at most: the cap (320 MiB of commit) is reached after about 120 MiB (Listen.ps1).
+            while ($sent -lt 200 -and (Left 60000) -gt 30000) {
+                $w = $endless.process.StandardInput.BaseStream.WriteAsync($chunk, 0, $chunk.Length)
+                $wrote = $false; try { $wrote = $w.Wait(15000) } catch { }
+                if ($wrote) { $sent++ }
+                if ($victim.Count -eq 1 -and $null -eq (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue)) { $gone = $true; break }
+                if (-not $wrote) { break }
+            }
+            if (-not $gone -and $victim.Count -eq 1) { $d = [datetime]::UtcNow.AddSeconds(10); while ($null -ne (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue) -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 250 }; $gone = ($null -eq (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue)) }
+            Check ($victim.Count -eq 1 -and $gone) ("the attach fed a line with no end is ended by the job's memory cap (" + $sent + " MiB sent)")
+            Check ((Get-ListenListeners -Port $p2) -ge 1 -and -not $listen.process.HasExited) "the listener goes on: sshd still listens, horde listen still runs"
+            $null = $other.process.StandardInput.BaseStream.WriteAsync(([System.Text.Encoding]::ASCII.GetBytes("still-alive`n")), 0, 12)
+            $s = $null; if ($ao.state -ceq "known") { $s = Receive-HordeLinkFrame -Link (Get-HordeValue $ao) -TimeoutMs (Left 15000) }
+            Check ($null -ne $s -and "$($s.value)" -ceq "still-alive") "and the other device's session still relays"
+        } finally {
+            if ($null -ne $endless) { try { $endless.process.Kill() } catch { } }
+            try { $other.process.Kill() } catch { }
+            if ($null -ne $ae -and $ae.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $ae) }
+            if ($ao.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $ao) }
+            [System.IO.File]::WriteAllText($files.authorized, ($good + "`n"))
+            $null = Wait-AttachGone -Ms (Left 15000)
+        }
         Write-Host ""
         Write-Host "--- CONTROL (issue #100): a .NET Console stream reads nothing in a session; `$input reads the line ---" -ForegroundColor Cyan
         # A second sshd, this suite's own, from the listener's very configuration on another port, whose
