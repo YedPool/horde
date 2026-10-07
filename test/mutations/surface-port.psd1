@@ -30,6 +30,19 @@
         @{ Name = "size-cap-one-short"
            Find = 'if ($Text.Length -gt $Bridge.limits.messageChars) {'
            Replace = 'if ($Text.Length -ge $Bridge.limits.messageChars) {' }
+        # --- the list of errors a surface keeps
+        @{ Name = "the-list-of-errors-is-never-trimmed"
+           Find = 'while ($Errors.Count -gt $Kept) { $Errors.RemoveAt(0) }'
+           Replace = '' }
+        @{ Name = "the-newest-error-is-the-one-dropped"
+           Find = 'while ($Errors.Count -gt $Kept) { $Errors.RemoveAt(0) }'
+           Replace = 'while ($Errors.Count -gt $Kept) { $Errors.RemoveAt($Errors.Count - 1) }' }
+        @{ Name = "an-empty-line-is-kept-as-an-error"
+           Find = 'if ("$Text" -eq "") { return }'
+           Replace = '' }
+        @{ Name = "a-spec-ignores-how-many-errors-to-keep"
+           Find = 'errorsKept = [int]$Settings.values.errorsKept'
+           Replace = 'errorsKept = 50' }
         # --- the module's settings
         @{ Name = "a-bridge-ignores-the-message-size-it-was-given"
            Find = 'messageChars = [int]$Settings.values.messageChars;'

@@ -221,6 +221,9 @@ $tickSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell
 $script:HordeWebView2.spec = $tickSpec
 & $handlers.tick; & $handlers.tick
 Check ($script:ticked -eq 10 -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -ceq "a tick failed: a tick that fails") "the tick handler hands the caller its own state, and a tick that throws is recorded, not fatal"
+# A TICK THAT FAILS EVERY TIME must not grow the process for as long as the window is open.
+1..60 | ForEach-Object { & $handlers.tick }
+Check ($tickSpec.errorsKept -eq 50 -and $script:ticked -eq 310 -and $script:HordeWebView2.errors.Count -eq 50 -and $script:HordeWebView2.errors[49] -ceq "a tick failed: a tick that fails") ("sixty-one failed ticks leave the last fifty in the list the caller reads (" + $script:HordeWebView2.errors.Count + ")")
 Write-Host ""
 Write-Host "--- a picture is Horde's to ask for, and only of a page that is being drawn ---" -ForegroundColor Cyan
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and -not (Test-Path -LiteralPath (Join-Path $work "p.png"))) "with no engine up there is nothing to take a picture of: not asked, and no file made"

@@ -250,7 +250,7 @@ Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"requ
 Write-Host ""
 Write-Host "--- the port's numbers are settings of the module 'surface', read from the home ---" -ForegroundColor Cyan
 $declared = Get-HordeSurfaceSettingsDeclaration
-Check ($declared.module -ceq "surface" -and (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") -ceq "widthPx=520 heightPx=760 tickMs=250 messageChars=65536 argumentChars=16384 refusalsKept=50") ("the module declares one table, with the defaults the port had (" + (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") + ")")
+Check ($declared.module -ceq "surface" -and (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") -ceq "widthPx=520 heightPx=760 tickMs=250 messageChars=65536 argumentChars=16384 refusalsKept=50 errorsKept=50") ("the module declares one table, with the defaults the port had (" + (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") + ")")
 $limits = Get-HordeSurfaceLimits
 Check ($limits.smallestWidthPx -eq 200 -and $limits.smallestHeightPx -eq 150 -and $limits.fastestTickMs -eq 50) "what no setting may go below is the port's to say, once: 200 by 150 pixels, a tick every 50 ms"
 $floor = @{}; foreach ($e in $declared.settings) { $floor[$e.name] = $e.min }
@@ -299,7 +299,16 @@ foreach ($notOne in @([pscustomobject]@{ values = $set.values; findings = @() },
 }
 Check (@($unsaid.PSObject.Properties | ForEach-Object { $_.Name }) -cnotcontains "findings") "a spec carries no findings: when a spec exists there was nothing wrong to carry"
 Check ($tight.limits.messageChars -eq 2000 -and (Invoke-HordeSurfaceRequest -Bridge $tight -Text ("z" * 2001)).refused -like "*more than the 2000*") "a bridge keeps the limits it was made with: a file changed later does not move them under a page"
-[System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "refusalsKept": 50 } }')
+# THE LIST OF ERRORS A SURFACE KEEPS FOR ITS CALLER IS SHORT TOO. A tick that fails every time adds
+# four lines a second for as long as the window is open (review of 2026-10-06, finding A9).
+Check ($defaultSpec.errorsKept -eq 50 -and $sized.errorsKept -eq 50) "CONTROL: a spec carries how many errors its surface keeps, 50 unless a person's file says otherwise"
+$kept = New-Object System.Collections.ArrayList
+1..7 | ForEach-Object { Add-HordeSurfaceError -Errors $kept -Text ("failure " + $_) -Kept 5 }
+Check ($kept.Count -eq 5 -and $kept[0] -ceq "failure 3" -and $kept[4] -ceq "failure 7") "seven errors added to a list that keeps five leave the last five, oldest first"
+Add-HordeSurfaceError -Errors $kept -Text "" -Kept 5
+Check ($kept.Count -eq 5 -and $kept[4] -ceq "failure 7") "an empty line is not an error, and pushes nothing out"
+[System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "errorsKept": 2 } }')
+Check ((New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work).errorsKept -eq 2) "and the number is the module's setting errorsKept"
 $handed = New-HordeSurfaceBridge -Settings $set -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
 $handedSpec = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $handed -DataFolder $work -Settings $set
 Check ($handed.limits.messageChars -eq 2000 -and $handed.limits.refusalsKept -eq 3 -and $handedSpec.width -eq 640) "a bridge and a spec that are handed settings use those and do not read the file again: one reading serves both, and its findings are the caller's to report once"
