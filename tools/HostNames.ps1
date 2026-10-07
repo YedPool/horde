@@ -132,6 +132,12 @@
 # instead fails when a listed file is missing or no longer has its fingerprint. Only inside a port's
 # folder: a list anywhere else pins nothing and is a finding, and a binary no list names is refused as
 # any other non-ASCII file is.
+# AND ONLY A PROGRAM LIBRARY, BY ITS FILE TYPE ($script:HordePinnedFileTypes). A list names files by
+# name alone, and whoever adds a file writes its line too, so a fingerprint proves only that the file
+# has not changed since - not that it was ever fit to go unread. The review of the pull request that
+# brought the exception in (2026-10-06) listed a .ps1 holding a look-alike letter with its own true
+# fingerprint, in a port's folder, and this scan passed it. A script or a data file is Horde's text
+# whoever pinned it: listed, it is still read like any other file, and its line is a finding.
 #
 # WHAT THE SCAN STILL CANNOT SEE, so that nobody reads a pass as more than it is:
 #   - A NAME BUILT AT RUN TIME: two string halves joined, or an environment variable's name assembled
@@ -167,6 +173,10 @@ $script:HordeHostNamesProseFolder = "planning"
 # what shows a page in a window, so a second way of showing one - another platform's window, a file,
 # a remote view - is a new folder too. surfaces/Port.ps1 belongs to no surface.
 $script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces")
+# The file types a fingerprint list may excuse from being read as text (header, AND ONLY A PROGRAM
+# LIBRARY): compiled program libraries. A new type is a line here, agreed in review, never a line in
+# a list.
+$script:HordePinnedFileTypes = @(".dll")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 # The cross-host import (header, THE ONE CROSS-HOST IMPORT): the count cell that marks it, matched
@@ -514,7 +524,11 @@ function Get-HordeRepoFiles {
         if ($f.Name -cne (Get-HordeFingerprintListName)) { continue }
         $listRel = $f.FullName.Substring($rootFull.Length).TrimStart('\', '/') -replace '\\', '/'
         if (-not (Get-HordePortFolderOf -Rel $listRel)) { continue }
-        foreach ($e in (Read-HordeFingerprintList -Path $f.FullName).entries) { $pinned[(Join-Path $f.DirectoryName $e.name).ToLowerInvariant()] = $true }
+        foreach ($e in (Read-HordeFingerprintList -Path $f.FullName).entries) {
+            # Only a program library is left unread (header, AND ONLY A PROGRAM LIBRARY).
+            if (-not (Test-HordePinnedFileType -Name $e.name)) { continue }
+            $pinned[(Join-Path $f.DirectoryName $e.name).ToLowerInvariant()] = $true
+        }
     }
     foreach ($f in $listing) {
         $rel = $f.FullName.Substring($rootFull.Length).TrimStart('\', '/') -replace '\\', '/'
@@ -547,8 +561,19 @@ function Test-HordePinnedFiles {
         foreach ($x in (Test-HordeFingerprints -Folder $f.DirectoryName).findings) {
             [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $rel; problem = ("pinned file: " + $x) })
         }
+        foreach ($listed in (Read-HordeFingerprintList -Path $f.FullName).entries) {
+            if (Test-HordePinnedFileType -Name $listed.name) { continue }
+            [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $rel; problem = ("pinned file: " + $listed.name + " is not a program library (" + ($script:HordePinnedFileTypes -join ", ") + "), so the list does not excuse it - a script or a data file is Horde's text, and is read like any other") })
+        }
     }
     return $found
+}
+
+function Test-HordePinnedFileType {
+    # Is -Name a file a fingerprint list may excuse from being read as text: a program library, by its
+    # file type (header, AND ONLY A PROGRAM LIBRARY)? Compared without regard to case, as Windows does.
+    param([string]$Name)
+    return [bool]($script:HordePinnedFileTypes -contains [System.IO.Path]::GetExtension("$Name").ToLowerInvariant())
 }
 
 function Get-HordeNameMentionCount {

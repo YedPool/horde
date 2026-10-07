@@ -349,6 +349,13 @@
         @{ Name = "a-list-outside-a-port-is-not-a-finding"
            Find = 'if (-not (Get-HordePortFolderOf -Rel $rel)) {'
            Replace = 'if ($false) {' }
+        # --- only a program library is left unread (review of the surfaces pull request, 2026-10-06)
+        @{ Name = "a-list-excuses-a-script"
+           Find = 'if (-not (Test-HordePinnedFileType -Name $e.name)) { continue }'
+           Replace = '' }
+        @{ Name = "a-listed-script-is-not-a-finding"
+           Find = 'if (Test-HordePinnedFileType -Name $listed.name) { continue }'
+           Replace = 'continue' }
         @{ Name = "shrink-import-invisible"
            Find = 'if ($r.cells[1] -ceq $script:HordeImportCount) { $c = 1 }'
            Replace = 'if ($false) { $c = 1 }' }
