@@ -9,6 +9,16 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 $tool = Join-Path $root "tools\Mutate.ps1"
+# NO RUN BELOW INHERITS A VERIFY SETTING. A gate may run this suite with HORDE_MUTATE_VERIFY_MAPS=1 in
+# its environment, and that would confirm the catches the -Fast checks below need left unverified.
+# Cleared for this suite's own process, which is all a run of the tool below inherits from; the
+# checks that are about the variable set it themselves.
+$env:HORDE_MUTATE_VERIFY_MAPS = $null
+# The one line a gate outside this repository accepts as a spec's result, matched whole, and only
+# as the LAST line of the output.
+$classicLine = '^mutations: (\d+), as expected: (\d+), not: (\d+)$'
+function Get-LastLine { param([string[]]$Lines) return "$(@($Lines) | Select-Object -Last 1)" }
+function Get-LineBeforeLast { param([string[]]$Lines) return "$(@($Lines) | Select-Object -Last 2 | Select-Object -First 1)" }
 
 $target = Join-Path $root "test\fixtures\mutate\target.ps1"
 $before = [System.IO.File]::ReadAllText($target)
@@ -81,24 +91,38 @@ Check ($LASTEXITCODE -eq 0 -and @($onlyRun | Where-Object { $_ -match 'known-gap
 $onlyBad = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -Spec "test\fixtures\mutate\spec-honest.psd1" -Only "no-such-mutant" | ForEach-Object { "$_" })
 Check ($LASTEXITCODE -eq 2 -and @($onlyBad | Where-Object { $_ -match 'no-such-mutant' }).Count -ge 1) "-Only refuses a mutant the spec does not have"
 
-# SECTIONS: A MUTANT RUNS ONLY THE SECTIONS ITS SPEC MAPS IT TO, AND A MAP CAN NEVER HIDE A SURVIVOR.
-# Each mutant reran the whole suite when one section would catch it: link-contract.psd1 took about
-# 2900 s on the always-on box (issues #82, #83). The fixture suite logs the selection of every run, so
-# these checks see the runs the tool made, not only what it reported. The shell that runs the tool
-# has a stray HORDE_SECTIONS set: a whole run must still be whole.
+# SECTIONS AND -Fast: THE WHOLE SUITE DECIDES UNLESS THE CALLER SAYS -Fast, AND A -Fast RESULT CANNOT
+# BE READ AS A GATE'S. Each mutant reran the whole suite when one section would catch it:
+# link-contract.psd1 took about 2900 s on the always-on box (issues #82, #83). The fixture suite logs
+# the selection of every run, so these checks see the runs the tool made, not only what it reported.
+# The shell that runs the tool has a stray HORDE_SECTIONS set: a whole run must still be whole.
 $secLog = Join-Path $env:TEMP ("horde-mutate-seclog-" + [guid]::NewGuid().ToString("N") + ".txt")
 $keepSel = $env:HORDE_SECTIONS; $keepLog = $env:HORDE_MUTATE_SECTIONS_LOG
 try {
     $env:HORDE_SECTIONS = "four"; $env:HORDE_MUTATE_SECTIONS_LOG = $secLog
-    $sec = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" | ForEach-Object { "$_" })
+    $sec = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" -Fast | ForEach-Object { "$_" })
     $secCode = $LASTEXITCODE
     $secRuns = @(); if (Test-Path -LiteralPath $secLog) { $secRuns = @([System.IO.File]::ReadAllLines($secLog)) }
+    [System.IO.File]::WriteAllText($secLog, "")
+    $whole = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" | ForEach-Object { "$_" })
+    $wholeCode = $LASTEXITCODE
+    $wholeRuns = @([System.IO.File]::ReadAllLines($secLog))
+    [System.IO.File]::WriteAllText($secLog, "")
+    # HORDE_MUTATE_VERIFY_MAPS IS "1", "0" OR NOTHING: "true" read as "do not verify" and said nothing
+    # (review of #115, round 3, finding F2).
+    $keepVm = $env:HORDE_MUTATE_VERIFY_MAPS
+    try {
+        $env:HORDE_MUTATE_VERIFY_MAPS = "true"
+        $vmBad = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" | ForEach-Object { "$_" })
+        $vmBadCode = $LASTEXITCODE
+    } finally { $env:HORDE_MUTATE_VERIFY_MAPS = $keepVm }
+    $vmBadRuns = @([System.IO.File]::ReadAllLines($secLog))
     [System.IO.File]::WriteAllText($secLog, "")
     $bad = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-bad.psd1" | ForEach-Object { "$_" })
     $badCode = $LASTEXITCODE
     $badRuns = @([System.IO.File]::ReadAllLines($secLog))
     [System.IO.File]::WriteAllText($secLog, "")
-    $senv = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-env.psd1" | ForEach-Object { "$_" })
+    $senv = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-env.psd1" -Fast | ForEach-Object { "$_" })
     $senvCode = $LASTEXITCODE
     $senvRuns = @([System.IO.File]::ReadAllLines($secLog))
 } finally {
@@ -108,64 +132,100 @@ try {
 $nosuite = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-nosuite.psd1" | ForEach-Object { "$_" })
 $nosuiteCode = $LASTEXITCODE
 
-Check ($secCode -eq 0) ("a spec with a section map, one map miss and one declared survivor passes (exit " + $secCode + ")")
+# WITHOUT -Fast A MAP IS NOT USED: every run is whole, and the last line is the one a gate reads.
+Check ($wholeCode -eq 0) ("a spec with a section map passes a plain run (exit " + $wholeCode + ")")
+# The runs, in order: the baseline, the four mutants, the baseline again - no run on a selection.
+Check (($wholeRuns -join " | ") -ceq "run sections=[] | run sections=[] | run sections=[] | run sections=[] | run sections=[] | run sections=[]") ("without -Fast every mutant, mapped or not, runs the whole suite once, and no map gets a baseline (" + ($wholeRuns -join " | ") + ")")
+Check (@($whole | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[map \(two\) not used: a map is used only under -Fast\]' }).Count -eq 1) "and a mapped mutant's line says its map was not used"
+Check ((Get-LastLine $whole) -cmatch $classicLine -and (Get-LastLine $whole) -ceq "mutations: 4, as expected: 4, not: 0") ("the last line of a plain run is the classic result line and nothing more (" + (Get-LastLine $whole) + ")")
+Check ((Get-LineBeforeLast $whole) -ceq "maps: sectioned 0, misses 0, hides 0") ("the map counts have the line before it (" + (Get-LineBeforeLast $whole) + ")")
+Check (@($whole | Where-Object { $_ -match 'MAP-MISS|MAP-HIDES|unverified' }).Count -eq 0) "CONTROL: a plain run names no map miss and leaves nothing unverified"
+Check ("mutations: 4, as expected: 4, not: 0, map misses: 1, unverified catches: 1" -cnotmatch $classicLine) "CONTROL: the line the earlier form printed does not match the gate's pattern, so the pattern can tell the two apart"
+
+# AN UNKNOWN VALUE OF THE VARIABLE IS REFUSED BEFORE ANYTHING RUNS.
+Check ($vmBadCode -eq 2) ("HORDE_MUTATE_VERIFY_MAPS=true is refused with exit 2 (exit " + $vmBadCode + ")")
+Check ($vmBadRuns.Count -eq 0) ("and no suite ran, baseline included (" + ($vmBadRuns -join " | ") + ")")
+Check ($vmBad.Count -eq 0) ("and nothing is printed where a result is read: the refusal is on stderr (" + ($vmBad -join " | ") + ")")
+
+# WITH -Fast A MAPPED MUTANT RUNS ITS SECTIONS.
+Check ($secCode -eq 0) ("a -Fast run of a spec with a section map, one map miss and one declared survivor exits 0 (exit " + $secCode + ")")
 Check (@($sec | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\)' }).Count -eq 1) "a mutant its sections catch is reported caught"
 Check (@($sec | Where-Object { $_ -match '\[FAIL\] Get-Two returns two' }).Count -eq 1) "and the check in its section that caught it is named"
 # The runs, in order: the whole baseline; a baseline of each distinct map (two, four); mapped in its
 # section; map-miss in its section, then whole; survivor in its section, then whole; unmapped whole;
 # the whole baseline again, and each map's baseline again.
 $wantRuns = "run sections=[] | run sections=[two] | run sections=[four] | run sections=[two] | run sections=[two] | run sections=[] | run sections=[four] | run sections=[] | run sections=[] | run sections=[] | run sections=[two] | run sections=[four]"
-Check (($secRuns -join " | ") -ceq $wantRuns) ("the tool ran each mapped mutant in its sections only, reran on the whole suite only what passed them, and ran the baselines and the unmapped mutant whole, whatever the shell's HORDE_SECTIONS (" + ($secRuns -join " | ") + ")")
-Check (@($sec | Where-Object { $_ -match '\[OK\] map-miss: caught \(expected caught\)' }).Count -eq 1) "a mutant its sections miss and the whole suite catches is caught: a wrong map costs time, never a verdict"
+Check (($secRuns -join " | ") -ceq $wantRuns) ("under -Fast the tool ran each mapped mutant in its sections only, reran on the whole suite only what passed them, and ran the baselines and the unmapped mutant whole, whatever the shell's HORDE_SECTIONS (" + ($secRuns -join " | ") + ")")
+Check (@($sec | Where-Object { $_ -match '\[OK\] map-miss: caught \(expected caught\)' }).Count -eq 1) "a mutant its sections miss and the whole suite catches is caught: a pass of its sections is never a survival"
 Check (@($sec | Where-Object { $_ -match '\[MAP-MISS\] map-miss: its sections \(two\) passed; the whole suite caught it' }).Count -eq 1) "and is named as a map miss, so the map gets fixed"
 Check (@($sec | Where-Object { $_ -match '\[FAIL\] Get-Three returns three' }).Count -eq 1) "with the check that caught it in the whole suite"
 Check (@($sec | Where-Object { $_ -match '\[OK\] survivor: survived \(expected survives\)' }).Count -eq 1) "a mutant that survives its sections and then the whole suite is a survivor"
 Check (@($sec | Where-Object { $_ -match 'MAP-MISS\] (mapped|survivor|unmapped)' }).Count -eq 0) "CONTROL: only the map miss is named one"
-Check (@($sec | Where-Object { $_ -cmatch '^mutations: 4, as expected: 4, not: 0, map misses: 1, unverified catches: 1$' }).Count -eq 1) "the summary line counts the map misses and the catches no whole run confirmed, so both stay visible"
 Check (@($sec | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[sections: two\] unverified: the whole suite was not run' }).Count -eq 1) "a catch made by its sections alone says it is unverified"
+Check ((Get-LastLine $sec) -ceq "mutations (fast, unverified catches: 1 - not gate evidence): 4, as expected: 4, not: 0") ("and the last line of that run counts it and says the run is not gate evidence (" + (Get-LastLine $sec) + ")")
+Check ((Get-LastLine $sec) -cnotmatch $classicLine -and @($sec | Where-Object { $_ -cmatch $classicLine }).Count -eq 0) "so no line of a -Fast run with an unverified catch matches the gate's pattern"
+Check ((Get-LineBeforeLast $sec) -ceq "maps: sectioned 3, misses 1, hides 0") ("the line before it counts the mutants run on their sections and the map misses (" + (Get-LineBeforeLast $sec) + ")")
 
 Check ($badCode -eq 1) ("a spec whose map is wrong fails the run (exit " + $badCode + ")")
-Check (@($bad | Where-Object { $_ -match "\[BAD\] misspelt: invalid: section 'tow' is not one test\\fixtures\\mutate\\suite-sections\.ps1 declares" }).Count -eq 1) "a mapped section the suite does not declare is refused, not run"
+Check (@($bad | Where-Object { $_ -match "\[BAD\] misspelt: invalid: section 'tow' is not one test\\fixtures\\mutate\\suite-sections\.ps1 declares" }).Count -eq 1) "a mapped section the suite does not declare is refused, not run - in a plain run too, where the map is not used"
 Check (@($bad | Where-Object { $_ -match '\[BAD\] empty-map: invalid: its Sections names no section' }).Count -eq 1) "an empty map is refused, not read as a whole run"
 Check (@($bad | Where-Object { $_ -match '\[OK\] good: caught' }).Count -eq 1) "CONTROL: a good map in the same spec runs"
-Check (($badRuns -join " | ") -ceq "run sections=[] | run sections=[four] | run sections=[four] | run sections=[] | run sections=[four]") ("a refused mutant never runs (" + ($badRuns -join " | ") + ")")
+Check (($badRuns -join " | ") -ceq "run sections=[] | run sections=[] | run sections=[]") ("a refused mutant never runs: the baseline, the one good mutant, the baseline (" + ($badRuns -join " | ") + ")")
 Check ($nosuiteCode -eq 1 -and @($nosuite | Where-Object { $_ -match '\[BAD\] mapped-nowhere: invalid: .*suite\.ps1 declares no sections' }).Count -eq 1) "a map on a suite that declares no sections is refused"
 Check ($senvCode -eq 1 -and @($senv | Where-Object { $_ -match "\[BAD\] outside: invalid: section 'four' is outside the spec's own HORDE_SECTIONS" }).Count -eq 1) "a mutant mapped outside the spec's own section filter is refused"
 Check (@($senv | Where-Object { $_ -match '\[OK\] inside: caught' }).Count -eq 1) "CONTROL: one mapped inside it runs"
 Check (($senvRuns -join " | ") -ceq "run sections=[two,three] | run sections=[two] | run sections=[two] | run sections=[two,three] | run sections=[two]") ("the spec's own filter is the whole run for its baselines (" + ($senvRuns -join " | ") + ")")
 
-# A MAPPED CATCH IS NOT PROVEN UNTIL THE WHOLE SUITE CATCHES IT (review of #115, round 2). Section "use"
-# computes its value when run alone and reads a cache the section before it filled when run whole; the
-# mutant breaks only the computing path. Its section catches it; the whole suite never sees it.
+# A CATCH ONLY A SECTION MAKES IS NO CATCH, AND THE PLAIN RUN MUST SAY SO (review of #115, rounds 2
+# and 3). Section "use" computes its value when run alone and reads a cache the section before it
+# filled when run whole; the mutant breaks only the computing path. Its section catches it; the whole
+# suite never sees it. The plain run - what every gate runs - printed it [OK], caught, and exited 0
+# until the whole suite became every plain run's verdict.
 $cold = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" | ForEach-Object { "$_" })
 $coldCode = $LASTEXITCODE
-Check ($coldCode -eq 0 -and @($cold | Where-Object { $_ -match '\[OK\] cold-path: caught .* unverified' }).Count -eq 1 -and @($cold | Where-Object { $_ -cmatch ', unverified catches: 1$' }).Count -eq 1) "CONTROL: without -VerifyMaps its section's catch stands, marked unverified and counted - the gap the flag closes"
-$coldV = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" -VerifyMaps | ForEach-Object { "$_" })
-$coldVCode = $LASTEXITCODE
-Check ($coldVCode -eq 1 -and @($coldV | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("with -VerifyMaps the whole suite decides: the mutant its section caught survived (exit " + $coldVCode + ")")
-Check (@($coldV | Where-Object { $_ -match '\[MAP-HIDES\] cold-path: its sections \(use\) caught it and the whole suite did not' }).Count -eq 1 -and @($coldV | Where-Object { $_ -cmatch ', unverified catches: 0$' }).Count -eq 1) "and is named as a map that hides a survivor, with nothing left unverified"
+Check ($coldCode -eq 1 -and @($cold | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("a plain run reports the mutant only its section catches as the survivor it is (exit " + $coldCode + ")")
+Check (@($cold | Where-Object { $_ -match '\[OK\]' }).Count -eq 0) "and prints it as caught nowhere"
+Check ((Get-LastLine $cold) -cmatch $classicLine -and (Get-LastLine $cold) -ceq "mutations: 1, as expected: 0, not: 1") ("and counts it as not expected on the classic last line (" + (Get-LastLine $cold) + ")")
+# -Fast IS A REVIEWER'S TOOL: the section's catch stands, and the run cannot be read as a result.
+# Run with HORDE_MUTATE_VERIFY_MAPS=0, which is accepted and forces nothing.
+$keepVm = $env:HORDE_MUTATE_VERIFY_MAPS
+try {
+    $env:HORDE_MUTATE_VERIFY_MAPS = "0"
+    $coldF = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" -Fast | ForEach-Object { "$_" })
+    $coldFCode = $LASTEXITCODE
+} finally { $env:HORDE_MUTATE_VERIFY_MAPS = $keepVm }
+Check ($coldFCode -eq 0 -and @($coldF | Where-Object { $_ -match '\[OK\] cold-path: caught .* unverified' }).Count -eq 1) ("CONTROL: under -Fast, with HORDE_MUTATE_VERIFY_MAPS=0 accepted, its section's catch stands, marked unverified - the gap is real on this fixture (exit " + $coldFCode + ")")
+Check ((Get-LastLine $coldF) -cnotmatch $classicLine) ("the last line of that -Fast run does not match the gate's pattern (" + (Get-LastLine $coldF) + ")")
+Check ((Get-LastLine $coldF) -ceq "mutations (fast, unverified catches: 1 - not gate evidence): 1, as expected: 1, not: 0") "and names the number of unverified catches"
+# A GATE CAN FORCE VERIFICATION WHATEVER ITS CALLER PASSES: HORDE_MUTATE_VERIFY_MAPS=1 beats -Fast.
 $keepVm = $env:HORDE_MUTATE_VERIFY_MAPS
 try {
     $env:HORDE_MUTATE_VERIFY_MAPS = "1"
-    $coldE = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" | ForEach-Object { "$_" })
+    $coldE = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" -Fast | ForEach-Object { "$_" })
     $coldECode = $LASTEXITCODE
 } finally { $env:HORDE_MUTATE_VERIFY_MAPS = $keepVm }
-Check ($coldECode -eq 1 -and @($coldE | Where-Object { $_ -match '\[MAP-HIDES\] cold-path' }).Count -eq 1) "HORDE_MUTATE_VERIFY_MAPS=1 verifies the same way, for a gate or a scheduled run"
-$honestV = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" -VerifyMaps | ForEach-Object { "$_" })
-Check ($LASTEXITCODE -eq 0 -and @($honestV | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[sections: two\] verified by the whole suite' }).Count -eq 1 -and @($honestV | Where-Object { $_ -cmatch '^mutations: 4, as expected: 4, not: 0, map misses: 1, unverified catches: 0$' }).Count -eq 1) "CONTROL: an honest map passes -VerifyMaps, each catch confirmed by the whole suite"
+Check ($coldECode -eq 1 -and @($coldE | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("HORDE_MUTATE_VERIFY_MAPS=1 with -Fast verifies: the whole suite's survival stands (exit " + $coldECode + ")")
+Check (@($coldE | Where-Object { $_ -match '\[MAP-HIDES\] cold-path: its sections \(use\) caught it and the whole suite did not' }).Count -eq 1) "and the mutant is named as one its map hides"
+Check ((Get-LineBeforeLast $coldE) -ceq "maps: sectioned 1, misses 0, hides 1") ("and counted as one (" + (Get-LineBeforeLast $coldE) + ")")
+Check ((Get-LastLine $coldE) -cmatch $classicLine -and (Get-LastLine $coldE) -ceq "mutations: 1, as expected: 0, not: 1") ("with nothing left unverified, the last line is the classic one (" + (Get-LastLine $coldE) + ")")
+# -Fast -VerifyMaps IS THE SAME CHECK OF THE MAPS, asked for on the command line.
+$honestV = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" -Fast -VerifyMaps | ForEach-Object { "$_" })
+$honestVCode = $LASTEXITCODE
+Check ($honestVCode -eq 0 -and @($honestV | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[sections: two\] verified by the whole suite' }).Count -eq 1) ("CONTROL: an honest map passes -Fast -VerifyMaps, its catch confirmed by the whole suite (exit " + $honestVCode + ")")
+Check ((Get-LineBeforeLast $honestV) -ceq "maps: sectioned 3, misses 1, hides 0" -and (Get-LastLine $honestV) -ceq "mutations: 4, as expected: 4, not: 0") ("and a -Fast run with every catch confirmed ends in the classic line (" + (Get-LineBeforeLast $honestV) + " / " + (Get-LastLine $honestV) + ")")
 
-# EVERY MAP HAS A BASELINE OF ITS OWN. A section that fails when run without the ones before it would
-# "catch" every mutant mapped to it - here a mutant its section never even checks.
-$dep = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-dependent.psd1" | ForEach-Object { "$_" })
+# EVERY MAP HAS A BASELINE OF ITS OWN, UNDER -Fast. A section that fails when run without the ones
+# before it would "catch" every mutant mapped to it - here a mutant its section never even checks.
+$dep = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-dependent.psd1" -Fast | ForEach-Object { "$_" })
 Check ($LASTEXITCODE -eq 2 -and @($dep | Where-Object { $_ -match 'UNMUTATED suite does not pass when only its sections use run' }).Count -eq 1) "a map whose sections fail unmutated is refused before any mutant runs"
 Check (@($dep | Where-Object { $_ -match '\[OK\]|\[BAD\]' }).Count -eq 0) "and no mutant is reported against it, so none can read as caught"
-$noisy = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-noisy.psd1" | ForEach-Object { "$_" })
+$noisy = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-noisy.psd1" -Fast | ForEach-Object { "$_" })
 Check ($LASTEXITCODE -eq 2 -and @($noisy | Where-Object { $_ -match 'sections quiet run \(exited 3 but printed a failed check or an error\)' }).Count -eq 1) "a map's baseline that exits 3 yet prints an [ERROR] is not a pass"
-$silent = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-silent.psd1" | ForEach-Object { "$_" })
+$silent = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-silent.psd1" -Fast | ForEach-Object { "$_" })
 Check ($LASTEXITCODE -eq 2 -and @($silent | Where-Object { $_ -match 'sections silent run \(exited 1\)' }).Count -eq 1) "a map's baseline that exits 1 with nothing printed is not a pass either"
 # THE WHOLE-SUITE RERUN NEVER ACCEPTS 3. Exit 3 is a pass only for a run of a map's sections; a whole
 # rerun that exits 3 skipped part of the suite, and is no survival (review of #115).
-$e3 = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-exit3.psd1" | ForEach-Object { "$_" })
+$e3 = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-exit3.psd1" -Fast | ForEach-Object { "$_" })
 Check (@($e3 | Where-Object { $_ -match '\[BAD\] rerun-exits-3: the suite broke \(exit 3\) with no failed check' }).Count -eq 1) "a whole rerun that exits 3 is a broken run, never a survivor"
 # A TIMEOUT IS NEVER A SURVIVAL: a mutant declared to survive that hangs the suite is bad (review of #115).
 $hs = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-hangs-survives.psd1" -TimeoutSeconds 20 | ForEach-Object { "$_" })

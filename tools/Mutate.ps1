@@ -16,7 +16,9 @@
 # A mutation the suite is KNOWN not to catch is declared with Expect = "survives" and a Reason, so the
 # gap is written down where a reader can disagree with it, instead of being left out of the spec.
 #
-# Exit 0 only if every mutation applied exactly once and did what it was expected to.
+# Exit 0 only if every mutation applied exactly once and did what it was expected to - on the whole
+# suite, unless -Fast was given. A -Fast run can exit 0 on a catch only a section made; it is a
+# reviewer's tool and its result is never evidence for a merge (SECTIONS AND -Fast, below).
 
 #
 # "CAUGHT" MEANS A CHECK FAILED. Before any mutation, the copied suite is run UNMUTATED and must pass;
@@ -39,33 +41,65 @@
 # -Only runs just the named mutants of the spec - to rerun one after a fix without the rest - and
 # refuses a name the spec does not have (second review of PR #31, finding 9).
 #
-# SECTIONS: A MUTANT CAN RUN ONLY THE PART OF THE SUITE THAT KILLS IT (issues #82 and #83). Every
-# mutant reran the whole suite when one section would catch it; link-contract.psd1 took about 2900 s
-# on the always-on box. A suite that declares sections (test\lib\Suite.ps1, Register-HordeSuiteSections)
-# lets a mutant carry Sections = @("id", ...): that mutant's run gets HORDE_SECTIONS for those ids, and a
-# run that skipped the rest (exit 3) counts as a pass. The rules, each because the opposite would lie:
-#   - A MAPPED PASS IS NEVER A SURVIVOR UNTIL THE WHOLE SUITE SAYS SO. A mutant that passes its sections
-#     is run again on the whole suite before it gets a verdict. Caught there, it is caught, and named
-#     [MAP-MISS] and counted on the result line so the map gets fixed; passed there too, it survived.
-#   - A MAPPED CATCH IS UNVERIFIED UNLESS -VerifyMaps. A section can take another path when the
-#     sections before it did not run - a cache an earlier one would have filled, a setup it would
-#     have done - so a mutant on that path fails the section alone and passes the whole suite: a
-#     survivor the map would report as caught (review of #115, round 2, reproduced). Only a run of the
-#     whole suite can rule that out, and running it for every catch is the cost sections remove. So:
-#       * every catch made by a map alone is marked "unverified" and counted on the result line
-#         ("unverified catches: N"), so no gate can read one as proven without seeing it;
-#       * -VerifyMaps (or HORDE_MUTATE_VERIFY_MAPS=1 in the environment, for a gate or a scheduled
-#         run) reruns every mapped catch on the whole suite, and the whole suite's verdict stands. A
-#         mutant its sections caught and the whole suite did not is named [MAP-HIDES]: it survived;
-#       * -Changed always verifies: whatever a change could have moved onto such a path is exactly
-#         what it selects. A spec whose map changed has every mutant selected, so a new or edited map
-#         is always verified in the review round that brings it. The periodic full check is
-#         -VerifyMaps on every spec (CONTRIBUTING 15).
-#   - A WRONG MAP IS REFUSED, NOT RUN: a name the suite does not declare, an empty map, a map on a suite
-#     with no sections, or one outside the spec's own HORDE_SECTIONS (test\lib\SuiteSections.ps1, the
-#     rule test\test-mutation-specs.ps1 checks on every gate run).
+# SECTIONS AND -Fast: IN A REVIEW ROUND A MUTANT CAN RUN ONLY THE PART OF THE SUITE THAT KILLS IT
+# (issues #82 and #83). Every mutant reran the whole suite when one section would catch it;
+# link-contract.psd1 took about 2900 s on the always-on box. A suite that declares sections
+# (test\lib\Suite.ps1, Register-HordeSuiteSections) lets a mutant carry Sections = @("id", ...).
+#
+# WHAT A MAP CANNOT PROVE. A section can take another path when the sections before it did not run - a
+# cache an earlier one would have filled, a setup it would have done - so a mutant on that path fails
+# the section alone and passes the whole suite: a survivor the map reports as caught (review of #115,
+# round 2, reproduced on test\fixtures\mutate\spec-sections-cache.psd1). Only a run of the whole suite
+# rules that out. The first form of this tool made that run only on request (-VerifyMaps), so the
+# plain -Spec run every gate makes printed such a catch as [OK] and exited 0 (review of #115, round 3,
+# finding F1). So the whole suite decides every verdict unless the caller asks otherwise:
+#   - WITHOUT -Fast - THE DEFAULT, AND WHAT A GATE RUNS - A MAP IS NOT USED. A mapped mutant runs the
+#     whole suite once, exactly as an unmapped one does, and that run is its verdict. Its sections are
+#     not run first: the whole suite decides anyway, so that run would only be added time. THE COST,
+#     PLAINLY: at the gate a map saves nothing. Every mutant of link-contract.psd1 costs a whole run
+#     there again; the time sections save is saved in review rounds only.
+#   - -Fast USES THE MAP, AND ITS RESULT IS NOT EVIDENCE FOR A MERGE. It is the review-round
+#     accelerator. A mapped mutant's run gets HORDE_SECTIONS for its ids, and a run that skipped the
+#     rest (exit 3) counts as a pass. Then:
+#       * A MAPPED PASS IS NEVER A SURVIVOR UNTIL THE WHOLE SUITE SAYS SO. A mutant that passes its
+#         sections is run again on the whole suite. Caught there, it is caught, and named [MAP-MISS]
+#         so the map gets fixed; passed there too, it survived.
+#       * A MAPPED CATCH STANDS, UNVERIFIED. It is printed "unverified", it counts as expected, and
+#         the run exits 0 if nothing else is wrong - so a fast exit 0 is a reviewer's signal and no
+#         more. One unverified catch changes the shape of the result line (THE RESULT LINES, below),
+#         so no gate can read the run as a result.
+#       * EVERY MAP HAS AN UNMUTATED BASELINE OF ITS OWN, before and after the mutants.
+#   - -Fast WITH VERIFICATION CHECKS THE MAPS. Given -Fast and -VerifyMaps, or -Fast with
+#     HORDE_MUTATE_VERIFY_MAPS=1 in the environment, every mapped catch is run again on the whole
+#     suite and the whole suite's verdict stands. A mutant its sections caught and the whole suite did
+#     not is named [MAP-HIDES]: it survived. This costs MORE than the default - the sections' run and
+#     the whole run for every mapped mutant, and two baselines for every map - and its one use is to
+#     find a map that misses or hides.
+#   - HORDE_MUTATE_VERIFY_MAPS IS "1", "0" OR NOTHING. Unset, empty or "0", it has no say: it never
+#     turns verification off, so a plain run still verifies and -Fast alone still does not. "1"
+#     verifies even when -Fast was given, so a gate can force it whatever its caller passes. Any other
+#     value is refused on stderr with exit 2 before anything runs: "true" and "yes" used to read,
+#     silently, as "do not verify" (review of #115, round 3, finding F2).
+#   - -VerifyMaps WITHOUT -Fast changes nothing: verifying is the default. It is kept so a caller
+#     written for the earlier form still runs.
+#   - A WRONG MAP IS REFUSED, NOT RUN, with or without -Fast: a name the suite does not declare, an
+#     empty map, a map on a suite with no sections, or one outside the spec's own HORDE_SECTIONS
+#     (test\lib\SuiteSections.ps1, the rule test\test-mutation-specs.ps1 checks on every gate run).
 #   - EVERY OTHER RUN IS WHOLE: both baselines, every unmapped mutant and every rerun get the spec's own
 #     HORDE_SECTIONS or none at all - never one inherited from the shell that started this tool.
+#
+# THE RESULT LINES. The LAST line of a run in which no catch rests on a section alone is exactly
+#   mutations: N, as expected: N, not: N
+# with nothing after it. Gates outside this repository accept a spec only when its last line of output
+# matches ^mutations: (\d+), as expected: (\d+), not: (\d+)$ - the earlier form of this tool appended
+# the map counts to that line, and every spec would have read NOT RUN there. The map counts have a
+# line of their own, printed just before it and only when a mutant that ran carries a map:
+#   maps: sectioned N, misses N, hides N
+# (how many mutants ran on their sections, how many of those the map missed, how many it hid). A -Fast
+# run that left at least one catch unverified ends instead with
+#   mutations (fast, unverified catches: N - not gate evidence): N, as expected: N, not: N
+# which that pattern cannot match. A -Fast run with no unverified catch ends with the classic line:
+# every mutant its sections caught was confirmed whole, and every other verdict was the whole suite's.
 #
 # -Changed <base-ref> RUNS ONLY THE MUTANTS A CHANGE COULD HAVE MADE THE SUITES MISS: those whose find
 # string lies on a line the diff from merge-base(<base-ref>, HEAD) to the working tree added or
@@ -76,9 +110,14 @@
 # mutant selected and every one skipped, with the reason. A diff that touches a mutation target yet
 # selects nothing exits 2: zero is not a pass there. -Plan prints the selection and runs nothing (no
 # "mutations:" line, so no gate can read it as a result).
+# -Changed VERIFIES AS ANY RUN DOES: each spec it runs gets -Fast only when -Changed itself was given
+# -Fast (and -VerifyMaps likewise). Its total line is the classic one, with the "maps:" totals on the
+# line before it when a spec printed them; if any spec left a catch unverified, the total takes the
+# fast shape too. It selects by a mutant's own line and its spec file, so a change to a suite or a
+# helper alone selects - and so verifies - nothing: that is the full specs' job (CONTRIBUTING 15).
 #
 #   powershell -File tools\Mutate.ps1 -Changed origin/main
-param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan, [switch]$VerifyMaps)
+param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan, [switch]$VerifyMaps, [switch]$Fast)
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +127,11 @@ $repo = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repo "test\lib\SuiteSections.ps1")
 if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
 if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
+# HORDE_MUTATE_VERIFY_MAPS IS "1", "0" OR NOTHING, and is read before anything runs. It was compared with
+# "1" and nothing else, so "true" or "yes" from a gate's configuration meant "do not verify" and said
+# nothing (review of #115, round 3, finding F2). On stderr, so the refusal is no part of a result.
+$verifyEnv = "$env:HORDE_MUTATE_VERIFY_MAPS"
+if (@("", "0", "1") -cnotcontains $verifyEnv) { [Console]::Error.WriteLine("  HORDE_MUTATE_VERIFY_MAPS is '" + $verifyEnv + "': set it to 1 to verify every mapped catch, or to 0 or nothing to leave it to the switches. Nothing was run."); exit 2 }
 if ($Changed) {
     if ($Only.Count -gt 0) { Write-Host "  -Only and -Changed both choose the mutants; give one" -ForegroundColor Red; exit 2 }
     . (Join-Path $PSScriptRoot "MutateChanged.ps1")
@@ -139,29 +183,47 @@ if ($Changed) {
     # Each spec with a selected mutant runs as an ordinary -Spec -Only run of this same tool, in this
     # process: its own Environment (section filter), its own baselines before and after.
     $sum = 0; $okSum = 0; $notSum = 0; $worst = 0; $t0 = Get-Date
+    $unverifiedSum = 0; $mapLines = 0; $sectionedSum = 0; $missSum = 0; $hideSum = 0
     foreach ($so in $specObjs) {
         $names = @($selRows | Where-Object { $_.spec -eq $so.spec } | ForEach-Object { $_.name } | Select-Object -Unique)
         if ($names.Count -eq 0) { continue }
         Write-Host ("changed: running " + $names.Count + " mutant(s) of " + $so.spec)
         $ts = Get-Date
-        # Always verified: a change is what moves a mutant onto a path only its section takes alone.
-        $childArgs = @{ Spec = $so.spec; Only = $names; TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $true }
+        # VERIFIED UNLESS THE CALLER OF -Changed SAID -Fast: a spec run verifies by default, so nothing
+        # is passed down that the caller did not give. A change is what moves a mutant onto a path only
+        # its section takes alone (review of #115, round 2).
+        $childArgs = @{ Spec = $so.spec; Only = $names; TimeoutSeconds = $TimeoutSeconds }
+        if ($Fast) { $childArgs.Fast = $true }
+        if ($VerifyMaps) { $childArgs.VerifyMaps = $true }
         if ($RunTag) { $childArgs.RunTag = $RunTag }
         $lines = @(& $PSCommandPath @childArgs 6>&1 | ForEach-Object { "$_" })
         $code = $LASTEXITCODE
-        # The spec's own result line is relayed indented, so the one line starting "mutations: " is
-        # the total below - the line a gate reads.
-        foreach ($l in $lines) { if ($l -match '^mutations: ') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l } }
-        $m = [regex]::Match((@($lines | Where-Object { $_ -match '^mutations: ' }) | Select-Object -Last 1), '^mutations: (\d+), as expected: (\d+), not: (\d+)')
+        # The spec's own result line and its "maps:" line are relayed indented, so the one line
+        # starting "mutations" is the total below - the line a gate reads.
+        foreach ($l in $lines) { if ($l -match '^(mutations[ :]|maps: )') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l } }
+        # A spec's result is its last "mutations" line, in one of the two shapes a run can end with
+        # (THE RESULT LINES, above), each matched whole. Anything else is a spec that did not run.
+        $resultLine = "$(@($lines | Where-Object { $_ -match '^mutations[ :]' }) | Select-Object -Last 1)"
+        $m = [regex]::Match($resultLine, '^mutations: (\d+), as expected: (\d+), not: (\d+)$')
+        $mFast = [regex]::Match($resultLine, '^mutations \(fast, unverified catches: (\d+) - not gate evidence\): (\d+), as expected: (\d+), not: (\d+)$')
         if ($m.Success) { $sum += [int]$m.Groups[1].Value; $okSum += [int]$m.Groups[2].Value; $notSum += [int]$m.Groups[3].Value }
+        elseif ($mFast.Success) { $unverifiedSum += [int]$mFast.Groups[1].Value; $sum += [int]$mFast.Groups[2].Value; $okSum += [int]$mFast.Groups[3].Value; $notSum += [int]$mFast.Groups[4].Value }
         elseif ($code -eq 0) { $code = 2 }
+        $mMaps = [regex]::Match("$(@($lines | Where-Object { $_ -match '^maps: ' }) | Select-Object -Last 1)", '^maps: sectioned (\d+), misses (\d+), hides (\d+)$')
+        if ($mMaps.Success) { $mapLines++; $sectionedSum += [int]$mMaps.Groups[1].Value; $missSum += [int]$mMaps.Groups[2].Value; $hideSum += [int]$mMaps.Groups[3].Value }
         if ($code -ne 0 -and $code -ne 1) { $code = 2 }
         if ($code -gt $worst) { $worst = $code }
         Write-Host ("changed: " + $so.spec + " exit=" + $code + " in " + [int]((Get-Date) - $ts).TotalSeconds + "s")
     }
     Write-Host ("changed: ran the selection in " + [int]((Get-Date) - $t0).TotalSeconds + "s")
     if ($worst -eq 2) { Write-Host "mutations: not run - a selected spec could not run (see above)"; exit 2 }
-    Write-Host ("mutations: " + $sum + ", as expected: " + $okSum + ", not: " + $notSum)
+    # The map counts were on no line of this total at all (review of #115, round 3, finding F5). They
+    # get the line before it, and the total keeps the shape a gate reads - unless a spec left a catch
+    # unverified, which only -Changed -Fast can cause.
+    if ($mapLines -gt 0) { Write-Host ("maps: sectioned " + $sectionedSum + ", misses " + $missSum + ", hides " + $hideSum) }
+    $totalHead = "mutations: "
+    if ($unverifiedSum -gt 0) { $totalHead = "mutations (fast, unverified catches: " + $unverifiedSum + " - not gate evidence): " }
+    Write-Host ($totalHead + $sum + ", as expected: " + $okSum + ", not: " + $notSum)
     if ($worst -ne 0 -or $notSum -gt 0) { exit 1 }
     exit 0
 }
@@ -259,8 +321,14 @@ if ($unknownOnly.Count -gt 0) { Write-Host ("  -Only names mutants the spec does
 $script:envSaved = @{}
 $specEnv = @{}
 if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
+# A MAP IS USED ONLY UNDER -Fast. Without it the whole suite is each mutant's one run, so there is no
+# mapped catch to confirm. (When a map was used in every run and verifying had to be asked for, the
+# plain run every gate makes reported a survivor as caught: review of #115, round 3, finding F1.)
+$useMaps = [bool]$Fast
+# Under -Fast, a mapped catch is confirmed on the whole suite only when asked. Not named $verifyMaps:
+# variable names ignore case, so that local WAS the -VerifyMaps parameter (CONTRIBUTING 12).
+$confirmCatches = ($VerifyMaps -or $verifyEnv -ceq "1")
 # The whole suite, as this spec runs it: its own section filter, or none.
-$verifyMaps = ($VerifyMaps -or "$env:HORDE_MUTATE_VERIFY_MAPS" -eq "1")
 $wholeSelection = ""
 if ($specEnv.ContainsKey("HORDE_SECTIONS")) { $wholeSelection = "$($specEnv.HORDE_SECTIONS)" }
 foreach ($name in @($specEnv.Keys)) {
@@ -312,8 +380,10 @@ try {
     # ones before it - one that reads a variable an earlier section set - fails every mutant mapped to
     # it, and reads as a catch the whole-suite rerun never questions (it reruns only a pass). Reproduced
     # by the review of #115 (B1) and on test-node-serve's refused-peer section, 2026-10-07. So each
-    # distinct selection is run unmutated first and again at the end, and must pass both times.
-    $selections = @($script:toRun | Where-Object { $_.ContainsKey("Sections") -and -not (Get-HordeMutantSectionProblem -Mutant $_ -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv) } | ForEach-Object { (@(@($_.Sections) | ForEach-Object { "$_".Trim() }) -join ",") } | Select-Object -Unique)
+    # distinct selection is run unmutated first and again at the end, and must pass both times. Only
+    # under -Fast: without it no mutant runs on a selection, so there is no such catch to guard.
+    $selections = @()
+    if ($useMaps) { $selections = @($script:toRun | Where-Object { $_.ContainsKey("Sections") -and -not (Get-HordeMutantSectionProblem -Mutant $_ -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv) } | ForEach-Object { (@(@($_.Sections) | ForEach-Object { "$_".Trim() }) -join ",") } | Select-Object -Unique) }
     foreach ($sel in $selections) {
         $selBase = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel
         $selWhy = Get-HordeSelectionBaselineProblem -Run $selBase -PassCodes $passCodes -Seconds $TimeoutSeconds
@@ -329,7 +399,7 @@ try {
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
-        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); sections = ""; mapMiss = $false; verified = ""; mapHides = $false }
+        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); sections = ""; sectioned = $false; mapMiss = $false; verified = ""; mapHides = $false }
         $mapWhy = ""
         if ($m.ContainsKey("Sections")) {
             $mapWhy = Get-HordeMutantSectionProblem -Mutant $m -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv
@@ -358,18 +428,19 @@ try {
                     [void]$results.Add([pscustomobject]$row)
                     continue
                 }
-                if ($row.sections) {
+                if ($row.sections -and $useMaps) {
                     # Its sections first; a run that skipped the rest exits 3, which is a pass here.
+                    $row.sectioned = $true
                     $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $row.sections
                     $row.failures = @(Get-HordeFailLines -Out $run.out)
                     $row.outcome = Get-HordeRunOutcome -Run $run -PassCodes (@($passCodes) + 3) -Seconds $TimeoutSeconds
                     if ($row.outcome -eq "survived") {
-                        # A MAP CAN NEVER HIDE A SURVIVOR: the whole suite decides.
+                        # A PASS OF ITS SECTIONS IS NOT A SURVIVAL: the whole suite decides.
                         $rerun = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
                         $row.failures = @(Get-HordeFailLines -Out $rerun.out)
                         $row.outcome = Get-HordeRunOutcome -Run $rerun -PassCodes $passCodes -Seconds $TimeoutSeconds
                         $row.mapMiss = ($row.outcome -eq "caught")
-                    } elseif ($row.outcome -eq "caught" -and $verifyMaps) {
+                    } elseif ($row.outcome -eq "caught" -and $confirmCatches) {
                         # A MAPPED CATCH, CONFIRMED: the whole suite's verdict stands.
                         $confirm = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
                         $wholeOutcome = Get-HordeRunOutcome -Run $confirm -PassCodes $passCodes -Seconds $TimeoutSeconds
@@ -377,6 +448,7 @@ try {
                         else { $row.outcome = $wholeOutcome; $row.failures = @(Get-HordeFailLines -Out $confirm.out); $row.mapHides = $true }
                     } elseif ($row.outcome -eq "caught") { $row.verified = "no" }
                 } else {
+                    # Unmapped, or mapped in a run without -Fast: the whole suite, once.
                     $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
                     $row.failures = @(Get-HordeFailLines -Out $run.out)
                     $row.outcome = Get-HordeRunOutcome -Run $run -PassCodes $passCodes -Seconds $TimeoutSeconds
@@ -419,7 +491,10 @@ finally {
 if ($script:baselineFailed) { exit 2 }
 
 $bad = 0
+$mapped = 0
+$sectioned = 0
 $mapMisses = 0
+$mapHides = 0
 $unverified = 0
 foreach ($r in $results) {
     # Expect is written "caught" or "survives"; the outcome of a run is "caught" or "survived".
@@ -427,7 +502,11 @@ foreach ($r in $results) {
     $ok = ($r.outcome -eq $want)
     if (-not $ok) { $bad++ }
     $color = "DarkGray"; if (-not $ok) { $color = "Red" }
-    $where = ""; if ($r.sections) { $where = " [sections: " + $r.sections + "]" }
+    $where = ""
+    if ($r.sections) { $mapped++ }
+    if ($r.sectioned) { $sectioned++ }
+    if ($r.sections -and $useMaps) { $where = " [sections: " + $r.sections + "]" }
+    elseif ($r.sections) { $where = " [map (" + $r.sections + ") not used: a map is used only under -Fast]" }
     if ($r.verified -eq "yes") { $where += " verified by the whole suite" }
     elseif ($r.verified -eq "no") { $where += " unverified: the whole suite was not run"; $unverified++ }
     Write-Host ("  [" + $(if ($ok) { "OK" } else { "BAD" }) + "] " + $r.name + ": " + $r.outcome + " (expected " + $r.expect + ")" + $where) -ForegroundColor $color
@@ -436,12 +515,19 @@ foreach ($r in $results) {
         Write-Host ("  [MAP-MISS] " + $r.name + ": its sections (" + $r.sections + ") passed; the whole suite caught it - fix the map") -ForegroundColor Yellow
     }
     if ($r.mapHides) {
+        # Counted: a [MAP-HIDES] line was on no count at all (review of #115, round 3, finding F4).
+        $mapHides++
         Write-Host ("  [MAP-HIDES] " + $r.name + ": its sections (" + $r.sections + ") caught it and the whole suite did not (" + $r.outcome + ") - the map hides a survivor") -ForegroundColor Red
     }
     foreach ($f in $r.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
 }
-# The map misses ride on the one result line a gate reads, so a wrong map stays visible: a warning,
-# never a failure, since the whole suite still decided the verdict.
-Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad + ", map misses: " + $mapMisses + ", unverified catches: " + $unverified)
+# THE LAST LINE IS WHAT A GATE READS, SO IT KEEPS ITS EXACT SHAPE (THE RESULT LINES, in the header). The
+# map counts go on the line before it, when a mutant that ran carries a map. And a run that left a
+# catch unverified must not end in a line a gate accepts: its head is another, so the gate's pattern
+# cannot match it.
+if ($mapped -gt 0) { Write-Host ("maps: sectioned " + $sectioned + ", misses " + $mapMisses + ", hides " + $mapHides) }
+$resultHead = "mutations: "
+if ($unverified -gt 0) { $resultHead = "mutations (fast, unverified catches: " + $unverified + " - not gate evidence): " }
+Write-Host ($resultHead + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad)
 if ($bad -gt 0) { exit 1 }
 exit 0

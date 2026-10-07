@@ -22,7 +22,7 @@
            Find = 'if ($worst -ne 0 -or $notSum -gt 0) { exit 1 }'
            Replace = '' }
         @{ Name = "spec-result-relayed-unindented"
-           Find = 'if ($l -match ''^mutations: '') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l }'
+           Find = 'if ($l -match ''^(mutations[ :]|maps: )'') { Write-Host ("  " + $so.spec + ": " + $l) } else { Write-Host $l }'
            Replace = 'Write-Host $l' }
         @{ Name = "changed-spec-not-reselected"
            Find = 'specChanged = $diff.changed.ContainsKey($relKey) }'
@@ -33,8 +33,27 @@
         @{ Name = "zero-line-carries-a-number"
            Find = 'Write-Host ("mutations: none selected - "'
            Replace = 'Write-Host ("mutations: 0 - "' }
-        @{ Name = "changed-runs-unverified"
-           Find = 'TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $true }'
-           Replace = 'TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $false }' }
+        # -Changed verifies unless its caller said -Fast, and then says so on its total.
+        @{ Name = "changed-always-fast"
+           Find = 'if ($Fast) { $childArgs.Fast = $true }'
+           Replace = '$childArgs.Fast = $true' }
+        @{ Name = "changed-fast-not-passed-down"
+           Find = 'if ($Fast) { $childArgs.Fast = $true }'
+           Replace = '' }
+        @{ Name = "fast-spec-result-not-read"
+           Find = 'elseif ($mFast.Success) {'
+           Replace = 'elseif ($false) {' }
+        @{ Name = "unverified-catches-not-summed"
+           Find = 'elseif ($mFast.Success) { $unverifiedSum += [int]$mFast.Groups[1].Value;'
+           Replace = 'elseif ($mFast.Success) {' }
+        @{ Name = "fast-total-classic-shaped"
+           Find = 'if ($unverifiedSum -gt 0) { $totalHead ='
+           Replace = 'if ($false) { $totalHead =' }
+        @{ Name = "map-totals-not-printed"
+           Find = 'if ($mapLines -gt 0) { Write-Host ("maps: sectioned "'
+           Replace = 'if ($false) { Write-Host ("maps: sectioned "' }
+        @{ Name = "map-hides-not-summed"
+           Find = '$hideSum += [int]$mMaps.Groups[3].Value'
+           Replace = '$hideSum += 0' }
     )
 }

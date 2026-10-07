@@ -1,5 +1,6 @@
 # A spec that maps mutants to the suite's sections: one the map kills, one the map misses and the
-# whole suite catches, one that survives everything, and one with no map.
+# whole suite catches, one that survives everything, and one with no map. The map is used only under
+# -Fast; a plain run gives every one of them the whole suite.
 @{
     Target = "test\fixtures\mutate\target-sections.ps1"
     Suite  = "test\fixtures\mutate\suite-sections.ps1"

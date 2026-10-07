@@ -1,7 +1,9 @@
-# Mutations of the section map in tools\Mutate.ps1: a mutant runs only the sections its spec maps it to,
-# and a map can never hide a survivor. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\mutate-sections.psd1
-# Each lets a mapped run lie - a survivor reported without the whole suite, a part read as the whole, a
-# wrong map run instead of refused; test\test-mutate.ps1 must fail for every one.
+# Mutations of the section map in tools\Mutate.ps1: the whole suite decides every verdict unless the
+# caller says -Fast, and a -Fast result can never be read as a gate's.
+# Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\mutate-sections.psd1
+# Each lets a mapped run lie - a map used in a plain run, a survivor reported without the whole suite,
+# a part read as the whole, a wrong map run instead of refused, a fast result shaped like a gate's;
+# test\test-mutate.ps1 must fail for every one.
 @{
     Target = "tools\Mutate.ps1"
     Suite  = "test\test-mutate.ps1"
@@ -23,9 +25,15 @@
         @{ Name = "map-miss-not-counted"
            Find = '$mapMisses++'
            Replace = '' }
-        @{ Name = "map-misses-off-the-result-line"
-           Find = ' + ", map misses: " + $mapMisses + ", unverified catches: " + $unverified)'
-           Replace = ' + ", unverified catches: " + $unverified)' }
+        @{ Name = "maps-line-not-printed"
+           Find = 'if ($mapped -gt 0) { Write-Host ("maps: sectioned "'
+           Replace = 'if ($false) { Write-Host ("maps: sectioned "' }
+        @{ Name = "map-hides-not-counted"
+           Find = '$mapHides++'
+           Replace = '' }
+        @{ Name = "sectioned-runs-not-counted"
+           Find = 'if ($r.sectioned) { $sectioned++ }'
+           Replace = '' }
         @{ Name = "selection-never-passed"
            Find = 'if ($Selection -ne "") { $psi.EnvironmentVariables["HORDE_SECTIONS"] = $Selection }'
            Replace = '' }
@@ -60,11 +68,40 @@
            Find = 'if ($Run.timedOut) { return ("timed out after " + $Seconds + "s - not a catch") }'
            Replace = 'if ($Run.timedOut) { return "survived" }' }
         @{ Name = "mapped-catch-not-verified"
-           Find = '} elseif ($row.outcome -eq "caught" -and $verifyMaps) {'
+           Find = '} elseif ($row.outcome -eq "caught" -and $confirmCatches) {'
            Replace = '} elseif ($false) {' }
         @{ Name = "verify-env-ignored"
-           Find = '$verifyMaps = ($VerifyMaps -or "$env:HORDE_MUTATE_VERIFY_MAPS" -eq "1")'
-           Replace = '$verifyMaps = [bool]$VerifyMaps' }
+           Find = '$confirmCatches = ($VerifyMaps -or $verifyEnv -ceq "1")'
+           Replace = '$confirmCatches = [bool]$VerifyMaps' }
+        @{ Name = "verify-switch-ignored"
+           Find = '$confirmCatches = ($VerifyMaps -or $verifyEnv -ceq "1")'
+           Replace = '$confirmCatches = ($verifyEnv -ceq "1")' }
+        # The finding that blocked the first form (review of #115, round 3, F1): with a map used in a
+        # plain run, a catch only a section makes is reported caught, exit 0.
+        @{ Name = "map-used-without-fast"
+           Find = '$useMaps = [bool]$Fast'
+           Replace = '$useMaps = $true' }
+        @{ Name = "sections-run-without-fast"
+           Find = 'if ($row.sections -and $useMaps) {'
+           Replace = 'if ($row.sections) {' }
+        @{ Name = "map-baselines-run-without-fast"
+           Find = 'if ($useMaps) { $selections = @('
+           Replace = 'if ($true) { $selections = @(' }
+        @{ Name = "verify-env-any-value-accepted"
+           Find = 'if (@("", "0", "1") -cnotcontains $verifyEnv) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "verify-env-zero-refused"
+           Find = 'if (@("", "0", "1") -cnotcontains $verifyEnv) {'
+           Replace = 'if (@("", "1") -cnotcontains $verifyEnv) {' }
+        @{ Name = "verify-env-refusal-on-stdout"
+           Find = '[Console]::Error.WriteLine("  HORDE_MUTATE_VERIFY_MAPS is'
+           Replace = '[Console]::Out.WriteLine("  HORDE_MUTATE_VERIFY_MAPS is' }
+        @{ Name = "fast-result-line-classic-shaped"
+           Find = 'if ($unverified -gt 0) { $resultHead ='
+           Replace = 'if ($false) { $resultHead =' }
+        @{ Name = "map-counts-back-on-the-result-line"
+           Find = 'Write-Host ($resultHead + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad)'
+           Replace = 'Write-Host ($resultHead + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad + ", map misses: " + $mapMisses)' }
         @{ Name = "whole-verdict-ignored"
            Find = 'else { $row.outcome = $wholeOutcome; $row.failures = @(Get-HordeFailLines -Out $confirm.out); $row.mapHides = $true }'
            Replace = 'else { $row.mapHides = $true }' }

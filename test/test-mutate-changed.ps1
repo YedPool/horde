@@ -12,6 +12,9 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "tools\MutateChanged.ps1")
+# No run below inherits a verify setting from a gate's environment: the -Fast checks need their
+# catches left unverified. This suite's own process only; the check about the variable sets it.
+$env:HORDE_MUTATE_VERIFY_MAPS = $null
 
 # ---------------------------------------------------------------------------------------------
 # The parts, one rule at a time.
@@ -245,9 +248,10 @@ try {
     Check ($unshimmed.code -eq 0) "CONTROL: with the real git first on PATH again, the same plan exits 0"
     if ((Split-Path -Leaf $shimDir) -match '^horde-mutchg-[0-9a-f]{32}-shim\z') { Remove-Item -LiteralPath $shimDir -Recurse -Force -ErrorAction SilentlyContinue }
 
-    # -Changed VERIFIES EVERY MAPPED CATCH ON THE WHOLE SUITE (review of #115, round 2). A change is what
-    # moves a mutant onto a path its section takes only when run alone; here section "use" computes its
-    # value alone and reads a warm cache when run whole, so its catch of cold-path is no catch at all.
+    # -Changed VERIFIES AS ANY RUN DOES, AND RUNS FAST ONLY WHEN ASKED (review of #115, rounds 2 and
+    # 3). A change is what moves a mutant onto a path its section takes only when run alone; here
+    # section "use" computes its value alone and reads a warm cache when run whole, so its catch of
+    # cold-path is no catch at all.
     Write-Fx "cache.ps1" @('$script:valCache = $null', 'function Get-Val { if ($null -ne $script:valCache) { return $script:valCache }; return (2 + 3) }', 'function Set-ValCache { $script:valCache = 5 }')
     Write-Fx "test\cache-suite.ps1" @(
         '. (Join-Path $PSScriptRoot "lib\Suite.ps1")',
@@ -269,8 +273,23 @@ try {
     Write-Fx "cache.ps1" @('$script:valCache = $null', 'function Get-Val { if ($null -ne $script:valCache) { return $script:valCache }; return (2 + 3) } # computed', 'function Set-ValCache { $script:valCache = 5 }')
     $cold = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\cache.psd1")
     Check ($c4 -eq 0 -and @(Get-Picked $cold.lines "SELECT") -join "," -ceq "cold-path") ("CONTROL: the changed line selects the mapped mutant (" + ((Get-Picked $cold.lines "SELECT") -join ", ") + ")")
-    Check ($cold.code -eq 1 -and @($cold.lines | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("-Changed runs it with its map verified: the whole suite's survival stands (exit " + $cold.code + ")")
-    Check (@($cold.lines | Where-Object { $_ -match '\[MAP-HIDES\] cold-path' }).Count -eq 1) "and names the map that hid it"
+    $classicLine = '^mutations: (\d+), as expected: (\d+), not: (\d+)$'
+    function Get-LastLine { param([string[]]$Lines) return "$(@($Lines) | Select-Object -Last 1)" }
+    function Get-LineBeforeLast { param([string[]]$Lines) return "$(@($Lines) | Select-Object -Last 2 | Select-Object -First 1)" }
+    Check ($cold.code -eq 1 -and @($cold.lines | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("-Changed runs it on the whole suite: its survival stands (exit " + $cold.code + ")")
+    Check ((Get-LastLine $cold.lines) -cmatch $classicLine -and (Get-LastLine $cold.lines) -ceq "mutations: 1, as expected: 0, not: 1") ("and the total is the classic last line (" + (Get-LastLine $cold.lines) + ")")
+    # -Changed -Fast: the spec runs fast, and the total cannot be read as a result either.
+    $coldFast = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\cache.psd1", "-Fast")
+    Check ($coldFast.code -eq 0 -and @($coldFast.lines | Where-Object { $_ -match '\[OK\] cold-path: caught .* unverified' }).Count -eq 1) ("CONTROL: -Changed -Fast lets the section's catch stand, unverified (exit " + $coldFast.code + ")")
+    Check ((Get-LastLine $coldFast.lines) -ceq "mutations (fast, unverified catches: 1 - not gate evidence): 1, as expected: 1, not: 0") ("its total names the unverified catches (" + (Get-LastLine $coldFast.lines) + ")")
+    Check (@($coldFast.lines | Where-Object { $_ -cmatch $classicLine }).Count -eq 0) "and no line of it matches the gate's pattern"
+    Check ((Get-LineBeforeLast $coldFast.lines) -ceq "maps: sectioned 1, misses 0, hides 0") ("the map totals have the line before the total (" + (Get-LineBeforeLast $coldFast.lines) + ")")
+    Check (@($coldFast.lines | Where-Object { $_ -match '^(mutations|maps)' }).Count -eq 2) "and those two are the only unindented result lines: each spec's own are relayed indented"
+    # HORDE_MUTATE_VERIFY_MAPS=1 reaches each spec's run, and beats -Fast there.
+    $keepVm = $env:HORDE_MUTATE_VERIFY_MAPS
+    try { $env:HORDE_MUTATE_VERIFY_MAPS = "1"; $coldForced = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\cache.psd1", "-Fast") } finally { $env:HORDE_MUTATE_VERIFY_MAPS = $keepVm }
+    Check ($coldForced.code -eq 1 -and @($coldForced.lines | Where-Object { $_ -match '\[MAP-HIDES\] cold-path' }).Count -eq 1) ("-Changed -Fast with HORDE_MUTATE_VERIFY_MAPS=1 verifies, and names the map that hid the survivor (exit " + $coldForced.code + ")")
+    Check ((Get-LineBeforeLast $coldForced.lines) -ceq "maps: sectioned 1, misses 0, hides 1" -and (Get-LastLine $coldForced.lines) -ceq "mutations: 1, as expected: 0, not: 1") ("the hidden survivor is on the map totals, and the total is the classic line (" + (Get-LineBeforeLast $coldForced.lines) + " / " + (Get-LastLine $coldForced.lines) + ")")
 
     # THE ARGUMENTS.
     $noArgs = Invoke-FxMutate @()
