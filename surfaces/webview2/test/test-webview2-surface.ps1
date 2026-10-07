@@ -265,6 +265,7 @@ foreach ($notReal in @("no", "unknown")) {
 }
 
 $bridgeJs = [System.IO.File]::ReadAllText((Join-Path $adapter "page\bridge.js"))
+Check ($bridgeJs.Contains('fetch(new URL("' + $script:HordeSurfaceMessagesFile + '", here))') -and $bridgeJs -cnotmatch 'VERSION|protocol\s*[:=]\s*[0-9]') ("the page's side of the bridge asks for the port's definition of the messages by the name the port serves it under (" + $script:HordeSurfaceMessagesFile + "), and carries no protocol number of its own")
 Check ($bridgeJs.Contains("window.HordeBridge = { request: request, on: on, live:") -and -not $bridgeJs.Contains("hostObjects") -and -not $bridgeJs.Contains("eval(") -and -not $bridgeJs.Contains("innerHTML")) "the page's side of the bridge gives a page request, on and live, and uses no host object, no eval and no markup from data"
 
 Write-Host ""
