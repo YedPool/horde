@@ -76,6 +76,13 @@ foreach ($wrong in @(
 Write-Host ""
 Write-Host "--- one window ---" -ForegroundColor Cyan
 $one = Pick @((Pane 0 0 0 "cmd.exe")) "0" @((Win 4100 "whatever the window is called"))
+# ONE WINDOW ID LISTED AND ONE WINDOW IN THE PROCESS: THE TITLE NEED NOT FIT, ON PURPOSE (review of
+# 2026-10-06, finding C3, "taken without looking at its title"). The proof here is the count - the
+# terminal says it has one window and its process shows one - and a count does not rest on a title,
+# which is text a session sets and the weaker evidence of the two. Asking the title to fit as well
+# would turn a certain answer into unknown for every terminal that titles its windows its own way.
+# What the count can get wrong is a window opening or closing as it is read, and that is what the
+# second reading is for (below): the count must hold twice.
 Check ($one.state -ceq "known" -and $one.value.handle -eq 4100 -and $one.value.window -ceq "0" -and $one.value.detail -ceq "the terminal has one window") "one window listed and one terminal window in the process: that window, whatever its title"
 $oneTwoTabs = Pick @((Pane 0 0 0 "first"), (Pane 0 1 1 "second")) "1" @((Win 4100 "[1/2] first"))
 Check ($oneTwoTabs.state -ceq "known" -and $oneTwoTabs.value.handle -eq 4100) "a pane in a tab that is not in front is still in that one window"
@@ -162,9 +169,10 @@ function Find { param([string]$Pane, [string]$Instance, [scriptblock]$W = $windo
     return (Find-HordeWeztermSessionWindow -Pane $Pane -Instance $Instance -Settings (Settings @{ socketFolder = $sockDir; attempts = $Attempts; retryWaitMs = 25 }) -Runner $R -Windows $W -ProcessStart $alive -Wait $wait) }
 $found = Find "18" "gui-sock-4242"
 Check ($found.state -ceq "known" -and $found.value.handle -eq 7002) "pane 18 of instance gui-sock-4242: the keeper's window"
-Check ($script:calls.Count -eq 1 -and $script:calls[0] -ceq "list --format json") "the terminal is asked one thing, its list of panes - nothing that types, moves or closes"
+Check ($script:calls.Count -eq 2 -and @($script:calls | Where-Object { $_ -cne "list --format json" }).Count -eq 0) "the terminal is asked one thing, its list of panes, once for each of two readings - nothing that types, moves or closes"
+Check ($found.value.detail -ceq "the one of the terminal's 4 windows titled after its panes, and again on a second reading 300 ms later" -and ($script:waits -join ",") -ceq "300") "the second reading is taken after the wait its settings give, 300 ms unless a person says otherwise, and the answer says it held twice"
 Check ($script:targets[0].socket -ceq (Join-Path $sockDir "gui-sock-4242") -and "" + $script:targets[0].guiPid -ceq "4242" -and $script:targets[0].guiStart -ceq "133000000000000000") "and it is asked as a named terminal: the instance's socket, its gui and that gui's start time"
-Check ($script:windowReads -eq 2 -and $script:pidAsked -eq 4242) "the windows read are that gui process's own, once before the listing and once after"
+Check ($script:windowReads -eq 4 -and $script:pidAsked -eq 4242) "the windows read are that gui process's own, before each listing and after it"
 
 $script:calls.Clear()
 foreach ($bad in @(
@@ -191,22 +199,69 @@ $script:windowReads = 0
 $settling = { param($processId) $script:windowReads++; if ($script:windowReads -le 2) { return $spinning }; return $fleetWindows }
 $script:waits.Clear()
 $r = Find "18" "gui-sock-4242" -W $settling
-Check ($r.state -ceq "known" -and $r.value.handle -eq 7002 -and $script:windowReads -eq 4) "a title that fitted nothing on the first reading is read again, and found on the second"
-Check (($script:waits -join ",") -ceq "25") "after the wait its settings give, asked for once"
-$script:windowReads = 0
+Check ($r.state -ceq "known" -and $r.value.handle -eq 7002 -and $script:windowReads -eq 6) "a title that fitted nothing on the first reading is read again, found, and found once more"
+Check (($script:waits -join ",") -ceq "25,300") "after the wait its settings give before a retry, and then the wait before the second reading"
+$script:windowReads = 0; $script:waits.Clear()
 $never = { param($processId) $script:windowReads++; return $spinning }
 $r = Find "18" "gui-sock-4242" -W $never
-Check ($r.state -ceq "unknown" -and $r.reason -like "none of the terminal's*" -and $script:windowReads -eq 6) "one that never fits is read three times and is then unknown"
+Check ($r.state -ceq "unknown" -and $r.reason -like "none of the terminal's*" -and $script:windowReads -eq 6 -and ($script:waits -join ",") -ceq "25,25") "one that never fits is read three times and is then unknown"
 $script:windowReads = 0
 $r = Find "99" "gui-sock-4242" -W $never
 Check ($r.state -ceq "unknown" -and $script:windowReads -eq 2) "a pane that is not listed is not read again: reading again cannot bring it back"
 
 Write-Host ""
+Write-Host "--- a window is believed only when a second reading, a moment later, names it again ---" -ForegroundColor Cyan
+# THE REVIEW'S CASE (2026-10-06, finding C2). Window 100 truly shows pane 0 and window 200 pane 1. Both
+# panes have just been retitled; the listing is newer than both readings of the windows, and pane 0's
+# new title is what window 200 still shows. One reading names window 200: known, and wrong.
+$staleRows = @((Pane 1 1 0 "deploy"), (Pane 2 2 1 "logs"))
+$staleWindows = @((Win 100 "build"), (Win 200 "deploy"))
+$trueWindows = @((Win 100 "deploy"), (Win 200 "logs"))
+$wrong = Pick $staleRows "0" $staleWindows $staleWindows
+Check ($wrong.state -ceq "known" -and $wrong.value.handle -eq 200) "CONTROL: one reading whose titles are both stale names window 200, which does not hold the pane - one reading is a likelihood, not a proof"
+$right = Pick $staleRows "0" $trueWindows $trueWindows
+Check ($right.state -ceq "known" -and $right.value.handle -eq 100) "CONTROL: read when the titles have caught up, the same listing names window 100"
+function Twice { param($First, $Second)
+    if ($null -eq (Get-Command -Name Compare-HordeWeztermWindowReadings -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ state = "missing"; value = $null; reason = "the finder has nothing that holds two readings against each other" } }
+    return (Compare-HordeWeztermWindowReadings -First $First -Second $Second -ApartMs 300) }
+$held = Twice $wrong $right
+Check ($held.state -ceq "unknown" -and $held.reason -ceq "two readings 300 ms apart named different windows for the pane (200, then 100), so neither is believed") ("the two readings disagree: unknown, with both windows named and neither chosen (" + $held.state + ")")
+$same = Twice $right (Pick $staleRows "0" $trueWindows $trueWindows)
+Check ($same.state -ceq "known" -and $same.value.handle -eq 100 -and $same.value.window -ceq "1" -and $same.value.detail -ceq "the one of the terminal's 2 windows titled after its panes, and again on a second reading 300 ms later") "the two readings name the same window for the same pane: known, and it says it held twice"
+$gone = Twice $right (Pick $staleRows "0" @((Win 100 "mid redraw"), (Win 200 "logs")))
+Check ($gone.state -ceq "unknown" -and $gone.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later (none of the terminal's 2 windows*") "found once and not found again: unknown, with what the second reading said"
+$renumbered = Twice $right (Pick @((Pane 7 1 0 "deploy"), (Pane 2 2 1 "logs")) "0" $trueWindows $trueWindows)
+Check ($renumbered.state -ceq "unknown" -and $renumbered.reason -ceq "two readings 300 ms apart put the pane in different windows of the terminal's own numbering (1, then 7), so neither is believed") "the same native window, but the terminal's own number for the pane's window changed between the readings: unknown"
+$never1 = Twice (Pick $staleRows "9" $trueWindows) $right
+Check ($never1.state -ceq "unknown" -and $never1.reason -like "the terminal lists no pane 9*") "a first reading that found nothing is the answer as it is: there is nothing for a second to hold"
+# Through the finder: the whole reading - windows, listing, windows - is taken twice.
+$script:listing = Listing $staleRows
+$catching = { param($processId) $script:windowReads++; if ($script:windowReads -le 2) { return $staleWindows }; return $trueWindows }
+$script:windowReads = 0; $script:waits.Clear(); $script:calls.Clear()
+$r = Find "0" "gui-sock-4242" -W $catching -Attempts 1
+Check ($r.state -ceq "unknown" -and $r.reason -like "two readings 300 ms apart named different windows for the pane (200, then 100)*" -and $script:calls.Count -eq 2 -and $script:windowReads -eq 4 -and ($script:waits -join ",") -ceq "300") ("THE REVIEW'S CASE, through the finder: the stale match is not believed - " + $r.state + ", " + $script:calls.Count + " listings, waits " + ($script:waits -join ","))
+$script:windowReads = 0; $script:waits.Clear()
+$r = Find "0" "gui-sock-4242" -W $catching
+Check ($r.state -ceq "known" -and $r.value.handle -eq 100 -and $script:windowReads -eq 8 -and ($script:waits -join ",") -ceq "300,25,300") "and read again, the window that holds twice is the one that truly shows the pane"
+$script:windowReads = 0
+$r = Find "0" "gui-sock-4242" -W { param($processId) $script:windowReads++; return $staleWindows } -Attempts 1
+Check ($r.state -ceq "known" -and $r.value.handle -eq 200) "THE LIMIT, WRITTEN DOWN AS A CHECK: titles that stay stale in the same way through both readings are still believed; the second reading shortens the time a coincidence must last, it does not end it"
+# One window id and one window (finding C3, above): the count must hold on the second reading too.
+$script:listing = Listing @((Pane 0 0 0 "cmd.exe"))
+$script:windowReads = 0
+$r = Find "0" "gui-sock-4242" -W { param($processId) $script:windowReads++; return @((Win 4100 "a title that fits nothing")) } -Attempts 1
+Check ($r.state -ceq "known" -and $r.value.handle -eq 4100 -and $r.value.detail -ceq "the terminal has one window, and again on a second reading 300 ms later") "one window id and one window, on both readings: that window, by count, though its title fits nothing"
+$script:windowReads = 0
+$r = Find "0" "gui-sock-4242" -W { param($processId) $script:windowReads++; if ($script:windowReads -le 2) { return @((Win 4100 "a title that fits nothing")) }; return @((Win 4100 "a title that fits nothing"), (Win 4200 "one that has just opened")) } -Attempts 1
+Check ($r.state -ceq "unknown" -and $r.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later*") "one window on the first reading and two on the second: the count did not hold, and no title says which it is - unknown"
+$script:listing = Listing $fleet
+
+Write-Host ""
 Write-Host "--- its numbers and its folder are settings, with one table and one file ---" -ForegroundColor Cyan
 $declared = @($script:HordeWeztermWindowSettings.settings | ForEach-Object { $_.name + "=" + $_.default })
-Check (($declared -join " ") -ceq "attempts=3 retryWaitMs=200 socketFolder=") ("the finder declares its settings once, with these defaults (" + ($declared -join " ") + ")")
+Check (($declared -join " ") -ceq "attempts=3 retryWaitMs=200 confirmWaitMs=300 socketFolder=") ("the finder declares its settings once, with these defaults (" + ($declared -join " ") + ")")
 $none = Get-HordeWeztermWindowSettings
-Check ($none.state -ceq "defaults" -and $none.values.attempts -eq 3 -and $none.values.retryWaitMs -eq 200 -and $none.values.socketFolder -ceq "" -and @($none.findings).Count -eq 0 -and -not (Test-Path -LiteralPath $env:HORDE_HOME)) "with no file under the home every setting is its default, nothing is found wrong, and nothing was made"
+Check ($none.state -ceq "defaults" -and $none.values.attempts -eq 3 -and $none.values.retryWaitMs -eq 200 -and $none.values.confirmWaitMs -eq 300 -and $none.values.socketFolder -ceq "" -and @($none.findings).Count -eq 0 -and -not (Test-Path -LiteralPath $env:HORDE_HOME)) "with no file under the home every setting is its default, nothing is found wrong, and nothing was made"
 # The terminal's own place, when the folder is left out: this user's profile. The recording runner is
 # handed the socket and nothing is opened.
 $script:targets.Clear()
@@ -241,6 +296,10 @@ try {
     Check ($r.state -ceq "unknown" -and $script:windowReads -eq 4 -and ($script:waits -join ",") -ceq "7") ("a file under the home that says two readings and 7 ms: read twice, 7 ms apart (" + $script:windowReads + " window reads, waits " + ($script:waits -join ",") + ")")
     Check ($script:targets.Count -gt 0 -and $script:targets[0].socket -ceq (Join-Path $sockDir "gui-sock-4242")) "and the folder it names is where the socket is looked for"
     Check ((Get-HordeWeztermWindowSettings).state -ceq "read") "CONTROL: that file passed every check, and the finder went on with what it says"
+    [System.IO.File]::WriteAllText($settingsFile, (ConvertTo-Json -InputObject @{ schemaVersion = 1; settings = @{ confirmWaitMs = 60; socketFolder = $sockDir } } -Compress))
+    $script:waits.Clear()
+    $r = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Runner $runner -Windows $windows -ProcessStart $alive -Wait $wait
+    Check ($r.state -ceq "known" -and ($script:waits -join ",") -ceq "60" -and $r.value.detail -like "*again on a second reading 60 ms later") "a file that says the second reading comes 60 ms later: it does, and the answer says 60"
     # A FILE THAT FAILS A CHECK IS REFUSED, AND THE FINDER THEN ASKS NOTHING (core/ModuleSettings.ps1: an
     # override file that fails its checks refuses with a reason and never falls back to the defaults).
     # A setting out of its range beside a key nobody declared: no window is read and no terminal asked,

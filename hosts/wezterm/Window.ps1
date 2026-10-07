@@ -17,6 +17,10 @@
 # (20240203): `cli list --format json` gives window_id, tab_id, pane_id, title and is_active for every
 # pane and no native handle; the gui process had 16 terminal windows and 16 window ids. So:
 #   - one window id listed, one terminal window in the process: that window, nothing to tell apart.
+#     ITS TITLE IS NOT ASKED TO FIT, on purpose (review of 2026-10-06, finding C3): the proof is the
+#     count, which does not rest on a title - text a session sets, and the weaker evidence of the two -
+#     and asking for both would make a certain answer unknown in every terminal that titles its
+#     windows its own way. A count can be wrong while a window opens or closes; it must hold twice.
 #   - otherwise, BY THAT EXACT WINDOW'S OWN DETAILS FROM THE SAME LISTING: a terminal window is titled
 #     after the active pane of its active tab, with "[<tab>/<tabs>] " in front when it has more than
 #     one tab and "[Z] " in front of everything when the pane is zoomed (measured 2026-10-06: "[6/6]
@@ -29,6 +33,14 @@
 # A title can change between the two reads (a busy session redraws its title several times a second),
 # so the windows are read before and after the listing and a match in either counts, and the whole
 # reading is tried a few times before the answer is unknown.
+#
+# AND A WINDOW IS BELIEVED ONLY WHEN IT IS FOUND TWICE. One reading can name the wrong window: titles
+# stale in just the wrong way fit the session's window id and no other (review of 2026-10-06, finding
+# C2). So when a reading finds a window, the whole reading - windows, listing, windows - is taken again
+# a moment later (setting confirmWaitMs, 300 ms), and the answer is known only when both name the same
+# native window for the same window id (Compare-HordeWeztermWindowReadings, which also says what this
+# does not close). It costs one more call to the terminal and the wait, each time a window is found.
+# The one-window case is held to it too: the count of one must hold twice.
 #
 # A terminal configured to title its windows another way (its format-window-title event) will fit no
 # title: the answer is then unknown, and the caller's window stands free. That is the honest result.
@@ -59,6 +71,7 @@
 $script:HordeWeztermWindowSettings = New-HordeModuleSettings -Module "wezterm-window" -Settings @(
     @{ name = "attempts";     kind = "whole";  default = 3;   min = 1; max = 10;   what = "How many times the windows and the listing are read before a title that fits nothing is believed." },
     @{ name = "retryWaitMs";  kind = "whole";  default = 200; min = 0; max = 5000; what = "Milliseconds waited before the windows and the listing are read again." },
+    @{ name = "confirmWaitMs"; kind = "whole"; default = 300; min = 50; max = 5000; what = "Milliseconds between the reading that finds a window and the second reading that must name it again." },
     @{ name = "socketFolder"; kind = "folder"; default = "";                       what = "Folder the terminal keeps its sockets in; left out, the terminal's own place under the user's profile." }
 )
 
@@ -200,6 +213,34 @@ function Test-HordeWeztermWindowTitle {
     return $false
 }
 
+function New-HordeWeztermUnsettled {
+    # An unknown that another reading may settle: a title caught between two states, or two readings
+    # that disagreed. It carries a mark, readAgain, so the finder decides by the mark and never by the
+    # words of a reason; every other unknown stands as it is, because reading again cannot change it.
+    param([Parameter(Mandatory = $true)][string]$Reason)
+    $unsettled = New-HordeUnknown -Reason $Reason
+    Add-Member -InputObject $unsettled -NotePropertyName readAgain -NotePropertyValue $true
+    return $unsettled
+}
+
+function Compare-HordeWeztermWindowReadings {
+    # THE SECOND PROOF (review of 2026-10-06, finding C2 and decision 4). One reading can name the
+    # wrong window as known: with two panes just retitled and the listing newer than both readings of
+    # the windows, a stale title fits the session's window id and no other (the review ran that case,
+    # and the suite keeps it). So a window is believed only when a second whole reading, taken a moment
+    # later, names the same native window for the same window id. -First and -Second are the answers
+    # of the two readings, -ApartMs the wait between them. A PURE FUNCTION.
+    # WHAT THIS DOES NOT CLOSE: titles that stay stale in the same way through both readings. The
+    # wait shortens the time a coincidence must last; only an id shared by the terminal's listing and
+    # the operating system would end it, and this terminal gives none (header).
+    param([Parameter(Mandatory = $true)]$First, [Parameter(Mandatory = $true)]$Second, [Parameter(Mandatory = $true)][int]$ApartMs)
+    if ($First.state -cne "known") { return $First }
+    if ($Second.state -cne "known") { return (New-HordeWeztermUnsettled -Reason ("a window was found for the pane and was not found again on a second reading " + $ApartMs + " ms later (" + $Second.reason + "), and a match that does not hold twice is not believed")) }
+    if ([long]$First.value.handle -ne [long]$Second.value.handle) { return (New-HordeWeztermUnsettled -Reason ("two readings " + $ApartMs + " ms apart named different windows for the pane (" + $First.value.handle + ", then " + $Second.value.handle + "), so neither is believed")) }
+    if ("" + $First.value.window -cne "" + $Second.value.window) { return (New-HordeWeztermUnsettled -Reason ("two readings " + $ApartMs + " ms apart put the pane in different windows of the terminal's own numbering (" + $First.value.window + ", then " + $Second.value.window + "), so neither is believed")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ handle = [long]$Second.value.handle; window = $Second.value.window; detail = ("" + $Second.value.detail + ", and again on a second reading " + $ApartMs + " ms later") }))
+}
+
 function Select-HordeWeztermSessionWindow {
     # THE DECISION, with no terminal in it: from the listing's rows, the pane, and the terminal
     # process's windows read before (-Native) and after (-NativeAfter) the listing, an answer - known
@@ -225,7 +266,7 @@ function Select-HordeWeztermSessionWindow {
     $fits = { param([string]$Key, [string]$Id) $rowsOf = @($Rows | Where-Object { $_.window -ceq $Id }); foreach ($t in @($titles[$Key])) { if (Test-HordeWeztermWindowTitle -Title $t -Rows $rowsOf) { return $true } }; return $false }
     $matched = @(@($titles.Keys) | Where-Object { & $fits $_ $windowId })
     if ($matched.Count -eq 0) {
-        return (New-HordeUnknown -Reason ("none of the terminal's " + $titles.Count + " windows is titled as the window of pane " + $Pane + " would be: its title changed while it was read, or this terminal titles its windows its own way"))
+        return (New-HordeWeztermUnsettled -Reason ("none of the terminal's " + $titles.Count + " windows is titled as the window of pane " + $Pane + " would be: its title changed while it was read, or this terminal titles its windows its own way"))
     }
     if ($matched.Count -gt 1) {
         return (New-HordeUnknown -Reason ("" + $matched.Count + " of the terminal's windows are titled as the window of pane " + $Pane + " would be, and one is never chosen over another"))
@@ -266,26 +307,42 @@ function Find-HordeWeztermSessionWindowWith {
     $last = $null
     for ($try = 1; $try -le $Values.attempts; $try++) {
         if ($try -gt 1) { Wait-HordeWeztermWindowMoment -Milliseconds $Values.retryWaitMs -Wait $Wait }
-        $before = $null; $after = $null
-        if ($null -ne $Windows) { $before = @(& $Windows ([long]$target.value.guiPid)) } else { $before = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$target.value.guiPid)) }
-        $readIn = $ReadAs
-        if ($null -eq $Runner) { $readIn = Get-HordeWeztermAnswerEncoding }
-        $call = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $target.value -Runner $Runner
-        if ($call.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit " + $call.code + "): " + ("" + $call.err).Trim())) }
-        $listing = $call.out
-        if ($null -ne $readIn) {
-            $mended = ConvertTo-HordeWeztermAnswerText -Text (@($call.out) -join "`n") -ReadAs $readIn
-            if ($mended.state -cne "known") { return $mended }
-            $listing = $mended.value
+        $last = Read-HordeWeztermWindowReading -Target $target.value -Pane $Pane -Runner $Runner -Windows $Windows -ReadAs $ReadAs
+        if ($last.state -ceq "known") {
+            # Found once. Believed only if a second whole reading, a moment later, says the same.
+            Wait-HordeWeztermWindowMoment -Milliseconds $Values.confirmWaitMs -Wait $Wait
+            $again = Read-HordeWeztermWindowReading -Target $target.value -Pane $Pane -Runner $Runner -Windows $Windows -ReadAs $ReadAs
+            $last = Compare-HordeWeztermWindowReadings -First $last -Second $again -ApartMs $Values.confirmWaitMs
+            if ($last.state -ceq "known") { return $last }
         }
-        $rows = Read-HordeWeztermWindowList -Raw $listing
-        if ($rows.state -cne "known") { return $rows }
-        if ($null -ne $Windows) { $after = @(& $Windows ([long]$target.value.guiPid)) } else { $after = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$target.value.guiPid)) }
-        $last = Select-HordeWeztermSessionWindow -Rows @($rows.value) -Pane $Pane -Native $before -NativeAfter $after
-        # Only a title that fitted nothing is worth another reading; every other answer stands.
-        if ($last.state -ceq "known" -or $last.reason -notlike "none of the terminal's*") { return $last }
+        # Only an answer another reading may settle is read again; every other answer stands.
+        if ($null -eq $last.PSObject.Properties["readAgain"]) { return $last }
     }
     return $last
+}
+
+function Read-HordeWeztermWindowReading {
+    # ONE WHOLE READING of the named terminal -Target: its process's windows, its listing, its windows
+    # again, and the decision on those three - the answer of Select-HordeWeztermSessionWindow, or the
+    # unknown of whatever could not be read.
+    param([Parameter(Mandatory = $true)]$Target, [Parameter(Mandatory = $true)][string]$Pane,
+        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [System.Text.Encoding]$ReadAs = $null)
+    $before = $null; $after = $null
+    if ($null -ne $Windows) { $before = @(& $Windows ([long]$Target.guiPid)) } else { $before = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$Target.guiPid)) }
+    $readIn = $ReadAs
+    if ($null -eq $Runner) { $readIn = Get-HordeWeztermAnswerEncoding }
+    $call = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $Target -Runner $Runner
+    if ($call.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit " + $call.code + "): " + ("" + $call.err).Trim())) }
+    $listing = $call.out
+    if ($null -ne $readIn) {
+        $mended = ConvertTo-HordeWeztermAnswerText -Text (@($call.out) -join "`n") -ReadAs $readIn
+        if ($mended.state -cne "known") { return $mended }
+        $listing = $mended.value
+    }
+    $rows = Read-HordeWeztermWindowList -Raw $listing
+    if ($rows.state -cne "known") { return $rows }
+    if ($null -ne $Windows) { $after = @(& $Windows ([long]$Target.guiPid)) } else { $after = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$Target.guiPid)) }
+    return (Select-HordeWeztermSessionWindow -Rows @($rows.value) -Pane $Pane -Native $before -NativeAfter $after)
 }
 
 # THE PORT (core/HostWindow.ps1). A caller reaches this file only through it, so nothing outside
