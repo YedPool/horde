@@ -282,7 +282,8 @@ try {
     $s = State (Write-Lines "oldnote" @(@(ToolUse "2026-10-02T10:00:01Z" "toolu_V1" "Bash" @{ command = "x" }) + $untimedStart + @(Note "2026-09-30T10:00:00Z" "buntimed1" "completed")))
     Check (@($s.openTasks).Count -eq 1) "a notification from before this process started finishes nothing"
     $p = Write-Lines "hugepending" @((Prompt "2026-10-02T10:00:00Z" "go"), (TurnEnd "2026-10-02T10:00:06Z" ([long]3000000000)))
-    Check ((State $p).pendingAgents -gt 0) "a pending count too large for 32 bits still holds the session"
+    $hp = $null; try { $hp = (State $p).pendingAgents } catch { $hp = $null }
+    Check ($hp -eq [long]3000000000) "a pending count too large for 32 bits is read whole and still holds the session"
 
     Write-Host ""
     Write-Host "--- the Remote Control link, reported (design S8) ---" -ForegroundColor Cyan
