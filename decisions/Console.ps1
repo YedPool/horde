@@ -23,9 +23,13 @@
 # THE CONVERSATION UNDER A QUESTION is three verbs. `answer` and `reply` are both the operation say:
 # which of them was typed decides who is recorded as speaking and by what route, and no flag can say
 # otherwise - `answer` is the session that keeps the list writing down what the founder said in chat,
-# stored as recorded from chat and never as typed by him. `inbox` is the operation inbox, asked twice:
-# once to read what is unread, and - after the lines are out - once to mark exactly those messages as
-# read (Complete-HordeDecisionCommand). The words of a message are printed line for line as they are.
+# stored as recorded from chat and never as typed by him. `inbox` is two operations, in this order:
+# inbox, which only reads what is unread; and - after the lines are out - mark-read, naming the last
+# record that was printed (Complete-HordeDecisionCommand). So a command stopped between the two leaves
+# messages unread that were seen, never messages marked that nobody saw. `inbox -Json` is one line and
+# must say what the WHOLE command did, the marking included, so there the marking is made before the
+# line is written; the line says whether it was made and up to which record. The words of a message
+# are printed line for line as they are.
 #
 # THE PLAIN-TEXT OUTPUT IS UTF-8 WHEN IT GOES TO A PIPE. Typed at a terminal it is written as it is, and
 # how it looks is the terminal's doing. Redirected, Windows PowerShell 5.1 encodes it in the console's
@@ -69,7 +73,8 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # reply: that session speaks. inbox: what the founder has said that it has not read.
     answer = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
     reply  = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
-    inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]" }
+    # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
+    inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
@@ -133,8 +138,12 @@ function Read-HordeDecisionJsonFile {
 function ConvertTo-HordeDecisionJsonLine {
     # An answer as one line of ASCII JSON: { state; value; reason; observedAt }, core/Tristate.ps1's
     # stored form, so a script reads the three states the same way everywhere in Horde.
-    param($Answer)
-    $json = ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $Answer) -Compress -Depth 12
+    # -Beside is members to put beside those four, for a command that did more than one operation
+    # (inbox: the marking), so that its one line says everything it did.
+    param($Answer, $Beside = $null)
+    $record = ConvertTo-HordeAnswerRecord -Answer $Answer
+    if ($null -ne $Beside) { foreach ($k in @($Beside.Keys)) { $record[$k] = $Beside[$k] } }
+    $json = ConvertTo-Json -InputObject $record -Compress -Depth 12
     # Outside a string, JSON has no character beyond ASCII, so every match is inside one, where a \u
     # escape is the same character. A character beyond U+FFFF is two UTF-16 units and becomes two
     # escapes, which is how JSON writes it.
@@ -398,23 +407,31 @@ function Write-HordeDecisionLines {
     } finally { [Console]::OutputEncoding = $was }
 }
 
+function Invoke-HordeDecisionMarking {
+    # Ask for the marking a command owes: -After is { operation; request }. Returns what happened, as
+    # { done; upTo; marked; reason }: done is true when the marking is in the store (made now, or made
+    # before under the same id, or already made by another reader), and reason says why when it is not.
+    param($After)
+    $answer = Invoke-HordeDecision -Operation "$($After.operation)" -Request $After.request
+    if ($answer.state -cne "known") { return [pscustomobject]@{ done = $false; upTo = [long]0; marked = 0; reason = "$($answer.reason)" } }
+    if ($answer.value.outcome -ceq "refused") { return [pscustomobject]@{ done = $false; upTo = [long]0; marked = 0; reason = "$($answer.value.reason)" } }
+    return [pscustomobject]@{ done = $true; upTo = [long]$answer.value.upTo; marked = [int]$answer.value.marked; reason = "" }
+}
+
 function Complete-HordeDecisionCommand {
     # What a command does once its lines are out: -After is what Invoke-HordeDecisionCommand handed
     # back for it, or $null for nothing. Returns { lines; failure } like the command itself.
-    # Today that is the second half of `inbox`: marking as read exactly the messages that were
-    # printed, by naming the last of them (upTo). PRINTED FIRST, MARKED AFTER, so that a command
-    # stopped between the two leaves messages unread that were seen - which shows them again - and
-    # never messages marked read that nobody saw.
+    # Today that is the second half of `inbox`: marking as read up to the last record that was
+    # printed. PRINTED FIRST, MARKED AFTER, so that a command stopped between the two leaves messages
+    # unread that were seen - which shows them again - and never messages marked read that nobody saw.
+    # A MARKING THAT FAILS SAYS SO PLAINLY, and fails the command: the messages are still unread.
     param($After)
     if ($null -eq $After) { return [pscustomobject]@{ lines = @(); failure = "" } }
-    $answer = Invoke-HordeDecision -Operation "$($After.operation)" -Request $After.request
-    if ($answer.state -cne "known") { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $answer.reason) } }
-    if ($answer.value.outcome -ceq "refused") { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $answer.value.reason) } }
-    $lines = @()
-    if (-not [bool]$After.quiet) { $lines = @("", ("Marked as read: " + $answer.value.marked + " message(s), up to record " + $answer.value.upTo + ".")) }
-    # Another reader marked them between this command's printing and its marking: said as it is,
-    # not as "0 message(s), up to record 0".
-    if (-not [bool]$After.quiet -and [int]$answer.value.marked -eq 0) { $lines = @("", "Nothing was left to mark: the messages above were marked as read by another reader in the meantime.") }
+    $marking = Invoke-HordeDecisionMarking -After $After
+    if (-not $marking.done) { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $marking.reason) } }
+    $lines = @("", ("Marked as read: " + $marking.marked + " message(s), up to record " + $marking.upTo + "."))
+    # Another reader marked them between this command's printing and its marking: said as it is.
+    if ([int]$marking.marked -eq 0) { $lines = @("", "Nothing was left to mark: the messages above were marked as read by another reader in the meantime.") }
     return [pscustomobject]@{ lines = $lines; failure = "" }
 }
 
@@ -503,18 +520,36 @@ function Invoke-HordeDecisionCommand {
         }
     }
     $answer = Invoke-HordeDecision -Operation $operation -Request $request
-    # `inbox` WITHOUT -Peek MARKS WHAT IT PRINTED, AFTER IT IS PRINTED. The second request names the
-    # last message this answer holds (upTo), so a message that arrives between the two is beyond it
-    # and stays unread. Nothing to mark - no message, or the reading failed - asks for nothing.
+    # `inbox` WITHOUT -Peek MARKS WHAT IT PRINTED, AFTER IT IS PRINTED: the operation mark-read, naming
+    # the last record this answer holds (upTo), so a message that arrives between the two is beyond
+    # it and stays unread. Nothing to mark - no message, or the reading failed - asks for nothing.
     $after = $null
     $peek = ($have.ContainsKey("Peek") -and [bool]$have["Peek"])
     $asJson = ($have.ContainsKey("Json") -and [bool]$have["Json"])
-    if ($Verb -ceq "inbox" -and -not $peek -and $answer.state -ceq "known" -and $answer.value.outcome -ceq "done" -and @($answer.value.messages).Count -gt 0) {
-        $after = [pscustomobject]@{ operation = "inbox"; quiet = $asJson
-            request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; mark = $true; upTo = [long]$answer.value.upTo } }
+    $isInbox = ($Verb -ceq "inbox")
+    $unread = 0
+    if ($isInbox -and $answer.state -ceq "known" -and $answer.value.outcome -ceq "done") { $unread = @($answer.value.messages).Count }
+    if ($isInbox -and -not $peek -and $unread -gt 0) {
+        $after = [pscustomobject]@{ operation = "$($spec.then)"; request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; upTo = [long]$answer.value.upTo } }
     }
     $lines = @()
-    if ($have.ContainsKey("Json") -and [bool]$have["Json"]) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
+    $markFailure = ""
+    if ($asJson -and $isInbox) {
+        # ONE LINE THAT SAYS WHAT THE WHOLE COMMAND DID: the messages, and whether and up to where it
+        # marked. A line cannot be added to after it is written, so here - and only here - the marking
+        # is made before the printing. If it fails the line says so, and the command fails.
+        $marking = [ordered]@{ done = $false; upTo = [long]0; marked = 0; reason = "nothing was unread" }
+        if ($peek) { $marking["reason"] = "not asked: -Peek marks nothing" }
+        if ($answer.state -cne "known" -or $answer.value.outcome -cne "done") { $marking["reason"] = "the messages could not be read, so nothing was marked" }
+        if ($null -ne $after) {
+            $made = Invoke-HordeDecisionMarking -After $after
+            $marking = [ordered]@{ done = [bool]$made.done; upTo = [long]$made.upTo; marked = [int]$made.marked; reason = "$($made.reason)" }
+            if (-not $made.done) { $markFailure = "the messages were NOT marked as read, and will be shown again: " + $made.reason }
+            $after = $null
+        }
+        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marking = [pscustomobject]$marking }))
+    }
+    elseif ($asJson) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
     else {
         # The kinds table comes from the operations, like everything else this caller knows of the
         # list; if it cannot be had, a kind is shown by its name.
@@ -522,10 +557,11 @@ function Invoke-HordeDecisionCommand {
         $table = Invoke-HordeDecision -Operation "kinds" -Request @{}
         if ($table.state -ceq "known" -and $table.value.outcome -ceq "done") { $kinds = $table.value.kinds }
         $lines = @(Format-HordeDecisionAnswer -Verb $Verb -Answer $answer -Kinds $kinds -Showing $showing)
-        if ($Verb -ceq "inbox" -and $peek -and $answer.state -ceq "known" -and $answer.value.outcome -ceq "done" -and @($answer.value.messages).Count -gt 0) { $lines += @("", "Nothing was marked as read (-Peek).") }
+        if ($isInbox -and $peek -and $unread -gt 0) { $lines += @("", "Nothing was marked as read (-Peek).") }
     }
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
+    elseif ($markFailure -ne "") { $failure = $markFailure }
     return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after }
 }

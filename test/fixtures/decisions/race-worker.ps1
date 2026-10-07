@@ -30,7 +30,7 @@
 #   question, say. This is the race that shows what two DIFFERENT writes do to each other.
 #
 # -Mode inbox: with decisions/Console.ps1 at -CodePath, -Count times, on each tick: it does what
-#   `horde decisions inbox -Json` does, in its two halves - the reading and printing half, then, after
+#   `horde decisions inbox` does, in its two halves - the reading and printing half, then, after
 #   -PauseMs, the marking half - and writes down which messages the first half printed. The pause is
 #   where another racer's new message lands. This is the race that shows whether a message can be
 #   marked read without having been printed.
@@ -133,13 +133,13 @@ for ($i = 0; $i -lt $Count; $i++) {
         } catch { $line = "" + $i + "|threw||0|0||" + ("$($_.Exception.Message)" -replace "[\r\n|]", " ") }
     }
     elseif ($Mode -ceq "inbox") {
-        # The two halves of `horde decisions inbox -Json`, as cli/commands/decisions.ps1 runs them, with
+        # The two halves of `horde decisions inbox`, as cli/commands/decisions.ps1 runs them, with
         # the pause between them where the printing would be.
         try {
-            $first = Invoke-HordeDecisionCommand -Verb "inbox" -Given @{ Verb = "inbox"; Json = $true }
+            $first = Invoke-HordeDecisionCommand -Verb "inbox" -Given @{ Verb = "inbox" }
+            # What was printed, read from the printed lines themselves: every message's line names its record.
             $printed = @()
-            $parsed = (@($first.lines)[0] | ConvertFrom-Json)
-            if ($first.failure -eq "" -and $parsed.state -ceq "known") { $printed = @($parsed.value.messages | ForEach-Object { $_.message.sequence }) }
+            if ($first.failure -eq "") { $printed = @($first.lines | ForEach-Object { if ("$_" -cmatch '\(record ([0-9]+), ') { $Matches[1] } }) }
             if ($PauseMs -gt 0) { Start-Sleep -Milliseconds $PauseMs }
             $second = Complete-HordeDecisionCommand -After $first.after
             $line = "" + $i + "|" + ($printed -join ",") + "|" + ("$($first.failure)$($second.failure)" -replace "[\r\n|]", " ")
