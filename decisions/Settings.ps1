@@ -19,22 +19,32 @@
 #     not this module's alone.
 #   - READING IS PURE GIVEN THE TEXT. ConvertFrom-HordeDecisionSettingsText and
 #     Resolve-HordeDecisionSettings take text and give values; neither opens a file, reads the
-#     environment or a clock. Only Get-HordeDecisionSetting reads the one table beside this file.
-#   - AN OVERRIDE IS LAID OVER THE DEFAULTS, AND A WRONG ONE NEVER STOPS THE MODULE. A value of the
-#     wrong kind, or outside its range, or for a name the table does not have, is reported BY NAME and
-#     the default is used. No override is read from disk here: where one lives is the general unit's
-#     to say, and today Get-HordeDecisionSetting resolves with none.
+#     environment or a clock. Only Get-HordeDecisionSetting, and what it calls, reads files.
+#   - AN OVERRIDE IS LAID OVER THE DEFAULTS, AND ONE THAT FAILS ITS CHECKS IS REFUSED. The rule, which
+#     the general unit takes too: an override file that fails its checks refuses with a reason and
+#     NEVER SILENTLY FALLS BACK TO THE DEFAULTS. A person who wrote 5 where only 10 to 100 is allowed
+#     must be told so - not handed the default without a word, which would look exactly like being
+#     obeyed. So a value of the wrong kind or outside its range, a key the table does not have, or
+#     text that is no override at all refuses the WHOLE override, naming every problem (the file, the
+#     key, why); no setting is handed out from it, the wrong ones or the right ones, and no default
+#     stands in. With NO override file the defaults table is used: that is not a fallback, it is
+#     what was asked for.
+#   - THE OVERRIDE FILE IS <HordeHome>\settings\decisions.json, the place the general unit gives a
+#     module's override. Get-HordeDecisionSetting reads it, if it is there, every time it is asked:
+#     a small file, and a process that stays up sees a change without being restarted.
 # WHEN THAT UNIT LANDS: decisions/settings.json becomes its defaults table for this module (moved or
-# pointed at, entry for entry); the two pure functions here are replaced by its reader; and
-# Get-HordeDecisionSetting becomes one call to it. Nothing that calls Get-HordeDecisionSetting changes.
+# pointed at, entry for entry); the pure functions here are replaced by its reader; and
+# Get-HordeDecisionSetting and Get-HordeDecisionSettingsProblem become calls to it. Nothing that calls
+# those two changes.
 #
 # THE SHIPPED TABLE BEING WRONG IS A DEFECT, NOT A SETTING: a default outside its own range, a range
-# upside down, a kind nobody knows. That is refused whole, at the first setting asked for - unlike an
-# override, which a person wrote and which is reported and stepped over.
+# upside down, a kind nobody knows. That is refused whole, at the first setting asked for.
 #
 # THE TABLE IS DATA, NOT CODE, as decisions/question-kinds.json is: a page in a window can read it.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
+
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
 
 $script:HordeDecisionSettings = $null
 $script:HordeDecisionSettingNamePattern = '\Adecisions(\.[a-z][A-Za-z0-9]{0,39}){2}\z'
@@ -143,42 +153,42 @@ function ConvertFrom-HordeDecisionSettingsText {
 }
 
 function Resolve-HordeDecisionSettings {
-    # The value of every setting: its default, or the override's value where the override gives one
-    # that fits. PURE: a table (ConvertFrom-HordeDecisionSettingsText) and the override's text in,
-    # { values; findings } out. -OverrideText is JSON, { "schemaVersion": 1, "values": { name: value } },
-    # or "" for none.
-    # A WRONG OVERRIDE NEVER STOPS ANYTHING: text that is not such an object, a name the table does not
-    # have, a value of the wrong kind or outside its range - each is a finding that names what is
-    # wrong, and the default stands. A finding never repeats a text value: what a person typed into a
-    # settings file may be what must not be printed.
-    param([Parameter(Mandatory = $true)]$Table, [AllowEmptyString()][string]$OverrideText = "")
+    # The value of every setting: its default, or the override's value where the override gives one.
+    # PURE: a table (ConvertFrom-HordeDecisionSettingsText) and the override's text in,
+    # { state; values; findings } out. -OverrideText is JSON, { "schemaVersion": 1, "values":
+    # { name: value } }, or "" for no override; -From names the override in a finding (its file).
+    #   state ok       values holds every setting; findings is empty.
+    #   state refused  THE OVERRIDE FAILED ITS CHECKS. values is $null - nothing is handed out, and no
+    #                  default stands in for a wrong value - and findings names EVERY problem: the
+    #                  file, the key, and why. One wrong entry refuses the whole override.
+    # A finding never repeats a text value, nor a key that is not shaped like a setting's name: what a
+    # person typed into a settings file may be what must not be printed.
+    param([Parameter(Mandatory = $true)]$Table, [AllowEmptyString()][string]$OverrideText = "", [string]$From = "the settings override")
     $values = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
     foreach ($name in @($Table.Keys)) { $values[$name] = $Table[$name].default }
+    if ($OverrideText.Trim() -eq "") { return [pscustomobject]@{ state = "ok"; values = $values; findings = @() } }
     $findings = New-Object System.Collections.ArrayList
-    if ($OverrideText.Trim() -eq "") { return [pscustomobject]@{ values = $values; findings = @() } }
     $given = $null
     try { $given = ($OverrideText | ConvertFrom-Json) } catch { $given = $null }
     $valuesProp = $null; $versionProp = $null
     if ($given -is [System.Management.Automation.PSCustomObject]) { $valuesProp = $given.PSObject.Properties["values"]; $versionProp = $given.PSObject.Properties["schemaVersion"] }
     if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $valuesProp -or $valuesProp.Value -isnot [System.Management.Automation.PSCustomObject]) {
-        [void]$findings.Add("the settings override is not an object with schemaVersion 1 and a values object, so none of it is used: every setting has its default")
-        return [pscustomobject]@{ values = $values; findings = @($findings) }
+        return [pscustomobject]@{ state = "refused"; values = $null; findings = @($From + ": it is not an object with schemaVersion 1 and a values object") }
     }
     foreach ($prop in @($valuesProp.Value.PSObject.Properties)) {
         $name = "$($prop.Name)"
         if (-not $Table.ContainsKey($name)) {
-            $shown = "a name that is not repeated here"
+            $shown = "a key that is not repeated here"
             if ($name -cmatch '\A[A-Za-z][A-Za-z0-9.]{0,99}\z') { $shown = "'" + $name + "'" }
-            [void]$findings.Add("the settings override names " + $shown + ", which is not a setting of the decisions module; it is not used")
+            [void]$findings.Add($From + ": " + $shown + " is not a setting of the decisions module")
             continue
         }
-        $entry = $Table[$name]
-        $wrong = Get-HordeDecisionSettingValueProblem -Entry $entry -Value $prop.Value
-        # Only a number is repeated in a finding (the problem's own words do that); text never is.
-        if ($wrong -ne "") { [void]$findings.Add("the setting '" + $name + "' " + $wrong + "; its default is used"); continue }
+        $wrong = Get-HordeDecisionSettingValueProblem -Entry $Table[$name] -Value $prop.Value
+        if ($wrong -ne "") { [void]$findings.Add($From + ": '" + $name + "' " + $wrong); continue }
         $values[$name] = $prop.Value
     }
-    return [pscustomobject]@{ values = $values; findings = @($findings) }
+    if ($findings.Count -gt 0) { return [pscustomobject]@{ state = "refused"; values = $null; findings = @($findings) } }
+    return [pscustomobject]@{ state = "ok"; values = $values; findings = @() }
 }
 
 function Get-HordeDecisionSettingTable {
@@ -191,15 +201,47 @@ function Get-HordeDecisionSettingTable {
     return @($script:HordeDecisionSettings.Keys | Sort-Object | ForEach-Object { $script:HordeDecisionSettings[$_] })
 }
 
+function Get-HordeDecisionSettingsOverridePath {
+    # Where this module's override file is: <HordeHome>\settings\decisions.json. Worked out, never
+    # created: asking for a setting makes no folder.
+    return (Join-Path (Join-Path (Get-HordeHome) "settings") "decisions.json")
+}
+
+function Get-HordeDecisionSettingsNow {
+    # Every setting as it stands now: the table, with the override file laid over it when there is
+    # one. Returns Resolve-HordeDecisionSettings's { state; values; findings }. An override file that
+    # is there and cannot be read is refused like one that fails its checks.
+    if ($null -eq $script:HordeDecisionSettings) { $null = Get-HordeDecisionSettingTable }
+    $path = Get-HordeDecisionSettingsOverridePath
+    if (-not [System.IO.File]::Exists($path)) { return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings) }
+    $text = $null
+    try { $text = [System.IO.File]::ReadAllText($path, (New-Object System.Text.UTF8Encoding($false, $true))) }
+    catch { return [pscustomobject]@{ state = "refused"; values = $null; findings = @($path + ": it could not be read as UTF-8 text") } }
+    # A file that is there and empty is not "no override": somebody made it, and it says nothing.
+    if ($text.Trim() -eq "") { return [pscustomobject]@{ state = "refused"; values = $null; findings = @($path + ": it is empty; remove it to use the defaults") } }
+    return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings -OverrideText $text -From $path)
+}
+
+function Get-HordeDecisionSettingsProblem {
+    # Why the settings cannot be used, as one sentence naming the file and every problem, or "" when
+    # they can. For a caller that must answer rather than throw (decisions/Operations.ps1).
+    $now = Get-HordeDecisionSettingsNow
+    if ($now.state -ceq "ok") { return "" }
+    return ("the decisions settings override was refused, so no setting is used and no default is put in its place: " + (@($now.findings) -join "; "))
+}
+
 function Get-HordeDecisionSetting {
-    # The value of one setting. Today that is its default: no override is read (see the header). When
-    # a general settings unit lands, this function is the one thing that changes.
+    # The value of one setting: the override's, when there is an override file and it passed its
+    # checks; the default, when there is no override file. WHEN THE OVERRIDE FAILED ITS CHECKS THIS
+    # THROWS, with every problem named, for every setting: a default is never handed out in place of
+    # a value a person tried to set.
     # A name the table does not have THROWS: a misspelt name must never read as 0 or as nothing.
     param([Parameter(Mandatory = $true)][string]$Name)
     if ($null -eq $script:HordeDecisionSettings) { $null = Get-HordeDecisionSettingTable }
     if (-not $script:HordeDecisionSettings.ContainsKey($Name)) { throw ("'" + $Name + "' is not a setting of the decisions module (decisions/settings.json)") }
-    $resolved = Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings
-    $value = $resolved.values[$Name]
+    $now = Get-HordeDecisionSettingsNow
+    if ($now.state -cne "ok") { throw ("the decisions settings override was refused, so no setting is used and no default is put in its place: " + (@($now.findings) -join "; ")) }
+    $value = $now.values[$Name]
     # A whole number is handed out as a 64-bit one, whatever the parser read it as.
     if ("$($script:HordeDecisionSettings[$Name].kind)" -ceq "whole-number") { return [long]$value }
     return $value

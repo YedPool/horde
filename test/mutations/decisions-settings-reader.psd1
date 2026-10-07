@@ -96,30 +96,55 @@
         @{ Name = "relative-folder-taken"
            Find = 'if (-not [System.IO.Path]::IsPathRooted($Value)) { return "is not an absolute folder" }'
            Replace = '' }
-        # --- an override ---
+        # --- an override: one that fails its checks is refused, with every problem named, and no default stands in ---
         @{ Name = "override-not-laid-over-the-defaults"
            Find = '        $values[$name] = $prop.Value'
            Replace = '' }
-        @{ Name = "wrong-override-value-used"
-           Find = 'if ($wrong -ne "") { [void]$findings.Add("the setting ''" + $name + "'' " + $wrong + "; its default is used"); continue }'
+        @{ Name = "wrong-value-skipped-and-its-default-used"
+           Find = '    if ($findings.Count -gt 0) { return [pscustomobject]@{ state = "refused"; values = $null; findings = @($findings) } }'
            Replace = '' }
-        @{ Name = "wrong-override-value-not-reported"
-           Find = 'if ($wrong -ne "") { [void]$findings.Add("the setting ''" + $name + "'' " + $wrong + "; its default is used"); continue }'
-           Replace = 'if ($wrong -ne "") { continue }' }
-        @{ Name = "override-for-no-setting-not-reported"
-           Find = '            [void]$findings.Add("the settings override names " + $shown + ", which is not a setting of the decisions module; it is not used")'
+        @{ Name = "refused-override-still-hands-out-values"
+           Find = '    if ($findings.Count -gt 0) { return [pscustomobject]@{ state = "refused"; values = $null; findings = @($findings) } }'
+           Replace = '    if ($findings.Count -gt 0) { return [pscustomobject]@{ state = "refused"; values = $values; findings = @($findings) } }' }
+        @{ Name = "only-the-first-problem-named"
+           Find = '        if ($wrong -ne "") { [void]$findings.Add($From + ": ''" + $name + "'' " + $wrong); continue }'
+           Replace = '        if ($wrong -ne "") { [void]$findings.Add($From + ": ''" + $name + "'' " + $wrong); break }' }
+        @{ Name = "wrong-value-used-as-it-is"
+           Find = '        if ($wrong -ne "") { [void]$findings.Add($From + ": ''" + $name + "'' " + $wrong); continue }'
            Replace = '' }
-        @{ Name = "odd-name-in-an-override-repeated"
+        @{ Name = "problem-does-not-name-its-file"
+           Find = '        if ($wrong -ne "") { [void]$findings.Add($From + ": ''" + $name + "'' " + $wrong); continue }'
+           Replace = '        if ($wrong -ne "") { [void]$findings.Add("''" + $name + "'' " + $wrong); continue }' }
+        @{ Name = "key-that-is-no-setting-ignored"
+           Find = '            [void]$findings.Add($From + ": " + $shown + " is not a setting of the decisions module")'
+           Replace = '' }
+        @{ Name = "odd-key-in-an-override-repeated"
            Find = 'if ($name -cmatch ''\A[A-Za-z][A-Za-z0-9.]{0,99}\z'') { $shown ='
            Replace = 'if ($true) { $shown =' }
-        @{ Name = "override-of-another-shape-used"
+        @{ Name = "override-of-another-version-used"
            Find = 'if ($null -eq $versionProp -or $versionProp.Value -ne 1 -or $null -eq $valuesProp -or $valuesProp.Value -isnot [System.Management.Automation.PSCustomObject]) {'
            Replace = 'if ($null -eq $valuesProp -or $valuesProp.Value -isnot [System.Management.Automation.PSCustomObject]) {' }
-        @{ Name = "override-that-is-not-one-not-reported"
-           Find = '        [void]$findings.Add("the settings override is not an object with schemaVersion 1 and a values object, so none of it is used: every setting has its default")'
-           Replace = '' }
+        @{ Name = "text-that-is-no-override-falls-back-to-the-defaults"
+           Find = '        return [pscustomobject]@{ state = "refused"; values = $null; findings = @($From + ": it is not an object with schemaVersion 1 and a values object") }'
+           Replace = '        return [pscustomobject]@{ state = "ok"; values = $values; findings = @() }' }
         @{ Name = "resolving-changes-the-table"
            Find = '        $values[$name] = $prop.Value'
-           Replace = '        $values[$name] = $prop.Value; $entry.default = $prop.Value' }
+           Replace = '        $values[$name] = $prop.Value; $Table[$name].default = $prop.Value' }
+        # --- the override file under the home ---
+        @{ Name = "override-file-never-read"
+           Find = '    if (-not [System.IO.File]::Exists($path)) { return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings) }'
+           Replace = '    if ($true) { return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings) }' }
+        @{ Name = "refused-override-hands-out-the-default"
+           Find = '    if ($now.state -cne "ok") { throw ('
+           Replace = '    if ($now.state -cne "ok") { return [long]$script:HordeDecisionSettings[$Name].default }; if ($false) { throw (' }
+        @{ Name = "refusal-does-not-name-the-file"
+           Find = '    return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings -OverrideText $text -From $path)'
+           Replace = '    return (Resolve-HordeDecisionSettings -Table $script:HordeDecisionSettings -OverrideText $text)' }
+        @{ Name = "override-looked-for-somewhere-else"
+           Find = '    return (Join-Path (Join-Path (Get-HordeHome) "settings") "decisions.json")'
+           Replace = '    return (Join-Path (Join-Path (Get-HordeHome) "store") "decisions.json")' }
+        @{ Name = "problem-not-there-to-be-asked-for"
+           Find = '    if ($now.state -ceq "ok") { return "" }'
+           Replace = '    return ""' }
     )
 }

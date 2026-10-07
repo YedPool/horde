@@ -586,6 +586,36 @@ Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 could not be writ
 Check ((Get-Files $s) -ceq "0000000001.json" -and (Get-Listed $s) -ceq "1:open") "and the list is as it was: one record, question 1"
 
 Write-Host ""
+Write-Host "--- a settings override that fails its checks: every operation that needs its settings says why, and nothing is guessed ---" -ForegroundColor Cyan
+# The rule: an override file that fails its checks refuses with a reason and never silently falls back
+# to the defaults. So with a wrong <home>\settings\decisions.json no operation runs on defaults it was
+# told not to use: it answers unknown, naming the file and every problem in it.
+$keepSettingsHome = $env:HORDE_HOME
+try {
+    $settingsHome = Join-Path $script:work "settings-home"
+    $env:HORDE_HOME = $settingsHome
+    $s = Join-Path $settingsHome "store\decisions"
+    $null = Add-Q $s
+    New-Item -ItemType Directory -Path (Join-Path $settingsHome "settings") | Out-Null
+    $overrideFile = Join-Path $settingsHome "settings\decisions.json"
+    [System.IO.File]::WriteAllText($overrideFile, '{"schemaVersion":1,"values":{"decisions.write.raceTries":0,"decisions.store.maxGap":"many"}}', $utf8)
+    $a = Add-Q $s
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*settings\decisions.json*'decisions.write.raceTries' is 0, outside the range 1 to 100000*'decisions.store.maxGap' is not a whole number*") ("an add with a wrong settings override is unknown, and names the file and BOTH problems (" + $a.state + ": " + $a.reason + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json") "and nothing was written: it did not go ahead on the defaults"
+    $l = Invoke-Op $s "list" @{}
+    Check ($l.state -ceq "unknown" -and $l.reason -like "*settings\decisions.json*'decisions.write.raceTries' is 0*") ("a list is unknown too, with the same reason: a reading needs the store's settings (" + $l.state + ")")
+    Check ((Get-Outcome (Invoke-Op $s "kinds" @{})) -ceq "done") "CONTROL: kinds, which reads no store and needs no setting, still answers"
+    # A RIGHT override is used: with the largest gap believed set to 0, a record one place past the end is a stray.
+    [System.IO.File]::WriteAllText($overrideFile, '{"schemaVersion":1,"values":{"decisions.store.maxGap":0}}', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), '{"stray":true}', $utf8)
+    $l = Invoke-Op $s "list" @{}
+    Check ((Get-Outcome $l) -ceq "done" -and (@($l.value.strays | ForEach-Object { $_.file }) -join ",") -ceq "0000000003.json" -and @($l.value.unreadable).Count -eq 0) ("a right override is used, not only checked: with maxGap 0 the file one place past the end is a stray (" + (Get-Outcome $l) + ")")
+    Remove-Item -LiteralPath $overrideFile
+    $l = Invoke-Op $s "list" @{}
+    Check ((Get-Outcome $l) -ceq "done" -and @($l.value.strays).Count -eq 0 -and @($l.value.unreadable).Count -eq 2) "CONTROL: with no override file the default of 100 is back: the same file is read as a record after a gap"
+} finally { $env:HORDE_HOME = $keepSettingsHome }
+
+Write-Host ""
 Write-Host "--- without -Root the store is Horde's own, under HORDE_HOME, and nowhere else ---" -ForegroundColor Cyan
 $keepHome = $env:HORDE_HOME
 try {

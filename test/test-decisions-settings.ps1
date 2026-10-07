@@ -4,8 +4,10 @@
 #   - THE READER REFUSES A WRONG TABLE WHOLE: a default outside its own range, a range upside down, a
 #     value that is not of its kind, a setting that does not say what it means. A wait of -1 would
 #     otherwise surface as a hang, far from the table.
-#   - READING IS PURE GIVEN THE TEXT, AND AN OVERRIDE NEVER STOPS THE MODULE: a value of the wrong kind
-#     or outside its range, laid over the defaults, is reported by name and the default is used.
+#   - READING IS PURE GIVEN THE TEXT, AND AN OVERRIDE THAT FAILS ITS CHECKS IS REFUSED: a value of the
+#     wrong kind or outside its range, a key the table does not have, text that is no override - each
+#     is named (file, key, why), nothing is handed out, and no default is put in its place. With no
+#     override file the defaults table is used.
 #   - A NAME THE TABLE DOES NOT HAVE THROWS: a misspelt name must never read as 0.
 #   - THE TABLE AND THE CODE AGREE, BOTH WAYS: every setting the code asks for is in the table, every
 #     setting in the table is asked for by the code, and neither the store nor the operations assigns
@@ -24,6 +26,9 @@ $script:work = Join-Path $env:TEMP ("horde-decisions-settings-test-" + [guid]::N
 New-Item -ItemType Directory -Path $script:work | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:n = 0
+# The override file is looked for under the home: this suite's own, put back at the end.
+$keepHome = $env:HORDE_HOME
+$env:HORDE_HOME = (Join-Path $script:work "home")
 function Read-Table {
     # The table from its text, by the shipped pure reader. Returns the table, or "THREW: <message>".
     param([string]$Json)
@@ -35,7 +40,7 @@ function Resolve-With {
     # Lay an override's text over a table of this suite's own. Returns { values; findings }, or a
     # stand-in whose findings say it threw.
     param($Table, [string]$Override)
-    try { return (Resolve-HordeDecisionSettings -Table $Table -OverrideText $Override) } catch { return [pscustomobject]@{ values = @{}; findings = @("THREW: " + $_.Exception.Message) } }
+    try { return (Resolve-HordeDecisionSettings -Table $Table -OverrideText $Override -From "the test's override") } catch { return [pscustomobject]@{ state = "THREW"; values = @{}; findings = @("THREW: " + $_.Exception.Message) } }
 }
 
 try {
@@ -92,33 +97,62 @@ Check ("$(Read-Table (Get-One '"decisions.k.flag":{"kind":"true-false","default"
 Check ("$(Read-Table (Get-One '"decisions.k.folder":{"kind":"folder","default":"relative\\folder","means":"a folder"}'))" -like "THREW:*has a default that is not an absolute folder*") "a folder default that is not absolute is refused"
 
 Write-Host ""
-Write-Host "--- an override is laid over the defaults; a wrong one is reported by name and the default used ---" -ForegroundColor Cyan
+Write-Host "--- an override that fails its checks is REFUSED, with every problem named; it never falls back to a default ---" -ForegroundColor Cyan
+# THE RULE: an override file that fails its checks refuses with a reason and never silently falls back
+# to the defaults. A person who wrote 5 where only 10 to 100 is allowed must be told, not handed 40
+# without a word. So resolving answers { state; values; findings }: ok with every value, or refused
+# with NO values and one finding for every problem - the file, the key, and why.
+function Get-Findings { param($Resolved) return (@($Resolved.findings) -join " || ") }
 $none = Resolve-With $kinds ""
-Check (@($none.findings).Count -eq 0 -and $none.values["decisions.k.whole"] -eq 5 -and $none.values["decisions.k.text"] -ceq "hello" -and $none.values.Count -eq 5) "with no override every setting has its default, and nothing is reported"
+Check ($none.state -ceq "ok" -and @($none.findings).Count -eq 0 -and $none.values["decisions.k.whole"] -eq 5 -and $none.values["decisions.k.text"] -ceq "hello" -and $none.values.Count -eq 5) "with no override the defaults table is used: every setting has its default, and nothing is refused"
 $right = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":9,"decisions.k.text":"hi","decisions.k.fraction":1,"decisions.k.flag":false,"decisions.k.folder":"D:\\other"}}'
-Check (@($right.findings).Count -eq 0 -and $right.values["decisions.k.whole"] -eq 9 -and $right.values["decisions.k.text"] -ceq "hi" -and $right.values["decisions.k.fraction"] -eq 1 -and $right.values["decisions.k.flag"] -eq $false -and $right.values["decisions.k.folder"] -ceq "D:\other") "a value of the right kind and inside its range is used, for every kind; a whole number is a fraction too"
+Check ($right.state -ceq "ok" -and @($right.findings).Count -eq 0 -and $right.values["decisions.k.whole"] -eq 9 -and $right.values["decisions.k.text"] -ceq "hi" -and $right.values["decisions.k.fraction"] -eq 1 -and $right.values["decisions.k.flag"] -eq $false -and $right.values["decisions.k.folder"] -ceq "D:\other") "a value of the right kind and inside its range is used, for every kind; a whole number is a fraction too"
 $part = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":7}}'
-Check (@($part.findings).Count -eq 0 -and $part.values["decisions.k.whole"] -eq 7 -and $part.values["decisions.k.text"] -ceq "hello") "an override names only what it changes: every other setting keeps its default"
+Check ($part.state -ceq "ok" -and $part.values["decisions.k.whole"] -eq 7 -and $part.values["decisions.k.text"] -ceq "hello") "an override names only what it changes: every other setting keeps its default"
 $wrong = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":10,"decisions.k.text":"twelve chars","decisions.k.fraction":"half","decisions.k.flag":1,"decisions.k.folder":"relative","decisions.k.nothing":3}}'
-Check ($wrong.values["decisions.k.whole"] -eq 5 -and $wrong.values["decisions.k.text"] -ceq "hello" -and $wrong.values["decisions.k.fraction"] -eq 0.25 -and $wrong.values["decisions.k.flag"] -eq $true -and $wrong.values["decisions.k.folder"] -ceq "C:\somewhere\here" -and $wrong.values.Count -eq 5) "a value out of range, or of the wrong kind, is not used: the default stands, for every kind"
-Check (@($wrong.findings).Count -eq 6) ("and each is reported: six findings for six wrong entries (" + @($wrong.findings).Count + ")")
-Check (@($wrong.findings | Where-Object { $_ -ceq "the setting 'decisions.k.whole' is 10, outside the range 1 to 9; its default is used" }).Count -eq 1) "a number out of range is reported by the setting's name, with the range, and says the default is used"
-Check (@($wrong.findings | Where-Object { $_ -ceq "the setting 'decisions.k.fraction' is not a number; its default is used" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -ceq "the setting 'decisions.k.flag' is not true or false; its default is used" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -ceq "the setting 'decisions.k.folder' is not an absolute folder; its default is used" }).Count -eq 1) "a wrong kind is reported by the setting's name: 1 is not true, and text is not a number"
-Check (@($wrong.findings | Where-Object { $_ -like "the setting 'decisions.k.text' is 12 characters long, outside the range 1 to 10*" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -like "*twelve chars*" -or $_ -like "*half*" -or $_ -like "*relative*" }).Count -eq 0) "a text is reported by its length, and no finding repeats a text a person typed"
-Check (@($wrong.findings | Where-Object { $_ -ceq "the settings override names 'decisions.k.nothing', which is not a setting of the decisions module; it is not used" }).Count -eq 1) "a name the table does not have is reported, and changes nothing"
+Check ($wrong.state -ceq "refused" -and $null -eq $wrong.values) ("an override with wrong entries is REFUSED, and hands back no values at all: not the defaults, not the good part of it (" + $wrong.state + ")")
+Check (@($wrong.findings).Count -eq 6) ("and EVERY problem is named, not only the first: six findings for six wrong entries (" + @($wrong.findings).Count + ")")
+Check (@($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.whole' is 10, outside the range 1 to 9" }).Count -eq 1) "a number out of range is named by the file, the key and why, with the range"
+Check (@($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.fraction' is not a number" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.flag' is not true or false" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.folder' is not an absolute folder" }).Count -eq 1) "a wrong kind is named the same way: 1 is not true, and text is not a number"
+Check (@($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.text' is 12 characters long, outside the range 1 to 10" }).Count -eq 1 -and @($wrong.findings | Where-Object { $_ -like "*twelve chars*" -or $_ -like "*half*" -or $_ -like "*relative*" }).Count -eq 0) "a text is named by its length, and no finding repeats a text a person typed"
+Check (@($wrong.findings | Where-Object { $_ -ceq "the test's override: 'decisions.k.nothing' is not a setting of the decisions module" }).Count -eq 1) "a key the table does not have is a problem too: it is not ignored"
+Check (@($wrong.findings | Where-Object { $_ -like "*default*" }).Count -eq 0) "no finding says a default was used, because none was"
+$oneWrong = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":7,"decisions.k.fraction":2}}'
+Check ($oneWrong.state -ceq "refused" -and $null -eq $oneWrong.values -and @($oneWrong.findings).Count -eq 1) "ONE wrong value refuses the whole override: the right value beside it is not used either"
 $edge = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":1,"decisions.k.fraction":0}}'
-Check (@($edge.findings).Count -eq 0 -and $edge.values["decisions.k.whole"] -eq 1 -and $edge.values["decisions.k.fraction"] -eq 0) "CONTROL: a value AT the end of its range is inside it"
+Check ($edge.state -ceq "ok" -and $edge.values["decisions.k.whole"] -eq 1 -and $edge.values["decisions.k.fraction"] -eq 0) "CONTROL: a value AT the end of its range is inside it"
 $text = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":"7"}}'
-Check ($text.values["decisions.k.whole"] -eq 5 -and @($text.findings | Where-Object { $_ -ceq "the setting 'decisions.k.whole' is not a whole number; its default is used" }).Count -eq 1) "a number written as text is the wrong kind: it is never converted"
+Check ($text.state -ceq "refused" -and (Get-Findings $text) -ceq "the test's override: 'decisions.k.whole' is not a whole number") "a number written as text is the wrong kind: it is never converted, and it refuses"
 foreach ($bad in @('not json {', '[1,2]', '{"schemaVersion":2,"values":{"decisions.k.whole":7}}', '{"schemaVersion":1,"values":[]}', '{"schemaVersion":1}')) {
     $got = Resolve-With $kinds $bad
-    Check ($got.values["decisions.k.whole"] -eq 5 -and @($got.findings).Count -eq 1 -and "$(@($got.findings)[0])" -like "the settings override is not an object with schemaVersion 1 and a values object*every setting has its default") ("an override that is not one (" + $bad.Substring(0, [Math]::Min(18, $bad.Length)) + "...) stops nothing: one finding, and every default")
+    Check ($got.state -ceq "refused" -and $null -eq $got.values -and @($got.findings).Count -eq 1 -and "$(@($got.findings)[0])" -like "the test's override: it is not an object with schemaVersion 1 and a values object*") ("text that is not an override (" + $bad.Substring(0, [Math]::Min(18, $bad.Length)) + "...) is refused, by the file's name, and not quoted")
 }
 $odd = Resolve-With $kinds ('{"schemaVersion":1,"values":{"gh' + 'p_' + ("Ab3d" * 9) + '":1}}')
-Check (@($odd.findings).Count -eq 1 -and "$(@($odd.findings)[0])" -like "*a name that is not repeated here*" -and "$(@($odd.findings)[0])" -notlike "*Ab3d*") "a name that is not shaped like a setting's is reported without being repeated"
-# Pure: the same texts give the same answer, and the table is not changed by resolving against it.
+Check ($odd.state -ceq "refused" -and @($odd.findings).Count -eq 1 -and "$(@($odd.findings)[0])" -like "*a key that is not repeated here*" -and "$(@($odd.findings)[0])" -notlike "*Ab3d*") "a key that is not shaped like a setting's name is refused without being repeated"
 $twice = Resolve-With $kinds '{"schemaVersion":1,"values":{"decisions.k.whole":7}}'
 Check ($twice.values["decisions.k.whole"] -eq 7 -and $kinds["decisions.k.whole"].default -eq 5 -and (Resolve-With $kinds "").values["decisions.k.whole"] -eq 5) "resolving changes nothing it was given: the table's default is still its default"
+
+Write-Host ""
+Write-Host "--- the override file under the home: used when it is right, refused when it is not, absent is the defaults ---" -ForegroundColor Cyan
+$overrideHome = Join-Path $script:work "override-home"
+$env:HORDE_HOME = $overrideHome
+$overridePath = "THREW"
+try { $overridePath = Get-HordeDecisionSettingsOverridePath } catch { $overridePath = "THREW: " + $_.Exception.Message }
+Check ($overridePath -ceq (Join-Path $overrideHome "settings\decisions.json")) ("the override is <home>\settings\decisions.json (" + $overridePath + ")")
+function Get-Setting { param([string]$Name) try { return (Get-HordeDecisionSetting -Name $Name) } catch { return ("THREW: " + $_.Exception.Message) } }
+Check ((Get-Setting "decisions.store.maxGap") -eq 100 -and -not (Test-Path -LiteralPath $overrideHome)) "with no override file the default is handed out, and asking made no folder"
+New-Item -ItemType Directory -Path (Join-Path $overrideHome "settings") | Out-Null
+[System.IO.File]::WriteAllText($overridePath, '{"schemaVersion":1,"values":{"decisions.store.maxGap":7}}', $utf8)
+Check ((Get-Setting "decisions.store.maxGap") -eq 7 -and (Get-Setting "decisions.store.maxGap") -is [long] -and (Get-Setting "decisions.store.heldReadTries") -eq 40) "a right override file is used for what it names, and the rest keep their defaults"
+[System.IO.File]::WriteAllText($overridePath, '{"schemaVersion":1,"values":{"decisions.store.maxGap":-1,"decisions.store.noSuchThing":3}}', $utf8)
+$refusal = Get-Setting "decisions.store.maxGap"
+Check ("$refusal" -like "THREW:*settings\decisions.json*'decisions.store.maxGap' is -1, outside the range 0 to 1000000*'decisions.store.noSuchThing' is not a setting*") ("a wrong override file REFUSES the setting, naming the file and every problem in it (" + $refusal + ")")
+Check ("$(Get-Setting 'decisions.store.heldReadTries')" -like "THREW:*settings\decisions.json*") "and it refuses EVERY setting, not only the wrong one: nothing is handed out from a file that failed its checks, and no default stands in"
+Check ((Get-HordeDecisionSettingsProblem) -like "*settings\decisions.json*'decisions.store.maxGap' is -1*" ) "the same reason is there to be asked for without a throw"
+[System.IO.File]::WriteAllText($overridePath, 'not json {', $utf8)
+Check ("$(Get-Setting 'decisions.store.maxGap')" -like "THREW:*settings\decisions.json*it is not an object with schemaVersion 1*") "an override file that is not JSON refuses too"
+Remove-Item -LiteralPath $overridePath
+Check ((Get-Setting "decisions.store.maxGap") -eq 100 -and (Get-HordeDecisionSettingsProblem) -ceq "") "CONTROL: with the file gone the defaults are back, and there is no problem to report"
 
 Write-Host ""
 Write-Host "--- the table and the code agree, both ways ---" -ForegroundColor Cyan
@@ -162,6 +196,7 @@ $plantedHits = @($plantedAst.FindAll({ param($node) $node -is [System.Management
 Check ($plantedHits.Count -eq 1 -and "$($plantedHits[0])" -clike '*HordePlantedWaitMs = 50') ("CONTROL: the search finds a number assigned in code, and only the number (" + $plantedHits.Count + ")")
 
 } finally {
+    $env:HORDE_HOME = $keepHome
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-settings-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }
 }
 Check (-not (Test-Path -LiteralPath $script:work)) "the suite's temp folder is removed"

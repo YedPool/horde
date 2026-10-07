@@ -113,6 +113,9 @@
         @{ Name = "repost-confirmed-without-asking-the-store"
            Find = 'try { $sure = Confirm-HordeDecisionRecord -Root $Root -Sequence ([long]$prior.sequence) } catch { $sure = "unconfirmed" }'
            Replace = '$sure = "confirmed"' }
+        @{ Name = "operation-goes-ahead-on-refused-settings"
+           Find = '    if ($unfit -ne "") { return (New-HordeUnknown -Reason $unfit) }'
+           Replace = '' }
         @{ Name = "sequence-not-from-the-list-read"
            Find = '$sequence = [long]$list.lastSequence + 1'
            Replace = '$sequence = [long]$list.lastSequence + 2' }

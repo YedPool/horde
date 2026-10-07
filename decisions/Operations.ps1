@@ -394,6 +394,13 @@ function Invoke-HordeDecision {
     }
 
     if ($entry.ContainsKey("noStore")) { return (& $entry.read $plain $null $definitions $Now) }
+    # THE SETTINGS, BEFORE THE STORE. An override file that failed its checks refuses every setting
+    # (decisions/Settings.ps1), and an operation that went ahead would be running on defaults a person
+    # had tried to replace. So it answers unknown, with the file and every problem in it. A home that
+    # cannot be worked out is the same answer, in core/Home's own words.
+    $unfit = ""
+    try { $unfit = Get-HordeDecisionSettingsProblem } catch { $unfit = "$($_.Exception.Message)" }
+    if ($unfit -ne "") { return (New-HordeUnknown -Reason $unfit) }
     if ($Root -eq "") {
         try { $Root = Get-HordeDecisionStoreRoot }
         catch { return (New-HordeUnknown -Reason "the decisions store could not be found" -ErrorRecord $_) }
