@@ -83,6 +83,27 @@ function Get-HordeListenerCount {
     return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count
 }
 
+function Get-HordeListenerPrint {
+    # Who listens on -Port: { sockets; processes; lines }. One line per socket - its address, and its
+    # owning process's pid, name, start time (UTC) and command line - sorted, so two prints of the same
+    # listeners are equal. Sockets and processes are counted apart: one process listening on 0.0.0.0
+    # and :: is two sockets and one process. A count alone left two port-22 listeners on 2026-10-07
+    # unexplained (coordinator, 2026-10-07); a field that cannot be read says so.
+    param([Parameter(Mandatory = $true)][int]$Port)
+    $socks = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    $lines = New-Object System.Collections.ArrayList
+    $pids = @{}
+    foreach ($s in $socks) {
+        $procId = [int]$s.OwningProcess
+        $pids[$procId] = $true
+        $name = "(unreadable)"; $started = "(unreadable)"; $cmd = "(unreadable)"
+        try { $p = Get-Process -Id $procId -ErrorAction Stop; $name = $p.ProcessName; $started = $p.StartTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") } catch { }
+        try { $w = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $procId) -ErrorAction Stop; if ($null -ne $w -and "$($w.CommandLine)" -ne "") { $cmd = "$($w.CommandLine)" } } catch { }
+        [void]$lines.Add(("" + $s.LocalAddress + " port " + $Port + ": pid " + $procId + " " + $name + ", started " + $started + ", " + $cmd))
+    }
+    return [pscustomobject]@{ sockets = $socks.Count; processes = $pids.Count; lines = @($lines | Sort-Object) }
+}
+
 function Get-HordeSshFolderPrint {
     # Names, lengths and write times of every file under -Path: what a change to that folder would
     # change. Contents are not read - C:\ProgramData\ssh holds host keys this suite has no business reading.

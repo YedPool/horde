@@ -39,8 +39,10 @@ $skipped = ""
 # THE MACHINE BEFORE.
 function Get-UserSshPrint { return (Get-HordeSshKeyFolderPrint -Path (Join-Path $env:USERPROFILE ".ssh")) }
 $programData = Join-Path $env:ProgramData "ssh"
-$before = [pscustomobject]@{ service = (Get-HordeSshdServiceState); firewall = (Get-HordeSshdFirewallState); port22 = (Get-HordeListenerCount -Port 22); programData = (Get-HordeSshFolderPrint -Path $programData); userSsh = (Get-UserSshPrint) }
-Write-Host ("  at the start: sshd service " + $before.service + ", firewall rule enabled=" + $before.firewall + ", " + $before.port22 + " listener(s) on port 22") -ForegroundColor DarkGray
+$p22 = Get-HordeListenerPrint -Port 22
+$before = [pscustomobject]@{ service = (Get-HordeSshdServiceState); firewall = (Get-HordeSshdFirewallState); port22 = ($p22.lines -join " | "); programData = (Get-HordeSshFolderPrint -Path $programData); userSsh = (Get-UserSshPrint) }
+Write-Host ("  at the start: sshd service " + $before.service + ", firewall rule enabled=" + $before.firewall + ", " + $p22.sockets + " socket(s) of " + $p22.processes + " process(es) listening on port 22") -ForegroundColor DarkGray
+foreach ($l in $p22.lines) { Write-Host ("    " + $l) -ForegroundColor DarkGray }
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $adminEnabled = ([System.Security.Principal.WindowsPrincipal]$me).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 Write-Host ("  this token: Administrators " + $(if ($adminEnabled) { "enabled (elevated)" } else { "not enabled" })) -ForegroundColor DarkGray
@@ -51,6 +53,20 @@ $savedHome = $env:HORDE_HOME
 try {
     Write-Host ""
     Write-Host "--- the instruments: each print sees a planted change, and stale folders are swept ---" -ForegroundColor Cyan
+    # The listener print, on a port this process holds on 127.0.0.1 and ::1: two sockets, one process,
+    # each line naming this process.
+    $l4 = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $l4.Start()
+    $benchPort = $l4.LocalEndpoint.Port
+    $l6 = $null
+    try { $l6 = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::IPv6Loopback, $benchPort); $l6.Start() } catch { $l6 = $null }
+    try {
+        $lp = Get-HordeListenerPrint -Port $benchPort
+        $wantSockets = 1; if ($null -ne $l6) { $wantSockets = 2 }
+        Check ($lp.sockets -eq $wantSockets -and $lp.processes -eq 1) ("the listener print counts sockets and processes apart: " + $lp.sockets + " socket(s), " + $lp.processes + " process(es), on 127.0.0.1" + $(if ($null -ne $l6) { " and ::1" } else { " (::1 could not be bound here)" }))
+        Check (@($lp.lines | Where-Object { $_.Contains(": pid " + $PID + " ") -and $_.Contains(", started 20") -and -not $_.Contains("(unreadable)") }).Count -eq $wantSockets) ("each line names the owning process, its start and its command line (" + ($lp.lines -join " | ") + ")")
+    } finally { $l4.Stop(); if ($null -ne $l6) { $l6.Stop() } }
+    Check ((Get-HordeListenerPrint -Port $benchPort).sockets -eq 0) "CONTROL: once closed, the print of that port is empty"
     # The machine-state comparisons below can only fail if the machine changes, so each print is shown
     # here to change when a folder does (review of PR #103, H4).
     $bench = Join-Path $env:TEMP ("horde-sshd-bench-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -251,7 +267,10 @@ try {
     }
     if ($sshdRoot -ne "" -and (Split-Path -Leaf $sshdRoot) -match '^horde-sshd-[0-9a-f]{12}$') { Remove-Item -LiteralPath $sshdRoot -Recurse -Force -ErrorAction SilentlyContinue }
     Check ($sshdRoot -eq "" -or -not (Test-Path -LiteralPath $sshdRoot)) "the test's keys, config and authorized_keys are removed"
-    $after = [pscustomobject]@{ service = (Get-HordeSshdServiceState); firewall = (Get-HordeSshdFirewallState); port22 = (Get-HordeListenerCount -Port 22); programData = (Get-HordeSshFolderPrint -Path $programData); userSsh = (Get-UserSshPrint) }
+    $p22After = Get-HordeListenerPrint -Port 22
+    $after = [pscustomobject]@{ service = (Get-HordeSshdServiceState); firewall = (Get-HordeSshdFirewallState); port22 = ($p22After.lines -join " | "); programData = (Get-HordeSshFolderPrint -Path $programData); userSsh = (Get-UserSshPrint) }
+    Write-Host ("  at the end: " + $p22After.sockets + " socket(s) of " + $p22After.processes + " process(es) listening on port 22") -ForegroundColor DarkGray
+    foreach ($l in $p22After.lines) { Write-Host ("    " + $l) -ForegroundColor DarkGray }
     foreach ($k in @("service", "firewall", "port22")) {
         $same = ("$($after.$k)" -ceq "$($before.$k)")
         if (-not $same) { Write-Host ("  !!! THE MACHINE CHANGED: " + $k + " was '" + $before.$k + "' at the start and is '" + $after.$k + "' now. Nothing was put back; look at it.") -ForegroundColor Red }
