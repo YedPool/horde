@@ -31,6 +31,15 @@
 
 # The one transport a node is served on before enrolment (cli/commands/node.ps1 serves on it).
 $script:HordeHubOwnTransport = "local"
+# How many copies of an unusable mirror are kept aside per node, newest first (review of PR #88).
+$script:HordeHubAsideKept = 3
+# HRESULT 0x80070020, ERROR_SHARING_VIOLATION: another process holds the hub's run lock.
+$script:HordeHubSharingViolation = -2147024864
+# Each node's part of a round is bounded (issue #87, F10). 45 s: a node's sessions.list builds its
+# projection, 11.4 s measured 2026-10-02, and node serve is opted out of power throttling, so 45 s
+# is about four of those; nodes are pulled one after another, so a slow one costs the rest of the
+# round at most this much.
+$script:HordeHubNodeBudgetMs = 45000
 # The verbs versions this hub speaks (link-verbs v1).
 $script:HordeHubVerbsVersions = @(1)
 # Unicode without a byte-order mark: a mirror file is the hub's own and read back by this file only.
@@ -94,7 +103,16 @@ function Read-HordeHubMirror {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (New-HordeAbsent -Note ("no mirror file at " + $Path)) }
     $m = $null
     try { $m = Read-HordeSharedText -Path $Path | ConvertFrom-Json }
-    catch { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_) }
+    catch {
+        # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
+        # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the
+        # round leaves the file as it is rather than moving it aside and writing over its name.
+        $inner = $_.Exception; while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
+        $u = New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_
+        $isHeld = ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException]))
+        $u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld
+        return $u
+    }
     if ($null -eq $m) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read: it is empty")) }
     $found = @(Test-HordeHubMirror -Mirror $m -Contract $Contract)
     if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read as a mirror: " + ($found -join "; "))) }
@@ -154,6 +172,25 @@ function Write-HordeHubMirror {
     return $path
 }
 
+function Move-HordeHubMirrorAside {
+    # Rename an unusable mirror to <name>.bad-<UTC stamp> beside it, and say where. The newest
+    # $script:HordeHubAsideKept copies are kept and older ones removed, said so: a mirror unreadable
+    # round after round left one more copy each round, without end (review of PR #88: 5 rounds, 5 copies).
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $aside = $Path + ".bad-" + [datetime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'", [System.Globalization.CultureInfo]::InvariantCulture)
+    try { [System.IO.File]::Move($Path, $aside) }
+    catch { return ("it could not be kept aside, and is overwritten: " + $_.Exception.Message) }
+    $said = "kept aside as " + (Split-Path -Leaf $aside)
+    # The stamp sorts as time does: one fixed-width format.
+    $copies = @(Get-ChildItem -LiteralPath (Split-Path -Parent $Path) -File -Filter ((Split-Path -Leaf $Path) + ".bad-*") | Sort-Object Name -Descending)
+    $old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)
+    if ($old.Count -gt 0) {
+        foreach ($c in $old) { Remove-Item -LiteralPath $c.FullName -Force -ErrorAction SilentlyContinue }
+        $said = $said + "; " + $old.Count + " older cop" + $(if ($old.Count -eq 1) { "y" } else { "ies" }) + " removed, the newest " + $script:HordeHubAsideKept + " kept"
+    }
+    return $said
+}
+
 function Send-HordeHubFrame {
     # One frame through the link's own writer. Returns "" when sent, or why not.
     param([Parameter(Mandatory = $true)]$Link, [Parameter(Mandatory = $true)]$Frame, [Parameter(Mandatory = $true)]$Contract)
@@ -164,11 +201,38 @@ function Send-HordeHubFrame {
     return ""
 }
 
+function New-HordeHubBound {
+    # The bound on one node's part of a round (issue #87, F10): { deadline; seconds }, or no deadline
+    # when -BudgetMs is 0.
+    param([int]$BudgetMs = 0)
+    if ($BudgetMs -le 0) { return [pscustomobject]@{ deadline = [datetime]::MaxValue; seconds = 0 } }
+    return [pscustomobject]@{ deadline = [datetime]::UtcNow.AddMilliseconds($BudgetMs); seconds = [math]::Round($BudgetMs / 1000, 1) }
+}
+
+function Get-HordeHubWaitMs {
+    # How long the next step may wait: -TimeoutMs, cut to what is left of -Bound. 0 when nothing is left.
+    param([Parameter(Mandatory = $true)]$Bound, [int]$TimeoutMs)
+    if ($Bound.deadline -eq [datetime]::MaxValue) { return $TimeoutMs }
+    $left = [int][math]::Floor(($Bound.deadline - [datetime]::UtcNow).TotalMilliseconds)
+    if ($left -le 0) { return 0 }
+    return [math]::Min($TimeoutMs, $left)
+}
+
+function Get-HordeHubPastBound {
+    # The reason a step failed, said as the bound when the bound is what ran out.
+    param([Parameter(Mandatory = $true)]$Bound, [string]$Reason)
+    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
+    return $Reason
+}
+
 function Receive-HordeHubFrame {
-    # The next frame from the node, as the link's decoder accepts it: { frame; reason }.
-    param([Parameter(Mandatory = $true)]$Link, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs)
-    $got = Receive-HordeLinkFrame -Link $Link -TimeoutMs $TimeoutMs
-    if ("$($got.state)" -cne "known") { return [pscustomobject]@{ frame = $null; reason = ("no frame from the node: " + $got.reason) } }
+    # The next frame from the node, as the link's decoder accepts it: { frame; reason }. -Bound cuts the
+    # wait to what is left of the node's bound.
+    param([Parameter(Mandatory = $true)]$Link, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs, $Bound = (New-HordeHubBound))
+    $wait = Get-HordeHubWaitMs -Bound $Bound -TimeoutMs $TimeoutMs
+    if ($wait -le 0) { return [pscustomobject]@{ frame = $null; reason = (Get-HordeHubPastBound -Bound $Bound -Reason "no time was left to wait for the node") } }
+    $got = Receive-HordeLinkFrame -Link $Link -TimeoutMs $wait
+    if ("$($got.state)" -cne "known") { return [pscustomobject]@{ frame = $null; reason = (Get-HordeHubPastBound -Bound $Bound -Reason ("no frame from the node: " + $got.reason)) } }
     $d = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes("$($got.value)")) -Contract $Contract
     if (-not $d.ok) { return [pscustomobject]@{ frame = $null; reason = ("the node sent a frame the hub refuses: " + $d.reason) } }
     if ("$($d.frame.kind)" -ceq "bye") { return [pscustomobject]@{ frame = $null; reason = ("the node ended the link: " + $d.frame.bye.code + ": " + $d.frame.bye.reason) } }
@@ -180,11 +244,14 @@ function Invoke-HordeHubPull {
     # registry entry with its transport resolved: { deviceId; deviceName; endpoint; transport;
     # transportError }. -Hub is { id; name; hordeVersion }. Every failure is a reason, never a throw of
     # its own; a throw from below is the caller's to catch (Update-HordeHubNode does).
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000)
+    # -BudgetMs bounds the whole pull, the open and every wait in it (issue #87, F10: a node that took
+    # every timeout held the round for about 195 s, 15 s to open and 60 s for each of three answers).
+    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
     $res = [pscustomobject]@{ ok = $false; reason = ""; nodeName = ""; list = $null; nodeSentAt = $null; receivedAt = $null; clock = $null }
     if ($null -eq $Entry.transport) { $res.reason = "the hub has no transport for this node: " + $Entry.transportError; return $res }
-    $open = Open-HordeTransportLink -Transport $Entry.transport -Endpoint "$($Entry.endpoint)" -Role "hub" -TimeoutMs ([Math]::Min($TimeoutMs, 15000))
-    if ("$($open.state)" -cne "known") { $res.reason = "could not open a link: " + $open.reason; return $res }
+    $bound = New-HordeHubBound -BudgetMs $BudgetMs
+    $open = Open-HordeTransportLink -Transport $Entry.transport -Endpoint "$($Entry.endpoint)" -Role "hub" -TimeoutMs ([Math]::Max(1, (Get-HordeHubWaitMs -Bound $bound -TimeoutMs ([Math]::Min($TimeoutMs, 15000)))))
+    if ("$($open.state)" -cne "known") { $res.reason = Get-HordeHubPastBound -Bound $bound -Reason ("could not open a link: " + $open.reason); return $res }
     $link = $open.value
     $seq = 0
     try {
@@ -193,7 +260,7 @@ function Invoke-HordeHubPull {
         $hello = [pscustomobject][ordered]@{ v = 1; kind = "hello"; id = (New-HordeLinkFrameId); seq = $seq; ts = $t; hello = [pscustomobject][ordered]@{ role = "hub"; id = "$($Hub.id)"; name = "$($Hub.name)"; protocols = @($script:HordeLinkProtocols); verbsVersions = @($script:HordeHubVerbsVersions); hordeVersion = "$($Hub.hordeVersion)"; t1 = $t } }
         $why = Send-HordeHubFrame -Link $link -Frame $hello -Contract $Contract
         if ($why -ne "") { $res.reason = $why; return $res }
-        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs
+        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs -Bound $bound
         if ($null -eq $got.frame) { $res.reason = $got.reason; return $res }
         $f = $got.frame
         $refusal = ""
@@ -219,7 +286,7 @@ function Invoke-HordeHubPull {
         $ping = [pscustomobject][ordered]@{ v = 1; kind = "ping"; id = (New-HordeLinkFrameId); seq = $seq; ts = (Get-HordeLinkTime); ping = [pscustomobject][ordered]@{ t1 = (Get-HordeLinkTime) } }
         $why = Send-HordeHubFrame -Link $link -Frame $ping -Contract $Contract
         if ($why -ne "") { $res.reason = $why; return $res }
-        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs
+        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs -Bound $bound
         $t4 = [datetime]::UtcNow
         if ($null -eq $got.frame) { $res.reason = $got.reason; return $res }
         $res.clock = New-HordeUnknown -Reason "the node's answer to the ping was not its pong"
@@ -231,7 +298,7 @@ function Invoke-HordeHubPull {
         $req = [pscustomobject][ordered]@{ v = 1; kind = "req"; id = (New-HordeLinkFrameId); seq = $seq; ts = (Get-HordeLinkTime); verb = "sessions.list"; requestId = (New-HordeLinkFrameId); issuedAt = (Get-HordeLinkTime); args = [pscustomobject]@{} }
         $why = Send-HordeHubFrame -Link $link -Frame $req -Contract $Contract
         if ($why -ne "") { $res.reason = $why; return $res }
-        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs
+        $got = Receive-HordeHubFrame -Link $link -Contract $Contract -TimeoutMs $TimeoutMs -Bound $bound
         $received = [datetime]::UtcNow
         if ($null -eq $got.frame) { $res.reason = $got.reason; return $res }
         $r = $got.frame
@@ -256,22 +323,30 @@ function Update-HordeHubNode {
     # One node's part of a round: read its mirror, pull, record the result, write the mirror. Returns one
     # line saying what happened. A throw anywhere is that line, never the end of the hub (as the node's
     # own loop answers a fault rather than crash, cli/NodeServe.ps1).
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000)
+    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
     $who = "node " + $Entry.deviceName + " (" + $Entry.deviceId + ")"
     $note = ""
     try {
-        $old = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $Root -DeviceId "$($Entry.deviceId)") -DeviceId "$($Entry.deviceId)" -Contract $Contract
+        $mirrorPath = Get-HordeHubMirrorPath -Root $Root -DeviceId "$($Entry.deviceId)"
+        $old = Read-HordeHubMirror -Path $mirrorPath -DeviceId "$($Entry.deviceId)" -Contract $Contract
         $m = $null
+        # A mirror another process holds open is left as it is: this node's round is skipped, said so.
+        if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {
+            return ($who + ": its mirror is held open by another process (" + $old.reason + "); left as it is, nothing pulled or written this round")
+        }
         if ($old.state -ceq "known") { $m = $old.value }
         else {
             $m = New-HordeNodeMirror -DeviceId "$($Entry.deviceId)" -DeviceName "$($Entry.deviceName)"
-            if ($old.state -ceq "unknown") { $note = "; the old mirror was started afresh: " + $old.reason }
+            # Never overwritten unseen (issue #87, F8): an unreadable mirror is renamed aside first, so its
+            # last-known inventory survives for a person to look at, and a missing one is said.
+            if ($old.state -ceq "unknown") { $note = "; the old mirror was started afresh: " + $old.reason + "; " + (Move-HordeHubMirrorAside -Path $mirrorPath) }
+            else { $note = "; no mirror file was there; started afresh" }
         }
         $p = $null
         # A failure is dated from when this pull began: an unreachable node can take the transport's
         # whole open timeout to say so (15 s on the local link), and "since" is when the hub tried.
         $began = [datetime]::UtcNow
-        try { $p = Invoke-HordeHubPull -Entry $Entry -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs }
+        try { $p = Invoke-HordeHubPull -Entry $Entry -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs }
         catch { $p = [pscustomobject]@{ ok = $false; reason = ("the hub failed while pulling: " + $_.Exception.Message) } }
         $line = ""
         if ($p.ok) {
@@ -288,6 +363,28 @@ function Update-HordeHubNode {
     }
 }
 
+function Get-HordeHubLockPath {
+    # The hub's run lock: serve.lock in the folder that holds the mirror folder.
+    param([Parameter(Mandatory = $true)][string]$Root)
+    return (Join-Path (Split-Path -Parent $Root) "serve.lock")
+}
+
+function Enter-HordeHubLock {
+    # Take the hub's run lock, or throw (issue #87, F9: two hubs each marked the node unreachable while
+    # the other held its one link, and raced on each mirror). The pattern of `horde metrics collect`
+    # (core/MetricsCollect.ps1): a file held with no sharing is released by the system when its holder
+    # dies, so a killed hub never leaves it locked; only a sharing violation means another hub, and any
+    # other failure to open it is said as itself, never as "busy" (review of PR #70, F8).
+    param([Parameter(Mandatory = $true)][string]$Path)
+    [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $Path))
+    try { return [System.IO.File]::Open($Path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) }
+    catch {
+        $inner = $_.Exception; while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
+        if ($inner -is [System.IO.IOException] -and $inner.HResult -eq $script:HordeHubSharingViolation) { throw ("another horde hub serve is running: it holds " + $Path) }
+        throw ("the hub's run lock could not be opened, so the hub did not start: " + $inner.Message)
+    }
+}
+
 function Invoke-HordeHubServe {
     # Pull every node, once per round, until -Rounds rounds are done (0: until stopped). -Nodes are
     # registry entries with their transports resolved. Returns one { at; outcomes } per round.
@@ -299,8 +396,12 @@ function Invoke-HordeHubServe {
         [int]$Rounds = 0,
         [int]$IntervalMs = 20000,
         [int]$TimeoutMs = 60000,
+        # The bound on each node's part of a round; 0 for none. See $script:HordeHubNodeBudgetMs.
+        [int]$NodeBudgetMs = $script:HordeHubNodeBudgetMs,
         [scriptblock]$OnRound = $null
     )
+    $lock = Enter-HordeHubLock -Path (Get-HordeHubLockPath -Root $Root)
+    try {
     $done = New-Object System.Collections.ArrayList
     # What a killed hub left: recovered or removed before the first round reads a mirror.
     $swept = New-Object System.Collections.ArrayList
@@ -311,7 +412,7 @@ function Invoke-HordeHubServe {
     while ($Rounds -le 0 -or $done.Count -lt $Rounds) {
         $began = [datetime]::UtcNow
         $outcomes = New-Object System.Collections.ArrayList
-        foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) { [void]$outcomes.Add((Update-HordeHubNode -Entry $e -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs)) }
+        foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) { [void]$outcomes.Add((Update-HordeHubNode -Entry $e -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) }
         if ($done.Count -eq 0) { foreach ($l in $swept) { [void]$outcomes.Add($l) } }
         $round = [pscustomobject]@{ at = (Get-HordeLinkTime -At $began); outcomes = $outcomes.ToArray() }
         [void]$done.Add($round)
@@ -322,6 +423,7 @@ function Invoke-HordeHubServe {
         if ($left -gt 0) { Start-Sleep -Milliseconds $left }
     }
     return $done.ToArray()
+    } finally { $lock.Dispose() }
 }
 
 function ConvertTo-HordeNodesRecord {

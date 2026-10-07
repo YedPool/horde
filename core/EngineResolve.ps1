@@ -47,6 +47,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "EngineConfig.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "Roles.ps1")
 

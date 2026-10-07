@@ -9,7 +9,12 @@
 # touches the terminal takes a $target: the terminal is always named, never left to the environment
 # (review of PR #96).
 #   Own     ()                    this node's own terminal, named explicitly: known target, or unknown
-#                                 when which one it is cannot be told
+#                                 when which one it is cannot be told. A node calls it with no
+#                                 arguments. The isolation probe passes two: ($profileDir, $running),
+#                                 a profile folder to look in instead of the user's, and the terminals
+#                                 to take as running ({ pid; start } each) instead of those listed now.
+#   OwnMarker ($profileDir, $pid) optional: the file whose presence makes terminal $pid that profile's
+#                                 own - where the probe's control plants one to show Own can see it.
 #   Resolve ($name)               the full path of a program from its command name
 #   Start   ($target, $program, $argv, $cwd, $environment)  a new pane running it: known { handle;
 #                                 program; cwd }. $environment maps a name to the value the session
@@ -26,7 +31,10 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 
-$script:HordeHostActors = New-Object System.Collections.ArrayList
+# A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
+# call, so this file is dot-sourced again by files loaded after the adapters have registered, and an
+# unconditional reset here would silently empty it.
+if ($null -eq (Get-Variable -Name HordeHostActors -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeHostActors = New-Object System.Collections.ArrayList }
 
 function Register-HordeHostActor {
     # Called by hosts/<name>/Act.ps1 when it is dot-sourced. Re-registering a name replaces it.
@@ -37,11 +45,12 @@ function Register-HordeHostActor {
         [Parameter(Mandatory = $true)][scriptblock]$Start,
         [Parameter(Mandatory = $true)][scriptblock]$Send,
         [Parameter(Mandatory = $true)][scriptblock]$Live,
-        [Parameter(Mandatory = $true)][scriptblock]$Stop
+        [Parameter(Mandatory = $true)][scriptblock]$Stop,
+        [scriptblock]$OwnMarker = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a host name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($a in $script:HordeHostActors) { if ($a.name -ceq $Name) { $script:HordeHostActors.Remove($a); break } }
-    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; own = $Own; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop })
+    [void]$script:HordeHostActors.Add([pscustomobject]@{ name = $Name; own = $Own; resolve = $Resolve; start = $Start; send = $Send; live = $Live; stop = $Stop; ownMarker = $OwnMarker })
 }
 
 function Get-HordeHostActor {
@@ -49,6 +58,11 @@ function Get-HordeHostActor {
     param([Parameter(Mandatory = $true)][string]$Name)
     foreach ($a in $script:HordeHostActors) { if ($a.name -ceq $Name) { return (New-HordeKnown -Value $a) } }
     return (New-HordeUnknown -Reason ("no acting adapter is loaded for the host " + $Name))
+}
+
+function Get-HordeHostActors {
+    # Every registered actor: what a check over all hosts, such as a node's isolation probe, walks.
+    return @($script:HordeHostActors)
 }
 
 function Get-HordeHostActorFiles {

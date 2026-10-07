@@ -72,7 +72,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 $script:HordeNodeActCore = Split-Path -Parent $PSScriptRoot
-foreach ($f in @("Tristate", "Namespace", "NodePolicy", "EngineResolve", "AgentLaunch", "HostAct")) { . (Join-Path $script:HordeNodeActCore ("core\" + $f + ".ps1")) }
+foreach ($f in @("Tristate", "Namespace", "NodePolicy", "EngineResolve", "NodeEngineLayers", "AgentLaunch", "HostAct")) { . (Join-Path $script:HordeNodeActCore ("core\" + $f + ".ps1")) }
 $script:HordeNodeSpawnLockName = ".spawn.lock"
 # EVERY PROMPT GOES BY FILE (review of #104, F9). A harness's input box reads its first character as a
 # mode - '!' a shell command run outside the permission mode just proven, '/' a command that can change
@@ -486,37 +486,6 @@ function Invoke-HordeNodeClose {
     $r.closedAt = (& $Context.now).ToUniversalTime().ToString("o"); $r.outcome = "closed"
     Write-HordeNodeSpawnRecord -Dir $Context.records -Record $r
     return (New-HordeNodeOutcome -State "done" -SessionId $sid)
-}
-
-function Get-HordeNodeEngineLayers {
-    # The node's own engine layers: L0 from the harness folders, L1 from <HordeHome>\engine.json and L4
-    # from <HordeHome>\engine-live.json when they exist - the names engines E6 and E7 inherit. Returns
-    # { layers; problems }. Every problem refuses every spawn (step 0): a file that fails is never
-    # dropped and acted on without it. -Builtin: L0 already read (shipped code, which changes only with
-    # a restart); without it L0 is read from -Root.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, $Descriptors, $Builtin = $null)
-    $docs = New-Object System.Collections.ArrayList
-    if ($null -eq $Builtin) { $Builtin = @(Get-HordeBuiltinLayer -Root $Root) }
-    foreach ($l in @($Builtin)) { [void]$docs.Add($l) }
-    $problems = New-Object System.Collections.ArrayList
-    foreach ($pair in @(@("L1", "engine.json"), @("L4", "engine-live.json"))) {
-        $path = Join-Path $HordeHome $pair[1]
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        try { [void]$docs.Add((Read-HordeEngineLayerText -Text ([System.IO.File]::ReadAllText($path)) -Layer $pair[0] -Source $path)) }
-        catch { [void]$problems.Add($path + ": not JSON") }
-    }
-    $findings = @(Test-HordeEngineConfig -Documents $docs.ToArray() -Descriptors $Descriptors | Where-Object { $_.severity -ceq "error" })
-    foreach ($f in $findings) { [void]$problems.Add($f.source + " " + $f.path + ": " + $f.code + " - " + $f.detail) }
-    return [pscustomobject]@{ layers = $docs.ToArray(); problems = $problems.ToArray() }
-}
-
-function Read-HordeNodeActConfig {
-    # What the node's owner controls, read now: { policy; layers; problems }. A spawn calls it under the
-    # spawn lock (review of #104, F1), so nothing the owner changes waits for a restart.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, $Descriptors, $Builtin = $null)
-    $policy = Get-HordeNodePolicy -Path (Get-HordeNodePolicyPath -HordeHome $HordeHome)
-    $eng = Get-HordeNodeEngineLayers -Root $Root -HordeHome $HordeHome -Descriptors $Descriptors -Builtin $Builtin
-    return [pscustomobject]@{ policy = $policy; layers = @($eng.layers); problems = @($eng.problems) }
 }
 
 function New-HordeNodeActContext {

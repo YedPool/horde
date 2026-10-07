@@ -30,8 +30,8 @@
            Find = 'catch { $p = [pscustomobject]@{ ok = $false; reason = ("the hub failed while pulling: " + $_.Exception.Message) } }'
            Replace = 'catch { throw }' }
         @{ Name = "unreadable-mirror-not-said"
-           Find = 'if ($old.state -ceq "unknown") { $note = "; the old mirror was started afresh: " + $old.reason }'
-           Replace = '' }
+           Find = 'if ($old.state -ceq "unknown") { $note = "; the old mirror was started afresh: " + $old.reason + "; " +'
+           Replace = 'if ($old.state -ceq "unknown") { $note = "" +' }
         @{ Name = "mirror-file-trusted-unchecked"
            Find = 'if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read as a mirror: "'
            Replace = 'if ($false) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read as a mirror: "' }
@@ -86,5 +86,32 @@
         @{ Name = "mirror-path-not-anchored"
            Find = '-cnotmatch ''\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'') { throw'
            Replace = '-cnotmatch ''[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'') { throw' }
+        @{ Name = "unreadable-mirror-overwritten-unkept"
+           Find = '+ "; " + (Move-HordeHubMirrorAside -Path $mirrorPath) }'
+           Replace = '}' }
+        @{ Name = "missing-mirror-unsaid"
+           Find = 'else { $note = "; no mirror file was there; started afresh" }'
+           Replace = '' }
+        @{ Name = "no-run-lock"
+           Find = '$lock = Enter-HordeHubLock -Path (Get-HordeHubLockPath -Root $Root)'
+           Replace = '$lock = New-Object System.IO.MemoryStream' }
+        @{ Name = "any-lock-failure-read-as-busy"
+           Find = 'if ($inner -is [System.IO.IOException] -and $inner.HResult -eq $script:HordeHubSharingViolation) { throw ("another horde hub serve is running'
+           Replace = 'if ($true) { throw ("another horde hub serve is running' }
+        @{ Name = "run-lock-kept-after-return"
+           Find = '    } finally { $lock.Dispose() }'
+           Replace = '    } finally { }' }
+        @{ Name = "node-bound-ignored"
+           Find = '$bound = New-HordeHubBound -BudgetMs $BudgetMs'
+           Replace = '$bound = New-HordeHubBound -BudgetMs 0' }
+        @{ Name = "held-mirror-moved-aside"
+           Find = 'if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "held-mirror-not-told-apart"
+           Find = '$u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld'
+           Replace = '$u | Add-Member -NotePropertyName held -NotePropertyValue $false' }
+        @{ Name = "aside-copies-uncapped"
+           Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
+           Replace = '$old = @()' }
     )
 }
