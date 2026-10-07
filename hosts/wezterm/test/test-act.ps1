@@ -326,6 +326,53 @@ try {
         Check ($r.state -eq "unknown" -and $r.reason -like "*junction or link*" -and $null -eq (& $a.value.ownMarker $jp 4242)) ("a profile folder reached through a junction is refused, though the socket is there (" + $r.reason + ")")
         [System.IO.Directory]::Delete($jp)
     } else { Check $false "CONTROL: a junction could be made for the test" }
+    # A junction INSIDE the profile, on the way to its socket folder (issue #119).
+    $pin = Join-Path $pp "profile-inner"
+    $elsewhere = Join-Path $pp "elsewhere-local"
+    New-Item -ItemType Directory -Path $pin, (Join-Path $elsewhere "share\wezterm") -Force | Out-Null
+    New-Item -ItemType File -Path (Join-Path $elsewhere "share\wezterm\gui-sock-4242") -Force | Out-Null
+    $null = cmd /c mklink /J "$(Join-Path $pin '.local')" "$elsewhere"
+    if (Test-Path -LiteralPath (Join-Path $pin ".local")) {
+        $r = & $a.value.own $pin @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+        Check ($r.state -eq "unknown" -and $r.reason -like "*.local, a junction or link*" -and $null -eq (& $a.value.ownMarker $pin 4242)) ("a junction inside the profile, at its .local, is refused though a socket waits behind it (" + $r.reason + ")")
+        [System.IO.Directory]::Delete((Join-Path $pin ".local"))
+    } else { Check $false "CONTROL: a junction could be made for the test" }
+    # The drive's type: only a fixed or removable local drive (issue #119: a mapped network drive passed).
+    $sys = $env:SystemDrive + "\"
+    Check ((Test-HordeWeztermProfileDir -Path $pp) -eq "") ("CONTROL: the temp profile on this machine's own drive passes (" + (New-Object System.IO.DriveInfo($pp.Substring(0, 3))).DriveType + ")")
+    foreach ($kind in @("Network", "CDRom", "Ram", "Unknown", "NoRootDirectory")) {
+        $why = Test-HordeWeztermProfileDir -Path $pp -DriveType ([scriptblock]::Create("param(`$root) '" + $kind + "'"))
+        Check ($why -like ("*of type '" + $kind + "'*")) ("a profile on a drive of type " + $kind + " is refused (" + $why + ")")
+    }
+    Check ((Test-HordeWeztermProfileDir -Path $pp -DriveType { param($root) "Removable" }) -eq "") "CONTROL: a removable local drive passes"
+    Check ((Test-HordeWeztermProfileDir -Path "\\server\share\profile" -DriveType { param($root) "Fixed" }) -like "*not a full path on a local drive*") "a share is refused by its form first, even where the drive type would pass"
+    # A folder that exists but cannot be read is refused, never passed as no junction (review of #131).
+    $why = Test-HordeWeztermProfileDir -Path $pp -ItemOf { param($p) $null }
+    Check ($why -like "*cannot be read, so whether it is a junction or link cannot be told*") ("a folder on the way that cannot be read is refused (" + $why + ")")
+    # A junction AT the socket folder itself, so a walk that starts one folder higher is caught.
+    $psock = Join-Path $pp "profile-sock"
+    $elsewhere2 = Join-Path $pp "elsewhere-sock"
+    New-Item -ItemType Directory -Path (Join-Path $psock ".local\share"), $elsewhere2 -Force | Out-Null
+    New-Item -ItemType File -Path (Join-Path $elsewhere2 "gui-sock-4242") -Force | Out-Null
+    $null = cmd /c mklink /J "$(Join-Path $psock '.local\share\wezterm')" "$elsewhere2"
+    if (Test-Path -LiteralPath (Join-Path $psock ".local\share\wezterm")) {
+        $r = & $a.value.own $psock @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+        Check ($r.state -eq "unknown" -and $r.reason -like "*wezterm, a junction or link*" -and $null -eq (& $a.value.ownMarker $psock 4242)) ("a junction at the socket folder itself is refused (" + $r.reason + ")")
+        [System.IO.Directory]::Delete((Join-Path $psock ".local\share\wezterm"))
+    } else { Check $false "CONTROL: a junction could be made for the test" }
+    # The node's own path, with no profile given, gets the same checks: USERPROFILE is pointed, for this
+    # check only, at a profile reached through a junction - never at the live profile.
+    $viaJ = Join-Path $pp "profile-via-junction"
+    $null = cmd /c mklink /J "$viaJ" "$pp"
+    if (Test-Path -LiteralPath $viaJ) {
+        $savedProfile2 = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = $viaJ
+            $r = Invoke-HordeWeztermOwn -Guis { @(4242) } -ProcessStart { param($p) "134350994347710308" }
+            Check ($r.state -eq "unknown" -and $r.reason -like "*profile cannot be trusted*junction or link*") ("with no profile given, a USERPROFILE reached through a junction is refused (" + $r.reason + ")")
+        } finally { $env:USERPROFILE = $savedProfile2 }
+        [System.IO.Directory]::Delete($viaJ)
+    } else { Check $false "CONTROL: a junction could be made for the test" }
 } finally { if ((Split-Path -Leaf $pp) -match '^horde-act-profile-[0-9a-f]{32}$') { Remove-Item -LiteralPath $pp -Recurse -Force -ErrorAction SilentlyContinue } }
 
 Remove-HordePaneTool
