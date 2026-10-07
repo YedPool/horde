@@ -89,7 +89,7 @@ $broke = Invoke-HordeDecisionWindowHandBack -State $handState -Hand { throw "it 
 Check ($broke.handed -eq $false -and $broke.state -ceq "unavailable" -and $broke.reason -clike "*it broke" -and $handState.handBacks -eq 5) "a port that throws is answered as unavailable, with what it said: the handler never throws"
 $viaPort = Invoke-HordeDecisionWindowHandBack -State $handState
 Check ($viaPort.handed -eq $false -and $viaPort.state -ceq "unavailable" -and $viaPort.reason -clike "zorb:*no way to hand the keyboard*") ("with no stand-in it asks the follow port itself, and a follower that cannot hand the keyboard over is said by name (" + $viaPort.reason + ")")
-Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed,probe") "and may be pushed four: the three changes, and a check's steps"
+Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed,probe,said") "and may be pushed five: the three changes, a check's steps, and the outcome of a save the helper made"
 $setup = (Ask $state "setup").reply | ConvertFrom-Json
 Check ($setup.ok -eq $true -and $setup.value.look.fontFamily -ceq $defaults.fontFamily -and $setup.value.look.textPx -eq 14 -and $setup.value.look.linePx -eq 22 -and $setup.value.look.smallTextPx -eq 12 -and $setup.value.look.smallLinePx -eq 18) "setup hands the page its letters: the family and the four sizes, from the settings"
 Check ($setup.value.report.lines -eq 400 -and $setup.value.report.subLines -eq 200 -and $setup.value.report.fleetRows -eq 80 -and $setup.value.report.lineChars -eq 400 -and $setup.value.report.textChars -eq 2000 -and $setup.value.report.chars -eq 60000 -and $setup.value.report.quietMs -eq 60) "the bounds of its report: 400 lines, 200 sub-lines, 80 fleet lines, 400 characters of a line, 60,000 in all"
@@ -311,11 +311,44 @@ Write-HordeDecisionWindowReport -State $state
 $file = [System.IO.File]::ReadAllText($state.reportPath) | ConvertFrom-Json
 Check ($file.schemaVersion -eq 2 -and $file.pid -eq $PID -and $file.handle -eq 77 -and $file.title -ceq $state.title) "one JSON object: version 2, this process, the window's handle and title"
 Check ($null -ne $file.drawn -and $file.drawn.lines[0].n -ceq "1" -and $file.drawn.lines[0].t -ceq "Is the first question drawn?" -and $file.drawn.headings[0].t -ceq "__proto__" -and $file.reports -eq 1 -and $file.reportsRefused -eq 1) "what the page drew, as the page sent it, and how many reports were taken and refused"
-Check ($file.pushes -eq 2 -and $file.rereads -eq 1 -and $file.watchFailures -eq 1 -and $file.askedForward -eq 1 -and $file.refused -eq $state.bridge.refused) "what the window did: lists pushed, the list read again in silence, the watch's failures, times asked to come forward, messages refused"
+Check ($file.pushes -eq 2 -and $file.rereads -eq 1 -and $file.watchFailures -eq 1 -and $file.askedForward -eq 1 -and $file.refused -eq $state.bridge.refused) ("what the window did: lists pushed, the list read again in silence, the watch's failures, times asked to come forward, messages refused (" + $file.pushes + "," + $file.rereads + "," + $file.watchFailures + "," + $file.askedForward + "," + $file.refused + ")")
 Check ((@($file.errors) -join ",") -ceq "e3,e4,e5,e6,e7" -and (@($file.findings) -join "|") -ceq "a finding of the suite's") "the newest five of the surface's errors, and what was wrong in the settings"
 Check ($file.attachment.attached -eq $false -and $file.attachment.follow -cne "") "and whether it stands beside a window, with the follow's own state"
 Write-HordeDecisionWindowReport -State $state
 Check (@(Get-ChildItem -LiteralPath $work -File | Where-Object { $_.Name -like "report.json*" }).Count -eq 1) "written again, it is replaced whole: no half-written copy is left beside it"
+
+Write-Host ""
+Write-Host "--- the slow work goes to a helper: the window's thread only starts it and hands its result on ---" -ForegroundColor Cyan
+$slow = New-HordeDecisionWindowState
+Check ($null -ne (Start-HordeDecisionWindowHelper -State $slow)) "a helper is started: a PowerShell of its own, loading the composer"
+$script:stepLongest = 0
+function Wait-Helper { param($S) for ($i = 0; $i -lt 600 -and ($null -ne $S.helper.pending -or $S.helper.queue.Count -gt 0); $i++) { $c = [System.Diagnostics.Stopwatch]::StartNew(); Step-HordeDecisionWindowHelper -State $S -Window $window; $script:stepLongest = [Math]::Max($script:stepLongest, $c.ElapsedMilliseconds); Start-Sleep -Milliseconds 50 } }
+Wait-Helper $slow
+$script:posted.Clear()
+$askedEarly = Ask $slow "list"
+$early = ($askedEarly.reply | ConvertFrom-Json).value
+Check ($early.state -ceq "unknown" -and $early.reading -eq $true -and $slow.helper.queue.Count -eq 1) "the page's first asking, before the helper has read the list: an answer that says it is being read, and the reading is asked of the helper - nothing is read on the window's thread"
+Wait-Helper $slow
+$firstPush = @($script:posted | Where-Object { $_ -like '*"event":"list-changed"*' })
+Check ($firstPush.Count -eq 1 -and @(($firstPush[0] | ConvertFrom-Json).value.value.questions).Count -eq 5 -and $slow.title -ceq "Open decisions: 5, 5 waiting") "when the helper has read it, the list is pushed once, whole, with its title"
+$sayId = [guid]::NewGuid().ToString("N")
+$taken = (Ask $slow "say" @{ number = 1; text = "yes, from the helper"; wording = 1; id = $sayId }).reply | ConvertFrom-Json
+Check ($taken.value.taken -eq $true -and $taken.value.id -ceq $sayId -and @((Invoke-HordeDecision -Operation "show" -Request @{ number = 1 }).value.question.thread.messages).Count -eq 0) "a save is answered at once as taken, by the page's id, and nothing is written on the window's thread"
+$script:posted.Clear()
+Wait-Helper $slow
+$saidEvents = @($script:posted | Where-Object { $_ -like '*"event":"said"*' } | ForEach-Object { ($_ | ConvertFrom-Json).value })
+Check ($saidEvents.Count -eq 1 -and $saidEvents[0].id -ceq $sayId -and $saidEvents[0].result.ok -eq $true -and $saidEvents[0].result.sequence -ge 1 -and $slow.says -eq 1) "the helper saved it and its outcome is pushed as said, with the page's id and the record's number"
+$after = @($script:posted | Where-Object { $_ -like '*"event":"list-changed"*' })
+Check ($after.Count -eq 1 -and @(@(($after[0] | ConvertFrom-Json).value.value.questions) | Where-Object { $_.number -eq 1 })[0].thread.count -eq 1) "and the list is read again by the helper after the save, and pushed with the answer in it"
+$refusedId = [guid]::NewGuid().ToString("N")
+[void](Ask $slow "say" @{ number = 99; text = "to a question that is not there"; wording = 1; id = $refusedId })
+$script:posted.Clear()
+Wait-Helper $slow
+$refusedEvent = @($script:posted | Where-Object { $_ -like '*"event":"said"*' } | ForEach-Object { ($_ | ConvertFrom-Json).value })
+Check ($refusedEvent.Count -eq 1 -and $refusedEvent[0].id -ceq $refusedId -and $refusedEvent[0].result.ok -eq $false -and $refusedEvent[0].result.reason -clike "Not saved:*" -and $slow.saysRefused -eq 1) "a refusal comes back the same way, in the rule's own words"
+Check ($script:stepLongest -lt 250) ("the window's thread was never held a quarter of a second by any of it: the longest step took " + $script:stepLongest + " ms")
+Stop-HordeDecisionWindowHelper -State $slow
+Check ($null -eq $slow.helper) "the helper is ended with the window"
 
 Write-Host ""
 Write-Host "--- what the page's files must not hold ---" -ForegroundColor Cyan

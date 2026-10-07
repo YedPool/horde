@@ -453,7 +453,7 @@ function New-HordeDecisionWindowBridge {
     # Get-HordeSurfaceSettings, read once by the caller.
     param($SurfaceSettings = $null)
     $most = [long]$script:HordeDecisionWindowReportBounds.chars
-    return (New-HordeSurfaceBridge -Settings $SurfaceSettings -Events @("list-changed", "fleet-changed", "attachment-changed", "probe") -Requests ([ordered]@{
+    return (New-HordeSurfaceBridge -Settings $SurfaceSettings -Events @("list-changed", "fleet-changed", "attachment-changed", "probe", "said") -Requests ([ordered]@{
         # What the page needs before it draws a letter: the letters themselves, the bounds of its
         # report, what to show first, and what was wrong in the settings files.
         "setup" = @{ run = { param($Arguments, $State, $Window)
@@ -469,7 +469,17 @@ function New-HordeDecisionWindowBridge {
             } } }
         "kinds" = @{ run = { param($Arguments, $State, $Window) return (Get-HordeDecisionWindowRecord -Operation "kinds") } }
         "list" = @{ run = { param($Arguments, $State, $Window)
+            # WITH A HELPER (THE SLOW WORK GOES TO A HELPER): the list it last read, or - before it has
+            # read one - an answer saying it is being read; the list is pushed when it is.
+            $State.pageAsked = $true
+            if ($null -ne $State.helper) {
+                if ($null -ne $State.listRecord) { if ($null -ne $Window) { & $Window.setTitle $State.title }; return $State.listRecord }
+                Add-HordeDecisionWindowJob -State $State -Kind "list"
+                return [pscustomobject]@{ state = "unknown"; value = $null; reason = "the list is being read"; reading = $true }
+            }
+            $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $record = Get-HordeDecisionWindowList -State $State
+            Add-HordeDecisionWindowBusy -State $State -What "list request" -Ms $clock.Elapsed.TotalMilliseconds
             # What the page now has, so that the next change is compared with it and not pushed twice.
             $State.listJson = ConvertTo-HordeSurfaceJson -Value $record
             $State.listReadAt = [datetime]::UtcNow
@@ -498,7 +508,11 @@ function New-HordeDecisionWindowBridge {
         "say" = @{
             args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 } }
             run = { param($Arguments, $State, $Window)
+                # With a helper: taken, and its outcome pushed as the event said, by the page's own id.
+                if ($null -ne $State.helper) { Add-HordeDecisionWindowJob -State $State -Kind "say" -Value $Arguments; return [pscustomobject]@{ taken = $true; id = "" + $Arguments["id"] } }
+                $clock = [System.Diagnostics.Stopwatch]::StartNew()
                 $said = Invoke-HordeDecisionWindowSay -Arguments $Arguments
+                Add-HordeDecisionWindowBusy -State $State -What "say" -Ms $clock.Elapsed.TotalMilliseconds
                 if ($said.ok) { $State.says = [int]$State.says + 1; $State.dirtyAt = [datetime]::UtcNow } else { $State.saysRefused = [int]$State.saysRefused + 1 }
                 $State.reportDue = $true
                 return $said }
@@ -528,6 +542,8 @@ function New-HordeDecisionWindowState {
         threadCache = @{}; told = @{}; toldPath = $ToldPath; toldStamp = ""; toldProblem = ""; says = 0; saysRefused = 0
         probePath = $ProbePath; probeStamp = ""; probeSent = [long]0; probeHeld = $null
         handBacks = 0; handBacksDone = 0; handBackLast = ""; handBackReason = ""
+        busyLongestMs = 0; busyLongestWhat = ""; busyOver250 = 0
+        helper = $null; helperErrors = (New-Object System.Collections.ArrayList); listRecord = $null; pageAsked = $false
     }
 }
 
@@ -597,6 +613,8 @@ function Write-HordeDecisionWindowReport {
         askedForward = [int]$State.shows
         says = [int]$State.says; saysRefused = [int]$State.saysRefused; toldMarks = [ordered]@{ path = "$($State.toldPath)"; told = @($State.told.Keys).Count; problem = "$($State.toldProblem)" }
         handBack = [ordered]@{ asked = [int]$State.handBacks; handed = [int]$State.handBacksDone; last = "$($State.handBackLast)"; reason = "$($State.handBackReason)" }
+        busy = [ordered]@{ longestMs = [long]$State.busyLongestMs; longestWhat = "$($State.busyLongestWhat)"; over250 = [int]$State.busyOver250 }
+        helper = [ordered]@{ running = ($null -ne $State.helper); done = $(if ($null -ne $State.helper) { [int]$State.helper.done } else { 0 }); failures = @($State.helperErrors | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ }) }
         findings = @($State.findings)
         errors = @($State.errors | Where-Object { $null -ne $_ } | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ })
         secondsToFirstReport = $seconds
@@ -614,18 +632,31 @@ function Write-HordeDecisionWindowReport {
 function Update-HordeDecisionWindowList {
     # Ask for the list again and push it to the page if it is not what the page has. Returns whether
     # it was pushed.
+    # With a helper the list is asked of it, and pushed when it answers (Step-HordeDecisionWindowHelper).
     param([Parameter(Mandatory = $true)]$State, $Window = $null, [datetime]$Now = [datetime]::UtcNow)
+    if ($null -ne $State.helper) { $State.listReadAt = $Now; Add-HordeDecisionWindowJob -State $State -Kind "list"; return $false }
     $record = Get-HordeDecisionWindowList -State $State
+    return (Push-HordeDecisionWindowList -State $State -Window $Window -Record $record -Json (ConvertTo-HordeSurfaceJson -Value $record) -Title (Get-HordeDecisionWindowTitle -Record $record) -Now $Now)
+}
+
+function Push-HordeDecisionWindowList {
+    # A list just read (-Record, written as -Json), pushed to the page if it is not what the page has.
+    # Returns whether it was pushed.
+    param([Parameter(Mandatory = $true)]$State, $Window = $null, $Record, [string]$Json, [string]$Title, [datetime]$Now = [datetime]::UtcNow)
     $State.listReadAt = $Now
-    $json = ConvertTo-HordeSurfaceJson -Value $record
-    if ($json -ceq $State.listJson) { return $false }
-    $State.listJson = $json
-    $State.title = Get-HordeDecisionWindowTitle -Record $record
+    $State.listRecord = $Record
+    if ($Json -ceq $State.listJson) { return $false }
+    $State.listJson = $Json
+    $State.title = $Title
     $State.pushes = [int]$State.pushes + 1
     $State.reportDue = $true
-    if ($null -ne $Window) {
+    # Before the page has asked for the list it is not pushed: the answer to its asking carries it.
+    if ($null -ne $Window -and $State.pageAsked) {
         & $Window.setTitle $State.title
-        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "list-changed" -Value $record)
+        # The list as it was already written (by the helper, off this thread): written again here it
+        # would cost this thread what the helper saved it. The event's envelope is the bridge's own.
+        $mark = "horde-list-" + [guid]::NewGuid().ToString("N")
+        & $Window.post ((ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "list-changed" -Value $mark).Replace('"' + $mark + '"', $Json))
     }
     return $true
 }
@@ -653,11 +684,114 @@ function Invoke-HordeDecisionWindowOpened {
     $State.reportDue = $true
 }
 
+# THE SLOW WORK GOES TO A HELPER (TRIAL; the owner, 2026-10-07: "it lags on text input"). Measured
+# that day on a copy of the real list (90 records), with keys by the engine's own input: a key typed
+# while the window was idle showed in 0.5 s through the check's own path, and in 4.2 to 5.2 s when it
+# was typed just after a save or just after the keeper wrote to the list; the window's thread was held
+# 22.6 s by the first read of the list and 11 times for more than a quarter of a second in three
+# minutes, while the page itself never took more than 12 ms to draw a key or the whole list. Reading
+# the list with every conversation in it took 1.9 s with nothing new, 3.4 s after a save, and a save
+# 1.5 s. So reading the list and saving are done by a helper of the window's own - a second
+# PowerShell in this process, loaded with this very file - one piece of work at a time, in the order
+# asked; the window's thread only starts a piece, and on a later tick takes its result and hands it
+# on. A save is answered at once as taken, and its outcome is pushed to the page (the event said, by
+# the page's own id). Without a helper (a check that calls a handler alone), the work is done where it
+# is asked, as before.
+$script:HordeDecisionWindowFile = Join-Path $PSScriptRoot "Window.ps1"
+
+function Start-HordeDecisionWindowHelper {
+    # The helper (above): a PowerShell of its own in this process, loading this file. Returns the
+    # helper's state, or $null when one could not be made - then the work is done on the window's thread.
+    param([Parameter(Mandatory = $true)]$State)
+    try {
+        $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $runspace.Open()
+        $shell = [System.Management.Automation.PowerShell]::Create()
+        $shell.Runspace = $runspace
+        [void]$shell.AddScript('param($File) Set-StrictMode -Version Latest; . $File; $global:HordeDecisionHelperState = [pscustomobject]@{ threadCache = @{}; told = @{} }; "ready"').AddArgument($script:HordeDecisionWindowFile)
+        $helper = [pscustomobject]@{ runspace = $runspace; shell = $shell; pending = $shell.BeginInvoke(); job = [pscustomobject]@{ kind = "load"; value = $null }; queue = (New-Object System.Collections.ArrayList); failures = 0; done = 0 }
+        $State.helper = $helper
+        return $helper
+    } catch { [void]$State.helperErrors.Add("the helper could not be started: " + $_.Exception.Message); return $null }
+}
+
+function Add-HordeDecisionWindowJob {
+    # Ask the helper for one piece of work: list (read the list again; one waiting is enough) or say
+    # (-Value is the page's arguments). In the order asked.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Kind, $Value = $null)
+    if ($Kind -ceq "list" -and @($State.helper.queue | Where-Object { $_.kind -ceq "list" }).Count -gt 0) { return }
+    [void]$State.helper.queue.Add([pscustomobject]@{ kind = $Kind; value = $Value })
+}
+
+function Step-HordeDecisionWindowHelper {
+    # On each tick: take the result of the piece of work that is done, and start the next.
+    param([Parameter(Mandatory = $true)]$State, $Window = $null, [datetime]$Now = [datetime]::UtcNow)
+    $helper = $State.helper
+    if ($null -eq $helper) { return }
+    if ($null -ne $helper.pending) {
+        if (-not $helper.pending.IsCompleted) { return }
+        $job = $helper.job
+        $out = $null; $failed = ""
+        try { $out = @($helper.shell.EndInvoke($helper.pending)) | Select-Object -Last 1 } catch { $failed = $_.Exception.Message }
+        if ($failed -eq "" -and $helper.shell.Streams.Error.Count -gt 0) { $failed = "" + $helper.shell.Streams.Error[0] }
+        $helper.shell.Commands.Clear(); $helper.shell.Streams.ClearStreams()
+        $helper.pending = $null; $helper.job = $null
+        $helper.done = [int]$helper.done + 1
+        if ($failed -ne "") { $helper.failures = [int]$helper.failures + 1; [void]$State.helperErrors.Add($job.kind + ": " + $failed) }
+        if ($job.kind -ceq "list" -and $failed -eq "" -and $null -ne $out) { [void](Push-HordeDecisionWindowList -State $State -Window $Window -Record $out.record -Json $out.json -Title $out.title -Now $Now) }
+        elseif ($job.kind -ceq "list") { $State.listReadAt = $Now }
+        if ($job.kind -ceq "say") {
+            $said = $out
+            if ($failed -ne "" -or $null -eq $said) { $said = [pscustomobject]@{ ok = $false; reason = ("Not saved: the helper that saves failed: " + $(if ($failed -ne "") { $failed } else { "no answer" })) } }
+            if ($said.ok) { $State.says = [int]$State.says + 1; Add-HordeDecisionWindowJob -State $State -Kind "list" } else { $State.saysRefused = [int]$State.saysRefused + 1 }
+            $State.reportDue = $true
+            if ($null -ne $Window) { & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "said" -Value ([pscustomobject]@{ id = "" + $job.value["id"]; result = $said })) }
+        }
+    }
+    if ($helper.queue.Count -eq 0) { return }
+    $next = $helper.queue[0]
+    $helper.queue.RemoveAt(0)
+    $helper.job = $next
+    if ($next.kind -ceq "list") {
+        [void]$helper.shell.AddScript('param($Told) $s = $global:HordeDecisionHelperState; $s.told = $Told; $r = Get-HordeDecisionWindowList -State $s; [pscustomobject]@{ record = $r; json = (ConvertTo-HordeSurfaceJson -Value $r); title = (Get-HordeDecisionWindowTitle -Record $r) }').AddArgument($State.told)
+    } else {
+        [void]$helper.shell.AddScript('param($Arguments) Invoke-HordeDecisionWindowSay -Arguments $Arguments').AddArgument($next.value)
+    }
+    $helper.pending = $helper.shell.BeginInvoke()
+}
+
+function Stop-HordeDecisionWindowHelper {
+    param([Parameter(Mandatory = $true)]$State)
+    if ($null -eq $State.helper) { return }
+    try { $State.helper.shell.Stop() } catch { }
+    try { $State.helper.shell.Dispose(); $State.helper.runspace.Dispose() } catch { }
+    $State.helper = $null
+}
+
+function Add-HordeDecisionWindowBusy {
+    # THE WINDOW'S OWN THREAD MUST NOT BE HELD (the owner, 2026-10-07: "it lags on text input"). The
+    # page's window is a child of this thread's window in another process, and the two share one queue
+    # of keyboard input: while this thread works, his keys wait. So every stretch of work here is
+    # timed, and -Report says the longest and how many went over a quarter of a second.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$What, [Parameter(Mandatory = $true)][double]$Ms)
+    if ($Ms -gt [double]$State.busyLongestMs) { $State.busyLongestMs = [Math]::Round($Ms); $State.busyLongestWhat = $What }
+    if ($Ms -ge 250) { $State.busyOver250 = [int]$State.busyOver250 + 1 }
+}
+
 function Invoke-HordeDecisionWindowTick {
+    # One tick of the window's thread (Invoke-HordeDecisionWindowTickWork), timed.
+    param($Window, $State, [datetime]$Now = [datetime]::UtcNow)
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    try { Invoke-HordeDecisionWindowTickWork -Window $Window -State $State -Now $Now }
+    finally { Add-HordeDecisionWindowBusy -State $State -What "tick" -Ms $clock.Elapsed.TotalMilliseconds }
+}
+
+function Invoke-HordeDecisionWindowTickWork {
     # On every tick, on the window's thread: a second `open` asking to be seen; the watch, started or
     # started again; a gathered change, or the list read again because none was heard; the Orcs'
     # files; the follow; the picture; the report.
     param($Window, $State, [datetime]$Now = [datetime]::UtcNow)
+    Step-HordeDecisionWindowHelper -State $State -Window $Window -Now $Now
     if ($null -ne $State.showEvent -and $State.showEvent.WaitOne(0)) { $State.shows = [int]$State.shows + 1; $State.reportDue = $true; & $Window.show }
     if ($State.watchFailed) { Stop-HordeDecisionWindowWatch -State $State }
     if ($null -eq $State.watcher) { [void](Start-HordeDecisionWindowWatch -State $State -Sync $Window.sync) }
@@ -737,6 +871,7 @@ function Invoke-HordeDecisionWindowTick {
 
 function Invoke-HordeDecisionWindowClosed {
     param($Window, $State)
+    Stop-HordeDecisionWindowHelper -State $State
     Stop-HordeDecisionWindowWatch -State $State
     [void](Stop-HordeWindowFollow)
 }
@@ -804,6 +939,9 @@ function Open-HordeDecisionWindow {
         $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment -PicturePath $picturePath -Settings $own.values -SurfaceSettings $surfaceSettings -FollowSettings $followSettings.values -Findings $findings -View $view -ToldPath $toldPath -ProbePath $probePath
         $state.showEvent = $show
         $script:HordeDecisionWindow = $state
+        # The helper starts loading now, and the first list is asked of it at once: both go on while the
+        # engine starts, and neither holds the window's thread.
+        if ($null -ne (Start-HordeDecisionWindowHelper -State $state)) { Add-HordeDecisionWindowJob -State $state -Kind "list" }
         $root = Split-Path -Parent $PSScriptRoot
         $specArgs = @{
             Title = "Open decisions"; Start = "window/index.html"; Bridge = $state.bridge; State = $state; Settings = $surfaceSettings

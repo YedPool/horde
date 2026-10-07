@@ -47,8 +47,25 @@
     topInset: function () { return topBar.getBoundingClientRect().bottom; },
     onDraw: function () { draws += 1; report(); },
     onChange: function () { showCounts(); report(); },
-    say: function (number, text, wording, id) { return bridge.request("say", { number: number, text: text, wording: wording, id: id }); }
+    say: say
   });
+
+  // A SAVE IS TAKEN AT ONCE AND ANSWERED LATER (decisions/Window.ps1, THE SLOW WORK GOES TO A HELPER):
+  // the answer to say is { taken, id }, and the outcome arrives as the event said with the same id.
+  // An answer that is already the outcome (no helper) is used as it is. An outcome that has not come
+  // in SAID_WAIT_MS is a refusal in words; the words stay a draft, and sent again they carry the same
+  // id, so a save that did happen is not made twice.
+  var SAID_WAIT_MS = 60000;
+  var awaiting = Object.create(null);
+  function say(number, text, wording, id) {
+    return bridge.request("say", { number: number, text: text, wording: wording, id: id }).then(function (answer) {
+      if (!answer || answer.taken !== true) { return answer; }
+      return new Promise(function (resolve) {
+        var timer = window.setTimeout(function () { delete awaiting[id]; resolve({ ok: false, reason: "Not saved, as far as this window knows: no answer came back in " + (SAID_WAIT_MS / 1000) + " seconds. Press Enter to try again; the same words are never saved twice." }); }, SAID_WAIT_MS);
+        awaiting[id] = function (result) { window.clearTimeout(timer); delete awaiting[id]; resolve(result); };
+      });
+    });
+  }
   var fleet = Fleet.mount(document.getElementById("fleet"), { countWords: "waiting on you", onPick: pick, onChange: report });
 
   // THE TOP LINE SAYS HOW FAR THE READER IS: how many questions of the run still have no answer of
@@ -120,6 +137,8 @@
 
   function showList(record) {
     if (record && record.state === "known" && record.value && record.value.outcome !== "done") { record = { state: "unknown", reason: record.value.reason }; }
+    // Still being read by Horde's helper: said, and the list is pushed when it is read.
+    if (record && record.reading === true) { notices.list = "Reading the list..."; showNotices(); report(); return; }
     var did = doc.setList(record);
     if (did === "unread") { notices.list = "The list could not be read, so what is shown may be old: " + ((record && record.reason) ? record.reason : "no reason was given"); }
     else {
@@ -220,6 +239,7 @@
     return;
   }
   bridge.on("list-changed", showList);
+  bridge.on("said", function (outcome) { if (outcome && typeof outcome.id === "string" && awaiting[outcome.id]) { awaiting[outcome.id](outcome.result); } });
   bridge.on("fleet-changed", function (status) { fleet.update(status); });
   bridge.on("attachment-changed", showAttachment);
   bridge.on("probe", function (probe) {

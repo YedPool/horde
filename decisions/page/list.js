@@ -582,6 +582,7 @@
     }
 
     function draw() {
+      var startedAt = window.performance.now();
       var before = place();
       // The caret, to be put back where it was: a redraw makes every field anew.
       var had = focusedLine();
@@ -666,6 +667,9 @@
           try { again.field.setSelectionRange(Math.min(caret.from, again.field.value.length), Math.min(caret.to, again.field.value.length)); } catch (e) { /* not drawn */ }
         }
       }
+      timing.draws += 1;
+      timing.drawLast = window.performance.now() - startedAt;
+      timing.drawMax = Math.max(timing.drawMax, timing.drawLast);
       onDraw();
     }
 
@@ -750,7 +754,19 @@
     // HOW MANY KEY PRESSES CAME FROM THE ENGINE ITSELF, and not from a script: a check that says it
     // pressed real keys holds this number against how many it pressed (snapshot, answer.realKeys).
     var realKeys = 0;
-    document.addEventListener("keydown", function (e) { if (e.isTrusted) { realKeys += 1; } }, true);
+    // HOW LONG A KEY TAKES TO SHOW (the owner, 2026-10-07: "it lags on text input"). For each key the
+    // engine vouches for: how long it waited before the page saw it (its own time stamp to now), and
+    // how long from then until the next frame was drawn. And how long each redraw of the list took.
+    // Read back by a check through the snapshot (answer.timing); nothing else uses them.
+    var timing = { keys: 0, waitMax: 0, frames: [], draws: 0, drawMax: 0, drawLast: 0 };
+    document.addEventListener("keydown", function (e) {
+      if (!e.isTrusted) { return; }
+      realKeys += 1;
+      var seen = window.performance.now();
+      timing.keys += 1;
+      timing.waitMax = Math.max(timing.waitMax, Math.max(0, seen - e.timeStamp));
+      window.requestAnimationFrame(function () { timing.frames.push(window.performance.now() - seen); if (timing.frames.length > 2000) { timing.frames.shift(); } });
+    }, true);
     window.addEventListener("resize", function () { drawnLines.forEach(function (line) { fit(line); }); });
 
     return {
@@ -866,7 +882,10 @@
         var has = focusedLine();
         var onHead = "";
         drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { onHead = h.txt.textContent; } });
-        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus() };
+        var frames = timing.frames.slice().sort(function (a, b) { return a - b; });
+        var at = function (share) { return frames.length ? Math.round(frames[Math.min(frames.length - 1, Math.floor(share * frames.length))]) : 0; };
+        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus(),
+          timing: { keys: timing.keys, waitMaxMs: Math.round(timing.waitMax), frameP50Ms: at(0.5), frameP95Ms: at(0.95), frameMaxMs: frames.length ? Math.round(frames[frames.length - 1]) : 0, draws: timing.draws, drawMaxMs: Math.round(timing.drawMax), drawLastMs: Math.round(timing.drawLast) } };
         return out;
       },
       measure: function () {
