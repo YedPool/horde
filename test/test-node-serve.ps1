@@ -65,6 +65,7 @@ function Ask {
 
 
 if (Enter-HordeSuiteSection "no-start" "the node file starts nothing") {
+    trap { Register-HordeSuiteError $_; continue }
     . (Join-Path $root "tools\ExecScan.ps1")
     $scan = @(Get-HordeExecFindings -Path (Join-Path $root "remote\NodeServe.ps1") -Known (Get-HordeExecFunctionNames -Roots @(Join-Path $root "remote")))
     Check ($scan.Count -eq 0) ("remote/NodeServe.ps1 passes the exec scan (" + ($scan -join "; ") + ")")
@@ -72,6 +73,7 @@ if (Enter-HordeSuiteSection "no-start" "the node file starts nothing") {
 }
 
 if (Enter-HordeSuiteSection "hello" "hello first") {
+    trap { Register-HordeSuiteError $_; continue }
     $st = State
     $r = Invoke-HordeNodeFrame -State $st -Line (Line (Req "node.info")) -Data (Data)
     Check ($null -ne $r.reply -and "$($r.reply.kind)" -ceq "res" -and "$($r.reply.error.code)" -ceq "refused" -and (Sendable $r.reply)) "a request before the hello is refused, in a frame the contract accepts"
@@ -117,6 +119,7 @@ if (Enter-HordeSuiteSection "hello" "hello first") {
 
 $closeArgs = [pscustomobject][ordered]@{ sessionId = "s-1"; expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = $device; space = "windows" }; pid = 4242; procStart = "133420000000000000" }; reason = "done" }
 if (Enter-HordeSuiteSection "read-verbs" "only the read verbs of R12a are answered") {
+    trap { Register-HordeSuiteError $_; continue }
     $deliverArgs = [pscustomobject][ordered]@{ messageId = (New-HordeLinkFrameId); sessionId = "aaaaaaaa-0000-4000-8000-000000000001"; from = [pscustomobject][ordered]@{ deviceId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; sessionId = "aaaaaaaa-0000-4000-8000-000000000002" }; body = "hello"; ttlSeconds = 60 }
     $deliverReq = Req "session.deliver" $deliverArgs
     Check ((ConvertTo-HordeFrameBytes -Frame $deliverReq).ok -eq $true) "CONTROL: the session.deliver request is well formed, so only the verb gate can refuse it"
@@ -129,6 +132,7 @@ if (Enter-HordeSuiteSection "read-verbs" "only the read verbs of R12a are answer
 }
 
 if (Enter-HordeSuiteSection "node-info" "node.info") {
+    trap { Register-HordeSuiteError $_; continue }
     $r = Ask "node.info"
     Check ("$($r.reply.result.state)" -ceq "known" -and "$($r.reply.result.value.deviceId)" -ceq $device -and (Sendable $r.reply)) "node.info answers this node's manifest, in a frame the contract accepts"
 }
@@ -138,6 +142,7 @@ if (Enter-HordeSuiteSection "node-info" "node.info") {
 $full = View
 foreach ($p in @($full.complete.PSObject.Properties)) { $p.Value.state = "known"; $p.Value | Add-Member -NotePropertyName value -NotePropertyValue $true -Force; $p.Value | Add-Member -NotePropertyName observedAt -NotePropertyValue "2026-10-02T12:00:00.000Z" -Force }
 if (Enter-HordeSuiteSection "sessions-list" "sessions.list") {
+    trap { Register-HordeSuiteError $_; continue }
     $r = Ask "sessions.list"
     Check ($r.needView -eq $true -and $null -eq $r.reply) "sessions.list asks for the projection first, and sends nothing until it has it"
     $r = Ask "sessions.list" -View (View)
@@ -164,6 +169,7 @@ if (Enter-HordeSuiteSection "sessions-list" "sessions.list") {
 }
 
 if (Enter-HordeSuiteSection "uncarriable" "values the link cannot carry become unknowns, never cut or reshaped") {
+    trap { Register-HordeSuiteError $_; continue }
     $odd = View
     $f1 = @($odd.sessions)[0].fields
     $f1.pid.value = -1
@@ -179,6 +185,7 @@ if (Enter-HordeSuiteSection "uncarriable" "values the link cannot carry become u
 }
 
 if (Enter-HordeSuiteSection "wire-fit" "every answer fits the wire, whatever the view holds") {
+    trap { Register-HordeSuiteError $_; continue }
     $big = View
     @($big.sessions)[0].fields.label = [pscustomobject]@{ state = "unknown"; reason = ("x" * 1500) }
     $r = Ask "sessions.list" -View $big
@@ -211,6 +218,7 @@ if (Enter-HordeSuiteSection "wire-fit" "every answer fits the wire, whatever the
 }
 
 if (Enter-HordeSuiteSection "session-get" "session.get") {
+    trap { Register-HordeSuiteError $_; continue }
     $r = Ask "session.get" ([pscustomobject]@{ sessionId = "aaaaaaaa-0000-4000-8000-000000000001" }) -View (View)
     Check ("$($r.reply.result.state)" -ceq "known" -and "$($r.reply.result.value.sessionId)" -ceq "aaaaaaaa-0000-4000-8000-000000000001" -and (Sendable $r.reply)) "session.get answers one session's summary"
     $r = Ask "session.get" ([pscustomobject]@{ sessionId = "bbbbbbbb-0000-4000-8000-000000000009" }) -View (View)
@@ -234,6 +242,7 @@ if (Enter-HordeSuiteSection "session-get" "session.get") {
 }
 
 if (Enter-HordeSuiteSection "request-status" "request.status") {
+    trap { Register-HordeSuiteError $_; continue }
     $rid = New-HordeLinkFrameId
     $r = Ask "request.status" ([pscustomobject]@{ requestId = $rid })
     Check ("$($r.reply.result.state)" -ceq "unknown" -and "$($r.reply.result.reason)" -clike "*no request journal*" -and (Sendable $r.reply)) "a node with no journal answers unknown, never absent"
@@ -253,6 +262,7 @@ if (Enter-HordeSuiteSection "request-status" "request.status") {
 }
 
 if (Enter-HordeSuiteSection "contract-once" "the contract is read once per link, never per frame or per session") {
+    trap { Register-HordeSuiteError $_; continue }
     # Measured 2026-10-02: Get-HordeLinkContract parses both link schemas on every call, about 1.4 s, and
     # the node read it once per session to check the id; sessions.list over the 31 sessions of the
     # projection fixture took 44 s and the real-pipe suite's hub gave up at 60 s. The state now carries
@@ -314,6 +324,7 @@ function Dial {
     return $open.value
 }
 if (Enter-HordeSuiteSection "loop" "the loop, over the in-process transport, with a fake view") {
+    trap { Register-HordeSuiteError $_; continue }
     $node = Start-Node
     $link = $null
     try {
@@ -361,6 +372,7 @@ if (Enter-HordeSuiteSection "loop" "the loop, over the in-process transport, wit
 }
 
 if (Enter-HordeSuiteSection "fault" "a fault while answering is an answer, not a crash") {
+    trap { Register-HordeSuiteError $_; continue }
     # cli/NodeServe.ps1's outer catch: horde.ps1 runs with $ErrorActionPreference Stop and nothing restarts
     # the node yet, so a throw while building an answer - past the view's own try - must become an internal
     # error to that request, and the link and the node go on (review of PR #81, F1a; the bug it fixes, a view
@@ -382,6 +394,7 @@ if (Enter-HordeSuiteSection "fault" "a fault while answering is an answer, not a
 }
 
 if (Enter-HordeSuiteSection "result-cap" "a result the link cannot carry is an internal error, and the link goes on") {
+    trap { Register-HordeSuiteError $_; continue }
     # Send-HordeNodeAnswer: a res the writer refuses is replaced by an internal error to the same request;
     # one record the link cannot carry must not end the link (review of PR #81, F1b).
     $node = Start-Node -ManifestTooLarge
@@ -434,6 +447,7 @@ $fake.accept = {
     return (& $script:mem.accept $ListenerState $TimeoutMs)
 }
 if (Enter-HordeSuiteSection "relisten" "a broken listener is restarted, up to its limit, and then the node stops") {
+    trap { Register-HordeSuiteError $_; continue }
     $up = Invoke-Relisten -FailFirst 2 -Limit 2
     Check ($up.error -eq "" -and $null -ne $up.result -and $up.result.served -eq 1 -and $up.result.relistens -eq 2) ("two fast accept failures with a limit of two: the node listens again twice and then serves its link (relistens " + "$($up.result.relistens)" + "; " + $up.error + ")")
     Check ($up.listens -eq 3 -and $up.accepts -eq 3) ("each restart is a new listener: three listens for three accepts (" + $up.listens + " listens, " + $up.accepts + " accepts)")
@@ -445,6 +459,7 @@ if (Enter-HordeSuiteSection "relisten" "a broken listener is restarted, up to it
 }
 
 if (Enter-HordeSuiteSection "refused-peer" "a refused peer is not a broken listener (issue #85)") {
+    trap { Register-HordeSuiteError $_; continue }
     # The same fake transport, now turning peers away: its accept says refused for the first N calls, then
     # hands over a link. A refusal must keep the listener - no stop, no new listen, so the endpoint's name is
     # held throughout - count nothing toward -RelistenLimit, wait for nothing, and be logged. Before the fix
