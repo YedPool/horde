@@ -28,7 +28,7 @@ try {
 
 Write-Host ""
 Write-Host "--- the adapter says what it is ---" -ForegroundColor Cyan
-$me = Resolve-HordeSurface -Requires @("page.local", "page.locked", "requests.closed", "push", "window.native")
+$me = Resolve-HordeSurface -Requires @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
 Check ($null -ne $me -and $me.name -ceq "webview2" -and $me.folder -ceq $adapter) "it registers under its folder's name, and has every capability a caller can ask for"
 Check ((Get-HordeSurfaceNames) -join "," -ceq "webview2") "CONTROL: it is the only surface loaded here"
 
@@ -129,6 +129,18 @@ $tickSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell
 $script:HordeWebView2.spec = $tickSpec
 & $handlers.tick; & $handlers.tick
 Check ($script:ticked -eq 10 -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -ceq "a tick failed: a tick that fails") "the tick handler hands the caller its own state, and a tick that throws is recorded, not fatal"
+Write-Host ""
+Write-Host "--- a picture is Horde's to ask for, and only of a page that is being drawn ---" -ForegroundColor Cyan
+Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and -not (Test-Path -LiteralPath (Join-Path $work "p.png"))) "with no engine up there is nothing to take a picture of: not asked, and no file made"
+$script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; startHost = $hostName; window = $null; opened = $true; view = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ } }; failure = ""; capture = $null; pictures = 0; errors = (New-Object System.Collections.ArrayList) }
+Check ((Start-HordeWebView2Capture -Path "p.png") -eq $false -and $script:HordeWebView2.errors.Count -eq 1) "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
+Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.txt")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "and so is a path that is not a .png; neither left a file behind"
+$script:HordeWebView2.capture = [pscustomobject]@{ task = [pscustomobject]@{ IsCompleted = $false } }
+Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false) "while one picture is being drawn a second is not taken"
+Complete-HordeWebView2Capture
+Check ($null -ne $script:HordeWebView2.capture -and $script:HordeWebView2.pictures -eq 0) "a picture the engine has not finished is left alone"
+$replies = @($liveBridge.requests.Keys)
+Check ($replies -cnotcontains "capture" -and (Receive-HordeWebView2Message -Json '{"v":1,"id":9,"request":"capture","args":{}}' -Source "https://shell.horde.invalid/index.html") -like "*refused*") "and a page that asks for one is refused like any request off the list"
 $script:HordeWebView2 = $null
 $quiet = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $quiet

@@ -18,6 +18,10 @@
       "support": "yes",
       "evidence": "An event is posted to the page as one line of JSON. test/e2e/e2e-decisions-window.ps1 adds a question while the window is open and the page reports one more row without a reload, 2026-10-06."
     },
+    "picture": {
+      "support": "yes",
+      "evidence": "The engine's own capture writes a PNG of the page as drawn. test/e2e/e2e-decisions-window.ps1 has the real window save one while it stands where nobody sees it, and checks that it is a PNG of the window's size holding many colours, 2026-10-07."
+    },
     "window.native": {
       "support": "yes",
       "evidence": "The surface is a top-level window of this process and hands its handle to the caller. The terminal host's own end-to-end scenario has this window owned by, placed beside and following a terminal window that scenario started, 2026-10-06."
