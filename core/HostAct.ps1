@@ -26,7 +26,10 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 
-$script:HordeHostActors = New-Object System.Collections.ArrayList
+# A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
+# call, so this file is dot-sourced again by files loaded after the adapters have registered, and an
+# unconditional reset here would silently empty it.
+if ($null -eq (Get-Variable -Name HordeHostActors -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeHostActors = New-Object System.Collections.ArrayList }
 
 function Register-HordeHostActor {
     # Called by hosts/<name>/Act.ps1 when it is dot-sourced. Re-registering a name replaces it.

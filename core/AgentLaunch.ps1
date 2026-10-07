@@ -46,7 +46,10 @@
 . (Join-Path $PSScriptRoot "AgentDescriptor.ps1")
 . (Join-Path $PSScriptRoot "PermissionLevels.ps1")
 
-$script:HordeLaunchAdapters = New-Object System.Collections.ArrayList
+# A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
+# call, so this file is dot-sourced again by files loaded after the adapters have registered, and an
+# unconditional reset here would silently empty it.
+if ($null -eq (Get-Variable -Name HordeLaunchAdapters -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeLaunchAdapters = New-Object System.Collections.ArrayList }
 # The longest session name. The web list shows about 60 characters before it cuts a title, measured on
 # the web session list on 2026-10-01 with the fleet's own titles; a name past that loses its end anyway.
 $script:HordeSessionNameMax = 60
