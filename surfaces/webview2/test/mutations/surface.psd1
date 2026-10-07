@@ -211,6 +211,25 @@
         @{ Name = "a-failed-ask-for-a-picture-leaves-its-file"
            Find = 'try { [System.IO.File]::Delete($temp) } catch { }'
            Replace = '' }
+        # --- how a window first appears
+        @{ Name = "a-free-standing-window-takes-the-keyboard"
+           Find = 'quiet = [bool]($Spec.hidden -or -not $Spec.takeKeyboard)'
+           Replace = 'quiet = [bool]($Spec.hidden -or $Spec.companion)' }
+        @{ Name = "a-hidden-window-takes-the-keyboard-when-asked"
+           Find = 'quiet = [bool]($Spec.hidden -or -not $Spec.takeKeyboard)'
+           Replace = 'quiet = [bool](-not $Spec.takeKeyboard)' }
+        @{ Name = "no-window-ever-takes-the-keyboard"
+           Find = 'quiet = [bool]($Spec.hidden -or -not $Spec.takeKeyboard)'
+           Replace = 'quiet = $true' }
+        @{ Name = "a-companion-has-a-place-in-the-taskbar"
+           Find = 'taskbar = [bool](-not ($Spec.companion -or $Spec.hidden))'
+           Replace = 'taskbar = [bool](-not $Spec.hidden)' }
+        @{ Name = "a-hidden-window-has-a-place-in-the-taskbar"
+           Find = 'taskbar = [bool](-not ($Spec.companion -or $Spec.hidden))'
+           Replace = 'taskbar = [bool](-not $Spec.companion)' }
+        @{ Name = "a-hidden-window-stands-where-it-would-be-seen"
+           Find = 'offScreen = [bool]$Spec.hidden'
+           Replace = 'offScreen = $false' }
         # --- the screen's real scale
         @{ Name = "real-scale-judged-by-whether-the-call-was-taken"
            Find = 'if ("$($Scale.realScale)" -ceq "yes") { return "" }'

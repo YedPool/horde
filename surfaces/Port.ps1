@@ -43,8 +43,11 @@
 #   theme      system, light or dark: which of its two looks the page is drawn in; system is the
 #              machine's own setting
 #   hidden     shown where nobody sees it and out of the taskbar: a start that must not interrupt, a test
-#   companion  it belongs beside another window: out of the taskbar, and shown without taking the
-#              keyboard from whatever has it
+#   companion  it belongs beside another window: out of the taskbar
+#   takeKeyboard   it takes the keyboard as it first appears. WITHOUT THIS NO SURFACE DOES: a window
+#              that appears while a person is typing somewhere else must not swallow their keys, so
+#              appearing quietly is the rule and the person clicks into it. A hidden surface never
+#              takes it, whatever is asked
 #   left, top, width, height   where it first stands, in pixels; with no left and top, mid-screen;
 #              with no width or height, the module's settings (520 by 760 unless a person's file
 #              says otherwise); never smaller than Get-HordeSurfaceLimits says
@@ -589,7 +592,7 @@ function New-HordeSurfaceSpec {
         [Parameter(Mandatory = $true)][string]$Start,
         [Parameter(Mandatory = $true)]$Bridge,
         [Parameter(Mandatory = $true)][string]$DataFolder,
-        [switch]$Hidden, [switch]$Companion, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
+        [switch]$Hidden, [switch]$Companion, [switch]$TakeKeyboard, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
         $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, $TickMs = $null, [scriptblock]$OnClosed = $null,
         $Settings = $null
     )
@@ -621,7 +624,7 @@ function New-HordeSurfaceSpec {
     return [pscustomobject]@{
         PSTypeName = "Horde.SurfaceSpec"
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
-        hidden = [bool]$Hidden; companion = [bool]$Companion; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
+        hidden = [bool]$Hidden; companion = [bool]$Companion; takeKeyboard = [bool]$TakeKeyboard; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
         errorsKept = [int]$Settings.values.errorsKept; messagesPerSecond = [int]$Settings.values.messagesPerSecond
     }

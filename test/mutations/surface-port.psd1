@@ -271,6 +271,9 @@
         @{ Name = "any-text-is-a-mount-name"
            Find = 'if ("$name" -cnotmatch $script:HordeSurfaceMountPattern) {'
            Replace = 'if ($false) {' }
+        @{ Name = "a-spec-asks-for-the-keyboard-unasked"
+           Find = 'takeKeyboard = [bool]$TakeKeyboard;'
+           Replace = 'takeKeyboard = $true;' }
         @{ Name = "a-left-with-no-top"
            Find = 'if (($null -eq $Left) -ne ($null -eq $Top)) {'
            Replace = 'if ($false) {' }

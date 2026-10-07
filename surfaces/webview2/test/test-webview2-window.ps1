@@ -30,6 +30,7 @@ Add-Type -Namespace HordeSurfaceProbe -Name Native -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+[DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] public static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
 '@
 
 $work = Join-Path $env:TEMP ("horde-webview2-window-" + [guid]::NewGuid().ToString("N"))
@@ -116,6 +117,7 @@ function Step-Probe {
             handle = [long]$Window.handle; isWindow = [HordeSurfaceProbe.Native]::IsWindow($handle); visible = [HordeSurfaceProbe.Native]::IsWindowVisible($handle)
             owner = [int]$owner; left = $rect.Left; top = $rect.Top; width = ($rect.Right - $rect.Left); height = ($rect.Bottom - $rect.Top)
             hasKeyboard = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq $handle); hadKeyboardAtOpen = $State.hadKeyboardAtOpen
+            inTaskbar = (([HordeSurfaceProbe.Native]::GetWindowLongPtr($handle, -20).ToInt64() -band 0x40000) -ne 0)
         }
         $State.phase = "sockets"
     }
@@ -287,7 +289,7 @@ Write-Host ""
 Write-Host "--- window.native: a window of this process, that never takes the keyboard when hidden ---" -ForegroundColor Cyan
 $n = $probe.native
 Check ($null -ne $n -and $n.handle -ne 0 -and $n.isWindow -eq $true -and $n.owner -eq $PID) ("the handle the caller is handed is a window, and this process's own (owner " + $(if ($null -ne $n) { $n.owner } else { "?" }) + ", this process " + $PID + ")")
-Check ($null -ne $n -and $n.left -eq -32000 -and $n.top -eq -32000 -and $n.visible -eq $true) "a hidden window is shown where no screen is: at -32000,-32000"
+Check ($null -ne $n -and $n.left -eq -32000 -and $n.top -eq -32000 -and $n.visible -eq $true -and $n.inTaskbar -eq $false) "a hidden window is shown where no screen is, at -32000,-32000, and has no place in the taskbar"
 Check ($null -ne $n -and $n.hadKeyboardAtOpen -eq $false -and $n.hasKeyboard -eq $false) "and it did not take the keyboard, when it appeared or after"
 
 Write-Host ""
@@ -409,6 +411,43 @@ Check (@($echo.heard).Count -eq 4 -and $echo.heard[3] -ceq "after the burst") ("
 Check ($echo.floods -eq 1 -and $echo.refusedByBurst -ge 2 -and $echo.refusedByBurst -le 101) ("of the " + $echo.burst + " messages no more than a second's worth was read - each of those refused for what it was - and the rest is one record of a flood: " + $echo.refusedByBurst + " refusals in all, " + $echo.floods + " of them the flood")
 Check ($echo.longestGapMs -gt 0 -and $echo.longestGapMs -lt 1500) ("the window's own thread was never held long: the longest wait between two of its ticks through the burst was " + $echo.longestGapMs + " ms (measured 2026-10-07 on a slowed machine: 11535 to 14127 ms when every message was read, 3502 ms when each was handed over and dropped unread, about 230 ms now that a flood is not listened to)")
 Check ($echoSpec.tickMs -eq 60 -and @($echo.errorsSeen).Count -eq 0) ("that window took its pace from the person's settings file, and had no error to tell its caller (" + (@($echo.errorsSeen) -join " | ") + ")")
+
+Write-Host ""
+Write-Host "--- a window that stands free appears without taking the keyboard ---" -ForegroundColor Cyan
+# THE ONE WINDOW HERE THAT IS NOT HIDDEN: it stands free, as a caller's own window does, so it has a
+# place in the taskbar for the second or so it lives. It is PUT where no screen is by its caller, and
+# it asks for no keyboard, so it must not take it (review of 2026-10-06, finding D6). Nothing here
+# asks for the keyboard: that would take it from whoever is at the machine.
+$free = [pscustomobject]@{ clock = [System.Diagnostics.Stopwatch]::StartNew(); limitMs = 20000; timedOut = ""; ticks = 0; atOpen = $null; later = $null; inTaskbar = $null; visible = $null; left = $null }
+$freeBridge = New-HordeSurfaceBridge -Events @("poke", "burst") -Requests ([ordered]@{
+    "echo" = @{ args = @{ text = @{ type = "string"; most = 600 } }; run = { param($Arguments, $State, $Window) return "heard" } }
+    "done" = @{ run = { param($Arguments, $State, $Window) return $true } }
+})
+function Step-Free {
+    param($Window, $State)
+    $State.ticks = $State.ticks + 1
+    if ($State.clock.ElapsedMilliseconds -gt $State.limitMs) { $State.timedOut = "waiting"; & $Window.close; return }
+    if ($State.ticks -eq 8) {
+        $handle = [IntPtr][long]$Window.handle
+        $rect = New-Object HordeSurfaceProbe.Native+RECT
+        [void][HordeSurfaceProbe.Native]::GetWindowRect($handle, [ref]$rect)
+        $State.later = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq $handle)
+        $State.inTaskbar = (([HordeSurfaceProbe.Native]::GetWindowLongPtr($handle, -20).ToInt64() -band 0x40000) -ne 0)
+        $State.visible = [HordeSurfaceProbe.Native]::IsWindowVisible($handle)
+        $State.left = $rect.Left
+        & $Window.close
+    }
+}
+$freeSpec = New-HordeSurfaceSpec -Title "surface probe, standing free" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe") }) -Start "probe/echo.html" -Bridge $freeBridge -DataFolder (Join-Path $work "data-free") `
+    -Left -32000 -Top -32000 -Width 320 -Height 200 -TickMs 50 -State $free `
+    -OnOpened { param($Window, $State) $State.atOpen = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq [IntPtr][long]$Window.handle) } `
+    -OnTick { param($Window, $State) Step-Free -Window $Window -State $State }
+Check ($freeSpec.hidden -eq $false -and $freeSpec.companion -eq $false -and $freeSpec.takeKeyboard -eq $false) "CONTROL: the spec is a plain window's: not hidden, nobody's companion, and it asks for no keyboard"
+$free.clock.Restart()
+$freeShown = Open-HordeSurface -Surface $surface -Spec $freeSpec
+Check ($freeShown.state -ceq "closed" -and $free.timedOut -ceq "" -and $free.visible -eq $true -and $free.left -eq -32000) ("it opened, was shown where its caller put it, and closed (" + $freeShown.state + " " + $freeShown.reason + ")")
+Check ($free.inTaskbar -eq $true) "it stands free, so it has its place in the taskbar"
+Check ($free.atOpen -eq $false -and $free.later -eq $false) "and it did not take the keyboard, when its engine came up or eight ticks later"
 
 } finally {
     if ($null -ne (Get-Variable -Name listener -ErrorAction SilentlyContinue) -and $null -ne $listener) { try { $listener.Stop() } catch { } }

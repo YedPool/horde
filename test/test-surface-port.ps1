@@ -244,6 +244,7 @@ Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/missing
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder "data" } "must be an absolute path") "a relative data folder"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -TickMs 5 } "ticks no faster") "a tick faster than every 50 ms"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "Dark" } "is not a theme; the themes are: system, light, dark") "a theme that is not one of the three, exactly"
+Check ($spec.takeKeyboard -eq $false -and (New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -TakeKeyboard).takeKeyboard -eq $true) "a spec does not ask for the keyboard unless its caller says so: a window that appears while a person types elsewhere must not swallow the keys"
 Check ($spec.theme -ceq "system" -and (New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "dark").theme -ceq "dark") "a spec follows the machine's theme unless it is given one"
 Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"request":"capture","args":{"path":"C:\\x.png"}}').refused -like "*not on the list*") "a picture is not something a page can ask for: capture is no request"
 
