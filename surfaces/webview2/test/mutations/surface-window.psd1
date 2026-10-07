@@ -52,6 +52,13 @@
         @{ Name = "the-real-engine-is-never-listened-to-again"
            Find = '$listenTimer.add_Tick($handlers.listen)'
            Replace = '' }
+        # --- how a real window appears
+        # NO MUTANT MAKES A REAL WINDOW TAKE THE KEYBOARD: running it would take the keyboard from whoever
+        # is at the machine, three windows in a row. The rule is held with no window by surface.psd1, and
+        # that the real form follows it by this suite's own checks of the hidden and the free window.
+        @{ Name = "a-free-standing-real-window-is-kept-out-of-the-taskbar"
+           Find = 'if (-not $look.taskbar) { $form.ShowInTaskbar = $false }'
+           Replace = '$form.ShowInTaskbar = $false' }
         # --- what the real engine does with them
         @{ Name = "a-new-window-opens-in-the-real-engine"
            Find = '$What.Handled = $true'

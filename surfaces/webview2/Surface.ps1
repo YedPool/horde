@@ -198,6 +198,23 @@ function Get-HordeWebView2OpeningNotes {
     return @($notes)
 }
 
+function Get-HordeWebView2WindowLook {
+    # How the window of -Spec first appears: { quiet; taskbar; offScreen }. PURE, so the rule is
+    # tested with no window.
+    #   quiet      it appears WITHOUT taking the keyboard. That is every window whose caller did not
+    #              ask for the keyboard (surfaces/Port.ps1, takeKeyboard), and a hidden one always. A
+    #              free-standing window used to take it (review of 2026-10-06, finding D6).
+    #   taskbar    it has a place in the taskbar: a window that stands free does; a companion and a
+    #              hidden window do not.
+    #   offScreen  it stands where no screen is: a hidden window.
+    param([Parameter(Mandatory = $true)]$Spec)
+    return [pscustomobject]@{
+        quiet = [bool]($Spec.hidden -or -not $Spec.takeKeyboard)
+        taskbar = [bool](-not ($Spec.companion -or $Spec.hidden))
+        offScreen = [bool]$Spec.hidden
+    }
+}
+
 function Get-HordeWebView2RuntimeProblem {
     # "" when -Version is the version of an installed engine; otherwise what to tell a person.
     param([AllowNull()][AllowEmptyString()][string]$Version)
@@ -583,13 +600,14 @@ function Open-HordeWebView2Surface {
     $form.Text = $Spec.title
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
     $form.Size = New-Object System.Drawing.Size($Spec.width, $Spec.height)
-    $form.Quiet = [bool]($Spec.companion -or $Spec.hidden)
-    if ($Spec.companion -or $Spec.hidden) { $form.ShowInTaskbar = $false }
+    $look = Get-HordeWebView2WindowLook -Spec $Spec
+    $form.Quiet = $look.quiet
+    if (-not $look.taskbar) { $form.ShowInTaskbar = $false }
     if ($null -ne $Spec.left) {
         $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
         $form.Location = New-Object System.Drawing.Point([int]$Spec.left, [int]$Spec.top)
     }
-    if ($Spec.hidden) {
+    if ($look.offScreen) {
         $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
         $form.Location = New-Object System.Drawing.Point($script:HordeWebView2HiddenAt, $script:HordeWebView2HiddenAt)
     }

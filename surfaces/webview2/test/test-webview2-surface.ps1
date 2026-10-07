@@ -190,6 +190,23 @@ $unknown = Receive-HordeWebView2Message -Json '{"v":1,"id":6,"request":"open-fil
 Check (($unknown | ConvertFrom-Json).ok -eq $false -and $liveBridge.refused -eq 4) "a request off the list, from the page itself, is refused by the bridge and recorded"
 
 Write-Host ""
+Write-Host "--- a window never takes the keyboard unless its caller asked ---" -ForegroundColor Cyan
+# A free-standing window used to take the keyboard as it appeared (review of 2026-10-06, finding D6):
+# whatever a person was typing went to it. Quiet is now the rule for every window; taking the
+# keyboard is something a caller asks for by name.
+function Look { param([hashtable]$With = @{}) $made = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data") @With; return (Get-HordeWebView2WindowLook -Spec $made) }
+$free = Look
+Check ($free.quiet -eq $true -and $free.taskbar -eq $true -and $free.offScreen -eq $false) "a window that stands free appears without taking the keyboard, and has its place in the taskbar"
+$asked = Look @{ TakeKeyboard = $true }
+Check ($asked.quiet -eq $false -and $asked.taskbar -eq $true) "CONTROL: one whose caller asked takes it"
+$beside = Look @{ Companion = $true }
+Check ($beside.quiet -eq $true -and $beside.taskbar -eq $false) "a companion appears quietly and out of the taskbar"
+$besideAsked = Look @{ Companion = $true; TakeKeyboard = $true }
+Check ($besideAsked.quiet -eq $false -and $besideAsked.taskbar -eq $false) "and takes the keyboard only when its caller asked"
+$unseen = Look @{ Hidden = $true; TakeKeyboard = $true }
+Check ($unseen.quiet -eq $true -and $unseen.taskbar -eq $false -and $unseen.offScreen -eq $true) "a hidden window never takes it, whatever was asked: nobody can see where their keys would go"
+
+Write-Host ""
 Write-Host "--- a page that floods is not read ---" -ForegroundColor Cyan
 # The window's own clock and meter, stood in for: a clock the suite moves by hand.
 $script:read = 0
