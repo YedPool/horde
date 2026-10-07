@@ -1,0 +1,41 @@
+/* decisions/window/shell.css - the window's frame: the colours every part reads, the header, and the
+   places of the list and the fleet panel. Light and dark follow the machine's setting. Dense on
+   purpose (the founder, 2026-10-06: many questions must be in view at once). */
+:root {
+  --bg: #ffffff; --alt: #f5f6f8; --hover: #e6eefb; --text: #14171c; --muted: #4f5967; --line: #d3d8e0;
+  --head: #eceff3; --accent: #0b4fb3; --accent-text: #ffffff; --field-line: #9aa4b2;
+  --wait: #8a4200; --ok: #0c5a26; --warn: #8e1610; --warnbg: #ffe1de; --draft: #6b5200; --draftbg: #fff3c4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --alt: #171b21; --hover: #22304a; --text: #eef1f5; --muted: #a9b3c1; --line: #323a46;
+    --head: #1c2129; --accent: #8ab8ff; --accent-text: #08182e; --field-line: #5b6675;
+    --wait: #ffb866; --ok: #7fdd9c; --warn: #ff9d94; --warnbg: #4a1512; --draft: #f3d260; --draftbg: #3d3200;
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 13px; height: 100%; }
+body { margin: 0; height: 100%; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: system-ui, "Segoe UI", Arial, sans-serif; line-height: 1.35; overflow: hidden; }
+button { font: inherit; color: inherit; }
+.top { flex: 0 0 auto; background: var(--bg); }
+.hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+.hdr h1 { font-size: 14px; margin: 0; }
+.counts { color: var(--muted); white-space: nowrap; }
+.tg { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+.sb { background: var(--bg); border: 1px solid var(--field-line); border-radius: 3px; padding: 0 7px; cursor: pointer; white-space: nowrap; line-height: 1.5; }
+.sb:hover { border-color: var(--accent); }
+.sb[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 700; }
+.sb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.only { background: var(--draftbg); color: var(--draft); font-weight: 700; padding: 0 5px; border-radius: 2px; }
+.notice { padding: 2px 8px; background: var(--draftbg); color: var(--draft); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.cols { display: grid; align-items: center; column-gap: 8px; grid-template-columns: 12px 26px minmax(0, 1fr) minmax(0, 24%) minmax(0, 26%); padding: 0 8px; background: var(--head); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; min-height: 17px; margin-right: var(--fleet-width, 200px); }
+.cols .num { text-align: right; }
+.mid { flex: 1 1 auto; min-height: 0; display: flex; }
+#main { flex: 1 1 auto; min-width: 0; overflow-y: auto; }
+#fleet { flex: 0 0 var(--fleet-width, 200px); min-height: 0; border-left: 2px solid var(--field-line); overflow: hidden; }
+body.fleet-folded { --fleet-width: 34px; }
+.foot { flex: 0 0 auto; color: var(--muted); font-size: 11px; padding: 2px 8px; border-top: 1px solid var(--line); background: var(--head); }
+@media (max-width: 460px) {
+  .cols { grid-template-columns: 12px 24px minmax(0, 1fr) minmax(0, 30%); }
+  .cols span:last-child { display: none; }
+}
