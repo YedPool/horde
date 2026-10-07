@@ -77,4 +77,12 @@ Check ($null -eq (Get-HordeWindowRectangle -Handle 2147480001)) "a window that i
 Stop-HordeWindowFollow
 Check ($null -eq (Get-HordeWindowFollow)) "stopping when nothing is followed does nothing"
 
+Write-Host ""
+Write-Host "--- real scale has one owner, and it is not this file ---" -ForegroundColor Cyan
+$followText = [System.IO.File]::ReadAllText((Join-Path $root "platform\windows\WindowFollow.ps1"))
+$scaleText = [System.IO.File]::ReadAllText((Join-Path $root "platform\windows\Scale.ps1"))
+Check ($scaleText.Contains("SetProcessDpiAwarenessContext") -and $followText.Contains("SetWindowPos")) "CONTROL: the search sees the awareness call in its owner's file, and a call this file does make"
+Check (-not $followText.Contains("SetProcessDpiAwarenessContext")) "the follower does not ask Windows for the awareness in words of its own"
+Check ($null -eq (Get-Command -Name "Enable-HordeWindowRealPixels" -ErrorAction SilentlyContinue) -and $null -ne (Get-Command -Name "Enable-HordeWindowsRealScale" -ErrorAction SilentlyContinue)) "and loading it brings the one owner's function, not a second one"
+
 Complete-HordeSuite -Success "a companion window's place is worked out from the other window's rectangle and scale alone"
