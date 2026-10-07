@@ -6,6 +6,19 @@
     Target = "hosts\wezterm\Window.ps1"
     Suite  = "hosts\wezterm\test\test-window.ps1"
     Mutations = @(
+        # --- the listing is UTF-8, and is mended in this file (the host's call is not this file's to change)
+        @{ Name = "the-listing-is-compared-as-it-was-read"
+           Find = '$listing = $mended.value'
+           Replace = '' }
+        @{ Name = "an-answer-read-as-utf8-is-mended-again"
+           Find = 'if ($ReadAs.CodePage -eq 65001 -or '
+           Replace = 'if (' }
+        @{ Name = "a-lost-byte-is-not-noticed"
+           Find = 'if ($ReadAs.GetString($bytes) -cne $Text) { $bytes = $null }'
+           Replace = '' }
+        @{ Name = "bytes-that-are-not-utf8-are-accepted"
+           Find = 'UTF8Encoding($false, $true)'
+           Replace = 'UTF8Encoding($false, $false)' }
         # --- the listing
         @{ Name = "a-pane-with-no-is-active-accepted"
            Find = 'foreach ($need in @("pane_id", "window_id", "tab_id", "title", "is_active")) {'
