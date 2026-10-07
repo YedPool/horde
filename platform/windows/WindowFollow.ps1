@@ -117,6 +117,7 @@ public static class HordeWindowsFollowV1 {
         if (GetWindow(new IntPtr(companion), 4) != new IntPtr(targetWindow)) { return new int[] { 1, error }; }
         target = new IntPtr(targetWindow);
         moved = onMoved;
+        Events = 0;     // the reports counted are this follow's, not every follow's since the process began
         // Windows keeps an owned window above its owner from the owner's next activation on, NOT from
         // the moment it is owned: a companion made before the other window stood under it (measured
         // 2026-10-07). So it is stood directly above the other window now - under the window that was
