@@ -90,7 +90,7 @@ function Test-SameSet { param([string[]]$A, [string[]]$B) return ((@($A | Sort-O
 
 try {
     New-Item -ItemType Directory -Path $fx | Out-Null
-    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "test\lib\SuiteFiles.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
+    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "test\lib\SuiteFiles.ps1", "test\lib\SuiteSections.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $fx $rel)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $rel) -Destination (Join-Path $fx $rel)
     }

@@ -39,6 +39,20 @@
 # -Only runs just the named mutants of the spec - to rerun one after a fix without the rest - and
 # refuses a name the spec does not have (second review of PR #31, finding 9).
 #
+# SECTIONS: A MUTANT CAN RUN ONLY THE PART OF THE SUITE THAT KILLS IT (issues #82 and #83). Every
+# mutant reran the whole suite when one section would catch it; link-contract.psd1 took about 2900 s
+# on the always-on box. A suite that declares sections (test\lib\Suite.ps1, Register-HordeSuiteSections)
+# lets a mutant carry Sections = @("id", ...): that mutant's run gets HORDE_SECTIONS for those ids, and a
+# run that skipped the rest (exit 3) counts as a pass. The rules, each because the opposite would lie:
+#   - A MAP CAN NEVER HIDE A SURVIVOR. A mutant that passes its sections is run again on the whole
+#     suite before it gets a verdict. Caught there, it is caught, and named [MAP-MISS] and counted on
+#     the result line so the map gets fixed; passed there too, it survived.
+#   - A WRONG MAP IS REFUSED, NOT RUN: a name the suite does not declare, an empty map, a map on a suite
+#     with no sections, or one outside the spec's own HORDE_SECTIONS (test\lib\SuiteSections.ps1, the
+#     rule test\test-mutation-specs.ps1 checks on every gate run).
+#   - EVERY OTHER RUN IS WHOLE: both baselines, every unmapped mutant and every rerun get the spec's own
+#     HORDE_SECTIONS or none at all - never one inherited from the shell that started this tool.
+#
 # -Changed <base-ref> RUNS ONLY THE MUTANTS A CHANGE COULD HAVE MADE THE SUITES MISS: those whose find
 # string lies on a line the diff from merge-base(<base-ref>, HEAD) to the working tree added or
 # modified, plus every mutant that cannot be placed (fail safe) and every mutant of a spec whose file changed. The
@@ -57,6 +71,7 @@ $ErrorActionPreference = "Stop"
 # Each suite this tool starts is opted out of power throttling (core/Platform.ps1, Invoke-HordeSuite).
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Platform.ps1")
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $repo "test\lib\SuiteSections.ps1")
 if (-not $Spec -and -not $Changed) { Write-Host "  give -Spec <spec>, or -Changed <base-ref>" -ForegroundColor Red; exit 2 }
 if ($Plan -and -not $Changed) { Write-Host "  -Plan only applies to -Changed" -ForegroundColor Red; exit 2 }
 if ($Changed) {
@@ -140,7 +155,9 @@ function Invoke-HordeSuite {
     # Run a suite as its own process; returns { code; out; timedOut }. The two streams are read through
     # the process API, NOT with `2>&1`: under PowerShell 5.1 that turns the first line a suite writes to
     # stderr into a terminating error - which ended this tool's first run on its first mutation.
-    param([string]$Path, [int]$Seconds)
+    # -Selection is the run's HORDE_SECTIONS, set for that process only; empty means none, so a whole
+    # run is whole whatever this tool's own environment holds.
+    param([string]$Path, [int]$Seconds, [string]$Selection = "")
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + $Path + "`""
@@ -148,6 +165,8 @@ function Invoke-HordeSuite {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    if ($psi.EnvironmentVariables.ContainsKey("HORDE_SECTIONS")) { $psi.EnvironmentVariables.Remove("HORDE_SECTIONS") }
+    if ($Selection -ne "") { $psi.EnvironmentVariables["HORDE_SECTIONS"] = $Selection }
     $p = [System.Diagnostics.Process]::Start($psi)
     $null = Set-HordeThrottlingOptOut -Process $p
     try {
@@ -178,6 +197,26 @@ function Get-HordeFailLines {
     return @(($Out -split "`r?`n") | Where-Object { $_ -match '^\s*\[FAIL\]' } | ForEach-Object { $_.Trim() })
 }
 
+function Get-HordeRunOutcome {
+    # What one mutant run means: survived, caught, or why it is not a catch. -PassCodes are the exit
+    # codes that mean the suite passed.
+    param($Run, [int[]]$PassCodes, [int]$Seconds)
+    if ($Run.timedOut) { return ("timed out after " + $Seconds + "s - not a catch") }
+    if ($PassCodes -contains $Run.code) { return "survived" }
+    if (@(Get-HordeFailLines -Out $Run.out).Count -gt 0) { return "caught" }
+    return ("the suite broke (exit " + $Run.code + ") with no failed check - not a catch")
+}
+
+function Get-HordeSelectionBaselineProblem {
+    # Why an UNMUTATED run of a map's sections does not pass, or "" when it does: it must exit with a
+    # pass code or 3 (sections skipped), and print no [FAIL] and no [ERROR] (review of #115, B1).
+    param($Run, [int[]]$PassCodes, [int]$Seconds)
+    if ($Run.timedOut) { return ("ran past " + $Seconds + "s") }
+    if ((@($PassCodes) + 3) -notcontains $Run.code) { return ("exited " + $Run.code) }
+    if (@(($Run.out -split "`r?`n") | Where-Object { $_ -match '^\s*\[(FAIL|ERROR)\]' }).Count -gt 0) { return ("exited " + $Run.code + " but printed a failed check or an error") }
+    return ""
+}
+
 function Get-HordeOccurrences {
     param([string]$Text, [string]$Find)
     $n = 0; $i = 0
@@ -205,6 +244,9 @@ if ($unknownOnly.Count -gt 0) { Write-Host ("  -Only names mutants the spec does
 $script:envSaved = @{}
 $specEnv = @{}
 if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
+# The whole suite, as this spec runs it: its own section filter, or none.
+$wholeSelection = ""
+if ($specEnv.ContainsKey("HORDE_SECTIONS")) { $wholeSelection = "$($specEnv.HORDE_SECTIONS)" }
 foreach ($name in @($specEnv.Keys)) {
     if ("$name" -cnotmatch '^HORDE_[A-Z0-9_]+$') { Write-Host ("  spec Environment may set only HORDE_ variables, not '" + $name + "'") -ForegroundColor Red; exit 2 }
 }
@@ -232,7 +274,7 @@ try {
     }
     $original = [System.IO.File]::ReadAllText($target)
 
-    $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
+    $base = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
     if ($base.timedOut -or $passCodes -notcontains $base.code) {
         $why = "exited " + $base.code
         if ($base.timedOut) { $why = "ran past " + $TimeoutSeconds + "s" }
@@ -247,12 +289,39 @@ try {
         $script:toRun = @($s.Mutations)
         if ($Only.Count -gt 0) { $script:toRun = @($s.Mutations | Where-Object { $Only -ccontains "$($_.Name)" }) }
     }
+    # The suite's declared sections, read once from the copy, when any mutant is mapped.
+    $declared = $null
+    if (@($script:toRun | Where-Object { $_.ContainsKey("Sections") }).Count -gt 0) { $declared = Get-HordeSuiteSectionIds -Path $suite }
+    # EVERY MAP HAS A BASELINE OF ITS OWN, BEFORE AND AFTER. A section that fails when run without the
+    # ones before it - one that reads a variable an earlier section set - fails every mutant mapped to
+    # it, and reads as a catch the whole-suite rerun never questions (it reruns only a pass). Reproduced
+    # by the review of #115 (B1) and on test-node-serve's refused-peer section, 2026-10-07. So each
+    # distinct selection is run unmutated first and again at the end, and must pass both times.
+    $selections = @($script:toRun | Where-Object { $_.ContainsKey("Sections") -and -not (Get-HordeMutantSectionProblem -Mutant $_ -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv) } | ForEach-Object { (@(@($_.Sections) | ForEach-Object { "$_".Trim() }) -join ",") } | Select-Object -Unique)
+    foreach ($sel in $selections) {
+        $selBase = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel
+        $selWhy = Get-HordeSelectionBaselineProblem -Run $selBase -PassCodes $passCodes -Seconds $TimeoutSeconds
+        if ($selWhy) {
+            Write-Host ("  the UNMUTATED suite does not pass when only its sections " + $sel + " run (" + $selWhy + "), so a mutant mapped to them would read as caught for nothing:") -ForegroundColor Red
+            foreach ($f in (Get-HordeFailLines -Out $selBase.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+            Write-Host "mutations: not run - baseline failed"
+            $script:baselineFailed = $true
+            $script:toRun = @()
+            break
+        }
+    }
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
-        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @() }
+        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); sections = ""; mapMiss = $false }
+        $mapWhy = ""
+        if ($m.ContainsKey("Sections")) {
+            $mapWhy = Get-HordeMutantSectionProblem -Mutant $m -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv
+            if (-not $mapWhy) { $row.sections = (@(@($m.Sections) | ForEach-Object { "$_".Trim() }) -join ",") }
+        }
         if ("$($m.Find)" -match "[\r\n]") { $row.outcome = "invalid: a find string may not span lines (line endings differ by checkout)" }
         elseif ($expect -eq "survives" -and -not "$($m.Reason)".Trim()) { $row.outcome = "invalid: a mutation expected to survive needs a Reason" }
+        elseif ($mapWhy) { $row.outcome = ("invalid: " + $mapWhy) }
         else {
             $count = Get-HordeOccurrences -Text $original -Find $m.Find
             if ($count -ne 1) { $row.outcome = ("did not apply: the find string occurs " + $count + " times, not once") }
@@ -273,12 +342,23 @@ try {
                     [void]$results.Add([pscustomobject]$row)
                     continue
                 }
-                $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
-                $row.failures = @(Get-HordeFailLines -Out $run.out)
-                if ($run.timedOut) { $row.outcome = ("timed out after " + $TimeoutSeconds + "s - not a catch") }
-                elseif ($passCodes -contains $run.code) { $row.outcome = "survived" }
-                elseif ($row.failures.Count -gt 0) { $row.outcome = "caught" }
-                else { $row.outcome = ("the suite broke (exit " + $run.code + ") with no failed check - not a catch") }
+                if ($row.sections) {
+                    # Its sections first; a run that skipped the rest exits 3, which is a pass here.
+                    $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $row.sections
+                    $row.failures = @(Get-HordeFailLines -Out $run.out)
+                    $row.outcome = Get-HordeRunOutcome -Run $run -PassCodes (@($passCodes) + 3) -Seconds $TimeoutSeconds
+                    if ($row.outcome -eq "survived") {
+                        # A MAP CAN NEVER HIDE A SURVIVOR: the whole suite decides.
+                        $rerun = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
+                        $row.failures = @(Get-HordeFailLines -Out $rerun.out)
+                        $row.outcome = Get-HordeRunOutcome -Run $rerun -PassCodes $passCodes -Seconds $TimeoutSeconds
+                        $row.mapMiss = ($row.outcome -eq "caught")
+                    }
+                } else {
+                    $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
+                    $row.failures = @(Get-HordeFailLines -Out $run.out)
+                    $row.outcome = Get-HordeRunOutcome -Run $run -PassCodes $passCodes -Seconds $TimeoutSeconds
+                }
             }
         }
         [System.IO.File]::WriteAllText($target, $original)
@@ -289,11 +369,20 @@ try {
     # machine - during a mutant's run reads as a catch. If the unmutated suite no longer passes
     # afterwards, the environment changed under the run and its catches are not evidence.
     if (-not $script:baselineFailed -and $script:toRun.Count -gt 0) {
-        $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds
+        $after = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
         if ($after.timedOut -or $passCodes -notcontains $after.code) {
             Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
             foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
             $script:baselineFailed = $true
+        }
+        foreach ($sel in $selections) {
+            $selAfter = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel
+            $selAfterWhy = Get-HordeSelectionBaselineProblem -Run $selAfter -PassCodes $passCodes -Seconds $TimeoutSeconds
+            if ($selAfterWhy) {
+                Write-Host ("  the UNMUTATED suite no longer passes its sections " + $sel + " after the run (" + $selAfterWhy + "), so their catches are not evidence:") -ForegroundColor Red
+                foreach ($f in (Get-HordeFailLines -Out $selAfter.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+                $script:baselineFailed = $true
+            }
         }
     }
 }
@@ -308,15 +397,23 @@ finally {
 if ($script:baselineFailed) { exit 2 }
 
 $bad = 0
+$mapMisses = 0
 foreach ($r in $results) {
     # Expect is written "caught" or "survives"; the outcome of a run is "caught" or "survived".
     $want = "caught"; if ($r.expect -eq "survives") { $want = "survived" }
     $ok = ($r.outcome -eq $want)
     if (-not $ok) { $bad++ }
     $color = "DarkGray"; if (-not $ok) { $color = "Red" }
-    Write-Host ("  [" + $(if ($ok) { "OK" } else { "BAD" }) + "] " + $r.name + ": " + $r.outcome + " (expected " + $r.expect + ")") -ForegroundColor $color
+    $where = ""; if ($r.sections) { $where = " [sections: " + $r.sections + "]" }
+    Write-Host ("  [" + $(if ($ok) { "OK" } else { "BAD" }) + "] " + $r.name + ": " + $r.outcome + " (expected " + $r.expect + ")" + $where) -ForegroundColor $color
+    if ($r.mapMiss) {
+        $mapMisses++
+        Write-Host ("  [MAP-MISS] " + $r.name + ": its sections (" + $r.sections + ") passed; the whole suite caught it - fix the map") -ForegroundColor Yellow
+    }
     foreach ($f in $r.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
 }
-Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad)
+# The map misses ride on the one result line a gate reads, so a wrong map stays visible: a warning,
+# never a failure, since the whole suite still decided the verdict.
+Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad + ", map misses: " + $mapMisses)
 if ($bad -gt 0) { exit 1 }
 exit 0
