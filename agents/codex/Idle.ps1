@@ -11,7 +11,10 @@
 #     lib/CodexStatus.ps1), so it can never say idle for long enough to matter.
 #   - A TOOL CALL is a response_item function_call, closed by the function_call_output of its call_id.
 #   - THE BOUNDARY allows NOTHING after the last turn end: in every rollout measured the turn end was the
-#     last line, and nothing else has been measured to start no turn.
+#     last line, and nothing else has been measured to start no turn. A line after it that cannot be read
+#     (skipped by the shared reader, seen as a gap in the line numbers) or that carries no time makes
+#     the boundary unknown, never idle (review of #93, F3).
+#   - THE REMOTE CONTROL LINK is unknown: no Codex remote view has been measured.
 #   - THE VERSION is session_meta's cli_version; every line after it counts towards it. The known kinds
 #     are the fifteen those rollouts hold.
 #   - Codex has no background agents, tasks, crons or queue that this reader can see: those lists are
@@ -38,11 +41,14 @@ function Get-CodexIdleKind {
 function Read-CodexTurnState {
     # The turn state of one rollout (core/Idle.ps1). -Since and -Now are UTC.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][datetime]$Since, [Parameter(Mandatory = $true)][datetime]$Now)
-    $st = @{ newest = $null; badTime = ""; hasEnd = $false; endAt = $null; endTimeBad = $false; turns = @{}; tools = @{}; blockers = (New-Object System.Collections.ArrayList); version = "unversioned"; versions = @{} }
+    $st = @{ newest = $null; badTime = ""; hasEnd = $false; endAt = $null; endTimeBad = $false; turns = @{}; tools = @{}; blockers = (New-Object System.Collections.ArrayList); version = "unversioned"; versions = @{}; lastLn = 0; unreadable = "" }
     $visit = {
         param($ln, $v)
         $kind = Get-CodexIdleKind $v
         $p = $v["payload"]
+        if ($st.hasEnd -and $ln -ne $st.lastLn + 1 -and $st.unreadable -eq "") { $st.unreadable = "line " + ($st.lastLn + 1) + ", after the last turn end, cannot be read" }
+        $st.lastLn = $ln
+        if ($st.hasEnd -and $st.turns.Count -eq 0 -and $null -eq $v["timestamp"] -and $st.unreadable -eq "") { $st.unreadable = "line " + $ln + " after the last turn end has no time" }
         $t = $null
         if ($null -ne $v["timestamp"]) {
             $t = ConvertTo-HordeUtcTime $v["timestamp"]
@@ -59,7 +65,7 @@ function Read-CodexTurnState {
         if ($kind -ceq "event_msg/task_started") { $st.turns[$turn] = $true; $st.blockers.Clear(); [void]$st.blockers.Add($kind); return }
         if ($kind -ceq "event_msg/task_complete" -or $kind -ceq "event_msg/turn_aborted") {
             $st.turns.Remove($turn)
-            if ($st.turns.Count -eq 0) { $st.hasEnd = $true; $st.endAt = $t; $st.endTimeBad = ($null -eq $t); $st.blockers.Clear(); $st.tools.Clear() }
+            if ($st.turns.Count -eq 0) { $st.hasEnd = $true; $st.endAt = $t; $st.endTimeBad = ($null -eq $t); $st.blockers.Clear(); $st.tools.Clear(); $st.unreadable = "" }
             return
         }
         if ($st.hasEnd -and $st.turns.Count -eq 0 -and -not $st.blockers.Contains($kind)) { [void]$st.blockers.Add($kind) }
@@ -79,13 +85,16 @@ function Read-CodexTurnState {
     if ($st.hasEnd) { if ($st.endTimeBad) { $endAt = New-HordeUnknown -Reason "the last turn end's time cannot be placed" } else { $endAt = New-HordeKnown -Value $st.endAt } }
     $blockers = @($st.blockers)
     if ($st.turns.Count -gt 0) { $blockers = @("open turn") + @($blockers | Where-Object { $_ -cne "event_msg/task_started" }) }
+    if ($st.hasEnd -and $read.lineCount -gt $st.lastLn -and $read.tornTail -eq 0 -and $st.unreadable -eq "") { $st.unreadable = "line " + ($st.lastLn + 1) + ", after the last turn end, cannot be read" }
     $boundary = $null
     if ($read.tornTail -gt 0) { $boundary = New-HordeUnknown -Reason "the last line is still being written" }
+    elseif ($st.unreadable -ne "") { $boundary = New-HordeUnknown -Reason $st.unreadable }
     elseif (-not $st.hasEnd -and $st.turns.Count -eq 0) { $boundary = New-HordeKnown -Value $false; $blockers = @("no turn end") }
     else { $boundary = New-HordeKnown -Value ($st.turns.Count -eq 0 -and $blockers.Count -eq 0) }
     $fields = @{
         harness = "codex"; lineCount = [int]$read.lineCount; parseSkipped = [int]$read.parseSkipped; tornTail = [int]$read.tornTail
         newestEventAt = $newest; lastTurnEndAt = $endAt; atBoundary = $boundary; blockers = $blockers
+        remoteLink = (New-HordeUnknown -Reason "no Codex remote view has been measured")
         pendingAgents = 0
         openTools = @($st.tools.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; name = $st.tools[$_] } })
         openTasks = @(); unknownTasks = @(); queued = 0; wakes = @(); crons = @()

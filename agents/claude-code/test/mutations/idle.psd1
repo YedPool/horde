@@ -10,10 +10,10 @@
            Find = 'elseif ($null -eq $st.newest -or $t -gt $st.newest) { $st.newest = $t }'
            Replace = 'elseif ($null -eq $st.newest) { $st.newest = [System.IO.File]::GetLastWriteTimeUtc($Path) }' }
         @{ Name = "pending-count-ignored"
-           Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [int]$p }'
+           Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }'
            Replace = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = 0 }' }
         @{ Name = "task-starts-not-read"
-           Find = 'if ($m.Success) { $st.tasks[$m.Groups[1].Value] = $s.kind; break }'
+           Find = 'if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; break }'
            Replace = 'if ($false) { break }' }
         @{ Name = "unrecognised-task-finished"
            Find = 'if ($final) { $St.unknownTasks.Remove($n.taskId) } else { $St.unknownTasks[$n.taskId] = $n.status }'
@@ -36,9 +36,9 @@
         @{ Name = "scheduled-fire-allowed-at-boundary"
            Find = '$script:ClaudeCodeBoundaryKinds = @("system/away_summary",'
            Replace = '$script:ClaudeCodeBoundaryKinds = @("system/scheduled_task_fire", "system/away_summary",' }
-        @{ Name = "unknown-metadata-allowed-at-boundary"
-           Find = 'if ($null -eq $raw) { $allowed = ($script:ClaudeCodeKnownKinds -ccontains $kind) }'
-           Replace = 'if ($null -eq $raw) { $allowed = $true }' }
+        @{ Name = "untimed-known-kind-allowed-at-boundary"
+           Find = 'if ($script:ClaudeCodeMetadataKinds -cnotcontains $kind -and $st.unreadable -eq "") {'
+           Replace = 'if ($script:ClaudeCodeKnownKinds -cnotcontains $kind -and $st.unreadable -eq "") {' }
         @{ Name = "enqueue-ignored"
            Find = 'if ($op -ceq "enqueue") { $st.queued++ }'
            Replace = 'if ($op -ceq "enqueue") { }' }
@@ -55,11 +55,11 @@
            Find = 'if ($read.tornTail -gt 0) { $boundary = New-HordeUnknown -Reason "the last line is still being written" }'
            Replace = 'if ($false) { }' }
         @{ Name = "failed-taskstop-finishes"
-           Find = 'if (-not $err) { $st.tasks.Remove($st.stops[$id]) }'
-           Replace = '$st.tasks.Remove($st.stops[$id])' }
+           Find = 'if (-not $Err) { $St.tasks.Remove($St.stops[$Id]) }'
+           Replace = '$St.tasks.Remove($St.stops[$Id])' }
         @{ Name = "failed-croncreate-creates"
-           Find = '                    if (-not $err) {'
-           Replace = '                    if ($true) {' }
+           Find = '        if (-not $Err) {'
+           Replace = '        if ($true) {' }
         @{ Name = "version-survey-off"
            Find = 'if ($script:ClaudeCodeKnownKinds -cnotcontains $kind -and -not $st.versions[$vkey].unrecognised.Contains($kind)) {'
            Replace = 'if ($false) {' }
@@ -81,5 +81,55 @@
         @{ Name = "tool-result-closes-nothing"
            Find = '                $st.tools.Remove($id)'
            Replace = '                $null = 0' }
+        # The review of #93's seven survivors, each moving the reader towards idle.
+        @{ Name = "dequeue-clears-queue"
+           Find = 'if ($st.queued -gt 0) { $st.queued-- }'
+           Replace = '$st.queued = 0' }
+        @{ Name = "newest-is-last-not-max"
+           Find = 'elseif ($null -eq $st.newest -or $t -gt $st.newest) { $st.newest = $t }'
+           Replace = 'else { $st.newest = $t }' }
+        @{ Name = "untimed-cron-expires"
+           Find = '$null -ne $st.crons[$_].at -and $st.crons[$_].at -lt $expiry'
+           Replace = '$st.crons[$_].at -lt $expiry' }
+        @{ Name = "unrecognised-note-is-final"
+           Find = '(@("final", "none") -ccontains $n.noteKind)'
+           Replace = '(@("final", "none", "unrecognised") -ccontains $n.noteKind)' }
+        @{ Name = "untimed-line-not-current"
+           Find = '$cur = ($null -eq $t) -or ($t -ge $Since)'
+           Replace = '$cur = ($null -ne $t) -and ($t -ge $Since)' }
+        @{ Name = "notification-before-since-counts"
+           Find = 'if ($cur -and (Test-ClaudeCodeNotificationOrigin -Origin $v["origin"])) {'
+           Replace = 'if ((Test-ClaudeCodeNotificationOrigin -Origin $v["origin"])) {' }
+        @{ Name = "pending-ignored-when-long"
+           Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }'
+           Replace = 'elseif ($p -is [int]) { $st.pending = [long]$p }' }
+        # The fixes of the review of #93.
+        @{ Name = "shell-start-by-one-phrase"
+           Find = 'pattern = ''ID: ([A-Za-z0-9]+)\)?\.?\s*Output is being written to'''
+           Replace = 'pattern = ''running in background with ID: ([A-Za-z0-9]+)''' }
+        @{ Name = "subagents-not-read"
+           Find = '    Read-ClaudeCodeSubagentTasks -St $st -Path $Path -Since $Since'
+           Replace = '    $null = 0' }
+        @{ Name = "subagent-lines-before-since-count"
+           Find = 'if ($null -ne $t -and $t -lt $Since) { return }'
+           Replace = '$null = 0' }
+        @{ Name = "skipped-line-gap-ignored"
+           Find = 'if ($st.hasEnd -and $ln -ne $st.lastLn + 1 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "skipped-last-line-ignored"
+           Find = 'if ($st.hasEnd -and $read.lineCount -gt $st.lastLn -and $read.tornTail -eq 0 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-is-a-known-boundary"
+           Find = 'elseif ($st.unreadable -ne "") { $boundary = New-HordeUnknown -Reason $st.unreadable }'
+           Replace = 'elseif ($false) { }' }
+        @{ Name = "crondelete-releases-at-the-call"
+           Find = 'elseif ($name -ceq "CronDelete") { $st.deletes[$id] = "$($in["id"])" }'
+           Replace = 'elseif ($name -ceq "CronDelete") { $st.crons.Remove("$($in["id"])") }' }
+        @{ Name = "failed-crondelete-releases"
+           Find = 'if ($St.deletes.ContainsKey($Id)) { if (-not $Err) { $St.crons.Remove($St.deletes[$Id]) }; $St.deletes.Remove($Id) }'
+           Replace = 'if ($St.deletes.ContainsKey($Id)) { $St.crons.Remove($St.deletes[$Id]); $St.deletes.Remove($Id) }' }
+        @{ Name = "remote-link-not-reported"
+           Find = 'if ($kind -ceq "bridge-session" -and $v["bridgeSessionId"] -is [string] -and $v["bridgeSessionId"] -ne "") { $st.link = $v["bridgeSessionId"] }'
+           Replace = '$null = 0' }
     )
 }

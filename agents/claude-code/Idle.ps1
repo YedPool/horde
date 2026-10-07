@@ -15,10 +15,18 @@
 #     which together started no turn in 4,939 turn ends. Everything else - a prompt, a user meta line
 #     (a local slash command: a known false keep, safe), a queue operation, an attachment, a scheduled
 #     task firing, a compaction, a kind never seen - is a blocker.
-#   - BACKGROUND TASKS (P12) start when a tool result announces one, by the harness's own words:
-#     "running in background with ID: x" (shell; 1,690 of them), "Monitor started (task x" (47),
-#     "Async agent launched successfully" with "agentId: x" (314), "Workflow launched in ... Task ID: x"
-#     (3). They finish at a notification the HARNESS marked as one (agents/claude-code/Transcript.ps1,
+#   - BACKGROUND TASKS (P12) start when a tool result announces one. A SHELL task is recognised by its
+#     STRUCTURE, an id followed by the file its output goes to ("ID: x" or "(ID: x)", then "Output is
+#     being written to"), never by the phrase before it: measured 2026-10-07 over 30 days, 3,678
+#     "Command running in background with ID: x.", 280 "Command did not complete within its Ns timeout
+#     and was moved to the background (ID: x)." and 11 "Command was manually backgrounded by user with
+#     ID: x." The first version knew only the first phrase and called 27 working sessions idle (review
+#     of #93, F1; the founder's run-complete-handoff hook already counted the timeout shape as "a launch
+#     too"). Monitors ("Monitor started (task x"; 47), async agents ("Async agent launched successfully"
+#     with "agentId: x"; 314) and Workflows ("Workflow launched in ... Task ID: x"; 3) keep their own.
+#     A SUBAGENT'S tasks start in <session>/subagents/agent-*.jsonl and are announced to the MAIN
+#     transcript when they finish, so those files are read for starts too (review of #93, F2: 17 working
+#     sessions called idle). They finish at a notification the HARNESS marked as one (agents/claude-code/Transcript.ps1,
 #     Test-ClaudeCodeNotificationOrigin: never text a person pasted) whose status is completed, failed,
 #     killed or stopped and whose note is not interim (2,275, 44, 195, 11; interim notes say the agent
 #     still has work running), or at a TaskStop that succeeded. A Monitor's event notifications carry
@@ -44,8 +52,14 @@
 #   - THE VERSION SURVEY (design 1.6): every kind each harness version wrote since -Since is checked
 #     against $script:ClaudeCodeKnownKinds, the kinds seen in 224 transcripts over 30 days (versions
 #     2.1.268 to 2.1.285). A version that wrote anything else is unsurveyed for this session.
-#   - A line that does not parse is counted (parseSkipped); a last line still being written makes the
-#     boundary unknown. Whether a skipped line hides a task start is the classifier's to weigh.
+#   - ANY LINE AFTER THE LAST TURN END THAT CANNOT BE READ MAKES THE BOUNDARY UNKNOWN, never idle: a line
+#     that does not parse, one nested past the parser's limit, a NUL-filled crash tail (all skipped by
+#     the shared reader, seen here as a gap in the line numbers), a last line still being written, and an
+#     untimestamped line of any kind but the metadata of $script:ClaudeCodeMetadataKinds (review of #93,
+#     F3 and F4). A skipped line before the last turn end is counted (parseSkipped) and decides nothing.
+#   - A CRON ENDS ONLY AT A CronDelete THAT SUCCEEDED - its result, not its call (review of #93, F5).
+#   - THE REMOTE CONTROL LINK is reported from the bridge-session line, and holds nothing (founder,
+#     2026-10-05: Remote Control activity shows in the transcript like any other).
 #
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/ReadShared.ps1, core/Transcript.ps1, core/Idle.ps1 and agents/claude-code/Transcript.ps1.
@@ -57,12 +71,17 @@ $script:ClaudeCodeKnownKinds = @("assistant", "user", "attachment", "queue-opera
     "frame-link", "cost-state", "artifact-autoreact-ledger", "artifact-comment-monitor", "(empty)",
     "system/stop_hook_summary", "system/turn_duration", "system/scheduled_task_fire", "system/away_summary", "system/local_command",
     "system/informational", "system/compact_boundary", "system/bridge_status", "system/model_refusal_no_fallback")
+# The kinds whose lines carry no time and may follow a turn end: the harness's metadata, every one seen
+# untimestamped after a turn end in 74 transcripts (design I-17). Any other untimestamped line there is
+# unknown.
+$script:ClaudeCodeMetadataKinds = @("last-prompt", "mode", "permission-mode", "bridge-session", "atis-latch", "ai-title", "agent-name", "custom-title",
+    "history-suppression", "file-history-snapshot", "cost-state", "artifact-autoreact-ledger", "artifact-comment-monitor", "(empty)")
 # Timestamped kinds that followed a turn end without starting a turn (design I-17).
 $script:ClaudeCodeBoundaryKinds = @("system/away_summary", "system/bridge_status", "system/informational", "system/local_command", "pr-link", "frame-link", "file-history-delta")
 $script:ClaudeCodeFinalTaskStatuses = @("completed", "failed", "killed", "stopped")
 $script:ClaudeCodeCronExpiryDays = 7
 $script:ClaudeCodeTaskStarts = @(
-    @{ kind = "shell"; pattern = 'running in background with ID: ([A-Za-z0-9]+)' },
+    @{ kind = "shell"; pattern = 'ID: ([A-Za-z0-9]+)\)?\.?\s*Output is being written to' },
     @{ kind = "monitor"; pattern = 'Monitor started \(task ([A-Za-z0-9]+)' },
     @{ kind = "workflow"; pattern = 'Workflow launched in [^\r\n]*?Task ID: ([A-Za-z0-9]+)' },
     @{ kind = "agent"; pattern = 'Async agent launched successfully[\s\S]*?agentId: ([A-Za-z0-9]+)' }
@@ -94,18 +113,77 @@ function Add-ClaudeCodeIdleNotification {
     if ($final) { $St.unknownTasks.Remove($n.taskId) } else { $St.unknownTasks[$n.taskId] = $n.status }
 }
 
+function Add-ClaudeCodeIdleToolResult {
+    # Apply one tool result (a cron made, a task stopped, a cron deleted, a task started) to the state.
+    param($St, [string]$Id, [bool]$Err, [string]$Text)
+    if ($St.cronCalls.ContainsKey($Id)) {
+        $c = $St.cronCalls[$Id]; $St.cronCalls.Remove($Id)
+        if (-not $Err) {
+            $m = [regex]::Match($Text, 'job ([0-9a-f]{8})\b')
+            $cid = "?" + $Id; if ($m.Success) { $cid = $m.Groups[1].Value }
+            $St.crons[$cid] = $c
+        }
+    }
+    if ($St.stops.ContainsKey($Id)) { if (-not $Err) { $St.tasks.Remove($St.stops[$Id]) }; $St.stops.Remove($Id) }
+    if ($St.deletes.ContainsKey($Id)) { if (-not $Err) { $St.crons.Remove($St.deletes[$Id]) }; $St.deletes.Remove($Id) }
+    if ($Err) { return }
+    foreach ($s in $script:ClaudeCodeTaskStarts) {
+        $m = [regex]::Match($Text, $s.pattern)
+        if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; break }
+    }
+}
+
+function Read-ClaudeCodeSubagentTasks {
+    # The background tasks this session's subagents started since -Since: <session>/subagents/agent-*.jsonl.
+    # A file not written since -Since holds no line since then, so it is not opened. Their notifications
+    # arrive in the main transcript, which is read after these.
+    param($St, [string]$Path, [datetime]$Since)
+    $dir = Join-Path ([System.IO.Path]::ChangeExtension($Path, $null).TrimEnd(".")) "subagents"
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "agent-*.jsonl" -File | Sort-Object Name)) {
+        if ($f.LastWriteTimeUtc -lt $Since) { continue }
+        $visitSub = {
+            param($ln, $v)
+            $t = $null
+            if ($null -ne $v["timestamp"]) { $t = ConvertTo-HordeUtcTime $v["timestamp"] }
+            if ($null -ne $t -and $t -lt $Since) { return }
+            $content = Get-HordeJsonPath $v "message.content"
+            if ("$($v["type"])" -ceq "assistant") {
+                foreach ($b in @($content)) {
+                    if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_use" -or $b["input"] -isnot [System.Collections.IDictionary]) { continue }
+                    if ("$($b["name"])" -ceq "TaskStop") { $St.stops["$($b["id"])"] = "$($b["input"]["task_id"])" }
+                }
+                return
+            }
+            if ("$($v["type"])" -cne "user") { return }
+            if (Test-ClaudeCodeNotificationOrigin -Origin $v["origin"]) { Add-ClaudeCodeIdleNotification -St $St -Text (Get-ClaudeCodeResultText $content) }
+            if ($content -is [string]) { return }
+            foreach ($b in @($content)) {
+                if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_result") { continue }
+                Add-ClaudeCodeIdleToolResult -St $St -Id "$($b["tool_use_id"])" -Err ($b["is_error"] -eq $true) -Text (Get-ClaudeCodeResultText $b["content"])
+            }
+        }
+        $null = Read-HordeJsonLines -Path $f.FullName -Each $visitSub
+    }
+}
+
 function Read-ClaudeCodeTurnState {
     # The turn state of one transcript (core/Idle.ps1). -Since is the harness process's start and -Now
     # the time of the reading, both UTC.
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][datetime]$Since, [Parameter(Mandatory = $true)][datetime]$Now)
     $st = @{
         newest = $null; badTime = ""; hasEnd = $false; endAt = $null; endTimeBad = $false; pending = 0; blockers = (New-Object System.Collections.ArrayList)
-        tools = @{}; tasks = @{}; unknownTasks = @{}; queued = 0; crons = @{}; cronCalls = @{}; stops = @{}; wakes = (New-Object System.Collections.ArrayList)
-        versions = @{}
+        tools = @{}; tasks = @{}; unknownTasks = @{}; queued = 0; crons = @{}; cronCalls = @{}; stops = @{}; deletes = @{}; wakes = (New-Object System.Collections.ArrayList)
+        versions = @{}; lastLn = 0; unreadable = ""; link = $null
     }
+    Read-ClaudeCodeSubagentTasks -St $st -Path $Path -Since $Since
     $visit = {
         param($ln, $v)
         $kind = Get-ClaudeCodeIdleKind $v
+        # A gap in the line numbers is a line the shared reader skipped: it could not be read.
+        if ($st.hasEnd -and $ln -ne $st.lastLn + 1 -and $st.unreadable -eq "") { $st.unreadable = "line " + ($st.lastLn + 1) + ", after the last turn end, cannot be read" }
+        $st.lastLn = $ln
+        if ($kind -ceq "bridge-session" -and $v["bridgeSessionId"] -is [string] -and $v["bridgeSessionId"] -ne "") { $st.link = $v["bridgeSessionId"] }
         $raw = $v["timestamp"]
         $t = $null
         if ($null -ne $raw) {
@@ -129,15 +207,15 @@ function Read-ClaudeCodeTurnState {
             $st.hasEnd = $true; $st.endAt = $t; $st.endTimeBad = ($null -eq $t)
             $p = $v["pendingBackgroundAgentCount"]
             if ($null -eq $p) { $st.pending = 0 }
-            elseif ($p -is [int] -or $p -is [long]) { $st.pending = [int]$p }
+            elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }
             else { throw ("line " + $ln + ": pendingBackgroundAgentCount is not a count") }
-            $st.blockers.Clear(); $st.tools.Clear()
+            $st.blockers.Clear(); $st.tools.Clear(); $st.unreadable = ""
             return
         }
         if ($st.hasEnd) {
-            $allowed = $false
-            if ($null -eq $raw) { $allowed = ($script:ClaudeCodeKnownKinds -ccontains $kind) } else { $allowed = ($script:ClaudeCodeBoundaryKinds -ccontains $kind) }
-            if (-not $allowed -and -not $st.blockers.Contains($kind)) { [void]$st.blockers.Add($kind) }
+            if ($null -eq $raw) {
+                if ($script:ClaudeCodeMetadataKinds -cnotcontains $kind -and $st.unreadable -eq "") { $st.unreadable = "line " + $ln + " after the last turn end has no time and is not metadata (" + $kind + ")" }
+            } elseif ($script:ClaudeCodeBoundaryKinds -cnotcontains $kind -and -not $st.blockers.Contains($kind)) { [void]$st.blockers.Add($kind) }
         }
 
         if ($kind -ceq "assistant") {
@@ -148,7 +226,7 @@ function Read-ClaudeCodeTurnState {
                 $st.tools[$id] = $name
                 if (-not $cur -or $in -isnot [System.Collections.IDictionary]) { continue }
                 if ($name -ceq "CronCreate") { $st.cronCalls[$id] = @{ recurring = ($in["recurring"] -eq $true); at = $t } }
-                elseif ($name -ceq "CronDelete") { $st.crons.Remove("$($in["id"])") }
+                elseif ($name -ceq "CronDelete") { $st.deletes[$id] = "$($in["id"])" }
                 elseif ($name -ceq "TaskStop") { $st.stops[$id] = "$($in["task_id"])" }
                 elseif ($name -ceq "ScheduleWakeup" -and ($in.ContainsKey("delaySeconds") -or $in.ContainsKey("prompt"))) {
                     $d = $in["delaySeconds"]
@@ -168,22 +246,7 @@ function Read-ClaudeCodeTurnState {
                 $id = "$($b["tool_use_id"])"
                 $st.tools.Remove($id)
                 if (-not $cur) { continue }
-                $err = ($b["is_error"] -eq $true)
-                $text = Get-ClaudeCodeResultText $b["content"]
-                if ($st.cronCalls.ContainsKey($id)) {
-                    $c = $st.cronCalls[$id]; $st.cronCalls.Remove($id)
-                    if (-not $err) {
-                        $m = [regex]::Match($text, 'job ([0-9a-f]{8})\b')
-                        $cid = "?" + $id; if ($m.Success) { $cid = $m.Groups[1].Value }
-                        $st.crons[$cid] = $c
-                    }
-                }
-                if ($st.stops.ContainsKey($id)) { if (-not $err) { $st.tasks.Remove($st.stops[$id]) }; $st.stops.Remove($id) }
-                if ($err) { continue }
-                foreach ($s in $script:ClaudeCodeTaskStarts) {
-                    $m = [regex]::Match($text, $s.pattern)
-                    if ($m.Success) { $st.tasks[$m.Groups[1].Value] = $s.kind; break }
-                }
+                Add-ClaudeCodeIdleToolResult -St $st -Id $id -Err ($b["is_error"] -eq $true) -Text (Get-ClaudeCodeResultText $b["content"])
             }
             return
         }
@@ -218,9 +281,12 @@ function Read-ClaudeCodeTurnState {
     }
     $endAt = New-HordeAbsent -Note "the transcript has no turn end"
     if ($st.hasEnd) { if ($st.endTimeBad) { $endAt = New-HordeUnknown -Reason "the last turn end's time cannot be placed" } else { $endAt = New-HordeKnown -Value $st.endAt } }
+    # Lines after the last one read that the reader skipped (a bad or NUL-filled last line with a newline).
+    if ($st.hasEnd -and $read.lineCount -gt $st.lastLn -and $read.tornTail -eq 0 -and $st.unreadable -eq "") { $st.unreadable = "line " + ($st.lastLn + 1) + ", after the last turn end, cannot be read" }
     $blockers = @($st.blockers)
     $boundary = $null
     if ($read.tornTail -gt 0) { $boundary = New-HordeUnknown -Reason "the last line is still being written" }
+    elseif ($st.unreadable -ne "") { $boundary = New-HordeUnknown -Reason $st.unreadable }
     elseif (-not $st.hasEnd) { $boundary = New-HordeKnown -Value $false; $blockers = @("no turn end") }
     else { $boundary = New-HordeKnown -Value ($blockers.Count -eq 0) }
     $expiry = $Now.AddDays(-$script:ClaudeCodeCronExpiryDays)
@@ -228,7 +294,8 @@ function Read-ClaudeCodeTurnState {
     $fields = @{
         harness = "claude-code"; lineCount = [int]$read.lineCount; parseSkipped = [int]$read.parseSkipped; tornTail = [int]$read.tornTail
         newestEventAt = $newest; lastTurnEndAt = $endAt; atBoundary = $boundary; blockers = $blockers
-        pendingAgents = [int]$st.pending
+        remoteLink = $(if ($null -ne $st.link) { New-HordeKnown -Value $st.link } else { New-HordeAbsent -Note "no bridge-session line names a Remote Control link" })
+        pendingAgents = [long]$st.pending
         openTools = @($st.tools.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; name = $st.tools[$_] } })
         openTasks = @($st.tasks.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; kind = $st.tasks[$_] } })
         unknownTasks = @($st.unknownTasks.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; status = $st.unknownTasks[$_] } })

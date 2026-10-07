@@ -44,10 +44,11 @@ $finalNote = "A task-notification fires each time this agent stops with no live 
 $interimNote = "This agent stopped with background work of its own still running; the result below may be interim."
 
 function Write-Lines {
-    param([string]$Name, [object[]]$Lines, [switch]$Torn)
+    param([string]$Name, [object[]]$Lines, [switch]$Torn, [string]$Tail = "")
     $p = Join-Path $work ($Name + ".jsonl")
     $sb = New-Object System.Text.StringBuilder
     foreach ($l in $Lines) { [void]$sb.Append((ConvertTo-Json -InputObject $l -Compress -Depth 20)); [void]$sb.Append("`n") }
+    [void]$sb.Append($Tail)
     if ($Torn) { [void]$sb.Append('{"type":"assistant","timestamp":"2026-10-0') }
     [System.IO.File]::WriteAllText($p, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
     return $p
@@ -98,7 +99,7 @@ try {
     $p = Write-Lines "newkind" @($ended + @(Sys "2026-10-02T10:05:00Z" "brand_new"))
     Check ((State $p).atBoundary.value -eq $false) "a line kind the reader has never seen, after a turn end, is not a boundary"
     $p = Write-Lines "newmeta" @($ended + @(Meta "brand-new-meta"))
-    Check ((State $p).atBoundary.value -eq $false) "an untimestamped line of a kind the reader has never seen is not a boundary"
+    Check ((State $p).atBoundary.state -eq "unknown") "an untimestamped line of a kind the reader has never seen makes the boundary unknown"
     $p = Write-Lines "metauser" @($ended + @(MetaUser "2026-10-02T10:05:00Z" "local command output"))
     $s = State $p
     Check ($s.atBoundary.value -eq $false -and @($s.blockers) -contains "user") "a user meta line after a turn end (a local command) is not a boundary: a known false keep"
@@ -200,6 +201,96 @@ try {
     Check ($u.Count -eq 1 -and $u[0] -ceq "9.9.9") "a version whose lines carry a kind the reader does not know is unsurveyed, and only that version"
     $s = State (Write-Lines "versionsold" @(@(Sys "2026-09-30T10:05:00Z" "brand_new" "9.9.9") + $ended))
     Check (@(Get-HordeUnsurveyedVersions -TurnState $s).Count -eq 0) "lines written before this process started are not this process's version"
+
+    Write-Host ""
+    Write-Host "--- review of #93: shell tasks the harness or the user moved to the background (F1) ---" -ForegroundColor Cyan
+    # Measured 2026-10-07 over 30 days of transcripts: 3,678 results "Command running in background with ID: x.",
+    # 280 "Command did not complete within its Ns timeout and was moved to the background (ID: x).", 11
+    # "Command was manually backgrounded by user with ID: x." - each followed by "Output is being written to".
+    $auto = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_T1" "Bash" @{ command = "x"; timeout = 120000 }), (ToolResult "2026-10-02T10:02:01Z" "toolu_T1" "Command did not complete within its 120s timeout and was moved to the background (ID: bauto0001). Output is being written to: x. You will be notified when it completes."), (Say "2026-10-02T10:02:02Z"), (TurnEnd "2026-10-02T10:02:03Z"))
+    $s = State (Write-Lines "autobg" $auto)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bauto0001" -and $s.openTasks[0].kind -ceq "shell") "a command the harness moved to the background on its timeout holds the session"
+    $man = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_T2" "PowerShell" @{ command = "x" }), (ToolResult "2026-10-02T10:00:31Z" "toolu_T2" "Command was manually backgrounded by user with ID: bman0001. Output is being written to: x"), (Say "2026-10-02T10:00:32Z"), (TurnEnd "2026-10-02T10:00:33Z"))
+    $s = State (Write-Lines "manbg" $man)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bman0001") "a command the user backgrounded with Ctrl+B holds the session"
+    $s = State (Write-Lines "newphrase" @((ToolUse "2026-10-02T10:00:01Z" "toolu_T3" "Bash" @{ command = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_T3" "Shell parked for later (ID: bnew0001). Output is being written to: x")))
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bnew0001") "a background start is recognised by its structure, an id then its output file, whatever the phrase before it"
+    $s = State (Write-Lines "autobgdone" @($auto + @(Note "2026-10-02T10:10:00Z" "bauto0001" "completed")))
+    Check (@($s.openTasks).Count -eq 0) "CONTROL: its completed notification finishes it"
+
+    Write-Host ""
+    Write-Host "--- review of #93: tasks a subagent started (F2) ---" -ForegroundColor Cyan
+    $main = Write-Lines "withsub" $ended
+    $subDir = Join-Path $work "withsub\subagents"
+    New-Item -ItemType Directory -Path $subDir -Force | Out-Null
+    $subLines = @((ToolUse "2026-10-02T10:00:02Z" "toolu_S9" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:03Z" "toolu_S9" "Command running in background with ID: bsub0001. Output is being written to: x"))
+    $sb = New-Object System.Text.StringBuilder; foreach ($l in $subLines) { [void]$sb.Append((ConvertTo-Json -InputObject $l -Compress -Depth 20)); [void]$sb.Append("`n") }
+    [System.IO.File]::WriteAllText((Join-Path $subDir "agent-a0000000000000009.jsonl"), $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $main
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "bsub0001") "a background task a subagent started holds the session, though its start is only in the subagent's transcript"
+    [System.IO.File]::AppendAllText($main, ((ConvertTo-Json -InputObject (Note "2026-10-02T10:20:00Z" "bsub0001" "completed") -Compress -Depth 20) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $main
+    Check (@($s.openTasks).Count -eq 0) "its notification, delivered to the main transcript, finishes it"
+    $null = Write-Lines "withsubold" $ended
+    New-Item -ItemType Directory -Path (Join-Path $work "withsubold\subagents") -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $work "withsubold\subagents\agent-a0000000000000010.jsonl"), $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State (Join-Path $work "withsubold.jsonl") -Since (& $utc "2026-10-03T00:00:00Z")
+    Check (@($s.openTasks).Count -eq 0) "a subagent's task from before this process started does not hold it"
+
+    Write-Host ""
+    Write-Host "--- review of #93: unreadable lines after the last turn end (F3, F4) ---" -ForegroundColor Cyan
+    $s = State (Write-Lines "badline" $ended -Tail ("{`"type`":`"user`",`"timestamp`":`"2026-10-02T10:05:00Z`",`"message`":{`"content`":`"next`"`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed whole line after the last turn end makes the boundary unknown"
+    $deep = ("[" * 120) + ("]" * 120)
+    $s = State (Write-Lines "deep" $ended -Tail ("{`"type`":`"user`",`"timestamp`":`"2026-10-02T10:05:00Z`",`"origin`":{`"kind`":`"human`"},`"message`":{`"role`":`"user`",`"content`":`"x`"},`"x`":" + $deep + "}`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a line nested past the parser's limit after the last turn end makes the boundary unknown"
+    $s = State (Write-Lines "nul" $ended -Tail (("`0" * 64) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown" -and $s.parseSkipped -eq 1) "a NUL-filled line after the last turn end is counted as skipped and makes the boundary unknown"
+    $s = State (Write-Lines "badmiddle" $ended -Tail ("{bad`n" + (ConvertTo-Json -InputObject (Meta "last-prompt") -Compress) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed line after the last turn end makes the boundary unknown even when a readable line follows it"
+    $s = State (Write-Lines "badbefore" @(@(Prompt "2026-10-02T09:00:00Z" "a") + $ended) -Tail "")
+    Check ($s.atBoundary.state -eq "known") "CONTROL: lines that all parse leave the boundary known"
+    $p = Join-Path $work "badearly.jsonl"
+    [System.IO.File]::WriteAllText($p, ("{bad`n" + ((($ended | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress -Depth 20 }) -join "`n") + "`n")), (New-Object System.Text.UTF8Encoding($false)))
+    $s = State $p
+    Check ($s.atBoundary.state -eq "known" -and $s.atBoundary.value -eq $true -and $s.parseSkipped -eq 1) "a malformed line BEFORE the last turn end is counted but does not decide the boundary"
+    $s = State (Write-Lines "untimeduser" @($ended + @(@{ type = "user"; origin = @{ kind = "human" }; message = @{ role = "user"; content = "next" } })))
+    Check ($s.atBoundary.state -eq "unknown") "an untimestamped prompt after a turn end makes the boundary unknown: only listed metadata may be untimestamped"
+    $s = State (Write-Lines "untimedtool" @($ended + @(@{ type = "assistant"; message = @{ role = "assistant"; content = @(@{ type = "tool_use"; id = "toolu_N1"; name = "Bash"; input = @{ command = "x" } }) } })))
+    Check ($s.atBoundary.state -eq "unknown") "an untimestamped tool call after a turn end makes the boundary unknown"
+
+    Write-Host ""
+    Write-Host "--- review of #93: a cron ends only at a CronDelete that succeeded (F5) ---" -ForegroundColor Cyan
+    $s = State (Write-Lines "crondelfail" @($cron + @((ToolUse "2026-10-04T11:00:00Z" "toolu_C2" "CronDelete" @{ id = "a1b2c3d4" }), (ToolResult "2026-10-04T11:00:01Z" "toolu_C2" "no such job" $true))))
+    Check (@($s.crons).Count -eq 1) "a CronDelete that failed leaves the cron live"
+    $s = State (Write-Lines "crondelpending" @($cron + @(ToolUse "2026-10-04T11:00:00Z" "toolu_C2" "CronDelete" @{ id = "a1b2c3d4" })))
+    Check (@($s.crons).Count -eq 1) "a CronDelete with no result yet leaves the cron live"
+
+    Write-Host ""
+    Write-Host "--- review of #93: the idle direction of each branch (F6) ---" -ForegroundColor Cyan
+    Check ((State (Write-Lines "q2" @($ended + @((Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:00Z" "enqueue"), (Queue "2026-10-02T10:05:02Z" "dequeue"))))).queued -eq 1) "two enqueued and one taken leaves one queued"
+    $s = State (Write-Lines "outoforder" @($ended + @((Sys "2026-10-02T10:30:00Z" "away_summary"), (Sys "2026-10-02T10:20:00Z" "informational"))))
+    Check ($s.newestEventAt.value -eq (& $utc "2026-10-02T10:30:00Z")) "the newest event is the latest time in the file, not the last line's"
+    $untimedCron = @(@{ type = "assistant"; version = $V; message = @{ role = "assistant"; content = @(@{ type = "tool_use"; id = "toolu_U1"; name = "CronCreate"; input = @{ cron = "*/5 * * * *"; prompt = "x"; recurring = $true } }) } }, (ToolResult "2026-10-04T10:00:02Z" "toolu_U1" "Scheduled recurring job c1c2c3c4 (Every 5 minutes). Session-only."))
+    $s = State (Write-Lines "untimedcron" $untimedCron) -Now (& $utc "2026-11-30T00:00:00Z")
+    Check (@($s.crons).Count -eq 1) "a recurring cron whose creation cannot be placed in time never expires"
+    $s = State (Write-Lines "oddnote" @($bgStart + @(Note "2026-10-02T10:10:00Z" "bsh0001" "completed" "A wording the reader has never seen.")))
+    Check (@($s.openTasks).Count -eq 1) "a completed notification with a note the reader does not recognise does not finish the task"
+    $untimedStart = @(@{ type = "user"; version = $V; message = @{ role = "user"; content = @(@{ type = "tool_result"; tool_use_id = "toolu_V1"; content = "Command running in background with ID: buntimed1. Output is being written to: x"; is_error = $false }) } })
+    $s = State (Write-Lines "untimedstart" @(@(ToolUse "2026-10-02T10:00:01Z" "toolu_V1" "Bash" @{ command = "x" }) + $untimedStart))
+    Check (@($s.openTasks).Count -eq 1) "a task start on a line whose time cannot be placed still counts"
+    $s = State (Write-Lines "oldnote" @(@(ToolUse "2026-10-02T10:00:01Z" "toolu_V1" "Bash" @{ command = "x" }) + $untimedStart + @(Note "2026-09-30T10:00:00Z" "buntimed1" "completed")))
+    Check (@($s.openTasks).Count -eq 1) "a notification from before this process started finishes nothing"
+    $p = Write-Lines "hugepending" @((Prompt "2026-10-02T10:00:00Z" "go"), (TurnEnd "2026-10-02T10:00:06Z" ([long]3000000000)))
+    Check ((State $p).pendingAgents -gt 0) "a pending count too large for 32 bits still holds the session"
+
+    Write-Host ""
+    Write-Host "--- the Remote Control link, reported (design S8) ---" -ForegroundColor Cyan
+    $s = State (Join-Path $fixtures "idle-session.jsonl")
+    Check ($s.remoteLink.state -eq "known" -and $s.remoteLink.value -ceq "session_neutral") "a bridge-session line reports the session's Remote Control link"
+    $s = State (Write-Lines "nolink" $ended)
+    Check ($s.remoteLink.state -eq "absent") "a transcript with no bridge-session line reports no link"
+    Check ($s.atBoundary.value -eq $true) "CONTROL: the link is reported only; it holds nothing"
 
     Write-Host ""
     Write-Host "--- no text leaves the reader ---" -ForegroundColor Cyan

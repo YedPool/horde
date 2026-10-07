@@ -25,10 +25,11 @@ function Ev { param($ts, $kind, $turn = "t1", $extra = @{}) $p = @{ type = $kind
 function Item { param($ts, $kind, $extra = @{}) $p = @{ type = $kind }; foreach ($k in $extra.Keys) { $p[$k] = $extra[$k] }; @{ timestamp = $ts; type = "response_item"; payload = $p } }
 function Plain { param($ts, $type) @{ timestamp = $ts; type = $type; payload = @{} } }
 function Write-Lines {
-    param([string]$Name, [object[]]$Lines, [switch]$Torn)
+    param([string]$Name, [object[]]$Lines, [switch]$Torn, [string]$Tail = "")
     $p = Join-Path $work ($Name + ".jsonl")
     $sb = New-Object System.Text.StringBuilder
     foreach ($l in $Lines) { [void]$sb.Append((ConvertTo-Json -InputObject $l -Compress -Depth 20)); [void]$sb.Append("`n") }
+    [void]$sb.Append($Tail)
     if ($Torn) { [void]$sb.Append('{"timestamp":"2026-10-0') }
     [System.IO.File]::WriteAllText($p, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
     return $p
@@ -58,6 +59,16 @@ try {
     Check ((State (Write-Lines "noturn" @((Meta "2026-10-02T10:00:00Z")))).atBoundary.value -eq $false) "a rollout with no turn end is not at a boundary"
     $s = State (Write-Lines "torn" @($turn + @(Ev "2026-10-02T10:00:06Z" "task_complete")) -Torn)
     Check ($s.atBoundary.state -eq "unknown") "a last line still being written makes the boundary unknown"
+    $done = @($turn + @(Ev "2026-10-02T10:00:06Z" "task_complete"))
+    $s = State (Write-Lines "badafter" $done -Tail ("{`"timestamp`":`"2026-10-02T10:05:00Z`",`"type`":`"event_msg`",`"payload`":{`"type`":`"task_started`"`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed whole line after the last turn end makes the boundary unknown (review of #93, F3)"
+    $s = State (Write-Lines "badmiddle" $done -Tail ("{bad`n" + (ConvertTo-Json -InputObject (Ev "2026-10-02T10:05:00Z" "token_count") -Compress -Depth 5) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown") "a malformed line after the last turn end makes the boundary unknown even when a readable line follows it"
+    $s = State (Write-Lines "nulafter" $done -Tail (("`0" * 64) + "`n"))
+    Check ($s.atBoundary.state -eq "unknown" -and $s.parseSkipped -eq 1) "a NUL-filled line after the last turn end is skipped and makes the boundary unknown"
+    $s = State (Write-Lines "untimedafter" @($done + @(@{ type = "event_msg"; payload = @{ type = "token_count" } })))
+    Check ($s.atBoundary.state -eq "unknown") "an untimestamped line after the last turn end makes the boundary unknown"
+    Check ($idle.remoteLink.state -eq "unknown") "Codex reports its Remote Control link as unknown: none has been measured"
     $s = State (Write-Lines "call" @($turn + @(Item "2026-10-02T10:00:05Z" "function_call" @{ call_id = "call_1"; name = "shell" })))
     Check (@($s.openTools).Count -eq 1 -and $s.openTools[0].id -ceq "call_1") "a function call with no output is an open tool"
     $s = State (Write-Lines "callout" @($turn + @((Item "2026-10-02T10:00:05Z" "function_call" @{ call_id = "call_1"; name = "shell" }), (Item "2026-10-02T10:00:06Z" "function_call_output" @{ call_id = "call_1" }))))

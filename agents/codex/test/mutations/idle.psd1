@@ -32,5 +32,18 @@
         @{ Name = "open-turn-is-a-boundary"
            Find = 'else { $boundary = New-HordeKnown -Value ($st.turns.Count -eq 0 -and $blockers.Count -eq 0) }'
            Replace = 'else { $boundary = New-HordeKnown -Value ($blockers.Count -eq 0 -or $true) }' }
+        # The fixes of the review of #93.
+        @{ Name = "skipped-line-gap-ignored"
+           Find = 'if ($st.hasEnd -and $ln -ne $st.lastLn + 1 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "skipped-last-line-ignored"
+           Find = 'if ($st.hasEnd -and $read.lineCount -gt $st.lastLn -and $read.tornTail -eq 0 -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "untimed-line-after-end-allowed"
+           Find = 'if ($st.hasEnd -and $st.turns.Count -eq 0 -and $null -eq $v["timestamp"] -and $st.unreadable -eq "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "unreadable-is-a-known-boundary"
+           Find = 'elseif ($st.unreadable -ne "") { $boundary = New-HordeUnknown -Reason $st.unreadable }'
+           Replace = 'elseif ($false) { }' }
     )
 }

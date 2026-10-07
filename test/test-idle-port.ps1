@@ -20,7 +20,7 @@ function New-GoodFields {
     return @{
         harness = "harness-a"; lineCount = 10; parseSkipped = 0; tornTail = 0
         newestEventAt = (New-HordeKnown -Value $since); lastTurnEndAt = (New-HordeKnown -Value $since)
-        atBoundary = (New-HordeKnown -Value $true); blockers = @()
+        atBoundary = (New-HordeKnown -Value $true); blockers = @(); remoteLink = (New-HordeAbsent -Note "none")
         pendingAgents = 0; openTools = @(); openTasks = @(); unknownTasks = @(); queued = 0
         wakes = @(); crons = @()
         versions = @([pscustomobject]@{ version = "1.0.0"; lines = 10; unrecognised = @() })
@@ -31,7 +31,7 @@ Write-Host ""
 Write-Host "--- the turn-state constructor ---" -ForegroundColor Cyan
 $ok = New-HordeTurnState -Fields (New-GoodFields)
 Check ($ok.PSObject.TypeNames -contains "Horde.TurnState" -and $ok.harness -ceq "harness-a") "CONTROL: a complete set of fields makes a turn state"
-foreach ($k in @("newestEventAt", "atBoundary", "openTasks", "crons", "versions", "queued")) {
+foreach ($k in @("newestEventAt", "atBoundary", "openTasks", "crons", "versions", "queued", "remoteLink")) {
     $f = New-GoodFields; $f.Remove($k)
     Check (Throws { New-HordeTurnState -Fields $f } ("needs the field '" + $k + "'")) ("a turn state without '" + $k + "' is refused as missing it, not for some later check")
 }
@@ -39,6 +39,10 @@ $f = New-GoodFields; $f["extra"] = 1
 Check (Throws { New-HordeTurnState -Fields $f } "extra") "a turn state with a field the port does not define is refused"
 $f = New-GoodFields; $f["atBoundary"] = $true
 Check (Throws { New-HordeTurnState -Fields $f } "atBoundary") "a bare value where an answer belongs is refused"
+$f = New-GoodFields; $f["remoteLink"] = "session_x"
+Check (Throws { New-HordeTurnState -Fields $f } "remoteLink") "a bare Remote Control link where an answer belongs is refused"
+$f = New-GoodFields; $f["pendingAgents"] = [long]3000000000
+Check ((New-HordeTurnState -Fields $f).pendingAgents -eq [long]3000000000) "a count past 32 bits is kept whole"
 $f = New-GoodFields; $f["pendingAgents"] = -1
 Check (Throws { New-HordeTurnState -Fields $f } "pendingAgents") "a negative count is refused"
 $f = New-GoodFields; $f["newestEventAt"] = New-HordeKnown -Value ([datetime]"2026-10-01T00:00:00")

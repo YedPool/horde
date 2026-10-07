@@ -164,7 +164,9 @@ function Read-HordeJsonLines {
                 if (($n % 500) -eq 0 -and $null -ne $script:HordeReadDeadline -and [datetime]::UtcNow -ge $script:HordeReadDeadline) { $script:HordeReadDeadlineHit = $true; throw $script:HordeReadDeadlineMessage }
                 if ($pendingBad) { $skipped++; $pendingBad = $false }
                 if ($null -ne $Upto -and $n -eq $limit -and $Upto.lastBad) { $pendingBad = $true; continue }
-                if ($text.Trim() -eq "") { continue }
+                # .NET's Trim() removes NUL too, so a NUL-filled line - a crash's torn write - read as blank
+                # and vanished from every count (review of #93, F3). Only a line of real whitespace is blank.
+                if ($text.Trim() -eq "" -and $text.IndexOf([char]0) -lt 0) { continue }
                 $value = $null
                 try { $value = $ser.DeserializeObject($text) } catch { $value = $null }
                 if ($value -isnot [System.Collections.Generic.Dictionary[string, object]]) { $pendingBad = $true; continue }

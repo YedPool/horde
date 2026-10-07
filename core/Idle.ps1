@@ -20,6 +20,8 @@
 #   atBoundary     answer, true or false: the last turn has ended and only lines the reader allows have
 #                  followed it (design 1.5). Unknown when the last line is still being written
 #   blockers       the kinds that keep it from a boundary, for people and the decision record
+#   remoteLink     answer: the Remote Control link the transcript names (design S8), REPORTED ONLY - a
+#                  linked session follows the same idle rules as any other (founder, 2026-10-05)
 #   pendingAgents  the background agents the harness said were still running at the last turn end
 #   openTools      { id; name }: tool calls with no result yet
 #   openTasks      { id; kind }: background tasks started since the process started and not finished
@@ -41,10 +43,10 @@
 # No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1.
 
 $script:HordeIdleAdapters = New-Object System.Collections.ArrayList
-$script:HordeTurnStateFields = @("harness", "lineCount", "parseSkipped", "tornTail", "newestEventAt", "lastTurnEndAt", "atBoundary", "blockers",
+$script:HordeTurnStateFields = @("harness", "lineCount", "parseSkipped", "tornTail", "newestEventAt", "lastTurnEndAt", "atBoundary", "blockers", "remoteLink",
     "pendingAgents", "openTools", "openTasks", "unknownTasks", "queued", "wakes", "crons", "versions")
 $script:HordeTurnStateCounts = @("lineCount", "parseSkipped", "tornTail", "pendingAgents", "queued")
-$script:HordeTurnStateAnswers = @("newestEventAt", "lastTurnEndAt", "atBoundary")
+$script:HordeTurnStateAnswers = @("newestEventAt", "lastTurnEndAt", "atBoundary", "remoteLink")
 $script:HordeTurnStateLists = @("blockers", "openTools", "openTasks", "unknownTasks", "wakes", "crons", "versions")
 
 function Register-HordeIdleAdapter {

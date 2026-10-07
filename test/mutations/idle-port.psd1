@@ -41,5 +41,8 @@
         @{ Name = "no-reader-throws-instead"
            Find = 'if ($null -eq $reader) { return (New-HordeUnknown -Reason ("no idle reader for the harness ''" + $Harness + "''")) }'
            Replace = 'if ($null -eq $reader) { return (New-HordeUnknown -Reason "unknown") }' }
+        @{ Name = "remote-link-not-an-answer"
+           Find = '$script:HordeTurnStateAnswers = @("newestEventAt", "lastTurnEndAt", "atBoundary", "remoteLink")'
+           Replace = '$script:HordeTurnStateAnswers = @("newestEventAt", "lastTurnEndAt", "atBoundary")' }
     )
 }
