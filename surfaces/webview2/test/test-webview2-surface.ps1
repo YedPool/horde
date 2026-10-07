@@ -51,7 +51,11 @@ $spec = $null
 $pageDir = Join-Path $work "page"; New-Item -ItemType Directory -Path $pageDir | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $pageDir "index.html"), "<!doctype html><title>x</title>")
 $bridge = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
-$spec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data") -Hidden
+# IF A REFUSAL BELOW EVER FAILS, A REAL WINDOW OPENS. This spec closes it the moment its engine is up,
+# so the check then fails in words ("closed", not "failed") instead of leaving a hidden window open
+# until somebody stops the suite - which is what the first red run of the unlisted-file check did,
+# 2026-10-07.
+$spec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data") -Hidden -OnOpened { param($Window, $State) & $Window.close }
 foreach ($name in @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")) {
     $dir = Copy-Lib ("changed-" + $name)
     $path = Join-Path $dir $name
@@ -72,6 +76,33 @@ Check ($unpinned.ok -eq $false -and $unpinned.reason -like "*WebView2Loader.dll 
 $gone = Copy-Lib "gone"; Remove-Item -LiteralPath (Join-Path $gone "Microsoft.Web.WebView2.WinForms.dll")
 Check ((Test-HordeWebView2Libraries -Folder $gone).ok -eq $false) "a missing file refuses the folder"
 Check ((Open-HordeWebView2Surface -Spec $spec -LibFolder (Join-Path $work "no-such-folder")).state -ceq "failed") "and so does a folder with no list at all"
+# A FILE NOBODY LISTED, BESIDE THE PINNED ONES (review of 2026-10-06, finding A7). A program library
+# loaded from a folder can pull in another that was put beside it, so the folder may hold the three
+# pinned files, their list, Microsoft's licence and notice, and nothing else.
+Check ((@($script:HordeWebView2LibOtherFiles) -join ",") -ceq "LICENSE.txt,NOTICE.txt" -and @((Test-HordeFingerprints -Folder $lib).unlisted | Where-Object { $script:HordeWebView2LibOtherFiles -cnotcontains $_ }).Count -eq 0) "CONTROL: the shipped folder holds nothing but the pinned files, their list, the licence and the notice"
+foreach ($extra in @(
+    @{ name = "version.dll"; what = "a program library nobody listed"; make = { param($d) [System.IO.File]::WriteAllText((Join-Path $d "version.dll"), "planted") } }
+    @{ name = "readme.txt"; what = "any other file, even plain text"; make = { param($d) [System.IO.File]::WriteAllText((Join-Path $d "readme.txt"), "hello") } }
+    @{ name = "license.txt"; what = "a file whose name differs from an allowed one only in letter case"; make = { param($d) Rename-Item -LiteralPath (Join-Path $d "LICENSE.txt") -NewName "license.txt" } }
+    @{ name = "plugins"; what = "a folder"; make = { param($d) New-Item -ItemType Directory -Path (Join-Path $d "plugins") | Out-Null } }
+)) {
+    $dir = Copy-Lib ("extra-" + $extra.name)
+    & $extra.make $dir
+    $check = Test-HordeWebView2Libraries -Folder $dir
+    Check ($check.ok -eq $false -and @($check.files).Count -eq 0 -and $check.reason -like ("*" + $extra.name + " is in the folder and is neither pinned by the list nor one of the files that may stand beside the pinned ones (LICENSE.txt, NOTICE.txt)*")) ($extra.what + " beside the pinned files refuses the folder whole, by name")
+    Check ((Open-HordeWebView2Surface -Spec $spec -LibFolder $dir).state -ceq "failed") ("and no window opens on it (" + $extra.name + ")")
+}
+# HELD FROM THE CHECK (finding A6): asked to hold, a folder that passes is handed back with its three
+# files open, and one that fails holds nothing.
+function Test-Writable { param([string]$Path) try { $w = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite); $w.Dispose(); return $true } catch { return $false } }
+$heldCopy = Copy-Lib "held"
+$holding = Test-HordeWebView2Libraries -Folder $heldCopy -Hold
+try { Check ($holding.ok -eq $true -and @($holding.held).Count -eq 3 -and (Test-Writable (Join-Path $heldCopy "WebView2Loader.dll")) -eq $false) "asked to hold, the check hands back the three files open: none can be written to until the caller lets go" }
+finally { foreach ($h in @($holding.held)) { $h.Dispose() } }
+Check ((Test-Writable (Join-Path $heldCopy "WebView2Loader.dll")) -eq $true) "CONTROL: let go, the file can be written to again"
+[System.IO.File]::WriteAllText((Join-Path $heldCopy "version.dll"), "planted")
+$refusedHold = Test-HordeWebView2Libraries -Folder $heldCopy -Hold
+Check ($refusedHold.ok -eq $false -and @($refusedHold.held).Count -eq 0 -and (Test-Writable (Join-Path $heldCopy "WebView2Loader.dll")) -eq $true) "a folder refused for a file nobody listed holds nothing open, although its three pinned files match"
 Check ((Test-EngineLoaded) -eq $false) "after every one of those refusals, nothing of the engine's interface is loaded in this process"
 
 Write-Host ""
@@ -342,8 +373,15 @@ foreach ($none in @("", "   ", $null)) {
 
 Write-Host ""
 Write-Host "--- the real files load (this is the one case that loads the engine's interface) ---" -ForegroundColor Cyan
-$loaded = Import-HordeWebView2Libraries
+# THE WAY A WINDOW LOADS THEM: held from the check, loaded while held, and still held afterwards for
+# the engine's start, which is when the third file - not .NET's - is loaded.
+$loaded = Import-HordeWebView2Libraries -Hold
 Check ($loaded -ceq "" -and (Test-EngineLoaded) -eq $true) "CONTROL: the pinned files, unchanged, are checked and then loaded"
+Check (@($script:HordeWebView2Held).Count -eq 3 -and (Test-Writable (Join-Path $lib "WebView2Loader.dll")) -eq $false) "and all three are still held, so the one the engine loads later is the one that was checked"
+Clear-HordeWebView2HeldFiles
+Check (@($script:HordeWebView2Held).Count -eq 0 -and (Test-Writable (Join-Path $lib "WebView2Loader.dll")) -eq $true) "until the surface lets go of them"
+$again = Import-HordeWebView2Libraries
+Check ($again -ceq "" -and @($script:HordeWebView2Held).Count -eq 0) "asked only to load, nothing is left held: the check runs again, every time, and lets go"
 Check ($null -ne ("HordeSurfaceForm" -as [type]) -and (New-Object HordeSurfaceForm).Quiet -eq $false) "and with them the window type that can be shown without taking the keyboard"
 $version = Get-HordeWebView2RuntimeVersion
 if ($version -ne "") { Write-Host ("  the engine installed here is " + $version) -ForegroundColor DarkGray }
