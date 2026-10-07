@@ -482,7 +482,7 @@ $deliverDesc = "$($realVerbs.definitions.'session-deliver-args'.description)"
 Check ($deliverDesc.Contains("THE GATE IS APPLIED TO THE RESOLVED SESSION")) "F1: the deliver contract says the gate is applied to the session the label resolved to"
 Check ($deliverDesc.Contains("passes to a new session id only through the process (pid and procStart")) "F1: hub-spawned status passes to a new session id only through the process"
 Check ($deliverDesc.Contains("never through a label")) "F1: hub-spawned status never passes through a label"
-Check ($deliverDesc.Contains("a live sessionId whose label differs from label is refused")) "F1: a live session id wearing another label is refused, never retargeted"
+Check ($deliverDesc.Contains("A live sessionId whose label differs from label is refused")) "F1: a live session id wearing another label is refused, never retargeted"
 # F9: the deliver description's other sentences, pinned.
 Check ($deliverDesc.Contains("its default is no label")) "F9: the opt-in list defaults to no label"
 Check ($deliverDesc.Contains("Until step R9 lands")) "F9: the deliver contract says what holds until R9"
