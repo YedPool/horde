@@ -330,18 +330,24 @@ Check ($answeredLong.code -eq 0 -and $answeredLong.out -like ("*Kept the founder
 $peeked = Invoke-Decisions @("inbox", "-Peek") $talkEnv
 Check ($peeked.code -eq 0 -and @($peeked.lines | Where-Object { $_ -ceq "2 message(s) not yet read, oldest first:" }).Count -eq 1 -and @($peeked.lines | Where-Object { $_ -ceq ("Question 1: " + $talkTitle) }).Count -eq 2 -and @($peeked.lines | Where-Object { $_ -ceq "Nothing was marked as read (-Peek)." }).Count -eq 1) "inbox -Peek prints the founder's two unread messages, each under its question's number and plain-words title, and says nothing was marked"
 Check ((Get-TalkKinds) -ceq "added,said,said,said") ("and -Peek wrote nothing (" + (Get-TalkKinds) + ")")
-# Without -Peek: the same messages, as data, exactly; and THEN they are marked.
+# With -Json: the same messages, as data, exactly - and NOTHING is marked: the caller does that.
 $inbox = Invoke-Decisions @("inbox", "-Json") $talkEnv
 $j = Get-JsonLine $inbox
 Check ($inbox.code -eq 0 -and $null -ne $j -and @($inbox.lines | Where-Object { $_.Trim() -ne "" }).Count -eq 1 -and $inbox.out -cnotmatch '[^\x00-\x7F]') "inbox -Json is exactly one line, all ASCII"
-Check ($null -ne $j -and $null -ne $j.PSObject.Properties["marking"] -and $j.marking.done -eq $true -and $j.marking.upTo -eq 4 -and $j.marking.marked -eq 2) "and that one line says what the whole command did: it marked two messages, up to record 4"
+Check ($null -ne $j -and $null -ne $j.PSObject.Properties["marked"] -and $j.marked -eq $false -and $j.upTo -eq 4 -and (Get-TalkKinds) -ceq "added,said,said,said") ("and that one line says nothing was marked and names the last record it showed, record 4 - and nothing WAS marked (" + (Get-TalkKinds) + ")")
 Check ($null -ne $j -and @($j.value.messages).Count -eq 2 -and $j.value.messages[0].number -eq 1 -and $j.value.messages[0].title -ceq $talkTitle -and [string]::Equals($j.value.messages[0].message.text, $said, [System.StringComparison]::Ordinal)) "the Hebrew comes back out of the inbox character for character, under its question's number and title"
 Check ($null -ne $j -and $j.value.messages[1].message.text.Length -eq 100000 -and [string]::Equals($j.value.messages[1].message.text, $long, [System.StringComparison]::Ordinal) -and $j.value.upTo -eq 4) "and so do all 100,000 characters of the long one: nothing cut on the way in or out"
+# The caller, having the line, marks explicitly.
+$marked = Invoke-Decisions @("mark-read", "-UpTo", "4") $talkEnv
 $markRecord = $null
 try { $markRecord = ([System.IO.File]::ReadAllText((Join-Path $talkStore "0000000005.json"), $utf8) | ConvertFrom-Json) } catch { }
-Check ((Get-TalkKinds) -ceq "added,said,said,said,read" -and $null -ne $markRecord -and $markRecord.data.reader -ceq "warchief" -and $markRecord.data.upTo -eq 4) ("after printing them, inbox recorded that the warchief has read up to record 4, the last one it printed (" + (Get-TalkKinds) + ")")
+Check ($marked.code -eq 0 -and $marked.out -like "*Marked as read: 2 message(s), up to record 4.*" -and (Get-TalkKinds) -ceq "added,said,said,said,read" -and $null -ne $markRecord -and $markRecord.data.reader -ceq "warchief" -and $markRecord.data.upTo -eq 4) ("mark-read -UpTo 4 then records that the warchief has read up to record 4 (" + (Get-TalkKinds) + ")")
+$noRecord = Invoke-Decisions @("mark-read") $talkEnv
+Check ($noRecord.code -eq 1 -and $noRecord.out -like "*decisions mark-read needs -UpTo <record>*" -and (Get-TalkKinds) -ceq "added,said,said,said,read") "mark-read with no record named exits 1 and marks nothing"
 $inboxAgain = Invoke-Decisions @("inbox") $talkEnv
 Check ($inboxAgain.code -eq 0 -and $inboxAgain.out -like "*Nothing unread*" -and (Get-TalkKinds) -ceq "added,said,said,said,read") "the second inbox is empty, and writes nothing"
+$shownData = Get-JsonLine (Invoke-Decisions @("show", "1", "-Json") $talkEnv)
+Check ($null -ne $shownData -and [string]::Equals($shownData.value.question.thread.messages[0].text, $said, [System.StringComparison]::Ordinal) -and [System.Convert]::ToBase64String($utf8.GetBytes($shownData.value.question.thread.messages[0].text)) -ceq [System.Convert]::ToBase64String($utf8.GetBytes($said)) -and $shownData.value.question.thread.messages[0].holdsDirectionOrInvisibleCharacters -eq $true) "show -Json hands the same sentence back byte for byte - embedding, isolate pair and all - and says it holds direction or invisible characters"
 # The words a person reads, through a pipe, as bytes: the Hebrew is its own UTF-8, from code page 437.
 $shown = Get-OutputBytes -CommandLine ('set "HORDE_HOME=' + $talkHome + '" & ' + $hordeLine + 'show 1') -CodePage 437
 $shownText = ""
