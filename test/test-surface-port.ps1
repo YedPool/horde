@@ -145,7 +145,7 @@ function New-FakeSurface {
     [System.IO.File]::WriteAllText((Join-Path $dir "capabilities.json"), (ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; surface = $named; capabilities = $caps }) -Depth 5))
     return $dir
 }
-Check ((Get-HordeSurfaceCapabilityNames) -join "," -ceq "page.local,page.locked,requests.closed,push,window.native") "the capability names are the schema's five"
+Check ((Get-HordeSurfaceCapabilityNames) -join "," -ceq "page.local,page.locked,requests.closed,push,window.native,picture") "the capability names are the schema's six"
 Check (Throws { Register-HordeSurface -Folder (Join-Path $work "nothing-here") -Open { } } "has no capabilities.json") "a folder with no capabilities.json is not a surface"
 Check (Throws { Register-HordeSurface -Folder (New-FakeSurface "zorbwrong" -Declared "zorbother") -Open { } } "but sits in the folder 'zorbwrong'") "nor is one whose capabilities name another folder"
 Check (Throws { Register-HordeSurface -Folder (New-FakeSurface "zorbmaybe" -Native "perhaps") -Open { } } "refused") "nor one with a support word outside the vocabulary"
@@ -196,6 +196,9 @@ Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/../../s
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/missing.html" -Bridge $bridge -DataFolder $work } "is not a file that exists") "a start page that is not there"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder "data" } "must be an absolute path") "a relative data folder"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -TickMs 5 } "ticks no faster") "a tick faster than every 50 ms"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "Dark" } "is not a theme; the themes are: system, light, dark") "a theme that is not one of the three, exactly"
+Check ($spec.theme -ceq "system" -and (New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "dark").theme -ceq "dark") "a spec follows the machine's theme unless it is given one"
+Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"request":"capture","args":{"path":"C:\\x.png"}}').refused -like "*not on the list*") "a picture is not something a page can ask for: capture is no request"
 
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-surface-port-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
