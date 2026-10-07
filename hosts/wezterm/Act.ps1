@@ -497,16 +497,60 @@ function Stop-HordeWeztermPane {
     return (New-HordeKnown -Value $true)
 }
 
+function Test-HordeWeztermProfileDir {
+    # "" when -Path may stand for a profile folder, else why not: a full path on a local drive (never a
+    # share, which Test-Path would reach over the network), already in full form (no '..'), and with no
+    # junction or link on any folder of it that exists (review of #108).
+    param([AllowEmptyString()][string]$Path)
+    if ($Path -cnotmatch '\A[A-Za-z]:\\') { return ("the profile folder '" + $Path + "' is not a full path on a local drive") }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return ("the profile folder '" + $Path + "' is not a path") }
+    if ($full.TrimEnd('\') -cne $Path.TrimEnd('\')) { return ("the profile folder '" + $Path + "' is not in full form (it reads as " + $full + ")") }
+    $p = $full.TrimEnd('\')
+    while ($p.Length -gt 3) {
+        if ((Test-Path -LiteralPath $p) -and (((Get-Item -LiteralPath $p -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { return ("the profile folder '" + $Path + "' passes through " + $p + ", a junction or link") }
+        $p = Split-Path -Parent $p
+    }
+    return ""
+}
+
+function Test-HordeWeztermRunningList {
+    # "" when -Running is a list of { pid; start } with a numeric pid and a start time of digits, else
+    # why not (review of #108: a pid of 'abc' made Own throw where the port says it answers).
+    param($Running)
+    if ($Running -is [System.Collections.IDictionary]) { return "the running terminals are a table, not a list of { pid; start }" }
+    foreach ($e in @($Running)) {
+        if ($null -eq $e -or $e -is [System.Collections.IDictionary] -or $null -eq $e.PSObject.Properties["pid"] -or $null -eq $e.PSObject.Properties["start"]) { return "a running terminal is not a { pid; start }" }
+        if (("" + $e.pid) -cnotmatch '\A[0-9]{1,10}\z') { return ("a running terminal's pid '" + $e.pid + "' is not a number") }
+        if (("" + $e.start) -cnotmatch '\A[0-9]{1,20}\z') { return ("a running terminal's start '" + $e.start + "' is not a time in digits") }
+    }
+    return ""
+}
+
+function Get-HordeWeztermOwnMarker {
+    # The port's OwnMarker: the socket file whose presence makes terminal -GuiPid -ProfileDir's own, or
+    # $null when the pid is not a number or the folder may not stand for a profile (review of #108).
+    param([AllowEmptyString()][string]$ProfileDir, $GuiPid)
+    if (("" + $GuiPid) -cnotmatch '\A[0-9]{1,10}\z') { return $null }
+    if ((Test-HordeWeztermProfileDir -Path $ProfileDir) -ne "") { return $null }
+    return (Join-Path (Get-HordeWeztermSockDir -ProfileDir $ProfileDir) ("gui-sock-" + $GuiPid))
+}
+
 function Invoke-HordeWeztermOwn {
-    # The port's Own (core/HostAct.ps1). With no arguments, as a node calls it: this user's terminals now.
-    # Given a profile folder, the sockets under it; given running terminals ({ pid; start } each), those
-    # in place of the processes listed now - the isolation probe's control, which plants one and must
-    # find it (test-hub-act-local, the coordinator's condition for dropping its socket pin, 2026-10-06).
-    param([string]$ProfileDir = "", $Running = $null)
+    # The port's Own (core/HostAct.ps1). With no arguments, as a node calls it: this user's terminals now,
+    # in %USERPROFILE%\.local\share\wezterm. Given a profile folder, the sockets under it; given running
+    # terminals ({ pid; start } each), those in place of the processes listed now - the isolation probe's
+    # control, which plants one and must find it (test-hub-act-local, 2026-10-06). Either given argument
+    # that cannot mean what it says is answered unknown, never a throw. -Guis and -ProcessStart stand in
+    # for the process table in a test of the no-argument path; the port never passes them.
+    param([string]$ProfileDir = "", $Running = $null, [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
     $pd = $ProfileDir
+    if ($pd -ne "") { $why = Test-HordeWeztermProfileDir -Path $pd; if ($why -ne "") { return (New-HordeUnknown -Reason $why) } }
     if ($pd -eq "") { $pd = $env:USERPROFILE }
     $sd = Get-HordeWeztermSockDir -ProfileDir $pd
-    if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd) }
+    if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart) }
+    $why = Test-HordeWeztermRunningList -Running $Running
+    if ($why -ne "") { return (New-HordeUnknown -Reason $why) }
     $list = @($Running)
     $guis = { @($list | ForEach-Object { [long]$_.pid }) }.GetNewClosure()
     $starts = { param($p) $hit = @($list | Where-Object { [long]$_.pid -eq [long]$p }); if ($hit.Count -eq 1) { "" + $hit[0].start } else { $null } }.GetNewClosure()
@@ -517,7 +561,7 @@ function Invoke-HordeWeztermOwn {
 # hosts/wezterm/ names the terminal (CONTRIBUTING 14). Own names this node's own terminal explicitly.
 Register-HordeHostActor -Name "wezterm" `
     -Own { param($profileDir, $running) Invoke-HordeWeztermOwn -ProfileDir $profileDir -Running $running } `
-    -OwnMarker { param($profileDir, $guiPid) Join-Path (Get-HordeWeztermSockDir -ProfileDir $profileDir) ("gui-sock-" + $guiPid) } `
+    -OwnMarker { param($profileDir, $guiPid) Get-HordeWeztermOwnMarker -ProfileDir $profileDir -GuiPid $guiPid } `
     -Resolve { param($n) Resolve-HordeWeztermProgram -Name $n } `
     -Start { param($target, $prog, $argv, $cwd, $envMap) if ($null -eq $envMap) { $envMap = @{} }; Start-HordeWeztermPane -Target $target -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap } `
     -Send { param($target, $h, $t, $submit) Send-HordeWeztermText -Target $target -Handle $h -Text $t -Submit:([bool]$submit) } `
