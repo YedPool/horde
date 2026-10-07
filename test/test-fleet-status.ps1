@@ -229,6 +229,7 @@ Check ($before -ceq $after) "after reading, every file and folder is exactly as 
 $src = [System.IO.File]::ReadAllText((Join-Path $root "fleet\StatusPanel.ps1"))
 $writes = 'WriteAll|Set-Content|Out-File|New-Item|Add-Content|Remove-Item|\.Delete\(|FileMode\]::(Create|Append|Truncate|OpenOrCreate)|FileAccess\]::(Write|ReadWrite)'
 Check (-not ($src -match $writes)) "and its source holds no call that writes, makes or removes a file"
+Check ([System.IO.File]::ReadAllText((Join-Path $root "tools\Mutate.ps1")) -match $writes) "CONTROL: the same search finds such a call in a shipped file that does write (tools/Mutate.ps1), so finding none here means something"
 
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-fleet-status-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
