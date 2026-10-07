@@ -101,7 +101,8 @@
 #   - It redacts secret-shaped strings from findings. Loading that would load the engine checker and
 #     the agent descriptors into every window. Instead A FINDING NEVER QUOTES A TEXT VALUE: it says the
 #     value's length, or that it is not on the list. Numbers and true/false are quoted. A key name is
-#     quoted, cut at 60 characters, with anything that is not printable ASCII written as \uXXXX.
+#     quoted, cut at 60 characters, with anything that is not printable ASCII written as \uXXXX; what
+#     the duplicate scan and the schema say, which quote the file too, is cut at 300 the same way.
 #
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
@@ -131,9 +132,11 @@ $script:HordeModuleSettingsFolder = "settings"
 # settings, each with a forty-character name and a short value, come to about 2500 characters
 # (reckoned, not measured), so this is a hundred times a large file and still small to hold in memory.
 $script:HordeModuleSettingsMaxLength = 262144
-# How much of a key's name, and of a whole finding, is shown before it is cut.
+# How much of a key's name is shown before it is cut, and how much of any other part of a finding
+# that quotes a file or a table: what the duplicate scan or the schema said, and a setting's rule.
+# The end of a finding, which says what was done about it, is never what is cut.
 $script:HordeModuleSettingsNameShown = 60
-$script:HordeModuleSettingsFindingShown = 400
+$script:HordeModuleSettingsPartShown = 300
 # WHAT JSON IS MADE OF, AND NOTHING ELSE: blanks, the six marks, strings in double quotes with JSON's
 # own escapes, true, false, null, and numbers as JSON writes them. The text is matched from its start
 # and must be consumed whole, BEFORE the parser sees it, because Windows PowerShell 5.1's
@@ -316,7 +319,8 @@ function New-HordeModuleSettings {
 function ConvertTo-HordeModuleSettingsPlain {
     # A text as a finding may carry it: printable ASCII as it is, anything else as \uXXXX, cut after
     # -Max characters with "..." to say so. A finding is printed to consoles that cannot draw every
-    # character, and a key's name comes from a file anybody may have written.
+    # character, and a key's name comes from a file anybody may have written. EVERY PART OF A FINDING
+    # THAT A FILE OR A TABLE SUPPLIED goes through here; the rest is this file's own ASCII words.
     param([AllowEmptyString()][string]$Text, [int]$Max)
     $sb = New-Object System.Text.StringBuilder
     foreach ($c in $Text.ToCharArray()) {
@@ -387,7 +391,7 @@ function Read-HordeModuleSettingsText {
         $body = $Text
         if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }
         $doc = Read-HordeModuleSettingsDocument -Text $body
-        foreach ($problem in @($doc.problems)) { [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -Problem $problem)) }
+        foreach ($problem in @($doc.problems)) { [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -Problem (ConvertTo-HordeModuleSettingsPlain -Text $problem -Max $script:HordeModuleSettingsPartShown))) }
         if ($null -ne $doc.settings) {
             # NAMES ARE COMPARED EXACTLY, so the file's keys go through an ordinal dictionary as the
             # declaration's fields did: a property read on the parsed object would ignore case.
@@ -403,7 +407,8 @@ function Read-HordeModuleSettingsText {
                 $entry = $byName[$key]
                 $checked = Test-HordeModuleSettingValue -Entry $entry -Value $given[$key]
                 if ($checked.ok) { $values[$key] = $checked.value; continue }
-                [void]$sentences.Add($module + " setting '" + $shown + "' must be " + (Get-HordeModuleSettingRule -Entry $entry) + "; the file gives " + (Get-HordeModuleSettingGiven -Value $given[$key]) + "; the default is used")
+                $rule = ConvertTo-HordeModuleSettingsPlain -Text (Get-HordeModuleSettingRule -Entry $entry) -Max $script:HordeModuleSettingsPartShown
+                [void]$sentences.Add($module + " setting '" + $shown + "' must be " + $rule + "; the file gives " + (Get-HordeModuleSettingGiven -Value $given[$key]) + "; the default is used")
             }
         }
     }
@@ -411,8 +416,7 @@ function Read-HordeModuleSettingsText {
     # error where a table would answer with nothing, and a caller that changes its answer changes only that.
     $answer = New-Object psobject
     foreach ($name in @($values.Keys)) { Add-Member -InputObject $answer -NotePropertyName $name -NotePropertyValue $values[$name] }
-    $findings = [string[]]@($sentences | ForEach-Object { ConvertTo-HordeModuleSettingsPlain -Text $_ -Max $script:HordeModuleSettingsFindingShown })
-    return [pscustomobject]@{ values = $answer; findings = $findings }
+    return [pscustomobject]@{ values = $answer; findings = [string[]]@($sentences.ToArray()) }
 }
 
 function Get-HordeModuleSettingsPath {

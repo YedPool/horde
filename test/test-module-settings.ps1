@@ -431,7 +431,18 @@ $r = FromText (Doc '{ "widthPx": 640 }')
 $r.values.widthPx = 1
 Check ((FromText $null).values.widthPx -eq 520 -and $decl.settings[0].default -eq 520) "an answer is the caller's own: changing it changes neither the declaration nor the next answer"
 $hostile = FromText (Doc ('{ "caf' + [char]0xE9 + '": "x", "role": "' + [char]0x4E2D + '\u0001", "' + ("k" * 500) + '": [[[1]]] }'))
-Check (@($hostile.findings).Count -eq 3 -and @($hostile.findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' -or $_.Length -gt 403 }).Count -eq 0) "every finding is printable ASCII, and at most 400 characters and a mark that it was cut"
+Check (@($hostile.findings).Count -eq 3 -and @($hostile.findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' -or $_.Length -gt 200 }).Count -eq 0) "three hostile keys are three findings, each printable ASCII and short"
+$longPart = '{ "schemaVersion": 1, "settings": {}, "' + ("k" * 500) + '": 1 }'
+$r = FromText $longPart
+Check ((Unreadable $longPart ("'" + ("k" * 200))) -and @($r.findings).Count -eq 1 -and $r.findings[0] -clike "*...; every setting of probe is its default" -and $r.findings[0].Length -lt 420) "what the schema says of a file is cut at 300 characters, and the finding still ends by saying what was done"
+$twiceAccent = Doc ('{ "caf' + [char]0xE9 + '": 1, "caf' + [char]0xE9 + '": 2 }')
+Check ((Unreadable $twiceAccent "'caf\u00E9'") -and @((FromText $twiceAccent).findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' }).Count -eq 0) "what the duplicate scan says of a file is written in printable ASCII"
+$listDecl = New-HordeModuleSettings -Module "probe" -Settings @(@{ name = "face"; kind = "text"; default = "plain"; values = @("plain", ("caf" + [char]0xE9)); what = "A face." })
+$r = Read-HordeModuleSettingsText -Declaration $listDecl -Text (Doc '{ "face": "bold" }')
+Check (@($r.findings).Count -eq 1 -and $r.findings[0] -clike "probe setting 'face' must be one of: plain, caf\u00E9; the file gives text of 4 characters; the default is used") "a rule that holds a character that is not ASCII is written in printable ASCII too"
+$manyDecl = New-HordeModuleSettings -Module "probe" -Settings @(@{ name = "face"; kind = "text"; default = ("a" * 100); values = @("a", "b", "c", "d", "e") | ForEach-Object { $_ * 100 }; what = "A face." })
+$r = Read-HordeModuleSettingsText -Declaration $manyDecl -Text (Doc '{ "face": "bold" }')
+Check (@($r.findings).Count -eq 1 -and $r.findings[0] -clike ("probe setting 'face' must be one of: " + ("a" * 100) + ", *...; the file gives text of 4 characters; the default is used") -and $r.findings[0].Length -lt 400) "a rule longer than 300 characters is cut, and the finding still says what was given and done"
 
 # ---------------------------------------------------------------------------------------------------
 # THE FILE. A home this suite makes under TEMP and removes; HORDE_HOME is put back as it was.
