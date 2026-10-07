@@ -91,7 +91,7 @@ $once = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
 $twice = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
 Check ($once.failure -eq "" -and $twice.failure -eq "" -and (Test-Line $twice "Question 1: this request was already recorded (record 4), so nothing was written again.") -and (Get-Kinds $store) -ceq "added,said,said,said") ("the same answer sent twice with one -Id is one message, and the second says so (" + (Get-Kinds $store) + ")")
 # -Json: one line, all ASCII, and the words come back from it exactly.
-$hebrew = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + " " + [char]0x2067 + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + [char]0x2069 + [char]0x202C
+$hebrew = "" + [char]0x05DB + [char]0x05DF + [char]0x200F + " " + [char]0x200E + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + [char]0x200D
 $j = Run "answer" @{ Number = "1"; File = (Write-Words "hebrew.txt" $hebrew); Json = $true }
 $parsed = $null
 try { $parsed = (@($j.lines)[0] | ConvertFrom-Json) } catch { }

@@ -206,17 +206,14 @@ $script:HordeDecisionMaxNumber = 999999999
 # to be stored exactly, and the operations suite's own Hebrew title carries U+200F. None of the four
 # can reorder or hide other text. What reorders or hides IS refused: the embeddings, overrides and
 # isolates (U+202A to U+202E, U+2066 to U+2069), the zero-width space, the byte-order mark.
-$script:HordeDecisionNotTextInOneLine = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'
-$script:HordeDecisionNotTextInLines = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'
-# WORDS SAID UNDER A QUESTION ARE KEPT VERBATIM, so less is refused in them than in a question's own
-# fields: only a control character other than tab and the two line-break characters. A question's
-# field is written by the session that keeps the list and can be written again; what a person said
-# cannot, and text written right to left is routinely carried with the embedding and isolate
-# characters (U+202A to U+202E, U+2066 to U+2069) that a field refuses - a phone's keyboard and a
-# chat program put them there, unseen. Refusing those would refuse his words, or make the session
-# recording them take characters out, which is no longer verbatim. A control character (ESC, NUL,
-# BEL) is in nothing a person typed, and is what a terminal obeys; that is still refused.
-$script:HordeDecisionNotTextInWords = '[\p{Cc}-[\t\r\n]]'
+# ONE DEFINITION, of which both patterns are made, so that what is not text is said once: the
+# classes that are refused, and the characters of those classes that are kept in every text.
+$script:HordeDecisionNotTextClasses = '\p{Cc}\p{Cf}\p{Zl}\p{Zp}'
+$script:HordeDecisionTextKept = '\r\n\u200C-\u200F'
+$script:HordeDecisionNotTextInOneLine = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionTextKept + ']]'
+# A text of several lines keeps the tab as well. WORDS SAID UNDER A QUESTION ARE SUCH A TEXT, held to
+# this same pattern and no other: what a question's text refuses, a message refuses.
+$script:HordeDecisionNotTextInLines = '[' + $script:HordeDecisionNotTextClasses + '-[\t' + $script:HordeDecisionTextKept + ']]'
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
 # In Chinese, Japanese, Thai, Lao, Khmer and Burmese a sentence is written with no spaces, so there
 # each letter is counted as a word: about what one carries in Chinese, generous in the others.
@@ -480,13 +477,9 @@ function Get-HordeDecisionCharProblem {
     # Why a text holds something that is not text, as the end of a finding ("holds the character
     # U+001B ..."), or "". Only the first such character is named. The text is never cleaned: what is
     # stored is what was given, so what cannot be stored is refused whole.
-    param([string]$Text, [switch]$OneLine, [switch]$Said)
+    param([string]$Text, [switch]$OneLine)
     $pattern = $script:HordeDecisionNotTextInLines
     $takes = "a text of several lines takes line breaks and tabs, and no other control, format or separator character"
-    if ($Said) {
-        $pattern = $script:HordeDecisionNotTextInWords
-        $takes = "words said under a question are kept exactly, with their line breaks and tabs, and take no other control character"
-    }
     if ($OneLine) {
         $pattern = $script:HordeDecisionNotTextInOneLine
         $takes = "a one-line field takes no control, format or separator character, a tab included"
@@ -627,7 +620,7 @@ function Test-HordeDecisionSaying {
     }
     if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
     if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
-    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said
+    $notWords = Get-HordeDecisionCharProblem -Text $Text
     if ($notWords -ne "") { [void]$out.Add("'text' " + $notWords) }
     return @($out)
 }
