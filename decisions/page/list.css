@@ -23,14 +23,14 @@
    --warn. --line-px is the host's line height, which the fold mark is centred in. */
 .hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
 .hd-head { display: grid; justify-content: start; grid-template-columns: 14px minmax(0, auto) minmax(0, auto); cursor: pointer; }
-.hd-qrow { --hang: 58px; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 14px; padding-left: var(--hang); min-height: var(--line-px); }
+.hd-qrow { --hang: 54px; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 14px; padding-left: var(--hang); min-height: var(--line-px); }
 .hd-qt { display: flex; align-items: baseline; flex: 0 1 auto; min-width: 0; max-width: calc(100% + var(--hang)); margin-left: calc(-1 * var(--hang)); cursor: pointer; }
 .hd-tri { flex: 0 0 14px; width: 14px; height: var(--line-px); align-self: flex-start; position: relative; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 .hd-tri::before { content: ""; position: absolute; left: 4px; top: calc((var(--line-px) - 8px) / 2); border-left: 6px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
 .hd-tri[aria-expanded="true"]::before { left: 2px; top: calc((var(--line-px) - 6px) / 2); border-top: 6px solid var(--faint); border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 0; }
 .hd-tri:focus-visible { outline: 1px solid var(--muted); }
 .hd-num { flex: 0 0 auto; min-width: 30px; color: var(--ink); font-weight: 600; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hd-qt > .hd-num { flex: 0 0 44px; width: 44px; }
+.hd-qt > .hd-num { flex: 0 0 40px; width: 40px; }
 .hd-let { color: var(--muted); font-weight: 400; padding-right: 4px; }
 .hd-line > .hd-num { min-width: 0; color: var(--muted); font-weight: 400; }
 .hd-lab { flex: 0 0 auto; color: var(--muted); padding-right: 6px; }
@@ -59,7 +59,7 @@
 .hd-bg { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-decoration: underline; }
 .hd-bg:focus-visible { outline: 1px solid var(--muted); }
 .hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
-.hd-sub { padding-left: 58px; }
+.hd-sub { padding-left: 54px; }
 .hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
   .hd-count { display: none; }
