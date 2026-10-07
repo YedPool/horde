@@ -162,6 +162,56 @@ $r = Find "99" "gui-sock-4242" -W $never
 Check ($r.state -ceq "unknown" -and $script:windowReads -eq 2) "a pane that is not listed is not read again: reading again cannot bring it back"
 
 Write-Host ""
+Write-Host "--- the terminal writes UTF-8, whatever code page its answer was read in ---" -ForegroundColor Cyan
+# THE HOST'S ONE CALL (hosts/wezterm/Act.ps1) leaves the decoding of the terminal's answer to .NET, which
+# reads it in the console's code page, or the machine's when there is no console. A pane title of one
+# character outside ASCII then comes back as three others and does not equal itself, and this finder
+# compares titles exactly. That file is not this one's to change, so the finder mends its own listing:
+# it notes the code page the answer was read in, turns the text back into the bytes the terminal
+# wrote, and reads those as UTF-8. MEASURED HERE EACH RUN, through the real call: the tool standing in
+# for the terminal's command prints the bytes of a listing in three alphabets, with this process set
+# to a console code page that has none of them.
+. (Join-Path $root "test\lib\PaneTool.ps1")
+$hebrew = "" + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD
+$wide = @((Pane 10 16 18 ($star + " " + $hebrew + " caf" + [char]0x00E9)), (Pane 11 17 19 ($half + " other")))
+$said = Listing $wide
+$wideWindows = { param($processId) return @((Win 8001 ($half + " other")), (Win 8002 ($star + " " + $hebrew + " caf" + [char]0x00E9))) }
+$oem = [System.Text.Encoding]::GetEncoding(437)
+function Mend { param([string]$Text, $ReadAs)
+    if ($null -eq (Get-Command -Name ConvertTo-HordeWeztermAnswerText -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ state = "missing"; value = $null; reason = "the finder has nothing that mends its listing" } }
+    return (ConvertTo-HordeWeztermAnswerText -Text $Text -ReadAs $ReadAs) }
+$saveExe = $script:HordeWeztermActExe
+$script:HordeWeztermActExe = Get-HordePaneTool
+$wasEncoding = $null; $raw = $null; $readIn = $null
+try { $wasEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = $oem } catch { $wasEncoding = $null }
+try {
+    try { $readIn = [Console]::OutputEncoding } catch { $readIn = [System.Text.Encoding]::Default }
+    $raw = Invoke-HordeWeztermAct -Rest @("say", [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($said))) -Target ([pscustomobject]@{ socket = (Join-Path $sockDir "gui-sock-4242"); guiPid = 4242; guiStart = "133000000000000000" })
+} finally { $script:HordeWeztermActExe = $saveExe; if ($null -ne $wasEncoding) { try { [Console]::OutputEncoding = $wasEncoding } catch { } } }
+Check ($raw.code -eq 0 -and $raw.out -cne $said -and $readIn.CodePage -ne 65001) ("CONTROL: read as the host's call reads it, in code page " + $readIn.CodePage + ", the listing does not equal what the terminal wrote")
+$mended = Mend $raw.out $readIn
+Check ($mended.state -ceq "known" -and $mended.value -ceq $said) "mended, it is what the terminal wrote, character for character, in three alphabets"
+$garbledWide = { param($rest, $envMap, $target) return [pscustomobject]@{ code = 0; out = $oem.GetString([System.Text.Encoding]::UTF8.GetBytes($said)); err = ""; timedOut = $false } }
+$unmended = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -SockDir $sockDir -Runner $garbledWide -Windows $wideWindows -ProcessStart $alive -Attempts 1 -RetryMs 0
+Check ($unmended.state -ceq "unknown" -and $unmended.reason -like "none of the terminal's*") "CONTROL: a listing left as it was read fits no window's title, so the finder answers unknown"
+$viaFinder = $null
+try { $viaFinder = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -SockDir $sockDir -Runner $garbledWide -ReadAs $oem -Windows $wideWindows -ProcessStart $alive -Attempts 1 -RetryMs 0 } catch { $viaFinder = [pscustomobject]@{ state = "threw"; value = $null; reason = "$($_.Exception.Message)" } }
+Check ($viaFinder.state -ceq "known" -and $viaFinder.value.handle -eq 8002) ("the finder mends the listing before it compares titles: the window titled in three alphabets is found (" + $viaFinder.state + ")")
+$plain = Mend '[{"title":"plain"}]' $oem
+Check ($plain.state -ceq "known" -and $plain.value -ceq '[{"title":"plain"}]') "text that is all ASCII is the same in every code page, and is left as it is"
+$already = Mend $said ([System.Text.Encoding]::UTF8)
+Check ($already.state -ceq "known" -and $already.value -ceq $said) "an answer that was read as UTF-8 is not mended a second time"
+$ansi = [System.Text.Encoding]::GetEncoding(1252)
+$fromAnsi = Mend ($ansi.GetString([System.Text.Encoding]::UTF8.GetBytes($said))) $ansi
+Check ($fromAnsi.state -ceq "known" -and $fromAnsi.value -ceq $said) "the same from the code page a process with no console reads in"
+$notUtf8 = Mend ("caf" + [char]0x00E9) $ansi
+Check ($notUtf8.state -ceq "unknown" -and $notUtf8.reason -like "*is not UTF-8*") "text whose bytes are not UTF-8 is unknown, never half mended"
+$lost = Mend $hebrew $oem
+Check ($lost.state -ceq "unknown" -and $lost.reason -like "*code page 437*cannot be turned back*") "text holding a character its code page does not have was not read whole: unknown, never mended from what is left"
+$twoByte = Mend ("caf" + [char]0x00E9) ([System.Text.Encoding]::GetEncoding(932))
+Check ($twoByte.state -ceq "unknown" -and $twoByte.reason -like "*cannot be turned back*") "a code page that cannot give the terminal's bytes back is unknown, with the page named"
+
+Write-Host ""
 Write-Host "--- the port ---" -ForegroundColor Cyan
 Check (@(Get-HordeHostWindowFinderFiles -Root $root | ForEach-Object { $_.Substring($root.Length + 1) }) -ccontains "hosts\wezterm\Window.ps1") "the finder file is found by folder"
 $viaPort = Find-HordeSessionWindow -Seat ([pscustomobject]@{ pane = "%3"; instance = "tty3" })
