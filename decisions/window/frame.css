@@ -25,6 +25,11 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); }
+/* THE SCROLL BAR IS THE THIN ONE, in the page's own colours. The ordinary one is 17 pixels wide with
+   an arrow at each end: of a window 378 pixels wide beside a terminal that is one part in twenty-two
+   taken from every line, and the heaviest thing on a quiet page (seen 2026-10-07 in pictures of the
+   real window, 567 device pixels wide at one and a half times the ordinary scale). */
+html { scrollbar-width: thin; scrollbar-color: var(--dim) var(--bg); }
 body { font-family: var(--font); font-size: var(--text-px); line-height: var(--line-px); font-weight: 400; }
 button { font: inherit; color: inherit; }
 #top { position: fixed; left: 0; right: 0; top: 0; height: calc(var(--line-px) + 6px); background: var(--bg); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; padding: 0 14px; z-index: 5; }
