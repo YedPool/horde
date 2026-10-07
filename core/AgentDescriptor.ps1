@@ -73,19 +73,6 @@ function Get-HordeAgentProp {
     Write-Output -NoEnumerate $p.Value
 }
 
-function Assert-HordeAsciiBytes {
-    # Throw unless the bytes are plain ASCII with no byte-order mark and no control byte but tab, CR and
-    # LF. Checked before decoding: a decoder turns a stray byte into a character, or a replacement mark,
-    # and either reads as text. A NUL is how a file saved as UTF-16 without a mark looks byte by byte, so
-    # it is named as that rather than left to fail later as not JSON (review of #109).
-    param([byte[]]$Bytes, [string]$What)
-    if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) { throw ($What + " starts with a UTF-8 byte-order mark; save it as plain ASCII (CONTRIBUTING 13)") }
-    foreach ($b in $Bytes) {
-        if ($b -gt 0x7F) { throw ($What + " holds a byte that is not ASCII (CONTRIBUTING 13)") }
-        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) { throw ($What + " holds the control byte 0x" + ([int]$b).ToString("X2") + $(if ($b -eq 0) { ", as a file saved as UTF-16 does" } else { "" }) + "; save it as plain ASCII (CONTRIBUTING 13)") }
-    }
-}
-
 function Get-HordeJsonDuplicateKeyProblems {
     # The duplicate-key findings for a JSON text, as refusals. Relies only on what every scan of that
     # name shares: something non-null comes back for a repeat, and nothing when there is none. Each

@@ -9,12 +9,6 @@
         @{ Name = "empty-list-read-as-missing"
            Find = 'Write-Output -NoEnumerate $p.Value'
            Replace = 'return $p.Value' }
-        @{ Name = "bom-accepted"
-           Find = '$Bytes[2] -eq 0xBF) { throw'
-           Replace = '$Bytes[2] -eq 0x00) { throw' }
-        @{ Name = "non-ascii-accepted"
-           Find = 'if ($b -gt 0x7F) { throw'
-           Replace = 'if ($b -gt 0xFF) { throw' }
         @{ Name = "duplicate-key-ignored"
            Find = 'return @(@(Find-HordeJsonDuplicateKey -Text $Text) |'
            Replace = 'return @(@() |' }
@@ -149,11 +143,5 @@
         @{ Name = "vocabulary-flag-in-meaning-accepted"
            Find = 'elseif ($meaning -cmatch $script:HordeCapabilityFlagPattern)'
            Replace = 'elseif ($false)' }
-        @{ Name = "control-bytes-allowed"
-           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
-           Replace = '        if ($false) {' }
-        @{ Name = "tab-refused"
-           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
-           Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
     )
 }

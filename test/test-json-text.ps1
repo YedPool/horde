@@ -47,4 +47,16 @@ Check (Finds '{"\x":1,"\x":2}' "*appears more than once*") "a key with a bad esc
 Check ((Survives 'a,b') -and (Survives '{"a":1}}') -and (Survives ']]') -and @(Dups '{"a":1}}').Count -eq 0) "stray commas and closing brackets outside any object are not an error"
 Check (@(Dups '').Count -eq 0 -and @(Dups '[1,2]').Count -eq 0 -and @(Dups '"text"').Count -eq 0) "text with no object has no duplicate"
 
+
+Write-Host ""
+Write-Host "--- the byte check every data-file reader runs before it decodes ---" -ForegroundColor Cyan
+function Refuses { param([byte[]]$B, [string]$Like) try { Assert-HordeAsciiBytes -Bytes $B -What "the file x"; return $false } catch { return ("" + $_.Exception.Message) -like $Like } }
+$plain = [System.Text.Encoding]::ASCII.GetBytes("{" + [char]13 + [char]10 + [char]9 + '"a": 1 }')
+Check (-not (Refuses $plain "*")) "CONTROL: plain ASCII with tab, CR and LF passes"
+Check (Refuses ([byte[]](@(0xEF, 0xBB, 0xBF) + $plain)) "the file x starts with a UTF-8 byte-order mark*") "a byte-order mark is refused, named"
+Check (Refuses ([byte[]](@(0x7B, 0xE9, 0x7D))) "the file x holds a byte that is not ASCII*") "a byte above 0x7F is refused, named"
+Check (Refuses ([System.Text.Encoding]::Unicode.GetBytes('{"a": 1}')) "*control byte 0x00, as a file saved as UTF-16 does*") "a NUL is refused and named as a UTF-16 file"
+Check (Refuses ([byte[]](@(0x7B, 0x07, 0x7D))) "*control byte 0x07;*") "another control byte is refused, named"
+Check (-not (Refuses ([byte[]](@(0x7B, 0x09, 0x7D))) "*")) "CONTROL: a tab alone passes"
+
 Complete-HordeSuite -Success "the one scanner finds every key written twice in one object, and nothing else"

@@ -13,6 +13,7 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 . (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "NodePolicy.ps1")
 . (Join-Path $PSScriptRoot "EngineResolve.ps1")
 
