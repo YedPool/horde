@@ -54,6 +54,14 @@
 // session named "__proto__" or "constructor" is a key like any other (measured 2026-10-06 in a real
 // window by the review of the earlier page). The same holds for every map here keyed by text or number.
 //
+// ROOM IS KEPT FOR THE QUESTIONS STILL TO ANSWER (seen 2026-10-07 in pictures of the real list: one
+// question's conversation filled the whole first view of the narrow window, and one saved answer
+// took eight lines). What was said before is one line each, cut with an ellipsis, EXCEPT the one thing
+// the reader has to answer - the last thing said, when somebody else said it - which is whole. A
+// saved answer the caret is not in rests at two lines, and says how many more it has; the caret in
+// it, it is whole. Unfolding the question's context (the triangle, F2, or a press on a cut line)
+// shows every message whole. THE QUESTION ITSELF IS NEVER CUT, and neither is a draft.
+//
 // A REDRAW KEEPS THE READER'S PLACE: what is unfolded stays unfolded, the line at the top of the view
 // stays where it is, and the caret stays in its field at its place in the words.
 //
@@ -70,8 +78,10 @@
   var MINE = "founder";
   // THE PAGE'S WORDS FOR THE ONE WHO KEEPS THE LIST, AND FOR WHAT BECAME OF AN ANSWER. In one place.
   var KEEPER = "Thrall";
+  // Each mark has a short form, drawn where there is no room beside the field (list.css).
   var WORDS = {
     you: "You", keeper: KEEPER, saving: "saving", saved: "saved", told: "told " + KEEPER, read: "read by " + KEEPER, draft: "draft",
+    toldShort: "told", readShort: "read",
     afterClosing: "the question is closed; kept, and it reopens nothing", earlierWording: "said to an earlier wording",
     marks: "this message holds direction or invisible characters"
   };
@@ -79,6 +89,8 @@
   // How long after the caret arrives in an empty field an Enter is taken for the tail of a doubled
   // key press. Longer than a key bounce or an accidental double tap; shorter than reading a question.
   var ARRIVAL_MS = 350;
+  // How many lines a saved answer rests at while the caret is not in it (header, ROOM IS KEPT).
+  var REST_LINES = 2;
   // The sub-lines of an unfolded question, in order: the field, the label before it ("" for none),
   // and how a list is shown - "each" a line per item, "joined" one line.
   var SUB_LINES = [
@@ -198,18 +210,25 @@
       return standing ? textOf(standing.text) : "";
     }
     function recOf(q) { return textOf(q.recommendation); }
+    // What became of what stands in a field: { full, short, note } - the mark in words, its short
+    // form, and what else must be said of a saved answer, which goes on a line of its own under it.
     function markOf(q, value) {
       var s = sent[q.number];
-      if (s && s.pending > 0) { return WORDS.saving; }
+      if (s && s.pending > 0) { return { full: WORDS.saving, short: WORDS.saving, note: "" }; }
       var standing = standingOf(q);
       if (standing && value === textOf(standing.text)) {
-        var words = WORDS.saved;
-        if (Array.isArray(standing.unreadBy)) { words = standing.unreadBy.length === 0 ? WORDS.read : (standing.told === true ? WORDS.told : WORDS.saved); }
-        if (standing.arrivedAfterClosing === true) { words += " (" + WORDS.afterClosing + ")"; }
-        if (standing.saidToEarlierWording === true) { words += " (" + WORDS.earlierWording + ")"; }
-        return words;
+        var mark = { full: WORDS.saved, short: WORDS.saved, note: "" };
+        if (Array.isArray(standing.unreadBy)) {
+          if (standing.unreadBy.length === 0) { mark.full = WORDS.read; mark.short = WORDS.readShort; }
+          else if (standing.told === true) { mark.full = WORDS.told; mark.short = WORDS.toldShort; }
+        }
+        var notes = [];
+        if (standing.arrivedAfterClosing === true) { notes.push(WORDS.afterClosing); }
+        if (standing.saidToEarlierWording === true) { notes.push(WORDS.earlierWording); }
+        mark.note = notes.join("; ");
+        return mark;
       }
-      return value !== "" ? WORDS.draft : "";
+      return value !== "" ? { full: WORDS.draft, short: WORDS.draft, note: "" } : { full: "", short: "", note: "" };
     }
 
     function kindWords(q) {
@@ -285,7 +304,10 @@
 
     // A FIELD IS AS TALL AS ITS WORDS, in whole lines: one when empty, unless the grey suggestion
     // needs more, which is measured by standing it in the field for the length of this function.
-    function fit(field) {
+    // A SAVED ANSWER THE CARET IS NOT IN RESTS AT REST_LINES, and the mark says how many more it has
+    // (header, ROOM IS KEPT). Words that are not saved are never shortened.
+    function fit(line) {
+      var field = line.field;
       if (field.offsetParent === null) { return; }
       var linePx = parseFloat(window.getComputedStyle(field).lineHeight) || 22;
       var empty = field.value === "" && field.placeholder !== "";
@@ -293,13 +315,22 @@
       field.style.height = "auto";
       var lines = Math.max(1, Math.round(field.scrollHeight / linePx));
       if (empty) { field.value = ""; }
-      field.style.height = "calc(" + lines + " * var(--line-px))";
+      var standing = standingOf(line.q);
+      var resting = document.activeElement !== field && !!standing && field.value === textOf(standing.text);
+      var shown = (resting && lines > REST_LINES) ? REST_LINES : lines;
+      field.style.height = "calc(" + shown + " * var(--line-px))";
+      line.more.textContent = shown < lines ? ("+" + (lines - shown) + (lines - shown === 1 ? " line" : " lines")) : "";
     }
 
     function refresh(line) {
       // The mark and the refusal of one line, from what is known now. No redraw.
       var s = sent[line.q.number];
-      line.mark.textContent = markOf(line.q, line.field.value);
+      var mark = markOf(line.q, line.field.value);
+      line.markFull.textContent = mark.full;
+      line.markShort.textContent = mark.short;
+      line.mark.hidden = mark.full === "";
+      line.markNote.textContent = mark.note;
+      line.markNote.hidden = mark.note === "";
       line.refusal.textContent = (s && s.refusal) ? s.refusal : "";
       line.refusal.hidden = !(s && s.refusal);
     }
@@ -351,7 +382,7 @@
       // Words changed after a refusal are not the words that were refused.
       var s = sent[q.number];
       if (s && s.refusal && value !== s.sentText) { s.refusal = ""; }
-      fit(line.field);
+      fit(line);
       refresh(line);
       onChange();
     }
@@ -383,7 +414,7 @@
         var now = focusedLine();
         if (line && now !== line && (!now || now.field.value === "" || drafts[now.q.number] === undefined)) { enter(line); }
       }
-      if (line) { refresh(line); }
+      if (line) { refresh(line); fit(line); }
       onChange();
     }
     function save(line) {
@@ -475,7 +506,28 @@
       });
       var ans = make("div", "hd-ans");
       var said = [];
-      earlierOf(q).forEach(function (m) { var drawn = drawMessage(m); ans.appendChild(drawn.row); said.push(drawn); });
+      var earlier = earlierOf(q);
+      var answered = !!standingOf(q);
+      earlier.forEach(function (m, i) {
+        var drawn = drawMessage(m);
+        // Whole only when it is what the reader has to answer (header, ROOM IS KEPT); else one line,
+        // and a press on it unfolds the question, which shows it whole.
+        if (answered || i !== earlier.length - 1 || m.speaker === MINE) {
+          drawn.row.classList.add("brief");
+          drawn.row.addEventListener("click", function () {
+            if (String(window.getSelection ? window.getSelection() : "") !== "") { return; }
+            toggleContext(q);
+          });
+        } else {
+          // What he has to answer is read like the question: in the page's own ink, and across the
+          // whole row, never squeezed into the column beside a short question (seen 2026-10-07 in a
+          // picture of the wide window: a reply of fifteen lines in a third of the width, the rest bare).
+          drawn.row.classList.add("asks");
+          ans.classList.add("wide");
+        }
+        ans.appendChild(drawn.row);
+        said.push(drawn);
+      });
       if (q.thread && textOf(q.thread.problem)) { ans.appendChild(make("div", "hd-refusal", q.thread.problem)); }
       var fl = make("div", "hd-fl");
       var field = make("textarea", "hd-field");
@@ -486,10 +538,16 @@
       field.placeholder = recOf(q);
       field.value = valueOf(q);
       var mark = make("span", "hd-mark");
+      var markFull = make("span", "hd-mark-full");
+      var markShort = make("span", "hd-mark-short");
+      var more = make("span", "hd-mark-more");
+      mark.appendChild(markFull); mark.appendChild(markShort); mark.appendChild(more);
       fl.appendChild(field); fl.appendChild(mark);
+      var markNote = make("div", "hd-marknote");
+      markNote.hidden = true;
       var refusal = make("div", "hd-refusal");
       refusal.hidden = true;
-      ans.appendChild(fl); ans.appendChild(refusal);
+      ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
       var subs = [];
@@ -512,10 +570,12 @@
         }
         wrap.appendChild(kids);
       }
-      var drawn = { q: q, wrap: wrap, row: row, num: no, letter: letter, txt: txt, field: field, mark: mark, refusal: refusal, said: said, subs: subs };
+      var drawn = { q: q, wrap: wrap, row: row, num: no, letter: letter, txt: txt, field: field, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
       field.addEventListener("input", function () { typed(drawn); });
       field.addEventListener("keydown", function (e) { onKey(e, drawn); });
-      field.addEventListener("focus", function () { onChange(); });
+      // The caret in it, an answer is whole; the caret gone, a saved one rests again.
+      field.addEventListener("focus", function () { fit(drawn); onChange(); });
+      field.addEventListener("blur", function () { fit(drawn); onChange(); });
       refresh(drawn);
       drawnLines.push(drawn);
       return wrap;
@@ -588,7 +648,7 @@
         root.appendChild(group);
         drawnHeads.push({ head: head, txt: txt, tri: tri, folded: folded, group: group, note: note });
       });
-      drawnLines.forEach(function (line) { fit(line.field); });
+      drawnLines.forEach(function (line) { fit(line); });
       if (before) {
         for (var j = 0; j < drawnLines.length; j += 1) {
           if (drawnLines[j].q.number === before.number) {
@@ -602,6 +662,7 @@
         var again = lineOf(caret.number);
         if (again && again.field.offsetParent !== null) {
           again.field.focus({ preventScroll: true });
+          fit(again);
           try { again.field.setSelectionRange(Math.min(caret.from, again.field.value.length), Math.min(caret.to, again.field.value.length)); } catch (e) { /* not drawn */ }
         }
       }
@@ -690,7 +751,7 @@
     // pressed real keys holds this number against how many it pressed (snapshot, answer.realKeys).
     var realKeys = 0;
     document.addEventListener("keydown", function (e) { if (e.isTrusted) { realKeys += 1; } }, true);
-    window.addEventListener("resize", function () { drawnLines.forEach(function (line) { fit(line.field); }); });
+    window.addEventListener("resize", function () { drawnLines.forEach(function (line) { fit(line); }); });
 
     return {
       setKinds: function (record) {
@@ -744,22 +805,33 @@
       },
       takeKeyboard: takeKeyboard,
       drive: drive,
+      // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
+      // questions are in the run of answering (not parked), toAnswer how many of those have no
+      // answer of the reader's standing, parked how many open ones are set aside.
       counts: function () {
-        var open = 0, waiting = 0, other = 0;
+        var open = 0, waiting = 0, other = 0, run = 0, toAnswer = 0, aside = 0;
         questions.forEach(function (q) {
-          if (textOf(q.state) === LISTED_STATE) { open += 1; if (listOf(q.waiting).length) { waiting += 1; } } else { other += 1; }
+          if (textOf(q.state) !== LISTED_STATE) { other += 1; return; }
+          open += 1;
+          if (listOf(q.waiting).length) { waiting += 1; }
+          if (parked[textOf(q.group)] === true) { aside += 1; return; }
+          run += 1;
+          if (!standingOf(q)) { toAnswer += 1; }
         });
-        return { open: open, waiting: waiting, other: other };
+        return { open: open, waiting: waiting, other: other, run: run, toAnswer: toAnswer, parked: aside };
       },
       // WHAT IS DRAWN, from the elements themselves and not from the data they were made of:
       //   headings  [{ t, count, folded, note }]  note is "" for a group with no note of background,
       //                                           "folded" or "shown" for one that has it
       //   lines     [{ n, l, t, s, g, open, dim,  n the number as text drawn, l the letter before it,
       //                rows, clip,                t the question's text, rows how many lines it takes,
-      //                a, p, m, r, fh, th }]      clip whether anything shortens it; a what stands in
-      //                                           the answer's field, p its grey suggestion, m its
-      //                                           mark, r the refusal under it, fh its height in
-      //                                           lines, th what was said before, as drawn. s is the
+      //                a, p, m, more, r, fh,      clip whether anything shortens it; a what stands in
+      //                th }]                      the answer's field, p its grey suggestion, m its
+      //                                           mark in full words, more what the mark says of a
+      //                                           resting answer's further lines, r the refusal
+      //                                           under it, fh the field's height in lines as it
+      //                                           stands, th what was said before, in full, brief
+      //                                           how many of those are drawn as one line. s is the
       //                                           suffix a folded line once carried: always "" now.
       //   sub       [{ n, t }]                    the sub-numbered lines of the unfolded questions
       //   answer    { fields, focus, pending,     how many fields can be typed in with no click, the
@@ -781,9 +853,10 @@
             n: line.num.textContent, l: line.letter.textContent, t: cut(line.txt.textContent, limits.lineChars), s: "", g: line.head,
             open: line.wrap.classList.contains("open"), dim: line.wrap.classList.contains("dim"),
             rows: Math.round(line.txt.getBoundingClientRect().height / linePx), clip: clipped(line.txt),
-            a: cut(line.field.value, limits.lineChars), p: cut(line.field.placeholder, limits.lineChars), m: cut(line.mark.textContent, limits.lineChars),
+            a: cut(line.field.value, limits.lineChars), p: cut(line.field.placeholder, limits.lineChars), m: cut(line.markFull.textContent + (line.markNote.textContent ? " (" + line.markNote.textContent + ")" : ""), limits.lineChars), more: cut(line.more.textContent, limits.lineChars),
             r: cut(line.refusal.textContent, limits.lineChars), fh: Math.round(line.field.getBoundingClientRect().height / linePx),
-            th: line.said.slice(0, 8).map(function (s) { return cut(s.who + ": " + s.said.textContent, limits.lineChars); })
+            th: line.said.slice(0, 8).map(function (s) { return cut(s.who + ": " + s.said.textContent, limits.lineChars); }),
+            brief: line.said.filter(function (s) { return s.row.classList.contains("brief"); }).length
           });
           line.subs.forEach(function (sub) {
             if (out.sub.length >= limits.subLines) { out.left.sub += 1; return; }

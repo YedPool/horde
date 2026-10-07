@@ -46,10 +46,22 @@
   var doc = window.HordeDecisionsDocument.mount(document.getElementById("list"), {
     topInset: function () { return topBar.getBoundingClientRect().bottom; },
     onDraw: function () { draws += 1; report(); },
-    onChange: function () { report(); },
+    onChange: function () { showCounts(); report(); },
     say: function (number, text, wording, id) { return bridge.request("say", { number: number, text: text, wording: wording, id: id }); }
   });
   var fleet = Fleet.mount(document.getElementById("fleet"), { countWords: "waiting on you", onPick: pick, onChange: report });
+
+  // THE TOP LINE SAYS HOW FAR THE READER IS: how many questions of the run still have no answer of
+  // his, and how many are set aside. It said "N waiting" - how many an Orc waits for - which was the
+  // heading of a column this page no longer has; the fleet line says who waits, by name.
+  function showCounts() {
+    if (!doc) { return; }
+    var c = doc.counts();
+    var words = c.toAnswer + " of " + c.run + " to answer";
+    if (c.parked) { words += ", " + c.parked + " parked"; }
+    var box = document.getElementById("counts");
+    if (box.textContent !== words) { box.textContent = words; }
+  }
 
   function showNotices() {
     while (noticeBox.firstChild) { noticeBox.removeChild(noticeBox.firstChild); }
@@ -116,8 +128,7 @@
     }
     if (did === "drawn") {
       open = record.value.questions.filter(function (q) { return q.state === "open"; });
-      var counts = doc.counts();
-      document.getElementById("counts").textContent = counts.open + " open, " + counts.waiting + " waiting";
+      showCounts();
       fleet.setCounts(countsOf());
     }
     showNotices();
@@ -162,6 +173,7 @@
     var value = {
       v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer,
       fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead },
+      top: document.getElementById("counts").textContent.slice(0, bounds.lineChars),
       notice: noticeBox.textContent.slice(0, bounds.textChars), foot: foot.textContent.slice(0, bounds.lineChars),
       text: {
         fontPx: letters ? letters.fontPx : null, linePx: letters ? letters.linePx : null, weight: letters ? letters.weight : "",
@@ -218,6 +230,7 @@
     setup = answer;
     applyLook();
     doc.setParked(answer.foldedGroups);
+    showCounts();
     notices.settings = (answer.findings && answer.findings.length) ? ("Settings: " + answer.findings.join(" ")) : "";
     return Promise.all([bridge.request("kinds"), bridge.request("list"), bridge.request("fleet"), bridge.request("attachment")]);
   }).then(function (answers) {

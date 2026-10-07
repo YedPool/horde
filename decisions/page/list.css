@@ -16,6 +16,17 @@
    line of its own, under the question's words (the row's left padding is where the words begin, and
    the fold mark and the number hang back into it).
 
+   ROOM IS KEPT FOR THE QUESTIONS STILL TO ANSWER (list.js says what was seen). A message said
+   before is one line, cut with an ellipsis, unless it is the one to answer or the question is
+   unfolded. IN A NARROW WINDOW THE MARK HANGS IN THE MARGIN LEFT OF THE FIELD, under the letter and
+   number, in its short form: beside the field it took a seventh of every line of the answer (seen
+   2026-10-07 in a picture of the real window, 378 pixels wide). In a wide one it stands to the right
+   of the field, in full words.
+
+   THE GREY SUGGESTION IS --hint, not --faint: measured 2026-10-07, --faint on the page was 2.61 to 1
+   in light and 3.73 to 1 in dark, under what small text needs to be read (4.5). --hint is 4.59 and
+   5.19; what he types is --ink, 17.8 and 14.7, so the two are never mistaken for each other.
+
    A GROUP'S NOTE OF BACKGROUND is not drawn until its heading's word "background" is pressed
    (list.js says what was seen). In a narrow window a heading's count is left out, and that word stays.
 
@@ -40,11 +51,18 @@
 .hd-fl { display: flex; align-items: flex-start; column-gap: 8px; }
 .hd-field { flex: 1 1 auto; min-width: 0; display: block; height: var(--line-px); font: inherit; line-height: var(--line-px); color: var(--ink); background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 2px; resize: none; overflow: hidden; outline: 0; box-shadow: inset 0 -1px 0 var(--line); unicode-bidi: plaintext; }
 .hd-field:focus { box-shadow: inset 0 -2px 0 var(--accent); }
-.hd-field::placeholder { color: var(--faint); }
-.hd-mark { flex: 0 0 auto; max-width: 50%; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
-.hd-mark:empty { display: none; }
+.hd-field::placeholder { color: var(--hint); }
+.hd-mark { flex: 0 0 auto; max-width: 50%; display: flex; flex-direction: column; align-items: flex-end; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); white-space: nowrap; }
+.hd-mark-short { display: none; }
+.hd-mark-more { line-height: var(--small-line-px); }
+.hd-mark-more:empty { display: none; }
+.hd-marknote { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
 .hd-refusal { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
 .hd-msg { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-msg.brief { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.hd-q.open .hd-msg.brief { white-space: pre-wrap; overflow: visible; }
+.hd-msg.asks { color: var(--ink); }
+.hd-ans.wide { flex-basis: 100%; }
 .hd-who { font-weight: 600; padding-right: 6px; }
 .hd-said { unicode-bidi: isolate; }
 .hd-flag { font-size: var(--small-px); }
@@ -63,4 +81,9 @@
 .hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
   .hd-count { display: none; }
+  .hd-ans { flex-basis: 100%; }
+  .hd-fl { position: relative; }
+  .hd-mark { position: absolute; right: 100%; top: 0; width: 54px; max-width: none; margin-right: 6px; }
+  .hd-mark-full { display: none; }
+  .hd-mark-short { display: inline; }
 }

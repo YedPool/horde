@@ -128,6 +128,7 @@ $got = @($drawn.lines | Sort-Object { [int]$_.n } | ForEach-Object { $_.n + "|" 
 Check ($got -ceq (@($list | Sort-Object number | ForEach-Object { "" + $_.number + "|" + $_.title }) -join "`n")) "the number and the text of every line drawn are the list's"
 Check ((Get-Line $first 1).l -ceq "B" -and (Get-Line $first 3).l -ceq "D" -and (Get-Line $first 4).l -ceq "A" -and (Get-Line $first 11).l -ceq "M" -and (Get-Line $first 22).l -ceq "M") "before each number stands the letter of the Orc that asked, and M for a question the keeper of the list asked"
 Check ($drawn.foot -ceq "Enter: save and next. Tab: take the grey suggestion, else next. Ctrl+Enter: accept the suggestion. Shift+Enter or Ctrl+J: new line. F2: context.") "the last line of the page says what the keys do, in the owner's words"
+Check ("$($drawn.top)" -ceq "22 of 22 to answer") ("the top line says how far he is: all 22 still to answer (" + $drawn.top + ")")
 Check ($drawn.answer.focus -ceq "" -and $drawn.answer.drafts -eq 0 -and "$($drawn.answer.storage)" -ceq "") "a hidden window has not been given the keyboard, so no field has the caret; no draft is kept yet, and drafts can be kept"
 Check ("$($first.toldMarks.problem)" -clike "*is not there yet*" -and $first.toldMarks.told -eq 0) "the file of announced messages is not there yet: said, and nothing is marked"
 Check ($first.refused -eq 0 -and $first.reportsRefused -eq 0 -and @($first.errors).Count -eq 0) "nothing was refused and nothing failed"
@@ -150,6 +151,7 @@ Check ($said1.Count -eq 1 -and $said1[0].text -ceq "Yes - commit it as it stands
 Check ($said1[0].speaker -ceq "founder" -and $said1[0].route -ceq "window" -and $said1[0].wordingStated -eq $true -and $said1[0].wordingVersion -eq 1) "said by the founder, typed in the window, to the wording the page showed"
 Check ($r.drawn.answer.focus -ceq "2") "THE CARET MOVED to question 2's field"
 Check ((Get-Line $r 1).a -ceq "Yes - commit it as it stands." -and (Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).r -ceq "" -and $r.drawn.answer.drafts -eq 0) "question 1's field shows his words, marked saved, and they are no longer a draft"
+Check ("$($r.drawn.top)" -ceq "21 of 22 to answer") ("and the top line counts down: " + $r.drawn.top)
 Check ($r.says -eq 1 -and $r.saysRefused -eq 0) "the window counts one answer stored"
 
 Write-Host ""
@@ -171,6 +173,7 @@ Check ($r.drawn.answer.focus -ceq "3" -and (Get-Line $r 3).a -ceq "line one`nlin
 $r = Send-Steps @((Step "key" -Key "Enter"), (Step "settle"))
 $said3 = @(Get-Said 3)
 Check ($said3.Count -eq 1 -and $said3[0].text -ceq "line one`nline two`nline three" -and $r.drawn.answer.focus -ceq "4") "Enter then saved all three lines as one message, line breaks kept, and moved to question 4"
+Check ([int](Get-Line $r 3).fh -eq 2 -and (Get-Line $r 3).more -ceq "+1 line" -and (Get-Line $r 3).a -ceq "line one`nline two`nline three") ("saved, and the caret gone from it, the long answer rests at two lines and says how many more it has; every word is still in the field (" + (Get-Line $r 3).more + ")")
 
 Write-Host ""
 Write-Host "=== Tab and the right arrow take the grey suggestion; Tab otherwise moves on ===" -ForegroundColor Cyan
@@ -226,6 +229,7 @@ $after = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seco
 $l1 = Get-Line $after 1
 Check ((@($l1.th) -join " | ") -ceq "You: Yes - commit it as it stands. | Thrall: Which branch should it go to?") ("under question 1 stand his answer and then the reply, speaker and words, newest last (" + (@($l1.th) -join " | ") + ")")
 Check ($l1.a -ceq "" -and $l1.m -ceq "") "and it is his turn again: the field under them is empty"
+Check ($l1.brief -eq 1 -and $l1.clip -eq $false) "his own earlier answer is kept to one line; the reply he has to answer is whole, and so is the question"
 Check ($after.handle -eq $first.handle -and $after.pid -eq $first.pid -and $after.pushes -ge 1) "in the same window of the same process: the new list was pushed, nothing was reloaded"
 Check ($after.drawn.answer.focus -ceq "9" -and (Get-Line $after 8).a -clike "*ask me in person" -and (Get-Line $after 6).a -ceq $rec6) "THE REDRAW TOOK NOTHING: the caret is where it was, and the two drafts are in their fields"
 
@@ -260,6 +264,7 @@ $aside = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seco
 $heads = @($aside.drawn.headings)
 Check ($parkedCli.code -eq 0 -and (Get-Shown -Number 22).wordingVersion -eq 1 -and "$((Get-Shown -Number 22).group)" -ceq "Parked") "question 22 is parked with an ordinary update that changes only its group; its wording is still wording 1"
 Check ($heads[$heads.Count - 1].t -ceq "Parked: 1 question" -and $heads[$heads.Count - 1].folded -eq $true -and $heads[$heads.Count - 1].parked -eq $true) ("PARKED STANDS AT THE FOOT OF THE PAGE AS ONE FOLDED LINE (" + $heads[$heads.Count - 1].t + ")")
+Check ("$($aside.drawn.top)" -clike "* of 22 to answer, 1 parked") ("the top line says one is parked, and counts the run without it (" + $aside.drawn.top + ")")
 Check (@($aside.drawn.lines).Count -eq 23 -and $aside.drawn.answer.fields -eq 22 -and $aside.handle -eq $first.handle -and $aside.pid -eq $first.pid) "all 23 questions are still drawn, 22 fields are in the run of answering, and it is the same window: nothing was reloaded"
 $r = Send-Steps @((Step "focus" -Q 21), (Step "key" -Key "Enter"), (Step "sleep"), (Step "key" -Key "Enter"))
 Check ($r.drawn.answer.focus -ceq "" -and $r.drawn.answer.focusHead -ceq "Parked: 1 question" -and @(Get-Said 22).Count -eq 0) "Enter runs from question 21 to 23 and then to the folded line, never into the parked question's field"
