@@ -26,6 +26,11 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1,
 # core/ReadShared.ps1 and core/Home.ps1.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "Home.ps1")
+
 $script:HordeRateKeys = @("input", "cacheRead", "cacheWrite", "cacheWrite5m", "cacheWrite1h", "output")
 
 

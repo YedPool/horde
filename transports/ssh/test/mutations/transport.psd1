@@ -166,5 +166,8 @@
         @{ Name = "review-control-second-start"
            Find = '$script:HordeSshFolder = $PSScriptRoot'
            Replace = '$script:HordeSshFolder = $PSScriptRoot; function Zz { [System.Diagnostics.Process]::Start("ssh.exe") }' }
+        @{ Name = "border-line-taken-as-reason"
+           Find = 'if ($clean -notmatch ''[A-Za-z0-9]'') { continue }'
+           Replace = '' }
     )
 }

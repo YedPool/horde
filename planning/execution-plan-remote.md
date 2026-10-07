@@ -228,9 +228,17 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    any other target is refused, never forwarded. Tests first: a deliver to a session above the ceiling
    is refused with the reason, as a spawn is; a deliver to a session the hub did not spawn is refused.
    **Amended 2026-10-05 (coordinator's decision, for cross-PC messaging, R21):** a deliver may also
-   target a session whose label the node's own `remote.deliverTo` lists. That key is read only from the
-   node's own L1, like `admission.*`, never from the link, and its default is no label. **Until R9
-   lands, hub-spawned or opted-in is the whole deliver gate.** What R9 changes: the permission ceiling
+   target a session whose label the node's own `remote.deliverTo` lists. That key is the node owner's
+   exactly like `remote.permissionCeiling`: settable only in the node's own layers, L1
+   (`<HordeHome>\engine.json`) and L4 (`<HordeHome>\engine-live.json`), the engines plan's two files,
+   read by the node's one layer reader, `core/NodeEngineLayers.ps1`'s `Get-HordeNodeEngineLayers` (#109), again
+   for every deliver as for every spawn - one source of truth for a node's configuration; never from
+   the link; and its default is no label. A live rule beats L1, and an empty value withdraws every
+   opt-in. The value is a bounded list: at most 64 hub labels, each `^[A-Z]{1,2}([1-9][0-9]{0,3})?$`,
+   none twice, and every refusal names the entry. **A node layer that fails its checks refuses every
+   deliver, exactly as it refuses every spawn** (coordinator's decision, 2026-10-06), a deliver to a
+   hub-spawned session included. **Until R9 lands, hub-spawned or opted-in is the whole deliver
+   gate.** What R9 changes: the permission ceiling
    is checked on top of that rule, for an opted-in session exactly as for a hub-spawned one, so an
    opted-in label running above the ceiling is refused with the reason; R9 does not widen the rule.
    **The gate is applied to the resolved session** (review of PR #97, F1): the one the session id, or
@@ -341,21 +349,41 @@ C. The node and the hub, read path (PROJ)
 
 D. The Windows listener (INSTALL; awaits the founder's OK)
 
-16. **R16. Install the Windows OpenSSH Server - AWAITING THE FOUNDER'S OK** (decision 2).
-    `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`, elevated, once. The installer
-    narrows the created `OpenSSH-Server-In-TCP` rule to loopback and the overlay interface (R8),
-    sets `ListenAddress` to the same, and `SyslogFacility LOCAL0` so failures are readable. In the
-    same elevated run, the listener's test fixture (decision 3): a second sshd service,
-    `horde-test-sshd`, startup Disabled, on a spare loopback port with a test config, a throwaway
-    `horde-link-test` account, and a service DACL that lets the founder's account start and stop it
-    unelevated. It never touches the production sshd or `~/.ssh`. Nothing in this step runs before the
-    founder says yes.
+16. **R16. The Windows OpenSSH Server, installed; the transport proven against it.** Rewritten
+    2026-10-05. The founder installed `OpenSSH.Server~~~~0.0.1.0` (decision 2): the `sshd` service is
+    Disabled and Stopped, its `OpenSSH-Server-In-TCP` firewall rule is disabled, and nothing listens on
+    port 22. sshd runs only while `horde listen` runs (R17). **No second service, no throwaway account
+    and no service DACL** (coordinator's decision, 2026-10-05): the listener's test fixture is
+    `sshd.exe -D -e` started as the suite's own child (`transports/ssh/test/Sshd.ps1`), on 127.0.0.1
+    and a free port, with a test-only config, host key, authorized_keys and pid file under a TEMP
+    folder whose ACL admits only the user, SYSTEM and Administrators (Windows sshd refuses an
+    authorized_keys another principal can read). A watchdog process kills it at the suite's
+    wall-clock limit. Nothing under `C:\ProgramData\ssh`, no service setting, no firewall rule and no
+    account is changed, and the suite checks each against its state at the start: a difference is a
+    loud FAIL, never put back silently. Measured: sshd.exe runs this way from an elevated token and
+    from a `runas /trustlevel:0x20000` one (Administrators deny-only); a true medium-integrity token
+    is unmeasured. Suite `transports/ssh/test/test-sshd-local.ps1` (machine-bound): R5's live cases -
+    frames round-trip, a mebibyte included; the forced command runs, never the requested one; a wrong
+    host key and an unknown client key are unknown with the reason - and the authorized_keys options
+    R17 depends on: `expiry-time` in the past refused, `restrict` refusing a port forward. When this
+    machine cannot run it, the suite exits 3.
 17. **R17. The listener.** The `horde-link` account (not an administrator, no interactive logon, no
     password), an sshd_config `Match User horde-link` fragment, the stateless attach shim, the hub
     pipe `\\.\pipe\horde-hub-<hubId>` with an ACL for the founder and `horde-link` only, and `horde node
     init` (key), `horde hub enroll`, `horde node pin`, `horde hub revoke`, `horde node rotate-key`.
     Enrolment and pinning move strings the founder carries; no host key is ever accepted from the
-    network. Gate, T3 against `horde-test-sshd`: `command=`, `restrict` and `expiry-time` are honoured
+    network. **The ssh transport's `dial.out` flips from unverified to yes here** (coordinator's
+    decision, 2026-10-05), when a node really dials the hub's listener over ssh: its evidence is
+    `test/test-transport-conformance.ps1`'s live ssh case, run locally (the suite is machine-bound)
+    against the child sshd of R16's `transports/ssh/test/Sshd.ps1`. Until then it stays unverified,
+    and `test-sshd-local.ps1` opens through the adapter, with a control that the port still refuses.
+    **The attach shim reads stdin through PowerShell's `$input`, never a .NET Console stream**
+    (`[Console]::In`, `[Console]::OpenStandardInput()`): under Windows sshd the Console stream never
+    returns the session's data and the session hangs, while `$input` streams (issue #100, measured
+    2026-10-06 on 9.5p1 and 9.5p2; review of PR #103, probe p8). The node writes every frame into that
+    stdin, so this is the shim's first case; R16 pins it with the mutant `echo-reads-console-stdin`
+    (`transports/ssh/test/mutations/sshd-live.psd1`).
+    Gate, T3 against the same child sshd (R16; no `horde-test-sshd` service): `command=`, `restrict` and `expiry-time` are honoured
     (unmeasured on Win32 OpenSSH, so these are the first cases); a requested command and a port
     forward are refused; a revoked key is refused even with its line restored by hand; `hello`
     claiming another device than the key's is refused; enrolling a device id already bound to
@@ -568,7 +596,7 @@ in its own repo after R1.
   R9 (R0, engines E2 to E4).
 - **PROJ**: R10 (first of R10, engines K1, engines R1, lifecycle step 24; all four before step 3.8),
   R11, R12 to R15, R20.
-- **INSTALL, awaiting the founder's OK**: R16, then R17.
+- **INSTALL**: R16 is installed and proven (2026-10-05); R17 follows.
 - **SPAWN**: R18, R19; R22 also needs INSTALL.
 - **PHASE5**: none since 2026-10-05; R21 was re-scoped to NOW (see its line).
 - **Deferred**: Linux and macOS nodes (decision 6), until the tmux adapter exists and the node's code

@@ -159,6 +159,10 @@ function Get-HordeSshFirstLine {
     foreach ($l in ($text -split "`r?`n")) {
         $clean = ($l -replace '[^\x20-\x7E]', '?').Trim()
         if ($clean -eq "") { continue }
+        # A line of nothing but punctuation is a banner's border, not a reason: against a live Windows
+        # sshd with a changed host key, ssh.exe's first line is a row of '@' and the reason ("REMOTE
+        # HOST IDENTIFICATION HAS CHANGED") is the next (measured 2026-10-05, remote plan R16).
+        if ($clean -notmatch '[A-Za-z0-9]') { continue }
         if ($clean.Length -gt $script:HordeSshReasonChars) { $clean = $clean.Substring(0, $script:HordeSshReasonChars) + "..." }
         return $clean
     }

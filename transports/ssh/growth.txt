@@ -1,0 +1,2 @@
+# Each time an entry of allowlist.txt is added or raised: path | old -> new | YYYY-MM-DD | reason.
+test/lib/SuiteFiles.ps1 | 0 -> 2 | 2026-10-06 | the machine-bound list (issue #89) names transports/ssh/test/test-sshd-local.ps1, which must not run on the remote box (remote plan R16)

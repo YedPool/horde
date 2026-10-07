@@ -31,6 +31,19 @@
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 . (Join-Path $PSScriptRoot "Roles.ps1")
 
+# Get-HordeStoredField moved here from core/Projection.ps1 (2026-10-07): core/Faults.ps1 calls it, and
+# Projection loads Faults, so Faults could not load Projection without a cycle. It reads a wezfleet
+# record and needs only Tristate, so it lives with the wezfleet readers, which both files load.
+function Get-HordeStoredField {
+    # An ENGINE field of a wezfleet record, translated the way schema/session-record.v1 says: a
+    # field that is not there, null, or an empty string is ABSENT - the store was read and holds
+    # none - because wezfleet writes "" for none (fleetSessionId, lastTool, owner).
+    param($Record, [string]$Name, [string]$What = "the record")
+    $p = $Record.PSObject.Properties[$Name]
+    if ($null -eq $p -or $null -eq $p.Value -or ($p.Value -is [string] -and $p.Value -eq "")) { return (New-HordeAbsent -Note ($What + " has no " + $Name)) }
+    return (New-HordeKnown -Value $p.Value)
+}
+
 function New-HordeGapList {
     # An empty list, returned whole: PowerShell unrolls an empty collection returned bare into $null.
     return , (New-Object System.Collections.ArrayList)
