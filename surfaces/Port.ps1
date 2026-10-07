@@ -50,9 +50,11 @@
 # mount is the surface's own: "surface", holding bridge.js, the page's side of the bridge; a caller may
 # not give a mount that name.
 #
-# A callback is given the window as { handle; sync; post; setTitle; show; close }: handle is the
-# native window handle (capability window.native), sync an object events can be marshalled through to
-# the window's own thread, and the rest are script blocks. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
+# A callback is given the window as { handle; sync; errors; post; setTitle; show; close }: handle is
+# the native window handle (capability window.native), sync an object events can be marshalled through
+# to the window's own thread, errors the list the surface adds to when a callback or a message fails
+# (a failure inside a window has no console to be printed on, so a caller that reports must be able
+# to read it), and the rest are script blocks. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
 # never from the variables of the function that wrote it: Windows PowerShell 5.1 does not keep them
 # (the first surface's own Surface.ps1 says what was measured, and its suite measures it on every run).
 #
