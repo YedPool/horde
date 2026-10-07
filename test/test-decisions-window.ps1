@@ -55,7 +55,7 @@ try {
 Write-Host ""
 Write-Host "--- every number a person might tune is one setting of the module ---" -ForegroundColor Cyan
 $names = @($defaults.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq "role,changeQuietMs,listRereadMs,fleetReadMs,followCheckMs,pictureSettleMs,fontFamily,textPx,linePx,smallTextPx,smallLinePx") ("the module declares eleven settings (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "role,changeQuietMs,listRereadMs,fleetReadMs,followCheckMs,pictureSettleMs,fontFamily,textPx,linePx,smallTextPx,foldedGroups,smallLinePx") ("the module declares twelve settings (" + ($names -join ",") + ")")
 Check ($defaults.role -ceq "warchief" -and $defaults.changeQuietMs -eq 400 -and $defaults.listRereadMs -eq 30000 -and $defaults.fleetReadMs -eq 5000 -and $defaults.followCheckMs -eq 1000 -and $defaults.pictureSettleMs -eq 700) "their defaults: the warchief; 400 ms of gathered changes; the list read again after 30 s of silence; the fleet every 5 s; the follow every second; 700 ms of quiet before a picture"
 Check ($defaults.fontFamily -ceq '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif' -and $defaults.textPx -eq 14 -and $defaults.linePx -eq 22 -and $defaults.smallTextPx -eq 12 -and $defaults.smallLinePx -eq 18) "and the letters: the family list, 14 on 22 and 12 on 18"
 Check ((Get-HordeDecisionWindowSettings -HordeHome "C:\h").path -ceq "C:\h\settings\decisions-window.json") "they are read from settings\decisions-window.json under Horde's home"
@@ -72,8 +72,8 @@ Write-Host "--- the closed list: six requests, three events ---" -ForegroundColo
 for ($n = 1; $n -le 3; $n++) { Add-Question $n }
 $state = New-HordeDecisionWindowState -ReportPath (Join-Path $work "report.json") -Settings $defaults -Findings @("a finding of the suite's") -View (ConvertTo-HordeDecisionWindowView -Unfold "2,3" -Orc "B")
 $script:HordeDecisionWindow = $state
-Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report") ("the page may ask for six things (" + (@($state.bridge.requests.Keys) -join ",") + ")")
-Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed") "and may be pushed three: no event is declared that nothing pushes"
+Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say") ("the page may ask for seven things, the last of them the one that writes (test/test-decisions-window-say.ps1 holds it) (" + (@($state.bridge.requests.Keys) -join ",") + ")")
+Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed,probe") "and may be pushed four: the three changes, and a check's steps"
 $setup = (Ask $state "setup").reply | ConvertFrom-Json
 Check ($setup.ok -eq $true -and $setup.value.look.fontFamily -ceq $defaults.fontFamily -and $setup.value.look.textPx -eq 14 -and $setup.value.look.linePx -eq 22 -and $setup.value.look.smallTextPx -eq 12 -and $setup.value.look.smallLinePx -eq 18) "setup hands the page its letters: the family and the four sizes, from the settings"
 Check ($setup.value.report.lines -eq 400 -and $setup.value.report.subLines -eq 200 -and $setup.value.report.fleetRows -eq 80 -and $setup.value.report.lineChars -eq 400 -and $setup.value.report.textChars -eq 2000 -and $setup.value.report.chars -eq 60000 -and $setup.value.report.quietMs -eq 60) "the bounds of its report: 400 lines, 200 sub-lines, 80 fleet lines, 400 characters of a line, 60,000 in all"
@@ -94,8 +94,11 @@ Check ($state.bridge.refused -eq $before + 7) "anything else is refused and coun
 $src = [System.IO.File]::ReadAllText((Join-Path $root "decisions\Window.ps1"))
 $operations = @([regex]::Matches($src, 'Get-HordeDecisionWindowRecord -Operation "([a-z-]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 Check (($operations -join ",") -ceq "kinds,list") "the composer asks the decisions operations for the list and the kinds, and for nothing else"
-$reads = 'Get-HordeDecisionRecords|ConvertTo-HordeDecisionState|Add-HordeDecisionRecord|Get-ChildItem|ReadAllText|Get-Content|\*\.json'
-Check (-not ($src -match $reads)) "and reads no record of the store itself: no listing of it, no file of it opened, no name of a record's file"
+$reads = 'Get-HordeDecisionRecords|ConvertTo-HordeDecisionState|Add-HordeDecisionRecord|Get-ChildItem|Get-Content|\*\.json'
+# The two files it does open are not the store's: the file of announced messages and a check's steps,
+# each read whole from the path the command was given.
+$opened = @([regex]::Matches($src, '(?m)^.*ReadAllText.*$') | ForEach-Object { $_.Value })
+Check (-not ($src -match $reads) -and $opened.Count -eq 2 -and @($opened | Where-Object { $_ -notmatch 'ReadAllText\(\$Path, ' }).Count -eq 0) "and reads no record of the store itself: no listing of it, no name of a record's file, and the only two files it opens are the two it was handed by path"
 Check ([System.IO.File]::ReadAllText((Join-Path $root "decisions\Store.ps1")) -match $reads) "CONTROL: the same search finds such a read in the store's own file, so finding none in the composer means something"
 $platform = 'HordeWindows|platform\\windows|user32|SetForegroundWindow'
 Check (-not ($src -match $platform)) "the composer calls no function of a platform by name: the follower and the surface are asked through their ports"

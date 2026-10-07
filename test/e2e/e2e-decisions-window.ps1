@@ -133,7 +133,8 @@ Check ((@($drawn.lines | Where-Object { $_.open } | ForEach-Object { $_.n }) -jo
 $sub = @($drawn.sub)
 Check ((@($sub | ForEach-Object { $_.n }) -join ",") -ceq "3.1,3.2,3.3,3.4,3.5,3.6,19.1,19.2,19.3,19.4,19.5,19.6") ("an unfolded question's lines are sub-numbered under its own number (" + (@($sub | ForEach-Object { $_.n }) -join ",") + ")")
 Check ($sub[0].t -ceq "What it is: Step 3 is ready and waits only for a yes. <script>this is shown as text</script>" -and $sub[1].t -ceq "Yes means: Step 3 is done today." -and $sub[2].t -ceq "Recommended: yes" -and $sub[3].t -ceq "Waiting: Orc D (step 3)" -and $sub[4].t -ceq "Asked by: Orc D" -and $sub[5].t -ceq "Answered with: yes or no") "in order: what it is, what yes means, the recommendation, who waits, who asked, how it is answered; and markup in a question is drawn as the text it is"
-Check ((@($drawn.lines | Where-Object { $_.n -ceq "1" })[0].s) -ceq " - Recommended: yes - Orc B waiting") "a folded line carries its muted suffix: the recommendation and who is waiting, by name and without the reason in brackets, which the unfolded line gives in full"
+$one = @($drawn.lines | Where-Object { $_.n -ceq "1" })[0]
+Check ($one.s -ceq "" -and $one.l -ceq "B" -and $one.p -ceq "yes" -and $one.a -ceq "" -and $one.clip -eq $false) "a question's line carries no muted suffix: the letter of the Orc that asked stands before its number, the recommendation is the grey suggestion in its answer field, and its text is not shortened"
 Check ($drawn.counts.open -eq 22 -and $drawn.counts.waiting -eq 17 -and $drawn.counts.other -eq 0 -and $first.title -ceq "Open decisions: 22, 17 waiting") ("22 open, 17 with someone waiting; the window's title says the same (" + $first.title + ")")
 
 Write-Host ""
@@ -159,7 +160,7 @@ Check ((Test-Whole $text.smallFontPx $text.ratio) -and (Test-Whole $text.smallLi
 Check (-not (Test-Whole 13.3 1.5) -and -not (Test-Whole 14 1.25) -and (Test-Whole 14.4 1.25) -and (Test-Whole 14 1.5)) "CONTROL: the same check fails 14 pixels at one and a quarter times, and passes the 14.4 the page draws there"
 Check ([Math]::Abs([double]$text.fontPx - 14) -lt 0.5 -and [Math]::Abs([double]$text.linePx - 22) -lt 0.5 -and [Math]::Abs([double]$text.smallFontPx - 12) -lt 0.5) "they are the settings' 14 on 22 and 12, moved by less than half a pixel"
 Check ("$($text.weight)" -ceq "400" -and "$($text.family)" -clike '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif*') ("a question line is weight 400, in the family list the module's setting gives (" + $text.family + ")")
-Check ($drawn.foot -clike "Read-only: answering here comes next.*") "the last line says answering comes next"
+Check ($drawn.foot -clike "Enter: save and next.*") "the last line says what the keys do"
 Check ($drawn.notice -ceq "Standing free: it was opened hidden, and a hidden window stands beside nothing" -and $first.attachment.attached -eq $false) "a hidden window stands beside nothing, and its page says so"
 Check ($first.refused -eq 0 -and $first.reportsRefused -eq 0 -and @($first.errors).Count -eq 0 -and @($first.findings).Count -eq 0 -and $drawn.left.lines -eq 0 -and $drawn.left.sub -eq 0) "the page asked for nothing off the list, nothing failed inside the window, and the report left nothing out"
 $seen = Get-HordeProbeWindow -Handle ([long]$first.handle)
