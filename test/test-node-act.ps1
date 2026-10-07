@@ -129,6 +129,7 @@ function Reset { $script:panes.Clear(); $script:sent.Clear(); $script:stopped.Cl
 try {
 
 if (Enter-HordeSuiteSection "spawn" "a spawn: policy, plan, pane, process, mode - then done, with the process to close it by") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctx0 = New-Context
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx0
@@ -156,6 +157,7 @@ if (Enter-HordeSuiteSection "spawn" "a spawn: policy, plan, pane, process, mode 
 }
 
 if (Enter-HordeSuiteSection "refused" "refused before anything starts") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ permission = "edits" }) -Context (New-Context -UserRules @(Rule "ceiling" @{ "remote.permissionCeiling" = "ask" }))
     Check ("$($o.state)" -ceq "refused" -and $o.reason -like "*edits is above this node's ceiling, ask*" -and $script:panes.Count -eq 0) "a level above the node's ceiling is refused, never lowered, and nothing starts"
@@ -180,6 +182,7 @@ if (Enter-HordeSuiteSection "refused" "refused before anything starts") {
 }
 
 if (Enter-HordeSuiteSection "wrong-session" "a session that is not what was asked is closed, never kept (decision 6: fail closed)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset; $script:reportMode = "bypass"
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context (New-Context)
     $x = $script:sessions[$o.sessionId]
@@ -227,6 +230,7 @@ if (Enter-HordeSuiteSection "wrong-session" "a session that is not what was aske
 }
 
 if (Enter-HordeSuiteSection "unendable" "a wrong-mode session that cannot be ended (review of #104, F2)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset; $script:stubborn = $true; $script:stopDenied = $true; $script:reportMode = "bypass"
     $ctxU = New-Context
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxU
@@ -244,6 +248,7 @@ if (Enter-HordeSuiteSection "unendable" "a wrong-mode session that cannot be end
 }
 
 if (Enter-HordeSuiteSection "after-mode" "the work is delivered only after the mode is proven (review of #104, F4: prevent, not detect)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset; $script:reportMode = "plan"
     $ctxP = New-Context
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct @{ prompt = [pscustomobject]@{ text = ("line one" + [char]10 + "line two") } }) -Context $ctxP
@@ -251,6 +256,7 @@ if (Enter-HordeSuiteSection "after-mode" "the work is delivered only after the m
 }
 
 if (Enter-HordeSuiteSection "prompt-file" "every prompt goes by file; the hub's text never reaches the input box (review of #104, F9)") {
+    trap { Register-HordeSuiteError $_; continue }
     $cases = @("!whoami", "/permissions", "#remember this", "@C:\secret.txt summarise", ("a" + [char]0x2028 + "b"), ("line one" + [char]13 + [char]10 + "line two"), ("x" * 1500))
     $names = @("! (a shell command)", "/ (a command)", "# (memory)", "@ (a file)", "U+2028 (a line separator)", "a line break", "1500 characters")
     for ($i = 0; $i -lt $cases.Count; $i++) {
@@ -269,6 +275,7 @@ if (Enter-HordeSuiteSection "prompt-file" "every prompt goes by file; the hub's 
 }
 
 if (Enter-HordeSuiteSection "prompt-folder" "the prompt's folder: its own, this user's alone, granted to the session at launch (review of #104, F10)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctxG = New-Context
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxG
@@ -310,6 +317,7 @@ if (Enter-HordeSuiteSection "prompt-folder" "the prompt's folder: its own, this 
 }
 
 if (Enter-HordeSuiteSection "key-profile" "refused before anything starts: a profile that needs a key (round 1: this had no test)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $keyed = [pscustomobject]@{ schemaVersion = 1; providers = @([pscustomobject]@{ name = "provider-k"; protocol = "anthropic-messages"; credential = [pscustomobject]@{ kind = "env"; ref = "PROVIDER_K_TOKEN" } }); profiles = @([pscustomobject]@{ name = "keyed"; harness = "harness-a"; provider = "provider-k" }); rules = @() }
     $ctxK = New-Context
@@ -323,6 +331,7 @@ if (Enter-HordeSuiteSection "key-profile" "refused before anything starts: a pro
 }
 
 if (Enter-HordeSuiteSection "node-config" "refused before anything starts: the node's own configuration and terminal") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctx = New-Context; $ctx | Add-Member -NotePropertyName layerProblems -NotePropertyValue @("C:\h\engine.json $.rules[0].set: key-value - 'Plan' is not a value of remote.permissionCeiling") -Force
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx
@@ -338,6 +347,7 @@ if (Enter-HordeSuiteSection "node-config" "refused before anything starts: the n
 }
 
 if (Enter-HordeSuiteSection "daily-cap" "the daily cap counts what this node started today") {
+    trap { Register-HordeSuiteError $_; continue }
     $capDir = Join-Path $work "records-cap"
     New-Item -ItemType Directory -Path $capDir | Out-Null
     $ctx = New-Context; $ctx.records = $capDir
@@ -387,6 +397,7 @@ if (Enter-HordeSuiteSection "daily-cap" "the daily cap counts what this node sta
 }
 
 if (Enter-HordeSuiteSection "junction" "the way to the records: no junction anywhere from the node's home down (review of #104, F6)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctxC = New-Context; $ctxC.now = { [datetime]::SpecifyKind([datetime]::Parse("2026-10-05T12:00:00"), [System.DateTimeKind]::Local) }
     $o = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctxC
@@ -410,6 +421,7 @@ if (Enter-HordeSuiteSection "junction" "the way to the records: no junction anyw
 }
 
 if (Enter-HordeSuiteSection "owner-files" "the owner's files are read at every spawn, not when serving starts (review of #104, F1 and F3)") {
+    trap { Register-HordeSuiteError $_; continue }
     $h1 = Join-Path $work "home-live"
     New-Item -ItemType Directory -Path (Join-Path $h1 "node") -Force | Out-Null
     $polPath = Join-Path $h1 "node\policy.json"
@@ -492,6 +504,7 @@ if (Enter-HordeSuiteSection "owner-files" "the owner's files are read at every s
 }
 
 if (Enter-HordeSuiteSection "settle" "at serve start, records a stopped node left starting are settled (review of #104, F5)") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctxR = New-Context
     New-Item -ItemType Directory -Path $ctxR.records -Force | Out-Null
@@ -521,6 +534,7 @@ if (Enter-HordeSuiteSection "settle" "at serve start, records a stopped node lef
 }
 
 if (Enter-HordeSuiteSection "close" "a close: only a session this node started, only the process the hub names, gracefully") {
+    trap { Register-HordeSuiteError $_; continue }
     Reset
     $ctx = New-Context
     $s = Invoke-HordeNodeActRequest -Act (SpawnAct) -Context $ctx
