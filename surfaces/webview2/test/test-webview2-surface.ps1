@@ -21,6 +21,9 @@ $adapter = Join-Path $root "surfaces\webview2"
 $lib = Join-Path $adapter "lib"
 $work = Join-Path $env:TEMP ("horde-webview2-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# A home of this run, never made: the surface's settings are then their defaults, whatever a person
+# has written in the real home's file.
+$env:HORDE_HOME = Join-Path $work "home"
 function Test-EngineLoaded { return (@([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -like "Microsoft.Web.WebView2*" }).Count -gt 0) }
 function Copy-Lib { param([string]$Name) $d = Join-Path $work $Name; Copy-Item -LiteralPath $lib -Destination $d -Recurse; return $d }
 
@@ -259,6 +262,12 @@ $adapterText = [System.IO.File]::ReadAllText((Join-Path $adapter "Surface.ps1"))
 Check ($commands -ccontains "Register-HordeSurface") "CONTROL: the adapter's commands are read from its syntax tree, and the one it must call is there"
 Check ($commands -ccontains "Enable-HordeWindowsRealScale" -and -not $adapterText.Contains("SetProcessDpiAwareness")) "the adapter asks platform/windows/Scale.ps1 for real pixels, and carries no call to Windows of its own for it"
 Check ((Get-HordeWebView2ScaleNote -Scale ([pscustomobject]@{ state = "applied"; awareness = "per-monitor-v2"; realScale = "yes"; reason = "Windows took it" })) -ceq "") "CONTROL: a process that draws at the screen's real scale is nothing to report"
+$aware = [pscustomobject]@{ state = "applied"; awareness = "per-monitor-v2"; realScale = "yes"; reason = "Windows took it" }
+Check (@(Get-HordeWebView2OpeningNotes -Scale $aware -Spec ([pscustomobject]@{ findings = @() })).Count -eq 0) "CONTROL: a window that opens with nothing wrong starts with nothing in the list its caller reads"
+$told = @(Get-HordeWebView2OpeningNotes -Scale $aware -Spec ([pscustomobject]@{ findings = @("The setting 'widthPx' of the module 'surface' is 5, below its smallest value 200; the default 520 is used.", "second") }))
+Check ($told.Count -eq 2 -and $told[0] -ceq "a setting was not used: The setting 'widthPx' of the module 'surface' is 5, below its smallest value 200; the default 520 is used." -and $told[1] -ceq "a setting was not used: second") "what was wrong in a person's settings file is put where the caller reads errors, each fault by name: never silently ignored"
+$both = @(Get-HordeWebView2OpeningNotes -Scale ([pscustomobject]@{ state = "already"; awareness = "system"; realScale = "no"; reason = "r" }) -Spec ([pscustomobject]@{ findings = @("one") }))
+Check ($both.Count -eq 2 -and $both[0] -like "*real scale*" -and $both[1] -ceq "a setting was not used: one") "beside what is said of the screen's scale"
 foreach ($notReal in @("no", "unknown")) {
     $note = Get-HordeWebView2ScaleNote -Scale ([pscustomobject]@{ state = "already"; awareness = "system"; realScale = $notReal; reason = "the process already had an awareness" })
     Check ($note -like "*not known to be drawn at the screen's real scale*" -and $note -like "*awareness system*" -and $note -like "*the process already had an awareness") ("real scale '" + $notReal + "' is said to the caller in words, with what the process is and why: it is decided on the real scale, never on whether the call was taken")

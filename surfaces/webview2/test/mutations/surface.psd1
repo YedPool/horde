@@ -175,6 +175,13 @@
         @{ Name = "real-scale-only-read-never-asked-for"
            Find = '$scale = Enable-HordeWindowsRealScale'
            Replace = '$scale = Get-HordeWindowsScaleAwareness' }
+        # --- what the caller is told as the window opens
+        @{ Name = "a-fault-in-the-settings-file-is-silently-ignored"
+           Find = 'foreach ($finding in @($Spec.findings)) { if ("$finding" -ne "") { $notes += ("a setting was not used: " + $finding) } }'
+           Replace = '' }
+        @{ Name = "the-scale-is-not-said-as-the-window-opens"
+           Find = 'if ($scaleNote -ne "") { $notes += $scaleNote }'
+           Replace = '' }
         # --- a machine without the engine
         @{ Name = "no-engine-reads-as-an-engine"
            Find = 'if ("$Version".Trim() -ne "") { return "" }'

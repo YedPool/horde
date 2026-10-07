@@ -18,6 +18,10 @@ trap { Register-HordeSuiteError $_; continue }
 
 $work = Join-Path $env:TEMP ("horde-surface-port-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# A HOME OF THIS RUN: the port reads its settings from <home>\settings\surface.json, and the real
+# home's file, if a person wrote one, is not this suite's to be steered by. Not created: with no file
+# every setting is its default, which is what every check above the settings section assumes.
+$env:HORDE_HOME = Join-Path $work "home"
 
 $script:calls = New-Object System.Collections.ArrayList
 $bridge = New-HordeSurfaceBridge -Events @("list-changed") -Requests ([ordered]@{
@@ -242,6 +246,49 @@ Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.h
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "Dark" } "is not a theme; the themes are: system, light, dark") "a theme that is not one of the three, exactly"
 Check ($spec.theme -ceq "system" -and (New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Theme "dark").theme -ceq "dark") "a spec follows the machine's theme unless it is given one"
 Check (-not $bridge.requests.Contains("capture") -and (Ask '{"v":1,"id":40,"request":"capture","args":{"path":"C:\\x.png"}}').refused -like "*not on the list*") "a picture is not something a page can ask for: capture is no request"
+
+Write-Host ""
+Write-Host "--- the port's numbers are settings of the module 'surface', read from the home ---" -ForegroundColor Cyan
+$declared = Get-HordeSurfaceSettingsDeclaration
+Check ($declared.module -ceq "surface" -and (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") -ceq "widthPx=520 heightPx=760 tickMs=250 messageChars=65536 argumentChars=16384 refusalsKept=50") ("the module declares one table, with the defaults the port had (" + (@($declared.settings | ForEach-Object { $_.name + "=" + $_.default }) -join " ") + ")")
+$limits = Get-HordeSurfaceLimits
+Check ($limits.smallestWidthPx -eq 200 -and $limits.smallestHeightPx -eq 150 -and $limits.fastestTickMs -eq 50) "what no setting may go below is the port's to say, once: 200 by 150 pixels, a tick every 50 ms"
+$floor = @{}; foreach ($e in $declared.settings) { $floor[$e.name] = $e.min }
+Check ($floor["widthPx"] -eq $limits.smallestWidthPx -and $floor["heightPx"] -eq $limits.smallestHeightPx -and $floor["tickMs"] -eq $limits.fastestTickMs) "and the settings' own smallest values are those same numbers, not a second copy"
+$unset = Get-HordeSurfaceSettings
+Check (@($unset.findings).Count -eq 0 -and $unset.values.widthPx -eq 520 -and $unset.values.messageChars -eq 65536 -and $unset.path -ceq (Join-Path $env:HORDE_HOME "settings\surface.json") -and -not (Test-Path -LiteralPath $env:HORDE_HOME)) "CONTROL: with no file every setting is its default, nothing is reported, and reading made no folder"
+$defaultSpec = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work
+Check ($defaultSpec.width -eq 520 -and $defaultSpec.height -eq 760 -and $defaultSpec.tickMs -eq 250 -and @($defaultSpec.findings).Count -eq 0) "CONTROL: a spec that names no size and no pace gets the defaults"
+New-Item -ItemType Directory -Path (Join-Path $env:HORDE_HOME "settings") -Force | Out-Null
+[System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "widthPx": 640, "heightPx": 480, "tickMs": 100, "messageChars": 2000, "argumentChars": 100, "refusalsKept": 3 } }')
+$set = Get-HordeSurfaceSettings
+Check (@($set.findings).Count -eq 0 -and $set.values.widthPx -eq 640 -and $set.values.refusalsKept -eq 3) "a person's file under the home overrides them"
+$tight = New-HordeSurfaceBridge -Settings $set -Requests ([ordered]@{ "say" = @{ args = @{ text = @{ type = "string" }; short = @{ type = "string"; most = 5 } }; run = { return 1 } } })
+Check ((Invoke-HordeSurfaceRequest -Bridge $tight -Text ('{"v":1,"id":1,"request":"say","args":{"text":"' + ("x" * 1900) + '","short":"ab"}}' + (" " * 100))).refused -like "*characters, more than the 2000 one may be; it was not read") "a bridge refuses a message past the size its settings give, unread"
+Check ((Invoke-HordeSurfaceRequest -Bridge $tight -Text ('{"v":1,"id":2,"request":"say","args":{"text":"' + ("x" * 101) + '","short":"ab"}}')).refused -like "*'text' is 101 characters, more than the 100 it may be") "an argument that declared no length of its own is held to the setting"
+Check ((Invoke-HordeSurfaceRequest -Bridge $tight -Text ('{"v":1,"id":3,"request":"say","args":{"text":"' + ("x" * 100) + '","short":"abcdef"}}')).refused -like "*'short' is 6 characters, more than the 5 it may be") "and one that declared its own is held to that"
+Check ((Invoke-HordeSurfaceRequest -Bridge $tight -Text ('{"v":1,"id":4,"request":"say","args":{"text":"' + ("x" * 100) + '","short":"abcde"}}')).refused -ceq "") "CONTROL: a message inside every limit is answered"
+Check ($tight.refused -eq 3 -and $tight.refusals.Count -eq 3) "CONTROL: three refused so far, three kept"
+[void](Invoke-HordeSurfaceRequest -Bridge $tight -Text "x"); [void](Invoke-HordeSurfaceRequest -Bridge $tight -Text "y")
+Check ($tight.refused -eq 5 -and $tight.refusals.Count -eq 3) "the record keeps as many refusals as the setting says: five counted, the last three kept"
+$sized = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $tight -DataFolder $work -Settings $set
+Check ($sized.width -eq 640 -and $sized.height -eq 480 -and $sized.tickMs -eq 100) "a spec that names no size and no pace gets the settings'"
+$named = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $tight -DataFolder $work -Settings $set -Width 300 -Height 200 -TickMs 60
+Check ($named.width -eq 300 -and $named.height -eq 200 -and $named.tickMs -eq 60) "and one that names them gets what it named: a caller's word is above a setting"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $tight -DataFolder $work -Settings $set -Width 199 } "at least 200 by 150 pixels") "a caller's size below the smallest is still refused"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $tight -DataFolder $work -Settings $set -Height 149 } "at least 200 by 150 pixels") "in either direction"
+$unsaid = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $tight -DataFolder $work
+Check ($unsaid.width -eq 640 -and @($unsaid.findings).Count -eq 0) "a spec handed no settings reads the file itself"
+[System.IO.File]::WriteAllText($unset.path, '{ "schemaVersion": 1, "settings": { "widthPx": 5, "heightPx": 480, "colour": "red" } }')
+$faulty = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work
+Check ($faulty.width -eq 520 -and $faulty.height -eq 480 -and @($faulty.findings).Count -eq 2 -and (@($faulty.findings) -join " ") -like "*widthPx*" -and (@($faulty.findings) -join " ") -like "*colour*") ("a value out of range and a name nobody declared are each said by name on the spec, the default is used, and the rest of the file still counts (" + (@($faulty.findings) -join " | ") + ")")
+Check ($tight.limits.messageChars -eq 2000 -and (Invoke-HordeSurfaceRequest -Bridge $tight -Text ("z" * 2001)).refused -like "*more than the 2000*") "a bridge keeps the limits it was made with: a file changed later does not move them under a page"
+$handed = New-HordeSurfaceBridge -Settings $set -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
+$handedSpec = New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $handed -DataFolder $work -Settings $set
+Check ($handed.limits.messageChars -eq 2000 -and $handed.limits.refusalsKept -eq 3 -and $handedSpec.width -eq 640 -and @($handedSpec.findings).Count -eq 0) "a bridge and a spec that are handed settings use those and do not read the file again: one reading serves both, and its findings are the caller's to report once"
+$fresh = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
+Check ($fresh.limits.messageChars -eq 65536 -and $fresh.limits.argumentChars -eq 16384 -and $fresh.limits.refusalsKept -eq 50) "and a bridge made now, handed no settings, reads the file as it is now"
+Remove-Item -LiteralPath $env:HORDE_HOME -Recurse -Force
 
 Write-Host ""
 Write-Host "--- which file an address names: only a file of a mount, of a kind a page is made of ---" -ForegroundColor Cyan

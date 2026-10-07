@@ -34,6 +34,9 @@ Add-Type -Namespace HordeSurfaceProbe -Name Native -MemberDefinition @'
 
 $work = Join-Path $env:TEMP ("horde-webview2-window-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# A home of this run, never made: the surface's settings are then their defaults, whatever a person
+# has written in the real home's file.
+$env:HORDE_HOME = Join-Path $work "home"
 $pages = Join-Path $here "pages"
 
 function Get-ProbeProcessTree {
@@ -332,7 +335,7 @@ $otherShapes = [ordered]@{ schemaVersion = 1; protocol = 7
     event = [ordered]@{ version = "ver"; name = "happened"; value = "got" } }
 $otherShapesPath = Join-Path $work "bridge-messages.json"
 [System.IO.File]::WriteAllText($otherShapesPath, (ConvertTo-Json -InputObject $otherShapes -Depth 5))
-$echo = [pscustomobject]@{ bridge = $null; heard = (New-Object System.Collections.ArrayList); phase = "talk"; timedOut = ""; limitMs = 30000; clock = [System.Diagnostics.Stopwatch]::StartNew(); inForce = "" }
+$echo = [pscustomobject]@{ bridge = $null; heard = (New-Object System.Collections.ArrayList); phase = "talk"; timedOut = ""; limitMs = 30000; clock = [System.Diagnostics.Stopwatch]::StartNew(); inForce = ""; errorsSeen = @() }
 $echo.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
     "echo" = @{ args = @{ text = @{ type = "string"; most = 600 } }; run = { param($Arguments, $State, $Window) [void]$State.heard.Add($Arguments["text"]); return ("heard " + $Arguments["text"]) } }
     "done" = @{ run = { param($Arguments, $State, $Window) $State.phase = "push"; return $true } }
@@ -346,10 +349,14 @@ function Step-Echo {
         & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "poke" -Value "again")
         $State.phase = "pushed"
     }
-    elseif ($State.phase -ceq "pushed" -and @($State.heard) -ccontains "pushed again") { & $Window.close }
+    elseif ($State.phase -ceq "pushed" -and @($State.heard) -ccontains "pushed again") { $State.errorsSeen = @($Window.errors); & $Window.close }
 }
+# THIS WINDOW ALSO OPENS ON A HOME WHOSE SETTINGS FILE HAS A FAULT, written now: a name the module
+# never declared. The spec below reads the file itself, so the fault must reach the window's caller.
+New-Item -ItemType Directory -Path (Join-Path $env:HORDE_HOME "settings") -Force | Out-Null
+[System.IO.File]::WriteAllText((Get-HordeSurfaceSettings).path, '{ "schemaVersion": 1, "settings": { "colour": "red", "tickMs": 60 } }')
 $echoSpec = New-HordeSurfaceSpec -Title "surface echo" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe") }) -Start "probe/echo.html" -Bridge $echo.bridge -DataFolder (Join-Path $work "data-echo") `
-    -Hidden -Width 320 -Height 200 -TickMs 50 -State $echo -OnTick { param($Window, $State) Step-Echo -Window $Window -State $State }
+    -Hidden -Width 320 -Height 200 -State $echo -OnTick { param($Window, $State) Step-Echo -Window $Window -State $State }
 $shippedShapes = $script:HordeSurfaceMessages
 $shapesPath = $otherShapesPath
 # The suite's own answer to "where is the definition", for this one window (a suite may replace a
@@ -366,6 +373,7 @@ Check (@($echo.heard).Count -eq 3 -and $echo.heard[0] -ceq "hello") ("a request 
 Check (@($echo.heard).Count -eq 3 -and $echo.heard[1] -like "heard hello | rejected: refused: *not on the list*") "so does the answer, and so does a refusal with its reason"
 Check (@($echo.heard).Count -eq 3 -and $echo.heard[2] -ceq "pushed again") "and an event pushed to the page"
 Check ($echo.bridge.answered -eq 4 -and $echo.bridge.refused -eq 1) ("nothing else was refused: " + $echo.bridge.answered + " answered, " + $echo.bridge.refused + " refused")
+Check ($echoSpec.tickMs -eq 60 -and @($echo.errorsSeen).Count -eq 1 -and $echo.errorsSeen[0] -like "a setting was not used: *colour*") ("that window took its pace from the person's settings file, and the one fault in the file reached its caller by name (" + (@($echo.errorsSeen) -join " | ") + ")")
 
 } finally {
     if ($null -ne (Get-Variable -Name listener -ErrorAction SilentlyContinue) -and $null -ne $listener) { try { $listener.Stop() } catch { } }
