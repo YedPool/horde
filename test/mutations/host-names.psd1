@@ -336,6 +336,19 @@
         @{ Name = "list-files-not-exempt"
            Find = 'return ($script:HordePortListFiles -contains $rest)'
            Replace = 'return $false' }
+        # --- a pinned file is the one exception to the ASCII rule (decisions design 2026-10-06, 3.11)
+        @{ Name = "pinned-file-read-as-text"
+           Find = 'if ($pinned.ContainsKey($f.FullName.ToLowerInvariant())) { continue }'
+           Replace = '' }
+        @{ Name = "pinned-file-not-held-to-its-fingerprint"
+           Find = 'foreach ($x in @(Test-HordePinnedFiles -RepoRoot $RepoRoot)) { Add-Finding $x.host $x.path $x.problem }'
+           Replace = '' }
+        @{ Name = "a-list-outside-a-port-excuses-its-files"
+           Find = 'if (-not (Get-HordePortFolderOf -Rel $listRel)) { continue }'
+           Replace = '' }
+        @{ Name = "a-list-outside-a-port-is-not-a-finding"
+           Find = 'if (-not (Get-HordePortFolderOf -Rel $rel)) {'
+           Replace = 'if ($false) {' }
         @{ Name = "shrink-import-invisible"
            Find = 'if ($r.cells[1] -ceq $script:HordeImportCount) { $c = 1 }'
            Replace = 'if ($false) { $c = 1 }' }
