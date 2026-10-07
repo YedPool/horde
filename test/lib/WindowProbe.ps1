@@ -27,6 +27,23 @@ Add-Type -Namespace HordeProbe -Name Native -MemberDefinition @'
 # this process would not be the one the window was placed at.
 try { [void][HordeProbe.Native]::SetProcessDpiAwarenessContext([IntPtr](-4)) } catch { }
 
+function New-HordeProbeRegistry {
+    # A fleet registry of session records under -Root, as the fleet being replaced writes them, for a
+    # scenario that needs the session holding a role to be found. Each record is { id; role; pane;
+    # instance }, with retired when it is. The one place these scenarios spell the records' key field,
+    # which carries an agent harness's name: the harness's allowlist lists this file for it.
+    param([Parameter(Mandatory = $true)][string]$Root, [hashtable[]]$Records = @())
+    $sessions = Join-Path $Root "registry\sessions"
+    New-Item -ItemType Directory -Path $sessions -Force | Out-Null
+    foreach ($r in $Records) {
+        $record = @{}
+        foreach ($k in @($r.Keys)) { if ($k -cne "id") { $record[$k] = $r[$k] } }
+        $record["claudeSessionId"] = $r["id"]
+        [System.IO.File]::WriteAllText((Join-Path $sessions ($r["id"] + ".json")), (ConvertTo-Json -InputObject $record -Compress))
+    }
+    return $Root
+}
+
 function Start-HordeProbeCommand {
     # Start the shipped horde.ps1 as its own process and return the process, still running, with its
     # output being gathered: { process; out; err }. -Env reaches only the child; a name mapped to $null

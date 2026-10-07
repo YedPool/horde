@@ -29,6 +29,7 @@ $hordeHome = Join-Path $work "home"
 $env:HORDE_HOME = $hordeHome
 $env:WEZFLEET_ROOT = Join-Path $work "no-fleet"
 . (Join-Path $root "decisions\Window.ps1")
+. (Join-Path $root "test\lib\WindowProbe.ps1")
 
 function Add-Question {
     param([int]$N, [string[]]$Waiting = @(), [string]$AskedBy = "Orc A", [string]$Group = "the first group")
@@ -200,15 +201,12 @@ Check ($hidden.attached -eq $false -and $hidden.reason -like "it was opened hidd
 $noFleet = Resolve-HordeDecisionWindowAttachment
 Check ($noFleet.attached -eq $false -and $noFleet.handle -eq 0 -and $noFleet.reason -like "the session records could not all be read*") "no fleet registry: not attached, with the reason"
 function Set-Registry { param([hashtable[]]$Records)
-    $dir = Join-Path $work ("fleet-" + [guid]::NewGuid().ToString("N").Substring(0, 8)); $sessions = Join-Path $dir "registry\sessions"
-    New-Item -ItemType Directory -Path $sessions -Force | Out-Null
-    foreach ($r in $Records) { [System.IO.File]::WriteAllText((Join-Path $sessions ($r["claudeSessionId"] + ".json")), (ConvertTo-Json -InputObject $r -Compress)) }
-    $env:WEZFLEET_ROOT = $dir }
-$keeper = @{ claudeSessionId = "aaaaaaaa-0000-4000-8000-000000000001"; role = "master"; pane = "18"; instance = "zorb-instance-1" }
-Set-Registry @(@{ claudeSessionId = "aaaaaaaa-0000-4000-8000-000000000002"; role = "orchestrator"; pane = "19"; instance = "zorb-instance-1" })
+    $env:WEZFLEET_ROOT = New-HordeProbeRegistry -Root (Join-Path $work ("fleet-" + [guid]::NewGuid().ToString("N").Substring(0, 8))) -Records $Records }
+$keeper = @{ id = "aaaaaaaa-0000-4000-8000-000000000001"; role = "master"; pane = "18"; instance = "zorb-instance-1" }
+Set-Registry @(@{ id = "aaaaaaaa-0000-4000-8000-000000000002"; role = "orchestrator"; pane = "19"; instance = "zorb-instance-1" })
 $nobody = Resolve-HordeDecisionWindowAttachment
 Check ($nobody.attached -eq $false -and $nobody.reason -ceq "no session holds the role of warchief, so there is no terminal window to stand beside") "no session holds the role: not attached, and says so"
-Set-Registry @($keeper, @{ claudeSessionId = "aaaaaaaa-0000-4000-8000-000000000003"; role = "master"; pane = "30"; instance = "zorb-instance-1" })
+Set-Registry @($keeper, @{ id = "aaaaaaaa-0000-4000-8000-000000000003"; role = "master"; pane = "30"; instance = "zorb-instance-1" })
 $two = Resolve-HordeDecisionWindowAttachment
 Check ($two.attached -eq $false -and $two.reason -like "2 live sessions each say they are the warchief*") "two sessions hold it: not attached, and neither is chosen"
 Set-Registry @($keeper)

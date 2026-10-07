@@ -108,9 +108,7 @@ if ($iso) {
         Write-Host ""
         Write-Host "--- 3. horde decisions open stands beside the window of the pane the registry names ---" -ForegroundColor Cyan
         $sessionId = "aaaaaaaa-0000-4000-8000-0000000000e2"
-        $registry = Join-Path $work "fleet\registry\sessions"
-        New-Item -ItemType Directory -Path $registry -Force | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $registry ($sessionId + ".json")), (ConvertTo-Json -Compress -InputObject @{ claudeSessionId = $sessionId; role = "master"; pane = $paneOne; instance = $instance }))
+        [void](New-HordeProbeRegistry -Root (Join-Path $work "fleet") -Records @(@{ id = $sessionId; role = "master"; pane = $paneOne; instance = $instance }))
         $report = Join-Path $work "report.json"
         $foregroundBefore = [HordeProbe.Native]::GetForegroundWindow().ToInt64()
         $open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Report", $report) -Env @{ HORDE_HOME = (Join-Path $work "home"); WEZFLEET_ROOT = (Join-Path $work "fleet"); PSModulePath = $null }

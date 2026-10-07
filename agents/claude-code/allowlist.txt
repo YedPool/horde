@@ -142,3 +142,4 @@ test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-800
 test/mutations/faults.psd1 | 2 | mutants of the fault checks that read this harness's processes; they move with them in engines A4
 test/mutations/projection.psd1 | 8 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4
 test/test-session-seat.ps1 | 2 | builds old-system session records, whose key field carries the harness's name, to test finding the session that holds a role
+test/lib/WindowProbe.ps1 | 1 | builds old-system session records, whose key field carries the harness's name, to test finding the session that holds a role
