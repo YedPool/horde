@@ -388,6 +388,24 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
     forward are refused; a revoked key is refused even with its line restored by hand; `hello`
     claiming another device than the key's is refused; enrolling a device id already bound to
     another key is refused.
+    **R17a, the listener, as built (2026-10-07; coordinator's decisions of that day).** `horde listen`
+    runs C:\Windows\System32\OpenSSH\sshd.exe as its own child (`transports/ssh/Listen.ps1`), never the
+    service: 127.0.0.1 only, Horde's own sshd_config, host key, authorized_keys and revoked_keys under
+    `<home>\hub\listen`, in a kill-on-close job only `horde listen` holds. Links run under the founder's
+    own account (a non-SYSTEM sshd admits only its own user); no `horde-link` account. Measured, and so
+    decided: **no ForceCommand** - one in sshd_config replaces each key's `command=`, losing the
+    `-Device` enrolment wrote - so the listener refuses to start while any authorized_keys line is not
+    forced to exactly `Get-HordeSshAttachCommand`'s attach for its device, restricted; HORDE_HOME
+    reaches the session through `SetEnv`. The forced command is **`cli\attach.ps1 -Device <id>`, not a
+    horde command**: once a script mentions `$input` at top level, PowerShell 5.1 waits at exit for
+    stdin to end, so `$input` in horde.ps1 would hang every horde command run with an open stdin pipe.
+    attach reads stdin only through `$input` (a .NET Console stream gets nothing in a session, issue
+    #100, and the live suite keeps that as a control), writes one preamble line naming its `-Device`
+    (`remote/LinkBinding.ps1`), and relays to `\\.\pipe\horde-hub-<hubId>`, the local transport's
+    `hub:<hubId>` endpoint (`transports/local/Relay.ps1`); when the hub closes it ends itself. The hub's
+    accept loop that reads the preamble and refuses a hello for another device is a later slice; the
+    rule it calls is `Test-HordeHelloBinding`. Suites: `transports/ssh/test/test-listen.ps1` (pure) and
+    `test-listen-local.ps1` (machine-bound), `test/test-link-binding.ps1`.
 
 E. Acting over the link
 
