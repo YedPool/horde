@@ -40,8 +40,15 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1
 # and core/ReadShared.ps1 loaded first.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+
 $script:HordeTranscriptKinds = @("call", "toolCall", "toolResult", "input", "usageTotal", "turnEnd", "compaction", "event")
-$script:HordeTranscriptAdapters = New-Object System.Collections.ArrayList
+# A REGISTRY IS MADE ONCE, never reset by a later load (review of #114): core files load what they
+# call, so this file is dot-sourced again by files loaded after the adapters have registered, and an
+# unconditional reset here would silently empty it.
+if ($null -eq (Get-Variable -Name HordeTranscriptAdapters -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeTranscriptAdapters = New-Object System.Collections.ArrayList }
 # A READ DEADLINE, for a caller with a budget (core/MetricsCollect.ps1; review of #70: a budget checked
 # only between files let one file run 48 s on a 2 s budget). When set, Read-HordeJsonLines checks it every
 # 500 lines and throws $script:HordeReadDeadlineMessage, after setting HordeReadDeadlineHit, so the caller

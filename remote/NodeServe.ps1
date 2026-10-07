@@ -7,18 +7,31 @@
 #
 # WHAT IT ANSWERS. The hub's hello, once, with the node's own (protocol negotiation, R2); a ping, with a
 # pong carrying the node's clock (R6); the read verbs of R12a: node.info, sessions.list, session.get
-# and request.status; and, on a node that serves acts, the two act verbs of R19's first version
-# (the act path's A3, 2026-10-05): session.spawn and session.close. Every other verb of link-verbs v1
-# is refused as unsupported - session.deliver, a drive verb, among them, and observe.since and
-# binding.get, which belong to R12b.
+# and request.status; on a node that serves acts, the two act verbs of R19's first version (the act
+# path's A3, 2026-10-05): session.spawn and session.close; and messaging, R21 slice 4: session.deliver,
+# delivery.status, mail.next and mail.receipt. Every other verb of link-verbs v1 is refused as
+# unsupported - observe.since and binding.get belong to R12b.
 #
 # AN ACT HAPPENS ONCE PER REQUEST ID, AND NOT HERE. This file starts nothing. On the first sight of an
 # act request it records it in the request journal (remote/Journal.ps1, before anything acts) and
 # answers NeedAct: its caller (cli/NodeServe.ps1, through cli/NodeAct.ps1) acts through the host and
 # agent layers and calls again with the outcome, which is recorded and answered as the journal entry.
 # A resend replays what was recorded and acts nothing; the same id with other arguments is refused; a
-# node with no journal, or that serves no acts, acts on nothing. Anything before the hello but the hello, a second
-# hello, and a hello that is not a hub's end the link; a line that is not a frame ends it too.
+# node with no journal, or that serves no acts, acts on nothing. Anything before the hello but the
+# hello, a second hello, and a hello that is not a hub's end the link; a line that is not a frame ends
+# it too.
+#
+# MESSAGING DECIDES NOTHING HERE (review of PR #97). Which session a deliver reaches and whether it may,
+# which outbound message is next, and what a receipt does to a record are remote/Messaging.ps1's rules -
+# Resolve-HordeDeliverTarget, Select-HordeMailNext and Resolve-HordeMailReceipt - called below and never
+# re-decided; test/test-node-serve-messaging.ps1 checks the call sites. And this file still acts on
+# nothing: a deliver that passes the gate comes back as NeedDeliver, a status as NeedStatus, the outbox
+# as NeedOutbox, the node's opt-in list as NeedDeliverTo (read again for every deliver, so an edit to
+# engine-live.json holds from the next one), and an outbox mark as a write the caller (cli/NodeServe.ps1)
+# performs before it sends the reply. A message is journaled (remote/Journal.ps1, kind message, keyed by
+# messageId) only once the messenger has answered; a resend before then asks the messenger again, which
+# is safe because a node's messenger must be idempotent by messageId (the messenger port's
+# idempotent.post).
 #
 # WHAT CROSSES. sessions.list and session.get carry a fixed summary of each session (schema
 # session-summary): identity and status fields, each a tristate answer, with the pid, procStart and
@@ -34,14 +47,16 @@
 
 . (Join-Path $PSScriptRoot "Protocol.ps1")
 . (Join-Path $PSScriptRoot "Journal.ps1")
+. (Join-Path $PSScriptRoot "Messaging.ps1")
 
 # The verbs this node answers in R12a, and those that need the session projection.
-$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status")
+$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status", "session.deliver", "delivery.status", "mail.next", "mail.receipt")
 # The act verbs of R19's first version, answered only by a node that serves acts (Data.acts).
 $script:HordeNodeActVerbs = @("session.spawn", "session.close")
 # The link's time spelling (Get-HordeLinkTime), for a request's issuedAt.
 $script:HordeNodeIssuedFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"
-$script:HordeNodeViewVerbs = @("sessions.list", "session.get")
+$script:HordeNodeViewVerbs = @("sessions.list", "session.get", "session.deliver")
+$script:HordeNodeOutboxVerbs = @("mail.next", "mail.receipt")
 # The verbs versions this node speaks (link-verbs v1).
 $script:HordeNodeVerbsVersions = @(1)
 # The time pattern of the link (link-frame.v1 "time"), for values taken from the session view.
@@ -72,10 +87,89 @@ function Get-HordeNodeNextSeq {
 }
 
 function New-HordeNodeReply {
-    # What Invoke-HordeNodeFrame decided: the frame to send (or none), whether the projection is needed
-    # first, and whether the link ends after the reply.
-    param($Reply = $null, [bool]$NeedView = $false, [bool]$Close = $false, [bool]$NeedAct = $false, $Act = $null)
-    return [pscustomobject]@{ reply = $Reply; needView = $NeedView; close = $Close; needAct = $NeedAct; act = $Act }
+    # What Invoke-HordeNodeFrame decided: the frame to send (or none); what the caller must fetch or do
+    # first and then ask again with - the projection (needView), an act (needAct: act), a delivery by the
+    # messenger (needDeliver: { target; message }), the messenger's word on one message (needStatus: its
+    # messageId), the outbox (needOutbox), the node's opt-in list read from its layers now (needDeliverTo);
+    # a mark the caller must write to the outbox BEFORE sending the reply (write: { messageId; marker; at });
+    # and whether the link ends after the reply.
+    param($Reply = $null, [bool]$NeedView = $false, [bool]$Close = $false, [bool]$NeedAct = $false, $Act = $null,
+        $NeedDeliver = $null, [string]$NeedStatus = "", [bool]$NeedOutbox = $false, [bool]$NeedDeliverTo = $false, $Write = $null)
+    return [pscustomobject]@{ reply = $Reply; needView = $NeedView; close = $Close; needAct = $NeedAct; act = $Act; needDeliver = $NeedDeliver; needStatus = $NeedStatus; needOutbox = $NeedOutbox; needDeliverTo = $NeedDeliverTo; write = $Write }
+}
+
+function Get-HordeNodeLiveSessions {
+    # The node's live sessions as the messaging rules take them: { sessionId; label; pid; procStart; ns },
+    # from the session view, every process placed in this node's namespace (R11). A field the view does not
+    # know is "", which the rules read as proving nothing.
+    param($View, [Parameter(Mandatory = $true)]$Namespace)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($s in @(Get-HordeLinkProp $View "sessions")) {
+        if ($null -eq $s) { continue }
+        $f = Get-HordeLinkProp $s "fields"
+        $vals = @{}
+        foreach ($n in @("label", "pid", "procStart")) {
+            $a = Get-HordeLinkProp $f $n
+            $vals[$n] = ""
+            if ("$(Get-HordeLinkProp $a 'state')" -ceq "known") { $vals[$n] = "$(Get-HordeLinkProp $a 'value')" }
+        }
+        [void]$out.Add([pscustomobject]@{ sessionId = "$(Get-HordeLinkProp $s 'sessionId')"; label = $vals["label"]; pid = $vals["pid"]; procStart = $vals["procStart"]
+            ns = [pscustomobject]@{ device = "$($Namespace.device)"; space = "$($Namespace.space)" } })
+    }
+    return $out.ToArray()
+}
+
+function ConvertTo-HordeNodeAnswer {
+    # A tristate answer held by this node (the journal's, the messenger's) as a link answer: known with its
+    # value and a time, otherwise unknown with a reason cut to its cap.
+    param($Answer, [string]$Unknown = "")
+    $now = Get-HordeLinkTime
+    if ("$(Get-HordeLinkProp $Answer 'state')" -ceq "known") { return [ordered]@{ state = "known"; value = (Get-HordeLinkProp $Answer "value"); reason = ""; observedAt = $now } }
+    $why = "$(Get-HordeLinkProp $Answer 'reason')"
+    if ($why.Trim() -eq "") { $why = "no reason was given" }
+    if ($Unknown -ne "") { $why = $Unknown + ": " + $why }
+    return [ordered]@{ state = "unknown"; reason = (Limit-HordeNodeReason $why) }
+}
+
+function New-HordeNodeDelivery {
+    # The link's delivery value for one message, from a stage the messenger reported. A stage the link does
+    # not know is $null, and the caller answers unknown rather than send it.
+    param([Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][string]$SessionId, $Reported, [Parameter(Mandatory = $true)]$Contract)
+    $stage = "$(Get-HordeLinkProp $Reported 'stage')"
+    if (@($Contract.verbs.definitions.delivery.properties.stage.enum) -cnotcontains $stage) { return $null }
+    # The port gives at as a time; a messenger's own text is taken only in the link's spelling.
+    $atRaw = Get-HordeLinkProp $Reported "at"
+    $at = "$atRaw"
+    if ($atRaw -is [datetime]) { $at = Get-HordeLinkTime -At $atRaw }
+    if ($at -cnotmatch $script:HordeNodeTimePattern) { $at = Get-HordeLinkTime }
+    $d = [ordered]@{ messageId = $MessageId; sessionId = $SessionId; stage = $stage; at = $at }
+    $why = "$(Get-HordeLinkProp $Reported 'reason')"
+    if ($why.Trim() -ne "") { $d["reason"] = Limit-HordeNodeReason $why }
+    return $d
+}
+
+function Test-HordeNodeDataGiven {
+    # Was a member of Data given at all? An empty list is given; a missing or null member is not yet
+    # fetched. Asked of the property itself, because a list read through a function comes back unrolled,
+    # and an empty one as $null.
+    param($Data, [string]$Name)
+    if ($null -eq $Data) { return $false }
+    $p = $Data.PSObject.Properties[$Name]
+    return ($null -ne $p -and $null -ne $p.Value)
+}
+
+function Get-HordeNodeDataList {
+    # The non-null items of a list member of Data, written to the pipeline one by one (none when it is
+    # missing), so a caller collects them with @() and never receives one nested array.
+    param($Data, [string]$Name)
+    if (-not (Test-HordeNodeDataGiven $Data $Name)) { return }
+    foreach ($x in @($Data.PSObject.Properties[$Name].Value)) { if ($null -ne $x) { $x } }
+}
+
+function Find-HordeNodeOutboxRecord {
+    param($Outbox, [string]$MessageId)
+    foreach ($r in @($Outbox)) { if ($null -ne $r -and [string]::Equals("$($r.messageId)", $MessageId, [System.StringComparison]::Ordinal)) { return $r } }
+    return $null
 }
 
 function Limit-HordeNodeReason {
@@ -332,6 +426,89 @@ function Invoke-HordeNodeAct {
     return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $Frame -Answer ([ordered]@{ state = "unknown"; reason = "the outcome was recorded and could not be read back; ask request.status" })))
 }
 
+function Invoke-HordeNodeDeliver {
+    # session.deliver (R21 slice 4). In order: the message journal (a message already delivered is answered
+    # from it, a reused messageId refused, before anything else is asked); the messenger present; the target
+    # and its gate, by Resolve-HordeDeliverTarget over the live sessions, the hub-spawned records and the
+    # node's own remote.deliverTo; then NeedDeliver, and with the messenger's answer, the journal and the
+    # reply. Data.hubSpawned is the sessions this hub spawned here, which step 3.8's record writer
+    # provides; until it ships, the caller passes none, and only opted-in labels can be reached.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)]$Data)
+    $f = $Request
+    $a = $f.args
+    $id = "$($a.messageId)"
+    $jr = "$(Get-HordeLinkProp $Data 'messageJournalRoot')"
+    if ($jr -eq "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason "this node keeps no message journal, so it could not tell a resend from a first sight; nothing is delivered")) }
+    $issued = ConvertFrom-HordeNodeIssuedAt -Text "$($f.issuedAt)"
+    if ($null -eq $issued) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason "the request's issuedAt is not a time this node can record")) }
+    $prior = Get-HordeJournalEntry -Root $jr -Id $id
+    if ($prior.state -ceq "unknown") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = "the node's message journal could not say whether this message was delivered; its own reason is kept on the node" }))) }
+    if ($prior.state -ceq "known") {
+        $e = $prior.value
+        if ("$($e.argsHash)" -cne (Get-HordeJournalArgsHash -Verb "session.deliver" -Arguments $a -IssuedAt $issued)) {
+            return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("message " + $id + " was reused: it was recorded with other arguments or another issue time")))
+        }
+        if ($null -eq $e.result) { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = ("message " + $id + " is being recorded at this moment; it is not delivered twice") }))) }
+        return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer (ConvertTo-HordeNodeAnswer -Answer $e.result)))
+    }
+    # A NODE LAYER THAT FAILS ITS CHECKS REFUSES EVERY DELIVER, to a hub-spawned session as to an opted-in
+    # one, exactly as it refuses every spawn: the node cannot say what its owner allows.
+    if (-not (Test-HordeNodeDataGiven $Data "deliverTo") -and "$(Get-HordeLinkProp $Data 'deliverToError')" -eq "") { return (New-HordeNodeReply -NeedDeliverTo $true) }
+    $layerWhy = "$(Get-HordeLinkProp $Data 'deliverToError')"
+    if ($layerWhy -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("this node's own configuration is refused, so it delivers nothing: " + $layerWhy))) }
+    if ("$(Get-HordeLinkProp $Data 'messenger')" -eq "") {
+        $why = "$(Get-HordeLinkProp $Data 'messengerError')"
+        $said = "this node has no messenger, so nothing is delivered"
+        if ($why -ne "") { $said = $said + ": " + $why }
+        return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason $said))
+    }
+    $label = ""
+    $lp = $a.PSObject.Properties["label"]
+    if ($null -ne $lp) { $label = "$($lp.Value)" }
+    $target = Resolve-HordeDeliverTarget -SessionId "$($a.sessionId)" -Label $label -Live @(Get-HordeNodeLiveSessions -View $Data.view -Namespace $Data.namespace) -HubSpawned @(Get-HordeNodeDataList $Data "hubSpawned") -DeliverTo @(Get-HordeNodeDataList $Data "deliverTo" | ForEach-Object { "$_" })
+    if ($target.refused -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason $target.refused)) }
+    $said = Get-HordeLinkProp $Data "deliverResult"
+    if ($null -eq $said) { return (New-HordeNodeReply -NeedDeliver ([pscustomobject]@{ target = $target; message = $a })) }
+    if ("$(Get-HordeLinkProp $said 'state')" -cne "known") {
+        return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer (ConvertTo-HordeNodeAnswer -Answer $said -Unknown "the messenger did not say whether it took the message")))
+    }
+    $d = New-HordeNodeDelivery -MessageId $id -SessionId $target.sessionId -Reported (Get-HordeLinkProp $said "value") -Contract $State.contract
+    if ($null -eq $d) { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = "the messenger reported a stage the link does not know" }))) }
+    $answer = New-HordeKnown -Value ([pscustomobject]$d) -ObservedAt ([datetime]::UtcNow)
+    $open = Open-HordeJournalEntry -Root $jr -Id $id -Verb "session.deliver" -Arguments $a -IssuedAt $issued
+    if ($open.decision -ceq "act") { $null = Complete-HordeJournalEntry -Root $jr -Id $id -State "done" -Result $answer }
+    elseif ($open.decision -ceq "replay") { $answer = $open.result }
+    elseif ($open.decision -ceq "refuse") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason $open.reason)) }
+    return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer (ConvertTo-HordeNodeAnswer -Answer $answer)))
+}
+
+function Invoke-HordeNodeDeliveryStatus {
+    # delivery.status: the message journal says whether, and to which session, this node delivered the
+    # message; the messenger says where it is now (NeedStatus). A messenger that cannot say is unknown,
+    # naming the last stage the journal recorded.
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Request, [Parameter(Mandatory = $true)]$Data)
+    $f = $Request
+    $id = "$($f.args.messageId)"
+    $now = Get-HordeLinkTime
+    $jr = "$(Get-HordeLinkProp $Data 'messageJournalRoot')"
+    if ($jr -eq "") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = "this node keeps no message journal" }))) }
+    $prior = Get-HordeJournalEntry -Root $jr -Id $id
+    if ($prior.state -ceq "absent") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "absent"; reason = "this node never accepted that message"; observedAt = $now }))) }
+    if ($prior.state -cne "known" -or $null -eq $prior.value.result -or "$($prior.value.result.state)" -cne "known") {
+        return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = "the node's message journal could not say; its own reason is kept on the node" })))
+    }
+    $recorded = $prior.value.result.value
+    $said = Get-HordeLinkProp $Data "deliveryStatus"
+    if ($null -eq $said) { return (New-HordeNodeReply -NeedStatus $id) }
+    if ("$(Get-HordeLinkProp $said 'state')" -ceq "known") {
+        $d = New-HordeNodeDelivery -MessageId $id -SessionId "$($recorded.sessionId)" -Reported (Get-HordeLinkProp $said "value") -Contract $State.contract
+        if ($null -ne $d) { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $d; reason = ""; observedAt = $now }))) }
+    }
+    $why = "$(Get-HordeLinkProp $said 'reason')"
+    if ($why.Trim() -eq "") { $why = "the messenger gave no stage the link knows" }
+    return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = (Limit-HordeNodeReason ("the messenger could not say where the message is (" + $why + "); last stage recorded: " + $recorded.stage)) })))
+}
+
 function Invoke-HordeNodeFrame {
     # One received line, answered. -Data is what the node knows: manifest (node.info's value), view (the
     # session-view document, or $null until asked for), viewError (why the view could not be built, or
@@ -373,9 +550,22 @@ function Invoke-HordeNodeFrame {
     $verb = "$($f.verb)"
     if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) { return (Invoke-HordeNodeAct -State $State -Frame $f -Data $Data) }
     if ($script:HordeNodeServedVerbs -cnotcontains $verb) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "unsupported-verb" -Reason ("this node answers " + ($script:HordeNodeServedVerbs -join ", ") + "; '" + $verb + "' is not one of them"))) }
+    # A READ-ONLY NODE ANSWERS READS AND NOTHING ELSE (review of #112, B1). The verb's effect class is read
+    # from remote/Contract.ps1's pinned table, not from a list of names here, so a write, drive, spawn or
+    # kill verb added later is refused too; a verb the table does not class is not a read.
+    if ((Get-HordeLinkProp $Data "readOnly") -eq $true) {
+        $effect = "unclassed"
+        if ($script:HordeLinkVerbAllow.ContainsKey($verb)) { $effect = "$($script:HordeLinkVerbAllow[$verb].effect)" }
+        if ($effect -cne "read") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("this node serves read verbs only (horde node serve -ReadOnly); " + $verb + " is a " + $effect + " verb"))) }
+    }
     if ($script:HordeNodeViewVerbs -ccontains $verb) {
         if ("$($Data.viewError)" -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("the node could not build its view of its sessions: " + $Data.viewError))) }
         if ($null -eq $Data.view) { return (New-HordeNodeReply -NeedView $true) }
+    }
+    if ($script:HordeNodeOutboxVerbs -ccontains $verb) {
+        $why = "$(Get-HordeLinkProp $Data 'outboxError')"
+        if ($why -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("the node could not read its outbox: " + $why))) }
+        if (-not (Test-HordeNodeDataGiven $Data "outbox")) { return (New-HordeNodeReply -NeedOutbox $true) }
     }
     $now = Get-HordeLinkTime
     switch ($verb) {
@@ -419,6 +609,34 @@ function Invoke-HordeNodeFrame {
             if ($e.state -ceq "absent") { return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "absent"; reason = "the node's journal holds no such request"; observedAt = $now }))) }
             # The journal's own reason can name its files; the hub is told only that it could not say.
             return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = "the node's journal could not say; its own reason is kept on the node" })))
+        }
+        "session.deliver" { return (Invoke-HordeNodeDeliver -State $State -Request $f -Data $Data) }
+        "delivery.status" { return (Invoke-HordeNodeDeliveryStatus -State $State -Request $f -Data $Data) }
+        "mail.next" {
+            $pick = Select-HordeMailNext -Outbox @(Get-HordeNodeDataList $Data "outbox")
+            $value = [ordered]@{ pending = $pick.pending }
+            $write = $null
+            if ($null -ne $pick.next) {
+                $value["mail"] = $pick.next.mail
+                # HANDED OUT BEFORE IT IS SENT: a receipt for this message is accepted only once the
+                # record says mail.next returned it, so the caller writes that first.
+                if (-not $pick.next.handedOut) { $write = [pscustomobject]@{ messageId = "$($pick.next.messageId)"; marker = "handed"; at = $now } }
+            }
+            return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $value; reason = ""; observedAt = $now })) -Write $write)
+        }
+        "mail.receipt" {
+            $id = "$($f.args.messageId)"
+            $rec = Find-HordeNodeOutboxRecord -Outbox @(Get-HordeNodeDataList $Data "outbox") -MessageId $id
+            $recorded = ""
+            if ($null -ne $rec -and $rec.handedOut) { $recorded = "$($rec.stage)" }
+            $r = Resolve-HordeMailReceipt -Recorded $recorded -Asked "$($f.args.stage)"
+            if ($r.refused -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("message " + $id + ": " + $r.refused))) }
+            $write = $null
+            $at = "$($rec.recordedAt)"
+            if ($r.changed) { $at = $now; $write = [pscustomobject]@{ messageId = $id; marker = $r.stage; at = $now } }
+            if ($at -cnotmatch $script:HordeNodeTimePattern) { $at = $now }
+            $ack = [ordered]@{ messageId = $id; stage = $r.stage; recordedAt = $at }
+            return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "known"; value = $ack; reason = ""; observedAt = $now })) -Write $write)
         }
     }
     return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("no answer was built for '" + $verb + "'")))

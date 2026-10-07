@@ -5,6 +5,7 @@
     { "name": "provider", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "name" }, "direction": "any" },
     { "name": "model", "layers": ["L0", "L1", "L3", "L4", "L5"], "value": { "kind": "model" }, "direction": "any" },
     { "name": "permission", "layers": ["L1", "L3", "L4", "L5"], "value": { "kind": "enum", "values": ["plan", "ask", "edits", "bypass"] }, "direction": "any" },
-    { "name": "remote.permissionCeiling", "layers": ["L1", "L4"], "value": { "kind": "enum", "values": ["plan", "ask", "edits", "bypass"] }, "direction": "lower-only" }
+    { "name": "remote.permissionCeiling", "layers": ["L1", "L4"], "value": { "kind": "enum", "values": ["plan", "ask", "edits", "bypass"] }, "direction": "lower-only" },
+    { "name": "remote.deliverTo", "layers": ["L1", "L4"], "value": { "kind": "labels" }, "direction": "any" }
   ]
 }

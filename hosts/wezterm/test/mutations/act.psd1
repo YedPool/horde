@@ -123,5 +123,56 @@
         @{ Name = "reader-wrong-offset"
            Find = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x80));'
            Replace = 'IntPtr env = ReadPtr(h, IntPtr.Add(pp, 0x88));' }
+        @{ Name = "own-probe-ignores-profile"
+           Find = '$sd = Get-HordeWeztermSockDir -ProfileDir $pd'
+           Replace = '$sd = Get-HordeWeztermSockDir' }
+        @{ Name = "own-probe-ignores-running"
+           Find = 'if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart) }'
+           Replace = 'return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart)' }
+        @{ Name = "own-marker-elsewhere"
+           Find = '    return (Join-Path (Get-HordeWeztermSockDir -ProfileDir $ProfileDir) ("gui-sock-" + $GuiPid))'
+           Replace = '    return (Join-Path $ProfileDir ("gui-sock-" + $GuiPid))' }
+        @{ Name = "own-default-profile-elsewhere"
+           Find = '        $pd = "" + $env:USERPROFILE'
+           Replace = '        $pd = "" + $env:TEMP' }
+        @{ Name = "own-noarg-other-sockdir"
+           Find = 'if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart) }'
+           Replace = 'if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $env:TEMP -Guis $Guis -ProcessStart $ProcessStart) }' }
+        @{ Name = "running-list-unchecked"
+           Find = '    $why = Test-HordeWeztermRunningList -Running $Running'
+           Replace = '    $why = ""' }
+        @{ Name = "running-start-unchecked"
+           Find = 'if (("" + $e.start) -cnotmatch ''\A[0-9]{1,20}\z'') {'
+           Replace = 'if ($false) {' }
+        @{ Name = "marker-pid-unchecked"
+           Find = '    if (("" + $GuiPid) -cnotmatch ''\A[0-9]{1,10}\z'') { return $null }'
+           Replace = '' }
+        @{ Name = "profile-share-allowed"
+           Find = '    if ($Path -cnotmatch ''\A[A-Za-z]:\\'') {'
+           Replace = '    if ($false) {' }
+        @{ Name = "profile-dotdot-allowed"
+           Find = '    if ($full.TrimEnd(''\'') -cne $Path.TrimEnd(''\'')) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "profile-junction-allowed"
+           Find = '            if (($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {'
+           Replace = '            if ($false) {' }
+        @{ Name = "profile-unchecked-in-own"
+           Find = '    if ($pd -ne "") { $why = Test-HordeWeztermProfileDir -Path $pd; if ($why -ne "") { return (New-HordeUnknown -Reason $why) } }'
+           Replace = '' }
+        @{ Name = "profile-network-drive-allowed"
+           Find = '    if (@("Fixed", "Removable") -cnotcontains $kind) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "profile-inner-junction-unchecked"
+           Find = '    $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd(''\'')).TrimEnd(''\'')'
+           Replace = '    $p = $full.TrimEnd(''\'')' }
+        @{ Name = "profile-unreadable-folder-passes"
+           Find = '            if ($null -eq $it) {'
+           Replace = '            if ($false) {' }
+        @{ Name = "profile-walk-starts-above-socket-folder"
+           Find = '    $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd(''\'')).TrimEnd(''\'')'
+           Replace = '    $p = Split-Path -Parent (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd(''\''))' }
+        @{ Name = "default-profile-unchecked"
+           Find = '        $why = Test-HordeWeztermProfileDir -Path $pd'
+           Replace = '        $why = ""' }
     )
 }

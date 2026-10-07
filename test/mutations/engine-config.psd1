@@ -124,11 +124,11 @@
            Find = 'if (@($entry.layers) -cnotcontains $d.layer) {'
            Replace = 'if ($false) {' }
         @{ Name = "key-value-not-checked"
-           Find = 'if (-not (Test-HordeConfigValue -Entry $entry -Value $p.Value)) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($why -ne "") { Add-Finding "key-value"'
+           Replace = 'if ($false) { Add-Finding "key-value"' }
         @{ Name = "enum-value-not-checked"
-           Find = 'if ($kind -ceq "enum") { return [bool]($Value -is [string] -and @($Entry.value.values) -ccontains $Value) }'
-           Replace = 'if ($kind -ceq "enum") { return $true }' }
+           Find = 'if ($kind -ceq "enum") { if (@($Entry.value.values) -ccontains $Value) { return "" };'
+           Replace = 'if ($kind -ceq "enum") { if ($true) { return "" };' }
         @{ Name = "undefined-profile-accepted"
            Find = 'if ($null -eq $prof) { Add-Finding "undefined-profile"'
            Replace = 'if ($false) { Add-Finding "undefined-profile"' }
