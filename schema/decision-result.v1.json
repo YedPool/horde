@@ -64,7 +64,7 @@
     "message": {
       "type": "object",
       "description": "One thing said under a question. What the record holds: sequence, at, speaker, route, recordedBy, text, wordingVersion. What is worked out from the order of the records each time, and stored nowhere: saidToEarlierWording, arrivedAfterClosing, unreadBy.",
-      "required": ["sequence", "at", "speaker", "speakerShown", "route", "routeShown", "recordedBy", "text", "wordingStated", "wordingVersion", "saidToEarlierWording", "arrivedAfterClosing", "unreadBy"],
+      "required": ["sequence", "at", "speaker", "speakerShown", "route", "routeShown", "recordedBy", "text", "holdsDirectionOrInvisibleCharacters", "wordingStated", "wordingVersion", "saidToEarlierWording", "arrivedAfterClosing", "unreadBy"],
       "additionalProperties": false,
       "properties": {
         "sequence": {"type": "integer", "minimum": 1, "description": "The record the words are in. A thread is in this order."},
@@ -75,6 +75,7 @@
         "routeShown": {"type": "string", "description": "The route in words, the same words everywhere: 'recorded by the warchief from chat' for words another hand wrote down."},
         "recordedBy": {"type": "string", "description": "The role that made the request. For words recorded from chat it is not the speaker."},
         "text": {"type": "string", "description": "The words, verbatim."},
+        "holdsDirectionOrInvisibleCharacters": {"type": "boolean", "description": "True when the words hold a direction mark, an embedding, an override, an isolate, a joiner or another character that is not seen. They are stored exactly as typed; a way of showing them isolates the message so that it cannot reorder what is beside it. Worked out from the text each time, stored nowhere."},
         "wordingStated": {"type": "boolean", "description": "Whether the speaker said which wording of the question they were looking at. When false, a way of showing says 'wording not stated'."},
         "wordingVersion": {"type": "integer", "minimum": 0, "description": "The wording the speaker was looking at; 0 when it was not stated, which is never a wording."},
         "saidToEarlierWording": {"type": "boolean", "description": "True when the question had already left that wording WHEN THE WORDS WERE SAID: they answered something the question no longer said. Judged at the record's place in the order, and only ever for a STATED wording; never against the wording now: a rewording made afterwards does not flag words said before it."},

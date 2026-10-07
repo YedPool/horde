@@ -732,26 +732,48 @@ Check ($hundredThousand.Length -eq 100000 -and (Get-Saying -Text $hundredThousan
 Check ((Get-Saying -Text ("x" * 500000)).Count -eq 0) "and so may 500,000, the most a text may be"
 $tooLong = Get-Saying -Text ("x" * 500001)
 Check ((Test-Says $tooLong "'text' is 500001 characters long; the most is 500000") -and (Test-Says $tooLong "refused whole, never cut") -and @($tooLong | Where-Object { "$_".Length -gt 300 }).Count -eq 0) "one character more is refused whole, with the count, and the finding does not hold the text"
-# ONE DEFINITION OF "NOT TEXT", for a question's text of several lines and for words said under it:
-# control, format, line-separator and paragraph-separator characters are refused, except the line
-# break, the tab, and the four format characters right-to-left and joined writing is made with
-# (U+200C, U+200D, U+200E, U+200F). Refused by code point, never cleaned, never repeated.
-$hebrewSaid = "" + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + " " + [char]0x200E + "(yes)" + [char]0x200D + "`r`n`tnext"
-Check ((Get-Saying -Text $hebrewSaid).Count -eq 0) "Hebrew with its direction marks and a joiner, a line break and a tab, may be said as it is"
-foreach ($bad in @(0x202B, 0x202E, 0x2067, 0x2069, 0x200B, 0xFEFF, 0x2028, 0x2029)) {
-    $withIt = "before" + [char]$bad + "after"
-    $found = Get-Saying -Text $withIt
-    Check ((Test-Says $found ("'text' holds the character U+" + $bad.ToString("X4"))) -and (Test-Says $found "refused, not removed") -and -not (Test-Says $found "before")) ("a format or separator character (U+" + $bad.ToString("X4") + ") in words said is refused by its code point, and the words around it are not repeated")
+# TWO CLASSES, IN ONE PLACE, EACH NAMED FOR WHAT IT IS FOR (decisions/Rules.ps1):
+#   a QUESTION FIELD must not be able to disguise itself, so it refuses every format character but the
+#     four right-to-left and joined writing cannot do without (U+200C to U+200F);
+#   a SPOKEN MESSAGE must be stored exactly as typed, so it also takes what keyboards and chat programs
+#     put into right-to-left text: embeddings and overrides (U+202A to U+202E), isolates (U+2066 to
+#     U+2069), the Arabic letter mark (U+061C), the zero-width space and the word joiner (U+200B, U+2060).
+# Both refuse control characters other than the line break and the tab, the byte-order mark (U+FEFF)
+# and the line and paragraph separators (U+2028, U+2029). Refused by code point, never cleaned.
+$hebrewSaid = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x061C + [char]0x200B + [char]0x2060 + [char]0x200E + "(yes)" + [char]0x200D + "`r`n`tnext"
+Check ((Get-Saying -Text $hebrewSaid).Count -eq 0) "a Hebrew sentence with an embedding, an isolate pair, the marks, a zero-width space and a word joiner may be SAID exactly as it was typed"
+$inTitle = Get-Findings (New-Question @{ title = ("Should " + [char]0x202B + "this" + [char]0x202C + " closing sound play at all here?") })
+$inIsolate = Get-Findings (New-Question @{ title = ("Should " + [char]0x2067 + "this" + [char]0x2069 + " closing sound play at all here?") })
+Check ((Test-Says $inTitle "'title' holds the character U+202B") -and (Test-Says $inIsolate "'title' holds the character U+2067") -and @(Test-HordeDecisionNote -Text $hebrewSaid -Name "outcome").Count -gt 0) "the SAME characters in a question's title, or in its text of several lines, are still refused: a question field must not be able to disguise itself"
+# Character by character: what each class refuses, said outright. words / field of several lines.
+# Keyed by the code point as a number, in a plain table: an ordered one would take a number for a position.
+$expected = @{
+    0x09 = "kept/kept"; 0x0A = "kept/kept"; 0x0D = "kept/kept"; 0x41 = "kept/kept"; 0x05D0 = "kept/kept"
+    0x200C = "kept/kept"; 0x200D = "kept/kept"; 0x200E = "kept/kept"; 0x200F = "kept/kept"
+    0x202A = "kept/refused"; 0x202B = "kept/refused"; 0x202C = "kept/refused"; 0x202D = "kept/refused"; 0x202E = "kept/refused"
+    0x2066 = "kept/refused"; 0x2067 = "kept/refused"; 0x2068 = "kept/refused"; 0x2069 = "kept/refused"
+    0x061C = "kept/refused"; 0x200B = "kept/refused"; 0x2060 = "kept/refused"
+    0xFEFF = "refused/refused"; 0x2028 = "refused/refused"; 0x2029 = "refused/refused"
+    0x1B = "refused/refused"; 0x00 = "refused/refused"; 0x7F = "refused/refused"; 0x85 = "refused/refused"
 }
-# THE SAME RULE AS A QUESTION'S OWN TEXT, character for character: whatever one refuses, the other does.
-$apart = New-Object System.Collections.ArrayList
-foreach ($code in @(0x09, 0x0A, 0x0D, 0x1B, 0x00, 0x7F, 0x85, 0xAD, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2028, 0x2029, 0x2066, 0x2067, 0x2068, 0x2069, 0xFEFF, 0x41, 0x05D0)) {
+$off = New-Object System.Collections.ArrayList
+foreach ($code in @($expected.Keys | Sort-Object)) {
     $probe = "a" + [char]$code + "b"
-    $inWords = (@(Get-Saying -Text $probe | Where-Object { "$_" -like "*holds the character*" }).Count -gt 0)
-    $inText = (@(Test-HordeDecisionNote -Text $probe -Name "outcome" | Where-Object { "$_" -like "*holds the character*" }).Count -gt 0)
-    if ($inWords -ne $inText) { [void]$apart.Add("U+" + $code.ToString("X4") + " words:" + $inWords + " text:" + $inText) }
+    $inWords = $(if (@(Get-Saying -Text $probe | Where-Object { "$_" -like ("*holds the character U+" + ([int]$code).ToString("X4") + "*") }).Count -gt 0) { "refused" } else { "kept" })
+    $inText = $(if (@(Test-HordeDecisionNote -Text $probe -Name "outcome" | Where-Object { "$_" -like ("*holds the character U+" + ([int]$code).ToString("X4") + "*") }).Count -gt 0) { "refused" } else { "kept" })
+    if (($inWords + "/" + $inText) -cne $expected[$code]) { [void]$off.Add("U+" + ([int]$code).ToString("X4") + " " + $inWords + "/" + $inText + ", expected " + $expected[$code]) }
 }
-Check ($apart.Count -eq 0) ("words said and a question's text of several lines refuse exactly the same characters: one definition, not two" + $(if ($apart.Count) { " (" + ($apart -join "; ") + ")" } else { "" }))
+Check ($off.Count -eq 0 -and $expected.Count -eq 28) ("each of 28 characters is kept or refused by each class exactly as the two classes say" + $(if ($off.Count) { " (" + ($off -join "; ") + ")" } else { "" }))
+foreach ($bad in @(0x2028, 0x2029, 0xFEFF)) {
+    $found = Get-Saying -Text ("before" + [char]$bad + "after")
+    Check ((Test-Says $found ("'text' holds the character U+" + $bad.ToString("X4"))) -and (Test-Says $found "refused, not removed") -and -not (Test-Says $found "before")) ("U+" + $bad.ToString("X4") + " in a message is refused by its code point, and the words around it are not repeated")
+}
+# THE DERIVED FLAG: a message says of itself whether it holds direction or invisible characters, so that
+# whatever shows it knows to isolate it. Worked out from the text, stored nowhere.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text $hebrewSaid), (New-Said 3 1 -Text "plain words, a tab`tand a line`r`nbreak"), (New-Said 4 1 -Text ("only a mark" + [char]0x200F)))
+$t = Get-Thread $st 1
+Check ((@($t.messages | ForEach-Object { "" + $_.holdsDirectionOrInvisibleCharacters }) -join ",") -ceq "True,False,True") ("a message holding direction or invisible characters says so, one holding only a mark too, and plain words with a tab and a line break do not (" + (@($t.messages | ForEach-Object { "" + $_.holdsDirectionOrInvisibleCharacters }) -join ",") + ")")
+Check ([string]::Equals($t.messages[0].text, $hebrewSaid, [System.StringComparison]::Ordinal) -and $null -eq $st.questions[1].thread[0].PSObject.Properties["holdsDirectionOrInvisibleCharacters"]) "the words themselves are untouched, and the flag is not kept with them: it is worked out when the message is shown"
 Check ((Get-Saying -Text ("line one`r`nline two`n`tindented")).Count -eq 0) "line breaks of both kinds and a tab may be said"
 foreach ($bad in @(0x1B, 0x00, 0x07, 0x08, 0x7F, 0x85)) {
     $withControl = "before" + [char]$bad + "after"

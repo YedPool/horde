@@ -91,7 +91,7 @@ function Get-Said {
     # The message a say answered with; a stand-in that equals nothing when the answer holds none.
     param($Answer)
     if ($Answer.state -ceq "known" -and $null -ne $Answer.value.PSObject.Properties["message"]) { return $Answer.value.message }
-    return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingStated = "none"; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none" }
+    return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingStated = "none"; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none"; holdsDirectionOrInvisibleCharacters = "none" }
 }
 function Get-Unread { param($Thread) $u = @($Thread.unread | Where-Object { $_.reader -ceq "warchief" }) | Select-Object -First 1; if ($null -eq $u) { return -1 }; return [int]$u.count }
 function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["messages"]) { return "(the answer holds no messages)" }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo) }
@@ -189,9 +189,9 @@ $null = Add-Q $s
 # Written as escapes so this file stays ASCII (CONTRIBUTING 13). A right-to-left embedding, the word
 # "ken" (yes) and a right-to-left mark, a comma, an isolate around another word, then left-to-right
 # text in brackets, a joiner, and a second line.
-$hebrew = "" + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + " " + [char]0x200E + "(yes)" + [char]0x200D + "`r`n  " + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
+$hebrew = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x061C + [char]0x200B + [char]0x2060 + [char]0x200E + "(yes)" + [char]0x200D + "`r`n  " + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
 $a = Say $s 1 $hebrew
-Check ((Get-Outcome $a) -ceq "done" -and [string]::Equals((Get-Said $a).text, $hebrew, [System.StringComparison]::Ordinal)) ("Hebrew with its direction marks and a joiner is recorded as it is (" + (Get-Outcome $a) + ")")
+Check ((Get-Outcome $a) -ceq "done" -and [string]::Equals((Get-Said $a).text, $hebrew, [System.StringComparison]::Ordinal)) ("a Hebrew sentence with an embedding, an isolate pair, marks, a zero-width space and a word joiner is recorded as it is (" + (Get-Outcome $a) + ")")
 Check ([string]::Equals((Get-Thread $s 1).messages[0].text, $hebrew, [System.StringComparison]::Ordinal)) "and reads back from the store character for character: marks, line break and the spaces at both ends"
 Check ([string]::Equals((Read-Record $s 2).data.text, $hebrew, [System.StringComparison]::Ordinal)) "the record on disk holds exactly those characters"
 $long = ("word " * 19999) + "end!!"
@@ -201,8 +201,13 @@ Check ([string]::Equals((Get-Thread $s 1).messages[1].text, $long, [System.Strin
 $exact = "  leading spaces`ttab, CRLF`r`nthen LF`nthen two blank lines`r`n`r`n"
 $a = Say $s 1 $exact
 Check ((Get-Outcome $a) -ceq "done" -and [string]::Equals((Get-Thread $s 1).messages[2].text, $exact, [System.StringComparison]::Ordinal)) "spaces at both ends, a tab and line breaks of both kinds are kept as they were: nothing is trimmed or re-wrapped"
-$embedded = Say $s 1 ("" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x202C + " the rest of what he said")
-Check ((Test-Refused $embedded "'text' holds the character U+202B") -and (Get-Count $s) -eq 4 -and -not (Test-Echo $embedded "the rest of what he said")) ("a right-to-left EMBEDDING is refused by its code point, as in a question's own text: not removed, and the words are not repeated (" + (Get-Outcome $embedded) + ")")
+$inboxHebrew = @((Inbox $s).value.messages)[0].message
+Check ([string]::Equals($inboxHebrew.text, $hebrew, [System.StringComparison]::Ordinal) -and [System.Convert]::ToBase64String($utf8.GetBytes($inboxHebrew.text)) -ceq [System.Convert]::ToBase64String($utf8.GetBytes($hebrew))) "and comes back out of the inbox byte for byte"
+Check ((Get-Thread $s 1).messages[0].holdsDirectionOrInvisibleCharacters -eq $true -and (Get-Thread $s 1).messages[1].holdsDirectionOrInvisibleCharacters -eq $false -and $inboxHebrew.holdsDirectionOrInvisibleCharacters -eq $true) "the message says of itself that it holds direction or invisible characters, in show and in the inbox, so that whatever shows it knows to isolate it; the long plain one says it does not"
+$separated = Say $s 1 ("first part" + [char]0x2028 + "second part of what he said")
+Check ((Test-Refused $separated "'text' holds the character U+2028") -and (Get-Count $s) -eq 4 -and -not (Test-Echo $separated "second part of what he said")) ("a LINE SEPARATOR (U+2028) in a message is refused by its code point: not removed, and the words are not repeated (" + (Get-Outcome $separated) + ")")
+$titled = Invoke-Op $s "add" @{ id = (New-Id); actor = "warchief"; question = @{ title = ("Should " + [char]0x2067 + "this" + [char]0x2069 + " closing sound play at all here?"); kind = "yes-no"; whatItIs = "x"; group = "voice"; askedBy = "orc-b" } }
+Check ((Test-Refused $titled "'title' holds the character U+2067") -and (Get-Count $s) -eq 4) "CONTROL: an isolate in a question's TITLE is still refused: only what is said is taken as typed"
 $tooLong = Say $s 1 ("x" * 500001)
 Check ((Test-Refused $tooLong "'text' is 500001 characters long") -and (Get-Count $s) -eq 4) "a message longer than the most a text may be is refused whole, with the count: never cut, and never stored in part"
 $blank = Say $s 1 "   "
