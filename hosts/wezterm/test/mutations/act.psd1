@@ -159,5 +159,11 @@
         @{ Name = "profile-unchecked-in-own"
            Find = '    if ($pd -ne "") { $why = Test-HordeWeztermProfileDir -Path $pd; if ($why -ne "") { return (New-HordeUnknown -Reason $why) } }'
            Replace = '' }
+        @{ Name = "profile-network-drive-allowed"
+           Find = '    if (@("Fixed", "Removable") -cnotcontains $kind) {'
+           Replace = '    if ($false) {' }
+        @{ Name = "profile-inner-junction-unchecked"
+           Find = '    $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd(''\'')).TrimEnd(''\'')'
+           Replace = '    $p = $full.TrimEnd(''\'')' }
     )
 }

@@ -498,15 +498,22 @@ function Stop-HordeWeztermPane {
 }
 
 function Test-HordeWeztermProfileDir {
-    # "" when -Path may stand for a profile folder, else why not: a full path on a local drive (never a
-    # share, which Test-Path would reach over the network), already in full form (no '..'), and with no
-    # junction or link on any folder of it that exists (review of #108).
-    param([AllowEmptyString()][string]$Path)
+    # "" when -Path may stand for a profile folder, else why not: a full path on a fixed or removable
+    # local drive (never a share, nor a drive letter mapped to one, which Test-Path would reach over the
+    # network), already in full form (no '..'), and with no junction or link on any folder that exists
+    # from the drive down to the socket folder inside it (review of #108; issue #119: a junction at the
+    # profile's .local was adopted, and a mapped network drive passed). -DriveType stands in for the
+    # drive's type in a test: root -> type name.
+    param([AllowEmptyString()][string]$Path, [scriptblock]$DriveType = $null)
     if ($Path -cnotmatch '\A[A-Za-z]:\\') { return ("the profile folder '" + $Path + "' is not a full path on a local drive") }
+    $driveRoot = $Path.Substring(0, 3)
+    $kind = ""
+    try { if ($null -ne $DriveType) { $kind = "" + (& $DriveType $driveRoot) } else { $kind = "" + (New-Object System.IO.DriveInfo($driveRoot)).DriveType } } catch { $kind = "" }
+    if (@("Fixed", "Removable") -cnotcontains $kind) { return ("the profile folder '" + $Path + "' is on drive " + $driveRoot + " of type '" + $kind + "'; only a fixed or removable local drive may stand for a profile") }
     $full = $null
     try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return ("the profile folder '" + $Path + "' is not a path") }
     if ($full.TrimEnd('\') -cne $Path.TrimEnd('\')) { return ("the profile folder '" + $Path + "' is not in full form (it reads as " + $full + ")") }
-    $p = $full.TrimEnd('\')
+    $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd('\')).TrimEnd('\')
     while ($p.Length -gt 3) {
         if ((Test-Path -LiteralPath $p) -and (((Get-Item -LiteralPath $p -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) { return ("the profile folder '" + $Path + "' passes through " + $p + ", a junction or link") }
         $p = Split-Path -Parent $p

@@ -326,6 +326,25 @@ try {
         Check ($r.state -eq "unknown" -and $r.reason -like "*junction or link*" -and $null -eq (& $a.value.ownMarker $jp 4242)) ("a profile folder reached through a junction is refused, though the socket is there (" + $r.reason + ")")
         [System.IO.Directory]::Delete($jp)
     } else { Check $false "CONTROL: a junction could be made for the test" }
+    # A junction INSIDE the profile, on the way to its socket folder (issue #119).
+    $pin = Join-Path $pp "profile-inner"
+    $elsewhere = Join-Path $pp "elsewhere-local"
+    New-Item -ItemType Directory -Path $pin, (Join-Path $elsewhere "share\wezterm") -Force | Out-Null
+    New-Item -ItemType File -Path (Join-Path $elsewhere "share\wezterm\gui-sock-4242") -Force | Out-Null
+    $null = cmd /c mklink /J "$(Join-Path $pin '.local')" "$elsewhere"
+    if (Test-Path -LiteralPath (Join-Path $pin ".local")) {
+        $r = & $a.value.own $pin @([pscustomobject]@{ pid = 4242; start = "134350994347710308" })
+        Check ($r.state -eq "unknown" -and $r.reason -like "*.local, a junction or link*" -and $null -eq (& $a.value.ownMarker $pin 4242)) ("a junction inside the profile, at its .local, is refused though a socket waits behind it (" + $r.reason + ")")
+        [System.IO.Directory]::Delete((Join-Path $pin ".local"))
+    } else { Check $false "CONTROL: a junction could be made for the test" }
+    # The drive's type: only a fixed or removable local drive (issue #119: a mapped network drive passed).
+    $sys = $env:SystemDrive + "\"
+    Check ((Test-HordeWeztermProfileDir -Path $pp) -eq "") ("CONTROL: the temp profile on this machine's own drive passes (" + (New-Object System.IO.DriveInfo($pp.Substring(0, 3))).DriveType + ")")
+    foreach ($kind in @("Network", "CDRom", "Ram", "Unknown", "NoRootDirectory")) {
+        $why = Test-HordeWeztermProfileDir -Path $pp -DriveType ([scriptblock]::Create("param(`$root) '" + $kind + "'"))
+        Check ($why -like ("*of type '" + $kind + "'*")) ("a profile on a drive of type " + $kind + " is refused (" + $why + ")")
+    }
+    Check ((Test-HordeWeztermProfileDir -Path $pp -DriveType { param($root) "Removable" }) -eq "") "CONTROL: a removable local drive passes"
 } finally { if ((Split-Path -Leaf $pp) -match '^horde-act-profile-[0-9a-f]{32}$') { Remove-Item -LiteralPath $pp -Recurse -Force -ErrorAction SilentlyContinue } }
 
 Remove-HordePaneTool
