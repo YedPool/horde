@@ -26,6 +26,21 @@
         @{ Name = "empty-output-is-no-panes"
            Find = 'if ($joined -eq "") { return (New-HordeUnknown -Reason "the terminal''s pane list was empty output, which is unknown, not none") }'
            Replace = 'if ($joined -eq "") { return (New-HordeKnown -Value @()) }' }
+        @{ Name = "an-id-of-any-kind-is-read"
+           Find = 'if (($number -isnot [int] -and $number -isnot [long]) -or $number -lt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "an-id-below-zero-is-read"
+           Find = 'if (($number -isnot [int] -and $number -isnot [long]) -or $number -lt 0) {'
+           Replace = 'if ($number -isnot [int] -and $number -isnot [long]) {' }
+        @{ Name = "a-title-that-is-not-text-is-converted"
+           Find = 'if ($p.title -isnot [string]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "is-active-of-any-kind-is-converted"
+           Find = 'if ($p.is_active -isnot [bool]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "is-zoomed-of-any-kind-is-converted"
+           Find = 'if ($p.is_zoomed -isnot [bool]) {'
+           Replace = 'if ($false) {' }
         # --- the title a window can have
         @{ Name = "titles-compared-without-case"
            Find = 'if ($tabs -le 1) { if ($Title -ceq $want) { return $true }; continue }'
