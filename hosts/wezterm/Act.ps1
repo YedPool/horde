@@ -296,6 +296,12 @@ function Invoke-HordeWeztermAct {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # THE TERMINAL WRITES UTF-8, whatever this process's console is set to. Left to .NET, the answer is
+    # decoded in the console's code page, or the machine's when there is no console: a pane title of
+    # one character outside ASCII came back as three others, and did not equal itself (measured
+    # 2026-10-06; hosts/wezterm/Window.ps1 matches titles exactly).
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
     try { Set-HordeWeztermActEnvironment -Psi $psi -Environment $Environment } catch { return [pscustomobject]@{ code = -1; out = ""; err = ("refused: " + $_.Exception.Message); timedOut = $false } }
     $psi.EnvironmentVariables["WEZTERM_UNIX_SOCKET"] = "" + $Target.socket
