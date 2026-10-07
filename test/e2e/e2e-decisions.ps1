@@ -120,7 +120,7 @@ $waiting = Invoke-Decisions @("list")
 Check ($waiting.code -eq 0 -and @($waiting.lines | Where-Object { $_.Trim() -ceq "conversation: 1 message(s); 1 not yet read by the warchief; turn: the warchief" }).Count -eq 1) "the list shows that question 2 has one message, not yet read, and that it is the session's turn"
 $inbox = Invoke-Decisions @("inbox")
 Check ($inbox.code -eq 0 -and @($inbox.lines | Where-Object { $_ -ceq "1 message(s) not yet read, oldest first:" }).Count -eq 1 -and @($inbox.lines | Where-Object { $_ -ceq "Question 2: Which languages besides English should the test talker speak?" }).Count -eq 1) "inbox prints what he said, under the question's number and its plain-words title"
-Check (@($inbox.lines | Where-Object { $_ -ceq "      Both, but Hebrew first." -or $_ -ceq "      Which voice would the Spanish one be?" }).Count -eq 2 -and @($inbox.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, * UTC (record 8, said to wording 2)" }).Count -eq 1) "both of his lines, exactly, with who said them, how they were recorded, and which wording he was answering"
+Check (@($inbox.lines | Where-Object { $_ -ceq "      Both, but Hebrew first." -or $_ -ceq "      Which voice would the Spanish one be?" }).Count -eq 2 -and @($inbox.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, * UTC (record 8, wording not stated)" }).Count -eq 1) "both of his lines, exactly, with who said them, how they were recorded, and that which wording he saw was not stated"
 Check (@($inbox.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 8." }).Count -eq 1) "and then, having printed them, it marks them read and says so"
 $inboxAgain = Invoke-Decisions @("inbox")
 Check ($inboxAgain.code -eq 0 -and $inboxAgain.out -like "*Nothing unread*" -and $inboxAgain.out -notlike "*Marked as read*") "the inbox read again is empty: nothing is handed over twice, and nothing is marked"
@@ -130,7 +130,7 @@ $thread = Invoke-Decisions @("show", "2")
 Check ($thread.code -eq 0 -and @($thread.lines | Where-Object { $_ -ceq "Conversation: 2 message(s); turn: the founder" }).Count -eq 1) "show 2 gives the conversation: two messages, and it is the person's turn again"
 $saidAt = [array]::IndexOf($thread.lines, "      Which voice would the Spanish one be?")
 $repliedAt = [array]::IndexOf($thread.lines, "      A second voice, recorded this week; Hebrew goes first.")
-Check ($saidAt -gt 0 -and $repliedAt -gt $saidAt -and @($thread.lines | Where-Object { $_ -like "  the warchief, by command, * UTC (record 10, said to wording 2)" }).Count -eq 1) "his words first and the reply after them, each with who said it and by what route"
+Check ($saidAt -gt 0 -and $repliedAt -gt $saidAt -and @($thread.lines | Where-Object { $_ -like "  the warchief, by command, * UTC (record 10, wording not stated)" }).Count -eq 1) "his words first and the reply after them, each with who said it and by what route"
 Check (@($thread.lines | Where-Object { $_ -ceq "Question 2 - open (wording 2)" }).Count -eq 1 -and @($thread.lines | Where-Object { $_ -like "*(by warchief, record *" }).Count -eq 2) "and question 2 is still question 2, open, at wording 2, with the same two records in its history: talking changed nothing of it"
 $close2 = Invoke-Decisions @("close", "2", "-Outcome", "Hebrew first, then Spanish with a second voice.")
 $late = Invoke-Decisions @("answer", "2", "-Text", "Keep the English one too.")

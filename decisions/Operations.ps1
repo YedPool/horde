@@ -74,7 +74,7 @@ $script:HordeDecisionOperations = [ordered]@{
     # says the request is answered from the list with nothing written. parts: a function that gives
     # what the answer holds besides the question, from the list and the record's sequence number - the
     # same function for a write and for a repost of it, so the two answers cannot differ.
-    say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData";   parts = "Get-HordeDecisionSayParts" }
+    say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   parts = "Get-HordeDecisionSayParts" }
     inbox  = @{ writes = $true;  kind = "messages-read";     content = "Get-HordeDecisionInboxContent"; complete = "Complete-HordeDecisionInboxData"; parts = "Get-HordeDecisionInboxParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
@@ -183,21 +183,15 @@ function Get-HordeDecisionSayContent {
     param($Request, $Definitions)
     $body = [ordered]@{ speaker = [string]$Request.speaker; route = [string]$Request.route; text = [string]$Request.text }
     $found = New-Object System.Collections.ArrayList
-    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"])) { [void]$found.Add($f) }
-    if (Test-HordeDecisionMember -Object $Request -Name "wordingVersion") {
+    # THE WORDING THE SPEAKER WAS LOOKING AT IS RECORDED ONLY WHEN THE REQUEST STATES IT. Nothing is put
+    # in its place: a request without one makes a record without one ("not stated").
+    $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"
+    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }
+    if ($stated) {
         if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }
         else { [void]$found.Add("'wordingVersion' is not a wording a question can have: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
     }
     return [pscustomobject]@{ body = $body; findings = @($found) }
-}
-
-function Complete-HordeDecisionSayData {
-    # The wording the speaker was looking at, when the request did not say: the question's wording as
-    # it stands at this try. It is not part of what is hashed, so the same request sent again is the
-    # same request whatever the wording has become.
-    param($Request, $List, $Data)
-    if (-not $Data.Contains("wordingVersion")) { $Data["wordingVersion"] = [int]$List.questions[[int]$Data["number"]].wordingVersion }
-    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
 }
 
 function Get-HordeDecisionSayParts {

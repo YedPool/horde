@@ -42,6 +42,12 @@
         @{ Name = "message-does-not-say-how-it-was-recorded"
            Find = '[void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " +'
            Replace = '[void]$lines.Add($Indent + $Message.speakerShown + ", " +' }
+        @{ Name = "unstated-wording-shown-as-a-wording"
+           Find = '    if ($Message.wordingStated) { $wording = "said to wording " + $Message.wordingVersion }'
+           Replace = '    $wording = "said to wording " + $Message.wordingVersion' }
+        @{ Name = "stated-wording-not-shown"
+           Find = '    if ($Message.wordingStated) { $wording = "said to wording " + $Message.wordingVersion }'
+           Replace = '' }
         @{ Name = "arrival-after-closing-not-said"
            Find = 'if ($Message.arrivedAfterClosing) { [void]$lines.Add('
            Replace = 'if ($false) { [void]$lines.Add(' }
