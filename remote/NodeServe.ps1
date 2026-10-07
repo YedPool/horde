@@ -550,6 +550,14 @@ function Invoke-HordeNodeFrame {
     $verb = "$($f.verb)"
     if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) { return (Invoke-HordeNodeAct -State $State -Frame $f -Data $Data) }
     if ($script:HordeNodeServedVerbs -cnotcontains $verb) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "unsupported-verb" -Reason ("this node answers " + ($script:HordeNodeServedVerbs -join ", ") + "; '" + $verb + "' is not one of them"))) }
+    # A READ-ONLY NODE ANSWERS READS AND NOTHING ELSE (review of #112, B1). The verb's effect class is read
+    # from remote/Contract.ps1's pinned table, not from a list of names here, so a write, drive, spawn or
+    # kill verb added later is refused too; a verb the table does not class is not a read.
+    if ((Get-HordeLinkProp $Data "readOnly") -eq $true) {
+        $effect = "unclassed"
+        if ($script:HordeLinkVerbAllow.ContainsKey($verb)) { $effect = "$($script:HordeLinkVerbAllow[$verb].effect)" }
+        if ($effect -cne "read") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("this node serves read verbs only (horde node serve -ReadOnly); " + $verb + " is a " + $effect + " verb"))) }
+    }
     if ($script:HordeNodeViewVerbs -ccontains $verb) {
         if ("$($Data.viewError)" -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("the node could not build its view of its sessions: " + $Data.viewError))) }
         if ($null -eq $Data.view) { return (New-HordeNodeReply -NeedView $true) }

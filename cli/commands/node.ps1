@@ -72,9 +72,14 @@ $HordeCommand = @{
         # for every deliver; a layer that fails its checks refuses every deliver and says why. A deliver
         # goes through the messenger port (messengers/Port.ps1) to the messenger -Messenger names, which
         # Resolve-HordeNodeMessenger must accept; with none, every deliver is refused and says why.
-        $messaging = New-HordeNodeMessaging -Root $root -HordeHome $hordeHome -GetView $getView -MessengerName $Messenger
-        if ("$($messaging.MessengerError)" -ne "") { Write-Host ("every deliver is refused: " + $messaging.MessengerError) }
-        $r = Invoke-HordeNodeServe -Transport $transport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say -Messaging $messaging
+        # -ReadOnly builds NO messaging - no messenger, no outbox, no message journal - and the node refuses
+        # every verb whose effect is not read (review of #112, B1).
+        $messaging = $null
+        if (-not $ReadOnly) {
+            $messaging = New-HordeNodeMessaging -Root $root -HordeHome $hordeHome -GetView $getView -MessengerName $Messenger
+            if ("$($messaging.MessengerError)" -ne "") { Write-Host ("every deliver is refused: " + $messaging.MessengerError) }
+        }
+        $r = Invoke-HordeNodeServe -Transport $transport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say -Messaging $messaging -ReadOnly:$ReadOnly
         Write-Output ("served " + $r.served + " link(s)")
         foreach ($e in $r.endings) { Write-Output ("  " + $e) }
         if ($r.refused -gt 0) { Write-Output ("refused " + $r.refused + " peer(s), the listener kept each time") }

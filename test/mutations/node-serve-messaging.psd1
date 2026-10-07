@@ -17,6 +17,12 @@
         @{ Name = "deliverto-not-asked-for"
            Find = 'if (-not (Test-HordeNodeDataGiven $Data "deliverTo") -and'
            Replace = 'if ($false -and' }
+        @{ Name = "read-only-ignored"
+           Find = 'if ((Get-HordeLinkProp $Data "readOnly") -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "read-only-names-a-list"
+           Find = 'if ($effect -cne "read") {'
+           Replace = 'if (@("session.deliver") -ccontains $verb) {' }
         @{ Name = "refused-layer-still-delivers"
            Find = 'if ($layerWhy -ne "") {'
            Replace = 'if ($false) {' }

@@ -15,6 +15,12 @@
         @{ Name = "handed-out-mark-not-written-before-the-reply"
            Find = '$w = Add-HordeOutboxMarker -Root $outboxRoot -MessageId "$($r.write.messageId)" -Marker "$($r.write.marker)" -At "$($r.write.at)"'
            Replace = '$w = [pscustomobject]@{ state = "known" }' }
+        @{ Name = "loop-drops-read-only"
+           Find = 'actOutcome = $null; readOnly = [bool]$ReadOnly'
+           Replace = 'actOutcome = $null; readOnly = $false' }
+        @{ Name = "layer-problems-ignored"
+           Find = '$a = Get-HordeNodeDeliverTo -Layers @($eng.layers) -Problems @($eng.problems)'
+           Replace = '$a = Get-HordeNodeDeliverTo -Layers @($eng.layers) -Problems @()' }
         @{ Name = "message-sent-to-the-named-session"
            Find = '$m = [ordered]@{ messageId = "$($a.messageId)"; sessionId = "$($Need.target.sessionId)" }'
            Replace = '$m = [ordered]@{ messageId = "$($a.messageId)"; sessionId = "$($a.sessionId)" }' }

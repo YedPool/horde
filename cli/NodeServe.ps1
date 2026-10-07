@@ -101,8 +101,10 @@ function Invoke-HordeNodeServeStep {
     # sessions this hub spawned here, none until step 3.8 ships the record writer. NOTHING HERE TYPES INTO
     # A SESSION: delivery is the messenger's, behind the port.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Line, [Parameter(Mandatory = $true)]$Manifest,
-        [Parameter(Mandatory = $true)]$Namespace, [string]$JournalRoot = "", $Messaging = $null, [scriptblock]$GetView = $null, [scriptblock]$Act = $null)
-    $data = [pscustomobject]@{ manifest = $Manifest; view = $null; viewError = ""; journalRoot = $JournalRoot; namespace = $Namespace; acts = ($null -ne $Act); actOutcome = $null
+        [Parameter(Mandatory = $true)]$Namespace, [string]$JournalRoot = "", $Messaging = $null, [scriptblock]$GetView = $null, [scriptblock]$Act = $null,
+        # Read verbs only: every verb whose effect class is not read is refused (remote/NodeServe.ps1).
+        [switch]$ReadOnly)
+    $data = [pscustomobject]@{ manifest = $Manifest; view = $null; viewError = ""; journalRoot = $JournalRoot; namespace = $Namespace; acts = ($null -ne $Act); actOutcome = $null; readOnly = [bool]$ReadOnly
         messageJournalRoot = ""; deliverTo = @(); deliverToError = ""; hubSpawned = @(); messenger = ""; messengerError = ""; deliverResult = $null; deliveryStatus = $null; outbox = $null; outboxError = "" }
     $layerSource = $null
     $deliverer = $null
@@ -285,6 +287,8 @@ function Invoke-HordeNodeServe {
         # Given the act ({ verb; args; requestId }), returns its outcome { state; sessionId; expect;
         # reason }; $null serves no acts.
         [scriptblock]$Act = $null,
+        # Read verbs only (horde node serve -ReadOnly): every verb whose effect is not read is refused.
+        [switch]$ReadOnly,
         [int]$MaxLinks = 0,
         [int]$AcceptTimeoutMs = 15000,
         [int]$IdleTimeoutMs = 120000,
@@ -355,7 +359,7 @@ function Invoke-HordeNodeServe {
                     if ($line.state -cne "known") { $ended = "the link ended: " + $line.reason; break }
                     $r = $null
                     try {
-                        $r = Invoke-HordeNodeServeStep -State $state -Line "$($line.value)" -Manifest $Manifest -Namespace $Namespace -JournalRoot $JournalRoot -Messaging $Messaging -GetView $GetView -Act $Act
+                        $r = Invoke-HordeNodeServeStep -State $state -Line "$($line.value)" -Manifest $Manifest -Namespace $Namespace -JournalRoot $JournalRoot -Messaging $Messaging -GetView $GetView -Act $Act -ReadOnly:$ReadOnly
                     } catch {
                         $why = "$($_.Exception.Message)"
                         $req = $null
