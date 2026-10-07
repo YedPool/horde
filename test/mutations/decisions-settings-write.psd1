@@ -10,13 +10,13 @@
     Suite  = "test\test-decisions-operations.ps1"
     Mutations = @(
         @{ Name = "held-record-waited-for-ten-times-as-long"
-           Find = '"decisions.write.heldReads": { "default": 5,'
-           Replace = '"decisions.write.heldReads": { "default": 50,' }
+           Find = '"decisions.write.heldReads": { "kind": "whole-number", "default": 5,'
+           Replace = '"decisions.write.heldReads": { "kind": "whole-number", "default": 50,' }
         @{ Name = "held-record-not-waited-for-by-a-write"
-           Find = '"decisions.write.heldReads": { "default": 5,'
-           Replace = '"decisions.write.heldReads": { "default": 1,' }
+           Find = '"decisions.write.heldReads": { "kind": "whole-number", "default": 5,'
+           Replace = '"decisions.write.heldReads": { "kind": "whole-number", "default": 1,' }
         @{ Name = "one-try-only"
-           Find = '"decisions.write.raceTries": { "default": 200,'
-           Replace = '"decisions.write.raceTries": { "default": 1,' }
+           Find = '"decisions.write.raceTries": { "kind": "whole-number", "default": 200,'
+           Replace = '"decisions.write.raceTries": { "kind": "whole-number", "default": 1,' }
     )
 }
