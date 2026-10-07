@@ -150,7 +150,7 @@ $probe = [pscustomobject]@{
     outside = ("http://127.0.0.1:" + $port); socket = ("ws://127.0.0.1:" + $port); stamp = ("horde-surface-probe-" + [guid]::NewGuid().ToString("N"))
     pokeValue = ("poked " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD + " <b>&'")
     picturePath = (Join-Path $work "page.png"); secondPath = (Join-Path $work "second.png"); pictureAsked = $null; secondAsked = $null
-    native = $null; tree = @(); listeners = @(); hadKeyboardAtOpen = $null; openedMs = 0; closed = $false; errorsAtEnd = @()
+    native = $null; tree = @(); listeners = @(); hadKeyboardAtOpen = $null; openedMs = 0; closed = $false; errorsAtEnd = @(); heldAtOpen = -1
 }
 $knock = New-Object System.Net.Sockets.TcpClient
 $knock.Connect([System.Net.IPAddress]::Loopback, $port)
@@ -171,7 +171,7 @@ $probe.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
 })
 $spec = New-HordeSurfaceSpec -Title "surface probe" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe"); other = (Join-Path $pages "other") }) -Start "probe/index.html" `
     -Bridge $probe.bridge -DataFolder (Join-Path $work "data") -Hidden -Width 480 -Height 360 -TickMs 50 -State $probe `
-    -OnOpened { param($Window, $State) $State.openedMs = $State.clock.ElapsedMilliseconds; $State.hadKeyboardAtOpen = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq [IntPtr][long]$Window.handle) } `
+    -OnOpened { param($Window, $State) $State.openedMs = $State.clock.ElapsedMilliseconds; $State.heldAtOpen = @($script:HordeWebView2Held).Count; $State.hadKeyboardAtOpen = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq [IntPtr][long]$Window.handle) } `
     -OnTick { param($Window, $State) Step-Probe -Window $Window -State $State } `
     -OnClosed { param($Window, $State) $State.closed = $true }
 $surface = Resolve-HordeSurface -Requires @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
@@ -193,6 +193,7 @@ Check ($shown.state -ceq "closed" -and $shown.reason -ceq "" -and $probe.closed 
 Check ($probe.timedOut -ceq "") ("no step of the probe ran out of time (stopped in: '" + $probe.timedOut + "')")
 Check ((@($r.Keys) -join ",") -ceq ($steps -join ",")) ("the page reported every step, in order (" + (@($r.Keys) -join ",") + ")")
 Check (@($probe.errorsAtEnd).Count -eq 0) ("the window recorded no error of its own (" + (@($probe.errorsAtEnd) -join "; ") + ")")
+Check ($probe.heldAtOpen -eq 0) ("the engine started with its three pinned files held open by the surface - it could read them, nothing could change them - and once it was up the surface had let go of all of them (" + $probe.heldAtOpen + " still held)")
 
 Write-Host ""
 Write-Host "--- page.local: the page is files of this machine, and nothing listens ---" -ForegroundColor Cyan

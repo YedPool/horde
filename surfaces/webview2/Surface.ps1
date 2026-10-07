@@ -45,7 +45,9 @@
 #
 # THE THREE PINNED FILES in lib/ are Microsoft's, under the licence beside them. They are checked
 # against lib/fingerprints.txt BEFORE anything is loaded (core/Fingerprints.ps1), and a mismatch
-# refuses to load: a changed file would run inside Horde with everything Horde can do.
+# refuses to load: a changed file would run inside Horde with everything Horde can do. Each is held
+# open from the moment it is checked until the engine is up, so the bytes that are loaded are the
+# bytes that were checked, and a file nobody listed beside them refuses the folder.
 #
 # THE ENGINE ITSELF is not in this folder. It is the "WebView2 Runtime", part of Windows 11 and updated
 # with Edge. Where it is not installed the surface says so in plain words and fails.
@@ -81,6 +83,14 @@ $script:HordeWebView2LibFolder = Join-Path $PSScriptRoot "lib"
 # Every one of these must be pinned by the list, or nothing is loaded: a list that pinned two of the
 # three would let the third be anything.
 $script:HordeWebView2LibFiles = @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")
+# What else may stand in that folder, beside the three and their list: Microsoft's licence and notice.
+# ANYTHING ELSE REFUSES THE FOLDER. A program library loaded from a folder can pull in another that
+# was put beside it, and a check that only looked at the listed files would never see it (review of
+# 2026-10-06, finding A7: an extra file gave "ok").
+$script:HordeWebView2LibOtherFiles = @("LICENSE.txt", "NOTICE.txt")
+# The pinned files, open, from the moment they are checked until the engine is up
+# (Import-HordeWebView2Libraries -Hold; Clear-HordeWebView2HeldFiles).
+$script:HordeWebView2Held = @()
 $script:HordeWebView2 = $null
 # Where a hidden window stands: far outside any screen, the coordinates Windows itself gives a
 # minimised window, so nothing is drawn where a person can see it.
@@ -196,31 +206,57 @@ function Get-HordeWebView2RuntimeProblem {
 }
 
 function Test-HordeWebView2Libraries {
-    # Are the pinned files in -Folder the ones its list says, all three of them? { ok; reason; files }.
-    param([string]$Folder = $script:HordeWebView2LibFolder)
-    $check = Test-HordeFingerprints -Folder $Folder
+    # Are the pinned files in -Folder the ones its list says, all three of them, with nothing beside
+    # them but what may stand there? { ok; reason; files; held }. With -Hold, a folder that passes is
+    # handed back with its three files OPEN in held (core/Fingerprints.ps1): the caller loads them
+    # while they are held and disposes of every one. A folder that does not pass holds nothing.
+    param([string]$Folder = $script:HordeWebView2LibFolder, [switch]$Hold)
+    $check = Test-HordeFingerprints -Folder $Folder -Hold:$Hold
     $why = @($check.findings)
     $have = @($check.files | ForEach-Object { Split-Path -Leaf $_ })
     foreach ($need in $script:HordeWebView2LibFiles) { if ($have -cnotcontains $need) { $why += ($need + " is not pinned by the list, or did not match it") } }
-    if ($why.Count -gt 0) { return [pscustomobject]@{ ok = $false; reason = ("the window's program files in " + $Folder + " are not the ones this version of Horde pins, so none was loaded: " + (@($why | Select-Object -Unique) -join "; ")); files = @() } }
-    return [pscustomobject]@{ ok = $true; reason = ""; files = @($script:HordeWebView2LibFiles | ForEach-Object { Join-Path $Folder $_ }) }
+    foreach ($other in @($check.unlisted)) {
+        if ($script:HordeWebView2LibOtherFiles -cnotcontains $other) { $why += ($other + " is in the folder and is neither pinned by the list nor one of the files that may stand beside the pinned ones (" + ($script:HordeWebView2LibOtherFiles -join ", ") + ")") }
+    }
+    if ($why.Count -gt 0) {
+        foreach ($h in @($check.held)) { $h.Dispose() }
+        return [pscustomobject]@{ ok = $false; reason = ("the window's program files in " + $Folder + " are not the ones this version of Horde pins, so none was loaded: " + (@($why | Select-Object -Unique) -join "; ")); files = @(); held = @() }
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; files = @($script:HordeWebView2LibFiles | ForEach-Object { Join-Path $Folder $_ }); held = @($check.held) }
+}
+
+function Clear-HordeWebView2HeldFiles {
+    # Let go of every pinned file this adapter holds open. Safe to call when none is held.
+    foreach ($h in @($script:HordeWebView2Held)) { try { $h.Dispose() } catch { } }
+    $script:HordeWebView2Held = @()
 }
 
 function Import-HordeWebView2Libraries {
     # Check the pinned files, then load them. Returns "" when they are loaded, or why they were not.
     # THE CHECK COMES FIRST, every time: nothing of the folder is loaded unless all of it matches.
-    param([string]$Folder = $script:HordeWebView2LibFolder)
-    $libs = Test-HordeWebView2Libraries -Folder $Folder
+    # AND WHAT IS LOADED IS WHAT WAS CHECKED (review of 2026-10-06, finding A6): each file is opened
+    # once, fingerprinted from that open file, and kept open - nobody can change it - while it is
+    # loaded by path. -Hold keeps all three open after this returns, for a caller that goes on to
+    # start the engine, because the third file is loaded only then; that caller lets go with
+    # Clear-HordeWebView2HeldFiles once the engine is up. Without -Hold they are let go here.
+    param([string]$Folder = $script:HordeWebView2LibFolder, [switch]$Hold)
+    Clear-HordeWebView2HeldFiles
+    $libs = Test-HordeWebView2Libraries -Folder $Folder -Hold
     if (-not $libs.ok) { return $libs.reason }
-    if ($null -eq ("Microsoft.Web.WebView2.Core.CoreWebView2Environment" -as [type])) {
-        Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -AssemblyName System.Drawing
-        Add-Type -Path $libs.files[0]
-        Add-Type -Path $libs.files[1]
-        # The third file is not .NET: the first two find it through this folder when the engine starts.
-        [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::SetLoaderDllFolderPath($Folder)
-    }
-    if ($null -eq ("HordeSurfaceForm" -as [type])) { Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition $script:HordeWebView2NativeSource }
+    $script:HordeWebView2Held = @($libs.held)
+    $kept = $false
+    try {
+        if ($null -eq ("Microsoft.Web.WebView2.Core.CoreWebView2Environment" -as [type])) {
+            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            Add-Type -Path $libs.files[0]
+            Add-Type -Path $libs.files[1]
+            # The third file is not .NET: the first two find it through this folder when the engine starts.
+            [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::SetLoaderDllFolderPath($Folder)
+        }
+        if ($null -eq ("HordeSurfaceForm" -as [type])) { Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition $script:HordeWebView2NativeSource }
+        $kept = [bool]$Hold
+    } finally { if (-not $kept) { Clear-HordeWebView2HeldFiles } }
     return ""
 }
 
@@ -278,6 +314,9 @@ function Invoke-HordeWebView2Initialized {
     param($What)
     $s = $script:HordeWebView2
     if ($null -eq $s) { return }
+    # The engine has started, or has failed to: either way its third file has been loaded or never
+    # will be, and the pinned files need not be held any longer.
+    Clear-HordeWebView2HeldFiles
     try {
         if (-not $What.IsSuccess) { Stop-HordeWebView2 -Reason ("the web engine did not start: " + $What.InitializationException.Message); return }
         $core = $s.view.CoreWebView2
@@ -531,10 +570,12 @@ function Open-HordeWebView2Surface {
     $fail = { param([string]$Why) return [pscustomobject]@{ state = "failed"; reason = $Why } }
     if ($null -ne $script:HordeWebView2) { return (& $fail "this process already shows a window; one process shows one") }
     if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA) { return (& $fail "the window needs a single-threaded apartment, which Windows PowerShell gives unless it was started with -MTA") }
-    $notLoaded = Import-HordeWebView2Libraries -Folder $LibFolder
+    # Held open from here until the engine is up (Invoke-HordeWebView2Initialized), or until this
+    # function gives up or returns.
+    $notLoaded = Import-HordeWebView2Libraries -Folder $LibFolder -Hold
     if ($notLoaded -ne "") { return (& $fail $notLoaded) }
     $noEngine = Get-HordeWebView2RuntimeProblem -Version (Get-HordeWebView2RuntimeVersion)
-    if ($noEngine -ne "") { return (& $fail $noEngine) }
+    if ($noEngine -ne "") { Clear-HordeWebView2HeldFiles; return (& $fail $noEngine) }
 
     # Before the first window of the process exists, which is when Windows documents the call.
     $scale = Enable-HordeWindowsRealScale
@@ -595,6 +636,7 @@ function Open-HordeWebView2Surface {
     finally {
         $timer.Stop(); $timer.Dispose()
         $listenTimer.Stop(); $listenTimer.Dispose()
+        Clear-HordeWebView2HeldFiles
         try { $view.Dispose() } catch { }
         try { $form.Dispose() } catch { }
         $script:HordeWebView2 = $null

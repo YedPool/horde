@@ -16,8 +16,32 @@
            Find = 'foreach ($need in $script:HordeWebView2LibFiles) { if ($have -cnotcontains $need) {'
            Replace = 'foreach ($need in $script:HordeWebView2LibFiles) { if ($false) {' }
         @{ Name = "a-refused-folder-still-hands-back-its-files"
-           Find = '(@($why | Select-Object -Unique) -join "; ")); files = @() }'
-           Replace = '(@($why | Select-Object -Unique) -join "; ")); files = @($check.files) }' }
+           Find = '(@($why | Select-Object -Unique) -join "; ")); files = @(); held = @() }'
+           Replace = '(@($why | Select-Object -Unique) -join "; ")); files = @($check.files); held = @() }' }
+        # --- nothing beside the pinned files, and what is loaded is what was checked
+        @{ Name = "a-file-nobody-listed-is-let-stand"
+           Find = 'if ($script:HordeWebView2LibOtherFiles -cnotcontains $other) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-file-beside-them-is-matched-without-case"
+           Find = 'if ($script:HordeWebView2LibOtherFiles -cnotcontains $other) {'
+           Replace = 'if ($script:HordeWebView2LibOtherFiles -notcontains $other) {' }
+        @{ Name = "a-refused-folder-keeps-its-files-held"
+           Find = 'foreach ($h in @($check.held)) { $h.Dispose() }'
+           Replace = '' }
+        @{ Name = "asked-to-hold-the-check-holds-nothing"
+           Find = '$check = Test-HordeFingerprints -Folder $Folder -Hold:$Hold'
+           Replace = '$check = Test-HordeFingerprints -Folder $Folder' }
+        @{ Name = "the-files-are-loaded-without-being-held"
+           Find = '$libs = Test-HordeWebView2Libraries -Folder $Folder -Hold'
+           Replace = '$libs = Test-HordeWebView2Libraries -Folder $Folder' }
+        @{ Name = "the-files-are-let-go-before-the-engine-has-loaded-the-third"
+           Find = '$kept = [bool]$Hold'
+           Replace = '$kept = $false' }
+        @{ Name = "a-plain-load-leaves-the-files-held"
+           Find = '} finally { if (-not $kept) { Clear-HordeWebView2HeldFiles } }'
+           Replace = '} finally { }' }
+        # No mutant removes the letting-go once the engine is up: that line is the same text as three
+        # others in the file, and a find string must be one place. The real-window suite checks it.
         @{ Name = "window-opened-on-unchecked-files"
            Find = 'if ($notLoaded -ne "") { return (& $fail $notLoaded) }'
            Replace = '' }
