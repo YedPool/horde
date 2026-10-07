@@ -23,6 +23,10 @@
 # Study 1.4 and experiment program A5: a "still waiting" call has no tool call and fewer than this
 # many characters of text. Chosen by the study's author on 2026-09-30; validated by EP 3.4 (hand-label
 # 20 turns, precision and recall at least 0.9) before it is promoted. A parameter, not a magic number.
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "Price.ps1")
+
 $script:HordeStillWaitingMaxChars = 400
 # Study 1.4: MEASURED from the orchestrator itself, 53 pairs of consecutive calls with one tool result
 # over 4,000 characters between them; context growth divided into result size, median 2.38 (IQR 2.27

@@ -27,6 +27,9 @@
 # liveStatus answer (7 of 16 live records on 2026-09-30).
 
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "WezfleetState.ps1")
+
 . (Join-Path $PSScriptRoot "Tristate.ps1")
 . (Join-Path $PSScriptRoot "Roles.ps1")
 
