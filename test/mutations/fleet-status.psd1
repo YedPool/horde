@@ -78,8 +78,14 @@
            Find = 'if ($info.Length -gt $script:HordeFleetStatusMostBytes) {'
            Replace = 'if ($false) {' }
         @{ Name = "blocked-only-when-it-says-yes"
-           Find = 'if ($record.fields["blocked"].Trim() -cne "no") {'
+           Find = 'if (-not [string]::Equals($record.fields["blocked"].Trim(), "no", [System.StringComparison]::OrdinalIgnoreCase)) {'
            Replace = 'if ($record.fields["blocked"].Trim() -ceq "yes") {' }
+        @{ Name = "no-is-read-in-one-letter-case-only"
+           Find = '"no", [System.StringComparison]::OrdinalIgnoreCase)) {'
+           Replace = '"no", [System.StringComparison]::Ordinal)) {' }
+        @{ Name = "a-sentence-that-begins-with-no-is-not-blocked"
+           Find = 'if (-not [string]::Equals($record.fields["blocked"].Trim(), "no",'
+           Replace = 'if (-not $record.fields["blocked"].Trim().StartsWith("no", [System.StringComparison]::OrdinalIgnoreCase) -and -not [string]::Equals("x", "no",' }
         @{ Name = "age-from-the-clock-not-the-file"
            Find = '$out.ageSeconds = [int][Math]::Max(0, [Math]::Floor(($Now.ToUniversalTime() - $wroteAt).TotalSeconds))'
            Replace = '$out.ageSeconds = 0' }

@@ -129,6 +129,20 @@ $nobody = Get-HordeFleetStatus -Folder (Join-Path $work "nobody") -Now $now
 Check ($nobody.state -ceq "read" -and @($nobody.orcs).Count -eq 0) "CONTROL: a folder that is there and empty is a fleet of none"
 
 Write-Host ""
+Write-Host "--- blocked: no, in any letter case, is not blocked ---" -ForegroundColor Cyan
+# An Orc that wrote "No" was shown at the highest state with the reason "No" (measured 2026-10-06 by
+# the review of this reader). The word is read whatever its letters' case; anything else that is not
+# empty is the sentence saying what stops it, a full stop after the word included.
+$letters = @("A", "B", "C", "D", "E", "F")
+$words = @("no", "No", "NO", "nO", "no.", "Not until the test machine is switched on again")
+for ($i = 0; $i -lt $words.Count; $i++) { [void](New-Orc "words" ("w" + $i) (@("horde-orc-status 1", ("orc: " + $letters[$i]), "lane: a lane", "doing: Something", "finished: Something else", ("blocked: " + $words[$i])))) }
+$byWord = @{}
+foreach ($o in @((Get-HordeFleetStatus -Folder (Join-Path $work "words") -Settings (Read-HordeModuleSettingsText -Declaration (Get-HordeFleetSettingsDeclaration) -Text $null) -Now $now).orcs)) { $byWord[$o.folder] = $o }
+foreach ($i in 0..3) { Check ($byWord["w" + $i].written -eq $true -and $byWord["w" + $i].blocked -eq $false -and $byWord["w" + $i].blockedBy -ceq "") ("'blocked: " + $words[$i] + "' is not blocked, and gives no reason") }
+Check ($byWord["w4"].blocked -eq $true -and $byWord["w4"].blockedBy -ceq "no.") "'blocked: no.' is not the word alone: it is blocked, and that is its reason"
+Check ($byWord["w5"].blocked -eq $true -and $byWord["w5"].blockedBy -ceq "Not until the test machine is switched on again") "CONTROL: a sentence that begins with the word is the reason, whole"
+
+Write-Host ""
 Write-Host "--- where the files are, and how many folders are read, are the fleet module's settings ---" -ForegroundColor Cyan
 function New-Home { param([string]$Name, $Settings = $null)
     $h = Join-Path $work $Name; New-Item -ItemType Directory -Path (Join-Path $h "settings") -Force | Out-Null

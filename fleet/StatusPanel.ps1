@@ -168,8 +168,11 @@ function Read-HordeFleetStatusFolder {
     if ($null -eq $record.fields) { $out.problems = @($record.problems); return [pscustomobject]$out }
     $out.written = $true
     $out.orc = $record.fields["orc"]; $out.lane = $record.fields["lane"]; $out.doing = $record.fields["doing"]; $out.finished = $record.fields["finished"]
-    # "no", exactly as the record's rule 4 writes it; anything else is the sentence saying what stops it.
-    if ($record.fields["blocked"].Trim() -cne "no") { $out.blocked = $true; $out.blockedBy = $record.fields["blocked"].Trim() }
+    # THE WORD no, IN ANY LETTER CASE, is not blocked; anything else is the sentence saying what stops
+    # it. The record's rule 4 writes "no", and an Orc that wrote "No" was shown as blocked, at the
+    # highest state, for the reason "No" (measured 2026-10-06 by the review of this reader). Compared
+    # by code point with case set aside, so no machine's language reads the word differently.
+    if (-not [string]::Equals($record.fields["blocked"].Trim(), "no", [System.StringComparison]::OrdinalIgnoreCase)) { $out.blocked = $true; $out.blockedBy = $record.fields["blocked"].Trim() }
     return [pscustomobject]$out
 }
 
