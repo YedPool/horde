@@ -32,18 +32,18 @@ function New-Registry {
     }
     return $dir
 }
-function Keeper { param([hashtable]$With = @{}) $r = @{ id = $ids.keeper; role = "master"; pane = "18"; instance = "gui-sock-4242" }; foreach ($k in @($With.Keys)) { if ($null -eq $With[$k]) { $r.Remove($k) } else { $r[$k] = $With[$k] } }; return $r }
-$others = @(@{ id = $ids.orc; role = "orchestrator"; pane = "19"; instance = "gui-sock-4242" }, @{ id = $ids.plain; pane = "20"; instance = "gui-sock-4242" })
+function Keeper { param([hashtable]$With = @{}) $r = @{ id = $ids.keeper; role = "master"; pane = "18"; instance = "zorb-instance-1" }; foreach ($k in @($With.Keys)) { if ($null -eq $With[$k]) { $r.Remove($k) } else { $r[$k] = $With[$k] } }; return $r }
+$others = @(@{ id = $ids.orc; role = "orchestrator"; pane = "19"; instance = "zorb-instance-1" }, @{ id = $ids.plain; pane = "20"; instance = "zorb-instance-1" })
 
 try {
 
 Write-Host ""
 Write-Host "--- the seat of a role ---" -ForegroundColor Cyan
 $one = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "one" (@(Keeper) + $others))
-Check ($one.state -ceq "known" -and $one.value.sessionId -ceq $ids.keeper -and $one.value.pane -ceq "18" -and $one.value.instance -ceq "gui-sock-4242") "one live record names the role: its session, its pane and its terminal, as the record gives them"
+Check ($one.state -ceq "known" -and $one.value.sessionId -ceq $ids.keeper -and $one.value.pane -ceq "18" -and $one.value.instance -ceq "zorb-instance-1") "one live record names the role: its session, its pane and its terminal, as the record gives them"
 $orc = Get-HordeRoleSeat -Role "orc" -Root (Join-Path $work "one")
 Check ($orc.state -ceq "known" -and $orc.value.pane -ceq "19") "CONTROL: another role's seat is that role's holder, from the same records"
-$roleless = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "roleless" (@(Keeper) + $others + @(@{ id = "aaaaaaaa-0000-4000-8000-000000000005"; pane = "21"; instance = "gui-sock-4242" })))
+$roleless = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "roleless" (@(Keeper) + $others + @(@{ id = "aaaaaaaa-0000-4000-8000-000000000005"; pane = "21"; instance = "zorb-instance-1" })))
 Check ($roleless.state -ceq "known" -and $roleless.value.pane -ceq "18") "live sessions that name no role do not make the seat unknown: none of them says it holds the role"
 $numberPane = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "number" @((Keeper @{ pane = 7 })))
 Check ($numberPane.state -ceq "known" -and $numberPane.value.pane -ceq "7") "a pane written as a number is handed on as its text"
@@ -54,9 +54,9 @@ $none = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "none" $others)
 Check ($none.state -ceq "absent" -and $none.reason -ceq "no live session's record names the role warchief") "no record names the role: absent"
 $retired = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "retired" (@((Keeper @{ retired = $true })) + $others))
 Check ($retired.state -ceq "absent") "a retired holder holds nothing: absent"
-$two = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "two" (@(Keeper) + @(@{ id = $ids.second; role = "master"; pane = "30"; instance = "gui-sock-4242" }) + $others))
+$two = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "two" (@(Keeper) + @(@{ id = $ids.second; role = "master"; pane = "30"; instance = "zorb-instance-1" }) + $others))
 Check ($two.state -ceq "unknown" -and $two.reason -like "2 live sessions each say they are the warchief*one is never chosen over another" -and $two.reason.Contains($ids.keeper) -and $two.reason.Contains($ids.second)) "two live records name the role: unknown, both named, neither chosen"
-$oneRetired = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "two-one-retired" (@(Keeper) + @(@{ id = $ids.second; role = "master"; pane = "30"; instance = "gui-sock-4242"; retired = $true })))
+$oneRetired = Get-HordeRoleSeat -Role "warchief" -Root (New-Registry "two-one-retired" (@(Keeper) + @(@{ id = $ids.second; role = "master"; pane = "30"; instance = "zorb-instance-1"; retired = $true })))
 Check ($oneRetired.state -ceq "known" -and $oneRetired.value.pane -ceq "18") "CONTROL: of two that name it, the one that is not retired is the seat"
 
 Write-Host ""
@@ -79,7 +79,7 @@ Check (Throws { Get-HordeRoleSeat -Role "master" -Root (Join-Path $work "one") }
 
 Write-Host ""
 Write-Host "--- which window: every finder is asked, and none is believed beyond what it proves ---" -ForegroundColor Cyan
-$seat = [pscustomobject]@{ pane = "18"; instance = "gui-sock-4242" }
+$seat = [pscustomobject]@{ pane = "18"; instance = "zorb-instance-1" }
 $script:HordeHostWindowFinders.Clear()
 $nobody = Find-HordeSessionWindow -Seat $seat
 Check ($nobody.state -ceq "unknown" -and $nobody.reason -ceq "no terminal adapter that can find a session's window is loaded") "with no finder loaded the window is unknown"
@@ -105,7 +105,7 @@ foreach ($bad in @(
     Check ($r.state -ceq "unknown" -and $r.reason -like ("*" + $bad.says)) ($bad.what + " is not a window: unknown, and it says which finder")
 }
 $script:asked.Clear()
-foreach ($empty in @($null, [pscustomobject]@{ pane = ""; instance = "gui-sock-4242" }, [pscustomobject]@{ pane = "18"; instance = " " })) {
+foreach ($empty in @($null, [pscustomobject]@{ pane = ""; instance = "zorb-instance-1" }, [pscustomobject]@{ pane = "18"; instance = " " })) {
     $r = Find-HordeSessionWindow -Seat $empty
     Check ($r.state -ceq "unknown" -and $r.reason -ceq "no pane and terminal were given, so there is no window to look for") "a seat with no pane or no terminal is unknown"
 }
