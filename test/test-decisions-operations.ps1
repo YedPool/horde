@@ -604,6 +604,15 @@ try {
     Check ((Get-Files $s) -ceq "0000000001.json") "and nothing was written: it did not go ahead on the defaults"
     $l = Invoke-Op $s "list" @{}
     Check ($l.state -ceq "unknown" -and $l.reason -like "*settings\decisions.json*'decisions.write.raceTries' is 0*") ("a list is unknown too, with the same reason: a reading needs the store's settings (" + $l.state + ")")
+    # THE ANSWER IS GIVEN BEFORE THE STORE IS TOUCHED, and it is the settings' own sentence - not whatever
+    # the first part of the store to ask for a setting happened to throw, and not an answer from a
+    # path that happens to need none.
+    Check ("$($a.reason)".StartsWith("the decisions settings override was refused, so no setting is used and no default is put in its place: ") -and "$($l.reason)".StartsWith("the decisions settings override was refused, so no setting is used and no default is put in its place: ")) ("the reason is the settings' own sentence from its first word, for the add and for the list (" + $l.reason + ")")
+    $nowhere = Join-Path $settingsHome "no-such-store\decisions"
+    $ln = Invoke-Op $nowhere "list" @{}
+    Check ($ln.state -ceq "unknown" -and "$($ln.reason)".StartsWith("the decisions settings override was refused") -and -not (Test-Path -LiteralPath $nowhere)) ("a list of a store that is not there yet is unknown for the same reason: no path answers on its own because it happened to need no setting (" + $ln.state + ": " + $ln.reason + ")")
+    $sh = Invoke-Op $s "show" @{ number = 7 }
+    Check ($sh.state -ceq "unknown" -and "$($sh.reason)".StartsWith("the decisions settings override was refused")) ("show of a question that is not there is unknown too, not absent (" + $sh.state + ")")
     Check ((Get-Outcome (Invoke-Op $s "kinds" @{})) -ceq "done") "CONTROL: kinds, which reads no store and needs no setting, still answers"
     # A RIGHT override is used: with the largest gap believed set to 0, a record one place past the end is a stray.
     [System.IO.File]::WriteAllText($overrideFile, '{"schemaVersion":1,"values":{"decisions.store.maxGap":0}}', $utf8)
@@ -629,6 +638,7 @@ try {
     $a = $null
     try { $a = Invoke-HordeDecision -Operation "list" -Request @{ } } catch { $a = New-HordeUnknown -Reason ("THREW: " + $_.Exception.Message) }
     Check ($a.state -ceq "unknown" -and $a.reason -like "*HORDE_HOME must be an absolute path*" -and $a.reason -notlike "THREW*") "a relative HORDE_HOME is unknown with core/Home's own reason; nothing is guessed"
+    Check ("$($a.reason)".StartsWith("the decisions store could not be found")) ("and it is said as what it is - the store could not be found - before anything is asked of the settings (" + $a.reason + ")")
 } finally { $env:HORDE_HOME = $keepHome }
 
 } finally {

@@ -394,17 +394,20 @@ function Invoke-HordeDecision {
     }
 
     if ($entry.ContainsKey("noStore")) { return (& $entry.read $plain $null $definitions $Now) }
-    # THE SETTINGS, BEFORE THE STORE. An override file that failed its checks refuses every setting
-    # (decisions/Settings.ps1), and an operation that went ahead would be running on defaults a person
-    # had tried to replace. So it answers unknown, with the file and every problem in it. A home that
-    # cannot be worked out is the same answer, in core/Home's own words.
-    $unfit = ""
-    try { $unfit = Get-HordeDecisionSettingsProblem } catch { $unfit = "$($_.Exception.Message)" }
-    if ($unfit -ne "") { return (New-HordeUnknown -Reason $unfit) }
     if ($Root -eq "") {
         try { $Root = Get-HordeDecisionStoreRoot }
         catch { return (New-HordeUnknown -Reason "the decisions store could not be found" -ErrorRecord $_) }
     }
+    # THE SETTINGS, BEFORE THE STORE IS TOUCHED. An override file that failed its checks refuses every
+    # setting (decisions/Settings.ps1), and an operation that went ahead would be running on defaults a
+    # person had tried to replace - or would answer at all only because its path happened to need no
+    # setting. So every operation on the store answers unknown, in the settings' own sentence: the file
+    # and every problem in it. Asked AFTER the store is found, so that a home that cannot be worked out
+    # is still said as that, by the lines above; with -Root given and no home, the settings cannot be
+    # found either, and core/Home's own words are the reason.
+    $unfit = ""
+    try { $unfit = Get-HordeDecisionSettingsProblem } catch { $unfit = "$($_.Exception.Message)" }
+    if ($unfit -ne "") { return (New-HordeUnknown -Reason $unfit) }
     if ($entry.writes) { return (Invoke-HordeDecisionWrite -Operation $Operation -Request $plain -Root $Root -Definitions $definitions -Now $Now) }
     $read = Read-HordeDecisionState -Root $Root -Definitions $definitions
     if ($read.state -ceq "unknown") { return (New-HordeUnknown -Reason $read.reason) }
