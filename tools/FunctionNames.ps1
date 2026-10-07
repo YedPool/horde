@@ -22,12 +22,13 @@
 # an alias X hides function X. A name built at run time cannot be seen by a parse; none of these forms
 # is used in shipped code (grep, 2026-10-02), and the review of this guard listed them as its limit.
 #
-# WHAT SHIPS: every .ps1 under core/, remote/, transports/, messengers/, tools/, cli/, hosts/ and agents/, and
+# WHAT SHIPS: every .ps1 under core/, remote/, transports/, messengers/, surfaces/, platform/, fleet/, tools/, cli/,
+# hosts/ and agents/, and
 # horde.ps1, except anything in a folder named test. A suite may override a core function on purpose
 # (test/test-identity.ps1 replaces Get-HordeProcessTable with a tripwire), and each suite runs in its
 # own process.
 
-$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "tools", "cli", "hosts", "agents")
+$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "surfaces", "platform", "fleet", "tools", "cli", "hosts", "agents")
 $script:HordeShippedCodeFiles = @("horde.ps1")
 
 function Get-HordeShippedScriptFiles {
