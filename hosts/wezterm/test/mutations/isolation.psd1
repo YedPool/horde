@@ -35,7 +35,9 @@
         @{ Name = "teardown-deletes-any-store"
            Find = 'if ((Test-HordeOwnedPath -Path $ourStore'
            Replace = 'if ($true -or (Test-HordeOwnedPath -Path $ourStore'
-           Sections = @("teardown-refuse") }
+           # Unmapped: run on its section alone it broke the suite rather than failing a check (the
+           # always-on box, 2026-10-07), though the whole suite catches it there; the whole suite decides.
+        }
         @{ Name = "owned-path-ignores-name"
            Find = 'if ((Split-Path -Leaf $Path) -notmatch $LeafPattern) { return $false }'
            Replace = ''
