@@ -91,7 +91,7 @@ function Get-Said {
     # The message a say answered with; a stand-in that equals nothing when the answer holds none.
     param($Answer)
     if ($Answer.state -ceq "known" -and $null -ne $Answer.value.PSObject.Properties["message"]) { return $Answer.value.message }
-    return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none" }
+    return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingStated = "none"; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none" }
 }
 function Get-Unread { param($Thread) $u = @($Thread.unread | Where-Object { $_.reader -ceq "warchief" }) | Select-Object -First 1; if ($null -eq $u) { return -1 }; return [int]$u.count }
 function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["messages"]) { return "(the answer holds no messages)" }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo + " marked=" + $Answer.value.marked) }
@@ -115,8 +115,8 @@ Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 1 -and $a.value.seq
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).text -ceq "Yes, play it." -and (Get-Said $a).speaker -ceq "founder" -and (Get-Said $a).routeShown -ceq "recorded by the warchief from chat" -and (Get-Said $a).recordedBy -ceq "warchief" -and (Get-Said $a).sequence -eq 2) "the answer hands the message back: his words, his name, and that the warchief recorded them from chat"
 Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "one record was written for it"
 $rec = Read-Record $s 2
-Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it." -and $rec.data.number -eq 1 -and $rec.data.wordingVersion -eq 1) "the record holds who spoke, by what route, the words, the question and the wording he was looking at"
-Check ((@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "number,route,speaker,text,wordingVersion") "and nothing else: no turn, no flag, no 'read' is stored in it"
+Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it." -and $rec.data.number -eq 1) "the record holds who spoke, by what route, the words and the question"
+Check ((@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "number,route,speaker,text") "and nothing else: no turn, no flag, no 'read' - and no wording, because none was stated and none is guessed"
 $a = Reply $s 1 "It plays from the next build."
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).speaker -ceq "warchief" -and (Get-Said $a).routeShown -ceq "by command" -and $a.value.sequence -eq 3) "the warchief's reply is recorded as its own words, by command"
 $t = Get-Thread $s 1
@@ -124,7 +124,7 @@ Check ($t.count -eq 2 -and (Get-Texts $t) -ceq "Yes, play it. | It plays from th
 $listed = Invoke-Op $s "list" @{}
 Check ((Get-Outcome $listed) -ceq "done" -and $listed.value.questions[0].thread.count -eq 2 -and $listed.value.questions[0].thread.turn -ceq "founder" -and $null -eq $listed.value.questions[0].thread.PSObject.Properties["messages"]) "list hands back the counts and whose turn it is, and not the messages"
 # The founder typing in his own window is another caller sending the same request with other labels.
-$a = Say $s 1 "Typed by me." -Route "window" -Actor "founder"
+$a = Say $s 1 "Typed by me." -Route "window" -Actor "founder" -Wording 1
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).routeShown -ceq "typed in the window" -and (Get-Said $a).recordedBy -ceq "founder" -and (Read-Record $s 4).actor -ceq "founder") "words typed in the window are recorded by the founder's own caller, under their own route"
 
 Write-Host ""
@@ -147,7 +147,7 @@ $idDefault = New-Id
 $null = Say $s 1 "Said before the rewording." -Id $idDefault
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 1; changes = @{ title = "Should the closing sound play at the end of every session?" } }
 $again = Say $s 1 "Said before the rewording." -Id $idDefault
-Check ((Get-Outcome $again) -ceq "replayed" -and (Get-Said $again).wordingVersion -eq 1 -and (Get-Count $s) -eq 5) ("a repost after the question was reworded is still a repost, answered with the wording it was recorded under (" + (Get-Outcome $again) + ")")
+Check ((Get-Outcome $again) -ceq "replayed" -and (Get-Said $again).wordingStated -eq $false -and (Get-Said $again).saidToEarlierWording -eq $false -and (Get-Count $s) -eq 5) ("a repost after the question was reworded is still a repost, answered as it was recorded: wording not stated, and not flagged (" + (Get-Outcome $again) + ")")
 
 Write-Host ""
 Write-Host "--- words under a closed question are kept, flagged, and reopen nothing ---" -ForegroundColor Cyan
@@ -173,7 +173,8 @@ Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).wordingVersion -eq 1 -and
 $a = Say $s 1 "Yes, to these words." -Wording 2
 Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).saidToEarlierWording -eq $false) "CONTROL: words said to the wording the question has are not flagged"
 $a = Say $s 1 "Yes, with no wording named."
-Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).wordingVersion -eq 2 -and (Read-Record $s $a.value.sequence).data.wordingVersion -eq 2) "with no wording named, the record holds the wording the question had when the words were recorded"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).wordingStated -eq $false -and (Get-Said $a).saidToEarlierWording -eq $false -and $null -eq (Read-Record $s $a.value.sequence).data.PSObject.Properties["wordingVersion"]) "with no wording named, the record holds NO wording: it is 'not stated', nothing is guessed, and it is not flagged as said to an earlier one"
+Check ((Test-Refused (Say $s 1 "Typed with no wording." -Route "window" -Actor "founder") "always say which wording") -and (Get-Outcome (Say $s 1 "Typed, wording stated." -Route "window" -Actor "founder" -Wording 2)) -ceq "done") "words typed in the window must state the wording that was on screen, and with it are recorded"
 $before = Get-Count $s
 $a = Say $s 1 "Yes, to a wording that does not exist." -Wording 3
 Check ((Test-Refused $a "said to wording 3 of question 1, which has only reached wording 2") -and (Get-Count $s) -eq $before -and -not (Test-Echo $a "does not exist")) "words said to a wording the question has not reached are refused before anything is written, without being repeated"
@@ -275,7 +276,7 @@ Check ((Get-InboxLine $replayed) -ceq "3@1,4@2,6@1 upTo=6 marked=3" -and (Get-In
 # The title an inbox shows is the question as it reads now.
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ title = "Which languages should the test talker speak first?" } }
 $now = Inbox $s
-Check ($now.value.messages[0].title -ceq "Which languages should the test talker speak first?" -and $now.value.messages[0].message.saidToEarlierWording -eq $false -and $now.value.messages[0].message.wordingVersion -eq 1) "the inbox names a question by its words as they are now; the message, said before the rewording, is NOT flagged: it was said to the wording of its moment"
+Check ($now.value.messages[0].title -ceq "Which languages should the test talker speak first?" -and $now.value.messages[0].message.saidToEarlierWording -eq $false -and $now.value.messages[0].message.wordingStated -eq $false) "the inbox names a question by its words as they are now; the message, recorded from chat with no wording stated, says so and is not flagged"
 
 Write-Host ""
 Write-Host "--- inbox: only what is handed back is marked ---" -ForegroundColor Cyan
