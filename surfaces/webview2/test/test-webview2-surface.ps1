@@ -111,7 +111,7 @@ Check ((& $naive) -eq $false) "CONTROL: a handler that reads a local of the func
 # THE ADAPTER'S HANDLERS are made by a function that has returned, and still find their window: they
 # read the one state object in the script scope.
 $handlers = Get-HordeWebView2Handlers
-Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,frame,initialized,message,navigation,newWindow,shown,tick") "the adapter hands .NET eight handlers"
+Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,message,navigation,newWindow,shown,tick") "the adapter hands .NET nine handlers"
 $nav = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $nav
 Check ($nav.Cancel -eq $true -and $liveBridge.refused -eq 4 -and $liveBridge.refusals[3].reason -like "*an address that is not its own*") "its navigation handler, called after the function that made it returned, cancels a navigation elsewhere and records it"
@@ -124,6 +124,12 @@ Check ($frame.Cancel -eq $true -and $liveBridge.refused -eq 5) "every frame is r
 $pop = [pscustomobject]@{ Uri = "https://shell.horde.invalid/index.html"; Handled = $false }
 & $handlers.newWindow $null $pop
 Check ($pop.Handled -eq $true -and $liveBridge.refused -eq 6) "a request for a new window is marked handled, so nothing opens, and recorded"
+# A DOWNLOAD IS A FILE WRITTEN WHEREVER THE ENGINE KEEPS DOWNLOADS, outside anything of Horde's. Measured
+# 2026-10-06 by the review of this adapter, in a real hidden window on a page that made a link with a
+# download name and clicked it: the file appeared in the user's own Downloads folder.
+$save = [pscustomobject]@{ ResultFilePath = "C:\elsewhere\saved.txt"; Cancel = $false; Handled = $false }
+if ($handlers.ContainsKey("download")) { & $handlers.download $null $save }
+Check ($save.Cancel -eq $true -and $liveBridge.refused -eq 7 -and $liveBridge.refusals[6].reason -like "*save a file*") "a download is cancelled, so a page writes no file anywhere, and recorded"
 $script:ticked = 0
 $tickSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $liveBridge -DataFolder (Join-Path $work "data") -State ([pscustomobject]@{ n = 5 }) -OnTick { param($Window, $State) $script:ticked += $State.n; if ($script:ticked -ge 10) { throw "a tick that fails" } }
 $script:HordeWebView2.spec = $tickSpec
@@ -152,6 +158,7 @@ $tokens = $null; $errs = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $adapter "Surface.ps1"), [ref]$tokens, [ref]$errs)
 $calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object { $_.Member.Value })
 Check (@($errs).Count -eq 0 -and $calls -ccontains "PostWebMessageAsJson" -and $calls -ccontains "SetVirtualHostNameToFolderMapping") "CONTROL: the adapter's method calls are read from its syntax tree, and the two it must make are there"
+Check ($calls -ccontains "add_DownloadStarting") "the handler that cancels a download is given to the engine: a handler nobody was handed cancels nothing"
 Check (@($calls | Where-Object { $_ -like "AddHostObject*" -or $_ -like "*ExecuteScript*" -or $_ -ceq "NavigateToString" -or $_ -ceq "AddScriptToExecuteOnDocumentCreatedAsync" }).Count -eq 0) "it never adds a host object, never runs script it built in the page, and never shows text as a page"
 $settings = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -like '$core.Settings.*' }, $true) | ForEach-Object { $_.Left.Extent.Text.Substring(15) + "=" + $_.Right.Extent.Text })
 foreach ($off in @("AreDevToolsEnabled", "AreDefaultContextMenusEnabled", "AreBrowserAcceleratorKeysEnabled", "AreHostObjectsAllowed", "IsPasswordAutosaveEnabled", "IsGeneralAutofillEnabled", "IsStatusBarEnabled")) {
