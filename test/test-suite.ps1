@@ -12,8 +12,13 @@ trap { Register-HordeSuiteError $_; continue }
 
 function Invoke-Fixture {
     # Run one fixture suite; returns { code; out }. Streams read through the process API, not 2>&1.
-    param([string]$Name)
+    # -Vars sets variables for this fixture's process only. HORDE_SECTIONS and HORDE_FIXTURE_FAIL_IN
+    # are always cleared unless given, so a value in the shell that runs this suite cannot pick a
+    # fixture's sections for it.
+    param([string]$Name, [hashtable]$Vars = @{})
     $psi = New-Object System.Diagnostics.ProcessStartInfo
+    foreach ($k in @("HORDE_SECTIONS", "HORDE_FIXTURE_FAIL_IN")) { if ($psi.EnvironmentVariables.ContainsKey($k)) { $psi.EnvironmentVariables.Remove($k) } }
+    foreach ($k in @($Vars.Keys)) { $psi.EnvironmentVariables[$k] = "$($Vars[$k])" }
     $psi.FileName = "powershell.exe"
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root ("test\fixtures\suite\" + $Name + ".ps1")) + "`""
     $psi.UseShellExecute = $false
@@ -134,6 +139,39 @@ try { $env:HORDE_FAIL_FAST = "1"; $ff = Invoke-Fixture "failfast" } finally { $e
 Check ($ff.code -eq 1 -and $ff.out -like "*[[]FAIL] the first failing check*" -and $ff.out -notlike "*the second failing check*") "under fail-fast a suite stops at its first failed check"
 $ffOff = Invoke-Fixture "failfast"
 Check ($ffOff.code -eq 1 -and $ffOff.out -like "*the second failing check*") "CONTROL: without it every check runs"
+
+Write-Host ""
+Write-Host "--- sections, for mutation runs ---" -ForegroundColor Cyan
+# A mutation spec maps each mutant to the sections that kill it, and tools\Mutate.ps1 runs only those
+# (HORDE_SECTIONS). The selection must never read as a whole pass, and a wrong name must never read as
+# a caught mutant: Mutate.ps1 counts a catch only from a [FAIL] line.
+$sAll = Invoke-Fixture "sections"
+Check ($sAll.code -eq 0 -and $sAll.out -like "*[[]PASS] the alpha check*" -and $sAll.out -like "*[[]PASS] the beta check*") "with no selection every section runs and the suite exits 0"
+$sOne = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = "alpha" }
+Check ($sOne.code -eq 3) ("a run that skipped a section exits 3, never 0 (exit " + $sOne.code + ")")
+Check ($sOne.out -like "*[[]PASS] the alpha check*" -and $sOne.out -notlike "*the beta check*" -and $sOne.out -like "*[[]SKIP] section beta*") "only the selected section runs, and the skipped one says so"
+$sBoth = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = " beta , alpha " }
+Check ($sBoth.code -eq 0) "selecting every section is a whole run: exit 0"
+$sFail = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = "alpha"; HORDE_FIXTURE_FAIL_IN = "alpha" }
+Check ($sFail.code -eq 1 -and $sFail.out -like "*[[]FAIL] the alpha check*") "a failed check in a selected section exits 1, not 3"
+$sSkipFail = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = "alpha"; HORDE_FIXTURE_FAIL_IN = "beta" }
+Check ($sSkipFail.code -eq 3) "CONTROL: a failing check in a section that was not selected never runs"
+$sBad = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = "alpha,alhpa" }
+$badFails = @(($sBad.out -split "`r?`n") | Where-Object { $_ -match '^\s*\[FAIL\]' })
+Check ($sBad.code -eq 1 -and $sBad.out -like "*[[]ERROR]*alhpa*") "a selection naming a section the suite does not have fails the run, naming it"
+Check ($badFails.Count -eq 0) ("and as an [ERROR], never a [FAIL], so a typo in a map cannot read as a caught mutant (" + $badFails.Count + " [FAIL] lines)")
+$sEmpty = Invoke-Fixture "sections" -Vars @{ HORDE_SECTIONS = " , " }
+Check ($sEmpty.code -eq 1 -and $sEmpty.out -like "*[[]ERROR]*names no section*") "a selection that names nothing is an error, not a whole run"
+$sUn = Invoke-Fixture "sections-unentered"
+Check ($sUn.code -eq 1 -and $sUn.out -like "*[[]ERROR]*beta*never entered*") "a declared section the suite never enters fails the suite"
+$sUd = Invoke-Fixture "sections-undeclared"
+Check ($sUd.code -eq 1 -and $sUd.out -like "*[[]ERROR]*gamma*not declared*") "entering a section that was never declared fails the suite"
+$sTw = Invoke-Fixture "sections-twice"
+Check ($sTw.code -eq 1 -and $sTw.out -like "*[[]ERROR]*declares its sections more than once*") "a suite that declares its sections twice fails"
+Check ($sTw.out -like "*[[]ERROR]*section alpha is entered twice*") "a section entered twice fails the suite"
+$sId = Invoke-Fixture "sections-badids"
+Check ($sId.code -eq 1 -and $sId.out -like "*[[]ERROR]*section id 'Alpha' is not lowercase*") "a section id a selection could not name exactly is refused"
+Check ($sId.out -like "*[[]ERROR]*section id 'beta' is declared twice*") "a section id declared twice is refused"
 
 Write-Host ""
 Write-Host "--- controls ---" -ForegroundColor Cyan

@@ -43,6 +43,12 @@
 $ErrorActionPreference = "Stop"
 $script:fails = New-Object System.Collections.ArrayList
 $script:suiteErrors = New-Object System.Collections.ArrayList
+# Sections (Register-HordeSuiteSections below). Named apart from the section variables two suites
+# still keep of their own (test-engine-config, test-projection), so loading this file never resets them.
+$script:HordeSuiteSectionIds = $null
+$script:HordeSuiteSectionsWanted = @()
+$script:HordeSuiteSectionsEntered = New-Object System.Collections.ArrayList
+$script:HordeSuiteSectionsSkipped = New-Object System.Collections.ArrayList
 
 function Check {
     param($Cond, [string]$What)
@@ -76,12 +82,80 @@ function Register-HordeSuiteError {
     Write-Host ("  [ERROR] an error no test expected" + $where + ": " + $ErrorRecord) -ForegroundColor Red
 }
 
+function Add-HordeSuiteProblem {
+    # Record a problem that is not a failed check: printed as [ERROR], and the suite cannot pass.
+    param([string]$Text)
+    [void]$script:suiteErrors.Add($Text)
+    Write-Host ("  [ERROR] " + $Text) -ForegroundColor Red
+}
+
+# SECTIONS, FOR MUTATION RUNS (issues #82 and #83). A mutant of one rule is caught by the one part of a
+# suite that checks that rule, yet every mutant reran the whole suite: link-contract.psd1 took about
+# 2900 s on the always-on box. A suite that names its parts lets a mutation spec map each mutant to the
+# sections that kill it, and tools\Mutate.ps1 runs only those (it reruns the whole suite before it
+# reports a survivor, so a wrong map costs time, never a verdict). A suite declares its sections once,
+# as ONE LITERAL LIST - test\lib\SuiteSections.ps1 reads it from the text to check every map - and
+# guards each part:
+#
+#   Register-HordeSuiteSections -Ids @("controls", "rows")
+#   if (Enter-HordeSuiteSection "controls" "the real contract is valid") { ...checks... }
+#
+# HORDE_SECTIONS=<id,id> selects. The rules, each because the opposite would let a run lie:
+#   - A run that skipped any section exits 3, never 0, so no gate reads a part as the whole.
+#   - A selected name the suite does not declare is an [ERROR], never a [FAIL]: tools\Mutate.ps1
+#     counts a mutant caught only from a [FAIL], so a typo in a map cannot read as a catch.
+#   - A selection that names nothing is an error, not "every section".
+#   - A declared section the suite never enters, or one entered that was never declared, fails the
+#     suite: the list a map is checked against is the list that runs.
+function Register-HordeSuiteSections {
+    param([string[]]$Ids)
+    if ($null -ne $script:HordeSuiteSectionIds) { Add-HordeSuiteProblem "the suite declares its sections more than once"; return }
+    $seen = @{}
+    foreach ($id in @($Ids)) {
+        if ("$id" -cnotmatch '^[a-z0-9][a-z0-9-]*\z') { Add-HordeSuiteProblem ("section id '" + $id + "' is not lowercase letters, digits and hyphens") }
+        elseif ($seen.ContainsKey("$id")) { Add-HordeSuiteProblem ("section id '" + $id + "' is declared twice") }
+        $seen["$id"] = $true
+    }
+    $script:HordeSuiteSectionIds = @($Ids | ForEach-Object { "$_" })
+    $raw = "$env:HORDE_SECTIONS"
+    if ($raw -eq "") { return }
+    $script:HordeSuiteSectionsWanted = @($raw -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+    if ($script:HordeSuiteSectionsWanted.Count -eq 0) { Add-HordeSuiteProblem ("HORDE_SECTIONS names no section ('" + $raw + "')"); return }
+    foreach ($u in @($script:HordeSuiteSectionsWanted | Where-Object { $script:HordeSuiteSectionIds -cnotcontains $_ })) {
+        Add-HordeSuiteProblem ("HORDE_SECTIONS names " + $u + ", which is not a section of this suite")
+    }
+}
+
+function Enter-HordeSuiteSection {
+    # Print the section's header; return whether it runs.
+    param([string]$Id, [string]$Title)
+    if ($script:HordeSuiteSectionIds -cnotcontains $Id) { Add-HordeSuiteProblem ("section " + $Id + " is not declared by Register-HordeSuiteSections"); return $false }
+    if ($script:HordeSuiteSectionsEntered -ccontains $Id) { Add-HordeSuiteProblem ("section " + $Id + " is entered twice") }
+    [void]$script:HordeSuiteSectionsEntered.Add($Id)
+    Write-Host ""
+    Write-Host ("--- " + $Title + " ---") -ForegroundColor Cyan
+    if ($script:HordeSuiteSectionsWanted.Count -eq 0 -or $script:HordeSuiteSectionsWanted -ccontains $Id) { return $true }
+    [void]$script:HordeSuiteSectionsSkipped.Add($Id)
+    Write-Host ("  [SKIP] section " + $Id + " was not selected") -ForegroundColor Yellow
+    return $false
+}
+
 function Complete-HordeSuite {
     # End the suite: exit 1 if any check failed or any unexpected error was recorded, else exit
     # -PassCode (0 unless given). A suite that skipped part of itself on purpose passes with a code of
     # its own, so a gate that expects 0 fails loudly instead of reading a partial run as a whole one;
     # tools\Mutate.ps1 accepts it only from a spec that declares it (PassCodes).
     param([string]$Success = "every check passed", [ValidateRange(0, 255)][int]$PassCode = 0)
+    if ($null -ne $script:HordeSuiteSectionIds) {
+        foreach ($id in @($script:HordeSuiteSectionIds | Where-Object { $script:HordeSuiteSectionsEntered -cnotcontains $_ })) {
+            Add-HordeSuiteProblem ("section " + $id + " is declared but was never entered")
+        }
+        # A run that skipped a section passed only part of the suite (SECTIONS above).
+        if ($script:HordeSuiteSectionsSkipped.Count -gt 0 -and $PassCode -eq 0) {
+            $PassCode = 3
+            $Success = $Success + " (sections run: " + ($script:HordeSuiteSectionsWanted -join ",") + "; skipped: " + ($script:HordeSuiteSectionsSkipped -join ",") + ")"
+        }
+    }
     Write-Host ""
     $n = $script:fails.Count + $script:suiteErrors.Count
     if ($n -gt 0) {
