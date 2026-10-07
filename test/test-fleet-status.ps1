@@ -129,42 +129,66 @@ $nobody = Get-HordeFleetStatus -Folder (Join-Path $work "nobody") -Now $now
 Check ($nobody.state -ceq "read" -and @($nobody.orcs).Count -eq 0) "CONTROL: a folder that is there and empty is a fleet of none"
 
 Write-Host ""
-Write-Host "--- where the files are is configuration ---" -ForegroundColor Cyan
-function New-Home { param([string]$Name, $Config = $null)
-    $h = Join-Path $work $Name; New-Item -ItemType Directory -Path (Join-Path $h "fleet") -Force | Out-Null
-    if ($null -ne $Config) { [System.IO.File]::WriteAllText((Join-Path $h "fleet\status-source.json"), $Config) }
+Write-Host "--- where the files are, and how many folders are read, are the fleet module's settings ---" -ForegroundColor Cyan
+function New-Home { param([string]$Name, $Settings = $null)
+    $h = Join-Path $work $Name; New-Item -ItemType Directory -Path (Join-Path $h "settings") -Force | Out-Null
+    if ($null -ne $Settings) { [System.IO.File]::WriteAllText((Join-Path $h "settings\fleet.json"), ('{"schemaVersion":1,"settings":' + $Settings + '}')) }
     return $h }
 $fleetJson = (Join-Path $work "fleet").Replace("\", "\\")
-$configured = Get-HordeFleetStatusSource -HordeHome (New-Home "home-ok" ('{"schemaVersion":1,"folder":"' + $fleetJson + '"}'))
-Check ($configured.state -ceq "configured" -and $configured.folder -ceq (Join-Path $work "fleet")) "a configuration naming a folder that exists: that folder"
-$viaHome = Get-HordeFleetStatus -HordeHome (Join-Path $work "home-ok") -Now $now
-Check ($viaHome.state -ceq "read" -and @($viaHome.orcs).Count -eq 4) "and the fleet is read from it"
+$defaults = Read-HordeModuleSettingsText -Declaration (Get-HordeFleetSettingsDeclaration) -Text $null
+Check ((@($defaults.values.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "statusFolder,statusFoldersRead" -and $defaults.values.statusFolder -ceq "" -and $defaults.values.statusFoldersRead -eq 64) "the module declares two settings: the folder, which is none unless a person names one, and the most folders read, 64"
+$okHome = New-Home "home-ok" ('{"statusFolder":"' + $fleetJson + '"}')
+Check ((Get-HordeFleetSettings -HordeHome $okHome).path -ceq (Join-Path $okHome "settings\fleet.json")) "they are read from settings\fleet.json under Horde's home"
+$configured = Get-HordeFleetStatusSource -HordeHome $okHome
+Check ($configured.state -ceq "configured" -and $configured.folder -ceq (Join-Path $work "fleet")) "a setting naming a folder that exists: that folder"
+$viaHome = Get-HordeFleetStatus -HordeHome $okHome -Now $now
+Check ($viaHome.state -ceq "read" -and @($viaHome.orcs).Count -eq 4 -and $viaHome.notRead -eq 0 -and @($viaHome.findings).Count -eq 0) "and the fleet is read from it: four folders, none left unread, nothing wrong in the file"
 $none = Get-HordeFleetStatus -HordeHome (New-Home "home-none") -Now $now
-Check ($none.state -ceq "not-configured" -and $none.reason -ceq "no folder of status records is configured on this machine" -and @($none.orcs).Count -eq 0) "no configuration is not-configured, which is not an error"
+Check ($none.state -ceq "not-configured" -and $none.reason -ceq "no folder of status records is configured on this machine" -and @($none.orcs).Count -eq 0 -and $none.notRead -eq 0) "no setting is not-configured, which is not an error"
+$oldHome = New-Home "home-old"
+New-Item -ItemType Directory -Path (Join-Path $oldHome "fleet") | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $oldHome "fleet\status-source.json"), ('{"schemaVersion":1,"folder":"' + $fleetJson + '"}'))
+Check ((Get-HordeFleetStatus -HordeHome $oldHome -Now $now).state -ceq "not-configured") "the file this setting replaces, fleet\status-source.json, is no longer read: one place says where the records are"
+$missing = Get-HordeFleetStatus -HordeHome (New-Home "home-missing" '{"statusFolder":"C:\\no\\such\\folder\\of-orcs"}') -Now $now
+Check ($missing.state -ceq "unreadable" -and $missing.reason -ceq "the setting of where status records are (statusFolder) names a folder that does not exist: C:\no\such\folder\of-orcs" -and @($missing.orcs).Count -eq 0) "a setting naming a folder that does not exist is unreadable, and no Orc is shown"
 foreach ($bad in @(
-    @{ name = "home-text"; config = "not json"; says = "is not a JSON object" }
-    @{ name = "home-version"; config = ('{"schemaVersion":2,"folder":"' + $fleetJson + '"}'); says = "is not schemaVersion 1" }
-    @{ name = "home-relative"; config = '{"schemaVersion":1,"folder":"orcs"}'; says = "does not give an absolute folder" }
-    @{ name = "home-missing"; config = '{"schemaVersion":1,"folder":"C:\\no\\such\\folder\\of-orcs"}'; says = "names a folder that does not exist" }
-    @{ name = "home-nofolder"; config = '{"schemaVersion":1}'; says = "does not give an absolute folder" }
+    @{ name = "home-relative"; settings = '{"statusFolder":"orcs"}' }
+    @{ name = "home-number"; settings = '{"statusFolder":7}' }
+    @{ name = "home-text"; settings = 'not json' }
 )) {
-    $r = Get-HordeFleetStatus -HordeHome (New-Home $bad.name $bad.config) -Now $now
-    Check ($r.state -ceq "unreadable" -and $r.reason -like ("*" + $bad.says + "*") -and @($r.orcs).Count -eq 0) ("a configuration that " + $bad.says + " is unreadable, and no Orc is shown")
+    $r = Get-HordeFleetStatus -HordeHome (New-Home $bad.name $bad.settings) -Now $now
+    Check ($r.state -ceq "not-configured" -and @($r.findings).Count -ge 1 -and @($r.orcs).Count -eq 0) ("a settings file holding " + $bad.settings + " is said in the answer's findings and its default is used, which is no folder (" + (@($r.findings) -join " / ") + ")")
 }
 # A FOLDER WINDOWS CANNOT EVEN BE ASKED ABOUT is unreadable like the rest, never a throw: the caller is
 # a window's tick, and what it is promised is an answer. Measured 2026-10-06 by the review of this
 # reader: a folder on a machine that does not answer, and a folder whose name holds characters no path
-# may, each came out of Get-HordeFleetStatusSource as an exception ("The network path was not found",
-# "Illegal characters in path"). The catch here is the test's own, so that a throw is a failed check.
-foreach ($unaskable in @(
-    @{ name = "home-nomachine"; config = '{"schemaVersion":1,"folder":"\\\\horde-no-such-machine\\orcs"}'; says = "could not be looked for" }
-    @{ name = "home-nopath"; config = '{"schemaVersion":1,"folder":"C:\\orcs<of>|a?fleet"}'; says = "could not be looked for" }
-)) {
-    $r = $null
-    try { $r = Get-HordeFleetStatus -HordeHome (New-Home $unaskable.name $unaskable.config) -Now $now } catch { $r = [pscustomobject]@{ state = "threw"; reason = "$($_.Exception.Message)"; orcs = @() } }
-    Check ($r.state -ceq "unreadable" -and $r.reason -like ("*" + $unaskable.says + "*") -and @($r.orcs).Count -eq 0) ("a configuration naming a folder that " + $unaskable.says + " is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
-}
-Check ((Get-HordeFleetStatusSourcePath -HordeHome "C:\h") -ceq "C:\h\fleet\status-source.json") "the configuration is fleet\status-source.json under Horde's home"
+# may, each came out as an exception ("The network path was not found", "Illegal characters in
+# path"). The catch here is the test's own, so that a throw is a failed check.
+$r = $null
+try { $r = Get-HordeFleetStatus -HordeHome (New-Home "home-nomachine" '{"statusFolder":"\\\\horde-no-such-machine\\orcs"}') -Now $now } catch { $r = [pscustomobject]@{ state = "threw"; reason = "$($_.Exception.Message)"; orcs = @() } }
+Check ($r.state -ceq "unreadable" -and $r.reason -like "the setting of where status records are (statusFolder) names a folder that could not be looked for: *" -and @($r.orcs).Count -eq 0) ("a setting naming a folder on a machine that does not answer is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
+# The name no path may hold does not get as far as this reader through the settings (the folder kind
+# refuses it, measured 2026-10-07: a finding, and no folder), so it is handed over as a caller would.
+$r = Get-HordeFleetStatus -HordeHome (New-Home "home-nopath" '{"statusFolder":"C:\\orcs<of>|a?fleet"}') -Now $now
+Check ($r.state -ceq "not-configured" -and @($r.findings).Count -eq 1 -and $r.findings[0] -like "*statusFolder*") "a setting holding characters no path may is refused as a setting, by name, and no folder is configured"
+$r = $null
+try { $r = Get-HordeFleetStatus -Folder 'C:\orcs<of>|a?fleet' -Settings $defaults -Now $now } catch { $r = [pscustomobject]@{ state = "threw"; reason = "$($_.Exception.Message)"; orcs = @() } }
+Check ($r.state -ceq "unreadable" -and $r.reason -like "the folder of status records could not be listed: *" -and @($r.orcs).Count -eq 0) ("and such a folder handed over by a caller is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
+
+Write-Host ""
+Write-Host "--- no more folders are read than the setting says, and the rest are counted ---" -ForegroundColor Cyan
+for ($i = 1; $i -le 70; $i++) { [void](New-Orc "many" ("orc-" + $i.ToString("D2"))) }
+[void](New-Orc "many" "ORC-00" $good)
+$many = Get-HordeFleetStatus -Folder (Join-Path $work "many") -Settings $defaults -Now $now
+Check ($many.state -ceq "read" -and @($many.orcs).Count -eq 64 -and $many.notRead -eq 7) ("of 71 folders 64 are read and 7 are counted as not read (" + @($many.orcs).Count + ", " + $many.notRead + ")")
+$readNames = @($many.orcs | ForEach-Object { $_.folder })
+Check (($readNames -ccontains "ORC-00") -and ($readNames -ccontains "orc-63") -and -not ($readNames -ccontains "orc-64") -and -not ($readNames -ccontains "orc-70")) "which are read is the first so many by name, letter case set aside: ORC-00 and orc-01 to orc-63"
+$three = Read-HordeModuleSettingsText -Declaration (Get-HordeFleetSettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"statusFoldersRead":3}}'
+$few = Get-HordeFleetStatus -Folder (Join-Path $work "many") -Settings $three -Now $now
+Check (@($few.orcs).Count -eq 3 -and $few.notRead -eq 68 -and @($few.orcs | Where-Object { $_.written }).Count -eq 1) "with the setting at 3, three are read, the one good record among them, and 68 counted"
+Check (@((Get-HordeFleetStatus -Folder (Join-Path $work "fleet") -Settings $three -Now $now).orcs).Count -eq 3 -and (Get-HordeFleetStatus -Folder (Join-Path $work "fleet") -Settings $defaults -Now $now).notRead -eq 0) "CONTROL: a folder of four is read whole at 64, and counts none unread"
+$wrongKind = Get-HordeFleetStatus -HordeHome (New-Home "home-cap" ('{"statusFolder":"' + (Join-Path $work "many").Replace("\", "\\") + '","statusFoldersRead":"3"}')) -Now $now
+Check (@($wrongKind.orcs).Count -eq 64 -and @($wrongKind.findings).Count -eq 1 -and $wrongKind.findings[0] -like "*statusFoldersRead*") ("a most that is written as text is said by name, and 64 is used (" + (@($wrongKind.findings) -join " / ") + ")")
 
 Write-Host ""
 Write-Host "--- the reader writes nothing ---" -ForegroundColor Cyan

@@ -87,26 +87,42 @@
            Find = 'if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $out.problems = @("there is no " + $script:HordeFleetStatusFile); return [pscustomobject]$out }'
            Replace = 'if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $out.problems = @("there is no " + $script:HordeFleetStatusFile); $out.written = $true; return [pscustomobject]$out }' }
         @{ Name = "unlisted-folder-is-an-empty-fleet"
-           Find = 'catch { return [pscustomobject]@{ schemaVersion = 1; state = "unreadable"; reason = ("the folder of status records could not be listed: "'
-           Replace = 'catch { return [pscustomobject]@{ schemaVersion = 1; state = "read"; reason = ("the folder of status records could not be listed: "' }
-        # --- the configuration
-        @{ Name = "no-configuration-is-an-error"
+           Find = 'catch { return (& $none "unreadable" ("the folder of status records could not be listed: " + $_.Exception.Message)) }'
+           Replace = 'catch { return (& $none "read" ("the folder of status records could not be listed: " + $_.Exception.Message)) }' }
+        # --- the module's settings: where the records are
+        @{ Name = "no-setting-is-an-error"
            Find = 'return [pscustomobject]@{ state = "not-configured"; folder = "";'
            Replace = 'return [pscustomobject]@{ state = "unreadable"; folder = "";' }
-        @{ Name = "any-version-of-the-configuration"
-           Find = 'if ($null -eq $version -or $version.Value -ne 1) {'
-           Replace = 'if ($null -eq $version) {' }
-        @{ Name = "a-relative-folder-accepted"
-           Find = ' -or -not [System.IO.Path]::IsPathRooted($folder.Value)) {'
-           Replace = ') {' }
         @{ Name = "a-folder-that-is-not-there-accepted"
-           Find = 'if (-not (Test-Path -LiteralPath $folder.Value -PathType Container -ErrorAction Stop)) {'
+           Find = 'if (-not (Test-Path -LiteralPath $folder -PathType Container -ErrorAction Stop)) {'
            Replace = 'if ($false) {' }
         @{ Name = "a-folder-that-cannot-be-asked-about-throws"
            Find = '} catch { return (& $bad ("names a folder that could not be looked for: " + $_.Exception.Message)) }'
            Replace = '} catch { throw }' }
-        @{ Name = "the-configuration-somewhere-else"
-           Find = 'return (Join-Path (Join-Path $HordeHome "fleet") "status-source.json")'
-           Replace = 'return (Join-Path (Join-Path $HordeHome "fleet") "status.json")' }
+        @{ Name = "the-settings-of-another-module"
+           Find = '$script:HordeFleetSettings = New-HordeModuleSettings -Module "fleet" -Settings @('
+           Replace = '$script:HordeFleetSettings = New-HordeModuleSettings -Module "fleets" -Settings @(' }
+        @{ Name = "the-folder-setting-has-a-default-place"
+           Find = '@{ name = "statusFolder"; kind = "folder"; default = "";'
+           Replace = '@{ name = "statusFolder"; kind = "folder"; default = "C:\no\such\folder\of-orcs";' }
+        @{ Name = "what-was-wrong-in-the-file-not-said"
+           Find = '$findings = @($Settings.findings | ForEach-Object { "" + $_ })'
+           Replace = '$findings = @()' }
+        # --- the module's settings: how many folders are read
+        @{ Name = "every-folder-read"
+           Find = '$orcs = @($paths | Select-Object -First $most | ForEach-Object { Read-HordeFleetStatusFolder -Path $_ -Now $Now })'
+           Replace = '$orcs = @($paths | ForEach-Object { Read-HordeFleetStatusFolder -Path $_ -Now $Now })' }
+        @{ Name = "the-rest-not-counted"
+           Find = '$notRead = [Math]::Max(0, $paths.Length - $most)'
+           Replace = '$notRead = 0' }
+        @{ Name = "the-most-is-another-number"
+           Find = '@{ name = "statusFoldersRead"; kind = "whole"; default = 64;'
+           Replace = '@{ name = "statusFoldersRead"; kind = "whole"; default = 65;' }
+        @{ Name = "which-are-read-is-by-letter-case"
+           Find = '[System.Array]::Sort($paths, [System.StringComparer]::OrdinalIgnoreCase)'
+           Replace = '[System.Array]::Sort($paths, [System.StringComparer]::Ordinal); [System.Array]::Reverse($paths)' }
+        @{ Name = "the-count-of-unread-not-handed-on"
+           Find = 'orcs = $sorted; notRead = $notRead; findings = $findings }'
+           Replace = 'orcs = $sorted; notRead = 0; findings = $findings }' }
     )
 }

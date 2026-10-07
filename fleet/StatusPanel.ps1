@@ -1,8 +1,8 @@
 # fleet/StatusPanel.ps1 - what each Orc says it is doing, read from the small file each one keeps.
 #
 # THE ONE JOB of this file is to read status records and hand them on as plain data. It knows nothing
-# of questions, windows or pages: a panel that shows the data (fleet/panel/) is given it by whoever
-# opened the window, and the same data could be printed or sent across a link unchanged.
+# of questions, windows or pages: a page part that shows the data (fleet/line/) is given it by whoever
+# opened the page, and the same data could be printed or sent across a link unchanged.
 #
 # THE STATUS RECORD, version 1 (approved 2026-10-06). One file per Orc, status.txt, in that Orc's own
 # folder, replaced whole each time: exactly six lines of ASCII,
@@ -30,15 +30,29 @@
 # WHAT THIS DOES NOT SAY, and the panel must not pretend to: working or idle, sessions open, waiting
 # on a person. Those come from the fleet's activity and the list of questions, not from this file.
 #
-# WHERE THE FILES ARE IS CONFIGURATION, a path and nothing else: <HordeHome>\fleet\status-source.json,
-# { "schemaVersion": 1, "folder": "<absolute path>" }, each direct subfolder of which is one Orc's. With
-# no such file the answer is "not configured", which is not an error: a machine with no fleet has none.
+# WHERE THE FILES ARE, AND HOW MANY FOLDERS ARE READ, ARE THE MODULE'S SETTINGS (core/ModuleSettings.ps1,
+# module "fleet", a person's file <HordeHome>\settings\fleet.json):
+#   statusFolder        an absolute folder, each direct subfolder of which is one Orc's. Left out, the
+#                       answer is "not configured", which is not an error: a machine with no fleet has
+#                       none. (It replaces <HordeHome>\fleet\status-source.json, the one settings file
+#                       written before there was a place for a module's settings; that file is no
+#                       longer read.)
+#   statusFoldersRead   the most folders read, 64 unless the file says otherwise. THE REST ARE COUNTED
+#                       AND SAID, never read: the caller is a window's own thread, asking again every
+#                       few seconds, and a folder of ten thousand subfolders held it for 8 s each time
+#                       (measured 2026-10-06 by the review of this reader; with the 64, the same ten
+#                       thousand are listed, 64 read and 9,936 counted in 67 to 93 ms, measured
+#                       2026-10-07 on a machine slowed on purpose). Which are read is the first
+#                       so many by name, compared by code point with letter case set aside, so the same
+#                       ones every time.
+# A fault in the person's file is said by name in the answer's findings, and the default is used.
 #
 # NOTHING HERE WRITES. Not the configuration, not a status file, not a folder.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\ModuleSettings.ps1")
 
 $script:HordeFleetStatusHeader = "horde-orc-status 1"
 $script:HordeFleetStatusKeys = @("orc", "lane", "doing", "finished", "blocked")
@@ -51,38 +65,41 @@ $script:HordeFleetStatusMostBytes = 8192
 # Measured 2026-10-06 with every one named: 1,000 folders claiming one letter made 11 MB of answer,
 # 3,000 made 100 MB, and 10,000 ended in an out-of-memory error. More than 26 records must repeat one.
 $script:HordeFleetStatusMostNamed = 5
+# THE SETTINGS OF THE MODULE "fleet" (header). The four numbers above are not among them: they are the
+# record's own format and this reader's bound on its own answer, which no person's file should move.
+$script:HordeFleetSettings = New-HordeModuleSettings -Module "fleet" -Settings @(
+    @{ name = "statusFolder"; kind = "folder"; default = ""; what = "The folder whose direct subfolders each hold one Orc's status record. Left out, no fleet is configured on this machine." }
+    @{ name = "statusFoldersRead"; kind = "whole"; default = 64; min = 1; max = 1000; what = "The most status folders read at one time; the rest are counted and said, not read." }
+)
 # A bare pull-request or issue reference, or a Windows path: the record checker's own expression.
 $script:HordeFleetStatusBareReference = '(?i)\b(pr|pull request|issue)\s*#?\d+|#\d+|[A-Za-z]:\\'
 
-function Get-HordeFleetStatusSourcePath {
-    # Where the configuration is. Worked out, never created.
+function Get-HordeFleetSettingsDeclaration { return $script:HordeFleetSettings }
+
+function Get-HordeFleetSettings {
+    # The module's settings as they are now: { values; findings; path } (core/ModuleSettings.ps1).
+    # Reads the one file and writes nothing. -HordeHome is for a caller that already knows the home.
     param([string]$HordeHome = "")
-    if ($HordeHome -eq "") { $HordeHome = Get-HordeHome }
-    return (Join-Path (Join-Path $HordeHome "fleet") "status-source.json")
+    return (Get-HordeModuleSettings -Declaration $script:HordeFleetSettings -HordeHome $HordeHome)
 }
 
 function Get-HordeFleetStatusSource {
-    # The configured folder, as { state; folder; reason }: state is configured, not-configured (there
-    # is no configuration file) or unreadable (there is one and it does not name a folder that exists).
-    param([string]$HordeHome = "")
-    $path = Get-HordeFleetStatusSourcePath -HordeHome $HordeHome
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ state = "not-configured"; folder = ""; reason = "no folder of status records is configured on this machine" } }
-    $config = $null
-    try { $config = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json } catch { $config = $null }
-    $bad = { param([string]$Why) return [pscustomobject]@{ state = "unreadable"; folder = ""; reason = ("the configuration of where status records are (" + $path + ") " + $Why) } }
-    if ($null -eq $config -or $config -isnot [System.Management.Automation.PSCustomObject]) { return (& $bad "is not a JSON object") }
-    $version = $config.PSObject.Properties["schemaVersion"]
-    $folder = $config.PSObject.Properties["folder"]
-    if ($null -eq $version -or $version.Value -ne 1) { return (& $bad "is not schemaVersion 1") }
+    # The folder of status records, as { state; folder; reason }: state is configured, not-configured
+    # (the setting names none) or unreadable (it names a folder that is not there). -Settings is the
+    # answer of Get-HordeFleetSettings; without it the file is read here.
+    param($Settings = $null, [string]$HordeHome = "")
+    if ($null -eq $Settings) { $Settings = Get-HordeFleetSettings -HordeHome $HordeHome }
+    $folder = "$($Settings.values.statusFolder)"
+    if ($folder -eq "") { return [pscustomobject]@{ state = "not-configured"; folder = ""; reason = "no folder of status records is configured on this machine" } }
+    $bad = { param([string]$Why) return [pscustomobject]@{ state = "unreadable"; folder = ""; reason = ("the setting of where status records are (statusFolder) " + $Why) } }
     # A FOLDER WINDOWS CANNOT EVEN BE ASKED ABOUT IS UNREADABLE TOO, NEVER A THROW: the caller is a
     # window's tick, and it is promised an answer. Measured 2026-10-06 by the review of this reader: a
     # folder on a machine that does not answer threw "The network path was not found" out of the test
-    # for the folder, and a name holding characters no path may threw "Illegal characters in path" out
-    # of the test for an absolute one. Both are caught here and said in words.
+    # for the folder, and a name holding characters no path may threw "Illegal characters in path".
+    # Both are caught here and said in words.
     try {
-        if ($null -eq $folder -or $folder.Value -isnot [string] -or -not [System.IO.Path]::IsPathRooted($folder.Value)) { return (& $bad "does not give an absolute folder") }
-        if (-not (Test-Path -LiteralPath $folder.Value -PathType Container -ErrorAction Stop)) { return (& $bad ("names a folder that does not exist: " + $folder.Value)) }
-        return [pscustomobject]@{ state = "configured"; folder = [System.IO.Path]::GetFullPath($folder.Value); reason = "" }
+        if (-not (Test-Path -LiteralPath $folder -PathType Container -ErrorAction Stop)) { return (& $bad ("names a folder that does not exist: " + $folder)) }
+        return [pscustomobject]@{ state = "configured"; folder = [System.IO.Path]::GetFullPath($folder); reason = "" }
     } catch { return (& $bad ("names a folder that could not be looked for: " + $_.Exception.Message)) }
 }
 
@@ -157,20 +174,30 @@ function Read-HordeFleetStatusFolder {
 }
 
 function Get-HordeFleetStatus {
-    # Every Orc's record under the configured folder, as plain data a panel shows:
-    #   { schemaVersion; state; reason; orcs }
-    # state is read, not-configured or unreadable; orcs is one record per direct subfolder, in the order
-    # of their letters and then of their folder names. -Folder names the folder for a caller that made it.
-    param([string]$Folder = "", [string]$HordeHome = "", [datetime]$Now = [datetime]::UtcNow)
+    # Every Orc's record under the folder of status records, as plain data a page shows:
+    #   { schemaVersion; state; reason; orcs; notRead; findings }
+    # state is read, not-configured or unreadable; orcs is one record per direct subfolder that was
+    # read, in the order of their letters and then of their folder names; notRead is how many
+    # subfolders were past the most that are read (header) and were only counted; findings is what
+    # was wrong in the person's settings file, in sentences. -Folder names the folder for a caller
+    # that made it; -Settings is the answer of Get-HordeFleetSettings, read here when it is not given.
+    param([string]$Folder = "", [string]$HordeHome = "", $Settings = $null, [datetime]$Now = [datetime]::UtcNow)
+    if ($null -eq $Settings) { $Settings = Get-HordeFleetSettings -HordeHome $HordeHome }
+    $findings = @($Settings.findings | ForEach-Object { "" + $_ })
+    $none = { param([string]$State, [string]$Why) return [pscustomobject]@{ schemaVersion = 1; state = $State; reason = $Why; orcs = @(); notRead = 0; findings = $findings } }
     if ($Folder -eq "") {
-        $source = Get-HordeFleetStatusSource -HordeHome $HordeHome
-        if ($source.state -cne "configured") { return [pscustomobject]@{ schemaVersion = 1; state = $source.state; reason = $source.reason; orcs = @() } }
+        $source = Get-HordeFleetStatusSource -Settings $Settings
+        if ($source.state -cne "configured") { return (& $none $source.state $source.reason) }
         $Folder = $source.folder
     }
-    $dirs = $null
-    try { $dirs = @(Get-ChildItem -LiteralPath $Folder -Directory -ErrorAction Stop | Sort-Object Name) }
-    catch { return [pscustomobject]@{ schemaVersion = 1; state = "unreadable"; reason = ("the folder of status records could not be listed: " + $_.Exception.Message); orcs = @() } }
-    $orcs = @($dirs | ForEach-Object { Read-HordeFleetStatusFolder -Path $_.FullName -Now $Now })
+    $paths = $null
+    try { $paths = [string[]]@([System.IO.Directory]::GetDirectories($Folder)) }
+    catch { return (& $none "unreadable" ("the folder of status records could not be listed: " + $_.Exception.Message)) }
+    # THE SAME FOLDERS EVERY TIME (header): by name, by code point, letter case set aside.
+    [System.Array]::Sort($paths, [System.StringComparer]::OrdinalIgnoreCase)
+    $most = [int]$Settings.values.statusFoldersRead
+    $notRead = [Math]::Max(0, $paths.Length - $most)
+    $orcs = @($paths | Select-Object -First $most | ForEach-Object { Read-HordeFleetStatusFolder -Path $_ -Now $Now })
     # TWO FOLDERS, ONE LETTER: neither is shown as that Orc (header).
     foreach ($group in @($orcs | Where-Object { $_.written } | Group-Object -Property orc -CaseSensitive | Where-Object { $_.Count -gt 1 })) {
         # A FEW ARE NAMED AND THE REST COUNTED ($script:HordeFleetStatusMostNamed): every claimant's
@@ -184,5 +211,5 @@ function Get-HordeFleetStatus {
         }
     }
     $sorted = @($orcs | Sort-Object -Property @{ Expression = { if ($_.written) { 0 } else { 1 } } }, @{ Expression = { $_.orc } }, @{ Expression = { $_.folder } })
-    return [pscustomobject]@{ schemaVersion = 1; state = "read"; reason = ""; orcs = $sorted }
+    return [pscustomobject]@{ schemaVersion = 1; state = "read"; reason = ""; orcs = $sorted; notRead = $notRead; findings = $findings }
 }
