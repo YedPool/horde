@@ -444,7 +444,13 @@ function Start-HordeWebView2Capture {
         $s.capture = [pscustomobject]@{ path = $Path; temp = $temp; stream = $stream; task = $task }
         return $true
     } catch {
-        if ($null -ne $stream) { $stream.Dispose() }
+        # The file this function opened is this function's to remove: an ask the engine does not take
+        # must leave nothing beside where the picture would have been. Only when it WAS opened here:
+        # a file that could not be opened is somebody else's.
+        if ($null -ne $stream) {
+            $stream.Dispose()
+            try { [System.IO.File]::Delete($temp) } catch { }
+        }
         Add-HordeWebView2Error -Text ("a picture could not be asked for: " + $_.Exception.Message)
         return $false
     }

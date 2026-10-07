@@ -268,8 +268,19 @@ Write-Host ""
 Write-Host "--- a picture is Horde's to ask for, and only of a page that is being drawn ---" -ForegroundColor Cyan
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and -not (Test-Path -LiteralPath (Join-Path $work "p.png"))) "with no engine up there is nothing to take a picture of: not asked, and no file made"
 $script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; mounts = $servedMounts; window = $null; opened = $true; view = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ } }; failure = ""; capture = $null; pictures = 0; errors = (New-Object System.Collections.ArrayList) }
-Check ((Start-HordeWebView2Capture -Path "p.png") -eq $false -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*an absolute path ending .png*") "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
+# FROM INSIDE THIS RUN'S OWN FOLDER: if the refusal ever fails, the file a relative path would make
+# lands here and is removed with the folder, not wherever the suite was started from (review of
+# 2026-10-06, finding A13: two runs of the mutant below each left a file in the starting folder).
+Push-Location -LiteralPath $work
+try { $relativeTaken = Start-HordeWebView2Capture -Path "p.png" } finally { Pop-Location }
+Check ($relativeTaken -eq $false -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*an absolute path ending .png*") "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.txt")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "and so is a path that is not a .png; neither left a file behind"
+# THE ENGINE REFUSES THE ASK (here: the object standing in for it has no such call). The half-opened
+# file is the surface's own to remove.
+$failedAsk = Start-HordeWebView2Capture -Path (Join-Path $work "q.png")
+Check ($failedAsk -eq $false -and $script:HordeWebView2.errors.Count -eq 3 -and $script:HordeWebView2.errors[2] -like "a picture could not be asked for:*" -and $null -eq $script:HordeWebView2.capture) "an ask the engine does not take is answered no and recorded, and no picture is waited for"
+Check (@(Get-ChildItem -LiteralPath $work -Filter "q.*").Count -eq 0) ("and it leaves no file behind, not the picture and not the file it was being drawn into (" + (@(Get-ChildItem -LiteralPath $work -Filter "q.*" | ForEach-Object { $_.Name }) -join ", ") + ")")
+$script:HordeWebView2.errors.RemoveAt(2)
 $script:HordeWebView2.capture = [pscustomobject]@{ task = [pscustomobject]@{ IsCompleted = $false } }
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "while one picture is being drawn a second is not taken: nothing is asked of the engine, and no file is opened"
 Complete-HordeWebView2Capture

@@ -184,6 +184,9 @@
         @{ Name = "an-unfinished-picture-is-saved"
            Find = 'if ($null -eq $s -or $null -eq $s.capture -or -not $s.capture.task.IsCompleted) { return }'
            Replace = 'if ($null -eq $s -or $null -eq $s.capture) { return }' }
+        @{ Name = "a-failed-ask-for-a-picture-leaves-its-file"
+           Find = 'try { [System.IO.File]::Delete($temp) } catch { }'
+           Replace = '' }
         # --- the screen's real scale
         @{ Name = "real-scale-judged-by-whether-the-call-was-taken"
            Find = 'if ("$($Scale.realScale)" -ceq "yes") { return "" }'
