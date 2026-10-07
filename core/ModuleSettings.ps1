@@ -102,6 +102,7 @@
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
 . (Join-Path $PSScriptRoot "Schema.ps1")
+. (Join-Path $PSScriptRoot "JsonText.ps1")
 
 $script:HordeModuleSettingKinds = @("text", "whole", "fraction", "truefalse", "folder")
 $script:HordeModuleSettingFields = @("name", "kind", "default", "what", "min", "max", "values")
@@ -113,9 +114,29 @@ $script:HordeModuleSettingNamePattern = '\A[a-z][a-zA-Z0-9]{0,39}\z'
 # What an entry says it is: one line a person can read in a table, printable ASCII as every source file.
 $script:HordeModuleSettingWhatPattern = '\A[\x20-\x7E]{1,200}\z'
 # The longest text and the longest folder a setting may hold. A cap, so "no largest length" cannot be
-# declared; 1024 covers every path seen and is below the 32767 a long Windows path may reach.
+# declared; 1024 is about four times the 260 of an ordinary Windows path, and below the 32767 a long
+# one may reach.
 $script:HordeModuleSettingTextCap = 4096
 $script:HordeModuleSettingFolderCap = 1024
+$script:HordeModuleSettingsSchemaName = "module-settings.v1"
+# THE LONGEST FILE THAT IS READ, in characters of text and, for the file itself, in bytes. Forty
+# settings, each with a forty-character name and a short value, come to about 2500 characters
+# (reckoned, not measured), so this is a hundred times a large file and still small to hold in memory.
+$script:HordeModuleSettingsMaxLength = 262144
+# How much of a key's name, and of a whole finding, is shown before it is cut.
+$script:HordeModuleSettingsNameShown = 60
+$script:HordeModuleSettingsFindingShown = 400
+# WHAT JSON IS MADE OF, AND NOTHING ELSE: blanks, the six marks, strings in double quotes with JSON's
+# own escapes, true, false, null, and numbers as JSON writes them. The text is matched from its start
+# and must be consumed whole, BEFORE the parser sees it, because Windows PowerShell 5.1's
+# ConvertFrom-Json reads more than JSON (measured 2026-10-07): {'a':1} and {a:1} parse, so a key
+# repeated in single quotes or with none is kept once in silence and core/JsonText.ps1's scan, which
+# reads double-quoted keys, never sees it; NaN parses as a Double that is below nothing and above
+# nothing; 010 parses as 10 and +5 as 5. This says only what the pieces are; whether they form a
+# document is still the parser's to say. Nothing follows the repeat, so a text that stops matching
+# stops there: there is nothing to backtrack into, and 200000 digits with a letter after them are
+# refused as fast as they are read (test/test-module-settings.ps1 has that text).
+$script:HordeModuleSettingsJsonPieces = '\A(?:[ \t\r\n]+|[{}\[\],:]|"(?:[^"\\\x00-\x1F]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?![0-9A-Za-z.+-]))*'
 
 function Test-HordeModuleSettingFolder {
     # Is this an absolute path, one that means the same from every current folder and drive?
@@ -279,4 +300,99 @@ function New-HordeModuleSettings {
     }
     if ($problems.Count -gt 0) { throw ("the settings of " + $Module + " are declared wrongly: " + ($problems -join "; ")) }
     return [pscustomobject]@{ PSTypeName = "Horde.ModuleSettings"; module = $Module; settings = $rows.ToArray() }
+}
+
+function ConvertTo-HordeModuleSettingsPlain {
+    # A text as a finding may carry it: printable ASCII as it is, anything else as \uXXXX, cut after
+    # -Max characters with "..." to say so. A finding is printed to consoles that cannot draw every
+    # character, and a key's name comes from a file anybody may have written.
+    param([AllowEmptyString()][string]$Text, [int]$Max)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $Text.ToCharArray()) {
+        if ($sb.Length -ge $Max) { [void]$sb.Append("..."); break }
+        $code = [int]$c
+        if ($code -ge 0x20 -and $code -le 0x7E) { [void]$sb.Append($c) } else { [void]$sb.Append("\u" + $code.ToString("X4")) }
+    }
+    return $sb.ToString()
+}
+
+function Assert-HordeModuleSettingsDeclaration {
+    # Only what New-HordeModuleSettings returned is a declaration: a hand-built table was never checked.
+    param($Declaration)
+    if ($null -eq $Declaration -or $Declaration.PSObject.TypeNames -notcontains "Horde.ModuleSettings") { throw "-Declaration must be what New-HordeModuleSettings returned" }
+}
+
+function Read-HordeModuleSettingsDocument {
+    # The settings part of a file's text, or why the text cannot be read as a whole: { settings;
+    # problems }, one of them empty. Each problem finishes the sentence "the settings file of <module> ...".
+    # IN THIS ORDER: the length before anything walks the text; what JSON is made of before the
+    # duplicate scan, which reads only double-quoted keys; the duplicate scan before the parser, which
+    # keeps one of two equal keys and throws on two that differ in case; the schema last.
+    param([AllowEmptyString()][string]$Text)
+    if ($Text.Length -gt $script:HordeModuleSettingsMaxLength) { return [pscustomobject]@{ settings = $null; problems = @("is longer than " + $script:HordeModuleSettingsMaxLength + " characters") } }
+    $pieces = [regex]::Match($Text, $script:HordeModuleSettingsJsonPieces)
+    if ($pieces.Length -ne $Text.Length) {
+        $line = $Text.Substring(0, $pieces.Length).Split([char]10).Count
+        return [pscustomobject]@{ settings = $null; problems = @("is not JSON: line " + $line + " holds something JSON does not have") }
+    }
+    $twice = @(Find-HordeJsonDuplicateKey -Text $Text)
+    if ($twice.Count -gt 0) { return [pscustomobject]@{ settings = $null; problems = @($twice | ForEach-Object { "says one thing twice: " + $_ }) } }
+    # WHAT THE PARSER REFUSES ALTHOUGH ITS PIECES ARE JSON's (measured 2026-10-07 on 5.1): pieces in no
+    # order ({ "a": 1, }), a number too large for a Double (1e400), values nested more than about 100
+    # deep ("RecursionLimit exceeded"), an empty key, and a key named PSObject, which it keeps for
+    # itself. Each is this one sentence. The parser's own message is not passed on: it quotes the text.
+    $parsed = $null
+    try { $parsed = $Text | ConvertFrom-Json } catch { return [pscustomobject]@{ settings = $null; problems = @("is not JSON the parser can read") } }
+    $unfit = @(Test-HordeSchema -Value $parsed -Schema (Get-HordeSchema -Name $script:HordeModuleSettingsSchemaName))
+    if ($unfit.Count -gt 0) { return [pscustomobject]@{ settings = $null; problems = @($unfit | ForEach-Object { "does not fit schema/" + $script:HordeModuleSettingsSchemaName + ": " + $_ }) } }
+    return [pscustomobject]@{ settings = (Get-HordeObjectByKey $parsed)["settings"]; problems = @() }
+}
+
+function Read-HordeModuleSettingsText {
+    # A module's settings from its file's TEXT: { values; findings }. PURE: the same declaration and
+    # text give the same answer on any machine, and nothing is read but Horde's own schema file. -Text
+    # is $null when there is no file, which is every default and no finding; "" is an empty file, which
+    # is a finding. The rules are in the header.
+    param([Parameter(Mandatory = $true)]$Declaration, [AllowNull()]$Text)
+    Assert-HordeModuleSettingsDeclaration -Declaration $Declaration
+    if ($null -ne $Text -and $Text -isnot [string]) { throw "-Text is the file's text, or `$null when there is no file" }
+    $module = "" + $Declaration.module
+    $byName = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+    $byNameAnyCase = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $values = [ordered]@{}
+    foreach ($entry in @($Declaration.settings)) { $byName[$entry.name] = $entry; $byNameAnyCase[$entry.name] = $entry; $values[$entry.name] = $entry.default }
+    $sentences = New-Object System.Collections.ArrayList
+    if ($null -ne $Text) {
+        # ONE LEADING BYTE-ORDER MARK IS SKIPPED, here and not only where the file is decoded, so the
+        # answer is the same whoever turned the bytes into text: .NET's GetString keeps the mark and
+        # 5.1's parser refuses it as "Invalid JSON primitive" (measured 2026-10-07).
+        $body = $Text
+        if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }
+        $doc = Read-HordeModuleSettingsDocument -Text $body
+        foreach ($problem in @($doc.problems)) { [void]$sentences.Add("the settings file of " + $module + " " + $problem + "; every setting of " + $module + " is its default") }
+        if ($null -ne $doc.settings) {
+            # NAMES ARE COMPARED EXACTLY, so the file's keys go through an ordinal dictionary as the
+            # declaration's fields did: a property read on the parsed object would ignore case.
+            $given = Get-HordeObjectByKey $doc.settings
+            foreach ($key in @($given.Keys)) {
+                $shown = ConvertTo-HordeModuleSettingsPlain -Text $key -Max $script:HordeModuleSettingsNameShown
+                if (-not $byName.ContainsKey($key)) {
+                    $meant = ""
+                    if ($byNameAnyCase.ContainsKey($key)) { $meant = " (names are case-sensitive: '" + $byNameAnyCase[$key].name + "' is one)" }
+                    [void]$sentences.Add($module + " has no setting '" + $shown + "'" + $meant + "; it is not used")
+                    continue
+                }
+                $entry = $byName[$key]
+                $checked = Test-HordeModuleSettingValue -Entry $entry -Value $given[$key]
+                if ($checked.ok) { $values[$key] = $checked.value; continue }
+                [void]$sentences.Add($module + " setting '" + $shown + "' must be " + (Get-HordeModuleSettingRule -Entry $entry) + "; the file gives " + (Get-HordeModuleSettingGiven -Value $given[$key]) + "; the default is used")
+            }
+        }
+    }
+    # A NEW OBJECT EACH TIME, with a property per declared name: under strict mode a misspelt name is an
+    # error where a table would answer with nothing, and a caller that changes its answer changes only that.
+    $answer = New-Object psobject
+    foreach ($name in @($values.Keys)) { Add-Member -InputObject $answer -NotePropertyName $name -NotePropertyValue $values[$name] }
+    $findings = [string[]]@($sentences | ForEach-Object { ConvertTo-HordeModuleSettingsPlain -Text $_ -Max $script:HordeModuleSettingsFindingShown })
+    return [pscustomobject]@{ values = $answer; findings = $findings }
 }
