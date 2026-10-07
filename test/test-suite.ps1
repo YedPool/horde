@@ -9,6 +9,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\SuiteFiles.ps1")
+. (Join-Path $root "test\lib\SuiteSections.ps1")
 
 function Invoke-Fixture {
     # Run one fixture suite; returns { code; out }. Streams read through the process API, not 2>&1.
@@ -112,7 +113,16 @@ foreach ($s in $suites) {
     if (-not ($null -ne $last -and $last.Extent.Text -match '^Complete-HordeSuite\b')) { $why += "does not end with Complete-HordeSuite" }
     if ($exits.Count -gt 0) { $why += "" + $exits.Count + " exit outside a catch" }
     Check $ok ($s.Name + " declares the trap, ends with Complete-HordeSuite, and never exits early" + $(if ($why.Count) { " (" + ($why -join "; ") + ")" } else { "" }))
+    $trapless = @(Get-HordeSectionTrapProblems -Path $s.FullName)
+    if ($trapless.Count -gt 0) { Check $false ($s.Name + ": every section carries its own trap line (" + ($trapless -join "; ") + ")") }
 }
+# CONTROL: the section trap check, on a planted suite, names the section without a trap and only it.
+$plantTrap = Join-Path $env:TEMP ("horde-sectrap-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+    [System.IO.File]::WriteAllText($plantTrap, ("if (Enter-HordeSuiteSection `"kept`" `"t`") {`r`n    trap { Register-HordeSuiteError `$_; continue }`r`n    Check `$true `"x`"`r`n}`r`nif (Enter-HordeSuiteSection `"bare`" `"t`") {`r`n    Check `$true `"y`"`r`n}`r`nif (`$x) { Check `$true `"not a section`" }`r`n"))
+    $pt = @(Get-HordeSectionTrapProblems -Path $plantTrap)
+    Check ($pt.Count -eq 1 -and $pt[0] -like "line 5: section bare has 0 trap lines*") ("CONTROL: the check names a section without its own trap, and no other (" + ($pt -join "; ") + ")")
+} finally { if (Test-Path -LiteralPath $plantTrap) { Remove-Item -LiteralPath $plantTrap -Force } }
 
 Write-Host ""
 Write-Host "--- a condition must be a boolean ---" -ForegroundColor Cyan
@@ -169,6 +179,10 @@ Check ($sUd.code -eq 1 -and $sUd.out -like "*[[]ERROR]*gamma*not declared*") "en
 $sCh = Invoke-Fixture "sections-child" -Vars @{ HORDE_SECTIONS = "alpha" }
 Check ($sCh.code -eq 0 -and $sCh.out -like "*[[]PASS] the alpha check*") "CONTROL: the selected section ran"
 Check ($sCh.out.Contains("child saw []")) ("a selection never reaches what a suite starts: the child saw no HORDE_SECTIONS (review of #115, B2)" + $(if (-not $sCh.out.Contains("child saw []")) { " - " + (@(($sCh.out -split "`r?`n") | Where-Object { $_ -like "*child saw*" }) -join " ") } else { "" }))
+# A CHECK AFTER AN ERROR IN A SECTION STILL RUNS, as one after an error at top level does ("a check
+# cannot vanish" above): the section's own trap resumes inside the section.
+$sEr = Invoke-Fixture "sections-error"
+Check ($sEr.code -eq 1 -and $sEr.out -like "*[[]ERROR]*boom*" -and $sEr.out -like "*[[]FAIL] the check after the error*") "an error in a section does not skip the checks after it in that section"
 $sTw = Invoke-Fixture "sections-twice"
 Check ($sTw.code -eq 1 -and $sTw.out -like "*[[]ERROR]*declares its sections more than once*") "a suite that declares its sections twice fails"
 Check ($sTw.out -like "*[[]ERROR]*section alpha is entered twice*") "a section entered twice fails the suite"
