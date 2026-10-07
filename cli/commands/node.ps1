@@ -68,7 +68,7 @@ $HordeCommand = @{
         $say = { Write-Host ("node " + $node.deviceId + " listening on the local link") }
         # MESSAGING (R21 slice 4). The message journal and the outbox are this node's own, under its home.
         # remote.deliverTo is read from the node's own layers - engine.json (L1) and engine-live.json (L4),
-        # through cli/NodeAct.ps1's Get-HordeNodeEngineLayers, the one reader the spawn path uses - again
+        # through core/NodeEngineLayers.ps1's Get-HordeNodeEngineLayers, the one reader the spawn path uses - again
         # for every deliver; a layer that fails its checks refuses every deliver and says why. A deliver
         # goes through the messenger port (messengers/Port.ps1) to the messenger -Messenger names, which
         # Resolve-HordeNodeMessenger must accept; with none, every deliver is refused and says why.

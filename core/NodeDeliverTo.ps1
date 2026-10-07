@@ -4,7 +4,7 @@
 # A deliver may reach a session the hub spawned, or one whose label the node's own remote.deliverTo
 # lists. The list is the node owner's word, exactly like remote.permissionCeiling: core/config-keys.json
 # allows it only in L1 and L4, the node's own layers, <HordeHome>\engine.json and engine-live.json. They
-# are read by the node's ONE layer reader, cli/NodeAct.ps1's Get-HordeNodeEngineLayers, which the spawn
+# are read by the node's ONE layer reader, core/NodeEngineLayers.ps1's Get-HordeNodeEngineLayers, which the spawn
 # path uses too and which runs the configuration checker over them, so a run spec or a spawn setting the
 # key is a problem there; never from the link, and - like every setting (engine-settings decision 1) -
 # never from an environment variable. A live rule (L4) beats L1, as a higher layer does in

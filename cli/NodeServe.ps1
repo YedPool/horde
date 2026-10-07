@@ -205,7 +205,7 @@ function ConvertTo-HordeNodeMessengerMessage {
 }
 
 function Read-HordeNodeDeliverTo {
-    # The node's opt-in list, read now through the node's one layer reader (cli/NodeAct.ps1's
+    # The node's opt-in list, read now through the node's one layer reader (core/NodeEngineLayers.ps1's
     # Get-HordeNodeEngineLayers: L0, <HordeHome>\engine.json as L1 and engine-live.json as L4, every
     # error a problem): { deliverTo; error }. Any problem refuses every deliver, with its text.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, $Descriptors = $null, $Builtin = $null)

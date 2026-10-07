@@ -231,7 +231,7 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    target a session whose label the node's own `remote.deliverTo` lists. That key is the node owner's
    exactly like `remote.permissionCeiling`: settable only in the node's own layers, L1
    (`<HordeHome>\engine.json`) and L4 (`<HordeHome>\engine-live.json`), the engines plan's two files,
-   read by the node's one layer reader, `cli/NodeAct.ps1`'s `Get-HordeNodeEngineLayers` (A3), again
+   read by the node's one layer reader, `core/NodeEngineLayers.ps1`'s `Get-HordeNodeEngineLayers` (#109), again
    for every deliver as for every spawn - one source of truth for a node's configuration; never from
    the link; and its default is no label. A live rule beats L1, and an empty value withdraws every
    opt-in. The value is a bounded list: at most 64 hub labels, each `^[A-Z]{1,2}([1-9][0-9]{0,3})?$`,

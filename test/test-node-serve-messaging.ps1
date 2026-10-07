@@ -145,6 +145,19 @@ Check ("$($r.reply.result.state)" -ceq "unknown" -and "$($r.reply.result.reason)
 Check ((Get-HordeJournalEntry -Root $journalRoot -Id "$($unheard.messageId)").state -ceq "absent") "and nothing is journaled, so a resend asks the messenger again"
 
 Write-Host ""
+Write-Host "--- a read-only node refuses every verb whose effect is not read (review of #112, B1) ---" -ForegroundColor Cyan
+function ReadOnly { param($D) $D | Add-Member -NotePropertyName readOnly -NotePropertyValue $true -Force; return $D }
+$roMsg = Deliver -Label "A12"
+$r = AskFrame (Req "session.deliver" $roMsg) (Data -View (View) -DeliverTo @("A12"))
+Check ($null -ne $r.needDeliver) "CONTROL: without -ReadOnly, the same deliver passes the gate and asks the messenger"
+$r = AskFrame (Req "session.deliver" $roMsg) (ReadOnly (Data -View (View) -DeliverTo @("A12")))
+Check ("$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -clike "*read verbs only*session.deliver*drive*" -and $null -eq $r.needDeliver -and -not $r.needView -and (Sendable $r.reply)) "under -ReadOnly, session.deliver (drive) is refused with the reason, before anything is asked"
+$r = AskFrame (Req "mail.receipt" ([pscustomobject]@{ messageId = "0e000000-0000-4000-8000-000000000301"; stage = "accepted"; at = (Get-HordeLinkTime) })) (ReadOnly (Data -Outbox @()))
+Check ("$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -clike "*read verbs only*mail.receipt*write*" -and $null -eq $r.write -and (Sendable $r.reply)) "under -ReadOnly, mail.receipt (write) is refused with the reason, and nothing is written"
+$r = AskFrame (Req "mail.next" ([pscustomobject]@{})) (ReadOnly (Data -Outbox @()))
+Check ("$($r.reply.result.value.pending)" -eq "0" -and (Sendable $r.reply)) "a read verb (mail.next) still answers under -ReadOnly, from what the node was given"
+
+Write-Host ""
 Write-Host "--- delivery.status: the journal, then the messenger ---" -ForegroundColor Cyan
 $r = AskFrame (Req "delivery.status" ([pscustomobject]@{ messageId = (New-HordeLinkFrameId) })) (Data)
 Check ("$($r.reply.result.state)" -ceq "absent" -and (Sendable $r.reply)) "a message this node never accepted is absent"
@@ -226,6 +239,19 @@ Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason
 $none = New-HordeNodeMessaging -Root $root -HordeHome $nodeHome0 -GetView { View }
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" (Deliver -Label "A12"))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $none
 Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger was named*") "a node with no messenger named refuses every deliver, saying so"
+$posted0 = Deliver -Label "A12"
+$out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" $posted0)) -Manifest $manifest -Namespace $ns -JournalRoot "" -ReadOnly
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*read verbs only*" -and (Took "$($posted0.messageId)") -eq 0) "a read-only loop, given no messaging at all, refuses a deliver as read-only and posts nothing"
+$out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" $posted0)) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $loopEnv -ReadOnly
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*read verbs only*" -and (Took "$($posted0.messageId)") -eq 0) "and even handed a messenger, a read-only loop refuses the deliver: the flag decides, not what was passed"
+$out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" $posted0)) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $loopEnv
+Check ("$($out.reply.result.value.stage)" -ceq "accepted" -and (Took "$($posted0.messageId)") -eq 1) "CONTROL: without -ReadOnly, with a messenger named, the same deliver is delivered"
+$out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "delivery.status" ([pscustomobject]@{ messageId = "$($posted0.messageId)" }))) -Manifest $manifest -Namespace $ns -JournalRoot "" -ReadOnly
+Check ("$($out.reply.result.state)" -ceq "unknown" -and "$($out.reply.result.reason)" -clike "*keeps no message journal*" -and (Sendable $out.reply)) "a read verb (delivery.status) still answers on a read-only node, unknown: it opens no message journal"
+$out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "mail.next" ([pscustomobject]@{}))) -Manifest $manifest -Namespace $ns -JournalRoot "" -ReadOnly
+Check ("$($out.reply.error.code)" -ceq "internal" -and "$($out.reply.error.reason)" -clike "*keeps no outbox*" -and (Sendable $out.reply)) "and mail.next answers that the node keeps no outbox: a read-only node opens none, so it writes no handed-out mark"
+$nodeCmd = [System.IO.File]::ReadAllText((Join-Path $root "cli\commands\node.ps1"))
+Check ($nodeCmd -match '\$messaging = \$null\s+if \(-not \$ReadOnly\) \{\s+\$messaging = New-HordeNodeMessaging' -and $nodeCmd.Contains('-ReadOnly:$ReadOnly')) "horde node serve -ReadOnly builds no messaging (no messenger, outbox or journal) and serves read verbs only"
 
 Write-Host ""
 Write-Host "--- the opt-in list is read from the node's layers again for every deliver ---" -ForegroundColor Cyan
@@ -263,6 +289,24 @@ Put "engine-live.json" '{ "schemaVersion": 1, "rules": ['
 $out = DeliverNow
 Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine-live.json*" -and (Took $script:lastId) -eq 0) "an engine-live.json that is not JSON refuses every deliver too, naming the file"
 Put "engine-live.json" ""
+function PutBytes { param([string]$File, [byte[]]$Bytes) [System.IO.File]::WriteAllBytes((Join-Path $nodeHome $File), $Bytes) }
+$ascii = [System.Text.Encoding]::ASCII
+# A note with an e-acute (0xC3 0xA9 in UTF-8): JSON that parses, and is not the plain ASCII a layer must be.
+PutBytes "engine.json" ($ascii.GetBytes('{ "schemaVersion": 1, "rules": [ { "id": "opt-in", "match": {}, "set": { "remote.deliverTo": "A12" }, "writtenBy": "user", "note": "caf') + [byte[]](0xC3, 0xA9) + $ascii.GetBytes('" } ] }'))
+$out = DeliverNow
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine.json*not ASCII*" -and (Took $script:lastId) -eq 0) "a non-ASCII engine.json refuses every deliver, naming the file and why"
+$out = DeliverNow -SessionId "old-2" -Messaging $spawned
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine.json*not ASCII*" -and (Took $script:lastId) -eq 0) "even to a session the hub spawned"
+Put "engine.json" (OptIn "opt-in" "A12")
+# A byte order mark (0xEF 0xBB 0xBF) before JSON that is otherwise plain.
+PutBytes "engine-live.json" ([byte[]](0xEF, 0xBB, 0xBF) + $ascii.GetBytes((OptIn "live" "A12")))
+$out = DeliverNow
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine-live.json*not ASCII*" -and (Took $script:lastId) -eq 0) "an engine-live.json with a byte order mark refuses every deliver, naming the file and why"
+$out = DeliverNow -SessionId "old-2" -Messaging $spawned
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine-live.json*not ASCII*" -and (Took $script:lastId) -eq 0) "even to a session the hub spawned"
+Put "engine-live.json" ""
+$out = DeliverNow
+Check ("$($out.reply.result.value.stage)" -ceq "accepted") "CONTROL: with the byte order mark gone, the same deliver goes through"
 } finally {
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

@@ -4,7 +4,7 @@
 # A deliver may reach a session the hub spawned, or one whose label the node's own remote.deliverTo lists.
 # That key is the node owner's, exactly like remote.permissionCeiling: core/config-keys.json allows it only
 # in L1 (<HordeHome>\engine.json) and L4 (<HordeHome>\engine-live.json). Both files are read by the node's
-# ONE layer reader, cli/NodeAct.ps1's Get-HordeNodeEngineLayers - the one the spawn path uses - and every
+# ONE layer reader, core/NodeEngineLayers.ps1's Get-HordeNodeEngineLayers - the one the spawn path uses - and every
 # problem it finds refuses the whole list. Nothing on the link carries the key, and no environment
 # variable moves it. Its value is a bounded list of hub labels, and every refusal names the entry.
 # core/NodeDeliverTo.ps1 resolves the list; cli/NodeServe.ps1's Read-HordeNodeDeliverTo joins the two.
