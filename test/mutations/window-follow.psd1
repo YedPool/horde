@@ -22,6 +22,12 @@
         @{ Name = "the-other-window-is-not-made-the-owner"
            Find = 'SetWindowLongPtr(new IntPtr(companion), -8, target);     // GWLP_HWNDPARENT: the other window owns ours'
            Replace = '' }
+        @{ Name = "left-under-the-other-window"
+           Find = 'if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); }'
+           Replace = '' }
+        @{ Name = "standing-above-takes-the-keyboard"
+           Find = 'if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); }'
+           Replace = 'if (above != new IntPtr(companion)) { SetWindowPos(new IntPtr(companion), above, 0, 0, 0, 0, 0x0001 | 0x0002); }' }
         @{ Name = "placing-takes-the-keyboard"
            Find = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004 | 0x0010); }'
            Replace = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004); }' }
