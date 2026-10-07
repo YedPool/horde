@@ -45,12 +45,15 @@
 #          record whose words are the rules' closed lists (decisions/Rules.ps1); a caller across a
 #          bridge or a link sends the same request the command line does.
 #   inbox  what others have said that the actor has not read, under every question, oldest first.
-#          With mark it records, as one record of its own, that exactly the messages it hands back
-#          are now read. The messages and the mark are worked out from ONE reading of the list, and
-#          the mark is written only if nothing was written in between (the write loop above), so no
-#          message is ever marked that was not handed back. A caller that shows a person the messages
-#          first and marks afterwards sends upTo, the last one it showed: one that arrived in between
-#          is beyond it, and stays unread.
+#          IT ONLY READS: it marks nothing and writes nothing, however often it is asked.
+#   mark-read  records, as one record of its own, that the actor has read up to a given record.
+#          READING AND MARKING ARE TWO OPERATIONS, ON PURPOSE. A caller shows a person the messages
+#          an inbox handed it, and only then marks, naming the last one it showed: a message that
+#          arrived in between is beyond that record and stays unread, and a caller that dies between
+#          the two leaves messages unread that were seen - which shows them again - never messages
+#          marked read that nobody saw. There is no "mark everything", and no way to mark and be
+#          handed the words in one call. Marking is idempotent: up to a record already read it is
+#          done, marks nothing and writes nothing; and it never moves a mark back.
 # The thread itself comes back with show, and its counts and whose turn it is with every list.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
@@ -75,11 +78,12 @@ $script:HordeDecisionOperations = [ordered]@{
     # what the answer holds besides the question, from the list and the record's sequence number - the
     # same function for a write and for a repost of it, so the two answers cannot differ.
     say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   parts = "Get-HordeDecisionSayParts" }
-    inbox  = @{ writes = $true;  kind = "messages-read";     content = "Get-HordeDecisionInboxContent"; complete = "Complete-HordeDecisionInboxData"; parts = "Get-HordeDecisionInboxParts" }
+    "mark-read" = @{ writes = $true; kind = "messages-read"; content = "Get-HordeDecisionMarkContent"; complete = "Complete-HordeDecisionMarkData"; parts = "Get-HordeDecisionMarkParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
     # Answered from the definitions alone: no store is read, so it answers where a list could not.
     kinds  = @{ writes = $false; read = "Get-HordeDecisionKindsAnswer"; noStore = $true }
+    inbox  = @{ writes = $false; read = "Get-HordeDecisionInboxAnswer" }
 }
 # HOW LONG A WRITE KEEPS TRYING is two settings (decisions/Settings.ps1 and its table), written nowhere
 # here:
@@ -205,65 +209,67 @@ function Get-HordeDecisionSayParts {
     return [ordered]@{}
 }
 
-function Get-HordeDecisionInboxContent {
-    # A checked inbox request as { body; findings }. The body is what is hashed: whether to mark, and
-    # the bound the caller gave (0 for none).
-    param($Request, $Definitions)
-    $found = New-Object System.Collections.ArrayList
-    $mark = ((Test-HordeDecisionMember -Object $Request -Name "mark") -and $Request.mark -eq $true)
-    $upTo = [long]0
-    if (Test-HordeDecisionMember -Object $Request -Name "upTo") {
-        if (Test-HordeDecisionCount -Value $Request.upTo -Most (Get-HordeDecisionMaxSequence)) { $upTo = [long]$Request.upTo }
-        else { [void]$found.Add("'upTo' is not a record's sequence number: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxSequence)) }
-    }
-    $hasId = Test-HordeDecisionMember -Object $Request -Name "id"
-    if ($mark -and -not $hasId) { [void]$found.Add("to mark messages as read the request needs an 'id': marking writes a record, and the id is what makes sending it twice one marking") }
-    if (-not $mark -and $hasId) { [void]$found.Add("an 'id' is given and nothing is to be marked: an id belongs to a request that writes. Leave it out, or ask to mark") }
+function Get-HordeDecisionReaderProblem {
+    # Why -Actor has no inbox, or "": the one sentence both the reading and the marking refuse with.
+    param([string]$Actor)
     $readers = @(Get-HordeDecisionReaders)
-    if ($readers -cnotcontains ([string]$Request.actor)) { [void]$found.Add("'" + [string]$Request.actor + "' has no inbox; the roles that have one are: " + ($readers -join ", ")) }
-    return [pscustomobject]@{ body = [ordered]@{ mark = $mark; upTo = $upTo }; findings = @($found) }
+    if ($readers -ccontains $Actor) { return "" }
+    return ("'" + $Actor + "' has no inbox; the roles that have one are: " + ($readers -join ", "))
 }
 
-function Get-HordeDecisionInboxMore {
-    # What an inbox answers with: the messages, the last one's sequence number, and how many of them
-    # this call marked.
-    param($List, $Items, [int]$Marked)
+function Get-HordeDecisionInboxAnswer {
+    # What others have said that the actor has not read: every question, oldest first, each message
+    # with its question's number and title as it reads now. upTo is the last message's sequence
+    # number (0 for none): what a caller that then marks names. IT READS, AND NOTHING ELSE.
+    param($Request, $State, $Definitions, [datetime]$Now)
+    $reader = [string]$Request.actor
+    $why = Get-HordeDecisionReaderProblem -Actor $reader
+    if ($why -ne "") { return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation "inbox" -Outcome "refused" -Reason $why -Findings @($why) -State $State) -Definitions $Definitions -Now $Now) }
     $last = [long]0
     $views = New-Object System.Collections.ArrayList
-    foreach ($item in @($Items)) {
+    foreach ($item in @(Get-HordeDecisionMessagesFor -State $State -Reader $reader)) {
         $last = [long]$item.message.sequence
-        [void]$views.Add([pscustomobject]@{ number = [int]$item.question.number; title = "$($item.question.title)"; state = "$($item.question.state)"; message = (ConvertTo-HordeDecisionMessageView -Message $item.message -State $List) })
+        [void]$views.Add([pscustomobject]@{ number = [int]$item.question.number; title = "$($item.question.title)"; state = "$($item.question.state)"; message = (ConvertTo-HordeDecisionMessageView -Message $item.message -State $State) })
     }
-    return [ordered]@{ messages = @($views); upTo = $last; marked = $Marked }
+    $value = New-HordeDecisionResult -Operation "inbox" -Outcome "done" -State $State -More ([ordered]@{ messages = @($views); upTo = $last })
+    return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
 
-function Complete-HordeDecisionInboxData {
-    # THE MESSAGES AND THE MARK COME FROM ONE READING OF THE LIST. What the actor has not read, up to
-    # the caller's bound, is worked out from the list as it stands at this try. Not asked to mark, or
-    # nothing unread: that is the answer, and nothing is written. Asked to mark: the record says the
-    # reader has read up to the LAST MESSAGE HANDED BACK - not up to the end of the list - and the
-    # write loop writes it only if no record was written since this reading. So what is marked is
-    # exactly what is handed back.
+function Get-HordeDecisionMarkContent {
+    # A checked mark-read request as { body; findings }. The body is what is hashed: the record marked
+    # up to. The reader is the actor.
+    param($Request, $Definitions)
+    $found = New-Object System.Collections.ArrayList
+    $upTo = [long]0
+    if (Test-HordeDecisionCount -Value $Request.upTo -Most (Get-HordeDecisionMaxSequence)) { $upTo = [long]$Request.upTo }
+    else { [void]$found.Add("'upTo' is not a record's sequence number: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxSequence)) }
+    $why = Get-HordeDecisionReaderProblem -Actor ([string]$Request.actor)
+    if ($why -ne "") { [void]$found.Add($why) }
+    return [pscustomobject]@{ body = [ordered]@{ upTo = $upTo }; findings = @($found) }
+}
+
+function Complete-HordeDecisionMarkData {
+    # IDEMPOTENT, AND NEVER BACKWARDS: when the reader has already read up to that record or past it,
+    # the marking is done, marks nothing and writes nothing - whatever id it carries. Otherwise the
+    # record says the reader has read up to the record NAMED, and nothing beyond it.
     param($Request, $List, $Data)
     $reader = [string]$Request.actor
-    $bound = [long]::MaxValue
-    if ([long]$Data["upTo"] -gt 0) { $bound = [long]$Data["upTo"] }
-    $unread = @(Get-HordeDecisionMessagesFor -State $List -Reader $reader -UpTo $bound)
-    if (-not [bool]$Data["mark"] -or $unread.Count -eq 0) {
-        return [pscustomobject]@{ why = ""; write = $false; more = (Get-HordeDecisionInboxMore -List $List -Items $unread -Marked 0); data = $null }
+    $upTo = [long]$Data["upTo"]
+    if ($upTo -le (Get-HordeDecisionReadMark -State $List -Reader $reader)) {
+        return [pscustomobject]@{ why = ""; write = $false; more = ([ordered]@{ upTo = $upTo; marked = 0 }); data = $null }
     }
-    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = [ordered]@{ reader = $reader; upTo = [long]$unread[-1].message.sequence } }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = [ordered]@{ reader = $reader; upTo = $upTo } }
 }
 
-function Get-HordeDecisionInboxParts {
-    # What a marking answers with: the messages that record -Sequence marked - those between how far
-    # the reader had read before it and how far it says. Worked out from the list, so a repost of the
-    # request is answered with the same messages the first answer held.
+function Get-HordeDecisionMarkParts {
+    # What a marking answers with: the record it marked up to, and how many messages that marked -
+    # those between how far the reader had read before it and how far it says. Worked out from the
+    # list, so a repost of the request is answered as the first answer was.
     param($List, [long]$Sequence)
     if (-not $List.readEvents.ContainsKey($Sequence)) { return [ordered]@{} }
     $marking = $List.readEvents[$Sequence]
     $items = @(Get-HordeDecisionMessagesFor -State $List -Reader "$($marking.reader)" -After ([long]$marking.from) -UpTo ([long]$marking.upTo))
-    return (Get-HordeDecisionInboxMore -List $List -Items $items -Marked $items.Count)
+    return [ordered]@{ upTo = [long]$marking.upTo; marked = $items.Count }
 }
 
 function Get-HordeDecisionNumberAnswer {
@@ -371,9 +377,7 @@ function Invoke-HordeDecisionWrite {
         $hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $content.body }
         $requestHash = Get-HordeDecisionHash -Value $hashed
     }
-    # A request that only reads through this path (an inbox that marks nothing) has no id.
-    $id = ""
-    if (Test-HordeDecisionMember -Object $Request -Name "id") { $id = [string]$Request.id }
+    $id = [string]$Request.id
 
     $raceTries = Get-HordeDecisionSetting -Name "decisions.write.raceTries"
     $heldReads = Get-HordeDecisionSetting -Name "decisions.write.heldReads"
@@ -394,7 +398,7 @@ function Invoke-HordeDecisionWrite {
         $list = $read.list
 
         # A REPOST IS ANSWERED BEFORE THE REQUEST IS JUDGED: what was recorded stands.
-        if ($id -ne "" -and $list.ids.ContainsKey($id)) {
+        if ($list.ids.ContainsKey($id)) {
             $prior = $list.ids[$id]
             if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {
                 # "REPLAYED" SAYS "THIS WAS RECORDED", so the record is flushed to disk before it is said.

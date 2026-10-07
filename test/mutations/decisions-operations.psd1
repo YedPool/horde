@@ -55,7 +55,7 @@
            Replace = '$entry = $script:HordeDecisionOperations["list"]' }
         # --- one id, one record ---
         @{ Name = "repost-written-again"
-           Find = 'if ($id -ne "" -and $list.ids.ContainsKey($id)) {'
+           Find = 'if ($list.ids.ContainsKey($id)) {'
            Replace = 'if ($false) {' }
         @{ Name = "reused-id-replayed"
            Find = 'if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {'

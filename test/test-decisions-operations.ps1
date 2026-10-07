@@ -96,8 +96,8 @@ Check (Throws { Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits" 
 Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
-Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,inbox,list,show,kinds") "the operations are add, update, close and reopen, say and inbox, and list, show and kinds"
-Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,inbox") "and six of them can write (the conversation's two are test/test-decisions-threads.ps1's)"
+Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read,list,show,kinds,inbox") "the operations are add, update, close and reopen, say and mark-read, and list, show, kinds and inbox"
+Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read") "and six of them write (the conversation's two are test/test-decisions-threads.ps1's)"
 $reqDefs = @($defs.requestSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
 Check (@($ops | Where-Object { $reqDefs -cnotcontains $_.name }).Count -eq 0) "each has its request definition in schema/decision-request.v1"
 
