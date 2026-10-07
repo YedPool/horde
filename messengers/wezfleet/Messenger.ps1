@@ -274,8 +274,14 @@ function Read-HordeWezfleetMessengerAnswer {
     $asked = $MessageId.Replace("-", "")
     if ($j.id -cne $asked) { return (New-HordeUnknown -Reason ($what + " answered about " + (ConvertTo-HordeWezfleetMessengerLine $j.id) + ", not " + $asked)) }
     # EXIT 1 IS THE FLEET SAYING IT COULD NOT, not a code outside its table: said so, with the stage it
-    # gave. Unknown and never held, because the record may already be on disk when the fleet fails.
-    if ([int]$Run.exit -eq 1) { return (New-HordeUnknown -Reason ($what + ": the fleet could not do it (stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "'): " + (ConvertTo-HordeWezfleetMessengerLine $j.reason))) }
+    # gave, its code and its detail. Unknown and never held, because the record may already be on disk
+    # when the fleet fails.
+    if ([int]$Run.exit -eq 1) {
+        $failDetail = ""
+        $failProp = $j.PSObject.Properties["detail"]
+        if ($null -ne $failProp -and $failProp.Value -is [string]) { $failDetail = ConvertTo-HordeWezfleetMessengerLine $failProp.Value -Max $script:HordeWezfleetMessengerDetailChars }
+        return (New-HordeUnknown -Reason ($what + ": the fleet could not do it (stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "'): " + (ConvertTo-HordeWezfleetMessengerLine $j.reason) + $(if ($failDetail -ne "") { ": " + $failDetail } else { "" })))
+    }
     $byExit = $script:HordeWezfleetMessengerExits[$Command]
     if (-not $byExit.ContainsKey([int]$Run.exit)) { return (New-HordeUnknown -Reason ($what + ", which is not an exit code this messenger reads as a stage: " + (ConvertTo-HordeWezfleetMessengerLine $j.reason) + " " + (ConvertTo-HordeWezfleetMessengerLine "$($j.PSObject.Properties['detail'].Value)"))) }
     if (@($byExit[[int]$Run.exit]) -cnotcontains $j.stage) { return (New-HordeUnknown -Reason ($what + " with the stage '" + (ConvertTo-HordeWezfleetMessengerLine $j.stage) + "', which does not go with that exit code")) }

@@ -12,8 +12,10 @@
 #   store\<id>.json   one record per message id: { id; to; stage; body; fromLabel; fromSessionId }
 #   typed.log   one JSON line per text "typed" into a session: { id; text } - the fake target. Only a wake
 #               notice is ever written here, built the way wezfleet's Get-WfWakeNotice builds it
-#   mode.json   optional, per command (post|status): { exit; stdout; stage; reason; detail; hangSeconds;
-#               noWake; staleAbsent; stalePane; writeFailed; internal }
+#   mode.json   optional, per command (post|status): { exit; stdout; stderr; stage; reason; detail;
+#               hangSeconds; noWake; staleAbsent; stalePane; writeFailed; internal }. stderr goes with a
+#               scripted stdout: a parameter the host itself rejects prints nothing on stdout, the host's
+#               words on stderr, and exits 1 (measured against wezfleet main, 2026-10-06)
 #
 # THE CONTRACT IT PLAYS is wezfleet PR #65 as revised after its review (lib/MailPost.ps1, THE CONTRACT):
 # fields id, to, stage, reason, detail, and post adds woken; reason is a CODE. Exits: 0 post on disk for a
@@ -62,6 +64,7 @@ if (Test-Mode $m "hangSeconds") { Start-Sleep -Seconds ([int]$m.hangSeconds) }
 if (Test-Mode $m "stdout") {
     # A scripted answer, written as it is: an old wezfleet's usage text, garbage, two lines, anything.
     [Console]::Out.Write([string]$m.stdout)
+    if (Test-Mode $m "stderr") { [Console]::Error.Write([string]$m.stderr) }
     exit ([int]$m.exit)
 }
 

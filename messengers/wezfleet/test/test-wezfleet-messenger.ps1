@@ -81,6 +81,19 @@ foreach ($bad in @("relative\folder", ($tempRoot + "a\..\b"), "\\server\share\x"
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an absolute local folder")) ("a folder that is relative, climbs with .., or is a network or device path is refused (" + $bad + ")")
 }
+# A FOLDER ON A DRIVE THAT IS NOT THERE - a removable or mapped drive, unplugged - is a folder that does
+# not exist, and must read as one. Before the checkout rules came in, Join-Path raised "Cannot find
+# drive" for such a letter and the port reported "failed to post ... Cannot find drive" (measured
+# 2026-10-06, on the first shape of this function). A missing letter is looked for, never assumed.
+$gone = @([char[]]"ZYXWVUTSRQ" | Where-Object { -not [System.IO.Directory]::Exists("$_" + ":\") }) | Select-Object -First 1
+Check ($null -ne $gone) "CONTROL: a drive letter from Q to Z is not in use here, so the next two checks ran against a drive that is not there"
+if ($null -ne $gone) {
+    Set-HordeWezfleetMessengerRoot -Path ("$gone" + ":\fleet")
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("does not exist") -and -not "$($a.reason)".Contains("failed to")) ("a folder on a drive that is not there is unknown as a folder that does not exist, not as a failure of the messenger (" + $a.reason + ")")
+    $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("does not exist") -and -not "$($a.reason)".Contains("failed to")) ("and so is a status (" + $a.reason + ")")
+}
 Set-HordeWezfleetMessengerRoot -Path ""
 With-Fake {
     param($st)
@@ -353,12 +366,43 @@ With-Fake {
     $t0 = Get-Date
     $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
     $took = ((Get-Date) - $t0).TotalSeconds
-    $runs = @(& $fx.Runs $st)
-    $childPid = $(if ($runs.Count -ge 1) { [int]$runs[0].pid } else { 0 })
     Start-Sleep -Milliseconds 500
-    $alive = ($childPid -gt 0) -and ($null -ne (Get-Process -Id $childPid -ErrorAction SilentlyContinue))
     Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("3 s") -and $took -lt 30) ("a hung command is unknown after its deadline (" + [int]$took + " s): " + $a.reason)
-    Check ($childPid -gt 0 -and -not $alive) ("and the child it started was stopped (pid " + $childPid + ")")
+    # THE CHILD IS LOOKED FOR BY ITS COMMAND LINE, NOT BY A PID IT LOGGED. This check read the pid from the
+    # fake's argv.log, and on a loaded machine the fake had not reached its first line within the 3 s
+    # deadline: nothing was logged, and the check failed with "pid 0" although the child had been
+    # stopped (measured 2026-10-06: the unmutated baseline of this suite's mutation spec failed that way,
+    # so none of its mutants ran). The process exists from the moment it is started, whatever it has run,
+    # and its command line names this state's folder, which no other process does.
+    $self = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $PID)
+    Check ($null -ne $self -and "$($self.CommandLine)" -ne "") "CONTROL: a process's command line can be read here, so finding no child below is a finding"
+    $left = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { "$($_.CommandLine)".Contains($st.dir) })
+    Check ($left.Count -eq 0) ("and the child it started was stopped: no PowerShell is left running the fake in this state's folder (" + $left.Count + ")")
+    # A leftover would outlive the suite for the rest of its sleep; it is this test's to stop.
+    foreach ($l in $left) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# EXIT 1 IS THE FLEET'S OWN "COULD NOT", and the reason must say so, with its code and its detail: it read
+# "exit 1, which is not an exit code of the fleet's post" for an answer the fleet documents (measured
+# 2026-10-06), which sends a reader looking for a version mismatch. Unknown, never held: the record may
+# already be on disk, and the fleet's own table says to retry under the same id.
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ writeFailed = $true } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("the fleet could not do it") -and "$($a.reason)".Contains("write-failed") -and "$($a.reason)".Contains("the mail could not be written") -and -not "$($a.reason)".Contains("not an exit code")) ("exit 1 reads as the fleet's own failure, with its code and its detail (" + $a.reason + ")")
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId)); exit = 7 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not an exit code")) "CONTROL: an exit code the fleet does not have still reads as one"
+}
+# A PARAMETER THE HOST ITSELF REJECTS never reaches the fleet's script: nothing on stdout, the host's
+# words on stderr, exit 1 (measured against wezfleet main, 2026-10-06). The reason must carry those
+# words, or the cause is lost.
+With-Fake {
+    param($st)
+    & $fx.SetMode $st @{ post = @{ stdout = ""; stderr = "wezfleet.ps1 : Missing an argument for parameter MessageFile.`n"; exit = 1 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("exit 1") -and "$($a.reason)".Contains("Missing an argument for parameter MessageFile")) ("nothing on stdout and the host's words on stderr is unknown, carrying those words (" + $a.reason + ")")
 }
 
 Write-Host ""
