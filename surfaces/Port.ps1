@@ -107,6 +107,14 @@
 #              it is drawn now, and answers whether it was asked; the file appears, whole, a moment
 #              later. ONLY HORDE CAN ASK: capture is not a request, and no message from the page
 #              reaches it.
+# AND TWO ONLY ON A SURFACE WHOSE SPEC WAS MADE WITH probeInput - FOR A CHECK, never for a caller's
+# own work (TRIAL): a check of a page that must see what a real key press does.
+#   input      & $Window.input <steps> hands key presses and typed text to the surface's own input,
+#              for the page alone - never to the desktop, and whatever has the keyboard keeps it.
+#              A step is { key; shift; ctrl }, { text }, or { focus }: the page told it has the
+#              keyboard (true) or has not, with no window activated. Answers whether they were
+#              handed over.
+#   inputIdle  & $Window.inputIdle: has the surface taken everything it was handed?
 # A CALLBACK TAKES WHAT IT NEEDS FROM $State, never from the variables of the function that wrote it:
 # Windows PowerShell 5.1 does not keep them (the window surface's own Surface.ps1 says what was
 # measured, and its suite measures it on every run).
@@ -609,7 +617,7 @@ function New-HordeSurfaceSpec {
         [Parameter(Mandatory = $true)][string]$Start,
         [Parameter(Mandatory = $true)]$Bridge,
         [Parameter(Mandatory = $true)][string]$DataFolder,
-        [switch]$Hidden, [switch]$Companion, [switch]$TakeKeyboard, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
+        [switch]$Hidden, [switch]$Companion, [switch]$TakeKeyboard, [switch]$ProbeInput, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
         $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, $TickMs = $null, [scriptblock]$OnClosed = $null,
         $Settings = $null
     )
@@ -641,7 +649,7 @@ function New-HordeSurfaceSpec {
     return [pscustomobject]@{
         PSTypeName = "Horde.SurfaceSpec"
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
-        hidden = [bool]$Hidden; companion = [bool]$Companion; takeKeyboard = [bool]$TakeKeyboard; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
+        hidden = [bool]$Hidden; companion = [bool]$Companion; takeKeyboard = [bool]$TakeKeyboard; probeInput = [bool]$ProbeInput; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
         findings = @($findings); errorsKept = [int]$Settings.values.errorsKept; messagesPerSecond = [int]$Settings.values.messagesPerSecond
     }

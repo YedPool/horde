@@ -629,6 +629,7 @@
     //   { do: "focus", q }        the caret into that question's field
     //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
     //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
+    //   { do: "blur" }            the caret taken out of whatever has it, and put nowhere
     //   { do: "type", text }      the text typed at the caret
     //   { do: "key", key, shift, ctrl }   that key pressed in the field that has the caret
     //   { do: "settle" }          wait until nothing sent is still unanswered
@@ -651,6 +652,7 @@
         if (step.do === "focus") { target = lineOf(Number(step.q)); if (target) { enter(target); arrived.at = 0; } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
+        else if (step.do === "blur") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } onChange(); }
         else if (step.do === "type") { if (line) { insert(line, textOf(step.text)); } }
         else if (step.do === "key") {
           (line ? line.field : (document.activeElement || document.body)).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
@@ -684,6 +686,10 @@
       if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); takeKeyboard(); }
       else if (e.key.length === 1) { takeKeyboard(); }
     });
+    // HOW MANY KEY PRESSES CAME FROM THE ENGINE ITSELF, and not from a script: a check that says it
+    // pressed real keys holds this number against how many it pressed (snapshot, answer.realKeys).
+    var realKeys = 0;
+    document.addEventListener("keydown", function (e) { if (e.isTrusted) { realKeys += 1; } }, true);
     window.addEventListener("resize", function () { drawnLines.forEach(function (line) { fit(line.field); }); });
 
     return {
@@ -757,9 +763,12 @@
       //                                           suffix a folded line once carried: always "" now.
       //   sub       [{ n, t }]                    the sub-numbered lines of the unfolded questions
       //   answer    { fields, focus, pending,     how many fields can be typed in with no click, the
-      //               drafts, storage }           number of the question whose field has the caret
-      //                                           ("" for none), how many sends are unanswered, how
-      //                                           many drafts are kept, and what is wrong with keeping
+      //               drafts, storage,            number of the question whose field has the caret
+      //               realKeys, hasFocus }        ("" for none), how many sends are unanswered, how
+      //                                           many drafts are kept, what is wrong with keeping
+      //                                           them, how many key presses came from the engine
+      //                                           and not from a script, and whether the page has
+      //                                           the keyboard
       //   left      { lines, sub }                how many were left out by the caller's limits
       // limits is { lines, subLines, lineChars }: the most of each, and the most characters of a text.
       snapshot: function (limits) {
@@ -784,7 +793,7 @@
         var has = focusedLine();
         var onHead = "";
         drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { onHead = h.txt.textContent; } });
-        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem };
+        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus() };
         return out;
       },
       measure: function () {

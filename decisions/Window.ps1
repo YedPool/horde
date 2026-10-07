@@ -34,7 +34,10 @@
 # file is somebody else's and is only ever read; missing or not what it should be, nothing is marked
 # told, the report says why, and answering goes on.
 # -Probe names a file of steps for a check of the page that cannot press keys: { n; steps }, pushed
-# to the page once per n, which acts them out on its own fields and nowhere else.
+# to the page once per n, which acts them out on its own fields and nowhere else. The file may also
+# hold keys: REAL key presses and typed text, { key; shift; ctrl } or { text }, which the surface
+# hands to its own input for this page alone (surfaces/Port.ps1, probeInput: asked for only when
+# -Probe is given) BEFORE the steps of the same n are pushed. Nothing is sent to the desktop.
 #
 # WHAT THE PAGE DREW, IN ITS OWN WORDS (the request report). After each change the page says what
 # stands in it: every question line's number and text as drawn, the headings, which are unfolded, the
@@ -320,7 +323,11 @@ function Read-HordeDecisionWindowProbe {
         if ((Get-Item -LiteralPath $Path).Length -gt $script:HordeDecisionWindowSideFileBytes) { return $null }
         $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
         if ($null -eq $parsed -or ($parsed.n -isnot [int] -and $parsed.n -isnot [long]) -or [long]$parsed.n -lt 1) { return $null }
-        return [pscustomobject]@{ n = [long]$parsed.n; steps = @($parsed.steps) }
+        $keys = @()
+        if ($null -ne $parsed.PSObject.Properties["keys"]) { $keys = @($parsed.keys | Where-Object { $null -ne $_ }) }
+        $steps = @()
+        if ($null -ne $parsed.PSObject.Properties["steps"]) { $steps = @($parsed.steps | Where-Object { $null -ne $_ }) }
+        return [pscustomobject]@{ n = [long]$parsed.n; steps = $steps; keys = $keys }
     } catch { return $null }
 }
 
@@ -489,7 +496,7 @@ function New-HordeDecisionWindowState {
         showEvent = $null; shows = 0; handle = [long]0; openedAt = $Now; firstReportAt = $null
         picturePath = $PicturePath; pictureAsked = $false; pictureSeen = $false; lastReportAt = $null
         threadCache = @{}; told = @{}; toldPath = $ToldPath; toldStamp = ""; toldProblem = ""; says = 0; saysRefused = 0
-        probePath = $ProbePath; probeStamp = ""; probeSent = [long]0
+        probePath = $ProbePath; probeStamp = ""; probeSent = [long]0; probeHeld = $null
     }
 }
 
@@ -642,9 +649,20 @@ function Invoke-HordeDecisionWindowTick {
             $probe = Read-HordeDecisionWindowProbe -Path $State.probePath
             if ($null -ne $probe -and [long]$probe.n -gt [long]$State.probeSent) {
                 $State.probeSent = [long]$probe.n
-                & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "probe" -Value $probe)
+                # The real keys first, by the surface's own input; the steps are pushed when it has
+                # taken them all (below). A surface with no such input says so in the errors it keeps.
+                if (@($probe.keys).Count -gt 0) {
+                    if ($null -ne $Window.PSObject.Properties["input"]) { [void](& $Window.input @($probe.keys)) }
+                    else { [void]$Window.errors.Add("a check's keys were not pressed: this window has no input of its own to hand them to") }
+                }
+                $State.probeHeld = [pscustomobject]@{ n = [long]$probe.n; steps = @($probe.steps) }
             }
         }
+    }
+    if ($null -ne $State.probeHeld -and ($null -eq $Window.PSObject.Properties["inputIdle"] -or [bool](& $Window.inputIdle))) {
+        $held = $State.probeHeld
+        $State.probeHeld = $null
+        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "probe" -Value $held)
     }
     if ($null -ne $State.dirtyAt -and ($Now - $State.dirtyAt).TotalMilliseconds -ge $State.settings.changeQuietMs) {
         $State.dirtyAt = $null
@@ -764,6 +782,8 @@ function Open-HordeDecisionWindow {
             OnClosed = { param($Window, $State) Invoke-HordeDecisionWindowClosed -Window $Window -State $State }
         }
         if ($Hidden) { $specArgs["Hidden"] = $true }
+        # A check's real keys (header, -Probe): the surface is asked for an input of its own only then.
+        if ($probePath -ne "") { $specArgs["ProbeInput"] = $true }
         if ($OffScreen) { $specArgs["Left"] = $script:HordeDecisionWindowOffScreen.left; $specArgs["Top"] = $script:HordeDecisionWindowOffScreen.top }
         if ($attachment.attached) {
             # Never smaller than a surface may be: the port says what that is, and this file keeps no copy.
