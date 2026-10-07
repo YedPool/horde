@@ -13,6 +13,9 @@
 # is test/e2e/e2e-decisions-window.ps1's.
 
 $env:WEZTERM_UNIX_SOCKET = Join-Path $env:TEMP ("horde-test-window-no-terminal-" + [guid]::NewGuid().ToString("N"))
+# A HOME OF THIS SUITE'S OWN, which does not exist until the suite makes it: the finder reads its
+# settings from Horde's home, and the person's own file must never decide what a check here sees.
+$env:HORDE_HOME = Join-Path $env:TEMP ("horde-test-window-home-" + [guid]::NewGuid().ToString("N"))
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
@@ -140,8 +143,14 @@ $script:listing = Listing $fleet
 $runner = { param($rest, $envMap, $target) [void]$script:calls.Add((@($rest) -join " ")); [void]$script:targets.Add($target); return [pscustomobject]@{ code = 0; out = $script:listing; err = ""; timedOut = $false } }
 $windows = { param($processId) $script:windowReads++; $script:pidAsked = $processId; return $fleetWindows }
 $alive = { param($p) if ($p -eq 4242) { "133000000000000000" } else { $null } }
+# The finder's settings as a person's file would give them (core/ModuleSettings.ps1), from a table.
+function Settings { param([hashtable]$With = @{})
+    return (Read-HordeModuleSettingsText -Declaration $script:HordeWeztermWindowSettings -Text (ConvertTo-Json -InputObject @{ schemaVersion = 1; settings = $With } -Compress)) }
+# Every wait the finder asks for is recorded and none is slept: the suite checks how long it asked for.
+$script:waits = New-Object System.Collections.ArrayList
+$wait = { param($ms) [void]$script:waits.Add([int]$ms) }
 function Find { param([string]$Pane, [string]$Instance, [scriptblock]$W = $windows, [scriptblock]$R = $runner, [int]$Attempts = 3)
-    return (Find-HordeWeztermSessionWindow -Pane $Pane -Instance $Instance -SockDir $sockDir -Runner $R -Windows $W -ProcessStart $alive -Attempts $Attempts -RetryMs 0) }
+    return (Find-HordeWeztermSessionWindow -Pane $Pane -Instance $Instance -Settings (Settings @{ socketFolder = $sockDir; attempts = $Attempts; retryWaitMs = 25 }) -Runner $R -Windows $W -ProcessStart $alive -Wait $wait) }
 $found = Find "18" "gui-sock-4242"
 Check ($found.state -ceq "known" -and $found.value.handle -eq 7002) "pane 18 of instance gui-sock-4242: the keeper's window"
 Check ($script:calls.Count -eq 1 -and $script:calls[0] -ceq "list --format json") "the terminal is asked one thing, its list of panes - nothing that types, moves or closes"
@@ -171,8 +180,10 @@ Check ((Find "18" "gui-sock-4242" -R $garbled).reason -ceq "the terminal's pane 
 # A TITLE OUT OF STEP IS READ AGAIN, a few times, and then believed.
 $script:windowReads = 0
 $settling = { param($processId) $script:windowReads++; if ($script:windowReads -le 2) { return $spinning }; return $fleetWindows }
+$script:waits.Clear()
 $r = Find "18" "gui-sock-4242" -W $settling
 Check ($r.state -ceq "known" -and $r.value.handle -eq 7002 -and $script:windowReads -eq 4) "a title that fitted nothing on the first reading is read again, and found on the second"
+Check (($script:waits -join ",") -ceq "25") "after the wait its settings give, asked for once"
 $script:windowReads = 0
 $never = { param($processId) $script:windowReads++; return $spinning }
 $r = Find "18" "gui-sock-4242" -W $never
@@ -180,6 +191,42 @@ Check ($r.state -ceq "unknown" -and $r.reason -like "none of the terminal's*" -a
 $script:windowReads = 0
 $r = Find "99" "gui-sock-4242" -W $never
 Check ($r.state -ceq "unknown" -and $script:windowReads -eq 2) "a pane that is not listed is not read again: reading again cannot bring it back"
+
+Write-Host ""
+Write-Host "--- its numbers and its folder are settings, with one table and one file ---" -ForegroundColor Cyan
+$declared = @($script:HordeWeztermWindowSettings.settings | ForEach-Object { $_.name + "=" + $_.default })
+Check (($declared -join " ") -ceq "attempts=3 retryWaitMs=200 socketFolder=") ("the finder declares its settings once, with these defaults (" + ($declared -join " ") + ")")
+$none = Get-HordeWeztermWindowSettings
+Check ($none.values.attempts -eq 3 -and $none.values.retryWaitMs -eq 200 -and $none.values.socketFolder -ceq "" -and @($none.findings).Count -eq 0 -and -not (Test-Path -LiteralPath $env:HORDE_HOME)) "with no file under the home every setting is its default, nothing is found wrong, and nothing was made"
+# The terminal's own place, when the folder is left out: this user's profile. The recording runner is
+# handed the socket and nothing is opened.
+$script:targets.Clear()
+$own = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Runner $runner -Windows $windows -ProcessStart $alive -Wait $wait
+Check ($own.state -ceq "known" -and $script:targets[0].socket -ceq (Join-Path (Join-Path $env:USERPROFILE ".local\share\wezterm") "gui-sock-4242")) "with no folder set, the instance's socket is looked for in the terminal's own place under this user's profile"
+Check ((Get-HordeWeztermWindowSockDir -Configured "") -ceq (Join-Path $env:USERPROFILE ".local\share\wezterm") -and (Get-HordeWeztermWindowSockDir -Configured $sockDir) -ceq $sockDir) "one function says where the sockets are: the folder a person set, or the terminal's own place"
+$finderSrc = [System.IO.File]::ReadAllText((Join-Path $root "hosts\wezterm\Window.ps1"))
+$actSrc = [System.IO.File]::ReadAllText((Join-Path $root "hosts\wezterm\Act.ps1"))
+Check (([regex]::Matches($finderSrc, [regex]::Escape('Join-Path $env:USERPROFILE'))).Count -eq 1 -and $finderSrc.Contains('(Join-Path $env:USERPROFILE ".local\share\wezterm")') -and $actSrc.Contains('".local\share\wezterm"')) "the terminal's own place is written once in the finder, in the act file's own words (which that file's next owner replaces)"
+# A person's file: fewer readings, another wait, another folder.
+$settingsDir = Join-Path $env:HORDE_HOME "settings"
+New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null
+$settingsFile = Join-Path $settingsDir "wezterm-window.json"
+$neverFits = { param($processId) $script:windowReads++; return $spinning }
+try {
+    [System.IO.File]::WriteAllText($settingsFile, (ConvertTo-Json -InputObject @{ schemaVersion = 1; settings = @{ attempts = 2; retryWaitMs = 7; socketFolder = $sockDir } } -Compress))
+    $script:windowReads = 0; $script:waits.Clear(); $script:targets.Clear()
+    $r = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Runner $runner -Windows $neverFits -ProcessStart $alive -Wait $wait
+    Check ($r.state -ceq "unknown" -and $script:windowReads -eq 4 -and ($script:waits -join ",") -ceq "7") ("a file under the home that says two readings and 7 ms: read twice, 7 ms apart (" + $script:windowReads + " window reads, waits " + ($script:waits -join ",") + ")")
+    Check ($script:targets.Count -gt 0 -and $script:targets[0].socket -ceq (Join-Path $sockDir "gui-sock-4242")) "and the folder it names is where the socket is looked for"
+    Check ($r.reason -notlike "*a setting was not used*") "CONTROL: a good file adds nothing to the answer"
+    [System.IO.File]::WriteAllText($settingsFile, (ConvertTo-Json -InputObject @{ schemaVersion = 1; settings = @{ attempts = 0; retries = 9; socketFolder = $sockDir } } -Compress))
+    $script:windowReads = 0
+    $r = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Runner $runner -Windows $neverFits -ProcessStart $alive -Wait $wait
+    Check ($r.state -ceq "unknown" -and $script:windowReads -eq 6) ("a setting outside its range is not used: the default of three readings is (" + $script:windowReads + " window reads)")
+    Check ($r.reason -like "none of the terminal's*; a setting was not used: *attempts*" -and $r.reason -like "*retries*") "and the answer says so, naming the setting out of range and the key nobody declared"
+    $k = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Runner $runner -Windows $windows -ProcessStart $alive -Wait $wait
+    Check ($k.state -ceq "known" -and $k.value.handle -eq 7002 -and $k.value.detail -like "*; a setting was not used: *attempts*") "a window that is found says it too: a setting that did nothing is never silent"
+} finally { if ((Split-Path -Leaf $env:HORDE_HOME) -match '\Ahorde-test-window-home-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $env:HORDE_HOME)) { Remove-Item -LiteralPath $env:HORDE_HOME -Recurse -Force } }
 
 Write-Host ""
 Write-Host "--- the terminal writes UTF-8, whatever code page its answer was read in ---" -ForegroundColor Cyan
@@ -212,10 +259,11 @@ Check ($raw.code -eq 0 -and $raw.out -cne $said -and $readIn.CodePage -ne 65001)
 $mended = Mend $raw.out $readIn
 Check ($mended.state -ceq "known" -and $mended.value -ceq $said) "mended, it is what the terminal wrote, character for character, in three alphabets"
 $garbledWide = { param($rest, $envMap, $target) return [pscustomobject]@{ code = 0; out = $oem.GetString([System.Text.Encoding]::UTF8.GetBytes($said)); err = ""; timedOut = $false } }
-$unmended = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -SockDir $sockDir -Runner $garbledWide -Windows $wideWindows -ProcessStart $alive -Attempts 1 -RetryMs 0
+$once = Settings @{ socketFolder = $sockDir; attempts = 1; retryWaitMs = 0 }
+$unmended = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Settings $once -Runner $garbledWide -Windows $wideWindows -ProcessStart $alive -Wait $wait
 Check ($unmended.state -ceq "unknown" -and $unmended.reason -like "none of the terminal's*") "CONTROL: a listing left as it was read fits no window's title, so the finder answers unknown"
 $viaFinder = $null
-try { $viaFinder = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -SockDir $sockDir -Runner $garbledWide -ReadAs $oem -Windows $wideWindows -ProcessStart $alive -Attempts 1 -RetryMs 0 } catch { $viaFinder = [pscustomobject]@{ state = "threw"; value = $null; reason = "$($_.Exception.Message)" } }
+try { $viaFinder = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Settings $once -Runner $garbledWide -ReadAs $oem -Windows $wideWindows -ProcessStart $alive -Wait $wait } catch { $viaFinder = [pscustomobject]@{ state = "threw"; value = $null; reason = "$($_.Exception.Message)" } }
 Check ($viaFinder.state -ceq "known" -and $viaFinder.value.handle -eq 8002) ("the finder mends the listing before it compares titles: the window titled in three alphabets is found (" + $viaFinder.state + ")")
 $plain = Mend '[{"title":"plain"}]' $oem
 Check ($plain.state -ceq "known" -and $plain.value -ceq '[{"title":"plain"}]') "text that is all ASCII is the same in every code page, and is left as it is"
