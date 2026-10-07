@@ -5,16 +5,35 @@ $HordeCommand = @{
     # projection (11.4 s measured 2026-10-02); a busy background process is throttled about 7x after
     # 3 s (core/Platform.ps1), which could put a round past the link's 60 s silence window.
     sustained = $true
-    usage   = "hub serve [-Rounds <n>] [-IntervalSeconds <s>]"
-    summary = "pull every registered node's sessions over the link each round and keep one mirror file per node; a node it cannot reach has its sessions unknown, never absent. Read-only on the nodes"
+    usage   = "hub serve [-Rounds <n>] [-IntervalSeconds <s>] | hub init | hub enroll -Device <id> -Key <key> [-Days <n>] | hub revoke -Device <id> [-Transport <name>]"
+    summary = "serve: pull every registered node's sessions each round into one mirror file per node, read-only on the nodes; init, enroll, revoke: the listener's host key and which node keys it admits (enrolment, remote plan R17b)"
     run     = {
         [CmdletBinding()] param(
-            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve")][string]$Verb,
+            [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve", "init", "enroll", "revoke")][string]$Verb,
             # How many rounds to run before stopping; 0, the default, runs until stopped.
             [int]$Rounds = 0,
             # How long a round waits for the next; 20 s keeps a heard node inside the 60 s window.
-            [int]$IntervalSeconds = 20
+            [int]$IntervalSeconds = 20,
+            # enroll, revoke: the node's device id and, for enroll, its key, as `horde node init` printed them.
+            [string]$Device = "",
+            [string]$Key = "",
+            # enroll: how many days the enrolment lasts (remote design decision 13: one year).
+            [int]$Days = 365,
+            # init, enroll, revoke: which transport's enrolment, when more than one has any.
+            [string]$Transport = ""
         )
+        # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
+        $verbFlags = @{ serve = @("Rounds", "IntervalSeconds"); init = @("Transport"); enroll = @("Device", "Key", "Days", "Transport"); revoke = @("Device", "Transport") }
+        foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to hub " + $Verb) } }
+        if ($Verb -ne "serve") {
+            $root = Get-HordeRoot
+            foreach ($f in @("Tristate", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+            . (Join-Path $root "transports\Port.ps1")
+            foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
+            . (Join-Path $root "cli\Enroll.ps1")
+            foreach ($l in @(Invoke-HordeHubEnrollVerb -Verb $Verb -Root $root -Device $Device -Key $Key -Days $Days -Transport $Transport)) { Write-Output $l }
+            return
+        }
         # Loaded here, in the command's own scope, so the transports' helpers stay visible to the blocks
         # they register (transports/Port.ps1, the adapter contract).
         $root = Get-HordeRoot
