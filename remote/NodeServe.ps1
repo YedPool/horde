@@ -137,7 +137,10 @@ function New-HordeNodeDelivery {
     param([Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][string]$SessionId, $Reported, [Parameter(Mandatory = $true)]$Contract)
     $stage = "$(Get-HordeLinkProp $Reported 'stage')"
     if (@($Contract.verbs.definitions.delivery.properties.stage.enum) -cnotcontains $stage) { return $null }
-    $at = "$(Get-HordeLinkProp $Reported 'at')"
+    # The port gives at as a time; a messenger's own text is taken only in the link's spelling.
+    $atRaw = Get-HordeLinkProp $Reported "at"
+    $at = "$atRaw"
+    if ($atRaw -is [datetime]) { $at = Get-HordeLinkTime -At $atRaw }
     if ($at -cnotmatch $script:HordeNodeTimePattern) { $at = Get-HordeLinkTime }
     $d = [ordered]@{ messageId = $MessageId; sessionId = $SessionId; stage = $stage; at = $at }
     $why = "$(Get-HordeLinkProp $Reported 'reason')"
@@ -453,7 +456,12 @@ function Invoke-HordeNodeDeliver {
     if (-not (Test-HordeNodeDataGiven $Data "deliverTo") -and "$(Get-HordeLinkProp $Data 'deliverToError')" -eq "") { return (New-HordeNodeReply -NeedDeliverTo $true) }
     $layerWhy = "$(Get-HordeLinkProp $Data 'deliverToError')"
     if ($layerWhy -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("this node's own configuration is refused, so it delivers nothing: " + $layerWhy))) }
-    if ("$(Get-HordeLinkProp $Data 'messenger')" -eq "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason "this node has no messenger, so nothing is delivered")) }
+    if ("$(Get-HordeLinkProp $Data 'messenger')" -eq "") {
+        $why = "$(Get-HordeLinkProp $Data 'messengerError')"
+        $said = "this node has no messenger, so nothing is delivered"
+        if ($why -ne "") { $said = $said + ": " + $why }
+        return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason $said))
+    }
     $label = ""
     $lp = $a.PSObject.Properties["label"]
     if ($null -ne $lp) { $label = "$($lp.Value)" }

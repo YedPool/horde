@@ -15,5 +15,11 @@
         @{ Name = "handed-out-mark-not-written-before-the-reply"
            Find = '$w = Add-HordeOutboxMarker -Root $outboxRoot -MessageId "$($r.write.messageId)" -Marker "$($r.write.marker)" -At "$($r.write.at)"'
            Replace = '$w = [pscustomobject]@{ state = "known" }' }
+        @{ Name = "message-sent-to-the-named-session"
+           Find = '$m = [ordered]@{ messageId = "$($a.messageId)"; sessionId = "$($Need.target.sessionId)" }'
+           Replace = '$m = [ordered]@{ messageId = "$($a.messageId)"; sessionId = "$($a.sessionId)" }' }
+        @{ Name = "unresolved-messenger-reason-dropped"
+           Find = 'if ($got.state -ceq "known") { $Messenger = $got.value } else { $why = "$($got.reason)" }'
+           Replace = '$Messenger = $got.value' }
     )
 }

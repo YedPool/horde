@@ -70,8 +70,8 @@ $script:HordeConfigValueKinds = @{
     model = '^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$'
 }
 # LIST KINDS: a value written as comma-separated entries, each checked on its own, so a refusal names
-# the entry it refuses. labels is remote.deliverTo's (remote plan R21): hub labels (link-verbs v1 label,
-# wezfleet's label pattern), at most maxEntries of them, none longer than maxChars, none twice. An
+# the entry it refuses. labels is remote.deliverTo's (remote plan R21): hub labels (link-verbs v1's label
+# pattern), at most maxEntries of them, none longer than maxChars, none twice. An
 # empty value is the empty list, so a live rule can withdraw every opt-in; an empty ENTRY is refused.
 $script:HordeConfigListKinds = @{
     labels = @{ entry = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'; maxEntries = 64; maxChars = 6; what = "hub label" }

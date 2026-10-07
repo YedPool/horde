@@ -90,19 +90,20 @@ function Invoke-HordeNodeServeStep {
     # A mark that cannot be written turns the reply into an internal error: nothing is said that is not on
     # disk. Returns the final decision (remote/NodeServe.ps1's New-HordeNodeReply).
     #
-    # -Messaging carries what messaging needs, all of it from the node itself: GetView; Deliverer, an object
-    # { name; post; status } whose post is param($Message, $Target) and status param($MessageId), each
-    # returning a tristate answer of { stage; at; reason } (until the messenger port, R21 slice 3, is wired
-    # here, the node is started with none, and a deliver is refused); OutboxRoot; MessageJournalRoot;
-    # Layers, where the node's own remote.deliverTo is read from again for each deliver ({ root; hordeHome;
-    # descriptors; builtin }, from New-HordeNodeMessaging; Read-HordeNodeDeliverTo reads it) - or, already read, DeliverTo and DeliverToError, why the node's own
-    # layers were refused (then every deliver is); and HubSpawned, the sessions this
-    # hub spawned here, none until step 3.8 ships the record writer. NOTHING HERE TYPES INTO A SESSION:
-    # delivery is the messenger's, behind the port.
+    # -Messaging carries what messaging needs, all of it from the node itself: GetView; Messenger, one
+    # registered through the messenger port (messengers/Port.ps1), and MessengerError, why there is none -
+    # a deliver goes ONLY through Send-HordeMessengerMessage and a status only through
+    # Get-HordeMessengerStatus, so the stages are the port's vocabulary and nothing here knows any
+    # messenger's own shapes; OutboxRoot; MessageJournalRoot; Layers, where the node's own
+    # remote.deliverTo is read from again for each deliver ({ root; hordeHome; descriptors; builtin }, from
+    # New-HordeNodeMessaging; Read-HordeNodeDeliverTo reads it) - or, already read, DeliverTo and
+    # DeliverToError, why the node's own layers were refused (then every deliver is); and HubSpawned, the
+    # sessions this hub spawned here, none until step 3.8 ships the record writer. NOTHING HERE TYPES INTO
+    # A SESSION: delivery is the messenger's, behind the port.
     param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)][string]$Line, [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)]$Namespace, [string]$JournalRoot = "", $Messaging = $null, [scriptblock]$GetView = $null, [scriptblock]$Act = $null)
     $data = [pscustomobject]@{ manifest = $Manifest; view = $null; viewError = ""; journalRoot = $JournalRoot; namespace = $Namespace; acts = ($null -ne $Act); actOutcome = $null
-        messageJournalRoot = ""; deliverTo = @(); deliverToError = ""; hubSpawned = @(); messenger = ""; deliverResult = $null; deliveryStatus = $null; outbox = $null; outboxError = "" }
+        messageJournalRoot = ""; deliverTo = @(); deliverToError = ""; hubSpawned = @(); messenger = ""; messengerError = ""; deliverResult = $null; deliveryStatus = $null; outbox = $null; outboxError = "" }
     $layerSource = $null
     $deliverer = $null
     $outboxRoot = ""
@@ -121,11 +122,13 @@ function Invoke-HordeNodeServeStep {
         }
         $data.hubSpawned = @(@($Messaging.HubSpawned) | Where-Object { $null -ne $_ })
         $outboxRoot = "$($Messaging.OutboxRoot)"
-        $deliverer = $Messaging.Deliverer
-        if ($null -ne $deliverer) { $data.messenger = "$($deliverer.name)"; if ($data.messenger -eq "") { $data.messenger = "deliverer" } }
+        $mp = $Messaging.PSObject.Properties["Messenger"]
+        if ($null -ne $mp) { $deliverer = $mp.Value }
+        if ($null -ne $deliverer) { $data.messenger = "$($deliverer.name)"; if ($data.messenger -eq "") { $data.messenger = "messenger" } }
+        $ep = $Messaging.PSObject.Properties["MessengerError"]
+        if ($null -ne $ep) { $data.messengerError = "$($ep.Value)" }
         if ($null -eq $GetView) { $GetView = $Messaging.GetView }
     }
-    $noAnswer = { param($What) return [pscustomobject]@{ state = "unknown"; reason = ("the messenger gave no answer to " + $What) } }
     for ($round = 0; $round -lt 8; $round++) {
         $r = Invoke-HordeNodeFrame -State $State -Line $Line -Data $data
         if ($r.needView) {
@@ -162,16 +165,16 @@ function Invoke-HordeNodeServeStep {
         }
         if ($null -ne $r.needDeliver) {
             $said = $null
-            try { $said = & $deliverer.post $r.needDeliver.message $r.needDeliver.target } catch { $said = [pscustomobject]@{ state = "unknown"; reason = ("the messenger failed: " + $_.Exception.Message) } }
-            if ($null -eq $said) { $said = & $noAnswer "the delivery" }
+            $said = Send-HordeMessengerMessage -Messenger $deliverer -Message (ConvertTo-HordeNodeMessengerMessage -Need $r.needDeliver)
             $data.deliverResult = $said
             continue
         }
         if ("$($r.needStatus)" -ne "") {
             $said = $null
-            if ($null -eq $deliverer) { $said = [pscustomobject]@{ state = "unknown"; reason = "this node has no messenger to ask" } }
-            else { try { $said = & $deliverer.status $r.needStatus } catch { $said = [pscustomobject]@{ state = "unknown"; reason = ("the messenger failed: " + $_.Exception.Message) } } }
-            if ($null -eq $said) { $said = & $noAnswer "the status" }
+            if ($null -eq $deliverer) { $said = New-HordeUnknown -Reason "this node has no messenger to ask" }
+            else { $said = Get-HordeMessengerStatus -Messenger $deliverer -MessageId "$($r.needStatus)" }
+            # absent: the messenger never took a message the journal says it took - not a stage.
+            if ("$($said.state)" -ceq "absent") { $said = New-HordeUnknown -Reason "the messenger has no record of it" }
             $data.deliveryStatus = $said
             continue
         }
@@ -185,6 +188,20 @@ function Invoke-HordeNodeServeStep {
         return $r
     }
     throw "the node kept asking for more than it was given while answering one line"
+}
+
+function ConvertTo-HordeNodeMessengerMessage {
+    # The message the port takes (messengers/Port.ps1: session.deliver's arguments), addressed to the
+    # session the rules resolved - by id, or the one live session the label led to - never the one the
+    # hub named if they differ.
+    param([Parameter(Mandatory = $true)]$Need)
+    $a = $Need.message
+    $m = [ordered]@{ messageId = "$($a.messageId)"; sessionId = "$($Need.target.sessionId)" }
+    if ($null -ne $a.PSObject.Properties["label"]) { $m["label"] = "$($a.label)" }
+    $m["from"] = $a.from
+    $m["body"] = $a.body
+    $m["ttlSeconds"] = $a.ttlSeconds
+    return [pscustomobject]$m
 }
 
 function Read-HordeNodeDeliverTo {
@@ -204,7 +221,13 @@ function New-HordeNodeMessaging {
     # again for every deliver (Read-HordeNodeDeliverTo). Plain data, not a closure: a closure runs in a
     # module of its own and would not see the functions its caller loaded. The descriptors and L0 are
     # shipped code, read once, as cli/NodeAct.ps1's context reads them. HubSpawned is none until step 3.8.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, [scriptblock]$GetView = $null, $Deliverer = $null, $Descriptors = $null, $Builtin = $null)
+    #
+    # THE MESSENGER is picked by -MessengerName through Resolve-HordeNodeMessenger, the port's one
+    # production path, which requires body.untyped, idempotent.post and receipt.receiver (so the
+    # in-process test messenger is never picked). No name, or one that does not resolve, is no messenger:
+    # every deliver is refused with the reason. -Messenger hands in one already registered through the port
+    # (a test's memory messenger); the port refuses anything else.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$HordeHome, [scriptblock]$GetView = $null, [string]$MessengerName = "", $Messenger = $null, $Descriptors = $null, $Builtin = $null)
     $messages = Initialize-HordeJournal -Root (Join-Path $HordeHome "node\messages") -Kind "message"
     $outbox = Initialize-HordeOutbox -Root (Join-Path $HordeHome "node\outbox")
     if ($null -eq $Builtin) { $Builtin = @(Get-HordeBuiltinLayer -Root $Root) }
@@ -214,7 +237,15 @@ function New-HordeNodeMessaging {
         if ($all.state -eq "known") { $Descriptors = $all.value }
     }
     $layers = [pscustomobject]@{ root = $Root; hordeHome = $HordeHome; descriptors = $Descriptors; builtin = @($Builtin) }
-    return [pscustomobject]@{ GetView = $GetView; Deliverer = $Deliverer; OutboxRoot = $outbox; MessageJournalRoot = $messages; Layers = $layers; HubSpawned = @() }
+    $why = ""
+    if ($null -eq $Messenger) {
+        if ($MessengerName -eq "") { $why = "no messenger was named (horde node serve -Messenger <name>)" }
+        else {
+            $got = Resolve-HordeNodeMessenger -Name $MessengerName
+            if ($got.state -ceq "known") { $Messenger = $got.value } else { $why = "$($got.reason)" }
+        }
+    }
+    return [pscustomobject]@{ GetView = $GetView; Messenger = $Messenger; MessengerError = $why; OutboxRoot = $outbox; MessageJournalRoot = $messages; Layers = $layers; HubSpawned = @() }
 }
 
 function Invoke-HordeNodeServe {

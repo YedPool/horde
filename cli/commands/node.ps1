@@ -5,7 +5,7 @@ $HordeCommand = @{
     # 2026-10-02) and a busy background process is throttled about 7x after 3 s (core/Platform.ps1),
     # which could put a node past the hub's wait (review of PR #81, F2).
     sustained = $true
-    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly]"
+    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly] [-Messenger <name>]"
     summary = "serve this machine's sessions to the hub over the local link: hello, node.info, sessions.list, session.get and request.status, and session.spawn and session.close as this node's policy allows, and messaging (session.deliver, delivery.status, mail.next, mail.receipt) (-ReadOnly: no acts)"
     run     = {
         [CmdletBinding()] param(
@@ -15,7 +15,10 @@ $HordeCommand = @{
             # How long a link may be silent before the node ends it.
             [int]$IdleSeconds = 120,
             # Serve the read verbs only, and refuse every act as unsupported.
-            [switch]$ReadOnly
+            [switch]$ReadOnly,
+            # The messenger a deliver goes through (messengers/<name>/), picked by the port's production
+            # path; none, or one it refuses, and every deliver is refused with the reason.
+            [string]$Messenger = ""
         )
         # Loaded here, in the command's own scope, so the transports' helpers stay visible to the blocks
         # they register (transports/Port.ps1, the adapter contract).
@@ -27,6 +30,10 @@ $HordeCommand = @{
         . (Join-Path $root "remote\Outbox.ps1")
         . (Join-Path $root "cli\NodeServe.ps1")
         . (Join-Path $root "cli\NodeAct.ps1")
+        # The messenger port and every messenger, found by folder, loaded in this scope so the blocks they
+        # register see their helpers.
+        . (Join-Path $root "messengers\Port.ps1")
+        foreach ($m in @(Get-HordeMessengerFiles -Root (Join-Path $root "messengers"))) { . $m }
         # The act adapters, found by folder (CONTRIBUTING 14), loaded in this scope so the blocks they
         # register see their helpers.
         . (Join-Path $root "core\ReadShared.ps1")
@@ -62,9 +69,11 @@ $HordeCommand = @{
         # MESSAGING (R21 slice 4). The message journal and the outbox are this node's own, under its home.
         # remote.deliverTo is read from the node's own layers - engine.json (L1) and engine-live.json (L4),
         # through cli/NodeAct.ps1's Get-HordeNodeEngineLayers, the one reader the spawn path uses - again
-        # for every deliver; a layer that fails its checks refuses every deliver and says why. The deliverer
-        # is the messenger port's (R21 slice 3); until it is wired here the node has none.
-        $messaging = New-HordeNodeMessaging -Root $root -HordeHome $hordeHome -GetView $getView
+        # for every deliver; a layer that fails its checks refuses every deliver and says why. A deliver
+        # goes through the messenger port (messengers/Port.ps1) to the messenger -Messenger names, which
+        # Resolve-HordeNodeMessenger must accept; with none, every deliver is refused and says why.
+        $messaging = New-HordeNodeMessaging -Root $root -HordeHome $hordeHome -GetView $getView -MessengerName $Messenger
+        if ("$($messaging.MessengerError)" -ne "") { Write-Host ("every deliver is refused: " + $messaging.MessengerError) }
         $r = Invoke-HordeNodeServe -Transport $transport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say -Messaging $messaging
         Write-Output ("served " + $r.served + " link(s)")
         foreach ($e in $r.endings) { Write-Output ("  " + $e) }
