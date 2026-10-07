@@ -732,12 +732,26 @@ Check ($hundredThousand.Length -eq 100000 -and (Get-Saying -Text $hundredThousan
 Check ((Get-Saying -Text ("x" * 500000)).Count -eq 0) "and so may 500,000, the most a text may be"
 $tooLong = Get-Saying -Text ("x" * 500001)
 Check ((Test-Says $tooLong "'text' is 500001 characters long; the most is 500000") -and (Test-Says $tooLong "refused whole, never cut") -and @($tooLong | Where-Object { "$_".Length -gt 300 }).Count -eq 0) "one character more is refused whole, with the count, and the finding does not hold the text"
-# Right-to-left text as it really arrives: the direction marks, and the embedding and isolate
-# characters a phone's keyboard and a chat program put around it. A question's field refuses those;
-# words said are kept exactly.
-$hebrewSaid = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x200E + "(yes)" + [char]0x200D + [char]0x2028 + "next"
-Check ((Get-Saying -Text $hebrewSaid).Count -eq 0) "Hebrew with direction marks, an embedding, an isolate and a line separator may be said as it is"
-Check (@(Test-HordeDecisionNote -Text $hebrewSaid -Name "outcome").Count -gt 0) "CONTROL: the same characters in a question's own text are refused, so this is the rule for words said and not the absence of one"
+# ONE DEFINITION OF "NOT TEXT", for a question's text of several lines and for words said under it:
+# control, format, line-separator and paragraph-separator characters are refused, except the line
+# break, the tab, and the four format characters right-to-left and joined writing is made with
+# (U+200C, U+200D, U+200E, U+200F). Refused by code point, never cleaned, never repeated.
+$hebrewSaid = "" + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + " " + [char]0x200E + "(yes)" + [char]0x200D + "`r`n`tnext"
+Check ((Get-Saying -Text $hebrewSaid).Count -eq 0) "Hebrew with its direction marks and a joiner, a line break and a tab, may be said as it is"
+foreach ($bad in @(0x202B, 0x202E, 0x2067, 0x2069, 0x200B, 0xFEFF, 0x2028, 0x2029)) {
+    $withIt = "before" + [char]$bad + "after"
+    $found = Get-Saying -Text $withIt
+    Check ((Test-Says $found ("'text' holds the character U+" + $bad.ToString("X4"))) -and (Test-Says $found "refused, not removed") -and -not (Test-Says $found "before")) ("a format or separator character (U+" + $bad.ToString("X4") + ") in words said is refused by its code point, and the words around it are not repeated")
+}
+# THE SAME RULE AS A QUESTION'S OWN TEXT, character for character: whatever one refuses, the other does.
+$apart = New-Object System.Collections.ArrayList
+foreach ($code in @(0x09, 0x0A, 0x0D, 0x1B, 0x00, 0x7F, 0x85, 0xAD, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2028, 0x2029, 0x2066, 0x2067, 0x2068, 0x2069, 0xFEFF, 0x41, 0x05D0)) {
+    $probe = "a" + [char]$code + "b"
+    $inWords = (@(Get-Saying -Text $probe | Where-Object { "$_" -like "*holds the character*" }).Count -gt 0)
+    $inText = (@(Test-HordeDecisionNote -Text $probe -Name "outcome" | Where-Object { "$_" -like "*holds the character*" }).Count -gt 0)
+    if ($inWords -ne $inText) { [void]$apart.Add("U+" + $code.ToString("X4") + " words:" + $inWords + " text:" + $inText) }
+}
+Check ($apart.Count -eq 0) ("words said and a question's text of several lines refuse exactly the same characters: one definition, not two" + $(if ($apart.Count) { " (" + ($apart -join "; ") + ")" } else { "" }))
 Check ((Get-Saying -Text ("line one`r`nline two`n`tindented")).Count -eq 0) "line breaks of both kinds and a tab may be said"
 foreach ($bad in @(0x1B, 0x00, 0x07, 0x08, 0x7F, 0x85)) {
     $withControl = "before" + [char]$bad + "after"
