@@ -2,8 +2,8 @@
 #
 # WHAT A SURFACE IS (decisions design 2026-10-06, sections 3.5 and 3.6, decision 2). A surface shows a
 # page made of plain files, and carries the page's requests to Horde and Horde's events to the page.
-# It knows nothing of what the page is about: the first page is the list of questions waiting for a
-# person, and the same surface can show any other. Each one is a folder, surfaces/<name>/, holding
+# It knows nothing of what the page is about, or of who opens it: any caller shows any page through
+# the same contract. Each one is a folder, surfaces/<name>/, holding
 # Surface.ps1 (its code) and capabilities.json (what it can do, as data, checked against
 # schema/surface-capabilities.v1). This file names no surface: a second one - another platform's
 # window, a file to send to a phone, a view across a link - is a new folder, not an edit here.
@@ -28,14 +28,14 @@
 # WHAT GOES BACK is one line of ASCII JSON: { v; reply; ok; value } or { v; reply; ok; reason }, and for
 # an event Horde pushes, { v; event; value }. Every character outside printable ASCII is a \u escape,
 # which the page's JSON reader turns back into the same character, so text in any alphabet crosses
-# whatever sits between unchanged (decisions/Console.ps1 does the same for -Json).
+# whatever sits between unchanged.
 #
 # THE SURFACE CONTRACT. surfaces/<name>/Surface.ps1 is dot-sourced and calls Register-HordeSurface
 # with one script block:
 #   Open  param($Spec) -> { state; reason }   state is closed (it was shown and has been closed) or
 #                                             failed (it could not be shown; reason says why, in words)
 # -Spec is plain data and script blocks, made by New-HordeSurfaceSpec:
-#   title      the window's first title
+#   title      what the page is called where a surface has a place to say it (a window's first title)
 #   mounts     an ordered table, name -> folder: each folder is served to the page under the name
 #   start      "<mount>/<file>": the page to show, a file at the top of one of the mounts
 #   bridge     a bridge from New-HordeSurfaceBridge
@@ -50,7 +50,9 @@
 #              takes it, whatever is asked
 #   left, top, width, height   where it first stands, in pixels; with no left and top, mid-screen;
 #              with no width or height, the module's settings (520 by 760 unless a person's file
-#              says otherwise); never smaller than Get-HordeSurfaceLimits says
+#              says otherwise); never smaller than Get-HordeSurfaceLimits says. These, hidden,
+#              companion and takeKeyboard are words about a WINDOW: a surface that is not one - a
+#              file, a view across a link - has nothing to place and ignores them
 #   tickMs     how often onTick runs; with none, the module's setting (250 ms)
 #   findings   what was wrong in the person's settings file, when the spec read it itself: sentences,
 #              which a surface adds to the errors its caller reads
@@ -86,16 +88,28 @@
 #     bridge-messages.json, the definition of the messages that bridge.js reads. A caller may not give
 #     a mount that name.
 #
-# A callback is given the window as { handle; sync; errors; post; setTitle; show; close }: handle is
-# the native window handle (capability window.native), sync an object events can be marshalled through
-# to the window's own thread, errors the list the surface adds to when a callback or a message fails
-# (a failure inside a window has no console to be printed on, so a caller that reports must be able
-# to read it; it holds the last errorsKept of them, oldest first), and the rest are script blocks. With the capability picture there is one more, capture:
-# & $Window.capture <absolute path.png> asks the surface to save a picture of the page as it is drawn
-# now, and answers whether it was asked; the file appears, whole, a moment later. ONLY HORDE CAN ASK:
-# capture is not a request, and no message from the page reaches it. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
-# never from the variables of the function that wrote it: Windows PowerShell 5.1 does not keep them
-# (the first surface's own Surface.ps1 says what was measured, and its suite measures it on every run).
+# WHAT A CALLBACK IS HANDED, as $Window. EVERY surface gives these five:
+#   errors     the list the surface adds to when a callback, a message or a load fails. A failure
+#              inside a surface has no console to be printed on, so a caller that reports must be able
+#              to read it. It holds the last errorsKept of them, oldest first.
+#   post       & $Window.post <one line from ConvertTo-HordeSurfaceEvent>: push an event to the page
+#   setTitle   & $Window.setTitle <text>
+#   show       & $Window.show: bring it in front of the person, where that means something
+#   close      & $Window.close
+# TWO MORE EXIST ONLY ON A SURFACE WITH THE CAPABILITY window.native, and mean nothing anywhere else:
+#   handle     the native window handle, for something that must own or place the window
+#   sync       an object through which an event raised on another thread is brought to the window's
+#              own thread
+# A caller that needs them says so when it picks a surface (Resolve-HordeSurface -Requires
+# window.native) and must not read them otherwise: a surface that is a file or a view across a link
+# has no handle to give. AND ONE MORE ONLY WITH THE CAPABILITY picture:
+#   capture    & $Window.capture <absolute path.png> asks the surface to save a picture of the page as
+#              it is drawn now, and answers whether it was asked; the file appears, whole, a moment
+#              later. ONLY HORDE CAN ASK: capture is not a request, and no message from the page
+#              reaches it.
+# A CALLBACK TAKES WHAT IT NEEDS FROM $State, never from the variables of the function that wrote it:
+# Windows PowerShell 5.1 does not keep them (the window surface's own Surface.ps1 says what was
+# measured, and its suite measures it on every run).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
