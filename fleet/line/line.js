@@ -11,7 +11,9 @@
 //   line.update(status)        the value of the fleet request: { state, reason, orcs, notRead, findings }
 //   line.setCounts(counts)     a map from an entry's key to how many of the host's items are its
 //   line.setPicked(keyOrNull)  which entry is picked; line.setOpen(bool) folded or unfolded
-//   line.snapshot(mostRows)    what is drawn, as text: { open, picked, head, rows, entries, written, notRead, left }
+//   line.snapshot(mostRows)    what is drawn, as text: { open, picked, head, rows, entries, written, notRead, left,
+//                              headLines, headClipped, rowsLines }: how many lines the folded line and the
+//                              rows are laid out on, and whether the folded line is cut short at its end
 //   HordeFleetLine.keyOf(name) the key of the entry a name such as "Orc D (test deploy)" belongs to,
 //                              or null when the name is not an Orc's
 //
@@ -56,13 +58,31 @@
     return "written " + Math.round(seconds / 86400) + " days ago";
   }
 
+  // HOW MANY LINES A NODE'S TEXT IS LAID OUT ON, as the engine laid it out: the boxes of its text and
+  // its buttons, grouped by their middles, a new line wherever a middle is more than half the smallest
+  // box below the last. A node that is not shown (a row while the line is folded) is on none.
+  function linesOf(node) {
+    if (!node || !node.firstChild || node.getClientRects().length === 0) { return 0; }
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var boxes = range.getClientRects();
+    var mids = [], least = Infinity, i;
+    for (i = 0; i < boxes.length; i += 1) {
+      if (boxes[i].height > 0 && boxes[i].width > 0) { mids.push((boxes[i].top + boxes[i].bottom) / 2); least = Math.min(least, boxes[i].height); }
+    }
+    mids.sort(function (a, b) { return a - b; });
+    var lines = 0, last = -Infinity;
+    for (i = 0; i < mids.length; i += 1) { if (mids[i] - last > least / 2) { lines += 1; last = mids[i]; } }
+    return lines;
+  }
+
   function mount(root, options) {
     var onPick = (options && typeof options.onPick === "function") ? options.onPick : function () {};
     var countWords = (options && options.countWords) ? String(options.countWords) : "";
     var onChange = (options && typeof options.onChange === "function") ? options.onChange : function () {};
     // counts is a map with no prototype: a key is text from a name, and "constructor" is a name.
     var state = { status: null, counts: Object.create(null), picked: null, open: false };
-    var drawn = { head: "", rows: [], entries: 0, written: 0, notRead: 0 };
+    var drawn = { head: "", rows: [], entries: 0, written: 0, notRead: 0, headNode: null, rowNodes: [] };
 
     function entriesOf() {
       var out = [];
@@ -82,11 +102,11 @@
       return out;
     }
 
+    // The folded line names only the Orcs whose record was read (draw), so an entry here always has one.
     function stateWords(entry) {
       var count = state.counts[entry.key] || 0;
       var words = [];
-      if (!entry.record || !entry.record.written) { words.push("no status written"); }
-      else if (entry.record.blocked) { words.push("blocked"); }
+      if (entry.record.blocked) { words.push("blocked"); }
       if (count > 0 && countWords) { words.push(countWords + " (" + count + ")"); }
       return words.join(", ");
     }
@@ -133,16 +153,24 @@
       var notRead = (status && typeof status.notRead === "number") ? status.notRead : 0;
       if (!status) { head.appendChild(document.createTextNode(" not read yet")); }
       else if (status.state !== "read" && entries.length === 0) { head.appendChild(document.createTextNode(" " + status.reason)); }
-      var i, words;
+      // THE FOLDED LINE IS ONE LINE (the owner, 2026-10-07): it names each Orc whose record was read,
+      // and only COUNTS the entries with none. Measured the same day in a picture of the real window,
+      // 980 device pixels wide: eight folders with no status file and four Orcs the list names made the
+      // line seven lines long, each "no status written". Unfolded, every entry still has its own row.
+      var i, words, said = 0, without = 0;
       for (i = 0; i < entries.length; i += 1) {
-        head.appendChild(document.createTextNode(i ? ", " : " "));
+        if (!entries[i].record || !entries[i].record.written) { without += 1; continue; }
+        head.appendChild(document.createTextNode(said ? ", " : " "));
         head.appendChild(nameButton(entries[i], entries[i].name));
         words = stateWords(entries[i]);
         if (words) { head.appendChild(document.createTextNode(" " + words)); }
+        said += 1;
       }
+      if (without > 0) { head.appendChild(document.createTextNode((said ? ", " : " ") + without + " without status")); }
       if (notRead > 0) { head.appendChild(document.createTextNode((entries.length ? ", and " : " ") + notRead + " more not read")); }
       root.appendChild(head);
-      function addRow(node) { node.className = "fl-row"; root.appendChild(node); rows.push(node.textContent); }
+      var rowNodes = [];
+      function addRow(node) { node.className = "fl-row"; root.appendChild(node); rows.push(node.textContent); rowNodes.push(node); }
       var row;
       for (i = 0; i < entries.length; i += 1) {
         row = make("div");
@@ -156,7 +184,7 @@
       for (i = 0; i < findings.length; i += 1) { addRow(make("div", "", "Settings: " + findings[i])); }
       var written = 0;
       for (i = 0; i < entries.length; i += 1) { if (entries[i].record && entries[i].record.written) { written += 1; } }
-      drawn = { head: head.textContent, rows: rows, entries: entries.length, written: written, notRead: notRead };
+      drawn = { head: head.textContent, rows: rows, entries: entries.length, written: written, notRead: notRead, headNode: head, rowNodes: rowNodes };
       onChange();
     }
 
@@ -171,7 +199,11 @@
       setOpen: function (open) { state.open = !!open; draw(); },
       snapshot: function (mostRows) {
         var most = (typeof mostRows === "number") ? mostRows : drawn.rows.length;
-        return { open: state.open, picked: state.picked || "", head: drawn.head, rows: drawn.rows.slice(0, most), entries: drawn.entries, written: drawn.written, notRead: drawn.notRead, left: Math.max(0, drawn.rows.length - most) };
+        var rowsLines = 0;
+        for (var i = 0; i < drawn.rowNodes.length; i += 1) { rowsLines += linesOf(drawn.rowNodes[i]); }
+        var h = drawn.headNode;
+        return { open: state.open, picked: state.picked || "", head: drawn.head, rows: drawn.rows.slice(0, most), entries: drawn.entries, written: drawn.written, notRead: drawn.notRead, left: Math.max(0, drawn.rows.length - most),
+                 headLines: linesOf(h), headClipped: !!(h && h.scrollWidth > h.clientWidth + 1), rowsLines: rowsLines };
       }
     };
     draw();

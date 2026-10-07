@@ -7,11 +7,17 @@
     Target = "fleet\line\line.js"
     Suite  = "test\e2e\e2e-decisions-window.ps1"
     Mutations = @(
-        @{ Name = "no-status-is-shown-as-a-guess"
-           Find = 'if (!entry.record || !entry.record.written) { words.push("no status written"); }'
-           Replace = 'if (!entry.record || !entry.record.written) { words.push("idle"); }' }
+        @{ Name = "an-orc-without-status-is-named-in-the-folded-line"
+           Find = 'if (!entries[i].record || !entries[i].record.written) { without += 1; continue; }'
+           Replace = 'if (!entries[i].record || !entries[i].record.written) { without += 1; }' }
+        @{ Name = "the-orcs-without-status-are-not-counted"
+           Find = 'if (without > 0) { head.appendChild(document.createTextNode((said ? ", " : " ") + without + " without status")); }'
+           Replace = '' }
+        @{ Name = "the-line-count-sees-every-box-as-one-line"
+           Find = 'for (i = 0; i < mids.length; i += 1) { if (mids[i] - last > least / 2) { lines += 1; last = mids[i]; } }'
+           Replace = 'for (i = 0; i < mids.length; i += 1) { if (lines === 0) { lines += 1; last = mids[i]; } }' }
         @{ Name = "blocked-is-not-said"
-           Find = 'else if (entry.record.blocked) { words.push("blocked"); }'
+           Find = 'if (entry.record.blocked) { words.push("blocked"); }'
            Replace = '' }
         @{ Name = "an-orc-nobody-wrote-for-has-no-entry"
            Find = 'if (!seen[key] && key.indexOf("orc:") === 0 && state.counts[key] > 0) { extra.push(key); }'

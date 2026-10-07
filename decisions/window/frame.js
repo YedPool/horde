@@ -172,7 +172,7 @@
     if (notices.drafts !== snap.answer.storage) { notices.drafts = snap.answer.storage; showNotices(); }
     var value = {
       v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer,
-      fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead },
+      fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead, headLines: line.headLines, headClipped: line.headClipped, rowsLines: line.rowsLines },
       top: document.getElementById("counts").textContent.slice(0, bounds.lineChars),
       notice: noticeBox.textContent.slice(0, bounds.textChars), foot: foot.textContent.slice(0, bounds.lineChars),
       text: {

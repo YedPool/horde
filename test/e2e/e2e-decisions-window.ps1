@@ -140,7 +140,15 @@ Check ($drawn.counts.open -eq 22 -and $drawn.counts.waiting -eq 17 -and $drawn.c
 Write-Host ""
 Write-Host "=== the fleet line, and an Orc picked: the others' questions are dimmed, never hidden ===" -ForegroundColor Cyan
 Check ($drawn.fleet.open -eq $true -and $drawn.fleet.picked -ceq "orc:B") "the fleet line is unfolded and Orc B is picked, as the command asked"
-Check ($drawn.fleet.head -ceq "Fleet: A, B blocked, waiting on you (6), gamma no status written, C no status written, waiting on you (6), D no status written, waiting on you (5)") ("the folded line: each Orc, its state in words, and how many questions wait on the reader for it (" + $drawn.fleet.head + ")")
+Check ($drawn.fleet.head -ceq "Fleet: A, B blocked, waiting on you (6), 3 without status") ("the folded line: each Orc that wrote its status, its state in words, how many questions wait on the reader for it; the three with no good record are only counted (" + $drawn.fleet.head + ")")
+# ONE LINE WHEN FOLDED (the owner, 2026-10-07: eight folders with no status file made it seven lines
+# in the real window). The page counts the lines its text was laid out on; the rows under it are the
+# control, since an Orc's row is longer than this window is wide and is laid out on more than one.
+Check ($drawn.fleet.headLines -eq 1) ("the folded line is laid out on one line (" + $drawn.fleet.headLines + ")")
+# Measured 2026-10-07: at this window's 520 device pixels the line above does not fit and is cut at its
+# end with an ellipsis (line.css); it is said here, not held, since a narrower window may always cut it.
+Write-Host ("  measured: the folded line is cut short at its end: " + $drawn.fleet.headClipped) -ForegroundColor DarkGray
+Check ($drawn.fleet.rowsLines -gt @($drawn.fleet.rows).Count) ("CONTROL: the same count sees the rows under it wrap, " + $drawn.fleet.rowsLines + " lines for " + @($drawn.fleet.rows).Count + " rows")
 Check ($drawn.fleet.entries -eq 5 -and $drawn.fleet.written -eq 2 -and $drawn.fleet.notRead -eq 0 -and @($drawn.fleet.rows).Count -eq 5) "five entries - the three folders, and the two Orcs the list names that no good record speaks for; two records were good"
 Check ($drawn.fleet.rows[3] -ceq "Orc C: no status written (no folder of status records is this Orc's)") "an Orc the list names and no record speaks for is no status written, and never a guess"
 Check ($drawn.fleet.rows[0] -like "Orc A (the first lane): Building the second step of the plan. Last finished: The first step of the plan. (written *" -and $drawn.fleet.rows[0] -notlike "*Blocked*") "Orc A's line: its lane, what it is doing, what it last finished; its 'blocked: No' is not blocked; and its record ends what it is doing with a full stop, which the line does not write twice"
