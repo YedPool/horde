@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "description": "THE ONE DEFINITION of what crosses a surface's bridge (surfaces/Port.ps1, THE BRIDGE). Three shapes of one JSON object: a request from the page, Horde's reply to it, and an event Horde pushes. For each shape, the left side is the part it plays and the right side is the member name on the wire. surfaces/Port.ps1 reads every message and writes every reply and event by these names, and a surface serves this same file to the page as surface/bridge-messages.json, where the page's side of the bridge reads it before its first message: neither side carries a name or the protocol number of its own. protocol is the version of these shapes; a message of another version is refused, not half understood. To change a shape: change it here, raise protocol, and nothing else.",
+  "protocol": 1,
+  "request": { "version": "v", "id": "id", "name": "request", "arguments": "args" },
+  "reply": { "version": "v", "id": "reply", "ok": "ok", "value": "value", "reason": "reason" },
+  "event": { "version": "v", "name": "event", "value": "value" }
+}
