@@ -44,9 +44,23 @@
 # on the always-on box. A suite that declares sections (test\lib\Suite.ps1, Register-HordeSuiteSections)
 # lets a mutant carry Sections = @("id", ...): that mutant's run gets HORDE_SECTIONS for those ids, and a
 # run that skipped the rest (exit 3) counts as a pass. The rules, each because the opposite would lie:
-#   - A MAP CAN NEVER HIDE A SURVIVOR. A mutant that passes its sections is run again on the whole
-#     suite before it gets a verdict. Caught there, it is caught, and named [MAP-MISS] and counted on
-#     the result line so the map gets fixed; passed there too, it survived.
+#   - A MAPPED PASS IS NEVER A SURVIVOR UNTIL THE WHOLE SUITE SAYS SO. A mutant that passes its sections
+#     is run again on the whole suite before it gets a verdict. Caught there, it is caught, and named
+#     [MAP-MISS] and counted on the result line so the map gets fixed; passed there too, it survived.
+#   - A MAPPED CATCH IS UNVERIFIED UNLESS -VerifyMaps. A section can take another path when the
+#     sections before it did not run - a cache an earlier one would have filled, a setup it would
+#     have done - so a mutant on that path fails the section alone and passes the whole suite: a
+#     survivor the map would report as caught (review of #115, round 2, reproduced). Only a run of the
+#     whole suite can rule that out, and running it for every catch is the cost sections remove. So:
+#       * every catch made by a map alone is marked "unverified" and counted on the result line
+#         ("unverified catches: N"), so no gate can read one as proven without seeing it;
+#       * -VerifyMaps (or HORDE_MUTATE_VERIFY_MAPS=1 in the environment, for a gate or a scheduled
+#         run) reruns every mapped catch on the whole suite, and the whole suite's verdict stands. A
+#         mutant its sections caught and the whole suite did not is named [MAP-HIDES]: it survived;
+#       * -Changed always verifies: whatever a change could have moved onto such a path is exactly
+#         what it selects. A spec whose map changed has every mutant selected, so a new or edited map
+#         is always verified in the review round that brings it. The periodic full check is
+#         -VerifyMaps on every spec (CONTRIBUTING 15).
 #   - A WRONG MAP IS REFUSED, NOT RUN: a name the suite does not declare, an empty map, a map on a suite
 #     with no sections, or one outside the spec's own HORDE_SECTIONS (test\lib\SuiteSections.ps1, the
 #     rule test\test-mutation-specs.ps1 checks on every gate run).
@@ -64,7 +78,7 @@
 # "mutations:" line, so no gate can read it as a result).
 #
 #   powershell -File tools\Mutate.ps1 -Changed origin/main
-param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan)
+param([string]$Spec = "", [int]$TimeoutSeconds = 900, [ValidatePattern('^[a-z0-9]{1,16}\z')][string]$RunTag, [string[]]$Only = @(), [string]$Changed = "", [switch]$Plan, [switch]$VerifyMaps)
 $script:baselineFailed = $false
 
 $ErrorActionPreference = "Stop"
@@ -130,7 +144,8 @@ if ($Changed) {
         if ($names.Count -eq 0) { continue }
         Write-Host ("changed: running " + $names.Count + " mutant(s) of " + $so.spec)
         $ts = Get-Date
-        $childArgs = @{ Spec = $so.spec; Only = $names; TimeoutSeconds = $TimeoutSeconds }
+        # Always verified: a change is what moves a mutant onto a path only its section takes alone.
+        $childArgs = @{ Spec = $so.spec; Only = $names; TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $true }
         if ($RunTag) { $childArgs.RunTag = $RunTag }
         $lines = @(& $PSCommandPath @childArgs 6>&1 | ForEach-Object { "$_" })
         $code = $LASTEXITCODE
@@ -245,6 +260,7 @@ $script:envSaved = @{}
 $specEnv = @{}
 if ($s.ContainsKey("Environment")) { $specEnv = $s.Environment }
 # The whole suite, as this spec runs it: its own section filter, or none.
+$verifyMaps = ($VerifyMaps -or "$env:HORDE_MUTATE_VERIFY_MAPS" -eq "1")
 $wholeSelection = ""
 if ($specEnv.ContainsKey("HORDE_SECTIONS")) { $wholeSelection = "$($specEnv.HORDE_SECTIONS)" }
 foreach ($name in @($specEnv.Keys)) {
@@ -313,7 +329,7 @@ try {
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
-        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); sections = ""; mapMiss = $false }
+        $row = [ordered]@{ name = $m.Name; expect = $expect; outcome = ""; failures = @(); sections = ""; mapMiss = $false; verified = ""; mapHides = $false }
         $mapWhy = ""
         if ($m.ContainsKey("Sections")) {
             $mapWhy = Get-HordeMutantSectionProblem -Mutant $m -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv
@@ -353,7 +369,13 @@ try {
                         $row.failures = @(Get-HordeFailLines -Out $rerun.out)
                         $row.outcome = Get-HordeRunOutcome -Run $rerun -PassCodes $passCodes -Seconds $TimeoutSeconds
                         $row.mapMiss = ($row.outcome -eq "caught")
-                    }
+                    } elseif ($row.outcome -eq "caught" -and $verifyMaps) {
+                        # A MAPPED CATCH, CONFIRMED: the whole suite's verdict stands.
+                        $confirm = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
+                        $wholeOutcome = Get-HordeRunOutcome -Run $confirm -PassCodes $passCodes -Seconds $TimeoutSeconds
+                        if ($wholeOutcome -eq "caught") { $row.verified = "yes" }
+                        else { $row.outcome = $wholeOutcome; $row.failures = @(Get-HordeFailLines -Out $confirm.out); $row.mapHides = $true }
+                    } elseif ($row.outcome -eq "caught") { $row.verified = "no" }
                 } else {
                     $run = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $wholeSelection
                     $row.failures = @(Get-HordeFailLines -Out $run.out)
@@ -398,6 +420,7 @@ if ($script:baselineFailed) { exit 2 }
 
 $bad = 0
 $mapMisses = 0
+$unverified = 0
 foreach ($r in $results) {
     # Expect is written "caught" or "survives"; the outcome of a run is "caught" or "survived".
     $want = "caught"; if ($r.expect -eq "survives") { $want = "survived" }
@@ -405,15 +428,20 @@ foreach ($r in $results) {
     if (-not $ok) { $bad++ }
     $color = "DarkGray"; if (-not $ok) { $color = "Red" }
     $where = ""; if ($r.sections) { $where = " [sections: " + $r.sections + "]" }
+    if ($r.verified -eq "yes") { $where += " verified by the whole suite" }
+    elseif ($r.verified -eq "no") { $where += " unverified: the whole suite was not run"; $unverified++ }
     Write-Host ("  [" + $(if ($ok) { "OK" } else { "BAD" }) + "] " + $r.name + ": " + $r.outcome + " (expected " + $r.expect + ")" + $where) -ForegroundColor $color
     if ($r.mapMiss) {
         $mapMisses++
         Write-Host ("  [MAP-MISS] " + $r.name + ": its sections (" + $r.sections + ") passed; the whole suite caught it - fix the map") -ForegroundColor Yellow
     }
+    if ($r.mapHides) {
+        Write-Host ("  [MAP-HIDES] " + $r.name + ": its sections (" + $r.sections + ") caught it and the whole suite did not (" + $r.outcome + ") - the map hides a survivor") -ForegroundColor Red
+    }
     foreach ($f in $r.failures) { Write-Host ("        " + $f) -ForegroundColor DarkGray }
 }
 # The map misses ride on the one result line a gate reads, so a wrong map stays visible: a warning,
 # never a failure, since the whole suite still decided the verdict.
-Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad + ", map misses: " + $mapMisses)
+Write-Host ("mutations: " + $results.Count + ", as expected: " + ($results.Count - $bad) + ", not: " + $bad + ", map misses: " + $mapMisses + ", unverified catches: " + $unverified)
 if ($bad -gt 0) { exit 1 }
 exit 0

@@ -33,5 +33,8 @@
         @{ Name = "zero-line-carries-a-number"
            Find = 'Write-Host ("mutations: none selected - "'
            Replace = 'Write-Host ("mutations: 0 - "' }
+        @{ Name = "changed-runs-unverified"
+           Find = 'TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $true }'
+           Replace = 'TimeoutSeconds = $TimeoutSeconds; VerifyMaps = $false }' }
     )
 }

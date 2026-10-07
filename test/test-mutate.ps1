@@ -121,7 +121,8 @@ Check (@($sec | Where-Object { $_ -match '\[MAP-MISS\] map-miss: its sections \(
 Check (@($sec | Where-Object { $_ -match '\[FAIL\] Get-Three returns three' }).Count -eq 1) "with the check that caught it in the whole suite"
 Check (@($sec | Where-Object { $_ -match '\[OK\] survivor: survived \(expected survives\)' }).Count -eq 1) "a mutant that survives its sections and then the whole suite is a survivor"
 Check (@($sec | Where-Object { $_ -match 'MAP-MISS\] (mapped|survivor|unmapped)' }).Count -eq 0) "CONTROL: only the map miss is named one"
-Check (@($sec | Where-Object { $_ -cmatch '^mutations: 4, as expected: 4, not: 0, map misses: 1$' }).Count -eq 1) "the summary line counts the map misses, so they stay visible"
+Check (@($sec | Where-Object { $_ -cmatch '^mutations: 4, as expected: 4, not: 0, map misses: 1, unverified catches: 1$' }).Count -eq 1) "the summary line counts the map misses and the catches no whole run confirmed, so both stay visible"
+Check (@($sec | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[sections: two\] unverified: the whole suite was not run' }).Count -eq 1) "a catch made by its sections alone says it is unverified"
 
 Check ($badCode -eq 1) ("a spec whose map is wrong fails the run (exit " + $badCode + ")")
 Check (@($bad | Where-Object { $_ -match "\[BAD\] misspelt: invalid: section 'tow' is not one test\\fixtures\\mutate\\suite-sections\.ps1 declares" }).Count -eq 1) "a mapped section the suite does not declare is refused, not run"
@@ -132,6 +133,26 @@ Check ($nosuiteCode -eq 1 -and @($nosuite | Where-Object { $_ -match '\[BAD\] ma
 Check ($senvCode -eq 1 -and @($senv | Where-Object { $_ -match "\[BAD\] outside: invalid: section 'four' is outside the spec's own HORDE_SECTIONS" }).Count -eq 1) "a mutant mapped outside the spec's own section filter is refused"
 Check (@($senv | Where-Object { $_ -match '\[OK\] inside: caught' }).Count -eq 1) "CONTROL: one mapped inside it runs"
 Check (($senvRuns -join " | ") -ceq "run sections=[two,three] | run sections=[two] | run sections=[two] | run sections=[two,three] | run sections=[two]") ("the spec's own filter is the whole run for its baselines (" + ($senvRuns -join " | ") + ")")
+
+# A MAPPED CATCH IS NOT PROVEN UNTIL THE WHOLE SUITE CATCHES IT (review of #115, round 2). Section "use"
+# computes its value when run alone and reads a cache the section before it filled when run whole; the
+# mutant breaks only the computing path. Its section catches it; the whole suite never sees it.
+$cold = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" | ForEach-Object { "$_" })
+$coldCode = $LASTEXITCODE
+Check ($coldCode -eq 0 -and @($cold | Where-Object { $_ -match '\[OK\] cold-path: caught .* unverified' }).Count -eq 1 -and @($cold | Where-Object { $_ -cmatch ', unverified catches: 1$' }).Count -eq 1) "CONTROL: without -VerifyMaps its section's catch stands, marked unverified and counted - the gap the flag closes"
+$coldV = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" -VerifyMaps | ForEach-Object { "$_" })
+$coldVCode = $LASTEXITCODE
+Check ($coldVCode -eq 1 -and @($coldV | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("with -VerifyMaps the whole suite decides: the mutant its section caught survived (exit " + $coldVCode + ")")
+Check (@($coldV | Where-Object { $_ -match '\[MAP-HIDES\] cold-path: its sections \(use\) caught it and the whole suite did not' }).Count -eq 1 -and @($coldV | Where-Object { $_ -cmatch ', unverified catches: 0$' }).Count -eq 1) "and is named as a map that hides a survivor, with nothing left unverified"
+$keepVm = $env:HORDE_MUTATE_VERIFY_MAPS
+try {
+    $env:HORDE_MUTATE_VERIFY_MAPS = "1"
+    $coldE = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-cache.psd1" | ForEach-Object { "$_" })
+    $coldECode = $LASTEXITCODE
+} finally { $env:HORDE_MUTATE_VERIFY_MAPS = $keepVm }
+Check ($coldECode -eq 1 -and @($coldE | Where-Object { $_ -match '\[MAP-HIDES\] cold-path' }).Count -eq 1) "HORDE_MUTATE_VERIFY_MAPS=1 verifies the same way, for a gate or a scheduled run"
+$honestV = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections.psd1" -VerifyMaps | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -eq 0 -and @($honestV | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\) \[sections: two\] verified by the whole suite' }).Count -eq 1 -and @($honestV | Where-Object { $_ -cmatch '^mutations: 4, as expected: 4, not: 0, map misses: 1, unverified catches: 0$' }).Count -eq 1) "CONTROL: an honest map passes -VerifyMaps, each catch confirmed by the whole suite"
 
 # EVERY MAP HAS A BASELINE OF ITS OWN. A section that fails when run without the ones before it would
 # "catch" every mutant mapped to it - here a mutant its section never even checks.

@@ -90,7 +90,7 @@ function Test-SameSet { param([string[]]$A, [string[]]$B) return ((@($A | Sort-O
 
 try {
     New-Item -ItemType Directory -Path $fx | Out-Null
-    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "test\lib\SuiteFiles.ps1", "test\lib\SuiteSections.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
+    foreach ($rel in @("tools\Mutate.ps1", "tools\MutateChanged.ps1", "test\lib\SuiteFiles.ps1", "test\lib\SuiteSections.ps1", "test\lib\Suite.ps1", "core\Platform.ps1", "core\Tristate.ps1")) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $fx $rel)) | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $rel) -Destination (Join-Path $fx $rel)
     }
@@ -244,6 +244,33 @@ try {
     $unshimmed = Invoke-FxMutate @("-Changed", "HEAD~1", "-Plan")
     Check ($unshimmed.code -eq 0) "CONTROL: with the real git first on PATH again, the same plan exits 0"
     if ((Split-Path -Leaf $shimDir) -match '^horde-mutchg-[0-9a-f]{32}-shim\z') { Remove-Item -LiteralPath $shimDir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # -Changed VERIFIES EVERY MAPPED CATCH ON THE WHOLE SUITE (review of #115, round 2). A change is what
+    # moves a mutant onto a path its section takes only when run alone; here section "use" computes its
+    # value alone and reads a warm cache when run whole, so its catch of cold-path is no catch at all.
+    Write-Fx "cache.ps1" @('$script:valCache = $null', 'function Get-Val { if ($null -ne $script:valCache) { return $script:valCache }; return (2 + 3) }', 'function Set-ValCache { $script:valCache = 5 }')
+    Write-Fx "test\cache-suite.ps1" @(
+        '. (Join-Path $PSScriptRoot "lib\Suite.ps1")',
+        'trap { Register-HordeSuiteError $_; continue }',
+        'Register-HordeSuiteSections -Ids @("warm", "use")',
+        '. (Join-Path (Split-Path -Parent $PSScriptRoot) "cache.ps1")',
+        'if (Enter-HordeSuiteSection "warm" "warm the cache") {',
+        '    trap { Register-HordeSuiteError $_; continue }',
+        '    Set-ValCache',
+        '    Check ((Get-Val) -eq 5) "the warmed value is five"',
+        '}',
+        'if (Enter-HordeSuiteSection "use" "use the value") {',
+        '    trap { Register-HordeSuiteError $_; continue }',
+        '    Check ((Get-Val) -eq 5) "Get-Val returns five"',
+        '}',
+        'Complete-HordeSuite -Success "warm, then use"')
+    Write-Fx "test\mutations\cache.psd1" @('@{ Target = "cache.ps1"; Suite = "test\cache-suite.ps1"; Mutations = @(', '  @{ Name = "cold-path"; Find = "return (2 + 3)"; Replace = "return (2 + 4)"; Sections = @("use") }', ') }')
+    $c4 = (Invoke-Fx @("add", "-A")) + (Invoke-Fx @("commit", "-q", "-m", "four"))
+    Write-Fx "cache.ps1" @('$script:valCache = $null', 'function Get-Val { if ($null -ne $script:valCache) { return $script:valCache }; return (2 + 3) } # computed', 'function Set-ValCache { $script:valCache = 5 }')
+    $cold = Invoke-FxMutate @("-Changed", "HEAD", "-Spec", "test\mutations\cache.psd1")
+    Check ($c4 -eq 0 -and @(Get-Picked $cold.lines "SELECT") -join "," -ceq "cold-path") ("CONTROL: the changed line selects the mapped mutant (" + ((Get-Picked $cold.lines "SELECT") -join ", ") + ")")
+    Check ($cold.code -eq 1 -and @($cold.lines | Where-Object { $_ -match '\[BAD\] cold-path: survived \(expected caught\)' }).Count -eq 1) ("-Changed runs it with its map verified: the whole suite's survival stands (exit " + $cold.code + ")")
+    Check (@($cold.lines | Where-Object { $_ -match '\[MAP-HIDES\] cold-path' }).Count -eq 1) "and names the map that hid it"
 
     # THE ARGUMENTS.
     $noArgs = Invoke-FxMutate @()

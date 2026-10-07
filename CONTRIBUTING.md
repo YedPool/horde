@@ -304,6 +304,15 @@ its branch can break main when main moved under it").
    on `main` can break without anyone running it. `test\mutations\port-names.psd1` had a mutant
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
+
+   **A section map's catches are verified separately.** A spec whose mutants carry `Sections` runs
+   each one on just those sections (`tools\Mutate.ps1`, SECTIONS). A catch made that way is not
+   proven, because a section run alone can take another path than it takes inside the whole suite.
+   So the result line counts every such catch as `unverified catches: N`. `-Changed` always verifies
+   the mutants it selects on the whole suite, and that includes every mutant of a spec whose map
+   changed. Every spec also runs with `-VerifyMaps` (or `HORDE_MUTATE_VERIFY_MAPS=1`, for example
+   through the remote gate's `-Env`) before each batch merge, and at least weekly. A `[MAP-HIDES]`
+   line in that run is a survivor the map hid: fix the map, then the gap.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites

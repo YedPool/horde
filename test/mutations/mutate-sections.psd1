@@ -24,8 +24,8 @@
            Find = '$mapMisses++'
            Replace = '' }
         @{ Name = "map-misses-off-the-result-line"
-           Find = ' + ", map misses: " + $mapMisses)'
-           Replace = ')' }
+           Find = ' + ", map misses: " + $mapMisses + ", unverified catches: " + $unverified)'
+           Replace = ' + ", unverified catches: " + $unverified)' }
         @{ Name = "selection-never-passed"
            Find = 'if ($Selection -ne "") { $psi.EnvironmentVariables["HORDE_SECTIONS"] = $Selection }'
            Replace = '' }
@@ -59,6 +59,21 @@
         @{ Name = "timeout-reads-survived"
            Find = 'if ($Run.timedOut) { return ("timed out after " + $Seconds + "s - not a catch") }'
            Replace = 'if ($Run.timedOut) { return "survived" }' }
+        @{ Name = "mapped-catch-not-verified"
+           Find = '} elseif ($row.outcome -eq "caught" -and $verifyMaps) {'
+           Replace = '} elseif ($false) {' }
+        @{ Name = "verify-env-ignored"
+           Find = '$verifyMaps = ($VerifyMaps -or "$env:HORDE_MUTATE_VERIFY_MAPS" -eq "1")'
+           Replace = '$verifyMaps = [bool]$VerifyMaps' }
+        @{ Name = "whole-verdict-ignored"
+           Find = 'else { $row.outcome = $wholeOutcome; $row.failures = @(Get-HordeFailLines -Out $confirm.out); $row.mapHides = $true }'
+           Replace = 'else { $row.mapHides = $true }' }
+        @{ Name = "unverified-not-counted"
+           Find = '$where += " unverified: the whole suite was not run"; $unverified++'
+           Replace = '$where += " unverified: the whole suite was not run"' }
+        @{ Name = "map-hides-not-named"
+           Find = 'if ($r.mapHides) {'
+           Replace = 'if ($false) {' }
         @{ Name = "crash-reads-as-catch"
            Find = 'if (@(Get-HordeFailLines -Out $Run.out).Count -gt 0) { return "caught" }'
            Replace = 'return "caught"' }
