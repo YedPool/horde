@@ -1,0 +1,4 @@
+# The core files that do not load what they call, as tools/CoreLoad.ps1 first found them (2026-10-06),
+# one call per line: file | function. test/test-core-load.ps1 fails on a finding not listed here, and on
+# a line here that is no longer a finding, so this list only shrinks. The follow-up to #109 removes it
+# by making each file load what it calls.

@@ -20,6 +20,19 @@
 # output in a code page of their own, and escaped text passes through all of them unchanged: text in
 # any alphabet comes back character for character.
 #
+# THE CONVERSATION UNDER A QUESTION is three verbs. `answer` and `reply` are both the operation say:
+# which of them was typed decides who is recorded as speaking and by what route, and no flag can say
+# otherwise - `answer` is the session that keeps the list writing down what the founder said in chat,
+# stored as recorded from chat and never as typed by him. `inbox` is two operations, in this order:
+# inbox, which only reads what is unread; and - after the lines are out - mark-read, naming the last
+# record that was printed (Complete-HordeDecisionCommand). So a command stopped between the two leaves
+# messages unread that were seen, never messages marked that nobody saw. `inbox -Json` NEVER MARKS: its
+# one line holds the unread messages, says "marked": false, and names the last record it showed (upTo);
+# the caller, once it HAS the line, marks explicitly with `mark-read -UpTo <record>`. A line cannot be
+# added to after it is written, so a -Json that marked would have to mark before printing - and a
+# caller killed in between would have marked words it never received. The words of a message
+# are printed line for line as they are.
+#
 # THE PLAIN-TEXT OUTPUT IS UTF-8 WHEN IT GOES TO A PIPE. Typed at a terminal it is written as it is, and
 # how it looks is the terminal's doing. Redirected, Windows PowerShell 5.1 encodes it in the console's
 # code page, and the session that keeps the list reads these commands through a pipe: measured
@@ -34,7 +47,10 @@
 . (Join-Path $PSScriptRoot "Operations.ps1")
 
 # THE ONE TABLE OF THE COMMAND'S VERBS. A verb is an operation of the same name
-# (decisions/Operations.ps1); here is what the command line adds to it: whether it is about one
+# (decisions/Operations.ps1), unless its entry names another (operation): "answer" and "reply" are
+# both the operation say, with who speaks and by what route fixed here (says), because at this
+# command line that is decided by which verb was typed and never by a flag. Here is what the command
+# line adds to an operation: whether it is about one
 # question (and so takes its number), which flags it takes, and how its usage reads. The dispatch
 # below reads it, a wrong command line is answered with a verb's usage from it, and the whole usage
 # line is built from it. Whether a verb writes is not said here: the operations say that.
@@ -54,11 +70,21 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
+    # THE CONVERSATION UNDER A QUESTION. answer: the session that keeps the list writes down what the
+    # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
+    # reply: that session speaks. inbox: what the founder has said that it has not read.
+    answer = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
+    reply  = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
+    # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
+    inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
+    # mark-read: record that everything said up to a record has been read. What `inbox` does by itself
+    # in plain text, and what a caller of `inbox -Json` does once it has the line.
+    "mark-read" = @{ number = $false; flags = @("UpTo", "Id", "Json");              usage = "mark-read -UpTo <record> [-Id <32 hex>] [-Json]" }
     # THE ONE VERB THAT IS NOT AN OPERATION. It changes and reads nothing itself: it opens a window
     # that is another caller of the same operations (decisions/Window.ps1). It is in this table so
     # that its flags are checked and its usage is printed like any verb's; `opens` is what tells the
     # dispatch below to hand it on instead of calling an operation of its name.
-    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>]"; opens = $true }
+    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc", "ToldMarks"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>] [-ToldMarks <file.json>]"; opens = $true }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
@@ -122,8 +148,12 @@ function Read-HordeDecisionJsonFile {
 function ConvertTo-HordeDecisionJsonLine {
     # An answer as one line of ASCII JSON: { state; value; reason; observedAt }, core/Tristate.ps1's
     # stored form, so a script reads the three states the same way everywhere in Horde.
-    param($Answer)
-    $json = ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $Answer) -Compress -Depth 12
+    # -Beside is members to put beside those four, for a command that did more than one operation
+    # (inbox: the marking), so that its one line says everything it did.
+    param($Answer, $Beside = $null)
+    $record = ConvertTo-HordeAnswerRecord -Answer $Answer
+    if ($null -ne $Beside) { foreach ($k in @($Beside.Keys)) { $record[$k] = $Beside[$k] } }
+    $json = ConvertTo-Json -InputObject $record -Compress -Depth 12
     # Outside a string, JSON has no character beyond ASCII, so every match is inside one, where a \u
     # escape is the same character. A character beyond U+FFFF is two UTF-16 units and becomes two
     # escapes, which is how JSON writes it.
@@ -155,6 +185,50 @@ function Get-HordeDecisionFirstLine {
     return $line
 }
 
+function Format-HordeDecisionMessage {
+    # One message as lines, for a thread and for an inbox alike: who said it and by what route, when,
+    # in which record; what is to be known about it; and the words, every line, exactly.
+    # THE WORDS ARE NEVER CUT, JOINED OR RE-WRAPPED: each of their lines is one printed line, indented.
+    param($Message, [string]$Indent = "  ", [int]$NowWording = 0)
+    $lines = New-Object System.Collections.ArrayList
+    $wording = "wording not stated"
+    if ($Message.wordingStated) { $wording = "said to wording " + $Message.wordingVersion }
+    [void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " + (Format-HordeDecisionTime -At $Message.at) + " (record " + $Message.sequence + ", " + $wording + ")")
+    if ($Message.arrivedAfterClosing) { [void]$lines.Add($Indent + "  NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.") }
+    if ($Message.saidToEarlierWording) {
+        $now = ""
+        if ($NowWording -gt 0) { $now = "; the question is now at wording " + $NowWording }
+        [void]$lines.Add($Indent + "  NOTE: this was said to an earlier wording (wording " + $Message.wordingVersion + $now + "). Check that it still answers the question as it reads now.")
+    }
+    foreach ($l in @(([string]$Message.text) -split "\r?\n")) { [void]$lines.Add($Indent + "    " + $l) }
+    return @($lines)
+}
+
+function Format-HordeDecisionThreadSummary {
+    # A thread's counts as one phrase: "3 message(s); 1 not yet read by the warchief; turn: the warchief".
+    param($Thread)
+    $phrase = "" + $Thread.count + " message(s)"
+    foreach ($u in @($Thread.unread)) { if ($u.count -gt 0) { $phrase = $phrase + "; " + $u.count + " not yet read by " + $u.readerShown } }
+    return ($phrase + "; turn: " + $Thread.turnShown)
+}
+
+function Format-HordeDecisionInbox {
+    # An inbox answer as lines: each unread message under its question's number and plain-words title.
+    param($Value)
+    $lines = New-Object System.Collections.ArrayList
+    $items = @($Value.messages)
+    if ($items.Count -eq 0) { [void]$lines.Add("Nothing unread: nothing has been said that was not already read."); return @($lines) }
+    [void]$lines.Add("" + $items.Count + " message(s) not yet read, oldest first:")
+    foreach ($item in $items) {
+        [void]$lines.Add("")
+        $heading = "Question " + $item.number + ": " + $item.title
+        if ("$($item.state)" -cne "open") { $heading = $heading + " [" + $item.state + "]" }
+        [void]$lines.Add($heading)
+        foreach ($l in @(Format-HordeDecisionMessage -Message $item.message)) { [void]$lines.Add($l) }
+    }
+    return @($lines)
+}
+
 function Format-HordeDecisionProblems {
     # The lines that say which records could not be read, or did not apply. They follow every listing
     # and every result, so a damaged record is never out of sight.
@@ -171,6 +245,18 @@ function Format-HordeDecisionProblems {
         [void]$lines.Add("")
         [void]$lines.Add("NOTE: " + $off.Count + " record(s) were read and changed nothing:")
         foreach ($o in $off) { [void]$lines.Add("  record " + $o.sequence + " (" + $o.file + "): " + $o.reason) }
+    }
+    $later = @($Value.notUnderstood)
+    if ($later.Count -gt 0) {
+        $total = 0
+        foreach ($k in $later) { $total += [int]$k.count }
+        [void]$lines.Add("")
+        [void]$lines.Add("NOTE: " + $total + " record(s) are of a kind this version of Horde does not understand. A later version wrote them; they are kept, and cost no question number:")
+        foreach ($k in $later) {
+            $where = "record " + $k.first
+            if ([long]$k.last -ne [long]$k.first) { $where = "records " + $k.first + " to " + $k.last }
+            [void]$lines.Add("  " + $k.kind + ": " + $k.count + " record(s), " + $where)
+        }
     }
     $loose = @($Value.strays)
     if ($loose.Count -gt 0) {
@@ -208,6 +294,9 @@ function Format-HordeDecisionList {
             if ($q.needsSecret) { $meta = $meta + "; needs a secret" }
             [void]$lines.Add($pad + $meta)
             if ("$($q.recommendation)".Trim() -ne "") { [void]$lines.Add($pad + "recommended: " + (Get-HordeDecisionFirstLine -Text $q.recommendation)) }
+            # A question nobody has spoken under says nothing here: it is the founder's turn, as for
+            # every question just asked.
+            if ($q.thread.count -gt 0) { [void]$lines.Add($pad + "conversation: " + (Format-HordeDecisionThreadSummary -Thread $q.thread)) }
             if ($q.state -cne "open") {
                 $done = $q.state
                 if ("$($q.closedAt)" -ne "") { $done = $done + " " + (Format-HordeDecisionTime -At $q.closedAt) }
@@ -259,6 +348,14 @@ function Format-HordeDecisionQuestion {
     [void]$lines.Add("")
     [void]$lines.Add("History:")
     foreach ($h in @($q.history)) { [void]$lines.Add("  " + (Format-HordeDecisionTime -At $h.at) + "  " + $h.note + " (by " + $h.actor + ", record " + $h.sequence + ")") }
+    [void]$lines.Add("")
+    [void]$lines.Add("Conversation: " + (Format-HordeDecisionThreadSummary -Thread $q.thread))
+    $said = @()
+    if ($null -ne $q.thread.PSObject.Properties["messages"]) { $said = @($q.thread.messages) }
+    foreach ($m in $said) {
+        foreach ($l in @(Format-HordeDecisionMessage -Message $m -NowWording ([int]$q.wordingVersion))) { [void]$lines.Add($l) }
+        foreach ($reader in @($m.unreadBy)) { $who = @($q.thread.unread | Where-Object { $_.reader -ceq $reader }) | Select-Object -First 1; if ($null -ne $who) { [void]$lines.Add("    (not yet read by " + $who.readerShown + ")") } }
+    }
     return @($lines)
 }
 
@@ -284,8 +381,21 @@ function Format-HordeDecisionAnswer {
             [void]$lines.Add("  " + $k.Name + ": " + $k.Value.label + ". " + $k.Value.means + $needs)
         }
     }
+    elseif ($Verb -ceq "inbox") { foreach ($l in @(Format-HordeDecisionInbox -Value $value)) { [void]$lines.Add($l) } }
+    elseif ($Verb -ceq "mark-read") {
+        if ($value.outcome -ceq "replayed") { [void]$lines.Add("This marking was already recorded (record " + $value.sequence + "), so nothing was written again.") }
+        elseif ([int]$value.marked -eq 0) { [void]$lines.Add("Nothing to mark: everything up to record " + $value.upTo + " was already read.") }
+        else { [void]$lines.Add("Marked as read: " + $value.marked + " message(s), up to record " + $value.upTo + ".") }
+    }
     elseif ($value.outcome -ceq "replayed") {
         [void]$lines.Add("Question " + $value.number + ": this request was already recorded (record " + $value.sequence + "), so nothing was written again.")
+    }
+    elseif ($Verb -ceq "answer" -or $Verb -ceq "reply") {
+        $said = "Replied under question "
+        if ($Verb -ceq "answer") { $said = "Kept " + $value.message.speakerShown + "'s words, " + $value.message.routeShown + ", under question " }
+        [void]$lines.Add($said + $value.number + " (record " + $value.sequence + "): " + $value.question.title)
+        if ($value.message.arrivedAfterClosing) { [void]$lines.Add("  NOTE: question " + $value.number + " is " + $value.question.state + ". The words are kept under it, and it stays " + $value.question.state + ": saying something reopens nothing.") }
+        if ($value.message.saidToEarlierWording) { [void]$lines.Add("  NOTE: they were said to wording " + $value.message.wordingVersion + ", and the question is now at wording " + $value.question.wordingVersion + ". They are kept, and marked as said to an earlier wording.") }
     }
     else {
         $done = @{ add = "Added question "; update = "Changed question "; close = "Closed question "; reopen = "Reopened question " }
@@ -312,11 +422,41 @@ function Write-HordeDecisionLines {
     } finally { [Console]::OutputEncoding = $was }
 }
 
+function Invoke-HordeDecisionMarking {
+    # Ask for the marking a command owes: -After is { operation; request }. Returns what happened, as
+    # { done; upTo; marked; reason }: done is true when the marking is in the store (made now, or made
+    # before under the same id, or already made by another reader), and reason says why when it is not.
+    param($After)
+    $answer = Invoke-HordeDecision -Operation "$($After.operation)" -Request $After.request
+    if ($answer.state -cne "known") { return [pscustomobject]@{ done = $false; upTo = [long]0; marked = 0; reason = "$($answer.reason)" } }
+    if ($answer.value.outcome -ceq "refused") { return [pscustomobject]@{ done = $false; upTo = [long]0; marked = 0; reason = "$($answer.value.reason)" } }
+    return [pscustomobject]@{ done = $true; upTo = [long]$answer.value.upTo; marked = [int]$answer.value.marked; reason = "" }
+}
+
+function Complete-HordeDecisionCommand {
+    # What a command does once its lines are out: -After is what Invoke-HordeDecisionCommand handed
+    # back for it, or $null for nothing. Returns { lines; failure } like the command itself.
+    # Today that is the second half of `inbox`: marking as read up to the last record that was
+    # printed. PRINTED FIRST, MARKED AFTER, so that a command stopped between the two leaves messages
+    # unread that were seen - which shows them again - and never messages marked read that nobody saw.
+    # A MARKING THAT FAILS SAYS SO PLAINLY, and fails the command: the messages are still unread.
+    param($After)
+    if ($null -eq $After) { return [pscustomobject]@{ lines = @(); failure = "" } }
+    $marking = Invoke-HordeDecisionMarking -After $After
+    if (-not $marking.done) { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $marking.reason) } }
+    $lines = @("", ("Marked as read: " + $marking.marked + " message(s), up to record " + $marking.upTo + "."))
+    # Another reader marked them between this command's printing and its marking: said as it is.
+    if ([int]$marking.marked -eq 0) { $lines = @("", "Nothing was left to mark: the messages above were marked as read by another reader in the meantime.") }
+    return [pscustomobject]@{ lines = $lines; failure = "" }
+}
+
 function Invoke-HordeDecisionCommand {
     # Run one `horde decisions <verb>`. -Given is the command's bound parameters, by name. Returns
-    # { lines; failure; opens }: the lines to print, and, when the command must fail, the message to
-    # fail with. opens is true for the one verb that is not an operation: its command line has been
-    # checked like any other, nothing was done, and the caller opens the window. It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
+    # { lines; failure; after; opens }: the lines to print; when the command must fail, the message to fail
+    # with; what is to be done once the lines are out (Complete-HordeDecisionCommand), or $null; and opens,
+    # true for the one verb that is not an operation: its command line has been checked like any other,
+    # nothing was done, and the caller opens the window.
+    # It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
     # another verb, a missing number, a file it cannot read.
     param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given)
     $spec = $script:HordeDecisionCommandVerbs[$Verb]
@@ -327,7 +467,12 @@ function Invoke-HordeDecisionCommand {
     if ($null -eq $spec) { throw ("decisions takes " + (@($script:HordeDecisionCommandVerbs.Keys) -join ", ") + ", not '" + $Verb + "'") }
     # What a command line that cannot be acted on is answered with, after the reason: this verb's usage.
     $usageNote = ". Usage: horde decisions " + $spec.usage
-    $writes = [bool](@(Get-HordeDecisionOperations | Where-Object { $_.name -ceq $Verb }) | Select-Object -First 1).writes
+    $operation = $Verb
+    if ($spec.ContainsKey("operation")) { $operation = "$($spec.operation)" }
+    $writes = [bool](@(Get-HordeDecisionOperations | Where-Object { $_.name -ceq $operation }) | Select-Object -First 1).writes
+    # `inbox` reads first and writes afterwards, as two requests of its own (see below): the request
+    # built here is the reading one, which takes no id.
+    if ($Verb -ceq "inbox") { $writes = $false }
     foreach ($flag in @($have.Keys)) {
         if ($flag -eq "Verb" -or $flag -eq "Number") { continue }
         if ($spec.flags -notcontains $flag) { throw ("-" + $flag + " does not belong to decisions " + $Verb + $usageNote) }
@@ -339,13 +484,13 @@ function Invoke-HordeDecisionCommand {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
     elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
-    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; opens = $true } }
+    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true } }
+    $id = [guid]::NewGuid().ToString("N")
+    if ($have.ContainsKey("Id")) {
+        $id = "$($have['Id'])"
+        if ($id -cnotmatch '\A[0-9a-f]{32}\z') { throw "-Id is 32 lowercase hex digits (a GUID with no hyphens), chosen once and reused when the same command is sent again" }
+    }
     if ($writes) {
-        $id = [guid]::NewGuid().ToString("N")
-        if ($have.ContainsKey("Id")) {
-            $id = "$($have['Id'])"
-            if ($id -cnotmatch '\A[0-9a-f]{32}\z') { throw "-Id is 32 lowercase hex digits (a GUID with no hyphens), chosen once and reused when the same command is sent again" }
-        }
         $request["id"] = $id
         $request["actor"] = $script:HordeDecisionCommandActor
     }
@@ -370,10 +515,57 @@ function Invoke-HordeDecisionCommand {
             $request["reason"] = "$($have['Reason'])"
         }
         "list" { if ($have.ContainsKey("State")) { $showing = "$($have['State'])"; $request["state"] = $showing } }
+        "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
+        "mark-read" {
+            if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }
+            $upToText = "$($have['UpTo'])"
+            if ($upToText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-UpTo is a record's number, as in: -UpTo 12" + $usageNote) }
+            $request["upTo"] = [long]$upToText
+        }
     }
-    $answer = Invoke-HordeDecision -Operation $Verb -Request $request
+    if ($spec.ContainsKey("says")) {
+        # THE WORDS: one line as an argument, or anything longer from a file, exactly as the file holds
+        # them. Never both, never neither.
+        if ($have.ContainsKey("Text") -eq $have.ContainsKey("File")) { throw ("decisions " + $Verb + " needs the words exactly once: -Text <one line>, or -File <path> for more than a line" + $usageNote) }
+        $words = ""
+        if ($have.ContainsKey("File")) { $words = Read-HordeDecisionTextFile -Path "$($have['File'])" -What "the file of words" }
+        else {
+            $words = "$($have['Text'])"
+            # Nothing of the text is repeated: what was typed may be what must not be printed.
+            if ($words -match "[\r\n]") { throw ("-Text is one line, and it has a line break: words of more than a line come from -File <path>, so that none is lost on the way in" + $usageNote) }
+        }
+        $request["speaker"] = "$($spec.says.speaker)"
+        $request["route"] = "$($spec.says.route)"
+        $request["text"] = $words
+        if ($have.ContainsKey("Wording")) {
+            $wording = "$($have['Wording'])"
+            if ($wording -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("-Wording is the number of the wording the speaker was looking at, as in: -Wording 2" + $usageNote) }
+            $request["wordingVersion"] = [int]$wording
+        }
+    }
+    $answer = Invoke-HordeDecision -Operation $operation -Request $request
+    # `inbox` WITHOUT -Peek MARKS WHAT IT PRINTED, AFTER IT IS PRINTED: the operation mark-read, naming
+    # the last record this answer holds (upTo), so a message that arrives between the two is beyond
+    # it and stays unread. Nothing to mark - no message, or the reading failed - asks for nothing.
+    $after = $null
+    $peek = ($have.ContainsKey("Peek") -and [bool]$have["Peek"])
+    $asJson = ($have.ContainsKey("Json") -and [bool]$have["Json"])
+    $isInbox = ($Verb -ceq "inbox")
+    $unread = 0
+    if ($isInbox -and $answer.state -ceq "known" -and $answer.value.outcome -ceq "done") { $unread = @($answer.value.messages).Count }
+    if ($isInbox -and -not $peek -and $unread -gt 0) {
+        $after = [pscustomobject]@{ operation = "$($spec.then)"; request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; upTo = [long]$answer.value.upTo } }
+    }
     $lines = @()
-    if ($have.ContainsKey("Json") -and [bool]$have["Json"]) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
+    if ($asJson -and $isInbox) {
+        # -Json NEVER MARKS (see the header): the line says so, and names the last record it shows, which
+        # is what the caller hands to `mark-read -UpTo` once it has received the line.
+        $after = $null
+        $shownUpTo = [long]0
+        if ($unread -gt 0) { $shownUpTo = [long]$answer.value.upTo }
+        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marked = $false; upTo = $shownUpTo }))
+    }
+    elseif ($asJson) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
     else {
         # The kinds table comes from the operations, like everything else this caller knows of the
         # list; if it cannot be had, a kind is shown by its name.
@@ -381,9 +573,10 @@ function Invoke-HordeDecisionCommand {
         $table = Invoke-HordeDecision -Operation "kinds" -Request @{}
         if ($table.state -ceq "known" -and $table.value.outcome -ceq "done") { $kinds = $table.value.kinds }
         $lines = @(Format-HordeDecisionAnswer -Verb $Verb -Answer $answer -Kinds $kinds -Showing $showing)
+        if ($isInbox -and $peek -and $unread -gt 0) { $lines += @("", "Nothing was marked as read (-Peek).") }
     }
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    return [pscustomobject]@{ lines = $lines; failure = $failure; opens = $false }
+    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false }
 }

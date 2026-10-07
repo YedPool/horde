@@ -15,6 +15,22 @@
 # ADDING AN EVENT KIND is one entry in $HordeDecisionEventKinds and its function below, plus its data
 # definition in schema/decision-event.v1. Nothing else in this file changes.
 #
+# A SMALL CONVERSATION UNDER EACH QUESTION. Two kinds are not about the question's words at all:
+# "message-said" (someone said something under question N) and "messages-read" (a reader has read
+# what others said, up to a record). What they mean is worked out here, like everything else:
+#   - A MESSAGE IS KEPT, ALWAYS. Words said under a closed question are kept and flagged "arrived
+#     after closing"; words said to a wording the question had already left WHEN THEY WERE SAID are
+#     kept and flagged "said to an earlier wording". Both are judged at the moment of the record, in
+#     store order, never against today: a later rewording does not flag words said before it, and a
+#     later reopening does not unflag words that arrived while it was closed. Neither is ever
+#     dropped, and neither changes the question: speaking never moves a number, a wording or a
+#     state, and reopens nothing.
+#   - THE FLAGS, WHOSE TURN IT IS AND WHAT IS UNREAD ARE DERIVED, NEVER STORED. A record holds what was
+#     said, by whom, by what route, and the wording the speaker was looking at. Whether that wording
+#     was already old, whether the question was closed, whose turn it now is and whether the other
+#     side has read it all follow from the order of the records, and are worked out from it each time.
+#   - A QUESTION'S THREAD IS ITS MESSAGES IN STORE ORDER. Two messages to one question are both there.
+#
 # A QUESTION'S NUMBER IS DERIVED FROM THE ORDER, AND IS PERMANENT. The Nth question-added record is
 # question N; there is no counter anywhere. Each question-added record also carries the number it was
 # given, as a CHECK on that derivation, and here is why it must. A record can become unreadable after
@@ -32,6 +48,28 @@
 # With every record readable both rules reduce to "the Nth question-added is question N", and
 # test/test-decisions-rules.ps1 holds them to that.
 #
+# THE COMPATIBILITY CONTRACT, FOR EVERY LATER EVENT KIND. A store outlives the version that wrote to
+# it, and two versions may write to one store. So a record whose ENVELOPE is well formed - it matches
+# schema/decision-event.v1, and says it is the record its place says - but whose KIND this version
+# does not know is not damage. A later version wrote it. It is "not understood by this version":
+#   - it is SET ASIDE from the fold: it changes no question, and is not reported as unreadable;
+#   - it is REPORTED, once for its kind, with how many records and from which to which, in every
+#     result, so nobody can show the list without saying that part of the store was not understood;
+#   - IT NEVER COUNTS AS A POSSIBLE QUESTION, and so leaves no question number unused. This is safe
+#     because of two promises every version makes: "question-added" is a kind every version knows,
+#     and A KIND'S NAME NEVER CHANGES MEANING - a new meaning is a new name. A record of any other
+#     name therefore cannot have added a question. Measured 2026-10-07, before this rule: one record
+#     of a later kind between two questions numbered the next one 4 instead of 3, for good;
+#   - ITS ID IS STILL SEEN: the envelope is readable, so a request sent again under that id is known
+#     to have been recorded, and is not written a second time.
+# What this asks of whoever adds a kind: never reuse a kind's name for another meaning; never make an
+# existing kind's record mean something only together with a later kind's (an older version sees the
+# first without the second); and keep the envelope as it is - a change to the envelope is a new
+# schema version, which an older version reads as unreadable, with the conservative rule below.
+# A RECORD THAT IS DAMAGED KEEPS THE CONSERVATIVE RULE: torn, missing, held, not this schema's
+# envelope, out of its place, or of a KNOWN kind with data that is not that kind's. Any of those may
+# have been a question, and each still leaves one number unused.
+#
 # STORED RECORDS ARE FACTS, NOT REQUESTS. The fold checks a record's SHAPE (its schemas) and whether it
 # applies, never the wording rules below: a title rule tightened next month must not make last month's
 # question unreadable. The wording rules are for what is about to be written.
@@ -39,15 +77,23 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path $PSScriptRoot "Format.ps1")
 
 # THE EVENT KINDS. data: the definition of schema/decision-event.v1 its data must match. words: the
 # member of its data, if any, that holds question fields (schema/decision-question.v1). apply: the
 # function that applies it to the list, or returns why it cannot.
+# about: "question" when its data names one question by number, "list" when it is about the whole
+# list. actors: who may write it - "keepers" (the roles that keep the list, $HordeDecisionActors) or
+# "speakers" (the roles that speak under a question, $HordeDecisionSpeakers). counts: the members of
+# its data that are counts, each with the largest it may be, held here because the schema has no
+# "maximum" (see THE LARGEST NUMBER below).
 $script:HordeDecisionEventKinds = [ordered]@{
-    "question-added"    = @{ data = "question-added";    words = "question"; apply = "Step-HordeDecisionAdded" }
-    "question-updated"  = @{ data = "question-updated";  words = "changes";  apply = "Step-HordeDecisionUpdated" }
-    "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed" }
-    "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened" }
+    "question-added"    = @{ data = "question-added";    words = "question"; apply = "Step-HordeDecisionAdded";    about = "question"; actors = "keepers";  counts = @{} }
+    "question-updated"  = @{ data = "question-updated";  words = "changes";  apply = "Step-HordeDecisionUpdated";  about = "question"; actors = "keepers";  counts = @{} }
+    "question-closed"   = @{ data = "question-closed";   words = "";         apply = "Step-HordeDecisionClosed";   about = "question"; actors = "keepers";  counts = @{} }
+    "question-reopened" = @{ data = "question-reopened"; words = "";         apply = "Step-HordeDecisionReopened"; about = "question"; actors = "keepers";  counts = @{} }
+    "message-said"      = @{ data = "message-said";      words = "";         apply = "Step-HordeDecisionSaid";     about = "question"; actors = "speakers"; counts = @{ wordingVersion = "number" } }
+    "messages-read"     = @{ data = "messages-read";     words = "";         apply = "Step-HordeDecisionRead";     about = "list";     actors = "speakers"; counts = @{ upTo = "sequence" } }
 }
 
 # THE STATES a question can be in. A later slice adds to this list; nothing reads a state it does not
@@ -64,6 +110,37 @@ $script:HordeDecisionStates = @("open", "closed")
 # THE ACTOR IS WHAT THE CALLER SAYS IT IS. Nothing here proves it; a caller across a link must have it
 # set by the link, not taken from the request.
 $script:HordeDecisionActors = @("warchief")
+
+# WHO MAY SPEAK UNDER A QUESTION: a closed list. The founder is not a session role of core/roles.json:
+# it is the person the list is kept for. shown: how a way of showing names the speaker. then: whose
+# turn it is once this speaker has spoken under an open question. reads: whether this role has an
+# inbox - whether "what it has not yet read" is kept track of. Today only the warchief does: the
+# founder reads in a window that is a later unit, and until that window marks what he has seen,
+# counting the warchief's replies as "unread by the founder" would be a number that means nothing.
+# Giving the founder an inbox is turning that one flag on.
+$script:HordeDecisionSpeakers = [ordered]@{
+    founder  = @{ shown = "the founder";  then = "warchief"; reads = $false }
+    warchief = @{ shown = "the warchief"; then = "founder";  reads = $true }
+}
+# WHOSE TURN IT IS, derived: the first speaker's when a question is asked or reopened (a question is
+# asked OF the founder); the other speaker's once one has spoken; nobody's while it is closed.
+$script:HordeDecisionFirstTurn = "founder"
+$script:HordeDecisionNoTurn = "nobody"
+# BY WHAT ROUTE WORDS ARRIVE: a closed list. speakers: whose words may arrive this way. actors: who may
+# make the request that records them. shown: how a way of showing says it. statesWording: whether
+# words by this route must say which wording of the question the speaker was looking at. The window
+# knows what it showed, and always says; the session writing down what was said in chat does not
+# know what was in front of the speaker, and a command has no screen. WHERE IT IS NOT STATED, NOTHING
+# IS GUESSED: the record holds no wording, the message says "wording not stated", and "said to an
+# earlier wording" is never worked out for it - that flag is only ever derived for a stated wording.
+# "chat-recorded" IS ITS OWN ROUTE ON PURPOSE. The founder's words, typed by him into the window, and
+# the founder's words as the warchief heard them in chat and wrote them down, are different evidence:
+# the second passed through another hand. They are stored distinctly and shown distinctly, always.
+$script:HordeDecisionRoutes = [ordered]@{
+    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window";                statesWording = $true }
+    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }
+    "command"       = @{ speakers = @("warchief"); actors = @("warchief"); shown = "by command";                         statesWording = $false }
+}
 
 # THE FIELDS OF A QUESTION, in the order they are stored and shown. type: text, list (of texts) or
 # flag. oneLine: a line break is refused. wording: a change to it is a new wording, because it is what
@@ -100,9 +177,10 @@ $script:HordeDecisionMaxListItems = 100
 # add throw "Cannot convert value to type System.Int32" - the whole list unloadable for one record -
 # and one numbered 2147483647 made every later add throw. A question's number is nine digits, which
 # is what the command line takes (decisions/Console.ps1) and is inside the Int32 the list keeps it
-# in; a record's sequence number is ten, the length of its file name (decisions/Store.ps1).
+# in. The largest a record's sequence number can be is NOT written here: it is the largest its file
+# name can hold, and decisions/Format.ps1 is the one place that says how wide that name is. The
+# rules ask it there (Get-HordeDecisionMaxSequence), as the store does.
 $script:HordeDecisionMaxNumber = 999999999
-$script:HordeDecisionMaxSequence = 9999999999
 # CHARACTERS THAT ARE NOT TEXT. A terminal obeys a control character, and a format or separator
 # character changes how a line reads without being seen. Measured 2026-10-06, before these: a title
 # holding ESC [2J and a group holding BEL were stored, and the plain-text list printed both raw; a
@@ -116,8 +194,33 @@ $script:HordeDecisionMaxSequence = 9999999999
 # to be stored exactly, and the operations suite's own Hebrew title carries U+200F. None of the four
 # can reorder or hide other text. What reorders or hides IS refused: the embeddings, overrides and
 # isolates (U+202A to U+202E, U+2066 to U+2069), the zero-width space, the byte-order mark.
-$script:HordeDecisionNotTextInOneLine = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'
-$script:HordeDecisionNotTextInLines = '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'
+# TWO CLASSES, DEFINED HERE AND NOWHERE ELSE, EACH NAMED FOR WHAT IT IS FOR. Both start from the same
+# refusal - control, format, line-separator and paragraph-separator characters - and differ only in
+# what of it they keep.
+#   A QUESTION FIELD MUST NOT BE ABLE TO DISGUISE ITSELF. It is written by the session that keeps the
+#     list, it is what a person reads before answering, and it can be written again. So it keeps
+#     only what right-to-left and joined writing cannot do without: the two direction marks and the
+#     two joiners (U+200C to U+200F). A character that reorders or hides the text beside it - an
+#     embedding, an override, an isolate, a zero-width space - is refused.
+#   A SPOKEN MESSAGE MUST BE STORED EXACTLY AS TYPED. What a person said cannot be written again, and
+#     a phone's keyboard and a chat program put characters into right-to-left text that he never
+#     sees: embeddings and overrides (U+202A to U+202E), isolates (U+2066 to U+2069), the Arabic
+#     letter mark (U+061C), the zero-width space and the word joiner (U+200B, U+2060). Refusing
+#     those would refuse his words, or make whoever records them take characters out. So a message
+#     keeps them all - and says of itself that it holds such characters
+#     (holdsDirectionOrInvisibleCharacters), so that whatever shows it knows to isolate it.
+# BOTH still refuse a control character other than the line break (and, in more than a line, the
+# tab), the byte-order mark (U+FEFF) and the line and paragraph separators (U+2028, U+2029): none is
+# in anything a person typed, and the first is what a terminal obeys.
+$script:HordeDecisionNotTextClasses = '\p{Cc}\p{Cf}\p{Zl}\p{Zp}'
+$script:HordeDecisionQuestionFieldKeeps = '\r\n\u200C-\u200F'
+$script:HordeDecisionSpokenMessageKeeps = '\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'
+$script:HordeDecisionNotTextInOneLine = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionQuestionFieldKeeps + ']]'
+$script:HordeDecisionNotTextInLines = '[' + $script:HordeDecisionNotTextClasses + '-[\t' + $script:HordeDecisionQuestionFieldKeeps + ']]'
+$script:HordeDecisionNotTextInWords = '[' + $script:HordeDecisionNotTextClasses + '-[' + $script:HordeDecisionSpokenMessageKeeps + ']]'
+# WHAT A MESSAGE IS SAID TO HOLD when it holds any of them: every format character, and the three that
+# older character tables do not yet call one.
+$script:HordeDecisionDirectionOrInvisible = '[\p{Cf}\u061C\u2066-\u2069]'
 # A title must have this many words besides numbers and reference words. "Merge PR 1469?" has one.
 # In Chinese, Japanese, Thai, Lao, Khmer and Burmese a sentence is written with no spaces, so there
 # each letter is counted as a word: about what one carries in Chinese, generous in the others.
@@ -176,6 +279,44 @@ $script:HordeDecisionSecretSlashRunPattern = '(?<![A-Za-z0-9+/=_.-])[A-Za-z0-9+/
 $script:HordeDecisionSecretSlashRunBits = 4.35
 
 function Get-HordeDecisionEventKinds { return @($script:HordeDecisionEventKinds.Keys) }
+function Get-HordeDecisionSpeakers { return @($script:HordeDecisionSpeakers.Keys) }
+function Get-HordeDecisionReaders { return @($script:HordeDecisionSpeakers.Keys | Where-Object { [bool]$script:HordeDecisionSpeakers[$_].reads }) }
+function Get-HordeDecisionRoutes { return @($script:HordeDecisionRoutes.Keys) }
+
+function Get-HordeDecisionKindAbout {
+    # What an event kind is about: "question" (its data names one by number) or "list". "" for a kind
+    # this version does not know.
+    param([string]$Kind)
+    $entry = $script:HordeDecisionEventKinds[$Kind]
+    if ($null -eq $entry) { return "" }
+    return "$($entry.about)"
+}
+
+function Get-HordeDecisionKindActors {
+    # Who may write an event of -Kind, as { roles; may }: the role labels, and what they may do, in
+    # words for a refusal. Asked of a request before it is written; a stored record is a fact and is
+    # not asked this.
+    param([Parameter(Mandatory = $true)][string]$Kind)
+    $entry = $script:HordeDecisionEventKinds[$Kind]
+    if ($null -ne $entry -and "$($entry.actors)" -ceq "speakers") { return [pscustomobject]@{ roles = @($script:HordeDecisionSpeakers.Keys); may = "speak under a question, or mark what was said there as read" } }
+    return [pscustomobject]@{ roles = @($script:HordeDecisionActors); may = "change the list" }
+}
+
+function Get-HordeDecisionSpeakerShown {
+    # How a speaker is named to a person. A label this version does not list (a later version wrote
+    # it) is shown as it is.
+    param([string]$Speaker)
+    $entry = $script:HordeDecisionSpeakers[$Speaker]
+    if ($null -eq $entry) { return $Speaker }
+    return "$($entry.shown)"
+}
+
+function Get-HordeDecisionRouteShown {
+    param([string]$Route)
+    $entry = $script:HordeDecisionRoutes[$Route]
+    if ($null -eq $entry) { return $Route }
+    return "$($entry.shown)"
+}
 function Get-HordeDecisionStates { return @($script:HordeDecisionStates) }
 function Get-HordeDecisionActors { return @($script:HordeDecisionActors) }
 function Get-HordeDecisionFieldNames { return @($script:HordeDecisionFields.Keys) }
@@ -343,9 +484,13 @@ function Get-HordeDecisionCharProblem {
     # Why a text holds something that is not text, as the end of a finding ("holds the character
     # U+001B ..."), or "". Only the first such character is named. The text is never cleaned: what is
     # stored is what was given, so what cannot be stored is refused whole.
-    param([string]$Text, [switch]$OneLine)
+    param([string]$Text, [switch]$OneLine, [switch]$Said)
     $pattern = $script:HordeDecisionNotTextInLines
     $takes = "a text of several lines takes line breaks and tabs, and no other control, format or separator character"
+    if ($Said) {
+        $pattern = $script:HordeDecisionNotTextInWords
+        $takes = "words said under a question are kept exactly as typed, direction characters included; they take no control character but the line break and the tab, no byte-order mark, and no line or paragraph separator"
+    }
     if ($OneLine) {
         $pattern = $script:HordeDecisionNotTextInOneLine
         $takes = "a one-line field takes no control, format or separator character, a tab included"
@@ -468,6 +613,29 @@ function Test-HordeDecisionNote {
     return @($out)
 }
 
+function Test-HordeDecisionSaying {
+    # Findings for words about to be recorded under a question: who is said to have spoken, by what
+    # route, who is making the request, and the words. Empty means they may be written. THE TEXT IS
+    # NEVER REPEATED in a finding, and never changed: what cannot be stored is refused whole.
+    # Secrets are not looked for here: Find-HordeDecisionSecrets runs over the whole request first.
+    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true)
+    $out = New-Object System.Collections.ArrayList
+    $speakerKnown = $script:HordeDecisionSpeakers.Contains($Speaker)
+    $routeEntry = $script:HordeDecisionRoutes[$Route]
+    if (-not $speakerKnown) { [void]$out.Add("'speaker' is '" + $Speaker + "', which is not someone who speaks under a question; the speakers are: " + (@($script:HordeDecisionSpeakers.Keys) -join ", ")) }
+    if ($null -eq $routeEntry) { [void]$out.Add("'route' is '" + $Route + "', which is not a way words arrive; the routes are: " + (@($script:HordeDecisionRoutes.Keys) -join ", ")) }
+    if ($speakerKnown -and $null -ne $routeEntry) {
+        if (@($routeEntry.speakers) -cnotcontains $Speaker) { [void]$out.Add("words " + $routeEntry.shown + " are never " + $script:HordeDecisionSpeakers[$Speaker].shown + "'s: by the route '" + $Route + "' only these speak: " + (@($routeEntry.speakers) -join ", ")) }
+        if (@($routeEntry.actors) -cnotcontains $Actor) { [void]$out.Add("words " + $routeEntry.shown + " are recorded only by: " + (@($routeEntry.actors) -join ", ") + ". The request came from '" + $Actor + "'") }
+        if ([bool]$routeEntry.statesWording -and -not $WordingStated) { [void]$out.Add("words " + $routeEntry.shown + " always say which wording of the question was on screen ('wordingVersion'), and these do not") }
+    }
+    if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
+    if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
+    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said
+    if ($notWords -ne "") { [void]$out.Add("'text' " + $notWords) }
+    return @($out)
+}
+
 function New-HordeDecisionState {
     # The list before any record: nothing asked. questions is keyed by number and kept in number order.
     return [pscustomobject]@{
@@ -480,7 +648,18 @@ function New-HordeDecisionState {
         # Files the store would not believe were records. The rules do nothing with them: they are
         # carried here so that every result worked out from this list can name them.
         strays = (New-Object System.Collections.ArrayList)
+        # Records of a kind this version does not know (see THE COMPATIBILITY CONTRACT), by kind, in
+        # the order each kind was first met: { kind; count; first; last }, first and last being
+        # sequence numbers.
+        notUnderstood = (New-Object System.Collections.Specialized.OrderedDictionary)
         lastSequence = [long]0
+        # How far each reader has read what others said: role label -> the sequence number of the
+        # last record it has read up to. A reader with no entry has read nothing.
+        readMarks = (New-Object 'System.Collections.Generic.Dictionary[string,long]' ([System.StringComparer]::Ordinal))
+        # Every messages-read record that applied, by its own sequence number, as { reader; from; upTo }:
+        # from is how far that reader had read before it. A repost of the request that made it is
+        # answered with the same messages from this.
+        readEvents = (New-Object 'System.Collections.Generic.Dictionary[long,object]')
     }
 }
 
@@ -526,6 +705,8 @@ function Step-HordeDecisionAdded {
     $question["updatedAt"] = "$($Ev.at)"
     $question["closedAt"] = ""
     $question["history"] = (New-Object System.Collections.ArrayList)
+    $question["thread"] = (New-Object System.Collections.ArrayList)
+    $question["turn"] = $script:HordeDecisionFirstTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "added"
     $State.questions[$number] = $question
     $State.lastNumber = $number
@@ -575,6 +756,8 @@ function Step-HordeDecisionClosed {
     $question.state = "closed"
     $question.outcome = "$($Ev.data.outcome)"
     $question.closedAt = "$($Ev.at)"
+    # Closing ends whoever's turn it was: nothing is waited for under a closed question.
+    $question.turn = $script:HordeDecisionNoTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "closed"
     return ""
 }
@@ -591,8 +774,98 @@ function Step-HordeDecisionReopened {
     $question.outcome = ""
     $question.closedAt = ""
     $question.reopenReason = "$($Ev.data.reason)"
+    # A reopened question is asked again, of the same person: whatever was said while it was closed
+    # is in its thread, and did not take a turn.
+    $question.turn = $script:HordeDecisionFirstTurn
     Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "reopened"
     return ""
+}
+
+function Test-HordeDecisionEnvelope {
+    # Findings for a parsed record's ENVELOPE alone: that it matches schema/decision-event.v1 and its
+    # sequence number is one a record can have. Nothing is asked of its kind or its data. Empty means
+    # the envelope can be trusted: its sequence, its id and its kind's NAME are what they say.
+    param($Ev, $Definitions)
+    $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
+    if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
+    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most (Get-HordeDecisionMaxSequence))) { return @("its sequence number is beyond " + (Get-HordeDecisionMaxSequence) + ", the largest a record can have") }
+    return @()
+}
+
+function Step-HordeDecisionSaid {
+    # Someone said something under a question. The words are added to the question's thread, in store
+    # order, and NOTHING ELSE of the question changes: not its number, its wording, its state, its
+    # history or when it was last changed. Under a closed question they are kept all the same, and
+    # reopen nothing. That they arrived after closing, and that they were said to a wording the
+    # question had already left, are both worked out HERE, from where the record stands in the order:
+    # facts about the moment, which no later record undoes or adds. The record itself holds only the
+    # wording its speaker was looking at.
+    param($State, $Ev)
+    $target = Get-HordeDecisionTarget -State $State -Ev $Ev
+    if ($null -eq $target.question) { return $target.why }
+    $question = $target.question
+    # The wording the speaker was looking at, when the record states one. When it does not, nothing is
+    # put in its place: 0 here means "not stated", and is never compared with anything.
+    $stated = Test-HordeDecisionMember -Object $Ev.data -Name "wordingVersion"
+    $seen = 0
+    if ($stated) { $seen = [int]$Ev.data.wordingVersion }
+    if ($stated -and $seen -gt [int]$question.wordingVersion) {
+        return ("it says it was said to wording " + $seen + " of question " + $question.number + ", which has only reached wording " + $question.wordingVersion + ": nobody can have been looking at a wording that was not written yet")
+    }
+    $speaker = "$($Ev.data.speaker)"
+    [void]$question.thread.Add([pscustomobject]@{
+        sequence = [long]$Ev.sequence; at = "$($Ev.at)"; speaker = $speaker; route = "$($Ev.data.route)"; recordedBy = "$($Ev.actor)"
+        # Exactly what the record holds: never trimmed, never re-wrapped.
+        text = [string]$Ev.data.text
+        wordingStated = [bool]$stated
+        wordingVersion = $seen
+        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)
+        arrivedAfterClosing = [bool]($question.state -cne "open")
+    })
+    # The turn passes only under an open question, and only for a speaker this version lists.
+    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
+    return ""
+}
+
+function Step-HordeDecisionRead {
+    # A reader has read what others said, up to a record. It moves that reader's mark forward and
+    # changes nothing else. A mark that moves nothing - the reader had already read that far - does
+    # not apply, so the same marking sent twice is one marking; and a mark that claims a record at or
+    # after its own place is refused, because nothing is read before it is written.
+    param($State, $Ev)
+    $reader = "$($Ev.data.reader)"
+    $upTo = [long]$Ev.data.upTo
+    if ($upTo -ge [long]$Ev.sequence) { return ("it says '" + $reader + "' has read up to record " + $upTo + ", which is not before this record (" + $Ev.sequence + "): nothing is read before it is written") }
+    $had = Get-HordeDecisionReadMark -State $State -Reader $reader
+    if ($upTo -le $had) { return ("it marks nothing as read: '" + $reader + "' had already read up to record " + $had) }
+    $State.readMarks[$reader] = $upTo
+    $State.readEvents[[long]$Ev.sequence] = [pscustomobject]@{ reader = $reader; from = $had; upTo = $upTo }
+    return ""
+}
+
+function Get-HordeDecisionReadMark {
+    # How far -Reader has read what others said: a record's sequence number, or 0 for nothing yet.
+    param($State, [string]$Reader)
+    if ($State.readMarks.ContainsKey($Reader)) { return [long]$State.readMarks[$Reader] }
+    return [long]0
+}
+
+function Get-HordeDecisionMessagesFor {
+    # What others said that -Reader is to read: every message, under any question, by a speaker other
+    # than -Reader, whose record is after -After and at or before -UpTo. In store order, oldest first,
+    # each as { question; message }. With no -After it starts from the reader's own mark,
+    # which is "what it has not read yet"; a repost of a marking names the two ends it recorded.
+    param($State, [Parameter(Mandatory = $true)][string]$Reader, [long]$After = -1, [long]$UpTo = [long]::MaxValue)
+    if ($After -lt 0) { $After = Get-HordeDecisionReadMark -State $State -Reader $Reader }
+    $found = New-Object System.Collections.ArrayList
+    foreach ($question in $State.questions.Values) {
+        foreach ($message in $question.thread) {
+            if ($message.speaker -ceq $Reader) { continue }
+            if ([long]$message.sequence -le $After -or [long]$message.sequence -gt $UpTo) { continue }
+            [void]$found.Add([pscustomobject]@{ question = $question; message = $message })
+        }
+    }
+    return @($found | Sort-Object { [long]$_.message.sequence })
 }
 
 function Test-HordeDecisionEvent {
@@ -600,9 +873,8 @@ function Test-HordeDecisionEvent {
     # its schema. Empty means the record can be applied. One function, used for a stored record and for
     # a record about to be written, so nothing is ever written that the reader would call unreadable.
     param($Ev, $Definitions)
-    $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
-    if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
-    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) { return @("its sequence number is beyond " + $script:HordeDecisionMaxSequence + ", the largest a record can have") }
+    $found = @(Test-HordeDecisionEnvelope -Ev $Ev -Definitions $Definitions)
+    if ($found.Count -gt 0) { return $found }
     $entry = $script:HordeDecisionEventKinds["$($Ev.kind)"]
     if ($null -eq $entry) { return @("its kind '" + $Ev.kind + "' is not one this version of Horde knows; a newer version may have written it") }
     $dataSchema = Get-HordeDecisionMember -Object $Definitions.eventSchema.definitions -Name $entry.data
@@ -611,7 +883,16 @@ function Test-HordeDecisionEvent {
         $found = @(Test-HordeSchema -Value (Get-HordeDecisionMember -Object $Ev.data -Name $entry.words) -Schema $Definitions.questionSchema -Path ('$.data.' + $entry.words))
     }
     if ($found.Count -gt 0) { return @("its data is not what a " + $Ev.kind + " record holds: " + (@($found | Select-Object -First 3) -join "; ")) }
-    if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) { return @("its question number is beyond " + $script:HordeDecisionMaxNumber + ", the largest a question can have") }
+    if ($entry.about -ceq "question" -and -not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) { return @("its question number is beyond " + $script:HordeDecisionMaxNumber + ", the largest a question can have") }
+    # Every other count the kind carries, held to the same two limits and for the same reason: a
+    # number the schema calls an integer and a cast would throw on.
+    foreach ($member in @($entry.counts.Keys)) {
+        $most = $script:HordeDecisionMaxNumber
+        if ($entry.counts[$member] -ceq "sequence") { $most = (Get-HordeDecisionMaxSequence) }
+        # A count the record does not carry is not asked: whether it must is its schema's to say.
+        if (-not (Test-HordeDecisionMember -Object $Ev.data -Name $member)) { continue }
+        if (-not (Test-HordeDecisionCount -Value (Get-HordeDecisionMember -Object $Ev.data -Name $member) -Most $most)) { return @("its '" + $member + "' is beyond " + $most + ", the largest it can be") }
+    }
     return @()
 }
 
@@ -628,9 +909,27 @@ function Add-HordeDecisionRecordToState {
     $why = ""
     if ($Record.kind -cne "ok") { $why = "$($Record.reason)" }
     else {
-        $shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions)
-        if ($shape.Count -gt 0) { $why = $shape[0] }
+        # The envelope first, and the record's place: only a record that passes both is believed about
+        # anything, its kind's name included.
+        $cover = @(Test-HordeDecisionEnvelope -Ev $Record.data -Definitions $Definitions)
+        if ($cover.Count -gt 0) { $why = $cover[0] }
         elseif ([long]$Record.data.sequence -ne [long]$Record.sequence) { $why = "it says it is record " + $Record.data.sequence + ", which is not its place in the store" }
+        elseif ($null -eq $script:HordeDecisionEventKinds["$($Record.data.kind)"]) {
+            # NOT UNDERSTOOD BY THIS VERSION (the compatibility contract in the header): set aside, counted
+            # under its kind, its id remembered - and never a possible question, so nothing is added to
+            # the numbers left unused.
+            $later = "$($Record.data.kind)"
+            if ($State.notUnderstood.Contains($later)) { $seen = $State.notUnderstood[$later]; $seen.count = [int]$seen.count + 1; $seen.last = [long]$Record.sequence }
+            else { $State.notUnderstood[$later] = [pscustomobject]@{ kind = $later; count = 1; first = [long]$Record.sequence; last = [long]$Record.sequence } }
+            if (-not $State.ids.ContainsKey("$($Record.data.id)")) {
+                $State.ids["$($Record.data.id)"] = [pscustomobject]@{ sequence = [long]$Record.sequence; kind = $later; requestHash = "$($Record.data.requestHash)"; number = 0; applied = $false }
+            }
+            return ""
+        }
+        else {
+            $shape = @(Test-HordeDecisionEvent -Ev $Record.data -Definitions $Definitions)
+            if ($shape.Count -gt 0) { $why = $shape[0] }
+        }
     }
     if ($why -ne "") {
         # A long reason is cut, and says so: a damaged record can produce findings of any length.
@@ -644,9 +943,12 @@ function Add-HordeDecisionRecordToState {
     $entry = $script:HordeDecisionEventKinds["$($Ev.kind)"]
     $applied = & $entry.apply $State $Ev
     if ("$applied" -ne "") { [void]$State.ignored.Add([pscustomobject]@{ sequence = [long]$Record.sequence; file = "$($Record.file)"; reason = "$applied" }) }
-    # The first record of an id is the one a repost is answered from.
+    # The first record of an id is the one a repost is answered from. number is the question it was
+    # about, or 0 for a record about the whole list.
     if (-not $State.ids.ContainsKey("$($Ev.id)")) {
-        $State.ids["$($Ev.id)"] = [pscustomobject]@{ sequence = [long]$Record.sequence; kind = "$($Ev.kind)"; requestHash = "$($Ev.requestHash)"; number = [int]$Ev.data.number; applied = ("$applied" -eq "") }
+        $about = 0
+        if ($entry.about -ceq "question") { $about = [int]$Ev.data.number }
+        $State.ids["$($Ev.id)"] = [pscustomobject]@{ sequence = [long]$Record.sequence; kind = "$($Ev.kind)"; requestHash = "$($Ev.requestHash)"; number = $about; applied = ("$applied" -eq "") }
     }
     return "$applied"
 }
@@ -660,10 +962,56 @@ function ConvertTo-HordeDecisionState {
     return $state
 }
 
+function ConvertTo-HordeDecisionMessageView {
+    # One message as plain data, schema/decision-result.v1's message. ONE THING IS DERIVED HERE, at the
+    # moment of showing: unreadBy, from the readers' marks - the roles that have an inbox, other than
+    # the speaker, that have not read up to this record. The two flags were worked out in the fold, at
+    # the record's place in the order, and are only copied. speakerShown and routeShown are this
+    # file's words for the two labels, handed out so that every way of showing says "recorded by the
+    # warchief from chat" in the same words.
+    param($Message, $State)
+    $unreadBy = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($reader in @(Get-HordeDecisionReaders)) {
+        if ($reader -cne $Message.speaker -and [long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }
+    }
+    return [pscustomobject]@{
+        sequence = [long]$Message.sequence; at = "$($Message.at)"
+        speaker = "$($Message.speaker)"; speakerShown = (Get-HordeDecisionSpeakerShown -Speaker "$($Message.speaker)")
+        route = "$($Message.route)"; routeShown = (Get-HordeDecisionRouteShown -Route "$($Message.route)")
+        recordedBy = "$($Message.recordedBy)"
+        text = [string]$Message.text
+        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))
+        wordingStated = [bool]$Message.wordingStated
+        wordingVersion = [int]$Message.wordingVersion
+        saidToEarlierWording = [bool]$Message.saidToEarlierWording
+        arrivedAfterClosing = [bool]$Message.arrivedAfterClosing
+        unreadBy = $unreadBy.ToArray()
+    }
+}
+
+function ConvertTo-HordeDecisionThreadView {
+    # A question's conversation as plain data: how many messages, whose turn it is, and how many each
+    # reader has not read - and, with -Messages, the messages themselves in store order. A list gives
+    # the counts; one question shown gives the whole thread.
+    param($Question, $State, [switch]$Messages)
+    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })
+    $unread = New-Object System.Collections.ArrayList
+    foreach ($reader in @(Get-HordeDecisionReaders)) {
+        [void]$unread.Add([pscustomobject]@{ reader = $reader; readerShown = (Get-HordeDecisionSpeakerShown -Speaker $reader); count = @($views | Where-Object { $_.unreadBy -ccontains $reader }).Count })
+    }
+    $turn = "$($Question.turn)"
+    $turnShown = $turn
+    if ($turn -cne $script:HordeDecisionNoTurn) { $turnShown = Get-HordeDecisionSpeakerShown -Speaker $turn }
+    $thread = [ordered]@{ count = $views.Count; turn = $turn; turnShown = $turnShown; unread = @($unread) }
+    if ($Messages) { $thread["messages"] = $views }
+    return [pscustomobject]$thread
+}
+
 function ConvertTo-HordeDecisionView {
     # One question of the list as plain data, schema/decision-result.v1's view: a copy, so nothing a
-    # caller does to it reaches the list.
-    param($Question)
+    # caller does to it reaches the list. -State is the list the question is in, which is where what
+    # is unread comes from; -Messages puts the whole conversation in, and without it only its counts.
+    param($Question, $State, [switch]$Messages)
     $view = [ordered]@{ number = [int]$Question.number; state = "$($Question.state)"; wordingVersion = [int]$Question.wordingVersion }
     foreach ($name in $script:HordeDecisionFields.Keys) {
         $type = $script:HordeDecisionFields[$name].type
@@ -673,5 +1021,6 @@ function ConvertTo-HordeDecisionView {
     }
     foreach ($name in @("outcome", "reopenReason", "addedAt", "updatedAt", "closedAt")) { $view[$name] = "$($Question[$name])" }
     $view["history"] = @($Question.history | ForEach-Object { [pscustomobject]@{ sequence = $_.sequence; kind = $_.kind; at = $_.at; actor = $_.actor; note = $_.note } })
+    $view["thread"] = ConvertTo-HordeDecisionThreadView -Question $Question -State $State -Messages:$Messages
     return [pscustomobject]$view
 }

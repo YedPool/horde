@@ -120,6 +120,55 @@ function Register-HordeTransport {
     return $t
 }
 
+# ENROLMENT (remote plan R17b). How a node and a hub come to trust each other is the transport's own
+# business - keys, pins, revocation - so each transport that has any registers it from its own
+# transports/<name>/Enroll.ps1, and the commands that enrol (horde node init, horde hub enroll, ...)
+# reach it through Get-HordeEnrollment without naming a transport (CONTRIBUTING rule 14). Each
+# operation takes Horde's home and plain strings and returns { ok; line; reason }: the line is what
+# the founder carries to the other machine. hubEnroll is given Horde's root, never a command: what a
+# device's link may run is built by the transport's own attach-command builder, not by a caller.
+if ($null -eq (Get-Variable -Name HordeEnrollments -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeEnrollments = @{} }
+
+function Get-HordeEnrollmentFiles {
+    # Every transport's Enroll.ps1, for the caller to dot-source at script level, as Get-HordeTransportFiles.
+    param([string]$Root = (Get-HordeTransportRoot))
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Root -Directory | Sort-Object Name | ForEach-Object { Join-Path $_.FullName "Enroll.ps1" } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+}
+
+function Register-HordeEnrollment {
+    # Called by a transport's own Enroll.ps1, once.
+    param(
+        [Parameter(Mandatory = $true)][string]$Folder,
+        [Parameter(Mandatory = $true)][scriptblock]$NodeInit,
+        [Parameter(Mandatory = $true)][scriptblock]$NodeRotate,
+        [Parameter(Mandatory = $true)][scriptblock]$NodePin,
+        [Parameter(Mandatory = $true)][scriptblock]$HubInit,
+        [Parameter(Mandatory = $true)][scriptblock]$HubEnroll,
+        [Parameter(Mandatory = $true)][scriptblock]$HubRevoke
+    )
+    $name = Split-Path -Leaf $Folder
+    if ($script:HordeEnrollments.ContainsKey($name)) { throw ("enrolment for transport '" + $name + "' is already registered; the first registration stands") }
+    $e = [pscustomobject]@{ PSTypeName = "Horde.Enrollment"; name = $name; nodeInit = $NodeInit; nodeRotate = $NodeRotate; nodePin = $NodePin; hubInit = $HubInit; hubEnroll = $HubEnroll; hubRevoke = $HubRevoke }
+    $script:HordeEnrollments[$name] = $e
+    return $e
+}
+
+function Get-HordeEnrollment {
+    # The enrolment of -Name, or, with no name, of the one transport that has any. A tristate answer:
+    # unknown when none is loaded, or several and no name says which.
+    param([string]$Name = "")
+    if ($Name -ne "") {
+        if ($script:HordeEnrollments.ContainsKey($Name)) { return (New-HordeKnown -Value $script:HordeEnrollments[$Name]) }
+        return (New-HordeUnknown -Reason ("no transport named '" + $Name + "' has enrolment"))
+    }
+    $all = @($script:HordeEnrollments.Keys | Sort-Object)
+    if ($all.Count -eq 1) { return (New-HordeKnown -Value $script:HordeEnrollments[$all[0]]) }
+    if ($all.Count -eq 0) { return (New-HordeUnknown -Reason "no transport with enrolment is loaded") }
+    return (New-HordeUnknown -Reason ("several transports have enrolment (" + ($all -join ", ") + "); name one with -Transport"))
+}
+
 function Get-HordeTransportNames {
     return @($script:HordeTransports.Keys | Sort-Object)
 }

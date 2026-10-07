@@ -10,7 +10,10 @@
 #   - a refusal prints its reasons and exits 1; a refused secret is not printed back;
 #   - a flag given to the wrong verb, a missing number and an unreadable file are refused, not ignored;
 #   - a damaged record is named in what a person reads, not only in the data;
-#   - HORDE_HOME decides where the store is, and nothing is ever written to the real one.
+#   - HORDE_HOME decides where the store is, and nothing is ever written to the real one;
+#   - what the founder said, written down with `answer` from a file, comes back out of `inbox` and
+#     `show` character for character - Hebrew with its direction marks, 100,000 characters - and
+#     `inbox` marks as read only what it printed, after printing it.
 # The user story from an empty list to a reopened question is test/e2e/e2e-decisions.ps1.
 #
 # Each call starts powershell.exe, about 5 s on the throttled machine this was written on (2026-10-06),
@@ -179,8 +182,13 @@ $tokens = $null; $errors = $null
 $cmdAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\decisions.ps1"), [ref]$tokens, [ref]$errors)
 $setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AttributeAst] -and $node.TypeName.Name -ceq "ValidateSet" }, $true) | Select-Object -First 1 | ForEach-Object { $_.PositionalArguments } | ForEach-Object { "$($_.Value)" })
 Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
-$operationVerbs = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens })
-Check ((@(Get-HordeDecisionOperations | ForEach-Object { $_.name }) -join ",") -ceq ($operationVerbs -join ",")) "and they are the operations, one verb for each"
+# Every verb is an operation - its own name, or the one its entry names - and every operation has a verb.
+$operationNames = @(Get-HordeDecisionOperations | ForEach-Object { $_.name })
+$verbOperations = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens } | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
+$thenOperations = @($verbNames | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("then")) { "$($entry.then)" } })
+Check (@(@($verbOperations) + @($thenOperations) | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0 -and @($operationNames | Where-Object { $verbOperations -cnotcontains $_ -and $thenOperations -cnotcontains $_ }).Count -eq 0) ("every verb is an operation, and every operation is a verb's own or what a verb asks for once its lines are out (" + (@(@($verbOperations) + @($thenOperations) | Sort-Object -Unique) -join ",") + ")")
+Check (($thenOperations -join ",") -ceq "mark-read" -and "$($script:HordeDecisionCommandVerbs['inbox'].then)" -ceq "mark-read") "inbox reads, and then asks for mark-read: two operations, in that order"
+Check ((@($verbNames | Where-Object { $script:HordeDecisionCommandVerbs[$_].ContainsKey("says") }) -join ",") -ceq "answer,reply" -and $script:HordeDecisionCommandVerbs["answer"].says.speaker -ceq "founder" -and $script:HordeDecisionCommandVerbs["answer"].says.route -ceq "chat-recorded" -and $script:HordeDecisionCommandVerbs["reply"].says.speaker -ceq "warchief" -and $script:HordeDecisionCommandVerbs["reply"].says.route -ceq "command") "answer is the founder's words recorded from chat, and reply is the warchief's own: who speaks is the verb's, never a flag's"
 Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).opens }) -join ",") -ceq "open" -and $verbNames[$verbNames.Count - 1] -ceq "open") "but for open, the one verb that is no operation: it opens a window that calls them"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
@@ -285,6 +293,73 @@ Check ($null -ne $j -and @($j.value.unreadable).Count -eq 1 -and $j.value.unread
 $strayRun = Invoke-Decisions @("list", "-State", "all")
 Check ($strayRun.code -eq 0 -and $strayRun.out -like "*NOTE: 1 file(s) in the store folder are named like a record and are not part of the list:*" -and $strayRun.out -like "*0000002000.json: it is 1994 places past record 5*") "a stray file far ahead in the store is named where a person will see it, with how far"
 Check ($strayRun.out -like "*WARNING: 1 record(s) in the store could not be read.*") "and it is not counted among the records that could not be read: still one"
+# A record of a kind a later version wrote is not damage: it is named apart, once for its kind.
+[System.IO.File]::WriteAllText((Join-Path $store "0000000006.json"), ('{"schemaVersion":1,"sequence":6,"id":"' + ("e" * 32) + '","kind":"spoken-in-a-later-version","at":"2026-10-07T09:00:00Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":{"number":1,"text":"yes"}}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $store "0000000007.json"), ('{"schemaVersion":1,"sequence":7,"id":"' + ("d" * 32) + '","kind":"spoken-in-a-later-version","at":"2026-10-07T09:00:01Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":{"number":1,"text":"and more"}}'), $utf8)
+$laterRun = Invoke-Decisions @("list", "-State", "all")
+Check ($laterRun.code -eq 0 -and $laterRun.out -like "*NOTE: 2 record(s) are of a kind this version of Horde does not understand. A later version wrote them; they are kept, and cost no question number:*" -and $laterRun.out -like "*  spoken-in-a-later-version: 2 record(s), records 6 to 7*") ("records of a later kind are named where a person will see them, once for the kind, with how many and which (exit " + $laterRun.code + ")")
+Check ($laterRun.out -like "*WARNING: 1 record(s) in the store could not be read.*") "and they are not counted among the records that could not be read: still one"
+
+Write-Host ""
+Write-Host "--- the conversation under a question, at a real command line: answer, reply, inbox ---" -ForegroundColor Cyan
+# What only a real process can show: the founder's words go in through a file and an argument, and come
+# out through a console and a pipe, character for character; inbox marks what it printed, after
+# printing it; a refusal exits 1 and prints nothing back. How each line reads, and every refusal of a
+# command line, is test/test-decisions-console-threads.ps1, in one process, where it costs nothing.
+# In a home of its own, so that nothing above or below counts these records.
+$talkHome = Join-Path $script:work "talk-home"
+$talkStore = Join-Path $talkHome "store\decisions"
+$talkEnv = @{ HORDE_HOME = $talkHome }
+function Get-TalkKinds { if (-not (Test-Path -LiteralPath $talkStore)) { return "" }; return (@(Get-ChildItem -LiteralPath $talkStore -File | Sort-Object Name | ForEach-Object { ([System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json).kind -creplace '\Aquestion-', '' -creplace '\Amessages?-', '' }) -join ",") }
+$talkTitle = "Should the closing sound play when the assistant closes?"
+$null = Invoke-Decisions @("add", "-File", (Write-Json "talk-question.json" ('{"title":"' + $talkTitle + '","kind":"yes-no","whatItIs":"The app has no closing sound today.","group":"voice","askedBy":"orc-b"}'))) $talkEnv
+# What the founder said, as a file: a Hebrew sentence as a phone sends it - an embedding, an isolate
+# pair, the marks, a zero-width space and a word joiner - then a second line, with spaces at both ends. Written as escapes
+# (CONTRIBUTING 13); the file holds the letters themselves, as an editor would save them.
+$said = "  " + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x061C + [char]0x200B + [char]0x2060 + [char]0x200E + "(yes)" + [char]0x200D + "`r`n" + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
+$answered = Invoke-Decisions @("answer", "1", "-File", (Write-Json "said.txt" $said), "-Json") $talkEnv
+$j = Get-JsonLine $answered
+Check ($answered.code -eq 0 -and $null -ne $j -and $j.value.outcome -ceq "done" -and $j.value.number -eq 1 -and $answered.out -cnotmatch '[^\x00-\x7F]') ("answer, from a file, exits 0 with one ASCII line of data saying done (exit " + $answered.code + ")")
+Check ($null -ne $j -and [string]::Equals($j.value.message.text, $said, [System.StringComparison]::Ordinal)) "the founder's Hebrew, with its direction marks, its line break and the spaces at both ends, is recorded character for character"
+Check ($null -ne $j -and $j.value.message.speaker -ceq "founder" -and $j.value.message.routeShown -ceq "recorded by the warchief from chat" -and $j.value.message.recordedBy -ceq "warchief") "as the founder's words, recorded by the warchief from chat"
+$replied = Invoke-Decisions @("reply", "1", "-Text", "It plays from the next build.") $talkEnv
+Check ($replied.code -eq 0 -and $replied.out -like ("*Replied under question 1 (record 3): " + $talkTitle + "*")) "reply, with one line of text as an argument, says under which question and in which record"
+$long = ("word " * 19999) + "end!!"
+$answeredLong = Invoke-Decisions @("answer", "1", "-File", (Write-Json "long.txt" $long)) $talkEnv
+Check ($answeredLong.code -eq 0 -and $answeredLong.out -like ("*Kept the founder's words, recorded by the warchief from chat, under question 1 (record 4): " + $talkTitle + "*") -and $answeredLong.out.Length -lt 2000) "a 100,000-character answer is recorded, and the line that says so does not print it back"
+# -Peek: prints, marks nothing, writes nothing.
+$peeked = Invoke-Decisions @("inbox", "-Peek") $talkEnv
+Check ($peeked.code -eq 0 -and @($peeked.lines | Where-Object { $_ -ceq "2 message(s) not yet read, oldest first:" }).Count -eq 1 -and @($peeked.lines | Where-Object { $_ -ceq ("Question 1: " + $talkTitle) }).Count -eq 2 -and @($peeked.lines | Where-Object { $_ -ceq "Nothing was marked as read (-Peek)." }).Count -eq 1) "inbox -Peek prints the founder's two unread messages, each under its question's number and plain-words title, and says nothing was marked"
+Check ((Get-TalkKinds) -ceq "added,said,said,said") ("and -Peek wrote nothing (" + (Get-TalkKinds) + ")")
+# With -Json: the same messages, as data, exactly - and NOTHING is marked: the caller does that.
+$inbox = Invoke-Decisions @("inbox", "-Json") $talkEnv
+$j = Get-JsonLine $inbox
+Check ($inbox.code -eq 0 -and $null -ne $j -and @($inbox.lines | Where-Object { $_.Trim() -ne "" }).Count -eq 1 -and $inbox.out -cnotmatch '[^\x00-\x7F]') "inbox -Json is exactly one line, all ASCII"
+Check ($null -ne $j -and $null -ne $j.PSObject.Properties["marked"] -and $j.marked -eq $false -and $j.upTo -eq 4 -and (Get-TalkKinds) -ceq "added,said,said,said") ("and that one line says nothing was marked and names the last record it showed, record 4 - and nothing WAS marked (" + (Get-TalkKinds) + ")")
+Check ($null -ne $j -and @($j.value.messages).Count -eq 2 -and $j.value.messages[0].number -eq 1 -and $j.value.messages[0].title -ceq $talkTitle -and [string]::Equals($j.value.messages[0].message.text, $said, [System.StringComparison]::Ordinal)) "the Hebrew comes back out of the inbox character for character, under its question's number and title"
+Check ($null -ne $j -and $j.value.messages[1].message.text.Length -eq 100000 -and [string]::Equals($j.value.messages[1].message.text, $long, [System.StringComparison]::Ordinal) -and $j.value.upTo -eq 4) "and so do all 100,000 characters of the long one: nothing cut on the way in or out"
+# The caller, having the line, marks explicitly.
+$marked = Invoke-Decisions @("mark-read", "-UpTo", "4") $talkEnv
+$markRecord = $null
+try { $markRecord = ([System.IO.File]::ReadAllText((Join-Path $talkStore "0000000005.json"), $utf8) | ConvertFrom-Json) } catch { }
+Check ($marked.code -eq 0 -and $marked.out -like "*Marked as read: 2 message(s), up to record 4.*" -and (Get-TalkKinds) -ceq "added,said,said,said,read" -and $null -ne $markRecord -and $markRecord.data.reader -ceq "warchief" -and $markRecord.data.upTo -eq 4) ("mark-read -UpTo 4 then records that the warchief has read up to record 4 (" + (Get-TalkKinds) + ")")
+$noRecord = Invoke-Decisions @("mark-read") $talkEnv
+Check ($noRecord.code -eq 1 -and $noRecord.out -like "*decisions mark-read needs -UpTo <record>*" -and (Get-TalkKinds) -ceq "added,said,said,said,read") "mark-read with no record named exits 1 and marks nothing"
+$inboxAgain = Invoke-Decisions @("inbox") $talkEnv
+Check ($inboxAgain.code -eq 0 -and $inboxAgain.out -like "*Nothing unread*" -and (Get-TalkKinds) -ceq "added,said,said,said,read") "the second inbox is empty, and writes nothing"
+$shownData = Get-JsonLine (Invoke-Decisions @("show", "1", "-Json") $talkEnv)
+Check ($null -ne $shownData -and [string]::Equals($shownData.value.question.thread.messages[0].text, $said, [System.StringComparison]::Ordinal) -and [System.Convert]::ToBase64String($utf8.GetBytes($shownData.value.question.thread.messages[0].text)) -ceq [System.Convert]::ToBase64String($utf8.GetBytes($said)) -and $shownData.value.question.thread.messages[0].holdsDirectionOrInvisibleCharacters -eq $true) "show -Json hands the same sentence back byte for byte - embedding, isolate pair and all - and says it holds direction or invisible characters"
+# The words a person reads, through a pipe, as bytes: the Hebrew is its own UTF-8, from code page 437.
+$shown = Get-OutputBytes -CommandLine ('set "HORDE_HOME=' + $talkHome + '" & ' + $hordeLine + 'show 1') -CodePage 437
+$shownText = ""
+try { $shownText = $strictUtf8.GetString($shown.bytes) } catch { $shownText = "NOT UTF-8" }
+$firstLine = @($said -split "\r?\n")[0]
+Check ($shown.code -eq 0 -and (Test-HoldsBytes $shown.bytes $utf8.GetBytes($firstLine)) -and -not (Test-HoldsBytes $shown.bytes ([byte[]]@(0x3F, 0x3F, 0x3F)))) "show, in plain text through a pipe from code page 437, carries the founder's Hebrew as its own UTF-8 bytes, marks included"
+Check ($shownText -like "*Conversation: 3 message(s); turn: the warchief*" -and $shownText -like "*the founder, recorded by the warchief from chat, 20*" -and $shownText -like "*the warchief, by command, 20*(record 3, wording not stated)*" -and $shownText -like "*    It plays from the next build.*") "and the thread under the question: who said each thing, by what route, in which record, and the words"
+# A secret in the words: refused, exit 1, not printed back, nothing written.
+$talkToken = "gh" + "p_" + ("Zx9" * 12)
+$secretSaid = Invoke-Decisions @("answer", "1", "-File", (Write-Json "talk-secret.txt" ("the token is " + $talkToken + " - use it"))) $talkEnv
+Check ($secretSaid.code -eq 1 -and $secretSaid.out -like "*Refused:*'text' holds what looks like an access token*" -and -not $secretSaid.out.Contains($talkToken) -and -not $secretSaid.out.Contains("Zx9Zx9") -and (Get-TalkKinds) -ceq "added,said,said,said,read") "words holding a token are refused, exit 1; the token is on neither stream, and nothing is written"
 
 Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan

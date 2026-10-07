@@ -64,6 +64,7 @@ function Invoke-Op {
     return $answer
 }
 function Add-Q { param([string]$Store, [hashtable]$Over = @{}, [string]$Id = "") if ($Id -eq "") { $Id = New-Id }; return (Invoke-Op $Store "add" @{ id = $Id; actor = "warchief"; question = (New-Question $Over) }) }
+function Get-NotUnderstood { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; if ($null -eq $Answer.value.PSObject.Properties["notUnderstood"]) { return "(the result names no such thing)" }; return (@($Answer.value.notUnderstood | ForEach-Object { "" + $_.kind + " x" + $_.count + " " + $_.first + "-" + $_.last }) -join "; ") }
 function Get-Outcome { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; return "$($Answer.value.outcome)" }
 function Test-Refused { param($Answer, [string]$Text) return ($Answer.state -ceq "known" -and $Answer.value.outcome -ceq "refused" -and @($Answer.value.findings | Where-Object { "$_".Contains($Text) }).Count -gt 0) }
 function Get-Files { param([string]$Store) if (-not (Test-Path -LiteralPath $Store)) { return "" }; return (@(Get-ChildItem -LiteralPath $Store -File | Sort-Object Name | ForEach-Object { $_.Name }) -join ",") }
@@ -72,10 +73,31 @@ function Get-Listed { param([string]$Store, [string]$State = "all") $a = Invoke-
 try {
 
 Write-Host ""
+Write-Host "--- the rules and the store read ONE definition of how large a record's number can be ---" -ForegroundColor Cyan
+# decisions/Format.ps1 holds the width a sequence number is written in, as a constant, and the largest
+# number that width holds is worked out from it. The store names files by it and the rules refuse a
+# record beyond it. Before, each wrote its own number down, and this check held the two together.
+function Get-NumbersWritten {
+    # Every whole number at or above a hundred million written as a constant in a file of the module:
+    # the largest sequence number is ten digits, and must be written in none of them.
+    param([string]$Relative)
+    $tokens = $null; $errors = $null
+    $tree = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root $Relative), [ref]$tokens, [ref]$errors)
+    return @($tree.FindAll({ param($node) $node -is [System.Management.Automation.Language.ConstantExpressionAst] -and ($node.Value -is [int] -or $node.Value -is [long] -or $node.Value -is [double] -or $node.Value -is [decimal]) -and [double]$node.Value -ge 100000000 }, $true) | ForEach-Object { "$($_.Extent.Text)" })
+}
+Check ((Get-HordeDecisionSequenceDigits) -eq 10 -and (Get-HordeDecisionMaxSequence) -eq 9999999999 -and (Get-HordeDecisionMaxSequence) -is [long]) ("a sequence number is written in ten digits, and the largest is the largest ten digits hold (" + (Get-HordeDecisionMaxSequence) + ")")
+Check ((@(Get-NumbersWritten "decisions\Rules.ps1") -join ",") -ceq "999999999" -and @(Get-NumbersWritten "decisions\Store.ps1").Count -eq 0 -and @(Get-NumbersWritten "decisions\Format.ps1").Count -eq 0) ("the largest sequence number is written in none of the three files: the rules write only the largest QUESTION number, the store and the format none (rules: " + (@(Get-NumbersWritten "decisions\Rules.ps1") -join ",") + ")")
+Check ((Get-HordeDecisionRecordName -Sequence (Get-HordeDecisionMaxSequence)) -ceq "9999999999.json" -and (Throws { Get-HordeDecisionRecordName -Sequence ((Get-HordeDecisionMaxSequence) + 1) } "1 to 9999999999")) "the store names the largest record and refuses the one after it"
+$tooFar = '{"schemaVersion":1,"sequence":10000000000,"id":"' + ("a" * 32) + '","kind":"question-closed","at":"2026-10-06T12:00:00Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":1,"outcome":"x"}}'
+$atEnd = $tooFar.Replace('"sequence":10000000000', '"sequence":9999999999')
+Check ("$(@(Test-HordeDecisionEvent -Ev ($tooFar | ConvertFrom-Json) -Definitions $defs)[0])" -like "*sequence number is beyond 9999999999*" -and @(Test-HordeDecisionEvent -Ev ($atEnd | ConvertFrom-Json) -Definitions $defs).Count -eq 0) "and the rules refuse a record claiming the number after the largest, and accept the largest: the same limit, read from the same place"
+Check (Throws { Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits" } "is not a setting") "the width is not a setting: nothing can ask the settings for it"
+
+Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
-Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,list,show,kinds") "the operations of this slice are add, update, close, reopen, list, show and kinds"
-Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen") "and four of them write"
+Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read,list,show,kinds,inbox") "the operations are add, update, close and reopen, say and mark-read, and list, show, kinds and inbox"
+Check ((@($ops | Where-Object { $_.writes } | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,say,mark-read") "and six of them write (the conversation's two are test/test-decisions-threads.ps1's)"
 $reqDefs = @($defs.requestSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
 Check (@($ops | Where-Object { $reqDefs -cnotcontains $_.name }).Count -eq 0) "each has its request definition in schema/decision-request.v1"
 
@@ -324,9 +346,47 @@ Check ($v2 -cne $good -and $v2.Contains('"schemaVersion":2')) "CONTROL: the plan
 [System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), $v2, $utf8)
 [System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), '{"schemaVersion":1,"sequence":3,"id":"' + ("c" * 32) + '","kind":"answer-recorded","at":"2026-10-06T12:00:00Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":1,"words":"yes"}}', $utf8)
 $a = Invoke-Op $s "list" @{ state = "all" }
-Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 2) "the list loads with question 1, and both records are reported"
+Check ((Get-Outcome $a) -ceq "done" -and (@($a.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1" -and @($a.value.unreadable).Count -eq 1) "the list loads with question 1, and the record of another schema is reported as unreadable"
 Check ($a.value.unreadable[0].sequence -eq 2 -and $a.value.unreadable[0].reason -like "*not a decision-event.v1 record*schemaVersion*") "the version 2 record is not read as version 1, and the reason names the field"
-Check ($a.value.unreadable[1].sequence -eq 3 -and $a.value.unreadable[1].reason -like "*'answer-recorded' is not one this version of Horde knows*") "the unknown kind is named, not guessed at"
+Check ((Get-NotUnderstood $a) -ceq "answer-recorded x1 3-3") ("the record of an unknown kind is not damage: it is named apart, as not understood by this version (" + (Get-NotUnderstood $a) + ")")
+
+Write-Host ""
+Write-Host "--- records of a later kind between questions: no number moves, and every operation works ---" -ForegroundColor Cyan
+# The compatibility contract of decisions/Rules.ps1, through the operations: a store that a later
+# version has also written to. Measured 2026-10-07, before it: with these four records the next
+# question was numbered 7, not 3.
+function New-LaterRecord { param([long]$Sequence, [string]$Kind, [string]$Data, [string]$Id = "") if ($Id -eq "") { $Id = $Sequence.ToString("x32") }; return ('{"schemaVersion":1,"sequence":' + $Sequence + ',"id":"' + $Id + '","kind":"' + $Kind + '","at":"2026-10-07T09:00:00Z","actor":"founder","requestHash":"' + ("1" * 64) + '","data":' + $Data + '}') }
+$s = New-TestStore
+$null = Add-Q $s                                                                                    # record 1, question 1
+$laterId = "f" * 32
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), (New-LaterRecord 2 "spoken-in-a-later-version" '{"number":1,"speaker":"founder","text":"yes"}' $laterId), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), (New-LaterRecord 3 "seen-in-a-later-version" '{"reader":"warchief","upTo":2}'), $utf8)
+$a = Add-Q $s @{ title = "Is the second question still the second after later records?" }           # record 4
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 2 -and $a.value.sequence -eq 4) ("after two records of later kinds the next question is 2, in record 4: no number was left unused (" + (Get-Outcome $a) + ", number " + $(if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["number"]) { $a.value.number } else { "none" }) + ")")
+[System.IO.File]::WriteAllText((Join-Path $s "0000000005.json"), (New-LaterRecord 5 "spoken-in-a-later-version" '{"number":2,"speaker":"warchief","text":"noted"}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000006.json"), (New-LaterRecord 6 "spoken-in-a-later-version" '{"number":2,"speaker":"founder","text":"good"}'), $utf8)
+$a = Add-Q $s @{ title = "Is the third question the third, whatever a later version wrote?" }      # record 7
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and $a.value.sequence -eq 7) ("and the one after is 3, in record 7 (" + (Get-Outcome $a) + ")")
+Check ((Get-NotUnderstood $a) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3" -and @($a.value.unreadable).Count -eq 0 -and @($a.value.ignored).Count -eq 0) ("the write's own result names them once per kind, with how many and from which record to which, and calls none of them unreadable (" + (Get-NotUnderstood $a) + ")")
+$listed = Invoke-Op $s "list" @{ state = "all" }
+Check ((Get-Outcome $listed) -ceq "done" -and (@($listed.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3" -and (Get-NotUnderstood $listed) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3") "list shows questions 1, 2 and 3 and the same one finding per kind"
+$shown = Invoke-Op $s "show" @{ number = 2 }
+Check ((Get-Outcome $shown) -ceq "done" -and $shown.value.question.title -ceq "Is the second question still the second after later records?" -and @($shown.value.question.history).Count -eq 1) "show 2 is the second question, with a history of one record: the later records about it changed nothing this version shows"
+$closed = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." }
+Check ((Get-Outcome $closed) -ceq "done" -and (Get-Listed $s) -ceq "1:closed,2:open,3:open") "and close, like every write, goes on working around them"
+$closedAgain = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done again." }
+Check ((Get-Outcome $closedAgain) -ceq "refused" -and (Get-NotUnderstood $closedAgain) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3") ("a refusal names them too: no result leaves them out (" + (Get-NotUnderstood $closedAgain) + ")")
+Check (@($listed.value.notUnderstood | Where-Object { "$($_.reason)" -notlike "*later version*" -or "$($_.reason)" -notlike "*no question number*" }).Count -eq 0) "each finding says in words what it is: written by a later version, kept, and costing no question number"
+# A REPOST OF AN ID A LATER-KIND RECORD CARRIES DOES NOT WRITE AGAIN: the envelope is readable, so the id is seen.
+$before = Get-Files $s
+$again = Add-Q $s @{ title = "Is an id a later version used ever written under twice?" } $laterId
+Check ((Get-Outcome $again) -ceq "refused" -and (Test-Refused $again ("the id " + $laterId + " was already used")) -and (Test-Refused $again "record 2, spoken-in-a-later-version") -and (Get-Files $s) -ceq $before) ("a request under the id of a record this version did not understand is refused, naming that record and its kind, and writes nothing (" + (Get-Outcome $again) + ")")
+# CONTROL: damage keeps the conservative rule - a torn record between questions still costs a number.
+$s = New-TestStore
+$null = Add-Q $s
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), '{"schemaVersion":1,"sequence":2,"id":"', $utf8)
+$a = Add-Q $s @{ title = "Is a number still left unused after a torn record?" }
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and (Get-NotUnderstood $a) -ceq "" -and @($a.value.unreadable).Count -eq 1) ("CONTROL: a torn record is unreadable, not 'not understood', and the next question is 3: it may have been question 2 (" + (Get-Outcome $a) + ")")
 
 Write-Host ""
 Write-Host "--- a stray file far ahead in the store: named, not believed, and no number moves ---" -ForegroundColor Cyan
@@ -426,6 +486,70 @@ try {
 Check ((Add-HordeDecisionRecord -Root $s -Sequence 1 -Text "{}") -ceq "exists") "CONTROL: the real create is back in place for the rest of the suite"
 
 Write-Host ""
+Write-Host "--- a record that could not be confirmed on disk is never reported as saved ---" -ForegroundColor Cyan
+# The store says "unconfirmed" when a record HAS its name but the flush after its move failed
+# (decisions/Store.ps1). The caller must not be told "done" - nothing says the record would survive a
+# power cut - and must not be told "nothing was written" either, because the record is there. Here
+# the durable move is replaced by one that makes the real move and then answers as a failed flush does.
+$s = New-TestStore
+$null = Add-Q $s
+$realMove = ${function:Move-HordeFileNewDurable}
+$script:unconfirmedOnce = 1
+function Move-HordeFileNewDurable {
+    param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null)
+    $answer = & $realMove -From $From -To $To -Open $Open
+    if ($script:unconfirmedOnce -gt 0 -and $answer -ceq "moved") { $script:unconfirmedOnce--; return "unconfirmed" }
+    return $answer
+}
+try {
+    $unsureId = New-Id
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ($a.state -ceq "unknown") ("an add whose record could not be confirmed on disk is unknown: not done, and not replayed as if it had been recorded before (" + (Get-Outcome $a) + ")")
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 has its place in the store*could not be confirmed*NOT reported as saved*same id*") ("and the reason says the record is there, that it is not reported as saved, and what to do (" + $a.reason + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "the record does have its place: the answer did not claim that nothing was written"
+    Check ($script:unconfirmedOnce -eq 0) "CONTROL: the move was made, and answered unconfirmed exactly once"
+    # THE RESEND CONFIRMS BEFORE IT ANSWERS. "replayed" says "this was recorded": after an unconfirmed
+    # save that is the very claim that could not be made, so the resend first has the record flushed
+    # to disk - through core's one flush path, the same the move uses - and only then answers. Here
+    # that path is replaced by one that writes down what it was handed and answers as the test says.
+    $realFlush = ${function:Confirm-HordeFileFlushed}
+    $script:flushes = New-Object System.Collections.ArrayList
+    $script:flushAnswer = "unconfirmed"
+    function Confirm-HordeFileFlushed {
+        param($Open)
+        $name = ""; $canWrite = $false; $length = [long]-1
+        if ($Open -is [System.IO.FileStream]) { $name = [System.IO.Path]::GetFileName($Open.Name); $canWrite = $Open.CanWrite; $length = $Open.Length }
+        [void]$script:flushes.Add([pscustomobject]@{ name = $name; canWrite = $canWrite; length = $length })
+        if ($script:flushAnswer -ceq "real") { return (& $realFlush -Open $Open) }
+        return $script:flushAnswer
+    }
+    $bytesBefore = [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $s "0000000002.json")))
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 holds this request*could not be confirmed*NOT reported as saved*") ("a resend whose flush of the record fails is unknown AGAIN: it is not answered 'replayed' on the strength of a flush that did not happen (" + (Get-Outcome $a) + ")")
+    Check ($script:flushes.Count -eq 1 -and $script:flushes[0].name -ceq "0000000002.json" -and $script:flushes[0].canWrite -and $script:flushes[0].length -gt 0) ("the resend opened the EXISTING record and handed it to the flush path, once (" + $script:flushes.Count + " flush(es)" + $(if ($script:flushes.Count -ge 1) { " of " + $script:flushes[0].name } else { "" }) + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "and wrote nothing"
+    $script:flushes.Clear(); $script:flushAnswer = "real"
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ((Get-Outcome $a) -ceq "replayed" -and $a.value.number -eq 2 -and (Get-Files $s) -ceq "0000000001.json,0000000002.json") ("once the flush succeeds, the same request with the same id is answered from that record and writes nothing (" + (Get-Outcome $a) + ")")
+    Check ($script:flushes.Count -eq 1 -and $script:flushes[0].name -ceq "0000000002.json") "and that answer too came after the record was flushed: every 'replayed' is confirmed first, since nothing records which saves were not"
+    Check ([System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $s "0000000002.json"))) -ceq $bytesBefore) "confirming changed no byte of the record: it is opened to be flushed, and nothing is written to it"
+    # A request that is NOT a repost flushes nothing but its own new record, through the move.
+    $script:flushes.Clear()
+    $a = Add-Q $s
+    Check ((Get-Outcome $a) -ceq "done" -and @($script:flushes | Where-Object { $_.name -cmatch '\A[0-9]{10}\.json\z' -and $_.name -cne "0000000003.json" }).Count -eq 0) "CONTROL: a new request flushes no earlier record"
+    # The id of a DIFFERENT request is refused without any flush: nothing is being claimed saved.
+    $script:flushes.Clear()
+    $a = Add-Q $s @{ title = "Is another question under a used id ever confirmed as saved?" } $unsureId
+    Check ((Get-Outcome $a) -ceq "refused" -and $script:flushes.Count -eq 0) "CONTROL: the same id with another request is refused, and nothing is flushed for it"
+} finally {
+    Remove-Item -LiteralPath function:Move-HordeFileNewDurable
+    if (Test-Path -LiteralPath function:Confirm-HordeFileFlushed) { Remove-Item -LiteralPath function:Confirm-HordeFileFlushed }
+    . (Join-Path $root "core\FileAtomic.ps1")
+}
+$a = Add-Q $s
+Check ((Get-Outcome $a) -ceq "done") "CONTROL: the real move and the real flush are back in place for the rest of the suite"
+
+Write-Host ""
 Write-Host "--- a write does not wait for ever on a record another process holds open ---" -ForegroundColor Cyan
 # Measured 2026-10-06, before the wait had a limit of its own: with record 1 held open, an add was
 # still waiting after 40 s, and the code allowed it 400. Here this process holds the record without
@@ -460,6 +584,36 @@ New-Item -ItemType Directory -Path (Join-Path $s "0000000002.json") | Out-Null
 $a = Add-Q $s
 Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 could not be written, so nothing changed*") ("when the record itself cannot be created the answer is unknown, with the record's number - a failure to write is not a refusal (" + (Get-Outcome $a) + ")")
 Check ((Get-Files $s) -ceq "0000000001.json" -and (Get-Listed $s) -ceq "1:open") "and the list is as it was: one record, question 1"
+
+Write-Host ""
+Write-Host "--- a settings override that fails its checks: every operation that needs its settings says why, and nothing is guessed ---" -ForegroundColor Cyan
+# The rule: an override file that fails its checks refuses with a reason and never silently falls back
+# to the defaults. So with a wrong <home>\settings\decisions.json no operation runs on defaults it was
+# told not to use: it answers unknown, naming the file and every problem in it.
+$keepSettingsHome = $env:HORDE_HOME
+try {
+    $settingsHome = Join-Path $script:work "settings-home"
+    $env:HORDE_HOME = $settingsHome
+    $s = Join-Path $settingsHome "store\decisions"
+    $null = Add-Q $s
+    New-Item -ItemType Directory -Path (Join-Path $settingsHome "settings") | Out-Null
+    $overrideFile = Join-Path $settingsHome "settings\decisions.json"
+    [System.IO.File]::WriteAllText($overrideFile, '{"schemaVersion":1,"values":{"decisions.write.raceTries":0,"decisions.store.maxGap":"many"}}', $utf8)
+    $a = Add-Q $s
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*settings\decisions.json*'decisions.write.raceTries' is 0, outside the range 1 to 100000*'decisions.store.maxGap' is not a whole number*") ("an add with a wrong settings override is unknown, and names the file and BOTH problems (" + $a.state + ": " + $a.reason + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json") "and nothing was written: it did not go ahead on the defaults"
+    $l = Invoke-Op $s "list" @{}
+    Check ($l.state -ceq "unknown" -and $l.reason -like "*settings\decisions.json*'decisions.write.raceTries' is 0*") ("a list is unknown too, with the same reason: a reading needs the store's settings (" + $l.state + ")")
+    Check ((Get-Outcome (Invoke-Op $s "kinds" @{})) -ceq "done") "CONTROL: kinds, which reads no store and needs no setting, still answers"
+    # A RIGHT override is used: with the largest gap believed set to 0, a record one place past the end is a stray.
+    [System.IO.File]::WriteAllText($overrideFile, '{"schemaVersion":1,"values":{"decisions.store.maxGap":0}}', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), '{"stray":true}', $utf8)
+    $l = Invoke-Op $s "list" @{}
+    Check ((Get-Outcome $l) -ceq "done" -and (@($l.value.strays | ForEach-Object { $_.file }) -join ",") -ceq "0000000003.json" -and @($l.value.unreadable).Count -eq 0) ("a right override is used, not only checked: with maxGap 0 the file one place past the end is a stray (" + (Get-Outcome $l) + ")")
+    Remove-Item -LiteralPath $overrideFile
+    $l = Invoke-Op $s "list" @{}
+    Check ((Get-Outcome $l) -ceq "done" -and @($l.value.strays).Count -eq 0 -and @($l.value.unreadable).Count -eq 2) "CONTROL: with no override file the default of 100 is back: the same file is read as a record after a gap"
+} finally { $env:HORDE_HOME = $keepSettingsHome }
 
 Write-Host ""
 Write-Host "--- without -Root the store is Horde's own, under HORDE_HOME, and nowhere else ---" -ForegroundColor Cyan

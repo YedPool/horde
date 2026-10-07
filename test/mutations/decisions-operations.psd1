@@ -21,12 +21,11 @@
            Find = 'if ($want -cmatch ''\A[a-z][a-z-]{0,31}\z'') { $named ='
            Replace = 'if ($true) { $named =' }
         # --- a write's wait on a held record has an end ---
-        @{ Name = "held-record-waited-for-ten-times-as-long"
-           Find = '$script:HordeDecisionWriteBusyReads = 5'
-           Replace = '$script:HordeDecisionWriteBusyReads = 50' }
-        @{ Name = "held-record-not-waited-for-by-a-write"
-           Find = '$script:HordeDecisionWriteBusyReads = 5'
-           Replace = '$script:HordeDecisionWriteBusyReads = 1' }
+        # How long is the setting decisions.write.heldReads: its default's mutants are in
+        # test\mutations\decisions-settings-write.psd1. Here, that the setting is what is counted to.
+        @{ Name = "held-record-given-up-on-at-the-first-read"
+           Find = 'if ($busyReads -ge $heldReads) {'
+           Replace = 'if ($busyReads -ge 1) {' }
         @{ Name = "held-record-written-past"
            Find = 'if ($null -ne $read.busy) {'
            Replace = 'if ($false) {' }
@@ -49,7 +48,7 @@
            Find = 'if ($bad.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "role-not-checked-by-name"
-           Find = 'if ($actors -cnotcontains $actor) {'
+           Find = 'if (@($allowed.roles) -cnotcontains $actor) {'
            Replace = 'if ($false) {' }
         @{ Name = "unknown-operation-runs"
            Find = 'if ($Operation -cmatch ''\A[a-z][a-z-]{0,31}\z'') { $entry = $script:HordeDecisionOperations[$Operation] }'
@@ -105,18 +104,30 @@
         @{ Name = "lost-sequence-number-reported-as-written"
            Find = 'if ($made -cne "created") { continue }'
            Replace = '' }
+        @{ Name = "unconfirmed-record-reported-as-saved"
+           Find = 'if ($made -ceq "unconfirmed") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "repost-answered-without-confirming-the-record"
+           Find = 'if ($sure -cne "confirmed") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "repost-confirmed-without-asking-the-store"
+           Find = 'try { $sure = Confirm-HordeDecisionRecord -Root $Root -Sequence ([long]$prior.sequence) } catch { $sure = "unconfirmed" }'
+           Replace = '$sure = "confirmed"' }
+        @{ Name = "operation-goes-ahead-on-refused-settings"
+           Find = '    if ($unfit -ne "") { return (New-HordeUnknown -Reason $unfit) }'
+           Replace = '' }
         @{ Name = "sequence-not-from-the-list-read"
            Find = '$sequence = [long]$list.lastSequence + 1'
            Replace = '$sequence = [long]$list.lastSequence + 2' }
         @{ Name = "one-try-only"
-           Find = '$script:HordeDecisionWriteTries = 200'
-           Replace = '$script:HordeDecisionWriteTries = 1' }
+           Find = 'for ($attempt = 1; $attempt -le $raceTries; $attempt++) {'
+           Replace = 'for ($attempt = 1; $attempt -le 1; $attempt++) {' }
         # --- what a result holds ---
         @{ Name = "unreadable-records-left-out-of-results"
            Find = '$value["unreadable"] = $unreadable'
            Replace = '$value["unreadable"] = @()' }
         @{ Name = "refusal-blames-the-unwritten-record"
-           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays) }'
+           Find = '$before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }'
            Replace = '$before = $list' }
         @{ Name = "write-failure-reads-as-refused"
            Find = 'catch { return (New-HordeUnknown -Reason ("record " + $sequence + " could not be written, so nothing changed") -ErrorRecord $_) }'
@@ -146,5 +157,12 @@
         @{ Name = "home-error-thrown-at-the-caller"
            Find = 'catch { return (New-HordeUnknown -Reason "the decisions store could not be found" -ErrorRecord $_) }'
            Replace = 'catch { throw }' }
+        # --- records of a later kind are in every result, once for each kind ---
+        @{ Name = "later-kinds-left-out-of-results"
+           Find = '$value["notUnderstood"] = $later'
+           Replace = '$value["notUnderstood"] = @()' }
+        @{ Name = "later-kinds-left-out-of-a-refusal"
+           Find = 'strays = @($list.strays); notUnderstood = $list.notUnderstood }'
+           Replace = 'strays = @($list.strays); notUnderstood = (New-Object System.Collections.Specialized.OrderedDictionary) }' }
     )
 }

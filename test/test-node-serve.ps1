@@ -115,9 +115,9 @@ Write-Host ""
 Write-Host "--- only the read verbs of R12a are answered ---" -ForegroundColor Cyan
 $deliverArgs = [pscustomobject][ordered]@{ messageId = (New-HordeLinkFrameId); sessionId = "aaaaaaaa-0000-4000-8000-000000000001"; from = [pscustomobject][ordered]@{ deviceId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; sessionId = "aaaaaaaa-0000-4000-8000-000000000002" }; body = "hello"; ttlSeconds = 60 }
 $deliverReq = Req "session.deliver" $deliverArgs
-Check ((ConvertTo-HordeFrameBytes -Frame $deliverReq).ok -eq $true) "CONTROL: the session.deliver request is well formed, so only the verb gate can refuse it"
+Check ((ConvertTo-HordeFrameBytes -Frame $deliverReq).ok -eq $true) "CONTROL: the session.deliver request is well formed"
 $r = Ask "session.deliver" $deliverArgs
-Check ("$($r.reply.kind)" -ceq "res" -and "$($r.reply.error.code)" -ceq "unsupported-verb" -and (Sendable $r.reply)) "session.deliver, a drive verb, is refused as unsupported: nothing is typed into any session"
+Check ($null -eq $r.reply -and $r.needView -eq $true -and $null -eq $r.needDeliver) "session.deliver (R21 slice 4) asks for the projection before anything else, and delivers nothing yet; its rules are test/test-node-serve-messaging.ps1's"
 $closeArgs = [pscustomobject][ordered]@{ sessionId = "s-1"; expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = $device; space = "windows" }; pid = 4242; procStart = "133420000000000000" }; reason = "done" }
 $r = Ask "session.close" $closeArgs
 Check ("$($r.reply.error.code)" -ceq "unsupported-verb" -and "$($r.reply.error.reason)" -clike "*node.info, sessions.list, session.get, request.status*" -and (Sendable $r.reply)) "a well-formed session.close is refused as unsupported, naming what this node answers"
