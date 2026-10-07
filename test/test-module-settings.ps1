@@ -42,19 +42,24 @@ function Refused {
     param([object[]]$Rows, [string[]]$Like, [string]$Module = "probe")
     $message = ""
     try { $null = New-HordeModuleSettings -Module $Module -Settings $Rows; return $false } catch { $message = "" + $_.Exception.Message }
-    foreach ($part in $Like) { if ($message -notlike ("*" + $part + "*")) { Write-Host ("    got: " + $message) -ForegroundColor DarkYellow; return $false } }
+    foreach ($part in $Like) { if ($message -cnotlike ("*" + $part + "*")) { Write-Host ("    got: " + $message) -ForegroundColor DarkYellow; return $false } }
     return $true
 }
 
 function Declared {
-    # The declared entry called -Name, from a table that must be accepted.
+    # The declared entry called -Name, from a table that must be accepted. A TABLE REFUSED HERE IS A
+    # FAILED CHECK, not an error of the suite: the answer is then an entry no check expects, so the
+    # check that asked fails, and tools\Mutate.ps1 counts the mutant that caused it as caught.
     param([object[]]$Rows, [string]$Name)
-    $d = New-HordeModuleSettings -Module "probe" -Settings $Rows
+    $d = $null
+    try { $d = New-HordeModuleSettings -Module "probe" -Settings $Rows }
+    catch { Write-Host ("    got: it was refused: " + $_.Exception.Message) -ForegroundColor DarkYellow; return [pscustomobject]@{ name = "<refused>"; kind = "<refused>"; default = "<refused>"; what = "<refused>"; min = $null; max = $null; values = @() } }
     return @($d.settings | Where-Object { $_.name -ceq $Name })[0]
 }
 
 # ---------------------------------------------------------------------------------------------------
 Section "the declaration"
+Check ((Throws { New-HordeModuleSettings -Module "probe" -Settings (Table) }) -eq $false) "a table with a setting of every kind is accepted"
 $decl = New-HordeModuleSettings -Module "probe" -Settings (Table)
 Check ($decl.module -ceq "probe") "a declaration carries its module's name"
 Check ((@($decl.settings | ForEach-Object { $_.name }) -join ",") -ceq "widthPx,share,follow,role,theme,statusFolder") "and its settings in the order they were declared"
@@ -73,7 +78,7 @@ Check ((Get-HordeModuleSettingRule -Entry $decl.settings[5]) -ceq "an absolute f
 
 Section "a module's name"
 foreach ($good in @("a", "decisions-window", ("m" + ("x" * 39)), "con-sole", "v2")) {
-    Check ((New-HordeModuleSettings -Module $good -Settings (Table)).module -ceq $good) ("the module name '" + $good + "' is accepted")
+    Check ((Throws { New-HordeModuleSettings -Module $good -Settings (Table) }) -eq $false) ("the module name '" + $good + "' is accepted")
 }
 foreach ($bad in @("Probe", "a b", "1a", "-a", "a_b", "a.b", "a/b", "..", ("m" + ("x" * 40)))) {
     Check (Refused -Rows (Table) -Module $bad -Like "is not a module name") ("the module name '" + $bad + "' is refused")
@@ -128,7 +133,8 @@ Check ((Declared (Table "share" @{ default = 1; min = 0; max = 1 }) "share").def
 Check ((Declared (Table "share" @{ default = [decimal]0.5 }) "share").default -is [double]) "a fraction's default given as a Decimal is a Double"
 Check ((Declared (Table "share" @{ default = 0.1 }) "share").default -eq 0.1) "a default equal to the smallest allowed is accepted"
 Check ((Declared (Table "share" @{ default = 0.9 }) "share").default -eq 0.9) "a default equal to the largest allowed is accepted"
-Check ((Declared (Table "share" @{ min = 0; max = 1 }) "share").min -eq 0.0) "a fraction may span the whole of 0 to 1"
+$span = Declared (Table "share" @{ min = 0; max = 1 }) "share"
+Check ($span.min -is [double] -and $span.min -eq 0.0 -and $span.max -is [double] -and $span.max -eq 1.0) "a fraction may span the whole of 0 to 1, and its smallest and largest are Doubles however they were written"
 foreach ($bad in @(0.05, 0.95, "0.25", $true, $null, [long]0, [double]::NaN, [double]::PositiveInfinity)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + $bad })
     Check (Refused -Rows (Table "share" @{ default = $bad }) -Like "share", "default", "a number from 0.1 to 0.9") ("a fraction's default may not be " + $shown)
@@ -201,7 +207,7 @@ function Says {
     # Does exactly one finding hold every -Like part? Prints the findings when not.
     param($Result, [string[]]$Like)
     $hits = 0
-    foreach ($f in @($Result.findings)) { $all = $true; foreach ($part in $Like) { if ($f -notlike ("*" + $part + "*")) { $all = $false } }; if ($all) { $hits++ } }
+    foreach ($f in @($Result.findings)) { $all = $true; foreach ($part in $Like) { if ($f -cnotlike ("*" + $part + "*")) { $all = $false } }; if ($all) { $hits++ } }
     if ($hits -ne 1) { foreach ($f in @($Result.findings)) { Write-Host ("    finding: " + $f) -ForegroundColor DarkYellow } }
     return ($hits -eq 1)
 }
@@ -215,10 +221,13 @@ function Unreadable {
     # A text that cannot be read as a whole: one or more findings, each saying so, each holding every
     # -Like part, and every setting its default.
     param($Text, [string[]]$Like = @())
-    $r = FromText $Text
+    # A THROW IS A FAILED CHECK HERE, not an error of the suite: "never a throw" is what is being
+    # checked, and tools\Mutate.ps1 counts only a failed check as a mutant caught.
+    $r = $null
+    try { $r = FromText $Text } catch { Write-Host ("    got: it threw: " + $_.Exception.Message) -ForegroundColor DarkYellow; return $false }
     $n = @($r.findings).Count
     $good = ($n -ge 1 -and (AllDefaults $r))
-    foreach ($f in @($r.findings)) { foreach ($part in (@("the settings file of probe ", "every setting of probe is its default") + $Like)) { if ($f -notlike ("*" + $part + "*")) { $good = $false } } }
+    foreach ($f in @($r.findings)) { foreach ($part in (@("the settings file of probe ", "every setting of probe is its default") + $Like)) { if ($f -cnotlike ("*" + $part + "*")) { $good = $false } } }
     if (-not $good) { foreach ($f in @($r.findings)) { Write-Host ("    finding: " + $f) -ForegroundColor DarkYellow } }
     return $good
 }
@@ -226,7 +235,8 @@ function WrongValue {
     # One setting given a wrong value beside a good one: exactly one finding, naming the key, its rule
     # and what was given; the setting is its default; the good one beside it is still read.
     param([string]$Key, [string]$Json, [string]$Given)
-    $r = FromText (Doc ('{ "' + $Key + '": ' + $Json + ', "theme": "dark" }'))
+    $r = $null
+    try { $r = FromText (Doc ('{ "' + $Key + '": ' + $Json + ', "theme": "dark" }')) } catch { Write-Host ("    got: it threw: " + $_.Exception.Message) -ForegroundColor DarkYellow; return $false }
     $entry = @($decl.settings | Where-Object { $_.name -ceq $Key })[0]
     $named = Says $r @(("probe setting '" + $Key + "' must be " + (Get-HordeModuleSettingRule -Entry $entry) + ";"), ("the file gives " + $Given + ";"), "the default is used")
     $kept = ($r.values.$Key -eq $entry.default -and $r.values.$Key.GetType() -eq $entry.default.GetType())
@@ -341,8 +351,8 @@ $r = FromText (Doc ('{ "' + $longKey + '": 1 }'))
 Check ((Says $r @(("'" + ("k" * 60) + "...'"))) -and @($r.findings | Where-Object { $_ -like ("*" + ("k" * 61) + "*") }).Count -eq 0) "an unknown key's name is cut at 60 characters"
 $r = FromText (Doc ('{ "' + ("k" * 60) + '": 1 }'))
 Check (Says $r @(("'" + ("k" * 60) + "'"))) "and one of exactly 60 is not cut"
-$r = FromText (Doc ('{ "caf' + [char]0xE9 + '\u0007~ ": 1 }'))
-Check ((Says $r @("'caf\u00E9\u0007~ '")) -and @($r.findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' }).Count -eq 0) "an unknown key's name is written in printable ASCII, the rest as \uXXXX"
+$r = FromText (Doc ('{ "caf' + [char]0xE9 + '\u0007\u001f~ ' + [char]0x7F + '": 1 }'))
+Check ((Says $r @("'caf\u00E9\u0007\u001F~ \u007F'")) -and @($r.findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' }).Count -eq 0) "an unknown key's name is written in printable ASCII (space to tilde, both kept), the rest as \uXXXX"
 $r = FromText (Doc '{ "__proto__": 1, "constructor": 2, "Count": 3, "Length": 4, "ToString": 5 }')
 Check (@($r.findings).Count -eq 5 -and (Says $r "'__proto__'") -and (Says $r "'ToString'") -and (AllDefaults $r)) "keys named after things a language keeps are unknown keys like any other"
 
@@ -371,7 +381,8 @@ Check (Unreadable (Doc '{ "widthPx": 0x280 }') "is not JSON") "a number in hexad
 Check (Unreadable (Doc '{ "widthPx": 640. }') "is not JSON") "a number ending in a point is not JSON"
 Check (Unreadable (Doc '{ "widthPx": 640px }') "is not JSON") "a number with a unit is not JSON"
 Check (Unreadable (Doc ('{ "role": "tab' + "`t" + 'here" }')) "is not JSON") "a raw tab inside a string is not JSON"
-Check (Unreadable (Doc '{ "role": "a\qb" }') "is not JSON") "an escape JSON does not have is not JSON"
+Check (Unreadable (Doc '{ "role": "a\qb" }') "is not JSON: line 1") "an escape JSON does not have is not JSON"
+Check (Unreadable ('{ "schemaVersion": 1,' + [char]0xA0 + '"settings": { "widthPx": 640 } }') "is not JSON: line 1") "A NO-BREAK SPACE between two parts is not JSON: only space, tab and the two line ends are blanks"
 Check (Unreadable (Doc '{ "share": 1e400 }') "is not JSON") "A NUMBER TOO LARGE TO HOLD is not JSON to the parser: one finding, never an error"
 Check (Unreadable (Doc ('{ "role": ' + ("[" * 200) + ("]" * 200) + ' }')) "is not JSON") "VALUES NESTED 200 DEEP are past the parser's limit: one finding, never an error"
 Check (Unreadable (Doc '{ "": 1 }') "is not JSON the parser can read") "an empty key is refused by the parser: one finding, never an error"
@@ -443,6 +454,16 @@ Check (@($r.findings).Count -eq 1 -and $r.findings[0] -clike "probe setting 'fac
 $manyDecl = New-HordeModuleSettings -Module "probe" -Settings @(@{ name = "face"; kind = "text"; default = ("a" * 100); values = @("a", "b", "c", "d", "e") | ForEach-Object { $_ * 100 }; what = "A face." })
 $r = Read-HordeModuleSettingsText -Declaration $manyDecl -Text (Doc '{ "face": "bold" }')
 Check (@($r.findings).Count -eq 1 -and $r.findings[0] -clike ("probe setting 'face' must be one of: " + ("a" * 100) + ", *...; the file gives text of 4 characters; the default is used") -and $r.findings[0].Length -lt 400) "a rule longer than 300 characters is cut, and the finding still says what was given and done"
+function InCulture {
+    # Run a block with the thread's culture set, and put the culture back.
+    param([string]$Name, [scriptblock]$Block)
+    $was = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try { [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Name); return (& $Block) }
+    finally { [System.Threading.Thread]::CurrentThread.CurrentCulture = $was }
+}
+Check ((InCulture "de-DE" { (0.5).ToString() }) -ceq "0,5") "CONTROL: under a German culture .NET writes one half with a comma"
+Check ((InCulture "de-DE" { Get-HordeModuleSettingRule -Entry $decl.settings[1] }) -ceq "a number from 0.1 to 0.9") "A RULE IS WRITTEN THE SAME ON EVERY MACHINE: a fraction's range has a point under a culture that writes a comma"
+Check ((InCulture "de-DE" { (FromText (Doc '{ "share": 5e-2, "widthPx": 520.5 }')).findings -join "|" }) -clike "*the file gives the number 0.05;*the file gives the number 520.5;*") "and so has the number a finding quotes, whether the parser read it as a Double's or a Decimal's"
 
 # ---------------------------------------------------------------------------------------------------
 # THE FILE. A home this suite makes under TEMP and removes; HORDE_HOME is put back as it was.
@@ -467,7 +488,8 @@ function FromFile { return (Get-HordeModuleSettings -Declaration $decl -HordeHom
 function FileUnreadable {
     # The file as it stands gives exactly one finding holding -Like, and every default.
     param([string]$Like)
-    $r = FromFile
+    $r = $null
+    try { $r = FromFile } catch { Write-Host ("    got: it threw: " + $_.Exception.Message) -ForegroundColor DarkYellow; return $false }
     $good = (@($r.findings).Count -eq 1 -and (AllDefaults $r) -and $r.findings[0] -like ("the settings file of probe *" + $Like + "*; every setting of probe is its default"))
     if (-not $good) { foreach ($f in @($r.findings)) { Write-Host ("    finding: " + $f) -ForegroundColor DarkYellow } }
     return $good
@@ -497,6 +519,10 @@ try {
     $r = FromFile
     Check ($r.values.widthPx -eq 640 -and $r.values.role -ceq "scout" -and $r.values.share -eq 0.25 -and @($r.findings).Count -eq 0) "a file under the home overrides what it names"
     Check (@($r.PSObject.Properties | ForEach-Object { $_.Name }) -join "," -ceq "values,findings,path") "the answer is values, findings and the path read"
+    $alone = $false
+    try { $held = [System.IO.File]::Open($probeFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None); $alone = $true } catch { $alone = $false }
+    if ($null -ne $held) { $held.Dispose(); $held = $null }
+    Check $alone "the file is let go when the read returns: another program can then open it for itself"
     $otherDecl = New-HordeModuleSettings -Module "other-module" -Settings (Table)
     Check ((AllDefaults (Get-HordeModuleSettings -Declaration $otherDecl -HordeHome $tempHome))) "ONE FILE PER MODULE: another module is not touched by this one's file"
     Put ($utf8.GetBytes((Doc '{ "widthPx": 300 }'))) (Join-Path $tempHome "settings\other-module.json")
