@@ -30,6 +30,7 @@ $script:HordeMachineBoundSuites = [ordered]@{
     "transports/local/test/test-node-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
     "transports/local/test/test-hub-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
     "test/test-transport-conformance.ps1" = "its [local] cases: on the always-on box its 27 [local] checks fail on main 54d97b3 exactly as on #85, and pass here (2026-10-05)"
+    "test/test-window-follow.ps1" = "two real windows, one of another process, and what Windows tells the taskbar: an interactive logon (its header); with no interactive desktop it follows nothing and exits 3"
 }
 
 function Get-HordeMachineBoundSuites {
