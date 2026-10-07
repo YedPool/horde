@@ -227,10 +227,17 @@ function Get-HordeHubWaitMs {
     return [math]::Min($TimeoutMs, $left)
 }
 
+# A step that fails within this much of the bound's deadline failed because of the bound. A wait cut
+# to the bound ends on the receive's own reading of the clock, and [datetime]::UtcNow moves in steps
+# (0.5 to 6 ms measured here, 2026-10-07), so it could end a few ms short of the deadline and be said as
+# a plain timeout: "no frame within 2767 ms" on a 3 s bound (remote run c2-dial, 2026-10-07).
+$script:HordeHubBoundSlackMs = 50
+
 function Get-HordeHubPastBound {
-    # The reason a step failed, said as the bound when the bound is what ran out.
+    # The reason a step failed, said as the bound when the bound is what ran out (within
+    # $script:HordeHubBoundSlackMs of its deadline).
     param([Parameter(Mandatory = $true)]$Bound, [string]$Reason)
-    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
+    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline.AddMilliseconds(-$script:HordeHubBoundSlackMs)) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
     return $Reason
 }
 

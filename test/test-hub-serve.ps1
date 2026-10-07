@@ -407,6 +407,12 @@ try {
     $null = Stop-Node $fast
     $outs = @($rounds[0].outcomes)
     Check (@($outs | Where-Object { $_ -clike ("*(" + $slowDev + "): unreachable: *past its 3 s bound*") }).Count -eq 1) ("a node slower than its bound is cut off at the bound (" + ($outs -join " | ") + ")")
+    # A failure a few ms short of the deadline is the bound's: a wait cut to the bound can end there,
+    # the clock moving in steps (remote run c2-dial, 2026-10-07: "no frame within 2767 ms" on 3 s).
+    $edge = [pscustomobject]@{ deadline = [datetime]::UtcNow.AddMilliseconds(20); seconds = 3 }
+    Check ((Get-HordeHubPastBound -Bound $edge -Reason "no frame") -clike "*past its 3 s bound: no frame") "a step that fails 20 ms before the deadline is said as the bound"
+    $early = [pscustomobject]@{ deadline = [datetime]::UtcNow.AddMilliseconds(5000); seconds = 3 }
+    Check ((Get-HordeHubPastBound -Bound $early -Reason "no frame") -ceq "no frame") "CONTROL: one that fails seconds before it is said as itself"
     Check (@($outs | Where-Object { $_ -clike ("*(" + $device + "): heard, 2 session(s)*") }).Count -eq 1) "the node after it is still pulled in the same round"
     Check ($sw.Elapsed.TotalSeconds -lt 7) ("and the round took " + [math]::Round($sw.Elapsed.TotalSeconds, 1) + " s, not the slow node's 8 s plus the rest")
     $slow = Start-Node -At $slowDev -ViewDelayMs 3000

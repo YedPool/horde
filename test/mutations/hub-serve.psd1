@@ -129,6 +129,9 @@
         @{ Name = "aside-failure-throws"
            Find = 'catch { return ("it could not be kept aside, and is overwritten: " + $_.Exception.Message) }'
            Replace = 'catch { throw }' }
+        @{ Name = "bound-without-slack"
+           Find = '[datetime]::UtcNow -ge $Bound.deadline.AddMilliseconds(-$script:HordeHubBoundSlackMs)'
+           Replace = '[datetime]::UtcNow -ge $Bound.deadline' }
         @{ Name = "aside-copies-uncapped"
            Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
            Replace = '$old = @()' }
