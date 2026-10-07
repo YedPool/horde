@@ -20,7 +20,8 @@
 #   1. one window: the finder names the instance's one window from the real listing, and says it held
 #      on a second reading; the answer takes at least the wait between the two readings.
 #   2. a pane the instance does not list, and an instance that is not running: unknown, in words.
-#   3. two windows running different programs are told apart by their own titles.
+#   3. two windows running different programs are told apart by the titles they carry (both are
+#      minimised here, so neither has a size).
 #   4. THE SECOND READING, FOR REAL: a window with the same title as the session's is opened between
 #      the two readings of one find. The first reading found the window; the second cannot tell it
 #      from its twin; the answer is unknown and says the match did not hold.
@@ -29,8 +30,21 @@
 #   6. how the terminal titles a zoomed pane, with one tab and with two: the finder still finds its
 #      window (the order "[Z] [1/2] title" was measured here first, 2026-10-07).
 #
-# NOT PROVED HERE: a terminal that titles its windows its own way; the live fleet's sixteen windows;
-# a second screen.
+#   7. A TERMINAL THAT TITLES AND PADS ITS WINDOWS ITS OWN WAY, AND SESSIONS THAT REDRAW THEIR TITLES - the
+#      case the first finder answered unknown for on the fleet's own terminal (trial of 2026-10-07). A
+#      second instance is started with a config of this scenario's own: a format-window-title handler
+#      that writes "[<tab>/<tabs>] <pane title> - horde test", and a padding no default has. Its windows
+#      stand where no screen is, at sizes this scenario gives them; in one a program redraws its title
+#      several times a second with another first character each time, as a working session does.
+#        - that window, alone of its size, is found by size while its title never holds still;
+#        - a pane in its second tab is in the same window;
+#        - two windows of one size with one title: unknown, neither chosen;
+#        - a third of that size with a title of its own: found, by size and then title;
+#        - the instance's first window, minimised and so of no size: found as the one left over.
+#
+# NOT PROVED HERE: the live fleet's sixteen windows (read-only runs of the finder against them are in
+# the trial's notes, not in a scenario: a scenario never lists the terminal in use); a second screen;
+# screens of two scales.
 
 $ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -42,8 +56,9 @@ $env:HORDE_HOME = Join-Path $env:TEMP ("horde-e2e-session-window-home-" + [guid]
 . (Join-Path $root "core\Tristate.ps1")
 . (Join-Path $root "hosts\wezterm\Window.ps1")
 
-# All this scenario does to a window: minimise it without giving it the keyboard.
-Add-Type -Namespace HordeSessionWindowScenario -Name Native -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd);'
+# All this scenario does to a window, and only to windows of the instances it started: minimise it
+# without giving it the keyboard, or (part 7) stand it where no screen is, at a size, the same way.
+Add-Type -Namespace HordeSessionWindowScenario -Name Native -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int cmd); [DllImport("user32.dll")] public static extern bool SetWindowPos(System.IntPtr h, System.IntPtr after, int x, int y, int cx, int cy, uint flags);'
 
 $fails = @()
 function Check { param($Cond, [string]$What)
@@ -110,7 +125,7 @@ if ($iso) {
         Show-Titles
         Check $told ("each pane's window is known (" + (Why $script:a) + " / " + (Why $script:b) + ")")
         Check ($told -and $second -ne 0 -and $script:a.value.handle -eq $first -and $script:b.value.handle -eq $second) "the first pane is in the first window and the second pane in the second: neither is taken for the other"
-        Check ($told -and $script:b.value.detail -ceq "the one of the terminal's 2 windows titled after its panes, and again on a second reading 300 ms later") "and they were told apart by title, from the listing, on two readings"
+        Check ($told -and $script:b.value.detail -ceq "the one of the terminal's 2 windows that carries the title of its pane, and again on a second reading 300 ms later") "and they were told apart by title, from the listing, on two readings"
 
         Write-Host ""
         Write-Host "--- 4. the second reading, for real: a twin opens between the two readings ---" -ForegroundColor Cyan
@@ -129,13 +144,13 @@ if ($iso) {
         $twin = Hide-New -Known @($first, $second)
         Show-Titles
         Check ($script:paneTwin -cmatch '\A[0-9]+\z' -and $twin -ne 0 -and $script:waitedMs -eq 300) ("between the two readings a third window was opened in the instance (pane " + $script:paneTwin + "), in the 300 ms wait the finder asked for")
-        Check ($caught.state -ceq "unknown" -and $caught.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later (2 of the terminal's windows are titled as the window of pane *") ("found on the first reading and not on the second: unknown, and it says the match did not hold (" + (Why $caught) + ")")
+        Check ($caught.state -ceq "unknown" -and $caught.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later (2 of the terminal's windows carry the title of the window of pane *") ("found on the first reading and not on the second: unknown, and it says the match did not hold (" + (Why $caught) + ")")
 
         Write-Host ""
         Write-Host "--- 5. two windows running the same program: unknown, and neither is chosen ---" -ForegroundColor Cyan
         $script:a = $null; $script:b = $null
         $settled = Wait-Until { $script:a = Find-HordeWeztermSessionWindow -Pane $paneOne -Instance $instance; $script:b = Find-HordeWeztermSessionWindow -Pane $script:paneTwin -Instance $instance; ($script:a.reason -like "2 of the terminal's windows*" -and $script:b.reason -like "2 of the terminal's windows*") } 20
-        Check ($settled -and $script:a.state -ceq "unknown" -and $script:a.reason -like "2 of the terminal's windows are titled as the window of pane * would be, and one is never chosen over another*") ("the first pane, whose window now has a twin: unknown (" + (Why $script:a) + ")")
+        Check ($settled -and $script:a.state -ceq "unknown" -and $script:a.reason -like "2 of the terminal's windows carry the title of the window of pane *, and one is never chosen over another*") ("the first pane, whose window now has a twin: unknown (" + (Why $script:a) + ")")
         Check ($settled -and $script:b.state -ceq "unknown") ("and the twin's pane: unknown too (" + (Why $script:b) + ")")
         $alone = Find-HordeWeztermSessionWindow -Pane $panePing -Instance $instance
         Check ($alone.state -ceq "known" -and $alone.value.handle -eq $second) ("CONTROL: the window titled alone beside the twins is still found (" + (Why $alone) + ")")
@@ -166,6 +181,120 @@ if ($iso) {
     Check (-not $result.refused) "teardown accepted the instance Start issued"
     Check ($result.stopped -and -not $result.survived -and @($result.orphansSurvived).Count -eq 0) "the terminal and everything that ran in it are gone"
 }
+
+Write-Host ""
+Write-Host "--- 7. a terminal with a config of its own: its own title format, its own padding, a title that never holds still ---" -ForegroundColor Cyan
+$configDir = Join-Path $env:TEMP ("horde-e2e-session-window-config-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $configDir | Out-Null
+$configFile = Join-Path $configDir "own.lua"
+[System.IO.File]::WriteAllText($configFile, @'
+local wezterm = require 'wezterm'
+wezterm.on('format-window-title', function(tab, pane, tabs, panes, config)
+  return string.format('[%d/%d] %s - horde test', tab.tab_index + 1, #tabs, pane.title)
+end)
+return {
+  window_padding = { left = 11, right = 5, top = 3, bottom = 7 },
+  initial_cols = 80, initial_rows = 24,
+  check_for_updates = false,
+  window_close_confirmation = 'NeverPrompt',
+}
+'@, (New-Object System.Text.UTF8Encoding($false)))
+function Start-Titled {
+    # A new window of the instance whose one pane runs a program that titles itself: with -Turning, a
+    # title whose first character is another one about seven times a second, as a working session's
+    # is; otherwise one title, set once. Returns the pane id as text.
+    param([string]$Name, [switch]$Turning, [string]$WindowId = "")
+    $program = "[Console]::Title = '" + $Name + "'; Start-Sleep -Seconds 900"
+    if ($Turning) { $program = '$g = @([char]0x25D0, [char]0x25D1, [char]0x2733); $i = 0; while ($true) { [Console]::Title = ([string]$g[$i % 3]) + " ' + $Name + '"; $i++; Start-Sleep -Milliseconds 140 }' }
+    $where = @("--new-window")
+    if ($WindowId -ne "") { $where = @("--window-id", $WindowId) }
+    return ("" + (Invoke-HordeWeztermCli -Rest (@("spawn") + $where + @("--", "powershell.exe", "-NoProfile", "-EncodedCommand", [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($program)))))).Trim()
+}
+function Set-Aside {
+    # Stand every window of the instance that -Known does not hold where no screen is, -Width by -Height
+    # outside, without the keyboard and without changing which window is in front; returns the handle
+    # of the one new window, or 0 when there is not exactly one.
+    param([long[]]$Known, [int]$Width, [int]$Height)
+    $new = @(Get-Windows | Where-Object { $Known -notcontains $_.handle })
+    foreach ($w in $new) { [void][HordeSessionWindowScenario.Native]::SetWindowPos([IntPtr]$w.handle, [IntPtr]::Zero, -32000, -32000, $Width, $Height, 0x0014) }     # SWP_NOZORDER | SWP_NOACTIVATE
+    if ($new.Count -eq 1) { return [long]$new[0].handle }
+    return [long]0
+}
+function Find-Pane { param([string]$Pane) return (Find-HordeWeztermSessionWindow -Pane $Pane -Instance $instance) }
+$iso = Start-HordeIsolatedWezterm -TimeoutSeconds 45 -ConfigFile $configFile
+Check ($null -ne $iso) "a second isolated instance started with this scenario's own config, and answered"
+if ($iso) {
+    $result = $null
+    try {
+        $count = Assert-HordeIsolated -Instance $iso
+        Check ($count -ge 1) ("THE CONTROL: this process can see only that instance's panes (" + $count + ")")
+        Check (@($guisBefore -split "," | Where-Object { $_ -ne "" }) -notcontains ("" + $iso.pid)) "its gui is a process that was not running before"
+        $instance = Split-Path -Leaf $iso.socket
+        $paneZero = "" + @(ConvertFrom-HordeWeztermJson (Invoke-HordeWeztermCli -Rest @("list", "--format", "json")))[0].pane_id
+        Check ((Wait-Until { @(Get-Windows).Count -eq 1 } 20)) "the instance has one window"
+        $w0 = [long]@(Get-Windows)[0].handle
+        [void][HordeSessionWindowScenario.Native]::ShowWindow([IntPtr]$w0, 7)                                 # SW_SHOWMINNOACTIVE
+        Check ((Wait-Until { @(Get-Windows | Where-Object { $_.handle -eq $w0 -and $_.title -cmatch '\A\[1/1\] .* - horde test\z' -and $_.width -eq 0 -and $_.height -eq 0 }).Count -eq 1 } 20)) ("the config is in force - the window is titled in the config's own format - and, minimised, it has no size: [" + @(Get-Windows)[0].title + "]")
+
+        $paneA = Start-Titled -Name "alpha" -Turning
+        Check ((Wait-Until { @(Get-Windows).Count -eq 2 } 20)) "a second window, whose session redraws its title"
+        $wA = Set-Aside -Known @($w0) -Width 1000 -Height 620
+        $paneB = Start-Titled -Name "beta"
+        Check ((Wait-Until { @(Get-Windows).Count -eq 3 } 20)) "a third window, titled beta"
+        $wB = Set-Aside -Known @($w0, $wA) -Width 760 -Height 480
+        $paneC = Start-Titled -Name "beta"
+        Check ((Wait-Until { @(Get-Windows).Count -eq 4 } 20)) "a fourth, titled beta too"
+        $wC = Set-Aside -Known @($w0, $wA, $wB) -Width 760 -Height 480
+        $paneD = Start-Titled -Name "gamma"
+        Check ((Wait-Until { @(Get-Windows).Count -eq 5 } 20)) "a fifth, titled gamma"
+        $wD = Set-Aside -Known @($w0, $wA, $wB, $wC) -Width 760 -Height 480
+        Check ($paneA -cmatch '\A[0-9]+\z' -and $paneB -cmatch '\A[0-9]+\z' -and $paneC -cmatch '\A[0-9]+\z' -and $paneD -cmatch '\A[0-9]+\z' -and $wA -ne 0 -and $wB -ne 0 -and $wC -ne 0 -and $wD -ne 0) ("four windows were opened in the instance and stood where no screen is (panes " + $paneA + ", " + $paneB + ", " + $paneC + ", " + $paneD + ")")
+        # The programs have started and titled themselves, and the sizes are as given.
+        $settled = Wait-Until { $w = @(Get-Windows); (@($w | Where-Object { $_.handle -eq $wA -and $_.title -clike "*alpha - horde test" }).Count -eq 1 -and @($w | Where-Object { $_.title -ceq "[1/1] beta - horde test" }).Count -eq 2 -and @($w | Where-Object { $_.title -ceq "[1/1] gamma - horde test" }).Count -eq 1) } 60
+        Show-Titles
+        Check $settled "every window is titled by the config's format around its own session's title"
+        $sizes = @(Get-Windows | ForEach-Object { "" + $_.width + "x" + $_.height })
+        Write-Host ("  their client sizes: " + ($sizes -join " ")) -ForegroundColor DarkGray
+        $sizeOf = { param([long]$h) $n = @(Get-Windows | Where-Object { $_.handle -eq $h })[0]; "" + $n.width + "x" + $n.height }
+        Check ((& $sizeOf $wB) -ceq (& $sizeOf $wC) -and (& $sizeOf $wC) -ceq (& $sizeOf $wD) -and (& $sizeOf $wA) -cne (& $sizeOf $wB) -and (& $sizeOf $wA) -cne "0x0" -and (& $sizeOf $wB) -cne "0x0") "one window of a size of its own, three of one size - in real pixels"
+        # THE TITLE NEVER HOLDS STILL: forty readings, 50 ms apart.
+        $seenTitles = New-Object System.Collections.ArrayList
+        for ($k = 0; $k -lt 40; $k++) { $t = "" + @(Get-Windows | Where-Object { $_.handle -eq $wA })[0].title; if ($seenTitles -cnotcontains $t) { [void]$seenTitles.Add($t) }; Start-Sleep -Milliseconds 50 }
+        Check ($seenTitles.Count -ge 2) ("CONTROL: the redrawing session's window was seen with " + $seenTitles.Count + " different titles in two seconds")
+
+        $script:a = $null
+        $foundA = Wait-Until { $script:a = Find-Pane $paneA; ($script:a.state -ceq "known") } 30
+        Check ($foundA -and $script:a.value.handle -eq $wA) ("THE LIVE CASE, FOR REAL: the window whose title never holds still, in a format of the config's own, is found (" + (Why $script:a) + ")")
+        Check ($foundA -and $script:a.value.detail -clike "the one of the terminal's 5 windows with the size of the pane's window (* cells), and again on a second reading 300 ms later") ("by its size, on two readings: " + $(if ($foundA) { $script:a.value.detail } else { "" }))
+        $again = @(1..4 | ForEach-Object { Find-Pane $paneA })
+        Check (@($again | Where-Object { $_.state -ceq "known" -and $_.value.handle -eq $wA }).Count -eq 4) ("and four times more of four, whatever its title was at each moment (" + ((@($again) | ForEach-Object { $_.state }) -join ", ") + ")")
+
+        $listed = @(ConvertFrom-HordeWeztermJson (Invoke-HordeWeztermCli -Rest @("list", "--format", "json")))
+        $windowA = "" + (@($listed | Where-Object { "" + $_.pane_id -ceq $paneA })[0].window_id)
+        $paneTab = Start-Titled -Name "delta" -WindowId $windowA
+        $script:t = $null
+        $inTab = Wait-Until { $script:t = Find-Pane $paneTab; ($script:t.state -ceq "known" -and @(Get-Windows | Where-Object { $_.handle -eq $wA -and $_.title -clike "[[]2/2[]] *" }).Count -eq 1) } 30
+        Show-Titles
+        Check ($paneTab -cmatch '\A[0-9]+\z' -and $inTab -and $script:t.value.handle -eq $wA) ("a second tab in that window, now in front, titled [2/2] by the config: its pane is in the same window (" + (Why $script:t) + ")")
+        Check ((Find-Pane $paneA).value.handle -eq $wA) "and so, still, is the pane of the tab behind it"
+
+        $script:b = $null; $script:c = $null
+        $twins = Wait-Until { $script:b = Find-Pane $paneB; $script:c = Find-Pane $paneC; ($script:b.reason -like "2 of the terminal's windows carry the title*" -and $script:c.reason -like "2 of the terminal's windows carry the title*") } 30
+        Check ($twins -and $script:b.state -ceq "unknown" -and $script:b.reason -clike "2 of the terminal's windows carry the title of the window of pane * and could be it by size (* cells), and one is never chosen over another") ("TWO WINDOWS OF EQUAL SIZE AND ONE TITLE: unknown, neither chosen (" + (Why $script:b) + ")")
+        Check ($twins -and $script:c.state -ceq "unknown") ("and the same for the other (" + (Why $script:c) + ")")
+        $script:d = $null
+        $foundD = Wait-Until { $script:d = Find-Pane $paneD; ($script:d.state -ceq "known") } 30
+        Check ($foundD -and $script:d.value.handle -eq $wD -and $script:d.value.detail -clike "the one of 3 windows that could be the pane's window by size (* cells) that carries its title, and again*") ("the third window of that size, with a title of its own, is found by size and then title (" + (Why $script:d) + ")")
+        $script:z = $null
+        $foundZero = Wait-Until { $script:z = Find-Pane $paneZero; ($script:z.state -ceq "known") } 30
+        Check ($foundZero -and $script:z.value.handle -eq $w0 -and $script:z.value.detail -clike "the one of the terminal's 5 windows that is not another's by size: the pane's window has no one size on screen*") ("the instance's first window, minimised, is the one left when every other is another's by size (" + (Why $script:z) + ")")
+    }
+    catch { Check $false ("part 7 stopped: " + $_.Exception.Message) }
+    finally { $result = Stop-HordeIsolatedWezterm -Instance $iso }
+    Check (-not $result.refused) "teardown accepted the second instance"
+    Check ($result.stopped -and -not $result.survived -and @($result.orphansSurvived).Count -eq 0) "the second terminal and everything that ran in it are gone"
+}
+if ((Split-Path -Leaf $configDir) -match '\Ahorde-e2e-session-window-config-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $configDir)) { Remove-Item -LiteralPath $configDir -Recurse -Force }
 Start-Sleep -Milliseconds 800
 $guisAfter = (@(Get-HordeWeztermGuiPids | Sort-Object) -join ",")
 Check ($guisAfter -ceq $guisBefore) ("the gui processes running are exactly those running before: " + $guisAfter)
