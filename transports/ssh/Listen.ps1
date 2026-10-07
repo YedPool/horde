@@ -105,7 +105,7 @@ function Get-HordeSshListenConfig {
         "LoginGraceTime 20",
         "ClientAliveInterval 15",
         "ClientAliveCountMax 4",
-        "Subsystem sftp none",
+        "MaxStartups 4:50:8",
         ('SetEnv "HORDE_HOME=' + $HordeHome.Replace('\', '/') + '"'),
         "LogLevel VERBOSE"
     )
@@ -155,12 +155,31 @@ function Stop-HordeSshListener {
     return $text
 }
 
+function Test-HordeSshListenerServing {
+    # The adapter's Health: known $true while sshd runs and every authorized_keys line still holds to
+    # attach; known $false once sshd has ended; unknown, with the reason, when the keys no longer hold.
+    # WHY THE KEYS AGAIN (issue #147, item 4): sshd reads authorized_keys at every login, so a line
+    # written after Start - by a buggy writer, a bare key above all - would be admitted unchecked.
+    # horde listen asks this every second and stops the listener on anything but known $true.
+    param([Parameter(Mandatory = $true)]$Listener)
+    $p = $Listener.process
+    if ($null -eq $p -or $p.HasExited) { return (New-HordeKnown -Value $false) }
+    if (-not (Test-Path -LiteralPath $Listener.authorized -PathType Leaf)) { return (New-HordeUnknown -Reason ("authorized_keys is gone (" + $Listener.authorized + "); the listener stops")) }
+    $found = @(Test-HordeSshListenKeys -Lines ([System.IO.File]::ReadAllLines($Listener.authorized)) -Root $Listener.root)
+    if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("authorized_keys changed after the listener started and no longer holds every key to attach: " + ($found -join "; ") + "; the listener stops")) }
+    return (New-HordeKnown -Value $true)
+}
+
 function Start-HordeSshListener {
     # The adapter's Start (transports/Listener.ps1). -Request is { hordeHome; hubId; port; root }.
     param([Parameter(Mandatory = $true)]$Request)
     if ("$($Request.hubId)" -cnotmatch ('\A' + $script:HordeSshListenDevicePattern + '\z')) { return (New-HordeSshListenResult -Ok $false -Reason ("'" + $Request.hubId + "' is not a hub id: one lowercase UUID, the hub's device id")) }
     $port = [int]$Request.port
     if ($port -lt 1 -or $port -gt 65535) { return (New-HordeSshListenResult -Ok $false -Reason ("port " + $port + " is not a TCP port to listen on")) }
+    # The configuration names files under the home unquoted, and sshd reads a space as the end of a
+    # path, # as a comment and % in AuthorizedKeysFile as a token (issue #147, item 3). Such a home
+    # would fail closed but say nothing useful, so it is refused here, saying why.
+    if ("$($Request.hordeHome)" -match '[\s#%"]') { return (New-HordeSshListenResult -Ok $false -Reason ("Horde's home '" + $Request.hordeHome + "' holds a space, #, % or quote, which sshd's configuration cannot name; set HORDE_HOME to a path without them")) }
     $files = Get-HordeSshListenFiles -HordeHome $Request.hordeHome
     if (-not (Test-Path -LiteralPath $files.hostKey -PathType Leaf)) { return (New-HordeSshListenResult -Ok $false -Reason ("the hub has no listener host key at " + $files.hostKey + ": run horde hub init")) }
     if (-not (Test-Path -LiteralPath $files.authorized -PathType Leaf)) { return (New-HordeSshListenResult -Ok $false -Reason ("no node is enrolled (" + $files.authorized + " does not exist): run horde hub enroll")) }
@@ -175,7 +194,7 @@ function Start-HordeSshListener {
     $proc = $null
     try {
         $proc = Start-HordeSshServer -Config $files.config -Job $job
-        $listener = [pscustomobject]@{ process = $proc; startedAt = $proc.StartTime.ToUniversalTime().Ticks; job = $job; log = $proc.StandardError.ReadToEndAsync(); port = $port; config = $files.config }
+        $listener = [pscustomobject]@{ process = $proc; startedAt = $proc.StartTime.ToUniversalTime().Ticks; job = $job; log = $proc.StandardError.ReadToEndAsync(); port = $port; config = $files.config; authorized = $files.authorized; root = "$($Request.root)" }
         $null = $proc.StandardOutput.ReadToEndAsync()
         $deadline = [datetime]::UtcNow.AddMilliseconds($script:HordeSshListenStartMs)
         $up = $false
@@ -193,10 +212,5 @@ function Start-HordeSshListener {
 
 $null = Register-HordeListener -Folder $script:HordeSshListenFolder `
     -Start { param($Request) return (Start-HordeSshListener -Request $Request) } `
-    -Health {
-        param($Listener)
-        $p = $Listener.process
-        if ($null -eq $p -or $p.HasExited) { return (New-HordeKnown -Value $false) }
-        return (New-HordeKnown -Value $true)
-    } `
+    -Health { param($Listener) return (Test-HordeSshListenerServing -Listener $Listener) } `
     -Stop { param($Listener) return (Stop-HordeSshListener -Listener $Listener) }

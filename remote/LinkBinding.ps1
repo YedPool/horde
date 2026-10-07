@@ -13,6 +13,14 @@
 # JSON, so the link's codec can never take it for a frame, and no frame can be read as one. The 1 is
 # the preamble's own version: a hub that reads another refuses the link rather than guess.
 #
+# WHAT THE BINDING DOES NOT STOP (issue #147, item 6). The preamble is believed because only attach
+# writes it, and attach is the forced command of an enrolled key. But the hub's pipe admits any process
+# of this user at the hub's integrity level (the local transport's trust boundary, documented in
+# transports/local/Transport.ps1): such a process can dial the hub's pipe itself and write a preamble
+# naming any device. It can equally read the user's files or run as the hub, which Windows draws no
+# line between; a process below that level is refused by the pipe's label. So the binding guards
+# against a remote peer claiming another device, not against this user's own processes.
+#
 # PURE. Text in, answers out. It reads no file and starts nothing, so it lives in remote/ under
 # tools/ExecScan.ps1's proof.
 #

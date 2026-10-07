@@ -219,7 +219,7 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
             $cli.Dispose()
             $e = $_.Exception
             while ($null -ne $e.InnerException) { $e = $e.InnerException }
-            if ($e -is [System.TimeoutException]) { return (New-HordeLocalResult -Ok $false -Reason ("no node answered on " + $pipe + " within " + $TimeoutMs + " ms")) }
+            if ($e -is [System.TimeoutException]) { return (New-HordeLocalResult -Ok $false -Reason ("no " + $(if ($pipe.StartsWith($script:HordeLocalHubPipePrefix, [System.StringComparison]::Ordinal)) { "hub" } else { "node" }) + " answered on " + $pipe + " within " + $TimeoutMs + " ms")) }
             # A denied open cannot say which of two things denied it: the pipe's ACL (another user's
             # pipe), or its label (a node at a higher integrity level than this hub). The label cannot be
             # read to tell them apart - measured 2026-10-01, a Medium process's GetNamedSecurityInfo of a

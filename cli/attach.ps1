@@ -42,7 +42,19 @@ try {
     $private:nodeFile = Join-Path (Get-HordeHome) "node\node.json"
     if (-not (Test-Path -LiteralPath $nodeFile -PathType Leaf)) { throw ("this hub has no device id yet (" + $nodeFile + " is missing)") }
     $private:hubId = (Read-HordeNodeFile -Path $nodeFile).deviceId
-    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -ExitWhenHubCloses
+    # ONE LINK PER DEVICE (issue #147, item 2). sshd's MaxSessions bounds sessions per connection, not
+    # connections per key, so an enrolled peer could open many, each a PowerShell. A device has one link
+    # to its hub at a time (the hub pulls it over that one link), so a second attach for the same device
+    # ends at once. A named mutex, held for this process's life: Windows frees it when the process ends,
+    # however it ends, so a dead link never blocks the next. Local\ is this logon session's namespace,
+    # where every session of this listener runs.
+    $private:oneLink = New-Object System.Threading.Mutex($false, ("Local\horde-attach-" + $hubId + "-" + $Device))
+    $private:held = $false
+    try { $held = $oneLink.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+    if (-not $held) { throw ("device " + $Device + " already has a live link to this hub; a device has one at a time") }
+    # The longest line the relay passes on: no frame may be longer (issue #147, item 1).
+    $private:ceiling = [int](Get-HordeLinkLimits (Get-HordeSchema -Name "link-frame.v1"))["frameBytesCeiling"]
+    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -MaxLineBytes $ceiling -ExitWhenHubCloses
     if (-not $result.ok) { throw $result.reason }
 } catch {
     [Console]::Error.WriteLine("horde attach: " + $_.Exception.Message)
