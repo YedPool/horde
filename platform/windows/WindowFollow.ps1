@@ -27,8 +27,13 @@
 # that sizes the other window here; a place the person dragged it to is an offset handed to the same
 # function; the small tab is a size. None of the three exists yet.
 #
-# PIXELS ARE REAL PIXELS when the process is per-monitor DPI aware, which is the window's maker's to
-# arrange before it makes its first window. This file only reads the other window's scale
+# PIXELS ARE REAL PIXELS only when the process draws at each screen's real scale, and asking Windows
+# for that has ONE owner, platform/windows/Scale.ps1, loaded here: a caller that works out a place
+# before its window exists calls Enable-HordeWindowsRealScale first, or the rectangle it reads is a
+# scaled one. (Measured 2026-10-06 with the process made aware first, at one and a half times the
+# ordinary scale: a terminal window at 60,60 of 1100 by 640 real pixels, and the companion standing at
+# 644,132, 480 by 532 - exactly the place worked out for it. What it looked like in the first second,
+# before it was followed, was not observed.) This file only reads the other window's scale
 # (GetDpiForWindow) so that margins and smallest sizes are the same physical size on every screen.
 # NOT MEASURED: a second monitor or a second scale - the measuring machine has one screen.
 #
@@ -41,6 +46,8 @@
 # Following a session into a new window is a later slice's.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
+
+. (Join-Path $PSScriptRoot "Scale.ps1")
 
 $script:HordeWindowFollowModes = @("floating")
 # The floating mode's numbers, in pixels at the ordinary scale of 96 dots per inch; each is multiplied
@@ -68,9 +75,6 @@ public static class HordeWindowFollowNative {
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
-    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
-    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. False when the process already has an awareness.
-    public static bool RealPixels() { try { return SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch (EntryPointNotFoundException) { return false; } }
 
     static IntPtr target = IntPtr.Zero, hook = IntPtr.Zero;
     static WinEventDelegate keep;       // held, or the delegate is collected while Windows still calls it
@@ -145,19 +149,6 @@ function Get-HordeWindowFollowPlacement {
 
 function Initialize-HordeWindowFollow {
     if ($null -eq ("HordeWindowFollowNative" -as [type])) { Add-Type -TypeDefinition $script:HordeWindowFollowSource }
-}
-
-function Enable-HordeWindowRealPixels {
-    # Make this process see real pixels on every screen, before it has made a window: a rectangle read
-    # while Windows is still scaling for the process is a scaled one, and a place worked out from it
-    # would be wrong by the screen's scale. (Measured 2026-10-06 with this called first, at one and a
-    # half times the ordinary scale: a terminal window at 60,60 of 1100 by 640 real pixels, and the
-    # companion standing at 644,132, 480 by 532 - exactly the place worked out for it. What it looked
-    # like in the first second, before it was followed, was not observed.) Returns
-    # whether Windows took it; false is not an error - the process already had its awareness, and a
-    # window's maker asks too.
-    Initialize-HordeWindowFollow
-    return [bool][HordeWindowFollowNative]::RealPixels()
 }
 
 function Get-HordeWindowRectangle {
