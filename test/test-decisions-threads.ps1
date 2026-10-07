@@ -7,8 +7,9 @@
 #     line breaks exactly; a double submit of one id is one message, and two messages are two;
 #   - WORDS ARE NEVER DROPPED: said under a question closed a moment earlier, or to a wording that has
 #     moved on, they are stored and flagged, and change nothing of the question;
-#   - NOTHING IS MARKED READ UNSEEN: an inbox hands back exactly what it marks, a bound is honoured, a
-#     second inbox is empty, and reading alone marks nothing and writes nothing;
+#   - NOTHING IS MARKED READ UNSEEN: reading and marking are two operations; a marking names the record
+#     it marks up to and marks nothing beyond it; it is idempotent; a second inbox is empty; and
+#     reading marks nothing and writes nothing, however often;
 #   - A SECRET IS REFUSED WITHOUT BEING REPEATED, and who may speak, by what route, and who may record
 #     whose words are the rules' closed lists - which did not widen who may change the list.
 # Writers in separate processes - a say racing a close, an inbox racing a new message, a writer killed
@@ -63,13 +64,12 @@ function Say {
     return (Invoke-Op $Store "say" $request)
 }
 function Reply { param([string]$Store, [int]$Number, [string]$Text) return (Say -Store $Store -Number $Number -Text $Text -Speaker "warchief" -Route "command") }
-function Inbox {
-    param([string]$Store, [switch]$Mark, [string]$Id = "", [long]$UpTo = 0, [string]$Actor = "warchief")
-    $request = @{ actor = $Actor }
-    if ($Mark) { $request["mark"] = $true; if ($Id -eq "") { $Id = New-Id } }
-    if ($Id -ne "") { $request["id"] = $Id }
-    if ($UpTo -gt 0) { $request["upTo"] = $UpTo }
-    return (Invoke-Op $Store "inbox" $request)
+function Inbox { param([string]$Store, [string]$Actor = "warchief") return (Invoke-Op $Store "inbox" @{ actor = $Actor }) }
+function Mark {
+    # Mark as read, for the warchief unless -Actor says otherwise, up to record -UpTo.
+    param([string]$Store, [long]$UpTo, [string]$Id = "", [string]$Actor = "warchief")
+    if ($Id -eq "") { $Id = New-Id }
+    return (Invoke-Op $Store "mark-read" @{ id = $Id; actor = $Actor; upTo = $UpTo })
 }
 function Get-Outcome { param($Answer) if ($Answer.state -cne "known") { return ($Answer.state + ": " + $Answer.reason) }; return "$($Answer.value.outcome)" }
 function Test-Refused { param($Answer, [string]$Text) return ($Answer.state -ceq "known" -and $Answer.value.outcome -ceq "refused" -and @($Answer.value.findings | Where-Object { "$_".Contains($Text) }).Count -gt 0) }
@@ -94,7 +94,8 @@ function Get-Said {
     return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingStated = "none"; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none" }
 }
 function Get-Unread { param($Thread) $u = @($Thread.unread | Where-Object { $_.reader -ceq "warchief" }) | Select-Object -First 1; if ($null -eq $u) { return -1 }; return [int]$u.count }
-function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["messages"]) { return "(the answer holds no messages)" }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo + " marked=" + $Answer.value.marked) }
+function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["messages"]) { return "(the answer holds no messages)" }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo) }
+function Get-MarkLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["marked"]) { return ($Answer.value.outcome + " (the answer does not say what it marked)") }; return ("" + $Answer.value.outcome + " upTo=" + $Answer.value.upTo + " marked=" + $Answer.value.marked) }
 function Test-Echo { param($Answer, [string]$Text) return ((ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $Answer) -Compress -Depth 12).Contains($Text)) }
 
 try {
@@ -102,9 +103,9 @@ try {
 Write-Host ""
 Write-Host "--- the operations of the conversation ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
-Check (@($ops | Where-Object { $_.name -ceq "say" -and $_.writes }).Count -eq 1 -and @($ops | Where-Object { $_.name -ceq "inbox" }).Count -eq 1) "say and inbox are operations, as a caller may list them"
+Check (@($ops | Where-Object { $_.name -ceq "say" -and $_.writes }).Count -eq 1 -and @($ops | Where-Object { $_.name -ceq "inbox" -and -not $_.writes }).Count -eq 1 -and @($ops | Where-Object { $_.name -ceq "mark-read" -and $_.writes }).Count -eq 1) "say, inbox and mark-read are operations, as a caller may list them: say and mark-read write, and inbox only reads"
 $reqDefs = @($defs.requestSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($reqDefs -ccontains "say") -and ($reqDefs -ccontains "inbox")) "each has its request definition in schema/decision-request.v1"
+Check (($reqDefs -ccontains "say") -and ($reqDefs -ccontains "inbox") -and ($reqDefs -ccontains "mark-read")) "each has its request definition in schema/decision-request.v1"
 
 Write-Host ""
 Write-Host "--- say: the words are kept, whole and exactly, in one record ---" -ForegroundColor Cyan
@@ -246,59 +247,72 @@ $none = Say $s 99 "to a question that is not there"
 Check ($none.state -ceq "absent" -and $none.reason -like "*there is no question 99*" -and (Get-Count $s) -eq $before) ("words under a number that was never given are answered absent, and nothing is written (" + $none.state + ")")
 
 Write-Host ""
-Write-Host "--- inbox: what the warchief has not read, across questions, oldest first ---" -ForegroundColor Cyan
+Write-Host "--- inbox: what the warchief has not read, across questions, oldest first; it only reads ---" -ForegroundColor Cyan
 $s = New-TestStore
 $empty = Inbox $s
-Check ((Get-InboxLine $empty) -ceq " upTo=0 marked=0" -and -not (Test-Path -LiteralPath $s)) ("with no store yet the inbox is empty, and reading it made no folder (" + (Get-InboxLine $empty) + ")")
+Check ((Get-InboxLine $empty) -ceq " upTo=0" -and -not (Test-Path -LiteralPath $s)) ("with no store yet the inbox is empty, and reading it made no folder (" + (Get-InboxLine $empty) + ")")
 $null = Add-Q $s "Should the closing sound play when the assistant closes?"
 $null = Add-Q $s "Which languages besides English should the test talker speak?"
 $null = Say $s 1 "one, under the first"          # record 3
 $null = Say $s 2 "two, under the second"         # record 4
 $null = Reply $s 1 "the warchief's own reply"    # record 5
 $null = Say $s 1 "three, under the first again"  # record 6
-$peek = Inbox $s
-Check ((Get-InboxLine $peek) -ceq "3@1,4@2,6@1 upTo=6 marked=0") ("the inbox holds the founder's three messages, from both questions, oldest first, and not the warchief's own reply (" + (Get-InboxLine $peek) + ")")
-Check ((Get-Outcome $peek) -ceq "done" -and $peek.value.messages[1].title -ceq "Which languages besides English should the test talker speak?" -and $peek.value.messages[1].message.text -ceq "two, under the second" -and $peek.value.messages[1].state -ceq "open") "each with its question's number, its plain-words title and the words"
-Check ((Get-Count $s) -eq 6 -and (Get-InboxLine (Inbox $s)) -ceq "3@1,4@2,6@1 upTo=6 marked=0") "READING MARKS NOTHING AND WRITES NOTHING: the same inbox again is the same three, and the store has no new record"
-Check ((Get-Unread (Get-Thread $s 1)) -eq 2 -and (Get-Unread (Get-Thread $s 2)) -eq 1) "CONTROL: all three are still unread by the warchief"
+$read = Inbox $s
+Check ((Get-InboxLine $read) -ceq "3@1,4@2,6@1 upTo=6") ("the inbox holds the founder's three messages, from both questions, oldest first, and not the warchief's own reply; upTo names the last of them (" + (Get-InboxLine $read) + ")")
+Check ((Get-Outcome $read) -ceq "done" -and $read.value.messages[1].title -ceq "Which languages besides English should the test talker speak?" -and $read.value.messages[1].message.text -ceq "two, under the second" -and $read.value.messages[1].state -ceq "open") "each with its question's number, its plain-words title and the words"
+Check ((Get-Count $s) -eq 6 -and (Get-InboxLine (Inbox $s)) -ceq "3@1,4@2,6@1 upTo=6" -and (Get-Unread (Get-Thread $s 1)) -eq 2 -and (Get-Unread (Get-Thread $s 2)) -eq 1) "READING MARKS NOTHING AND WRITES NOTHING, however often: the same inbox again is the same three, all still unread, and the store has no new record"
+Check ($null -eq $read.value.PSObject.Properties["marked"] -and $null -eq $read.value.PSObject.Properties["sequence"]) "an inbox answer says nothing of marking: it has no way to mark"
+$before = Get-Count $s
+Check ((Test-Refused (Invoke-Op $s "inbox" @{ actor = "warchief"; mark = $true; id = (New-Id) }) "request has 'mark'") -and (Get-Count $s) -eq $before -and (Get-InboxLine (Inbox $s)) -ceq "3@1,4@2,6@1 upTo=6") "READING AND MARKING ARE TWO OPERATIONS: an inbox asked to mark is refused as not what inbox takes, and marks nothing"
+Check ((Test-Refused (Inbox $s -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Test-Refused (Inbox $s -Actor "goblin") "'goblin' has no inbox")) "a role with no inbox is told so"
+
+Write-Host ""
+Write-Host "--- mark-read: up to a given record, as one record of its own, and idempotent ---" -ForegroundColor Cyan
 $markId = New-Id
-$marked = Inbox $s -Mark -Id $markId
-Check ((Get-InboxLine $marked) -ceq "3@1,4@2,6@1 upTo=6 marked=3" -and $marked.value.sequence -eq 7) ("asked to mark, the inbox hands back the same three and says it marked three, as record 7 (" + (Get-InboxLine $marked) + ")")
+$marked = Mark $s 6 -Id $markId
+Check ((Get-MarkLine $marked) -ceq "done upTo=6 marked=3" -and $marked.value.sequence -eq 7 -and $marked.value.attempts -eq 1) ("marking up to record 6 is done, as record 7, and says it marked the three messages up to there (" + (Get-MarkLine $marked) + ")")
 $rec = Read-Record $s 7
-Check ($rec.kind -ceq "messages-read" -and $rec.actor -ceq "warchief" -and $rec.data.reader -ceq "warchief" -and $rec.data.upTo -eq 6 -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "reader,upTo") "marking is one record of its own: the warchief has read up to record 6, the LAST MESSAGE HANDED BACK"
-Check ((Get-Unread (Get-Thread $s 1)) -eq 0 -and (Get-Unread (Get-Thread $s 2)) -eq 0 -and @((Get-Thread $s 1).messages | Where-Object { @($_.unreadBy).Count -gt 0 }).Count -eq 0) "and now nothing is unread by the warchief, in either thread"
-$second = Inbox $s -Mark
-Check ((Get-InboxLine $second) -ceq " upTo=0 marked=0" -and (Get-Count $s) -eq 7) ("THE SECOND INBOX IS EMPTY, and marking nothing writes nothing (" + (Get-InboxLine $second) + "; " + (Get-Count $s) + " records)")
-$replayed = Inbox $s -Mark -Id $markId
-Check ((Get-Outcome $replayed) -ceq "replayed" -and (Get-InboxLine $replayed) -ceq "3@1,4@2,6@1 upTo=6 marked=3" -and $replayed.value.sequence -eq 7 -and (Get-Count $s) -eq 7) ("the FIRST marking sent again, same id, is answered with the same three messages and writes nothing: a caller that lost the answer has not lost the words (" + (Get-InboxLine $replayed) + ")")
+Check ($rec.kind -ceq "messages-read" -and $rec.actor -ceq "warchief" -and $rec.data.reader -ceq "warchief" -and $rec.data.upTo -eq 6 -and (@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "reader,upTo") "marking is one record of its own: the warchief has read up to record 6"
+Check ($null -eq $marked.value.PSObject.Properties["messages"]) "a marking answer carries no messages: reading them is the inbox's"
+Check ((Get-Unread (Get-Thread $s 1)) -eq 0 -and (Get-Unread (Get-Thread $s 2)) -eq 0 -and (Get-InboxLine (Inbox $s)) -ceq " upTo=0") "and now nothing is unread by the warchief: THE SECOND INBOX IS EMPTY"
+# IDEMPOTENT, three ways: the same id again; a new id for the same record; a new id for an earlier one.
+$again = Mark $s 6 -Id $markId
+Check ((Get-MarkLine $again) -ceq "replayed upTo=6 marked=3" -and $again.value.sequence -eq 7 -and (Get-Count $s) -eq 7) ("the same marking sent again, same id, is answered from its record and writes nothing (" + (Get-MarkLine $again) + ")")
+$same = Mark $s 6
+Check ((Get-MarkLine $same) -ceq "done upTo=6 marked=0" -and (Get-Count $s) -eq 7 -and $null -eq $same.value.PSObject.Properties["sequence"]) ("marking up to a record already read, under a new id, is done, marks nothing and WRITES NOTHING (" + (Get-MarkLine $same) + "; " + (Get-Count $s) + " records)")
+$back = Mark $s 4
+Check ((Get-MarkLine $back) -ceq "done upTo=4 marked=0" -and (Get-Count $s) -eq 7 -and (Get-InboxLine (Inbox $s)) -ceq " upTo=0") "marking up to an earlier record never moves the mark back: nothing becomes unread again"
 $null = Say $s 2 "four, said after the marking"   # record 8
-Check ((Get-InboxLine (Inbox $s)) -ceq "8@2 upTo=8 marked=0" -and (Get-Unread (Get-Thread $s 2)) -eq 1) "a message said after the marking is unread, and is the whole of the next inbox"
-$replayed = Inbox $s -Mark -Id $markId
-Check ((Get-InboxLine $replayed) -ceq "3@1,4@2,6@1 upTo=6 marked=3" -and (Get-InboxLine (Inbox $s)) -ceq "8@2 upTo=8 marked=0") "and the old marking sent yet again still answers with its own three, and does not mark the new one"
+Check ((Get-InboxLine (Inbox $s)) -ceq "8@2 upTo=8" -and (Get-Unread (Get-Thread $s 2)) -eq 1) "a message said after the marking is unread, and is the whole of the next inbox"
+Check ((Get-MarkLine (Mark $s 6 -Id $markId)) -ceq "replayed upTo=6 marked=3" -and (Get-InboxLine (Inbox $s)) -ceq "8@2 upTo=8") "and the old marking sent yet again still answers as it was, and does not mark the new message"
 # The title an inbox shows is the question as it reads now.
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ title = "Which languages should the test talker speak first?" } }
 $now = Inbox $s
 Check ($now.value.messages[0].title -ceq "Which languages should the test talker speak first?" -and $now.value.messages[0].message.saidToEarlierWording -eq $false -and $now.value.messages[0].message.wordingStated -eq $false) "the inbox names a question by its words as they are now; the message, recorded from chat with no wording stated, says so and is not flagged"
 
 Write-Host ""
-Write-Host "--- inbox: only what is handed back is marked ---" -ForegroundColor Cyan
+Write-Host "--- mark-read: only up to the record named, and never past what is written ---" -ForegroundColor Cyan
 $s = New-TestStore
 $null = Add-Q $s
 $null = Say $s 1 "first"    # record 2
 $null = Say $s 1 "second"   # record 3
 $null = Say $s 1 "third"    # record 4
-$bounded = Inbox $s -Mark -UpTo 3
-Check ((Get-InboxLine $bounded) -ceq "2@1,3@1 upTo=3 marked=2" -and (Read-Record $s 5).data.upTo -eq 3) ("bounded at record 3, the inbox hands back and marks the two up to it (" + (Get-InboxLine $bounded) + ")")
-Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4 marked=0" -and (Get-Unread (Get-Thread $s 1)) -eq 1) "and the third, beyond the bound, is NOT marked: it is still unread"
-$below = Inbox $s -Mark -UpTo 3
-Check ((Get-InboxLine $below) -ceq " upTo=0 marked=0" -and (Get-Count $s) -eq 5) "a bound with nothing unread below it marks nothing and writes nothing"
+$bounded = Mark $s 3
+Check ((Get-MarkLine $bounded) -ceq "done upTo=3 marked=2" -and (Read-Record $s 5).data.upTo -eq 3) ("marking up to record 3 marks the two up to it (" + (Get-MarkLine $bounded) + ")")
+Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4" -and (Get-Unread (Get-Thread $s 1)) -eq 1) "and the third, beyond the record named, is NOT marked: it is still unread"
 $before = Get-Count $s
-Check ((Test-Refused (Invoke-Op $s "inbox" @{ actor = "warchief"; mark = $true }) "to mark messages as read the request needs an 'id'") -and (Get-Count $s) -eq $before) "marking without an id is refused: a marking that could not be told from its own repost"
-Check ((Test-Refused (Invoke-Op $s "inbox" @{ actor = "warchief"; id = (New-Id) }) "an 'id' is given and nothing is to be marked") -and (Get-Count $s) -eq $before) "an id on an inbox that only reads is refused, not ignored"
-Check ((Test-Refused (Inbox $s -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Get-Count $s) -eq $before) "a speaker with no inbox is told so"
-Check ((Test-Refused (Inbox $s -Actor "goblin") "'goblin' is not a role that may speak under a question, or mark what was said there as read") -and (Get-Count $s) -eq $before) "and a role that does not speak has none either"
-Check ((Test-Refused (Invoke-Op $s "inbox" @{ actor = "warchief"; mark = $true; id = (New-Id); upTo = 1e30 }) "'upTo' is not a record's sequence number") -and (Get-Count $s) -eq $before) "a bound no record can have is refused, not thrown on"
-Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4 marked=0") "CONTROL: none of the refusals marked anything"
+$future = Mark $s 6
+Check ((Get-Outcome $future) -ceq "refused" -and (Test-Refused $future "not before this record") -and (Get-Count $s) -eq $before -and (Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4") ("marking up to a record that is not written yet is refused: nothing is read before it is written (" + (Get-Outcome $future) + ")")
+Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; upTo = 4 }) "request has no 'id'") -and (Get-Count $s) -eq $before) "marking without an id is refused: it writes, and the id is what makes sending it twice one marking"
+Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; id = (New-Id) }) "request has no 'upTo'") -and (Get-Count $s) -eq $before) "marking with no record named is refused: there is no 'mark everything'"
+Check ((Test-Refused (Mark $s 4 -Actor "founder") "'founder' has no inbox; the roles that have one are: warchief") -and (Get-Count $s) -eq $before) "a speaker with no inbox cannot mark"
+Check ((Test-Refused (Mark $s 4 -Actor "goblin") "'goblin' is not a role that may speak under a question, or mark what was said there as read") -and (Get-Count $s) -eq $before) "and a role that does not speak cannot either"
+Check ((Test-Refused (Invoke-Op $s "mark-read" @{ actor = "warchief"; id = (New-Id); upTo = 1e30 }) "'upTo' is not a record's sequence number") -and (Get-Count $s) -eq $before) "a record number no record can have is refused, not thrown on"
+Check ((Get-InboxLine (Inbox $s)) -ceq "4@1 upTo=4") "CONTROL: none of the refusals marked anything"
+# A mark may name a record that is not a message: everything said up to it is read.
+$null = Reply $s 1 "a reply, record 6"   # record 6
+$upToReply = Mark $s 6
+Check ((Get-MarkLine $upToReply) -ceq "done upTo=6 marked=1" -and (Get-InboxLine (Inbox $s)) -ceq " upTo=0") ("marking up to a later record that is not the founder's marks what he said before it (" + (Get-MarkLine $upToReply) + ")")
 
 Write-Host ""
 Write-Host "--- a writer that loses its place to another checks again against what the winner left ---" -ForegroundColor Cyan
@@ -324,24 +338,23 @@ try {
     Check ((Get-Outcome $a) -ceq "done" -and $a.value.sequence -eq 3 -and $a.value.attempts -eq 2) ("the say is written to the next sequence number, on its second try (" + (Get-Outcome $a) + ")")
     Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).arrivedAfterClosing -eq $true -and $a.value.question.state -ceq "closed") "and it is flagged as having arrived after closing: the words are kept, the close stands"
     Check ((Get-Texts (Get-Thread $s 1)) -ceq "said as it was being closed") "the thread has the words"
-    # A NEW MESSAGE WINS THE PLACE A MARKING WANTED. With no bound, the marking is worked out again and
-    # hands back the new message too: what it marks is still exactly what it hands back.
-    $s = New-TestStore
-    $null = Add-Q $s
-    $null = Say $s 1 "seen before the marking began"   # record 2
-    $script:planted = 0; $script:plantText = New-Planted 3 "message-said" '{"number":1,"speaker":"founder","route":"chat-recorded","text":"arrived as the marking was being written","wordingVersion":1}' "d"
-    $a = Inbox $s -Mark
-    Check ($script:planted -eq 1 -and (Get-InboxLine $a) -ceq "2@1,3@1 upTo=3 marked=2" -and $a.value.attempts -eq 2 -and $a.value.sequence -eq 4) ("a marking that lost its place to a new message is worked out again: it hands back both and marks both (" + (Get-InboxLine $a) + ")")
-    Check ((Read-Record $s 4).data.upTo -eq 3 -and (Get-InboxLine (Inbox $s)) -ceq " upTo=0 marked=0") "the mark is up to the last message it handed back, and nothing is left unread that it did not hand back"
-    # WITH A BOUND - the caller showed a person the messages up to record 2 and now marks them - the new
-    # message is beyond it: it is not handed back by this call, and it is NOT marked.
+    # A NEW MESSAGE WINS THE PLACE A MARKING WANTED. The marking names the record it marks up to - the
+    # last message its caller showed - so the new message, which is beyond it, is NOT marked: the
+    # marking is written next, still up to record 2.
     $s = New-TestStore
     $null = Add-Q $s
     $null = Say $s 1 "shown to the person"   # record 2
-    $script:planted = 0; $script:plantText = New-Planted 3 "message-said" '{"number":1,"speaker":"founder","route":"chat-recorded","text":"arrived after the showing","wordingVersion":1}' "e"
-    $a = Inbox $s -Mark -UpTo 2
-    Check ($script:planted -eq 1 -and (Get-InboxLine $a) -ceq "2@1 upTo=2 marked=1" -and $a.value.attempts -eq 2) ("a bounded marking that lost its place to a new message marks only what was shown (" + (Get-InboxLine $a) + ")")
-    Check ((Get-InboxLine (Inbox $s)) -ceq "3@1 upTo=3 marked=0" -and (Read-Record $s 4).data.upTo -eq 2) "THE NEW MESSAGE IS NEVER MARKED READ UNSEEN: it is the next inbox"
+    $script:planted = 0; $script:plantText = New-Planted 3 "message-said" '{"number":1,"speaker":"founder","route":"chat-recorded","text":"arrived after the showing"}' "e"
+    $a = Mark $s 2
+    Check ($script:planted -eq 1 -and (Get-MarkLine $a) -ceq "done upTo=2 marked=1" -and $a.value.attempts -eq 2 -and $a.value.sequence -eq 4) ("a marking that lost its place to a new message is written next, and marks only up to the record it named (" + (Get-MarkLine $a) + ")")
+    Check ((Get-InboxLine (Inbox $s)) -ceq "3@1 upTo=3" -and (Read-Record $s 4).data.upTo -eq 2) "THE NEW MESSAGE IS NEVER MARKED READ UNSEEN: it is the next inbox"
+    # ANOTHER READER'S MARKING WINS THE PLACE: this one, worked out again, has nothing left to mark and writes nothing.
+    $s = New-TestStore
+    $null = Add-Q $s
+    $null = Say $s 1 "read by two at once"   # record 2
+    $script:planted = 0; $script:plantText = New-Planted 3 "messages-read" '{"reader":"warchief","upTo":2}' "f"
+    $a = Mark $s 2
+    Check ($script:planted -eq 1 -and (Get-MarkLine $a) -ceq "done upTo=2 marked=0" -and (Get-Count $s) -eq 3) ("a marking that lost its place to another marking of the same record writes no second one (" + (Get-MarkLine $a) + ")")
 } finally {
     Remove-Item -LiteralPath function:Add-HordeDecisionRecord
     . (Join-Path $root "decisions\Store.ps1")
@@ -357,7 +370,7 @@ function Get-Turn { param([string]$Store) $l = Invoke-Op $Store "list" @{ state 
 $turns = New-Object System.Collections.ArrayList
 $null = Add-Q $s;                                                    [void]$turns.Add((Get-Turn $s))   # asked
 $null = Say $s 1 "which one do you mean?";                            [void]$turns.Add((Get-Turn $s))   # he speaks
-$null = Inbox $s -Mark;                                              [void]$turns.Add((Get-Turn $s))   # it reads: not a turn
+$null = Mark $s (Inbox $s).value.upTo;                               [void]$turns.Add((Get-Turn $s))   # it reads and marks: not a turn
 $null = Reply $s 1 "the short one";                                  [void]$turns.Add((Get-Turn $s))   # it replies
 $null = Say $s 1 "then yes";                                         [void]$turns.Add((Get-Turn $s))   # he speaks
 $null = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." };       [void]$turns.Add((Get-Turn $s))   # it closes instead of replying

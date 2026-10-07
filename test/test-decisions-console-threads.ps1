@@ -156,8 +156,26 @@ $null = Run "answer" @{ Number = "2"; Text = "And Spanish after." }       # reco
 $asData = Run "inbox" @{ Json = $true }
 $parsed = $null
 try { $parsed = (@($asData.lines)[0] | ConvertFrom-Json) } catch { }
-Check ($asData.failure -eq "" -and @($asData.lines).Count -eq 1 -and $null -ne $parsed -and @($parsed.value.messages).Count -eq 1 -and $parsed.value.messages[0].message.text -ceq "And Spanish after." -and $parsed.value.upTo -eq 7) "inbox -Json prints one line holding the messages, and no second line for the marking"
-Check ((Get-Kinds $store) -ceq "added,added,said,said,said,read,said,read" -and (Read-Record $store 8).data.upTo -eq 7) "and the marking was made all the same"
+Check ($asData.failure -eq "" -and @($asData.lines).Count -eq 1 -and @($asData.then).Count -eq 0 -and $null -ne $parsed -and @($parsed.value.messages).Count -eq 1 -and $parsed.value.messages[0].message.text -ceq "And Spanish after." -and $parsed.value.upTo -eq 7) "inbox -Json prints ONE line holding the messages, and nothing after it"
+Check ($null -ne $parsed -and $null -ne $parsed.PSObject.Properties["marking"] -and $parsed.marking.done -eq $true -and $parsed.marking.upTo -eq 7 -and $parsed.marking.marked -eq 1 -and $parsed.marking.reason -ceq "") "and that line says what the WHOLE command did: it marked, up to record 7, one message"
+Check ((Get-Kinds $store) -ceq "added,added,said,said,said,read,said,read" -and (Read-Record $store 8).data.upTo -eq 7) "which is what the store holds"
+$peekData = Run "inbox" @{ Json = $true; Peek = $true }
+$emptyData = Run "inbox" @{ Json = $true }
+$parsedPeek = $null; $parsedEmpty = $null
+try { $parsedPeek = (@($peekData.lines)[0] | ConvertFrom-Json); $parsedEmpty = (@($emptyData.lines)[0] | ConvertFrom-Json) } catch { }
+Check ($null -ne $parsedEmpty -and $emptyData.failure -eq "" -and $parsedEmpty.marking.done -eq $false -and $parsedEmpty.marking.reason -ceq "nothing was unread" -and @($parsedEmpty.value.messages).Count -eq 0 -and (Get-Kinds $store) -ceq "added,added,said,said,said,read,said,read") "with nothing unread the line says nothing was marked, and why; and nothing is written"
+$null = Run "answer" @{ Number = "1"; Text = "One more, to peek at." }      # record 9
+$peekData = Run "inbox" @{ Json = $true; Peek = $true }
+try { $parsedPeek = (@($peekData.lines)[0] | ConvertFrom-Json) } catch { $parsedPeek = $null }
+Check ($null -ne $parsedPeek -and $peekData.failure -eq "" -and @($parsedPeek.value.messages).Count -eq 1 -and $parsedPeek.marking.done -eq $false -and $parsedPeek.marking.reason -like "not asked: -Peek*" -and (Get-Kinds $store) -ceq "added,added,said,said,said,read,said,read,said") "with -Peek the line holds the message and says the marking was not asked for; nothing is marked"
+# A marking that fails under -Json: the one line is still written, says the marking was NOT made, and the command fails.
+New-Item -ItemType Directory -Path (Join-Path $store "0000000010.json") | Out-Null
+$failData = Run "inbox" @{ Json = $true }
+Remove-Item -LiteralPath (Join-Path $store "0000000010.json")
+$parsedFail = $null
+try { $parsedFail = (@($failData.lines)[0] | ConvertFrom-Json) } catch { }
+Check (@($failData.lines).Count -eq 1 -and $null -ne $parsedFail -and @($parsedFail.value.messages).Count -eq 1 -and $parsedFail.marking.done -eq $false -and "$($parsedFail.marking.reason)" -ne "" -and $failData.failure -like "the messages were NOT marked as read, and will be shown again:*") ("when the marking cannot be written, the one line holds the messages and says they were NOT marked, and the command fails (" + $failData.failure + ")")
+Check ((Run "inbox" @{ Peek = $true }).lines -contains "      One more, to peek at.") "and they are shown again by the next inbox: at least once, never lost"
 
 Write-Host ""
 Write-Host "--- a message that arrives between the printing and the marking is never marked unseen ---" -ForegroundColor Cyan
@@ -174,9 +192,18 @@ Check ((Test-Line $next "1 message(s) not yet read, oldest first:") -and (Test-L
 $store = New-Home
 $null = Add-Q
 $null = Run "answer" @{ Number = "1"; Text = "Read by two at once." }   # record 2
-$other = { $null = Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief"; id = [guid]::NewGuid().ToString("N"); mark = $true } }
+$other = { $null = Invoke-HordeDecision -Operation "mark-read" -Request @{ actor = "warchief"; id = [guid]::NewGuid().ToString("N"); upTo = 2 } }
 $box = Run "inbox" @{} $other
 Check ($box.failure -eq "" -and (Test-Line $box "      Read by two at once.") -and (Test-Line $box "Nothing was left to mark: the messages above were marked as read by another reader in the meantime.") -and (Get-Kinds $store) -ceq "added,said,read") ("when another reader marked them first, this one says so and writes no second marking (" + (Get-Kinds $store) + ")")
+# A MARKING THAT IS REFUSED is a failed marking too, and says why: here its id was used, between the
+# printing and the marking, for another request.
+$store = New-Home
+$null = Add-Q
+$null = Run "answer" @{ Number = "1"; Text = "Printed, and its marking refused." }   # record 2
+$usedId = [guid]::NewGuid().ToString("N")
+$takeId = { $null = Invoke-HordeDecision -Operation "say" -Request @{ id = $usedId; actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "took the id" } }
+$box = Run "inbox" @{ Id = $usedId } $takeId
+Check ((Test-Line $box "      Printed, and its marking refused.") -and $box.failure -like "the messages above were NOT marked as read, and will be shown again:*already used for a different request*" -and @($box.then).Count -eq 0 -and (Get-Kinds $store) -ceq "added,said,said") ("a marking that is refused fails the command, says the messages were not marked, and gives the reason (" + $box.failure + ")")
 # A MARKING THAT FAILS says so, and says the messages will be shown again - which they are.
 $store = New-Home
 $null = Add-Q
