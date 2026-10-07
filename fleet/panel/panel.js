@@ -9,6 +9,7 @@
 //   panel.update(status)       the value of the fleet request: { state, reason, orcs: [...] }
 //   panel.setCounts(counts)    { "<key>": number }: how many of the host's items belong to each entry
 //   panel.setPicked(key)       which entry is picked, or null
+//   panel.setFolded(bool)      folded to its strip, or open
 //   panel.snapshot()           { entries, written }: what is on screen, as numbers
 //   HordeFleetPanel.keyOf(name)  the key of the entry a name such as "Orc D (test deploy)" belongs to,
 //                                or null when the name is not an Orc's
@@ -52,7 +53,14 @@
   function mount(root, options) {
     var onPick = (options && typeof options.onPick === "function") ? options.onPick : function () {};
     var state = { status: null, counts: {}, picked: null, collapsed: false, entries: 0, written: 0 };
-    try { state.collapsed = window.localStorage.getItem("horde.fleet.collapsed") === "1"; } catch (e) { state.collapsed = false; }
+    // FOLDED TO BEGIN WITH WHERE IT WOULD EAT THE PAGE (options.startFolded): beside a narrow list the
+    // open panel took a third of the width and left the questions cut short (seen 2026-10-07, in a
+    // picture of the window at 567 pixels wide). What the reader last chose, if anything, wins.
+    state.collapsed = !!(options && options.startFolded);
+    try {
+      var kept = window.localStorage.getItem("horde.fleet.collapsed");
+      if (kept === "1") { state.collapsed = true; } else if (kept === "0") { state.collapsed = false; }
+    } catch (e) { /* nothing was remembered */ }
 
     function entriesOf() {
       var out = [];
@@ -155,7 +163,7 @@
       });
       root.appendChild(list);
       if (!state.collapsed) {
-        root.appendChild(make("div", "fp-foot", "Shows only what each Orc's status file and this list say. Working or idle is not shown yet. Marks: ! blocked, ? waiting on you, - nothing waiting, x no status written."));
+        root.appendChild(make("div", "fp-foot", "Only what each Orc's status file and this list say; working or idle is not shown yet. ! blocked, ? waiting on you, - nothing waiting, x no status written."));
       }
     }
 
@@ -164,6 +172,7 @@
       update: function (status) { state.status = status || null; render(); },
       setCounts: function (counts) { state.counts = counts || {}; render(); },
       setPicked: function (key) { state.picked = key || null; render(); },
+      setFolded: function (folded) { state.collapsed = !!folded; render(); },
       snapshot: function () { return { entries: state.entries, written: state.written }; }
     };
   }

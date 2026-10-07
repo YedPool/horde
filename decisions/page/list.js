@@ -11,6 +11,7 @@
 //   list.setList(answer)        the list operation's answer: { state, value, reason }, asked for every state
 //   list.setFilter(name)        open | waiting | free | closed
 //   list.setPredicate(fn, why)  a further filter over a question, or null; why is words for the header
+//   list.setOpen(numbers)       which questions are opened to their context, by number
 //   list.onChange(fn)           fn(snapshot) after every draw
 //   list.snapshot()             { rows, open, closed, waiting, expanded, filter }
 //
@@ -31,10 +32,10 @@
   "use strict";
 
   var FILTERS = {
-    open: { label: "All open", test: function (q) { return q.state === "open"; } },
-    waiting: { label: "Someone waiting", test: function (q) { return q.state === "open" && q.waiting.length > 0; } },
-    free: { label: "Nobody blocked", test: function (q) { return q.state === "open" && q.waiting.length === 0; } },
-    closed: { label: "Closed", test: function (q) { return q.state !== "open"; } }
+    open: { label: "All open", short: "Open", test: function (q) { return q.state === "open"; } },
+    waiting: { label: "Someone waiting", short: "Waiting", test: function (q) { return q.state === "open" && q.waiting.length > 0; } },
+    free: { label: "Nobody blocked", short: "Unblocked", test: function (q) { return q.state === "open" && q.waiting.length === 0; } },
+    closed: { label: "Closed", short: "Closed", test: function (q) { return q.state !== "open"; } }
   };
 
   function make(tag, className, text) {
@@ -127,7 +128,9 @@
       line.appendChild(make("span", "dt-tw"));
       line.appendChild(make("span", "dt-n", q.number));
       line.appendChild(make("span", "dt-t", q.title));
-      var who = q.state !== "open" ? "closed" : (q.waiting.length ? firstLine(q.waiting[0], 60) + (q.waiting.length > 1 ? " +" + (q.waiting.length - 1) : "") : "nobody");
+      // The name alone, without what it is waiting to do: that is in the opened row, and a row has
+      // no room for it (seen 2026-10-07: "Orc D (test..." took a third of a narrow row from the question).
+      var who = q.state !== "open" ? "closed" : (q.waiting.length ? firstLine(q.waiting[0].split(" (")[0], 18) + (q.waiting.length > 1 ? " +" + (q.waiting.length - 1) : "") : "nobody");
       line.appendChild(make("span", "dt-w " + (q.state !== "open" ? "dt-done" : (q.waiting.length ? "dt-wait" : "dt-free")), who));
       line.appendChild(make("span", "dt-rc", q.state !== "open" ? firstLine(q.outcome, 90) : firstLine(q.recommendation, 90)));
       function toggle() {
@@ -207,7 +210,14 @@
         root.appendChild(head);
         var note = "";
         for (i = 0; i < mine.length; i += 1) { if (String(mine[i].groupNote || "").trim() !== "") { note = mine[i].groupNote; break; } }
-        if (note) { root.appendChild(make("div", "dg-n", note)); }
+        if (note) {
+          // ONE LINE, opened by a click: a note of several sentences pushed every question under it
+          // off a narrow window (seen 2026-10-07: seven lines of note above three questions).
+          var noteBox = make("div", "dg-n", note);
+          noteBox.title = "Click to read the whole note";
+          noteBox.addEventListener("click", function () { this.classList.toggle("dg-n-open"); });
+          root.appendChild(noteBox);
+        }
         for (i = 0; i < mine.length; i += 1) { root.appendChild(row(mine[i])); state.rows += 1; }
       }
       scroller.scrollTop = keptTop;
@@ -227,6 +237,7 @@
       },
       setFilter: function (name) { if (FILTERS[name]) { state.filter = name; draw(); } },
       setPredicate: function (fn, why) { state.predicate = (typeof fn === "function") ? fn : null; state.predicateWhy = state.predicate ? String(why || "") : ""; draw(); },
+      setOpen: function (numbers) { state.open = {}; for (var i = 0; numbers && i < numbers.length; i += 1) { state.open[numbers[i]] = true; } draw(); },
       onChange: function (fn) { state.listeners.push(fn); },
       snapshot: snapshot,
       questions: questions
@@ -234,6 +245,6 @@
   }
 
   var names = [];
-  for (var name in FILTERS) { if (Object.prototype.hasOwnProperty.call(FILTERS, name)) { names.push({ name: name, label: FILTERS[name].label }); } }
+  for (var name in FILTERS) { if (Object.prototype.hasOwnProperty.call(FILTERS, name)) { names.push({ name: name, label: FILTERS[name].label, short: FILTERS[name].short }); } }
   window.HordeDecisionsList = { mount: mount, filters: names };
 })();

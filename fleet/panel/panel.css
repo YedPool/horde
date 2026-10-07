@@ -9,7 +9,7 @@
 .fp-toggle:focus-visible, .fp-entry:focus-visible { outline: 2px solid var(--accent, #0b4fb3); outline-offset: -2px; }
 .fp-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .fp-note { padding: 4px 6px; color: var(--muted, #4f5967); border-bottom: 1px solid var(--line, #d3d8e0); }
-.fp-foot { padding: 4px 6px; color: var(--muted, #4f5967); font-size: 11px; border-top: 1px solid var(--line, #d3d8e0); }
+.fp-foot { padding: 2px 6px; color: var(--muted, #4f5967); font-size: 10px; line-height: 1.25; border-top: 1px solid var(--line, #d3d8e0); }
 .fp-entry { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: var(--bg, #ffffff); border: none; border-bottom: 1px solid var(--line, #d3d8e0); border-left: 3px solid transparent; padding: 3px 6px 4px 5px; cursor: pointer; }
 .fp-entry:hover { background: var(--hover, #e6eefb); }
 .fp-entry[aria-pressed="true"] { background: var(--hover, #e6eefb); box-shadow: inset 0 -3px 0 var(--accent, #0b4fb3); }
@@ -18,7 +18,12 @@
 .fp-mark { flex: 0 0 auto; font-family: Consolas, "Courier New", monospace; font-weight: 700; min-width: 10px; text-align: center; }
 .fp-name { flex: 1 1 auto; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
 .fp-count { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--wait, #8a4200); white-space: nowrap; }
-.fp-l2, .fp-l3 { display: block; overflow-wrap: anywhere; }
+.fp-l2, .fp-l3 { overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
+/* Two lines of what it is doing and one of what it finished, so eight Orcs fit; the picked entry, and
+   one the pointer rests on, shows all of it (seen 2026-10-07: in full, three Orcs filled the panel). */
+.fp-l2 { -webkit-line-clamp: 2; }
+.fp-l3 { -webkit-line-clamp: 1; }
+.fp-entry[aria-pressed="true"] .fp-l2, .fp-entry[aria-pressed="true"] .fp-l3, .fp-entry:hover .fp-l2, .fp-entry:hover .fp-l3 { -webkit-line-clamp: 12; }
 .fp-l2 { color: var(--text, #14171c); }
 .fp-l3 { color: var(--muted, #4f5967); font-size: 11px; }
 .fp-why { color: var(--warn, #8e1610); font-weight: 700; }
@@ -29,6 +34,6 @@
 .fp-none .fp-name, .fp-none .fp-l2 { color: var(--muted, #4f5967); font-weight: 400; }
 /* folded to a strip: the letter, the mark, the count */
 .fp-collapsed .fp-head { justify-content: center; padding: 2px 0; }
-.fp-collapsed .fp-entry { padding: 3px 2px; border-left-width: 2px; }
-.fp-collapsed .fp-l1 { flex-direction: column; align-items: center; gap: 0; }
-.fp-collapsed .fp-count { min-height: 13px; }
+.fp-collapsed .fp-entry { padding: 1px 1px; border-left-width: 2px; }
+.fp-collapsed .fp-l1 { justify-content: center; gap: 1px; font-size: 11px; }
+.fp-collapsed .fp-letter, .fp-collapsed .fp-mark { min-width: 0; }

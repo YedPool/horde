@@ -1,7 +1,7 @@
 /* decisions/page/list.css - the list's own look: one line per question, thin group headers, a row
    that opens to its context. Colours come from the host page's variables, each with a fallback, so
    the list is readable on a page that defines none. */
-.dr { display: grid; align-items: center; column-gap: 8px; grid-template-columns: 12px 26px minmax(0, 1fr) minmax(0, 24%) minmax(0, 26%); padding: 0 8px; min-height: 22px; cursor: pointer; }
+.dr { display: grid; align-items: center; column-gap: 8px; grid-template-columns: 12px 26px minmax(0, 1fr) 62px minmax(0, 28%); padding: 0 8px; min-height: 20px; cursor: pointer; }
 .dq { border-bottom: 1px solid var(--line, #d3d8e0); }
 .dq:nth-of-type(even) { background: var(--alt, #f5f6f8); }
 .dq:hover { background: var(--hover, #e6eefb); }
@@ -20,7 +20,8 @@
 .dg { display: flex; align-items: baseline; gap: 8px; padding: 1px 8px; background: var(--head, #eceff3); border-bottom: 1px solid var(--line, #d3d8e0); border-top: 1px solid var(--line, #d3d8e0); min-height: 19px; }
 .dg-t { font-weight: 700; overflow-wrap: anywhere; }
 .dg-c { color: var(--muted, #4f5967); white-space: nowrap; font-size: 11px; }
-.dg-n { padding: 2px 8px 3px 30px; background: var(--head, #eceff3); border-bottom: 1px solid var(--line, #d3d8e0); color: var(--muted, #4f5967); overflow-wrap: anywhere; }
+.dg-n { padding: 0 8px 1px 30px; background: var(--head, #eceff3); border-bottom: 1px solid var(--line, #d3d8e0); color: var(--muted, #4f5967); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.dg-n-open { white-space: normal; overflow-wrap: anywhere; }
 .dx { padding: 4px 8px 7px 54px; border-top: 1px dotted var(--line, #d3d8e0); overflow-wrap: anywhere; white-space: pre-wrap; }
 .dx dl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 2px 10px; margin: 0; }
 .dx dt { color: var(--muted, #4f5967); font-weight: 700; white-space: normal; }
@@ -31,9 +32,20 @@
 .dp { background: var(--warnbg, #ffe1de); color: var(--warn, #8e1610); border-bottom: 1px solid var(--line, #d3d8e0); padding: 3px 8px; }
 .dp-head { font-weight: 700; }
 .dp-item { padding-left: 12px; overflow-wrap: anywhere; }
-@media (max-width: 460px) {
-  .dr { grid-template-columns: 12px 24px minmax(0, 1fr) minmax(0, 30%); }
+/* A NARROW LIST - in the floating window, a third of a terminal wide, or beside an open fleet panel.
+   Measured on the list's own container (the page names it "list"), not on the window: seen
+   2026-10-07, a 650-wide window with the panel open left the list 450 and cut every question short. The question is what must be read,
+   so it takes two lines there rather than being cut after a few words; the recommendation waits in
+   the opened row. */
+@container (max-width: 470px) {
+  .dr { grid-template-columns: 10px 20px minmax(0, 1fr) 44px; column-gap: 5px; padding: 1px 5px; align-items: start; }
+  .dt-t { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.25; }
+  .dq-open .dt-t { display: block; }
+  .dt-w { font-size: 11px; text-align: right; }
+  .dg { padding: 0 5px; }
+  .dg-n { padding-left: 8px; }
   .dt-rc { display: none; }
+  .dcols { display: none; }
   .dx { padding-left: 12px; }
   .dx dl { grid-template-columns: 78px minmax(0, 1fr); }
 }

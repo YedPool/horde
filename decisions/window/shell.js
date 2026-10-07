@@ -23,7 +23,8 @@
   var listRoot = document.getElementById("list");
   var list = window.HordeDecisionsList.mount(listRoot, { scroller: document.getElementById("main") });
   var picked = null;
-  var panel = Panel.mount(document.getElementById("fleet"), { onPick: pick });
+  // Under 700 pixels the open panel leaves too little of the list: it starts folded to its strip.
+  var panel = Panel.mount(document.getElementById("fleet"), { onPick: pick, startFolded: window.innerWidth < 700 });
   var notice = document.getElementById("notice");
   var notices = { attachment: "", bridge: "", list: "" };
 
@@ -56,6 +57,8 @@
       return;
     }
     list.setPredicate(function (q) { return keysOf(q).indexOf(key) >= 0; }, "only the picked fleet entry");
+    // In a narrow window the open panel covers the list (shell.css): fold it, so the answer to the click shows.
+    if (window.innerWidth < 460) { panel.setFolded(true); }
     only.textContent = "Only the picked fleet entry - click it again for all";
     only.hidden = false;
   }
@@ -75,7 +78,7 @@
     list.setList(answer);
     panel.setCounts(countsForPanel());
     var s = list.snapshot();
-    document.getElementById("counts").textContent = s.open + " open, " + s.waiting + " with someone waiting, " + s.closed + " closed";
+    document.getElementById("counts").textContent = s.open + " open, " + s.waiting + " waiting" + (s.closed ? ", " + s.closed + " closed" : "");
     report();
   }
 
@@ -106,7 +109,8 @@
     var b = document.createElement("button");
     b.type = "button";
     b.className = "sb";
-    b.textContent = f.label;
+    b.textContent = f.short;
+    b.title = f.label;
     b.setAttribute("aria-pressed", index === 0 ? "true" : "false");
     b.addEventListener("click", function () {
       var all = filterBox.querySelectorAll("button");
@@ -132,6 +136,19 @@
   bridge.on("list-changed", applyList);
   bridge.on("fleet-changed", function (status) { panel.update(status); report(); });
   bridge.on("attachment-changed", applyAttachment);
+  // SHOW: Horde says what the page should show - a filter, which rows are opened, which fleet entry is
+  // picked, whether the panel is folded. Each member is optional; one that is absent changes nothing.
+  bridge.on("show", function (v) {
+    if (!v || typeof v !== "object") { return; }
+    if (typeof v.filter === "string") {
+      var buttons = filterBox.querySelectorAll("button");
+      window.HordeDecisionsList.filters.forEach(function (f, i) { if (f.name === v.filter) { buttons[i].click(); } });
+    }
+    if (v.expanded && typeof v.expanded.length === "number") { list.setOpen(v.expanded); }
+    if (typeof v.folded === "boolean") { panel.setFolded(v.folded); }
+    if (typeof v.picked === "string") { var key = v.picked === "" ? null : v.picked; panel.setPicked(key); pick(key); }
+    report();
+  });
   bridge.request("kinds", {}).then(function (answer) { if (answer && answer.state === "known") { list.setKinds(answer.value); } }, failed("The kinds of question"));
   bridge.request("list", {}).then(applyList, failed("The list"));
   bridge.request("fleet", {}).then(function (status) { panel.update(status); report(); }, failed("The fleet's status"));
