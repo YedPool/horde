@@ -6,7 +6,7 @@
     Suite  = "test\test-hub-dial.ps1"
     Mutations = @(
         @{ Name = "dialled-link-unserved"
-           Find = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -IdleTimeoutMs $IdleTimeoutMs'
+           Find = '$ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs'
            Replace = 'Close-HordeLink -Link $open.value; $ended = "closed by the protocol"' }
         @{ Name = "backoff-flat"
            Find = '$wait = [int][Math]::Min($BackoffMaxMs, 1000 * [Math]::Pow(2, [Math]::Min(16, $streak - 1)))'
