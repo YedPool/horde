@@ -101,8 +101,8 @@ $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spa
 Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused") "a prompt with neither is refused"
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn @{ prompt = [pscustomobject]@{ handoffRef = (New-HordeLinkFrameId) } }))) -Data (Data -Journal $jr)
 Check ($r.needAct -eq $false -and "$($r.reply.error.reason)" -like "*handoff reference*not served*") "a handoff reference is not served yet, and is refused rather than ignored"
-$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.deliver" ([pscustomobject][ordered]@{ messageId = (New-HordeLinkFrameId); sessionId = $sid; from = [pscustomobject][ordered]@{ deviceId = "7c9e6679-7425-40de-944b-e07fc1f90ae7"; sessionId = "aaaaaaaa-0000-4000-8000-000000000002" }; body = "hi"; ttlSeconds = 60 }))) -Data (Data -Journal $jr)
-Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "unsupported-verb") "session.deliver, a drive verb, is still refused: this step acts only on spawn and close"
+$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.resume" ([pscustomobject][ordered]@{ sessionId = $sid }))) -Data (Data -Journal $jr)
+Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "unsupported-verb") "session.resume is still refused: this step acts only on spawn and close (session.deliver is messaging, R21 slice 4, and is tested there)"
 
 Write-Host ""
 Write-Host "--- a close is acted on the same way ---" -ForegroundColor Cyan
