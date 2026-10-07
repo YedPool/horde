@@ -91,12 +91,20 @@
       return words.join(", ");
     }
 
+    // A record's line may or may not end its own sentence. One of the eight real records read
+    // 2026-10-07 did, and with a full stop always added a picture of the real window showed "every
+    // installer branch.. Last finished:". A full stop is added only where the words have no end.
+    function sentence(text) {
+      var words = String(text);
+      return /[.!?]$/.test(words) ? words : words + ".";
+    }
+
     function rowWords(entry) {
       var r = entry.record;
       if (!r) { return ": no status written (no folder of status records is this Orc's)"; }
       if (!r.written) { return ": no status written (" + (r.problems || []).join("; ") + ")"; }
-      var words = " (" + r.lane + "): " + r.doing + ". Last finished: " + r.finished + ".";
-      if (r.blocked) { words += " Blocked: " + r.blockedBy + "."; }
+      var words = " (" + r.lane + "): " + sentence(r.doing) + " Last finished: " + sentence(r.finished);
+      if (r.blocked) { words += " Blocked: " + sentence(r.blockedBy); }
       var age = ageWords(r.ageSeconds);
       return words + (age ? " (" + age + ")" : "");
     }

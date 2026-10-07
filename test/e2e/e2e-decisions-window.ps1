@@ -95,7 +95,7 @@ try {
 $records = @(Get-ChildItem -LiteralPath $store -File)
 Check ($records.Count -eq 22) "the store holds 22 questions, numbered 1 to 22"
 $orcs = Join-Path $script:work "orcs"
-foreach ($o in @(@{ folder = "alpha"; lines = @("horde-orc-status 1", "orc: A", "lane: the first lane", "doing: Building the second step of the plan", "finished: The first step of the plan", "blocked: No") },
+foreach ($o in @(@{ folder = "alpha"; lines = @("horde-orc-status 1", "orc: A", "lane: the first lane", "doing: Building the second step of the plan.", "finished: The first step of the plan", "blocked: No") },
                  @{ folder = "beta"; lines = @("horde-orc-status 1", "orc: B", "lane: the second lane", "doing: Waiting for an answer", "finished: The measurements", "blocked: A machine it needs is switched off") },
                  @{ folder = "gamma"; lines = @("horde-orc-status 1", "orc: C", "lane: the third lane") })) {
     New-Item -ItemType Directory -Path (Join-Path $orcs $o.folder) -Force | Out-Null
@@ -142,7 +142,7 @@ Check ($drawn.fleet.open -eq $true -and $drawn.fleet.picked -ceq "orc:B") "the f
 Check ($drawn.fleet.head -ceq "Fleet: A, B blocked, waiting on you (6), gamma no status written, C no status written, waiting on you (6), D no status written, waiting on you (5)") ("the folded line: each Orc, its state in words, and how many questions wait on the reader for it (" + $drawn.fleet.head + ")")
 Check ($drawn.fleet.entries -eq 5 -and $drawn.fleet.written -eq 2 -and $drawn.fleet.notRead -eq 0 -and @($drawn.fleet.rows).Count -eq 5) "five entries - the three folders, and the two Orcs the list names that no good record speaks for; two records were good"
 Check ($drawn.fleet.rows[3] -ceq "Orc C: no status written (no folder of status records is this Orc's)") "an Orc the list names and no record speaks for is no status written, and never a guess"
-Check ($drawn.fleet.rows[0] -like "Orc A (the first lane): Building the second step of the plan. Last finished: The first step of the plan. (written *" -and $drawn.fleet.rows[0] -notlike "*Blocked*") "Orc A's line: its lane, what it is doing, what it last finished; its 'blocked: No' is not blocked"
+Check ($drawn.fleet.rows[0] -like "Orc A (the first lane): Building the second step of the plan. Last finished: The first step of the plan. (written *" -and $drawn.fleet.rows[0] -notlike "*Blocked*") "Orc A's line: its lane, what it is doing, what it last finished; its 'blocked: No' is not blocked; and its record ends what it is doing with a full stop, which the line does not write twice"
 Check ($drawn.fleet.rows[1] -like "Orc B (the second lane): Waiting for an answer. Last finished: The measurements. Blocked: A machine it needs is switched off. (written *") "Orc B's line says what blocks it"
 Check ($drawn.fleet.rows[2] -like "gamma: no status written (has 3 lines, and a record is 6*") "a malformed record is no status written, with what was wrong, and none of its fields"
 $mine = @($list | Where-Object { @($_.waiting | Where-Object { $_ -clike "Orc B*" }).Count -gt 0 -or "$($_.askedBy)" -clike "Orc B*" } | ForEach-Object { "" + $_.number })

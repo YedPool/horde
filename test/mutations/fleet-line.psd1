@@ -17,8 +17,14 @@
            Find = 'if (!seen[key] && key.indexOf("orc:") === 0 && state.counts[key] > 0) { extra.push(key); }'
            Replace = '' }
         @{ Name = "what-blocks-an-orc-is-left-out"
-           Find = 'if (r.blocked) { words += " Blocked: " + r.blockedBy + "."; }'
+           Find = 'if (r.blocked) { words += " Blocked: " + sentence(r.blockedBy); }'
            Replace = '' }
+        @{ Name = "a-sentence-is-ended-twice"
+           Find = 'return /[.!?]$/.test(words) ? words : words + ".";'
+           Replace = 'return words + ".";' }
+        @{ Name = "a-sentence-is-left-without-its-end"
+           Find = 'return /[.!?]$/.test(words) ? words : words + ".";'
+           Replace = 'return words;' }
         @{ Name = "a-broken-record-shown-by-its-fields"
            Find = 'if (!r.written) { return ": no status written (" + (r.problems || []).join("; ") + ")"; }'
            Replace = '' }
