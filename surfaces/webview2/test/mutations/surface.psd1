@@ -68,6 +68,15 @@
         @{ Name = "a-new-window-not-recorded"
            Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page asked for a new window, and none was opened"'
            Replace = '' }
+        @{ Name = "a-download-is-saved"
+           Find = '$Download.Cancel = $true'
+           Replace = '$Download.Cancel = $false' }
+        @{ Name = "a-download-not-recorded"
+           Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page tried to save a file, and none was saved"'
+           Replace = '' }
+        @{ Name = "the-download-handler-is-not-given-to-the-engine"
+           Find = '$core.add_DownloadStarting($h.download)'
+           Replace = '' }
         # --- the handlers
         @{ Name = "a-failed-tick-closes-the-window-unrecorded"
            Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { [void]$s.errors.Add("a tick failed: " + $_.Exception.Message) }'

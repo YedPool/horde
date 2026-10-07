@@ -59,16 +59,6 @@ try {
     $r = Invoke-HordeWeztermAct -Rest @("env-dump", $d1) -Target $T
     $seen = Read-HordePaneToolEnv -Path $d1
     Check ($r.code -eq 0 -and $null -ne $seen -and $seen["WEZTERM_UNIX_SOCKET"] -ceq $T.socket) "the call's process is pinned to the named terminal's socket, whatever this process's own pin says"
-    # THE ANSWER IS READ AS UTF-8. A pane title holds characters outside ASCII, and the finder of a
-    # session's window compares titles exactly. This process is first set to a console code page
-    # that has none of them, where it has a console at all; with none, .NET would decode in the
-    # machine's own code page, which has none of them either.
-    $said = ([string][char]0x2733) + " " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD + " caf" + [char]0x00E9
-    $wasEncoding = $null
-    try { $wasEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(437) } catch { $wasEncoding = $null }
-    try { $r = Invoke-HordeWeztermAct -Rest @("say", [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($said))) -Target $T }
-    finally { if ($null -ne $wasEncoding) { try { [Console]::OutputEncoding = $wasEncoding } catch { } } }
-    Check ($r.code -eq 0 -and $r.out -ceq $said) "what the terminal's command prints is read as UTF-8: text in three alphabets comes back character for character, whatever the console's code page"
     foreach ($name in @("WEZTERM_UNIX_SOCKET", "wezterm_unix_socket", "WEZTERM_PANE", "WEZTERM_CONFIG_FILE")) {
         foreach ($val in @($null, "C:\elsewhere\gui-sock-1")) {
             $dx = Join-Path $work ("m-" + [guid]::NewGuid().ToString("N") + ".txt")

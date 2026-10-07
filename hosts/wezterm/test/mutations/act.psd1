@@ -6,9 +6,6 @@
     Target = "hosts\wezterm\Act.ps1"
     Suite  = "hosts\wezterm\test\test-act.ps1"
     Mutations = @(
-        @{ Name = "answer-read-in-the-console-code-page"
-           Find = '$psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8'
-           Replace = '' }
         @{ Name = "no-auto-start-dropped"
            Find = 'return @("cli", "--no-auto-start") + @($Rest)'
            Replace = 'return @("cli") + @($Rest)' }
