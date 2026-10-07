@@ -35,6 +35,25 @@ function Get-HordeSuiteSectionIds {
     return [pscustomobject]@{ ok = $true; ids = $ids; error = "" }
 }
 
+function Get-HordeSectionTrapProblems {
+    # Each section of a suite file without a trap line of its own, as "line N: section <id> ...". The
+    # suite's trap resumes after the statement that failed, and a section is one statement, so without
+    # its own trap one unexpected error skips every check left in the section (test\lib\Suite.ps1).
+    param([string]$Path)
+    $tk = $null; $pe = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tk, [ref]$pe)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($if in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] }, $true))) {
+        foreach ($clause in @($if.Clauses)) {
+            $cond = $clause.Item1.Extent.Text
+            if ($cond -notmatch '^\s*Enter-HordeSuiteSection\s+"([^"]*)"') { continue }
+            $traps = @($clause.Item2.Traps | Where-Object { $null -ne $_ -and $_.Body.Extent.Text -match 'Register-HordeSuiteError' })
+            if ($traps.Count -ne 1) { [void]$out.Add("line " + $clause.Item1.Extent.StartLineNumber + ": section " + $Matches[1] + " has " + $traps.Count + " trap lines of its own, not one") }
+        }
+    }
+    return @($out)
+}
+
 function Get-HordeMutantSectionProblem {
     # Why a mutant's section map cannot run, or "" when it can. -Declared is Get-HordeSuiteSectionIds'
     # answer for the spec's suite; -Suite its path as the spec writes it, for the message. A spec whose
