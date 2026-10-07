@@ -74,7 +74,16 @@
         @{ Name = "the-claimants-not-named-are-not-counted"
            Find = 'if ($claimants.Count -gt $script:HordeFleetStatusMostNamed) { $names += '
            Replace = 'if ($false) { $names += ' }
-        @{ Name = "a-huge-file-read"
+        @{ Name = "a-control-character-accepted"
+           Find = '[void]$problems.Add("holds a control character")'
+           Replace = '' }
+        @{ Name = "a-tab-and-a-lone-return-accepted"
+           Find = "-cmatch '[\x00-\x09\x0B-\x1F\x7F]') {"
+           Replace = "-cmatch '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') {" }
+        @{ Name = "a-delete-accepted"
+           Find = "\x0B-\x1F\x7F]') {"
+           Replace = "\x0B-\x1F]') {" }
+        @{ Name = "a-huge-file-read\"
            Find = 'if ($info.Length -gt $script:HordeFleetStatusMostBytes) {'
            Replace = 'if ($false) {' }
         @{ Name = "blocked-only-when-it-says-yes"

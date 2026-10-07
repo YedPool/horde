@@ -79,6 +79,21 @@ Check ((Says (Parse (Bytes (With 4 "finished: Merged PR 106"))) "finished holds 
 Check (@((Parse (Bytes (With 2 "lane: tidying C:\work after PR 9"))).problems).Count -eq 0) "CONTROL: the rule is doing's and finished's alone, as the checker has it"
 
 Write-Host ""
+Write-Host "--- a control character is no part of a record ---" -ForegroundColor Cyan
+# A record with an escape, a NUL or a backspace in a field was "written" and handed on (measured
+# 2026-10-06 by the review of this reader). The record is plain words on six lines; the only bytes
+# below a space it may hold are the ends of its lines.
+foreach ($ctl in @(@{ byte = 0x1B; name = "an escape" }, @{ byte = 0x00; name = "a NUL" }, @{ byte = 0x08; name = "a backspace" }, @{ byte = 0x09; name = "a tab" }, @{ byte = 0x7F; name = "a delete" })) {
+    $r = Parse (Bytes (With 3 ("doing: Building" + [string][char]$ctl.byte + "the window")))
+    Check ((Says $r "holds a control character") -and @($r.problems).Count -eq 1 -and $null -eq $r.fields) ($ctl.name + " in a field: one problem, and no field is passed on")
+}
+$ctlLane = Parse (Bytes (With 2 ("lane: decisions" + [string][char]0x1B + "[31m page")))
+Check ((Says $ctlLane "holds a control character") -and $null -eq $ctlLane.fields) "in any field, not only the two that are held to plain words"
+$lone = Parse ([System.Text.Encoding]::ASCII.GetBytes(($good -join "`n").Replace("decisions page", "decisions`rpage") + "`n"))
+Check ((Says $lone "holds a control character") -and $null -eq $lone.fields) "a carriage return that ends no line is one too"
+Check (@((Parse (Bytes $good "`r`n")).problems).Count -eq 0 -and @((Parse (Bytes $good)).problems).Count -eq 0) "CONTROL: the ends of the six lines, in either form, are not"
+
+Write-Host ""
 Write-Host "--- this reader's own rules ---" -ForegroundColor Cyan
 foreach ($letter in @("orc: f", "orc: FF", "orc: 7", "orc: F ", "orc: Orc F")) {
     $r = Parse (Bytes (With 1 $letter))
@@ -212,7 +227,8 @@ $before = @(Get-ChildItem -LiteralPath $work -Recurse -Force | ForEach-Object { 
 $after = @(Get-ChildItem -LiteralPath $work -Recurse -Force | ForEach-Object { $_.FullName + "|" + $(if ($_.PSIsContainer) { "dir" } else { "" + $_.Length + "|" + $_.LastWriteTimeUtc.Ticks }) }) -join ";"
 Check ($before -ceq $after) "after reading, every file and folder is exactly as it was: nothing made, nothing touched"
 $src = [System.IO.File]::ReadAllText((Join-Path $root "fleet\StatusPanel.ps1"))
-Check (-not ($src -match 'WriteAll|Set-Content|Out-File|New-Item|Add-Content|Remove-Item|\.Delete\(|FileMode\]::(Create|Append|Truncate|OpenOrCreate)|FileAccess\]::(Write|ReadWrite)')) "and its source holds no call that writes, makes or removes a file"
+$writes = 'WriteAll|Set-Content|Out-File|New-Item|Add-Content|Remove-Item|\.Delete\(|FileMode\]::(Create|Append|Truncate|OpenOrCreate)|FileAccess\]::(Write|ReadWrite)'
+Check (-not ($src -match $writes)) "and its source holds no call that writes, makes or removes a file"
 
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-fleet-status-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }

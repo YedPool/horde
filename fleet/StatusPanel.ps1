@@ -23,9 +23,11 @@
 # ASCII; a line count that is not six; a first line that is not the header; a line that is not its
 # "key: value" with something after the colon; doing or finished over 120 characters; doing or
 # finished holding a bare pull-request or issue number or a file path (the record is read cold by a
-# person: "the fix for garbled mail", not "PR 68"). One rule is this reader's own, because it has no
-# table of who sits where: the orc line is ONE capital letter, and two folders that both claim one
-# letter are both "no status written", since which is that Orc cannot be told.
+# person: "the fix for garbled mail", not "PR 68"). Two rules are this reader's own. It has no table
+# of who sits where, so the orc line is ONE capital letter, and two folders that both claim one letter
+# are both "no status written", since which is that Orc cannot be told. And a record holds no control
+# character but the ends of its lines: the checker lets one through, and this reader hands a record
+# on to be drawn.
 #
 # WHAT THIS DOES NOT SAY, and the panel must not pretend to: working or idle, sessions open, waiting
 # on a person. Those come from the fleet's activity and the list of questions, not from this file.
@@ -119,6 +121,10 @@ function ConvertFrom-HordeFleetStatusBytes {
     if (@($body | Where-Object { $_ -gt 127 }).Count -gt 0) { [void]$problems.Add("holds bytes that are not ASCII") }
     # Latin-1 maps each byte to one character, so nothing is lost or merged before the lines are split.
     $text = [System.Text.Encoding]::GetEncoding(28591).GetString($body)
+    # A CONTROL CHARACTER IS NO PART OF A RECORD: the only bytes below a space it may hold are the ends
+    # of its six lines. An escape, a NUL or a backspace in a field was handed on as "written" (measured
+    # 2026-10-06 by the review of this reader), to be shown by whatever draws the record.
+    if ($text.Replace("`r`n", "`n") -cmatch '[\x00-\x09\x0B-\x1F\x7F]') { [void]$problems.Add("holds a control character") }
     $lines = New-Object System.Collections.ArrayList
     foreach ($l in ($text.Replace("`r`n", "`n") -split "`n")) { [void]$lines.Add($l) }
     while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") { $lines.RemoveAt($lines.Count - 1) }
