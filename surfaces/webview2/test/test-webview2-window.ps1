@@ -1,0 +1,287 @@
+# DOES THE WINDOW SURFACE DO, IN A REAL WINDOW, EACH THING ITS capabilities.json SAYS YES TO?
+#
+# surfaces/webview2/test/test-webview2-surface.ps1 checks what can be checked with no window. This
+# suite opens the real one - hidden, at -32000,-32000, out of the taskbar, never taking the keyboard -
+# on a small page of its own (test/pages/probe) that behaves as a hostile page would, and holds three
+# things against each other: what the page saw from inside, what the surface recorded on the bridge,
+# and (for the listening-port check) a listener the suite itself opens on the loopback address.
+# A handler the engine was never handed records nothing here, so this is also the check that each
+# lock is really given to the engine (review of 2026-10-06, finding A5).
+#
+# MACHINE-BOUND (test/lib/SuiteFiles.ps1): it needs the web engine installed and an interactive
+# logon, so it runs through the local gate and never on the remote test box.
+#
+# WHAT IT TOUCHES: one hidden window of this process; a profile folder and a picture under %TEMP%;
+# one listening socket on 127.0.0.1 at a port Windows picks, closed at the end. It writes nothing
+# under any Horde home. If the download lock ever fails, the page's file lands in the user's own
+# Downloads folder under a name unique to this run, and this suite removes exactly that file.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "surfaces\Port.ps1")
+. (Join-Path $root "surfaces\webview2\Surface.ps1")
+
+Add-Type -Namespace HordeSurfaceProbe -Name Native -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+[DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+'@
+
+$work = Join-Path $env:TEMP ("horde-webview2-window-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $work | Out-Null
+$pages = Join-Path $here "pages"
+
+function Get-ProbeProcessTree {
+    # This process and everything it started, as { id; name }: the engine's processes are among them.
+    $all = @((New-Object System.Management.ManagementObjectSearcher("SELECT ProcessId, ParentProcessId, Name FROM Win32_Process")).Get() | ForEach-Object { [pscustomobject]@{ id = [int]$_.ProcessId; parent = [int]$_.ParentProcessId; name = "" + $_.Name } })
+    $tree = New-Object System.Collections.ArrayList
+    $ids = @{ $PID = $true }
+    [void]$tree.Add([pscustomobject]@{ id = $PID; name = "this process" })
+    $grew = $true
+    while ($grew) {
+        $grew = $false
+        foreach ($p in $all) { if ($ids.ContainsKey($p.parent) -and -not $ids.ContainsKey($p.id)) { $ids[$p.id] = $true; [void]$tree.Add([pscustomobject]@{ id = $p.id; name = $p.name }); $grew = $true } }
+    }
+    return @($tree)
+}
+
+function Get-ProbeListeners {
+    # Every TCP port a process of -Ids listens on, as "<pid> <address:port>", read from Windows' own table.
+    param([int[]]$Ids)
+    $found = New-Object System.Collections.ArrayList
+    $tool = Join-Path ([System.Environment]::SystemDirectory) "netstat.exe"
+    foreach ($line in @(& $tool -ano)) {
+        if ("$line" -match '^\s*TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)\s*$' -and $Ids -contains [int]$Matches[2]) { [void]$found.Add($Matches[2] + " " + $Matches[1]) }
+    }
+    return @($found)
+}
+
+function Receive-ProbeConnections {
+    # Take every connection waiting at the suite's listener, note its first line, answer it as a web
+    # server would (so that a load the surface failed to stop is seen by the page as loaded), close it.
+    param($State)
+    while ($State.listener.Pending()) {
+        $client = $State.listener.AcceptTcpClient()
+        try {
+            $client.ReceiveTimeout = 300
+            $stream = $client.GetStream()
+            $buffer = New-Object byte[] 2048
+            $n = 0
+            try { $n = $stream.Read($buffer, 0, $buffer.Length) } catch { $n = 0 }
+            $first = @([System.Text.Encoding]::ASCII.GetString($buffer, 0, $n) -split "`r?`n")[0]
+            [void]$State.connections.Add("" + $first)
+            $answer = [System.Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nAccess-Control-Allow-Origin: *`r`nContent-Type: text/javascript`r`nContent-Length: 2`r`nConnection: close`r`n`r`n//")
+            try { $stream.Write($answer, 0, $answer.Length) } catch { }
+        } finally { $client.Close() }
+    }
+}
+
+function Add-ProbeResult {
+    # One thing the page reports: what it saw, and every refusal the surface recorded since its last report.
+    param($State, [string]$Key, [string]$Value)
+    $new = [int]$State.bridge.refused - [int]$State.refusedSeen
+    $State.refusedSeen = [int]$State.bridge.refused
+    $kept = @($State.bridge.refusals | ForEach-Object { $_.reason })
+    $reasons = @()
+    if ($new -gt 0) { $reasons = @($kept | Select-Object -Last ([Math]::Min($new, $kept.Count))) }
+    $State.results[$Key] = [pscustomobject]@{ value = $Value; refusals = $new; reasons = $reasons }
+}
+
+function Step-Probe {
+    # The suite's side of the window, one small step each tick. A step never waits: it looks, acts
+    # once, and names the next step, so the window's thread is never held.
+    param($Window, $State)
+    Receive-ProbeConnections -State $State
+    if ($State.clock.ElapsedMilliseconds -gt $State.limitMs) { $State.timedOut = $State.phase; & $Window.close; return }
+    if ($State.phase -ceq "push") {
+        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "poke" -Value $State.pokeValue)
+        $State.phase = "pushed"
+    }
+    elseif ($State.phase -ceq "pushed") { if ($State.results.Contains("push")) { $State.phase = "window" } }
+    elseif ($State.phase -ceq "window") {
+        $handle = [IntPtr][long]$Window.handle
+        $owner = [uint32]0
+        [void][HordeSurfaceProbe.Native]::GetWindowThreadProcessId($handle, [ref]$owner)
+        $rect = New-Object HordeSurfaceProbe.Native+RECT
+        [void][HordeSurfaceProbe.Native]::GetWindowRect($handle, [ref]$rect)
+        $State.native = [pscustomobject]@{
+            handle = [long]$Window.handle; isWindow = [HordeSurfaceProbe.Native]::IsWindow($handle); visible = [HordeSurfaceProbe.Native]::IsWindowVisible($handle)
+            owner = [int]$owner; left = $rect.Left; top = $rect.Top; width = ($rect.Right - $rect.Left); height = ($rect.Bottom - $rect.Top)
+            hasKeyboard = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq $handle); hadKeyboardAtOpen = $State.hadKeyboardAtOpen
+        }
+        $State.phase = "sockets"
+    }
+    elseif ($State.phase -ceq "sockets") {
+        $State.tree = @(Get-ProbeProcessTree)
+        $State.listeners = @(Get-ProbeListeners -Ids @($State.tree | ForEach-Object { $_.id }))
+        $State.phase = "picture"
+    }
+    elseif ($State.phase -ceq "picture") {
+        $State.pictureAsked = (& $Window.capture $State.picturePath)
+        $State.secondAsked = (& $Window.capture $State.secondPath)
+        $State.phase = "drawing"
+    }
+    elseif ($State.phase -ceq "drawing") { if (Test-Path -LiteralPath $State.picturePath -PathType Leaf) { $State.errorsAtEnd = @($Window.errors); $State.phase = "closing" } }
+    elseif ($State.phase -ceq "closing") { & $Window.close }
+}
+
+try {
+
+Write-Host ""
+Write-Host "--- the engine, and the suite's own instruments ---" -ForegroundColor Cyan
+$loaded = Import-HordeWebView2Libraries
+$engine = Get-HordeWebView2RuntimeVersion
+Check ($loaded -ceq "" -and $engine -ne "") ("the web engine is installed here (" + $engine + "): without it nothing below can be shown, and no capability is proved")
+
+$listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$port = $listener.LocalEndpoint.Port
+$probe = [pscustomobject]@{
+    bridge = $null; results = [ordered]@{}; refusedSeen = 0; phase = "page"; timedOut = ""; limitMs = 40000
+    clock = [System.Diagnostics.Stopwatch]::StartNew(); listener = $listener; connections = (New-Object System.Collections.ArrayList)
+    outside = ("http://127.0.0.1:" + $port); socket = ("ws://127.0.0.1:" + $port); stamp = ("horde-surface-probe-" + [guid]::NewGuid().ToString("N"))
+    pokeValue = ("poked " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD + " <b>&'")
+    picturePath = (Join-Path $work "page.png"); secondPath = (Join-Path $work "second.png"); pictureAsked = $null; secondAsked = $null
+    native = $null; tree = @(); listeners = @(); hadKeyboardAtOpen = $null; openedMs = 0; closed = $false; errorsAtEnd = @()
+}
+$knock = New-Object System.Net.Sockets.TcpClient
+$knock.Connect([System.Net.IPAddress]::Loopback, $port)
+$hello = [System.Text.Encoding]::ASCII.GetBytes("GET /control HTTP/1.1`r`n`r`n")
+$knock.GetStream().Write($hello, 0, $hello.Length)
+Start-Sleep -Milliseconds 200
+Receive-ProbeConnections -State $probe
+$knock.Close()
+Check (@($probe.connections) -ccontains "GET /control HTTP/1.1") "CONTROL: a connection to the suite's listener is seen and its first line kept, so a load that leaves the engine cannot go unnoticed"
+Check (@(Get-ProbeListeners -Ids @($PID)) -ccontains ("" + $PID + " 127.0.0.1:" + $port)) "CONTROL: Windows' table of listening ports shows the suite's own listener under this process"
+$probe.connections.Clear()
+
+$probe.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
+    "setup"  = @{ run = { param($Arguments, $State, $Window) return [pscustomobject]@{ outside = $State.outside; socket = $State.socket; stamp = $State.stamp } } }
+    "report" = @{ args = @{ key = @{ type = "string"; most = 64 }; value = @{ type = "string"; most = 1600 } }
+                  run = { param($Arguments, $State, $Window) Add-ProbeResult -State $State -Key $Arguments["key"] -Value $Arguments["value"]; return $true } }
+    "done"   = @{ run = { param($Arguments, $State, $Window) $State.phase = "push"; return $true } }
+})
+$spec = New-HordeSurfaceSpec -Title "surface probe" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe"); other = (Join-Path $pages "other") }) -Start "probe/index.html" `
+    -Bridge $probe.bridge -DataFolder (Join-Path $work "data") -Hidden -Width 480 -Height 360 -TickMs 50 -State $probe `
+    -OnOpened { param($Window, $State) $State.openedMs = $State.clock.ElapsedMilliseconds; $State.hadKeyboardAtOpen = ([HordeSurfaceProbe.Native]::GetForegroundWindow() -eq [IntPtr][long]$Window.handle) } `
+    -OnTick { param($Window, $State) Step-Probe -Window $Window -State $State } `
+    -OnClosed { param($Window, $State) $State.closed = $true }
+$surface = Resolve-HordeSurface -Requires @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
+$probe.clock.Restart()
+$shown = Open-HordeSurface -Surface $surface -Spec $spec
+$tookMs = $probe.clock.ElapsedMilliseconds
+Receive-ProbeConnections -State $probe
+$r = $probe.results
+function Saw { param([string]$Key) if ($r.Contains($Key)) { return $r[$Key] }; return [pscustomobject]@{ value = "<the page never reported " + $Key + ">"; refusals = -1; reasons = @() } }
+$steps = @("where", "bridge", "unknown-request", "host-objects", "raw-message", "nav-out", "nav-lookalike", "nav-other-mount", "nav-scheme", "frame-own", "frame-out", "new-window", "download", "push")
+
+Write-Host ""
+Write-Host "--- the window opened, ran the whole probe and closed ---" -ForegroundColor Cyan
+Check ($shown.state -ceq "closed" -and $shown.reason -ceq "" -and $probe.closed -eq $true) ("the surface showed the page and says it was closed (" + $shown.state + " " + $shown.reason + "), " + $tookMs + " ms; the engine was up after " + $probe.openedMs + " ms")
+Check ($probe.timedOut -ceq "") ("no step of the probe ran out of time (stopped in: '" + $probe.timedOut + "')")
+Check ((@($r.Keys) -join ",") -ceq ($steps -join ",")) ("the page reported every step, in order (" + (@($r.Keys) -join ",") + ")")
+Check (@($probe.errorsAtEnd).Count -eq 0) ("the window recorded no error of its own (" + (@($probe.errorsAtEnd) -join "; ") + ")")
+
+Write-Host ""
+Write-Host "--- page.local: the page is files of this machine, and nothing listens ---" -ForegroundColor Cyan
+$home1 = (Saw "where").value
+Check ($home1 -like "https://*/index.html" -and (Saw "bridge").value -ceq "function function live=true") ("the page was drawn from its mount and found the bridge the surface serves (" + $home1 + "; " + (Saw "bridge").value + ")")
+$engines = @($probe.tree | Where-Object { $_.name -like "msedgewebview2*" })
+Check ($engines.Count -ge 1) ("CONTROL: the engine's own processes were found under this one while the window stood (" + $engines.Count + ")")
+$ownListener = "" + $PID + " 127.0.0.1:" + $port
+Check (@($probe.listeners) -ccontains $ownListener -and @($probe.listeners | Where-Object { $_ -cne $ownListener }).Count -eq 0) ("while the page was shown, no process of the window listened on any port but the suite's own listener (" + (@($probe.listeners) -join ", ") + ")")
+
+Write-Host ""
+Write-Host "--- requests.closed: only the list, only as text ---" -ForegroundColor Cyan
+$unknown = Saw "unknown-request"
+Check ($unknown.value -like "rejected: refused: *not on the list*" -and $unknown.value -notlike "*win.ini*" -and $unknown.value -notlike "*open-file*") ("a request off the list is refused in the real window, and the refusal repeats nothing the page sent (" + $unknown.value + ")")
+Check ($unknown.refusals -eq 1 -and @($unknown.reasons)[0] -like "*not on the list*") "and it is recorded on the bridge, once"
+Check ((Saw "host-objects").value -like "none*") ("the page finds no object of Horde's to call (" + (Saw "host-objects").value + ")")
+$rawSeen = Saw "raw-message"
+Check ($rawSeen.refusals -eq 1 -and @($rawSeen.reasons)[0] -like "*not one JSON object*") "text posted behind the bridge's back is refused and recorded, not read"
+Check ($probe.bridge.answered -eq ($steps.Count + 2)) ("every report, the setup and the done were answered through the list: " + $probe.bridge.answered + " answers")
+
+Write-Host ""
+Write-Host "--- page.locked: the page cannot leave, and each lock is the engine's to call ---" -ForegroundColor Cyan
+foreach ($try in @(
+    @{ key = "nav-out"; what = "an address outside" }
+    @{ key = "nav-lookalike"; what = "a host that only begins with the page's own" }
+    @{ key = "nav-other-mount"; what = "a file of another mount" }
+    @{ key = "nav-scheme"; what = "an address for another program to open" }
+)) {
+    $seen = Saw $try.key
+    Check ($seen.value -ceq ("still at " + $home1) -and $seen.refusals -eq 1 -and @($seen.reasons)[0] -like "*an address that is not its own*") ("sent to " + $try.what + ", the page stays where it is and the refusal is recorded once (" + $seen.value + "; " + $seen.refusals + ")")
+}
+foreach ($try in @(@{ key = "frame-own"; what = "a file of its own" }, @{ key = "frame-out"; what = "an address outside" })) {
+    $seen = Saw $try.key
+    Check ($seen.value -ceq "no frame ran" -and $seen.refusals -ge 1 -and @($seen.reasons) -like "*load a frame*") ("a frame on " + $try.what + " is not loaded, and is recorded (" + $seen.value + "; " + $seen.refusals + ")")
+}
+$popped = Saw "new-window"
+Check ($popped.value -ceq "no window" -and $popped.refusals -eq 1 -and @($popped.reasons)[0] -like "*a new window*") ("asked for a new window, the page gets none, and it is recorded (" + $popped.value + ")")
+$saved = Saw "download"
+$downloads = Join-Path ([System.Environment]::GetFolderPath("UserProfile")) "Downloads"
+try { $named = (Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -ErrorAction Stop)."{374DE290-123F-4565-9164-39C4925E467B}"; if ("$named" -ne "") { $downloads = [System.Environment]::ExpandEnvironmentVariables("$named") } } catch { }
+$landed = Join-Path $downloads ($probe.stamp + ".txt")
+$wasSaved = Test-Path -LiteralPath $landed -PathType Leaf
+if ($wasSaved) { Remove-Item -LiteralPath $landed -Force }
+Check ($saved.refusals -eq 1 -and @($saved.reasons)[0] -like "*save a file*" -and -not $wasSaved) ("a download the page starts is refused and recorded, and no file of this run is in " + $downloads)
+
+Write-Host ""
+Write-Host "--- push: Horde hands the page an event while it is shown ---" -ForegroundColor Cyan
+Check ((Saw "push").value -ceq $probe.pokeValue) "an event pushed to the open page arrives, with text in another alphabet and markup character for character"
+
+Write-Host ""
+Write-Host "--- window.native: a window of this process, that never takes the keyboard when hidden ---" -ForegroundColor Cyan
+$n = $probe.native
+Check ($null -ne $n -and $n.handle -ne 0 -and $n.isWindow -eq $true -and $n.owner -eq $PID) ("the handle the caller is handed is a window, and this process's own (owner " + $(if ($null -ne $n) { $n.owner } else { "?" }) + ", this process " + $PID + ")")
+Check ($null -ne $n -and $n.left -eq -32000 -and $n.top -eq -32000 -and $n.visible -eq $true) "a hidden window is shown where no screen is: at -32000,-32000"
+Check ($null -ne $n -and $n.hadKeyboardAtOpen -eq $false -and $n.hasKeyboard -eq $false) "and it did not take the keyboard, when it appeared or after"
+
+Write-Host ""
+Write-Host "--- picture: Horde can save what the page drew ---" -ForegroundColor Cyan
+Check ($probe.pictureAsked -eq $true -and $probe.secondAsked -eq $false -and -not (Test-Path -LiteralPath $probe.secondPath)) "a picture is asked for and taken; a second ask while it is drawn is not, and makes no file"
+$colours = @{}
+$size = "none"
+$isPng = $false
+if (Test-Path -LiteralPath $probe.picturePath -PathType Leaf) {
+    $bytes = [System.IO.File]::ReadAllBytes($probe.picturePath)
+    $isPng = ($bytes.Length -gt 8 -and $bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47)
+    Add-Type -AssemblyName System.Drawing
+    $stream = New-Object System.IO.MemoryStream(, $bytes)
+    $bitmap = New-Object System.Drawing.Bitmap($stream)
+    try {
+        $size = "" + $bitmap.Width + "x" + $bitmap.Height
+        for ($x = 0; $x -lt 24; $x++) { for ($y = 0; $y -lt 24; $y++) { $c = $bitmap.GetPixel([int](($x + 0.5) * $bitmap.Width / 24), [int](($y + 0.5) * $bitmap.Height / 24)); $colours[$c.ToArgb()] = $c } }
+    } finally { $bitmap.Dispose(); $stream.Dispose() }
+}
+$hasRed = @($colours.Values | Where-Object { $_.R -gt 180 -and $_.G -lt 80 -and $_.B -lt 80 }).Count -gt 0
+$hasBlue = @($colours.Values | Where-Object { $_.B -gt 180 -and $_.R -lt 80 -and $_.G -lt 110 }).Count -gt 0
+Check ($isPng -and $size -cne "none" -and $size -cne "0x0") ("the file is a PNG with a size (" + $size + ")")
+Check ($colours.Count -ge 4 -and $hasRed -and $hasBlue) ("and it is not blank: " + $colours.Count + " colours at 576 sampled points, the page's red and blue blocks among them")
+Check (@(Get-ChildItem -LiteralPath $work -Filter "*.tmp").Count -eq 0) "no half-written picture is left beside it"
+
+Write-Host ""
+Write-Host "--- after the window: nothing of the engine is left running ---" -ForegroundColor Cyan
+$left = @($engines)
+$waited = [System.Diagnostics.Stopwatch]::StartNew()
+while ($waited.ElapsedMilliseconds -lt 20000) {
+    $left = @($engines | Where-Object { $null -ne (Get-Process -Id $_.id -ErrorAction SilentlyContinue) })
+    if ($left.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 250
+}
+Check ($left.Count -eq 0) ("every engine process the window started has gone, " + $waited.ElapsedMilliseconds + " ms after it closed (" + (@($left | ForEach-Object { $_.name + " " + $_.id }) -join ", ") + ")")
+
+} finally {
+    if ($null -ne (Get-Variable -Name listener -ErrorAction SilentlyContinue) -and $null -ne $listener) { try { $listener.Stop() } catch { } }
+    if ((Split-Path -Leaf $work) -match '\Ahorde-webview2-window-[0-9a-f]{32}\z') {
+        # The engine lets go of its profile folder a moment after its last process has gone.
+        foreach ($try in 1..20) { if (-not (Test-Path -LiteralPath $work)) { break }; try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 250 } }
+    }
+}
+
+Complete-HordeSuite -Success "in a real window, the surface does each thing its capabilities say yes to, and each lock is the engine's to call"

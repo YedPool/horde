@@ -4,27 +4,27 @@
   "capabilities": {
     "page.local": {
       "support": "yes",
-      "evidence": "Each mount is a folder mapped to a made-up host name inside the engine; no web server is started and no port is opened. test/e2e/e2e-decisions-window.ps1 opens a real window on a real list this way, 2026-10-06."
+      "evidence": "Each mount is a folder mapped to a made-up host name inside the engine; no web server is started and no port is opened. surfaces/webview2/test/test-webview2-window.ps1 opens a real hidden window on a page of its own and reads Windows' table of listening ports for this process and every engine process under it: none listens, 2026-10-07."
     },
     "page.locked": {
       "support": "yes",
-      "evidence": "A navigation to any address but the start page's own host is cancelled, every frame navigation is cancelled, and a new-window request is marked handled; each is recorded as a refusal. The address rule is tested with no window in surfaces/webview2/test/test-webview2-surface.ps1; the throwaway proof of 2026-10-06 measured a cancelled navigation in a real window."
+      "evidence": "A navigation to any address but the start page's own host is cancelled, every frame navigation is cancelled, a new-window request is marked handled and a download is cancelled; each is recorded as a refusal. surfaces/webview2/test/test-webview2-window.ps1 has a page try each in a real hidden window - an outside address, a host that only begins with its own, another mount's file, an address for another program, a frame on its own file and on an outside address, a new window, a download - and finds the page where it was and one refusal recorded by the handler the engine called, 2026-10-07. The address rule itself is tested with no window in surfaces/webview2/test/test-webview2-surface.ps1."
     },
     "requests.closed": {
       "support": "yes",
-      "evidence": "The page posts JSON text and is handed JSON text. Every message goes through Invoke-HordeSurfaceRequest of surfaces/Port.ps1, and a message whose source is not the page's own host is refused before that. No host object is added to the page: AddHostObjectToScript is never called (surfaces/webview2/test/test-webview2-surface.ps1 reads the adapter's syntax tree for it)."
+      "evidence": "The page posts JSON text and is handed JSON text. Every message goes through Invoke-HordeSurfaceRequest of surfaces/Port.ps1, and a message whose source is not the page's own host is refused before that. No host object is added to the page: AddHostObjectToScript is never called (surfaces/webview2/test/test-webview2-surface.ps1 reads the adapter's syntax tree for it). In the real window of surfaces/webview2/test/test-webview2-window.ps1 a request off the list is rejected without an echo, text posted behind the bridge is refused and recorded, and the page finds no object of Horde's, 2026-10-07."
     },
     "push": {
       "support": "yes",
-      "evidence": "An event is posted to the page as one line of JSON. test/e2e/e2e-decisions-window.ps1 adds a question while the window is open and the page reports one more row without a reload, 2026-10-06."
+      "evidence": "An event is posted to the page as one line of JSON. surfaces/webview2/test/test-webview2-window.ps1 pushes one to the open page of a real hidden window, and the page hands back the same text, another alphabet and markup included, without a reload, 2026-10-07."
     },
     "picture": {
       "support": "yes",
-      "evidence": "The engine's own capture writes a PNG of the page as drawn. test/e2e/e2e-decisions-window.ps1 has the real window save one while it stands where nobody sees it, and checks that it is a PNG of the window's size holding many colours, 2026-10-07."
+      "evidence": "The engine's own capture writes a PNG of the page as drawn. surfaces/webview2/test/test-webview2-window.ps1 has the real window save one while it stands where nobody sees it, and checks that it is a PNG with a size holding the page's own blocks of colour, and that a second ask while one is drawn is not taken, 2026-10-07."
     },
     "window.native": {
       "support": "yes",
-      "evidence": "The surface is a top-level window of this process and hands its handle to the caller. The terminal host's own end-to-end scenario has this window owned by, placed beside and following a terminal window that scenario started, 2026-10-06."
+      "evidence": "The surface is a top-level window of this process and hands its handle to the caller. surfaces/webview2/test/test-webview2-window.ps1 asks Windows about that handle while the window stands: it is a window, it belongs to this process, it stands at -32000,-32000 when hidden, and it did not take the keyboard, 2026-10-07. That another window can own and place it is a follower's to prove, not this surface's."
     }
   }
 }

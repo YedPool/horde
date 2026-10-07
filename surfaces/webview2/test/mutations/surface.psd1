@@ -2,8 +2,8 @@
 #   powershell -File tools\Mutate.ps1 -Spec surfaces\webview2\test\mutations\surface.psd1
 # surfaces\webview2\test\test-webview2-surface.ps1 must fail for each. That suite opens no window, so
 # this spec holds only what can be broken without one: the pinned files, the address rule, where a
-# message may come from, the handlers and the settings. What needs a real window is
-# test\e2e\e2e-decisions-window.ps1's.
+# message may come from, the handlers and the settings. What only a real window can catch is in
+# surface-window.psd1 beside this file, held by surfaces\webview2\test\test-webview2-window.ps1.
 @{
     Target = "surfaces\webview2\Surface.ps1"
     Suite  = "surfaces\webview2\test\test-webview2-surface.ps1"

@@ -7,8 +7,10 @@
 # add or raise the entry here AND append a line to growth.txt in this folder:
 # path | old -> new | YYYY-MM-DD | reason.
 #
-# NO FILE IS LISTED, measured 2026-10-06 when the surfaces/ family came in: the surface is picked by
-# what it can do (Resolve-HordeSurface), its suites live in its own test folder, and the page talks
-# through the bridge this folder serves, so nothing outside needs its name.
+# ONE FILE IS LISTED, and no code: the surface is picked by what it can do (Resolve-HordeSurface), its
+# suites live in its own test folder, and a page talks through the bridge this folder serves and
+# addresses its files relatively, so nothing outside needs its name (measured 2026-10-06 when the
+# surfaces/ family came in, and again 2026-10-07).
 #
 # path | mentions | why this file may name the surface
+test/lib/SuiteFiles.ps1 | 2 | the table of machine-bound suites names each suite by its path, and this surface's real-window suite is one: its folder and its file name each carry the name
