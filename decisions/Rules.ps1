@@ -792,6 +792,27 @@ function Test-HordeDecisionEnvelope {
     return @()
 }
 
+# WHO MAY MARK WORDS AS A NOTE OR AS AN ACT (TRIAL; decisions/Operations.ps1 says why). A note is the
+# keeper's: words to the founder that ask him nothing. An act is the founder's, typed in the window.
+$script:HordeDecisionNoteSpeakers = @("warchief")
+$script:HordeDecisionActRoutes = @("window")
+$script:HordeDecisionActs = @("park", "unpark")
+
+function Test-HordeDecisionSayMarks {
+    # Findings for a say request's asks and act (above): empty when both are absent or allowed.
+    param($Request, [string]$Speaker, [string]$Route)
+    $found = New-Object System.Collections.ArrayList
+    if (Test-HordeDecisionMember -Object $Request -Name "asks") {
+        if ($Request.asks -isnot [bool]) { [void]$found.Add("'asks' is true or false") }
+        elseif ($Request.asks -eq $false -and $script:HordeDecisionNoteSpeakers -cnotcontains $Speaker) { [void]$found.Add("only the words of " + (@($script:HordeDecisionNoteSpeakers | ForEach-Object { Get-HordeDecisionSpeakerShown -Speaker $_ }) -join " or ") + " can be a note that asks nothing") }
+    }
+    if (Test-HordeDecisionMember -Object $Request -Name "act") {
+        if ($script:HordeDecisionActs -cnotcontains [string]$Request.act) { [void]$found.Add("'act' is one of: " + ($script:HordeDecisionActs -join ", ")) }
+        elseif ($Speaker -cne $script:HordeDecisionFirstTurn -or $script:HordeDecisionActRoutes -cnotcontains $Route) { [void]$found.Add("an act is recorded only for the founder's words typed in the window") }
+    }
+    return @($found)
+}
+
 function Step-HordeDecisionSaid {
     # Someone said something under a question. The words are added to the question's thread, in store
     # order, and NOTHING ELSE of the question changes: not its number, its wording, its state, its
@@ -821,9 +842,26 @@ function Step-HordeDecisionSaid {
         wordingVersion = $seen
         saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)
         arrivedAfterClosing = [bool]($question.state -cne "open")
+        # A note (asks false) and an act, as the record holds them (Test-HordeDecisionSayMarks).
+        asks = [bool](-not ((Test-HordeDecisionMember -Object $Ev.data -Name "asks") -and $Ev.data.asks -eq $false))
+        act = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "act") { [string]$Ev.data.act } else { "" })
     })
-    # The turn passes only under an open question, and only for a speaker this version lists.
-    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
+    $last = $question.thread[$question.thread.Count - 1]
+    # AN EDIT (TRIAL; the owner, 2026-10-07): words of the same speaker straight after their own last
+    # words under the question - acts left aside - replace them. Worked out here, at the record's place.
+    $replaces = $false
+    if ($last.act -eq "") {
+        for ($i = $question.thread.Count - 2; $i -ge 0; $i--) {
+            $before = $question.thread[$i]
+            if ("$($before.act)" -ne "") { continue }
+            $replaces = ("$($before.speaker)" -ceq $speaker)
+            break
+        }
+    }
+    Add-Member -InputObject $last -NotePropertyName replaces -NotePropertyValue ([bool]$replaces)
+    # The turn passes only under an open question, only for a speaker this version lists, and not on
+    # words that ask nothing (a note) or that record an act.
+    if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }
     return ""
 }
 
@@ -986,6 +1024,9 @@ function ConvertTo-HordeDecisionMessageView {
         saidToEarlierWording = [bool]$Message.saidToEarlierWording
         arrivedAfterClosing = [bool]$Message.arrivedAfterClosing
         unreadBy = $unreadBy.ToArray()
+        asks = [bool]$Message.asks
+        act = "$($Message.act)"
+        replaces = [bool]$Message.replaces
     }
 }
 

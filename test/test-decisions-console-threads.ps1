@@ -68,6 +68,7 @@ function Add-Q {
     return (Run "add" @{ File = $file })
 }
 function Test-Line { param($Result, [string]$Exactly) return (@($Result.lines | Where-Object { $_ -ceq $Exactly }).Count -eq 1) }
+function Test-Trimmed { param($Result, [string]$Exactly) return (@($Result.lines | Where-Object { "$_".Trim() -ceq $Exactly }).Count -eq 1) }
 function Get-Kinds { param([string]$Store) if (-not (Test-Path -LiteralPath $Store)) { return "" }; return (@(Get-ChildItem -LiteralPath $Store -File -Filter "*.json" | Sort-Object Name | ForEach-Object { ([System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json).kind -creplace '\Aquestion-', '' -creplace '\Amessages?-', '' }) -join ",") }
 function Read-Record { param([string]$Store, [long]$Sequence) return ([System.IO.File]::ReadAllText((Join-Path $Store ($Sequence.ToString("D10") + ".json")), $utf8) | ConvertFrom-Json) }
 $title = "Should the closing sound play when the assistant closes?"
@@ -86,6 +87,7 @@ $r = Run "reply" @{ Number = "1"; Text = "It plays from the next build." }
 Check ($r.failure -eq "" -and @($r.lines).Count -eq 1 -and $r.lines[0] -ceq ("Replied under question 1 (record 3): " + $title)) ("reply says under which question and in which record (" + $r.failure + @($r.lines)[0] + ")")
 $rec = Read-Record $store 3
 Check ($rec.data.speaker -ceq "warchief" -and $rec.data.route -ceq "command" -and $rec.actor -ceq "warchief") "and the record is the warchief's own words, by command"
+Check ($null -eq $rec.data.PSObject.Properties["asks"]) "a reply records no asks: words said to him ask him (TRIAL)"
 $id = [guid]::NewGuid().ToString("N")
 $once = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
 $twice = Run "answer" @{ Number = "1"; Text = "Only once."; Id = $id }
@@ -96,6 +98,22 @@ $j = Run "answer" @{ Number = "1"; File = (Write-Words "hebrew.txt" $hebrew); Js
 $parsed = $null
 try { $parsed = (@($j.lines)[0] | ConvertFrom-Json) } catch { }
 Check ($j.failure -eq "" -and @($j.lines).Count -eq 1 -and "$(@($j.lines)[0])" -cnotmatch '[^\x20-\x7E]' -and $null -ne $parsed -and [string]::Equals($parsed.value.message.text, $hebrew, [System.StringComparison]::Ordinal)) "-Json is one line of ASCII, and the Hebrew with its direction marks reads back from it character for character"
+
+Write-Host ""
+Write-Host "--- TRIAL: a note, and an answer that replaces his earlier one, said in words ---" -ForegroundColor Cyan
+$store = New-Home
+$null = Add-Q
+$null = Run "answer" @{ Number = "1"; Text = "Yes, play it." }
+$note = Run "reply" @{ Number = "1"; Text = "Noted, I am on it."; Note = $true }
+Check ($note.failure -eq "" -and (Read-Record $store 3).data.asks -eq $false -and (Test-Trimmed (Run "show" @{ Number = "1" }) "(a note: it asks him nothing, and the turn stayed the keeper's)")) "reply -Note records asks false, and show says the note asks him nothing"
+Check ((Test-Trimmed (Run "list") "conversation: 2 message(s); 1 not yet read by the warchief; turn: the warchief")) "and after the note the turn is still the keeper's"
+$null = Run "inbox"
+$null = Run "answer" @{ Number = "1"; Text = "Yes, and play it twice." }
+$plain = Run "inbox" @{ Peek = $true }
+Check (-not (Test-Trimmed $plain "(replaces his earlier answer)")) "CONTROL: his words after the keeper's note replace nothing, and say nothing of it"
+$null = Run "answer" @{ Number = "1"; Text = "Yes, and play it three times." }
+$replacing = Run "inbox" @{ Peek = $true }
+Check ((Test-Trimmed $replacing "(replaces his earlier answer)")) "HIS WORDS STRAIGHT AFTER HIS OWN: the inbox says, once, that they replace his earlier answer"
 
 Write-Host ""
 Write-Host "--- the words, from a file, are printed as they are ---" -ForegroundColor Cyan

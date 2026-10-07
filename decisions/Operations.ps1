@@ -195,6 +195,14 @@ function Get-HordeDecisionSayContent {
         if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }
         else { [void]$found.Add("'wordingVersion' is not a wording a question can have: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
     }
+    # A NOTE AND AN ACT (TRIAL; the owner, 2026-10-07: answers picked up should leave his list, and a
+    # reply that asks him nothing must not bring one back). asks=false: the keeper's words tell him
+    # something and ask nothing, so the turn stays the keeper's. act: the founder's words in the window
+    # record an act of his, park or unpark, and the turn does not pass. Each is recorded only when it
+    # says something; a word the rules do not let that speaker say is refused, never dropped.
+    foreach ($f in @(Test-HordeDecisionSayMarks -Request $Request -Speaker $body["speaker"] -Route $body["route"])) { [void]$found.Add($f) }
+    if ((Test-HordeDecisionMember -Object $Request -Name "asks") -and $Request.asks -eq $false) { $body["asks"] = $false }
+    if (Test-HordeDecisionMember -Object $Request -Name "act") { $body["act"] = [string]$Request.act }
     return [pscustomobject]@{ body = $body; findings = @($found) }
 }
 
