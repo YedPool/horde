@@ -164,6 +164,38 @@ Check ($one.code -eq 0 -and @($one.lines | Where-Object { $_ -ceq "Question 1 - 
 Check (@($one.lines | Where-Object { $_ -ceq "  1. a tone" -or $_ -ceq "  2. a spoken line" }).Count -eq 2 -and @($one.lines | Where-Object { $_ -ceq "Recommendation: none given" }).Count -eq 1 -and @($one.lines | Where-Object { $_ -ceq "References: PR 1583" }).Count -eq 1) "its options are listed, a missing recommendation is said, and the reference is shown as a reference"
 
 Write-Host ""
+Write-Host "--- one table for the verbs: the usage, the dispatch and the operations agree ---" -ForegroundColor Cyan
+# A command file may only declare, and its usage and its ValidateSet are read from the syntax tree
+# without running anything (cli/Commands.ps1), so both must be written out there. The ONE table is
+# decisions/Console.ps1's; these checks hold the written-out copies to it, so they cannot drift.
+. (Join-Path $root "cli\Commands.ps1")
+. (Join-Path $root "decisions\Console.ps1")
+$declared = (Find-HordeCommand -Name "decisions").command
+$tableUsage = "THREW"
+try { $tableUsage = Get-HordeDecisionCommandUsage } catch { }
+$verbNames = @(Get-HordeDecisionCommandVerbs)
+Check ("$($declared.usage)" -ceq $tableUsage) "the usage line the command file declares is the verbs table's, word for word"
+$tokens = $null; $errors = $null
+$cmdAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\decisions.ps1"), [ref]$tokens, [ref]$errors)
+$setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AttributeAst] -and $node.TypeName.Name -ceq "ValidateSet" }, $true) | Select-Object -First 1 | ForEach-Object { $_.PositionalArguments } | ForEach-Object { "$($_.Value)" })
+Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
+Check ((@(Get-HordeDecisionOperations | ForEach-Object { $_.name }) -join ",") -ceq ($verbNames -join ",")) "and they are the operations, one verb for each"
+Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
+$unsaid = New-Object System.Collections.ArrayList
+foreach ($verbName in $verbNames) {
+    $one = @($tableUsage -split ' \| ' | Where-Object { $_.StartsWith("decisions " + $verbName + " ") -or $_ -ceq ("decisions " + $verbName) }) | Select-Object -First 1
+    $spec = Get-HordeDecisionCommandVerb -Verb $verbName
+    if ($null -eq $one) { [void]$unsaid.Add($verbName + " has no part of the usage line"); continue }
+    foreach ($flag in @($spec.flags)) { if (-not $one.Contains("-" + $flag + " ") -and -not $one.Contains("-" + $flag + "]")) { [void]$unsaid.Add($verbName + " takes -" + $flag + " and its usage does not say so") } }
+    if ([bool]$spec.number -ne $one.Contains("<number>")) { [void]$unsaid.Add($verbName + ": the number is in one of the table and the usage, not both") }
+}
+Check ($unsaid.Count -eq 0) ("every flag a verb takes, and its number, is in that verb's usage" + $(if ($unsaid.Count) { " (" + ($unsaid -join "; ") + ")" } else { "" }))
+$noOutcome = Invoke-Decisions @("close", "1")
+Check ($noOutcome.code -eq 1 -and $noOutcome.out -like "*needs the outcome exactly once*Usage: horde decisions close <number> (-Outcome <one line> or -OutcomeFile <path>) ``[-Id <32 hex>``] ``[-Json``]*") "a command line that cannot be acted on is answered with that verb's own usage, from the table"
+$helpRun = Invoke-HordeCliProcess -Root $root -HordeArgs @("help")
+Check ($helpRun.code -eq 0 -and $helpRun.out.Contains("horde " + $tableUsage)) "and horde help prints the same line"
+
+Write-Host ""
 Write-Host "--- kinds: what each kind of question means ---" -ForegroundColor Cyan
 $kindsRun = Invoke-Decisions @("kinds")
 Check ($kindsRun.code -eq 0 -and $kindsRun.out -like "*yes-no: yes or no. Answered with yes or no.*" -and $kindsRun.out -like "*choice: a choice among options.*It needs at least two options.*") ("kinds prints each kind, its label, what it means and what it needs (exit " + $kindsRun.code + ")")
@@ -211,7 +243,7 @@ Check ($none.code -eq 1 -and $none.out -like "*there is no question 99; the high
 Write-Host ""
 Write-Host "--- a command line that cannot be acted on ---" -ForegroundColor Cyan
 $wrongFlag = Invoke-Decisions @("list", "-File", $questionFile)
-Check ($wrongFlag.code -eq 1 -and $wrongFlag.out -like "*-File does not belong to decisions list, which takes: -State, -Json*") "a flag that belongs to another verb is refused, never ignored"
+Check ($wrongFlag.code -eq 1 -and $wrongFlag.out -like "*-File does not belong to decisions list. Usage: horde decisions list ``[-State <open, closed or all>``] ``[-Json``]*") "a flag that belongs to another verb is refused, never ignored"
 $noNumber = Invoke-Decisions @("close", "-Outcome", "Done.")
 Check ($noNumber.code -eq 1 -and $noNumber.out -like "*decisions close needs the question's number*") "close with no number is refused"
 $unknownFlag = Invoke-Decisions @("list", "-Everything")

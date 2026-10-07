@@ -7,6 +7,16 @@
     Target = "decisions\Console.ps1"
     Suite  = "test\test-decisions-cli.ps1"
     Mutations = @(
+        # --- one table for the verbs ---
+        @{ Name = "usage-of-a-verb-differs-from-the-command-file"
+           Find = 'usage = "kinds [-Json]" }'
+           Replace = 'usage = "kinds" }' }
+        @{ Name = "wrong-command-line-answered-without-the-usage"
+           Find = '$usageNote = ". Usage: horde decisions " + $spec.usage'
+           Replace = '$usageNote = ""' }
+        @{ Name = "bar-between-alternatives-of-one-verb"
+           Find = '(-Outcome <one line> or -OutcomeFile <path>)'
+           Replace = '-Outcome <one line> | -OutcomeFile <path>' }
         @{ Name = "kinds-printed-without-what-they-need"
            Find = 'if ("$($k.Value.list)" -ne "") { $needs ='
            Replace = 'if ($false) { $needs =' }

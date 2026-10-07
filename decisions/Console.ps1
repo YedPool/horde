@@ -33,22 +33,46 @@
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\JsonText.ps1")
 . (Join-Path $PSScriptRoot "Operations.ps1")
 
-# Which flags each verb takes, and whether it is about one question (and so takes its number). A flag
-# given to a verb that does not take it is refused, never ignored (cli/commands/metrics.ps1 does the same).
+# THE ONE TABLE OF THE COMMAND'S VERBS. A verb is an operation of the same name
+# (decisions/Operations.ps1); here is what the command line adds to it: whether it is about one
+# question (and so takes its number), which flags it takes, and how its usage reads. The dispatch
+# below reads it, a wrong command line is answered with a verb's usage from it, and the whole usage
+# line is built from it. Whether a verb writes is not said here: the operations say that.
+# A flag given to a verb that does not take it is refused, never ignored (cli/commands/metrics.ps1
+# does the same).
+# THE COMMAND FILE HAS TO WRITE TWO THINGS OUT AGAIN: its usage and its ValidateSet are constants read
+# from its syntax tree without running anything (cli/Commands.ps1), so neither can be worked out from
+# this table when the file is loaded. test/test-decisions-cli.ps1 holds both to this table, word for
+# word, so they cannot drift.
+# IN A USAGE, a bar stands between two verbs and for nothing else: alternatives inside one verb are
+# written in words.
 $script:HordeDecisionCommandVerbs = [ordered]@{
-    add    = @{ number = $false; writes = $true;  flags = @("File", "Id", "Json") }
-    update = @{ number = $true;  writes = $true;  flags = @("File", "Id", "Json") }
-    close  = @{ number = $true;  writes = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json") }
-    reopen = @{ number = $true;  writes = $true;  flags = @("Reason", "Id", "Json") }
-    list   = @{ number = $false; writes = $false; flags = @("State", "Json") }
-    show   = @{ number = $true;  writes = $false; flags = @("Json") }
-    kinds  = @{ number = $false; writes = $false; flags = @("Json") }
+    add    = @{ number = $false; flags = @("File", "Id", "Json");                   usage = "add -File <question.json> [-Id <32 hex>] [-Json]" }
+    update = @{ number = $true;  flags = @("File", "Id", "Json");                   usage = "update <number> -File <changes.json> [-Id <32 hex>] [-Json]" }
+    close  = @{ number = $true;  flags = @("OutcomeFile", "Outcome", "Id", "Json"); usage = "close <number> (-Outcome <one line> or -OutcomeFile <path>) [-Id <32 hex>] [-Json]" }
+    reopen = @{ number = $true;  flags = @("Reason", "Id", "Json");                 usage = "reopen <number> -Reason <one line> [-Id <32 hex>] [-Json]" }
+    list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
+    show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
+    kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
-# today, and the operations refuse a role the event schema does not list.
+# today, and the operations refuse a role the rules' list of actors does not hold.
 $script:HordeDecisionCommandActor = "warchief"
 
 function Get-HordeDecisionCommandVerbs { return @($script:HordeDecisionCommandVerbs.Keys) }
+
+function Get-HordeDecisionCommandVerb {
+    # One verb's entry of the table, as { number; flags; usage }, or $null for a word that is no verb.
+    param([Parameter(Mandatory = $true)][string]$Verb)
+    $entry = $script:HordeDecisionCommandVerbs[$Verb]
+    if ($null -eq $entry) { return $null }
+    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)" }
+}
+
+function Get-HordeDecisionCommandUsage {
+    # The command's whole usage line, built from the table: each verb's usage, a bar between two.
+    return (@($script:HordeDecisionCommandVerbs.Keys | ForEach-Object { "decisions " + $script:HordeDecisionCommandVerbs[$_].usage }) -join " | ")
+}
 
 function Read-HordeDecisionTextFile {
     # The whole text of a file a command named, exactly as written. -What names it in a refusal.
@@ -295,9 +319,12 @@ function Invoke-HordeDecisionCommand {
     $have = @{}
     foreach ($k in @($Given.Keys)) { $have["$k"] = $Given[$k] }
     if ($null -eq $spec) { throw ("decisions takes " + (@($script:HordeDecisionCommandVerbs.Keys) -join ", ") + ", not '" + $Verb + "'") }
+    # What a command line that cannot be acted on is answered with, after the reason: this verb's usage.
+    $usageNote = ". Usage: horde decisions " + $spec.usage
+    $writes = [bool](@(Get-HordeDecisionOperations | Where-Object { $_.name -ceq $Verb }) | Select-Object -First 1).writes
     foreach ($flag in @($have.Keys)) {
         if ($flag -eq "Verb" -or $flag -eq "Number") { continue }
-        if ($spec.flags -notcontains $flag) { throw ("-" + $flag + " does not belong to decisions " + $Verb + ", which takes: " + (@($spec.flags | ForEach-Object { "-" + $_ }) -join ", ")) }
+        if ($spec.flags -notcontains $flag) { throw ("-" + $flag + " does not belong to decisions " + $Verb + $usageNote) }
     }
     $request = [ordered]@{}
     $numberText = ""
@@ -305,8 +332,8 @@ function Invoke-HordeDecisionCommand {
     if ($spec.number) {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
-    elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'") }
-    if ($spec.writes) {
+    elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
+    if ($writes) {
         $id = [guid]::NewGuid().ToString("N")
         if ($have.ContainsKey("Id")) {
             $id = "$($have['Id'])"
@@ -319,20 +346,20 @@ function Invoke-HordeDecisionCommand {
     $showing = "open"
     switch ($Verb) {
         "add" {
-            if (-not $have.ContainsKey("File")) { throw "decisions add needs -File <question.json>: the question as a JSON file. Long text is never taken from the command line" }
+            if (-not $have.ContainsKey("File")) { throw ("decisions add needs -File <question.json>: the question as a JSON file. Long text is never taken from the command line" + $usageNote) }
             $request["question"] = Read-HordeDecisionJsonFile -Path "$($have['File'])" -What "the question file"
         }
         "update" {
-            if (-not $have.ContainsKey("File")) { throw "decisions update needs -File <changes.json>: a JSON file holding only the fields to change" }
+            if (-not $have.ContainsKey("File")) { throw ("decisions update needs -File <changes.json>: a JSON file holding only the fields to change" + $usageNote) }
             $request["changes"] = Read-HordeDecisionJsonFile -Path "$($have['File'])" -What "the changes file"
         }
         "close" {
-            if ($have.ContainsKey("Outcome") -eq $have.ContainsKey("OutcomeFile")) { throw "decisions close needs the outcome exactly once: -Outcome <one line>, or -OutcomeFile <path> for more than a line" }
+            if ($have.ContainsKey("Outcome") -eq $have.ContainsKey("OutcomeFile")) { throw ("decisions close needs the outcome exactly once: -Outcome <one line>, or -OutcomeFile <path> for more than a line" + $usageNote) }
             if ($have.ContainsKey("OutcomeFile")) { $request["outcome"] = Read-HordeDecisionTextFile -Path "$($have['OutcomeFile'])" -What "the outcome file" }
             else { $request["outcome"] = "$($have['Outcome'])" }
         }
         "reopen" {
-            if (-not $have.ContainsKey("Reason")) { throw "decisions reopen needs -Reason <one line>: why the question is open again" }
+            if (-not $have.ContainsKey("Reason")) { throw ("decisions reopen needs -Reason <one line>: why the question is open again" + $usageNote) }
             $request["reason"] = "$($have['Reason'])"
         }
         "list" { if ($have.ContainsKey("State")) { $showing = "$($have['State'])"; $request["state"] = $showing } }
