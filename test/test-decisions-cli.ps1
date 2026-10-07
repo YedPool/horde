@@ -179,7 +179,9 @@ $tokens = $null; $errors = $null
 $cmdAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\decisions.ps1"), [ref]$tokens, [ref]$errors)
 $setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AttributeAst] -and $node.TypeName.Name -ceq "ValidateSet" }, $true) | Select-Object -First 1 | ForEach-Object { $_.PositionalArguments } | ForEach-Object { "$($_.Value)" })
 Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
-Check ((@(Get-HordeDecisionOperations | ForEach-Object { $_.name }) -join ",") -ceq ($verbNames -join ",")) "and they are the operations, one verb for each"
+$operationVerbs = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens })
+Check ((@(Get-HordeDecisionOperations | ForEach-Object { $_.name }) -join ",") -ceq ($operationVerbs -join ",")) "and they are the operations, one verb for each"
+Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).opens }) -join ",") -ceq "open" -and $verbNames[$verbNames.Count - 1] -ceq "open") "but for open, the one verb that is no operation: it opens a window that calls them"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
 foreach ($verbName in $verbNames) {
