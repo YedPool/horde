@@ -5,11 +5,13 @@
 #
 # -Counter (a synchronized hashtable) counts the views built, so the suite can see one is built per
 # request that needs it. -ThrowOnView makes every view build throw, as a broken projection would.
+# -ViewDelayMs makes every view build take that long, as a slow projection would (issue #87, F10).
 # -ViewThrowsWhenRead hands back a view that builds without error but throws when the answer is built
 # from it, so the throw comes from answering, past the view's own try. -ManifestTooLarge gives node.info
 # a manifest the link's writer refuses (over the caps), so its result cannot be sent.
 # -ActOutcome makes the node serve acts (the act path's A3) with a fixture act that counts itself in
-# -Counter["acts"] and returns that outcome state; -ActThrows makes the act throw instead.
+# -Counter["acts"] and returns that outcome state; -ActThrows makes the act throw instead. -ActDelayMs
+# holds the act that long first, so a hub that stops waiting loses the answer.
 param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Endpoint,
@@ -18,10 +20,12 @@ param(
     [int]$MaxLinks = 1,
     [int]$IdleTimeoutMs = 30000,
     [switch]$ThrowOnView,
+    [int]$ViewDelayMs = 0,
     [switch]$ViewThrowsWhenRead,
     [switch]$ManifestTooLarge,
     [string]$ActOutcome = "",
     [switch]$ActThrows,
+    [int]$ActDelayMs = 0,
     $Counter = $null,
     $Ready = $null
 )
@@ -45,6 +49,7 @@ $viewText = [System.IO.File]::ReadAllText($ViewPath)
 $getView = {
     if ($null -ne $Counter) { $Counter["views"] = 1 + [int]$Counter["views"] }
     if ($ThrowOnView) { throw "the fixture projection is broken on purpose" }
+    if ($ViewDelayMs -gt 0) { Start-Sleep -Milliseconds $ViewDelayMs }
     if ($ViewThrowsWhenRead) { return (New-Object HordeTestThrowingView) }
     return ($viewText | ConvertFrom-Json)
 }
@@ -55,6 +60,7 @@ if ($ActOutcome -ne "" -or $ActThrows) {
     $act = {
         param($a)
         if ($null -ne $Counter) { $Counter["acts"] = 1 + [int]$Counter["acts"] }
+        if ($ActDelayMs -gt 0) { Start-Sleep -Milliseconds $ActDelayMs }
         if ($ActThrows) { throw "the fixture act breaks on purpose" }
         $ex = [pscustomobject]@{ ns = [pscustomobject]@{ device = $deviceId; space = "windows" }; pid = 4242; procStart = "134350994347710308" }
         return [pscustomobject]@{ state = $ActOutcome; sessionId = "aaaaaaaa-1111-4222-8333-444444444444"; expect = $ex; reason = "" }

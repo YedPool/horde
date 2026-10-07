@@ -11,8 +11,8 @@
            Find = 'if ($script:HordeNodeServedVerbs -cnotcontains $verb) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "act-verb-served"
-           Find = '$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status")'
-           Replace = '$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status", "session.close")' }
+           Find = '$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status", "session.deliver",'
+           Replace = '$script:HordeNodeServedVerbs = @("node.info", "sessions.list", "session.get", "request.status", "session.close", "session.deliver",' }
         @{ Name = "complete-ignores-unreadable-stores"
            Find = 'if (-not ($st -ceq "known" -and $v -is [bool] -and $v)) {'
            Replace = 'if ($false) {' }
