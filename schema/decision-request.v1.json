@@ -71,6 +71,33 @@
       "description": "Asks for the table of question kinds. It takes nothing.",
       "additionalProperties": false,
       "properties": {}
+    },
+    "say": {
+      "type": "object",
+      "description": "Record words said under a question. They are kept whatever the question's state: under a closed question they are flagged as having arrived after closing, and reopen nothing.",
+      "required": ["id", "actor", "number", "speaker", "route", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "speaker": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Whose words they are. The closed list is the speakers of decisions/Rules.ps1."},
+        "route": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "By what route they arrived. The closed list is the routes of decisions/Rules.ps1, which also says whose words may arrive by each and who may record them: the actor recording a person's chat words is not the speaker."},
+        "text": {"type": "string", "description": "The words, verbatim. No pattern is set here, so that a refusal never describes them."},
+        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at. Absent means the wording current when the words are recorded."}
+      }
+    },
+    "inbox": {
+      "type": "object",
+      "description": "What others have said, under every question, that the actor has not read yet: oldest first. With mark, the same call records that the actor has now read exactly the messages it is handed, as one record of its own.",
+      "required": ["actor"],
+      "additionalProperties": false,
+      "properties": {
+        "actor": {"$ref": "#/definitions/actor"},
+        "id": {"$ref": "#/definitions/id"},
+        "mark": {"type": "boolean", "description": "True to record the messages handed back as read. It needs an id, because it writes. Absent or false reads only, and takes no id."},
+        "upTo": {"type": "integer", "minimum": 1, "description": "Only messages whose record is at or before this sequence number are handed back, and marked. A caller that showed a person some messages and then marks them names the last one it showed here, so that one which arrived in between is never marked unseen."}
+      }
     }
   }
 }

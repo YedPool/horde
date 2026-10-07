@@ -48,14 +48,14 @@
            Find = 'if ($bad.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "role-not-checked-by-name"
-           Find = 'if ($actors -cnotcontains $actor) {'
+           Find = 'if (@($allowed.roles) -cnotcontains $actor) {'
            Replace = 'if ($false) {' }
         @{ Name = "unknown-operation-runs"
            Find = 'if ($Operation -cmatch ''\A[a-z][a-z-]{0,31}\z'') { $entry = $script:HordeDecisionOperations[$Operation] }'
            Replace = '$entry = $script:HordeDecisionOperations["list"]' }
         # --- one id, one record ---
         @{ Name = "repost-written-again"
-           Find = 'if ($list.ids.ContainsKey($id)) {'
+           Find = 'if ($id -ne "" -and $list.ids.ContainsKey($id)) {'
            Replace = 'if ($false) {' }
         @{ Name = "reused-id-replayed"
            Find = 'if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {'
