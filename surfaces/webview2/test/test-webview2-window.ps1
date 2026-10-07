@@ -187,7 +187,7 @@ $steps = @("where", "bridge", "unknown-request", "host-objects", "raw-message",
     "own-fetch", "other-script", "other-fetch", "definition-fetch",
     "in-missing", "in-kind", "in-above", "in-escaped", "in-dots", "in-backslash", "in-port-file",
     "out-script", "out-style", "out-image", "out-fetch", "out-fetch-blind", "out-xhr", "out-beacon", "out-events", "out-font", "out-socket", "out-worker",
-    "nav-out", "nav-lookalike", "nav-other-mount", "nav-scheme", "frame-own", "frame-out", "new-window", "download", "push")
+    "nav-out", "nav-lookalike", "nav-other-mount", "nav-scheme", "frame-own", "frame-out", "new-window", "download", "ask-place", "ask-notify", "push")
 
 Write-Host ""
 Write-Host "--- the window opened, ran the whole probe and closed ---" -ForegroundColor Cyan
@@ -280,6 +280,11 @@ $landed = Join-Path $downloads ($probe.stamp + ".txt")
 $wasSaved = Test-Path -LiteralPath $landed -PathType Leaf
 if ($wasSaved) { Remove-Item -LiteralPath $landed -Force }
 Check ($saved.refusals -eq 1 -and @($saved.reasons)[0] -like "*save a file*" -and -not $wasSaved) ("a download the page starts is refused and recorded, and no file of this run is in " + $downloads)
+
+$place = Saw "ask-place"
+Check ($place.value -ceq "denied code 1" -and $place.refusals -eq 1 -and @($place.reasons)[0] -like "*asked the machine for something (the engine's word for it: Geolocation), and it was denied") ("asked where the machine is, the page is denied at once and it is recorded (" + $place.value + "; " + (@($place.reasons) -join " | ") + ")")
+$notify = Saw "ask-notify"
+Check ($notify.value -ceq "answered denied" -and $notify.refusals -eq 1 -and @($notify.reasons)[0] -like "*(the engine's word for it: Notifications), and it was denied") ("asked to put notices on the person's screen, the same (" + $notify.value + "; " + (@($notify.reasons) -join " | ") + ")")
 
 Write-Host ""
 Write-Host "--- push: Horde hands the page an event while it is shown ---" -ForegroundColor Cyan

@@ -38,6 +38,8 @@
 #     checks it.
 #   - developer tools, the context menu, the browser's own keys (reload, find, print), the status bar
 #     and saved form data are off.
+#   - whatever the page asks the person's machine for - its place, camera, microphone, clipboard,
+#     notices on the screen - is denied at once, and recorded as a refusal.
 #   - a download is cancelled, and recorded as a refusal. Left to the engine, a page that makes a link
 #     with a download name and clicks it writes a file into the user's own Downloads folder, outside
 #     anything of Horde's (measured 2026-10-06 by the review of this adapter, in a real hidden window:
@@ -374,6 +376,7 @@ function Invoke-HordeWebView2Initialized {
         $core.add_FrameNavigationStarting($h.frame)
         $core.add_NewWindowRequested($h.newWindow)
         $core.add_DownloadStarting($h.download)
+        $core.add_PermissionRequested($h.permission)
         # ONE delegate, made here and kept: the engine is asked to forget the handler it was handed,
         # so it is handed and asked with the same object. (Measured 2026-10-07 in the real window:
         # passing the script block itself both times was also honoured; keeping the object means that
@@ -447,6 +450,21 @@ function Invoke-HordeWebView2Download {
     if ($null -eq $s) { return }
     $Download.Cancel = $true
     Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page tried to save a file, and none was saved"
+}
+
+function Invoke-HordeWebView2Permission {
+    # A page asks the person's machine for something - where it is, its camera, its microphone, its
+    # clipboard, to put notices on the screen. A PAGE HORDE SHOWS IS GIVEN NONE OF THEM: it is denied
+    # here, at once, and recorded. Left to the engine, the ask waits on a prompt inside the window -
+    # measured 2026-10-07 in a real hidden window: a page asking where the machine is was still
+    # waiting when its own four-second limit ran out, and nothing was recorded.
+    param($What)
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return }
+    $What.State = "Deny"
+    $word = "something"
+    if (("" + $What.PermissionKind) -cmatch '\A[A-Za-z]{1,40}\z') { $word = "" + $What.PermissionKind }
+    Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason ("the page asked the machine for something (the engine's word for it: " + $word + "), and it was denied")
 }
 
 function Invoke-HordeWebView2Message {
@@ -575,6 +593,7 @@ function Get-HordeWebView2Handlers {
         frame       = { param($From, $What) Invoke-HordeWebView2Frame -Frame $What }
         newWindow   = { param($From, $What) Invoke-HordeWebView2NewWindow -What $What }
         download    = { param($From, $What) Invoke-HordeWebView2Download -Download $What }
+        permission  = { param($From, $What) Invoke-HordeWebView2Permission -What $What }
         message     = { param($From, $What) Invoke-HordeWebView2Message -What $What }
         listen      = { Resume-HordeWebView2Listening }
         tick        = { Invoke-HordeWebView2Tick }

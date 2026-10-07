@@ -21,6 +21,9 @@
         @{ Name = "the-download-lock-is-not-given-to-the-engine-seen-live"
            Find = '$core.add_DownloadStarting($h.download)'
            Replace = '' }
+        @{ Name = "the-permission-lock-is-not-given-to-the-real-engine"
+           Find = '$core.add_PermissionRequested($h.permission)'
+           Replace = '' }
         # --- every load is answered by the surface, in the real engine
         @{ Name = "the-engine-is-asked-about-pages-only"
            Find = '$core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::All)'
