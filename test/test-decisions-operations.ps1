@@ -359,28 +359,28 @@ function New-LaterRecord { param([long]$Sequence, [string]$Kind, [string]$Data, 
 $s = New-TestStore
 $null = Add-Q $s                                                                                    # record 1, question 1
 $laterId = "f" * 32
-[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), (New-LaterRecord 2 "message-said" '{"number":1,"speaker":"founder","text":"yes"}' $laterId), $utf8)
-[System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), (New-LaterRecord 3 "messages-read" '{"reader":"warchief","upTo":2}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000002.json"), (New-LaterRecord 2 "spoken-in-a-later-version" '{"number":1,"speaker":"founder","text":"yes"}' $laterId), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000003.json"), (New-LaterRecord 3 "seen-in-a-later-version" '{"reader":"warchief","upTo":2}'), $utf8)
 $a = Add-Q $s @{ title = "Is the second question still the second after later records?" }           # record 4
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 2 -and $a.value.sequence -eq 4) ("after two records of later kinds the next question is 2, in record 4: no number was left unused (" + (Get-Outcome $a) + ", number " + $(if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["number"]) { $a.value.number } else { "none" }) + ")")
-[System.IO.File]::WriteAllText((Join-Path $s "0000000005.json"), (New-LaterRecord 5 "message-said" '{"number":2,"speaker":"warchief","text":"noted"}'), $utf8)
-[System.IO.File]::WriteAllText((Join-Path $s "0000000006.json"), (New-LaterRecord 6 "message-said" '{"number":2,"speaker":"founder","text":"good"}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000005.json"), (New-LaterRecord 5 "spoken-in-a-later-version" '{"number":2,"speaker":"warchief","text":"noted"}'), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $s "0000000006.json"), (New-LaterRecord 6 "spoken-in-a-later-version" '{"number":2,"speaker":"founder","text":"good"}'), $utf8)
 $a = Add-Q $s @{ title = "Is the third question the third, whatever a later version wrote?" }      # record 7
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and $a.value.sequence -eq 7) ("and the one after is 3, in record 7 (" + (Get-Outcome $a) + ")")
-Check ((Get-NotUnderstood $a) -ceq "message-said x3 2-6; messages-read x1 3-3" -and @($a.value.unreadable).Count -eq 0 -and @($a.value.ignored).Count -eq 0) ("the write's own result names them once per kind, with how many and from which record to which, and calls none of them unreadable (" + (Get-NotUnderstood $a) + ")")
+Check ((Get-NotUnderstood $a) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3" -and @($a.value.unreadable).Count -eq 0 -and @($a.value.ignored).Count -eq 0) ("the write's own result names them once per kind, with how many and from which record to which, and calls none of them unreadable (" + (Get-NotUnderstood $a) + ")")
 $listed = Invoke-Op $s "list" @{ state = "all" }
-Check ((Get-Outcome $listed) -ceq "done" -and (@($listed.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3" -and (Get-NotUnderstood $listed) -ceq "message-said x3 2-6; messages-read x1 3-3") "list shows questions 1, 2 and 3 and the same one finding per kind"
+Check ((Get-Outcome $listed) -ceq "done" -and (@($listed.value.questions | ForEach-Object { $_.number }) -join ",") -ceq "1,2,3" -and (Get-NotUnderstood $listed) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3") "list shows questions 1, 2 and 3 and the same one finding per kind"
 $shown = Invoke-Op $s "show" @{ number = 2 }
 Check ((Get-Outcome $shown) -ceq "done" -and $shown.value.question.title -ceq "Is the second question still the second after later records?" -and @($shown.value.question.history).Count -eq 1) "show 2 is the second question, with a history of one record: the later records about it changed nothing this version shows"
 $closed = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done." }
 Check ((Get-Outcome $closed) -ceq "done" -and (Get-Listed $s) -ceq "1:closed,2:open,3:open") "and close, like every write, goes on working around them"
 $closedAgain = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done again." }
-Check ((Get-Outcome $closedAgain) -ceq "refused" -and (Get-NotUnderstood $closedAgain) -ceq "message-said x3 2-6; messages-read x1 3-3") ("a refusal names them too: no result leaves them out (" + (Get-NotUnderstood $closedAgain) + ")")
+Check ((Get-Outcome $closedAgain) -ceq "refused" -and (Get-NotUnderstood $closedAgain) -ceq "spoken-in-a-later-version x3 2-6; seen-in-a-later-version x1 3-3") ("a refusal names them too: no result leaves them out (" + (Get-NotUnderstood $closedAgain) + ")")
 Check (@($listed.value.notUnderstood | Where-Object { "$($_.reason)" -notlike "*later version*" -or "$($_.reason)" -notlike "*no question number*" }).Count -eq 0) "each finding says in words what it is: written by a later version, kept, and costing no question number"
 # A REPOST OF AN ID A LATER-KIND RECORD CARRIES DOES NOT WRITE AGAIN: the envelope is readable, so the id is seen.
 $before = Get-Files $s
 $again = Add-Q $s @{ title = "Is an id a later version used ever written under twice?" } $laterId
-Check ((Get-Outcome $again) -ceq "refused" -and (Test-Refused $again ("the id " + $laterId + " was already used")) -and (Test-Refused $again "record 2, message-said") -and (Get-Files $s) -ceq $before) ("a request under the id of a record this version did not understand is refused, naming that record and its kind, and writes nothing (" + (Get-Outcome $again) + ")")
+Check ((Get-Outcome $again) -ceq "refused" -and (Test-Refused $again ("the id " + $laterId + " was already used")) -and (Test-Refused $again "record 2, spoken-in-a-later-version") -and (Get-Files $s) -ceq $before) ("a request under the id of a record this version did not understand is refused, naming that record and its kind, and writes nothing (" + (Get-Outcome $again) + ")")
 # A QUESTION-ADDED RECORD WHOSE KIND WAS DAMAGED INTO ANOTHER NAME: set aside, and its number never given
 # again. Observed in review on 2026-10-07: the kind changed by one letter, show 2 said absent, and the
 # next add became number 2 with a different title.
