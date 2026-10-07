@@ -43,19 +43,22 @@
            Replace = 'if ($false) {' }
         # --- the title a window can have
         @{ Name = "titles-compared-without-case"
-           Find = 'if ($tabs -le 1) { if ($Title -ceq $want) { return $true }; continue }'
-           Replace = 'if ($tabs -le 1) { if ($Title -eq $want) { return $true }; continue }' }
+           Find = 'if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }'
+           Replace = 'if ($tabs -le 1) { if ($Title -eq ($zoom + $row.title)) { return $true }; continue }' }
         @{ Name = "a-bare-title-fits-a-window-of-several-tabs"
-           Find = 'if ($tabs -le 1) { if ($Title -ceq $want) { return $true }; continue }'
-           Replace = 'if ($Title -ceq $want) { return $true }; if ($tabs -le 1) { continue }' }
+           Find = 'if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }'
+           Replace = 'if ($Title -ceq ($zoom + $row.title)) { return $true }; if ($tabs -le 1) { continue }' }
         @{ Name = "any-tab-count-fits"
-           Find = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ("[" + $i + "/" + $tabs + "] " + $want)) { return $true } }'
-           Replace = 'for ($i = 1; $i -le 9; $i++) { for ($n = 1; $n -le 9; $n++) { if ($Title -ceq ("[" + $i + "/" + $n + "] " + $want)) { return $true } } }' }
+           Find = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }'
+           Replace = 'for ($i = 1; $i -le 9; $i++) { for ($n = 1; $n -le 9; $n++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $n + "] " + $row.title)) { return $true } } }' }
+        @{ Name = "zoomed-written-after-the-tab-count"
+           Find = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }'
+           Replace = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ("[" + $i + "/" + $tabs + "] " + $zoom + $row.title)) { return $true } }' }
         @{ Name = "a-pane-that-is-not-active-titles-the-window"
            Find = 'foreach ($row in @($Rows | Where-Object { $_.active })) {'
            Replace = 'foreach ($row in @($Rows)) {' }
         @{ Name = "zoomed-not-in-the-title"
-           Find = 'if ($row.zoomed) { $want = "[Z] " + $want }'
+           Find = 'if ($row.zoomed) { $zoom = "[Z] " }'
            Replace = '' }
         # --- the decision
         @{ Name = "a-pane-that-is-gone-still-has-a-window"

@@ -19,8 +19,10 @@
 #   - one window id listed, one terminal window in the process: that window, nothing to tell apart.
 #   - otherwise, BY THAT EXACT WINDOW'S OWN DETAILS FROM THE SAME LISTING: a terminal window is titled
 #     after the active pane of its active tab, with "[<tab>/<tabs>] " in front when it has more than
-#     one tab and "[Z] " when the pane is zoomed (measured: "[6/6] <pane title>" on a six-tab window,
-#     the bare pane title on a one-tab window). The listing gives every tab's active pane and the
+#     one tab and "[Z] " in front of everything when the pane is zoomed (measured 2026-10-06: "[6/6]
+#     <pane title>" on a six-tab window, the bare pane title on a one-tab window; measured 2026-10-07
+#     on an isolated instance: "[Z] <title>" with one tab, "[Z] [1/2] <title>" with two, and "[2/2]
+#     <title>" when the tab in front is not the zoomed one). The listing gives every tab's active pane and the
 #     number of tabs, so the titles the session's window can have are known. Exactly one terminal
 #     window must carry one of them, AND that window must not also fit another window id's titles.
 #     None, or two, or one that fits two ids: unknown, with the reason. Never the likeliest.
@@ -194,15 +196,15 @@ function ConvertTo-HordeWeztermAnswerText {
 
 function Test-HordeWeztermWindowTitle {
     # Could a terminal window with the panes -Rows (all of one window id) be titled -Title? The title
-    # of one of its tabs' active panes, behind "[<tab>/<tabs>] " when it has more than one tab and
-    # "[Z] " when that pane is zoomed (header). Compared exactly.
+    # of one of its tabs' active panes, behind "[<tab>/<tabs>] " when it has more than one tab, and
+    # behind "[Z] " - which comes first of all - when that pane is zoomed (header). Compared exactly.
     param([AllowEmptyString()][string]$Title, [Parameter(Mandatory = $true)][object[]]$Rows)
     $tabs = @($Rows | ForEach-Object { $_.tab } | Sort-Object -Unique).Count
     foreach ($row in @($Rows | Where-Object { $_.active })) {
-        $want = $row.title
-        if ($row.zoomed) { $want = "[Z] " + $want }
-        if ($tabs -le 1) { if ($Title -ceq $want) { return $true }; continue }
-        for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ("[" + $i + "/" + $tabs + "] " + $want)) { return $true } }
+        $zoom = ""
+        if ($row.zoomed) { $zoom = "[Z] " }
+        if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }
+        for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }
     }
     return $false
 }
