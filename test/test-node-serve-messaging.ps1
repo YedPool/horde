@@ -31,7 +31,7 @@ foreach ($t in @(Get-HordeTransportFiles)) { . $t }
 . (Join-Path $root "cli\NodeServe.ps1")
 . (Join-Path $root "cli\NodeAct.ps1")
 . (Join-Path $root "messengers\Port.ps1")
-. (Join-Path $root "messengers\memory\Messenger.ps1")
+foreach ($m in @(Get-HordeMessengerFiles -Root (Join-Path $root "messengers"))) { . $m }
 
 $fx = Join-Path $root "test\fixtures\node-serve"
 $device = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -69,6 +69,7 @@ function AskFrame { param($Frame, $Data) $st = State; $null = Invoke-HordeNodeFr
 function Deliver {
     param([string]$SessionId = $live, [string]$Label = "", [string]$Body = "Pause batch 8 until PR 91 merges.", [string]$MessageId = "")
     if ($MessageId -eq "") { $MessageId = New-HordeLinkFrameId }
+    $script:lastId = $MessageId
     $a = [ordered]@{ messageId = $MessageId; sessionId = $SessionId }
     if ($Label -ne "") { $a["label"] = $Label }
     $a["from"] = [pscustomobject][ordered]@{ deviceId = $hubDevice; sessionId = "bbbbbbbb-0000-4000-8000-000000000009"; label = "M" }
@@ -189,37 +190,39 @@ Check ("$($r.reply.result.value.stage)" -ceq "seen" -and "$($r.reply.result.valu
 
 Write-Host ""
 Write-Host "--- the loop step serves every need, through the messenger port ---" -ForegroundColor Cyan
-Reset-HordeMemoryMessenger
 $mem = (Resolve-HordeMessenger -Name "memory" -Require @()).value
-function Posts { return (Get-HordeMemoryMessengerLog).posts }
+$mfx = & (Join-Path $root "messengers\memory\test\Fixture.ps1") -Root $root
+$mfxState = & $mfx.New
+# How many records the messenger holds for one message: 1 once it took it, 0 if it never did.
+function Took { param([string]$Id) return [int](& $mfx.Observe $mfxState $Id).records }
 $loopEnv = [pscustomobject]@{ GetView = { View }; Messenger = $mem; OutboxRoot = $outboxRoot; MessageJournalRoot = $journalRoot; DeliverTo = @("A12"); HubSpawned = @() }
 $st = State
 $null = Invoke-HordeNodeFrame -State $st -Line (Line (Hello)) -Data (Data)
 $loopMsg = Deliver -Label "A12"
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" $loopMsg)) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $loopEnv
-Check ("$($out.reply.result.value.stage)" -ceq "accepted" -and (Posts) -eq 1 -and (Get-HordeMemoryMessengerLog -MessageId "$($loopMsg.messageId)").records -eq 1 -and (Sendable $out.reply)) "the loop builds the view, hands the message to the deliverer once, and answers the delivery"
-Set-HordeMemoryMessengerStage -MessageId "$($loopMsg.messageId)" -Stage "handed-over"
+Check ("$($out.reply.result.value.stage)" -ceq "accepted" -and (Took "$($loopMsg.messageId)") -eq 1 -and (Sendable $out.reply)) "the loop builds the view, hands the message to the deliverer once, and answers the delivery"
+& $mfx.Receive $mfxState "$($loopMsg.messageId)"
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "delivery.status" ([pscustomobject]@{ messageId = "$($loopMsg.messageId)" }))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $loopEnv
-Check ("$($out.reply.result.value.stage)" -ceq "handed-over" -and (Posts) -eq 1) "the loop asks the messenger, through the port, where the message is, and posts nothing again"
+Check ("$($out.reply.result.value.stage)" -ceq "seen" -and (Took "$($loopMsg.messageId)") -eq 1) "the loop asks the messenger, through the port, where the message is, and posts nothing again"
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "mail.next" ([pscustomobject]@{}))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $loopEnv
 Check ("$($out.reply.result.value.mail.messageId)" -ceq $neverId -and (Sendable $out.reply)) "the loop reads the outbox and hands out the next unsettled message"
 $after = Get-HordeOutbox -Root $outboxRoot
 Check (@($after.value | Where-Object { "$($_.messageId)" -ceq $neverId -and $_.handedOut }).Count -eq 1) "and the handed-out marker is on disk once the answer is built"
 $noMessenger = [pscustomobject]@{ GetView = { View }; Messenger = $null; OutboxRoot = $outboxRoot; MessageJournalRoot = $journalRoot; DeliverTo = @("A12"); HubSpawned = @() }
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" (Deliver -Label "A12"))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $noMessenger
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger*" -and (Posts) -eq 1) "a loop with no messenger refuses a deliver and posts nothing"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger*" -and (Took $script:lastId) -eq 0) "a loop with no messenger refuses a deliver and posts nothing"
 $followed = Deliver -SessionId "gone-1" -Label "A12"
 $byProcess = [pscustomobject]@{ GetView = { View }; Messenger = $mem; OutboxRoot = $outboxRoot; MessageJournalRoot = $journalRoot; DeliverTo = @(); HubSpawned = @(Proc "gone-1" "A12" "4242" "133420000000000000") }
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" $followed)) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $byProcess
-$took = $script:HordeMemoryMessengerStore["$($followed.messageId)"]
-Check ("$($out.reply.result.value.sessionId)" -ceq $live -and $null -ne $took -and "$($took.message.sessionId)" -ceq $live) "the port is handed the session the rules resolved, not the dead id the hub named"
+Check ("$($out.reply.result.value.sessionId)" -ceq $live -and (Took "$($followed.messageId)") -eq 1) "a deliver to a dead id reaches, through its process, the live session the rules resolved"
+$sent = ConvertTo-HordeNodeMessengerMessage -Need ([pscustomobject]@{ target = [pscustomobject]@{ sessionId = $live }; message = $followed })
+Check ("$($sent.sessionId)" -ceq $live -and "$($sent.label)" -ceq "A12" -and "$($sent.messageId)" -ceq "$($followed.messageId)" -and "$($sent.body)" -ceq "$($followed.body)") "the port is handed the session the rules resolved, not the dead id the hub named"
 $nodeHome0 = Join-Path $tmp "home0"
 [void][System.IO.Directory]::CreateDirectory($nodeHome0)
 $picked = New-HordeNodeMessaging -Root $root -HordeHome $nodeHome0 -GetView { View } -MessengerName "memory"
 Check ($null -eq $picked.Messenger -and "$($picked.MessengerError)" -clike "*receipt.receiver*") "the production path refuses the in-process messenger: it declines receipt.receiver"
-$posts = Posts
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" (Deliver -Label "A12"))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $picked
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger*receipt.receiver*" -and (Posts) -eq $posts) "so a node started with it refuses every deliver, saying why, and posts nothing"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger*receipt.receiver*" -and (Took $script:lastId) -eq 0) "so a node started with it refuses every deliver, saying why, and posts nothing"
 $none = New-HordeNodeMessaging -Root $root -HordeHome $nodeHome0 -GetView { View }
 $out = Invoke-HordeNodeServeStep -State $st -Line (Line (Req "session.deliver" (Deliver -Label "A12"))) -Manifest $manifest -Namespace $ns -JournalRoot "" -Messaging $none
 Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*no messenger was named*") "a node with no messenger named refuses every deliver, saying so"
@@ -239,29 +242,26 @@ Check ($null -ne $built.Layers -and (Test-Path -LiteralPath (Join-Path $nodeHome
 $out = DeliverNow
 Check ("$($out.reply.result.value.stage)" -ceq "accepted") "CONTROL: with A12 opted in by engine.json, a deliver to it goes through"
 Put "engine-live.json" (OptIn "withdraw" "")
-$posts = (Posts)
 $out = DeliverNow
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*neither spawned by this hub nor opted in*" -and (Posts) -eq $posts) "engine-live.json withdrawing every opt-in holds from the very next deliver, with no restart"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*neither spawned by this hub nor opted in*" -and (Took $script:lastId) -eq 0) "engine-live.json withdrawing every opt-in holds from the very next deliver, with no restart"
 Put "engine-live.json" ""
 $out = DeliverNow
-Check ("$($out.reply.result.value.stage)" -ceq "accepted" -and (Posts) -eq $posts + 1) "and removing the live file restores engine.json's list on the next deliver"
+Check ("$($out.reply.result.value.stage)" -ceq "accepted" -and (Took $script:lastId) -eq 1) "and removing the live file restores engine.json's list on the next deliver"
 
 Write-Host ""
 Write-Host "--- a node layer that fails its checks refuses every deliver, as it refuses every spawn ---" -ForegroundColor Cyan
 Put "engine.json" (OptIn "opt-in" "A12,A12")
-$posts = (Posts)
 $out = DeliverNow
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*'A12'*twice*" -and (Posts) -eq $posts -and (Sendable $out.reply)) "with engine.json refused, a deliver is refused with the layer's reason, and nothing is posted"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*'A12'*twice*" -and (Took $script:lastId) -eq 0 -and (Sendable $out.reply)) "with engine.json refused, a deliver is refused with the layer's reason, and nothing is posted"
 $spawned = [pscustomobject]@{ GetView = $built.GetView; Messenger = $mem; OutboxRoot = $built.OutboxRoot; MessageJournalRoot = $built.MessageJournalRoot; Layers = $built.Layers; HubSpawned = @(Proc "old-2" "A12" "4242" "133420000000000000") }
 $out = DeliverNow -SessionId "old-2" -Messaging $spawned
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*fails its checks*" -and (Posts) -eq $posts) "even to a session the hub spawned: a refused layer refuses every deliver, not only the opted-in ones"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*fails its checks*" -and (Took $script:lastId) -eq 0) "even to a session the hub spawned: a refused layer refuses every deliver, not only the opted-in ones"
 Put "engine.json" (OptIn "opt-in" "A12")
 $out = DeliverNow -SessionId "old-2" -Messaging $spawned
 Check ("$($out.reply.result.value.stage)" -ceq "accepted") "CONTROL: with engine.json fixed, the same deliver to the hub's session goes through"
 Put "engine-live.json" '{ "schemaVersion": 1, "rules": ['
-$posts = (Posts)
 $out = DeliverNow
-Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine-live.json*" -and (Posts) -eq $posts) "an engine-live.json that is not JSON refuses every deliver too, naming the file"
+Check ("$($out.reply.error.code)" -ceq "refused" -and "$($out.reply.error.reason)" -clike "*engine-live.json*" -and (Took $script:lastId) -eq 0) "an engine-live.json that is not JSON refuses every deliver too, naming the file"
 Put "engine-live.json" ""
 } finally {
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
