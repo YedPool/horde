@@ -151,12 +151,15 @@ $script:HordeModuleSettingsJsonPieces = '\A(?:[ \t\r\n]+|[{}\[\],:]|"(?:[^"\\\x0
 
 function Test-HordeModuleSettingFolder {
     # Is this an absolute path, one that means the same from every current folder and drive?
-    # IsPathRooted answers yes for C:x and \x (measured 2026-10-07), which do not; it is still asked,
-    # because it throws on a character no path may hold (| < > " and control characters), which is a no.
+    # IsPathRooted answers yes for C:x and \x (measured 2026-10-07), which do not, so on Windows the
+    # answer is this file's own pattern. It is still asked first, because it throws on a character no
+    # path may hold (| < > " and control characters), which is a no; and where the separator is not a
+    # backslash its answer is the answer.
     param([string]$Path)
-    try { if (-not [System.IO.Path]::IsPathRooted($Path)) { return $false } } catch { return $false }
+    $rooted = $false
+    try { $rooted = [System.IO.Path]::IsPathRooted($Path) } catch { return $false }
     if ([System.IO.Path]::DirectorySeparatorChar -eq [char]'\') { return [bool]($Path -cmatch '\A(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])') }
-    return $true
+    return $rooted
 }
 
 function Test-HordeModuleSettingValue {
