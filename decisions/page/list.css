@@ -15,6 +15,15 @@
    The colours are the host page's variables: --ink, --muted, --faint, --dim. --line-px is the host's
    line height, which the fold mark is centred in. */
 .hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
+/* A FOLDED QUESTION AND ITS SUFFIX SHARE THE LINE BY NEED, and so do a heading and its count. Each
+   of the two is given room up to what its words take, in equal steps: a short one keeps all its
+   words and the other has the rest, and when both are long each has half. A fixed share (the suffix
+   at most 46 percent of the line, the question the rest) cut a suffix short beside a short question
+   with a fifth of the line left empty (seen 2026-10-07 in a picture of the real window, 980 device
+   pixels wide: "Test near and far distances too? - Recommended: no, not in this pass - Orc..."). */
+.hd-head, .hd-q:not(.open) > .hd-row { display: grid; justify-content: start; }
+.hd-head { grid-template-columns: 14px minmax(0, auto) minmax(0, auto); }
+.hd-q:not(.open) > .hd-row { grid-template-columns: 14px auto minmax(0, auto) minmax(0, auto); }
 .hd-head, .hd-q > .hd-row { cursor: pointer; }
 .hd-tri { flex: 0 0 14px; width: 14px; height: var(--line-px); align-self: flex-start; position: relative; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 .hd-tri::before { content: ""; position: absolute; left: 4px; top: calc((var(--line-px) - 8px) / 2); border-left: 6px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
@@ -26,11 +35,13 @@
 .hd-txt { flex: 0 1 auto; min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
 .hd-q.open > .hd-row > .hd-txt, .hd-body > .hd-txt { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .hd-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.hd-suf { flex: 0 0 auto; max-width: 46%; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+.hd-suf { min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
 .hd-q.open > .hd-row > .hd-suf { display: none; }
 .hd-group { margin-top: 10px; }
 .hd-group:first-child { margin-top: 0; }
-.hd-head > .hd-txt { font-weight: 600; }
+/* A heading is never cut short: nothing unfolds it, so words lost to an ellipsis could not be read
+   at all. In a narrow window it takes a second line. */
+.hd-head > .hd-txt { font-weight: 600; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .hd-note { display: none; color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hd-group.note-open > .hd-note { display: block; }
 .hd-bg { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-decoration: underline; }
