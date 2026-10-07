@@ -30,9 +30,15 @@ function Start-HordeProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
+    # THE TWO STREAMS ARE READ AT THE SAME TIME, never one to its end and then the other. A pipe holds
+    # 4,096 bytes: a child that writes more than that to stderr waits for a reader, and a reader still
+    # waiting for stdout to end waits for the child - for ever. Measured 2026-10-07: an unknown command
+    # prints the whole help to stderr, the help reached 4,362 bytes, and this suite stood still for 23
+    # minutes at that check; at 3,591 bytes it had passed.
+    $errRead = $p.StandardError.ReadToEndAsync()
     $out = $p.StandardOutput.ReadToEnd()
-    $err = $p.StandardError.ReadToEnd()
     $p.WaitForExit()
+    $err = $errRead.Result
     return [pscustomobject]@{ code = $p.ExitCode; out = $out; err = $err }
 }
 
