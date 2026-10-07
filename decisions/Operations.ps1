@@ -205,7 +205,7 @@ function Get-HordeDecisionSayParts {
     param($List, [long]$Sequence)
     foreach ($question in $List.questions.Values) {
         foreach ($message in $question.thread) {
-            if ([long]$message.sequence -eq $Sequence) { return [ordered]@{ message = (ConvertTo-HordeDecisionMessageView -Message $message -Question $question -State $List) } }
+            if ([long]$message.sequence -eq $Sequence) { return [ordered]@{ message = (ConvertTo-HordeDecisionMessageView -Message $message -State $List) } }
         }
     }
     return [ordered]@{}
@@ -238,7 +238,7 @@ function Get-HordeDecisionInboxMore {
     $views = New-Object System.Collections.ArrayList
     foreach ($item in @($Items)) {
         $last = [long]$item.message.sequence
-        [void]$views.Add([pscustomobject]@{ number = [int]$item.question.number; title = "$($item.question.title)"; state = "$($item.question.state)"; message = (ConvertTo-HordeDecisionMessageView -Message $item.message -Question $item.question -State $List) })
+        [void]$views.Add([pscustomobject]@{ number = [int]$item.question.number; title = "$($item.question.title)"; state = "$($item.question.state)"; message = (ConvertTo-HordeDecisionMessageView -Message $item.message -State $List) })
     }
     return [ordered]@{ messages = @($views); upTo = $last; marked = $Marked }
 }

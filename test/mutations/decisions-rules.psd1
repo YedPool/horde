@@ -341,11 +341,14 @@
            Find = 'if ($seen -gt [int]$question.wordingVersion) {'
            Replace = 'if ($false) {' }
         @{ Name = "earlier-wording-not-flagged"
-           Find = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int]$Question.wordingVersion)'
-           Replace = 'saidToEarlierWording = $false' }
-        @{ Name = "current-wording-flagged-as-earlier"
-           Find = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int]$Question.wordingVersion)'
-           Replace = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -le [int]$Question.wordingVersion)' }
+           Find = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = $false' }
+        @{ Name = "wording-of-the-moment-flagged-as-earlier"
+           Find = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = [bool]($seen -le [int]$question.wordingVersion)' }
+        @{ Name = "earlier-wording-judged-against-todays-wording"
+           Find = 'saidToEarlierWording = [bool]$Message.saidToEarlierWording'
+           Replace = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int](@($State.questions.Values | Where-Object { $_.thread -contains $Message })[0].wordingVersion))' }
         @{ Name = "words-trimmed"
            Find = '        text = [string]$Ev.data.text'
            Replace = '        text = ([string]$Ev.data.text).Trim()' }
@@ -353,8 +356,8 @@
            Find = '    $speaker = "$($Ev.data.speaker)"'
            Replace = '    $speaker = "$($Ev.data.speaker)"; Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "said"' }
         @{ Name = "thread-in-reverse-order"
-           Find = '    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -Question $Question -State $State })'
-           Replace = '    $views = @($Question.thread | Sort-Object { -[long]$_.sequence } | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -Question $Question -State $State })' }
+           Find = '    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })'
+           Replace = '    $views = @($Question.thread | Sort-Object { -[long]$_.sequence } | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })' }
         @{ Name = "list-form-carries-the-messages"
            Find = '    if ($Messages) { $thread["messages"] = $views }'
            Replace = '    $thread["messages"] = $views' }
