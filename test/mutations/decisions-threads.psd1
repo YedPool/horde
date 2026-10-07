@@ -68,7 +68,9 @@
            Replace = '$items = @(Get-HordeDecisionMessagesFor -State $List -Reader "$($marking.reader)")' }
         @{ Name = "read-mark-given-a-question-number"
            Find = 'if ($about -ceq "question") { if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list } }'
-           Replace = 'if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list }' }
+           Replace = 'if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list }'
+           Expect = "survives"
+           Reason = "equivalent today: the one operation whose record is about the whole list (inbox) has a 'complete' step that replaces the record's data, so a question number put in before it never reaches the record. The guard is kept for the next such operation that has no such step, where the number would make the record fail its schema; it has nothing to be tested with until then" }
         @{ Name = "repost-of-a-marking-given-a-question-number"
            Find = 'if ([int]$prior.number -ge 1) { $more["number"] = [int]$prior.number }'
            Replace = '$more["number"] = [int]$prior.number' }
