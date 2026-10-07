@@ -9,9 +9,9 @@
     Suite  = "surfaces\webview2\test\test-webview2-surface.ps1"
     Mutations = @(
         # --- the pinned files
-        @{ Name = "files-loaded-without-the-check"
-           Find = 'if (-not $libs.ok) { return $libs.reason }'
-           Replace = '' }
+        # No mutant removes the return on a failed check by itself: a refused folder hands back no file
+        # (the third mutant below guards that), so going on would stop on an empty path, and a suite
+        # that stops has caught nothing (measured 2026-10-06: "the suite broke with no failed check").
         @{ Name = "a-file-the-list-does-not-pin-is-loaded"
            Find = 'foreach ($need in $script:HordeWebView2LibFiles) { if ($have -cnotcontains $need) {'
            Replace = 'foreach ($need in $script:HordeWebView2LibFiles) { if ($false) {' }
