@@ -41,9 +41,16 @@ $mirrorRoot = Join-Path $work "mirror"
 New-Item -ItemType Directory -Path $mirrorRoot | Out-Null
 # The fixture view as a node would build it now: the same sessions, observed this minute. The fixture
 # itself was observed on 2026-10-02, and an inventory that old is stale on the hub's clock, as it should be.
+# Stamped where it is used, not at the suite's start: on a loaded machine the sections before the loop
+# took more than the 60 s TTL, and the loop's control then read the sessions as stale (measured
+# 2026-10-07: "observed 66s ago, past its 60s TTL").
 $freshView = Join-Path $work "view-now.json"
 $fixtureAt = "2026-10-02T12:00:00.000Z"
-[System.IO.File]::WriteAllText($freshView, [System.IO.File]::ReadAllText($viewPath).Replace($fixtureAt, (Get-HordeLinkTime)))
+$freshAt = ""
+function Update-FreshView {
+    $script:freshAt = Get-HordeLinkTime
+    [System.IO.File]::WriteAllText($freshView, [System.IO.File]::ReadAllText($viewPath).Replace($fixtureAt, $script:freshAt))
+}
 
 function Start-Node {
     # cli/NodeServe.ps1's real loop in a second runspace, on the memory transport (test-node-serve's peer).
@@ -235,6 +242,7 @@ try {
     Write-Host ""
     Write-Host "--- the loop: a node heard, then gone ---" -ForegroundColor Cyan
     Remove-Item -LiteralPath (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -Force -ErrorAction SilentlyContinue
+    Update-FreshView
     $node = Start-Node -MaxLinks 1 -View $freshView
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     $null = Stop-Node $node
@@ -245,7 +253,7 @@ try {
     $after1 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -DeviceId $device -Contract $contract
     Check ($rounds.Count -eq 1 -and $after1.state -ceq "known" -and $null -ne (Get-HordeLinkProp $after1.value "heardAt") -and @($after1.value.inventory.list.sessions).Count -eq 2) "round one writes a mirror with the node's two sessions"
     $rows = @(Get-HordeMirrorRows -Mirror $after1.value -Now (Utc))
-    Check ($rows.Count -eq 2 -and @($rows | Where-Object { $_.presence.state -ceq "known" -and $_.device -ceq $device }).Count -eq 2) "CONTROL: and its sessions are known present, on the node's device"
+    Check ($rows.Count -eq 2 -and @($rows | Where-Object { $_.presence.state -ceq "known" -and $_.device -ceq $device }).Count -eq 2) ("CONTROL: and its sessions are known present, on the node's device (" + (@($rows | ForEach-Object { "$($_.presence.state) $($_.presence.reason)" }) -join " | ") + "; view observed " + $freshAt + ", now " + (Get-HordeLinkTime) + ")")
     $t2 = Utc
     $rounds = @(Invoke-HordeHubServe -Nodes @(Entry) -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
     $after2 = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $device) -DeviceId $device -Contract $contract
