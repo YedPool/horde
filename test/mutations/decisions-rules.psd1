@@ -324,5 +324,18 @@
         @{ Name = "known-kind-with-bad-data-not-checked"
            Find = '            if ($shape.Count -gt 0) { $why = $shape[0] }'
            Replace = '' }
+        # --- a set-aside record's number still raises the floor ---
+        @{ Name = "later-kind-number-does-not-raise-the-floor"
+           Find = '$State.lastNumber = [int]$carried; '
+           Replace = '' }
+        @{ Name = "later-kind-number-lowers-the-floor"
+           Find = '-and [double]$carried -gt ([double]$State.lastNumber + [double]$State.pending)) {'
+           Replace = ') {' }
+        @{ Name = "anything-in-a-number-field-taken-as-a-question-number"
+           Find = 'if ((Test-HordeDecisionCount -Value $carried -Most $script:HordeDecisionMaxNumber) -and'
+           Replace = 'if (($null -ne $carried) -and' }
+        @{ Name = "unreadable-count-kept-past-a-raised-floor"
+           Find = '; $State.pending = 0'
+           Replace = '' }
     )
 }

@@ -164,5 +164,8 @@
         @{ Name = "later-kinds-left-out-of-a-refusal"
            Find = 'strays = @($list.strays); notUnderstood = $list.notUnderstood }'
            Replace = 'strays = @($list.strays); notUnderstood = (New-Object System.Collections.Specialized.OrderedDictionary) }' }
+        @{ Name = "set-aside-records-not-named-when-a-number-cannot-be-read"
+           Find = ' + @($State.notUnderstood.Values | ForEach-Object {'
+           Replace = ' + @(@() | ForEach-Object {' }
     )
 }

@@ -45,7 +45,17 @@
 #     name therefore cannot have added a question. Measured 2026-10-07, before this rule: one record
 #     of a later kind between two questions numbered the next one 4 instead of 3, for good;
 #   - ITS ID IS STILL SEEN: the envelope is readable, so a request sent again under that id is known
-#     to have been recorded, and is not written a second time.
+#     to have been recorded, and is not written a second time;
+#   - ITS NUMBER STILL RAISES THE FLOOR. The two promises above hold only while a kind's NAME is
+#     undamaged, and a damaged name can be another well-formed one: observed in review on 2026-10-07,
+#     a question-added record with one letter of its kind changed was set aside, and its question
+#     number was given to the next question. A number is never given twice, so a set-aside record whose
+#     data has a "number" shaped like a question number (a whole number from 1 to the largest a
+#     question may have) raises the floor: the next question is above it, and that number reads as
+#     given and unreadable, not as never given. It only ever raises. For a record that really is of a
+#     later kind this costs nothing: such a record names a question that already has its number, at
+#     or below the floor - unless a later version adds questions under a new kind, when raising is
+#     exactly right.
 # What this asks of whoever adds a kind: never reuse a kind's name for another meaning; never make an
 # existing kind's record mean something only together with a later kind's (an older version sees the
 # first without the second); and keep the envelope as it is - a change to the envelope is a new
@@ -680,6 +690,13 @@ function Add-HordeDecisionRecordToState {
             else { $State.notUnderstood[$later] = [pscustomobject]@{ kind = $later; count = 1; first = [long]$Record.sequence; last = [long]$Record.sequence } }
             if (-not $State.ids.ContainsKey("$($Record.data.id)")) {
                 $State.ids["$($Record.data.id)"] = [pscustomobject]@{ sequence = [long]$Record.sequence; kind = $later; requestHash = "$($Record.data.requestHash)"; number = 0; applied = $false }
+            }
+            # ITS NUMBER STILL RAISES THE FLOOR (the contract's last point): a number field shaped like
+            # a question number is taken as a number that may have been given, and the next question is
+            # above it. It only ever raises: a number at or below the next one changes nothing.
+            $carried = Get-HordeDecisionMember -Object $Record.data.data -Name "number"
+            if ((Test-HordeDecisionCount -Value $carried -Most $script:HordeDecisionMaxNumber) -and [double]$carried -gt ([double]$State.lastNumber + [double]$State.pending)) {
+                $State.lastNumber = [int]$carried; $State.pending = 0
             }
             return ""
         }

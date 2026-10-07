@@ -167,7 +167,9 @@ function Get-HordeDecisionNumberAnswer {
     if ($Number -le [int]::MaxValue) { $status = Get-HordeDecisionNumberStatus -State $State -Number ([int]$Number) }
     if ($status -eq "present") { return $null }
     if ($status -eq "unreadable") {
-        $which = @($State.unreadable | ForEach-Object { "record " + $_.sequence + " (" + $_.file + "): " + $_.reason }) -join "; "
+        # The records that may hold it: every unreadable one, and every one set aside as a later kind,
+        # since a set-aside record's number raises the floor too (decisions/Rules.ps1, the contract).
+        $which = @(@($State.unreadable | ForEach-Object { "record " + $_.sequence + " (" + $_.file + "): " + $_.reason }) + @($State.notUnderstood.Values | ForEach-Object { $(if ([long]$_.first -eq [long]$_.last) { "record " + $_.first } else { "records " + $_.first + " to " + $_.last }) + " of the kind '" + $_.kind + "', set aside as not understood by this version" })) -join "; "
         return (New-HordeUnknown -Reason ("question " + $Number + " cannot be read, so '" + $Operation + "' did nothing: its number was given, or may have been, to a record that cannot be read. " + $which))
     }
     return (New-HordeAbsent -Note ("there is no question " + $Number + "; the highest number given is " + $State.lastNumber))

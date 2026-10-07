@@ -381,6 +381,19 @@ Check (@($listed.value.notUnderstood | Where-Object { "$($_.reason)" -notlike "*
 $before = Get-Files $s
 $again = Add-Q $s @{ title = "Is an id a later version used ever written under twice?" } $laterId
 Check ((Get-Outcome $again) -ceq "refused" -and (Test-Refused $again ("the id " + $laterId + " was already used")) -and (Test-Refused $again "record 2, message-said") -and (Get-Files $s) -ceq $before) ("a request under the id of a record this version did not understand is refused, naming that record and its kind, and writes nothing (" + (Get-Outcome $again) + ")")
+# A QUESTION-ADDED RECORD WHOSE KIND WAS DAMAGED INTO ANOTHER NAME: set aside, and its number never given
+# again. Observed in review on 2026-10-07: the kind changed by one letter, show 2 said absent, and the
+# next add became number 2 with a different title.
+$s = New-TestStore
+$null = Add-Q $s                                                                                    # question 1
+$null = Add-Q $s @{ title = "Is the second question's number kept when its kind is damaged?" }      # question 2
+$second = Join-Path $s "0000000002.json"
+$text = [System.IO.File]::ReadAllText($second, $utf8)
+[System.IO.File]::WriteAllText($second, $text.Replace('"kind":"question-added"', '"kind":"question-addex"'), $utf8)
+$a = Add-Q $s @{ title = "Is the next question numbered past the damaged one?" }
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3 -and (Get-NotUnderstood $a) -ceq "question-addex x1 2-2") ("the next add is question 3, not 2: a number is never given twice (" + (Get-Outcome $a) + ", number " + $(if ($a.state -ceq "known" -and $null -ne $a.value.PSObject.Properties["number"]) { $a.value.number } else { "-" }) + ")")
+$shown = Invoke-Op $s "show" @{ number = 2 }
+Check ($shown.state -ceq "unknown" -and "$($shown.reason)" -like "*question 2 cannot be read*" -and "$($shown.reason)" -like "*record 2*question-addex*") ("and show 2 says question 2 cannot be read and names the record set aside - not that there never was a question 2, and not another question (" + $shown.state + ": " + $shown.reason + ")")
 # CONTROL: damage keeps the conservative rule - a torn record between questions still costs a number.
 $s = New-TestStore
 $null = Add-Q $s

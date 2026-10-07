@@ -512,6 +512,28 @@ $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-added" ([ordered]@{ nu
 Check ((Get-HordeDecisionNextNumber -State $st) -eq 3 -and $st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a KNOWN kind with data that is not its own is damage, as before"
 $st = Get-Fold @((New-Added 1 1), (New-Record 2 "Answer Recorded" ([ordered]@{ number = 1 })))
 Check ($st.unreadable.Count -eq 1 -and (Get-NotUnderstood $st) -ceq "") "CONTROL: a kind that is not a kind's name at all fails the envelope, and is unreadable"
+# A NUMBER IS NEVER GIVEN TWICE, EVEN WHEN A KIND'S NAME IS DAMAGED. A question-added record whose kind
+# is damaged into another well-formed name is set aside as a later kind. Observed in review on
+# 2026-10-07: its question number was then given to the next question. So a set-aside record's number
+# field, when it is shaped like a question number, still raises the floor: the next question is above it.
+$damaged = New-Added 2 2
+$damaged.data.kind = "question-addex"
+$st = Get-Fold @((New-Added 1 1), $damaged)
+Check ((Get-NotUnderstood $st) -ceq "question-addex x1 2-2" -and $st.unreadable.Count -eq 0) ("a question-added record with its kind damaged to another name is set aside as a later kind (" + (Get-NotUnderstood $st) + ")")
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 3) ("and the next question is 3, not 2: the number it carries is never given again (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+Check ((Get-HordeDecisionNumberStatus -State $st -Number 2) -ceq "unreadable") ("and number 2 is a number that was given and cannot be shown, not one never given (" + (Get-HordeDecisionNumberStatus -State $st -Number 2) + ")")
+$st = Get-Fold @((New-Added 1 1), $damaged, (New-Added 3 2 "Is question number two given twice when a kind is damaged?"))
+Check ((Get-Numbers $st) -ceq "1" -and $st.ignored.Count -eq 1 -and "$($st.ignored[0].reason)" -like "*a number is never given twice*") ("a later record that says it is question 2 is not shown, and says why: number 2 was already given (" + (Get-Numbers $st) + ")")
+# A later kind's number field only ever RAISES the floor; one at or below it moves nothing, and one that
+# is not shaped like a question number is not read as one.
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Torn 3), (New-Record 4 "answer-recorded" ([ordered]@{ number = 2 })))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 4) ("CONTROL: a later kind's number below the next one moves nothing - it never lowers the floor two unreadable records raised (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+$st = Get-Fold @((New-Added 1 1), (New-Torn 2), (New-Record 3 "answer-recorded" ([ordered]@{ number = 5 })))
+Check ((Get-HordeDecisionNextNumber -State $st) -eq 6) ("a later kind's number above the floor is the new floor, as a question-added's would be: the unreadable record before it is counted in it (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+foreach ($odd in @(0, -4, 2.5, "7", 1e30)) {
+    $st = Get-Fold @((New-Added 1 1), (New-Record 2 "answer-recorded" ([ordered]@{ number = $odd })))
+    Check ((Get-HordeDecisionNextNumber -State $st) -eq 2) ("CONTROL: a number field of " + $odd + " is not a question number, and moves nothing (" + (Get-HordeDecisionNextNumber -State $st) + ")")
+}
 
 Write-Host ""
 Write-Host "--- one id, one record to answer from ---" -ForegroundColor Cyan
