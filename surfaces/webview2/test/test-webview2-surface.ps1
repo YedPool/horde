@@ -106,6 +106,33 @@ Check ($refusedHold.ok -eq $false -and @($refusedHold.held).Count -eq 0 -and (Te
 Check ((Test-EngineLoaded) -eq $false) "after every one of those refusals, nothing of the engine's interface is loaded in this process"
 
 Write-Host ""
+Write-Host "--- a data folder the engine could not write to is refused at once, in words ---" -ForegroundColor Cyan
+# With a folder it cannot write, the engine waited 67 s and then failed in its own words ("Server
+# execution failed (0x80080005)"), and one of its processes outlived the window (review of 2026-10-06,
+# finding A10). The surface now tries the folder itself before it starts anything.
+$goodData = Join-Path $work "data-ok\profile"
+Check ((Test-HordeWebView2DataFolder -Path $goodData) -ceq "" -and (Test-Path -LiteralPath $goodData -PathType Container) -and @(Get-ChildItem -LiteralPath $goodData -Force).Count -eq 0) "CONTROL: a folder that can be made and written to is no problem; it is made, and the trial file is gone"
+$blocker = Join-Path $work "a-file-in-the-way"
+[System.IO.File]::WriteAllText($blocker, "x")
+foreach ($bad in @(@{ path = $blocker; what = "a file where the folder should be" }, @{ path = (Join-Path $blocker "profile"); what = "a folder under a file" })) {
+    $said = Test-HordeWebView2DataFolder -Path $bad.path
+    Check ($said -like "the folder the window keeps its own files in cannot be made or written to*" -and $said -like "*so the window was not opened*") ($bad.what + " is said in words (" + $said.Substring(0, [Math]::Min(90, $said.Length)) + "...)")
+}
+$readOnlyDir = Join-Path $work "data-denied"
+New-Item -ItemType Directory -Path $readOnlyDir | Out-Null
+$acl = Get-Acl -LiteralPath $readOnlyDir
+$deny = New-Object System.Security.AccessControl.FileSystemAccessRule([System.Security.Principal.WindowsIdentity]::GetCurrent().User, "CreateFiles,AppendData,WriteData", "ContainerInherit,ObjectInherit", "None", "Deny")
+$acl.AddAccessRule($deny)
+Set-Acl -LiteralPath $readOnlyDir -AclObject $acl
+try { $deniedSaid = Test-HordeWebView2DataFolder -Path $readOnlyDir }
+finally { [void]$acl.RemoveAccessRule($deny); Set-Acl -LiteralPath $readOnlyDir -AclObject $acl }
+Check ($deniedSaid -like "the folder the window keeps its own files in cannot be made or written to*") "a folder this user may not write in is said the same way"
+$quick = [System.Diagnostics.Stopwatch]::StartNew()
+$deniedSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $blocker "profile") -Hidden -OnOpened { param($Window, $State) & $Window.close }
+$deniedOpen = Open-HordeWebView2Surface -Spec $deniedSpec
+Check ($deniedOpen.state -ceq "failed" -and $deniedOpen.reason -like "the folder the window keeps its own files in cannot be made or written to*" -and $quick.ElapsedMilliseconds -lt 10000) ("and a window asked to keep its files there fails at once, with that sentence, before any engine is started (" + $quick.ElapsedMilliseconds + " ms)")
+
+Write-Host ""
 Write-Host "--- the page may be at a file of its own mount, and nowhere else ---" -ForegroundColor Cyan
 $at = $script:HordeWebView2Origin
 Check ($at -cmatch '\Ahttps://[a-z.]+\.invalid\z') ("CONTROL: the one origin this adapter serves under is a name that can never be a machine (" + $at + ")")

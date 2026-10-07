@@ -211,6 +211,17 @@
         @{ Name = "a-failed-ask-for-a-picture-leaves-its-file"
            Find = 'try { [System.IO.File]::Delete($temp) } catch { }'
            Replace = '' }
+        # --- the folder the engine keeps its files in
+        # NO MUTANT REMOVES THE REFUSAL ITSELF. It was written and run once, 2026-10-07: caught, but the
+        # suite then really started the engine on a folder it cannot write to, which took 75 s and left
+        # one engine process running after the suite had gone (it was stopped by hand). That is the very
+        # fault the trial exists to prevent, and a spec must not reproduce it on every run.
+        @{ Name = "the-trial-file-is-left-in-the-folder"
+           Find = '[System.IO.File]::Delete($trial)'
+           Replace = '' }
+        @{ Name = "the-folder-is-only-looked-at-not-written-to"
+           Find = '[System.IO.File]::WriteAllText($trial, "x")'
+           Replace = '' }
         # --- how a window first appears
         @{ Name = "a-free-standing-window-takes-the-keyboard"
            Find = 'quiet = [bool]($Spec.hidden -or -not $Spec.takeKeyboard)'

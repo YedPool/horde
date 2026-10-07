@@ -214,6 +214,25 @@ function Get-HordeWebView2WindowLook {
     }
 }
 
+function Test-HordeWebView2DataFolder {
+    # "" when the engine will be able to keep its files in -Path; otherwise what to tell a person.
+    # The folder is made if it is not there, and one small file is written in it and removed.
+    # WHY THE SURFACE TRIES IT ITSELF: handed a folder it cannot write to, the engine waits and then
+    # fails in its own words - 67 s and "Server execution failed (0x80080005)", measured by the review
+    # of 2026-10-06, finding A10, with one engine process left running after the window had gone. A
+    # trial that takes a moment and answers in plain words is asked first, and nothing is started.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $trial = Join-Path $Path ("horde-surface-trial-" + $PID + ".tmp")
+    try {
+        [void][System.IO.Directory]::CreateDirectory($Path)
+        [System.IO.File]::WriteAllText($trial, "x")
+        [System.IO.File]::Delete($trial)
+        return ""
+    } catch {
+        return ("the folder the window keeps its own files in cannot be made or written to (" + $Path + "), so the window was not opened: " + $_.Exception.GetBaseException().Message)
+    }
+}
+
 function Get-HordeWebView2RuntimeProblem {
     # "" when -Version is the version of an installed engine; otherwise what to tell a person.
     param([AllowNull()][AllowEmptyString()][string]$Version)
@@ -586,6 +605,8 @@ function Open-HordeWebView2Surface {
     $fail = { param([string]$Why) return [pscustomobject]@{ state = "failed"; reason = $Why } }
     if ($null -ne $script:HordeWebView2) { return (& $fail "this process already shows a window; one process shows one") }
     if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA) { return (& $fail "the window needs a single-threaded apartment, which Windows PowerShell gives unless it was started with -MTA") }
+    $noFolder = Test-HordeWebView2DataFolder -Path $Spec.dataFolder
+    if ($noFolder -ne "") { return (& $fail $noFolder) }
     # Held open from here until the engine is up (Invoke-HordeWebView2Initialized), or until this
     # function gives up or returns.
     $notLoaded = Import-HordeWebView2Libraries -Folder $LibFolder -Hold
