@@ -70,9 +70,16 @@ function Get-HordeFleetStatusSource {
     $version = $config.PSObject.Properties["schemaVersion"]
     $folder = $config.PSObject.Properties["folder"]
     if ($null -eq $version -or $version.Value -ne 1) { return (& $bad "is not schemaVersion 1") }
-    if ($null -eq $folder -or $folder.Value -isnot [string] -or -not [System.IO.Path]::IsPathRooted($folder.Value)) { return (& $bad "does not give an absolute folder") }
-    if (-not (Test-Path -LiteralPath $folder.Value -PathType Container)) { return (& $bad ("names a folder that does not exist: " + $folder.Value)) }
-    return [pscustomobject]@{ state = "configured"; folder = [System.IO.Path]::GetFullPath($folder.Value); reason = "" }
+    # A FOLDER WINDOWS CANNOT EVEN BE ASKED ABOUT IS UNREADABLE TOO, NEVER A THROW: the caller is a
+    # window's tick, and it is promised an answer. Measured 2026-10-06 by the review of this reader: a
+    # folder on a machine that does not answer threw "The network path was not found" out of the test
+    # for the folder, and a name holding characters no path may threw "Illegal characters in path" out
+    # of the test for an absolute one. Both are caught here and said in words.
+    try {
+        if ($null -eq $folder -or $folder.Value -isnot [string] -or -not [System.IO.Path]::IsPathRooted($folder.Value)) { return (& $bad "does not give an absolute folder") }
+        if (-not (Test-Path -LiteralPath $folder.Value -PathType Container -ErrorAction Stop)) { return (& $bad ("names a folder that does not exist: " + $folder.Value)) }
+        return [pscustomobject]@{ state = "configured"; folder = [System.IO.Path]::GetFullPath($folder.Value); reason = "" }
+    } catch { return (& $bad ("names a folder that could not be looked for: " + $_.Exception.Message)) }
 }
 
 function ConvertFrom-HordeFleetStatusBytes {

@@ -94,8 +94,11 @@
            Find = ' -or -not [System.IO.Path]::IsPathRooted($folder.Value)) {'
            Replace = ') {' }
         @{ Name = "a-folder-that-is-not-there-accepted"
-           Find = 'if (-not (Test-Path -LiteralPath $folder.Value -PathType Container)) {'
+           Find = 'if (-not (Test-Path -LiteralPath $folder.Value -PathType Container -ErrorAction Stop)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "a-folder-that-cannot-be-asked-about-throws"
+           Find = '} catch { return (& $bad ("names a folder that could not be looked for: " + $_.Exception.Message)) }'
+           Replace = '} catch { throw }' }
         @{ Name = "the-configuration-somewhere-else"
            Find = 'return (Join-Path (Join-Path $HordeHome "fleet") "status-source.json")'
            Replace = 'return (Join-Path (Join-Path $HordeHome "fleet") "status.json")' }

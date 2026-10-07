@@ -144,6 +144,19 @@ foreach ($bad in @(
     $r = Get-HordeFleetStatus -HordeHome (New-Home $bad.name $bad.config) -Now $now
     Check ($r.state -ceq "unreadable" -and $r.reason -like ("*" + $bad.says + "*") -and @($r.orcs).Count -eq 0) ("a configuration that " + $bad.says + " is unreadable, and no Orc is shown")
 }
+# A FOLDER WINDOWS CANNOT EVEN BE ASKED ABOUT is unreadable like the rest, never a throw: the caller is
+# a window's tick, and what it is promised is an answer. Measured 2026-10-06 by the review of this
+# reader: a folder on a machine that does not answer, and a folder whose name holds characters no path
+# may, each came out of Get-HordeFleetStatusSource as an exception ("The network path was not found",
+# "Illegal characters in path"). The catch here is the test's own, so that a throw is a failed check.
+foreach ($unaskable in @(
+    @{ name = "home-nomachine"; config = '{"schemaVersion":1,"folder":"\\\\horde-no-such-machine\\orcs"}'; says = "could not be looked for" }
+    @{ name = "home-nopath"; config = '{"schemaVersion":1,"folder":"C:\\orcs<of>|a?fleet"}'; says = "could not be looked for" }
+)) {
+    $r = $null
+    try { $r = Get-HordeFleetStatus -HordeHome (New-Home $unaskable.name $unaskable.config) -Now $now } catch { $r = [pscustomobject]@{ state = "threw"; reason = "$($_.Exception.Message)"; orcs = @() } }
+    Check ($r.state -ceq "unreadable" -and $r.reason -like ("*" + $unaskable.says + "*") -and @($r.orcs).Count -eq 0) ("a configuration naming a folder that " + $unaskable.says + " is unreadable, not a throw (" + $r.state + ": " + $r.reason + ")")
+}
 Check ((Get-HordeFleetStatusSourcePath -HordeHome "C:\h") -ceq "C:\h\fleet\status-source.json") "the configuration is fleet\status-source.json under Horde's home"
 
 Write-Host ""
