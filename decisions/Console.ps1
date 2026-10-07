@@ -54,6 +54,11 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     list   = @{ number = $false; flags = @("State", "Json");                        usage = "list [-State <open, closed or all>] [-Json]" }
     show   = @{ number = $true;  flags = @("Json");                                 usage = "show <number> [-Json]" }
     kinds  = @{ number = $false; flags = @("Json");                                 usage = "kinds [-Json]" }
+    # THE ONE VERB THAT IS NOT AN OPERATION. It changes and reads nothing itself: it opens a window
+    # that is another caller of the same operations (decisions/Window.ps1). It is in this table so
+    # that its flags are checked and its usage is printed like any verb's; `opens` is what tells the
+    # dispatch below to hand it on instead of calling an operation of its name.
+    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>]"; opens = $true }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
@@ -62,11 +67,11 @@ $script:HordeDecisionCommandActor = "warchief"
 function Get-HordeDecisionCommandVerbs { return @($script:HordeDecisionCommandVerbs.Keys) }
 
 function Get-HordeDecisionCommandVerb {
-    # One verb's entry of the table, as { number; flags; usage }, or $null for a word that is no verb.
+    # One verb's entry of the table, as { number; flags; usage; opens }, or $null for a word that is no verb.
     param([Parameter(Mandatory = $true)][string]$Verb)
     $entry = $script:HordeDecisionCommandVerbs[$Verb]
     if ($null -eq $entry) { return $null }
-    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)" }
+    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens") }
 }
 
 function Get-HordeDecisionCommandUsage {
@@ -309,8 +314,9 @@ function Write-HordeDecisionLines {
 
 function Invoke-HordeDecisionCommand {
     # Run one `horde decisions <verb>`. -Given is the command's bound parameters, by name. Returns
-    # { lines; failure }: the lines to print, and, when the command must fail, the message to fail
-    # with. It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
+    # { lines; failure; opens }: the lines to print, and, when the command must fail, the message to
+    # fail with. opens is true for the one verb that is not an operation: its command line has been
+    # checked like any other, nothing was done, and the caller opens the window. It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
     # another verb, a missing number, a file it cannot read.
     param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given)
     $spec = $script:HordeDecisionCommandVerbs[$Verb]
@@ -333,6 +339,7 @@ function Invoke-HordeDecisionCommand {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
     elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
+    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; opens = $true } }
     if ($writes) {
         $id = [guid]::NewGuid().ToString("N")
         if ($have.ContainsKey("Id")) {
@@ -378,5 +385,5 @@ function Invoke-HordeDecisionCommand {
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    return [pscustomobject]@{ lines = $lines; failure = $failure }
+    return [pscustomobject]@{ lines = $lines; failure = $failure; opens = $false }
 }
