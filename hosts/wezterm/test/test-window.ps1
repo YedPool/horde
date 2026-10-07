@@ -281,9 +281,21 @@ $wasEncoding = $null; $raw = $null; $readIn = $null
 try { $wasEncoding = [Console]::OutputEncoding; [Console]::OutputEncoding = $oem } catch { $wasEncoding = $null }
 try {
     try { $readIn = [Console]::OutputEncoding } catch { $readIn = [System.Text.Encoding]::Default }
-    $raw = Invoke-HordeWeztermAct -Rest @("say", [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($said))) -Target ([pscustomobject]@{ socket = (Join-Path $sockDir "gui-sock-4242"); guiPid = 4242; guiStart = "133000000000000000" })
+    # THE STAND-IN IS COMPILED A MOMENT BEFORE IT IS RUN, and this machine's application control has
+    # refused to start a program that new: "An Application Control policy has blocked this file"
+    # (review of 2026-10-06, "one transient noise"; measured here 2026-10-07 in 5 of 17 runs under
+    # tools\Mutate.ps1, each of which compiles its own; waiting four seconds for the same file did not
+    # help). A call that never started measured nothing, so the stand-in is compiled again and the
+    # call made again, a few times; a call that ran is never repeated, and what it read stands.
+    for ($go = 1; $go -le 4; $go++) {
+        $raw = Invoke-HordeWeztermAct -Rest @("say", [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($said))) -Target ([pscustomobject]@{ socket = (Join-Path $sockDir "gui-sock-4242"); guiPid = 4242; guiStart = "133000000000000000" })
+        if ($raw.code -ne -1) { break }
+        Remove-HordePaneTool
+        Start-Sleep -Milliseconds 500
+        $script:HordeWeztermActExe = Get-HordePaneTool
+    }
 } finally { $script:HordeWeztermActExe = $saveExe; if ($null -ne $wasEncoding) { try { [Console]::OutputEncoding = $wasEncoding } catch { } } }
-Check ($raw.code -eq 0 -and $raw.out -cne $said -and $readIn.CodePage -ne 65001) ("CONTROL: read as the host's call reads it, in code page " + $readIn.CodePage + ", the listing does not equal what the terminal wrote")
+Check ($raw.code -eq 0 -and $raw.out -cne $said -and $readIn.CodePage -ne 65001) ("CONTROL: read as the host's call reads it, in code page " + $readIn.CodePage + ", the listing does not equal what the terminal wrote (exit " + $raw.code + $(if ($raw.code -ne 0) { ": " + ("" + $raw.err).Trim() } else { "" }) + ")")
 $mended = Mend $raw.out $readIn
 Check ($mended.state -ceq "known" -and $mended.value -ceq $said) "mended, it is what the terminal wrote, character for character, in three alphabets"
 $garbledWide = { param($rest, $envMap, $target) return [pscustomobject]@{ code = 0; out = $oem.GetString([System.Text.Encoding]::UTF8.GetBytes($said)); err = ""; timedOut = $false } }
