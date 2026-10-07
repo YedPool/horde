@@ -125,6 +125,13 @@
 # rule 13 already requires it, and it is what lets a byte-for-byte substring search stand for "names
 # the host". Without it the review of PR 21 hid a name behind a look-alike Cyrillic letter and behind
 # UTF-16 with no byte order mark (a NUL after every letter); both read as nothing. Both are refused now.
+# THE ONE EXCEPTION IS A PINNED FILE (decisions design 2026-10-06, section 3.11; core/Fingerprints.ps1).
+# An adapter that cannot be written without a program library commits it in its own folder beside a
+# fingerprints.txt, one line per file with its SHA-256. A file such a list names is not read as text
+# - it is not Horde's text, and nobody can change a byte of it without changing its line - and the scan
+# instead fails when a listed file is missing or no longer has its fingerprint. Only inside a port's
+# folder: a list anywhere else pins nothing and is a finding, and a binary no list names is refused as
+# any other non-ASCII file is.
 #
 # WHAT THE SCAN STILL CANNOT SEE, so that nobody reads a pass as more than it is:
 #   - A NAME BUILT AT RUN TIME: two string halves joined, or an environment variable's name assembled
@@ -142,6 +149,9 @@
 # --ignored --short` printed nothing on 2026-09-30 after every suite had run - so today the two agree.
 # A tool that starts leaving artefacts in the tree should write them outside it, or bring a .gitignore
 # and teach this scan to honour it.
+
+# The one reader of a fingerprint list, shared with the adapters that load pinned files.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Fingerprints.ps1")
 
 $script:HordeHostNamesProseFolder = "planning"
 # The families of port, each a top-level folder holding one folder per port. A third family is a line
@@ -492,16 +502,50 @@ function Get-HordeRepoFiles {
     param([string]$RepoRoot, [string[]]$Skip)
     $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
     $out = New-Object System.Collections.ArrayList
-    foreach ($f in @(Get-ChildItem -LiteralPath $rootFull -Recurse -File -Force)) {
+    $listing = @(Get-ChildItem -LiteralPath $rootFull -Recurse -File -Force)
+    # PINNED FILES ARE NOT TEXT (header, THE ONE EXCEPTION). Whatever a fingerprint list inside a port's
+    # folder names, in that list's own folder, is left out of every text scan; Test-HordePinnedFiles
+    # holds each to its fingerprint instead.
+    $pinned = @{}
+    foreach ($f in $listing) {
+        if ($f.Name -cne (Get-HordeFingerprintListName)) { continue }
+        $listRel = $f.FullName.Substring($rootFull.Length).TrimStart('\', '/') -replace '\\', '/'
+        if (-not (Get-HordePortFolderOf -Rel $listRel)) { continue }
+        foreach ($e in (Read-HordeFingerprintList -Path $f.FullName).entries) { $pinned[(Join-Path $f.DirectoryName $e.name).ToLowerInvariant()] = $true }
+    }
+    foreach ($f in $listing) {
         $rel = $f.FullName.Substring($rootFull.Length).TrimStart('\', '/') -replace '\\', '/'
         # .git IS A FILE IN A WORKTREE, holding the path of the main repository, and that path can
         # name anything: the worktree this ratchet was written in had the terminal's name in its
         # folder name, and the first count reported .git as a mention. Skipped as a file as well.
         if ($rel -eq ".git" -or (Test-HordeUnderFolder -Rel $rel -Folders (@(".git") + $Skip))) { continue }
         if (Test-HordePlanningProse -Rel $rel) { continue }
+        if ($pinned.ContainsKey($f.FullName.ToLowerInvariant())) { continue }
         [void]$out.Add([pscustomobject]@{ rel = $rel; full = $f.FullName })
     }
     return , $out
+}
+
+function Test-HordePinnedFiles {
+    # Every fingerprint list in the tree, held to its files (header, THE ONE EXCEPTION): one object per
+    # problem, { host; path; problem }, unrolled, so wrap the call in @(). A list outside a port's folder
+    # is a finding and pins nothing; inside one, a malformed line, a listed file that is missing and a
+    # file that no longer has its fingerprint are each a finding.
+    param([string]$RepoRoot)
+    $found = New-Object System.Collections.ArrayList
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    foreach ($f in @(Get-ChildItem -LiteralPath $rootFull -Recurse -File -Force | Where-Object { $_.Name -ceq (Get-HordeFingerprintListName) })) {
+        $rel = $f.FullName.Substring($rootFull.Length).TrimStart('\', '/') -replace '\\', '/'
+        if (Test-HordeUnderFolder -Rel $rel -Folders @(".git")) { continue }
+        if (-not (Get-HordePortFolderOf -Rel $rel)) {
+            [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $rel; problem = "is a fingerprint list outside a port's folder, where it pins nothing - only an adapter, in its own folder, brings in a file that is not Horde's text" })
+            continue
+        }
+        foreach ($x in (Test-HordeFingerprints -Folder $f.DirectoryName).findings) {
+            [void]$found.Add([pscustomobject]@{ host = "(repository)"; path = $rel; problem = ("pinned file: " + $x) })
+        }
+    }
+    return $found
 }
 
 function Get-HordeNameMentionCount {
@@ -570,6 +614,8 @@ function Test-HordeHostNames {
             Add-Finding "(repository)" $f.rel ("has a byte that is not printable ASCII at offset " + $bad + " - source files are ASCII (CONTRIBUTING rule 13), and a name hidden in such bytes is invisible to this scan")
         }
     }
+    # THE FILES LEFT OUT OF THAT SCAN ARE HELD TO THEIR FINGERPRINTS instead (header, THE ONE EXCEPTION).
+    foreach ($x in @(Test-HordePinnedFiles -RepoRoot $RepoRoot)) { Add-Finding $x.host $x.path $x.problem }
 
     # Every port of every family, each held to its own lists. A port's folder is exempt for that port
     # only; another port's folder - of either family - is scanned like core.
