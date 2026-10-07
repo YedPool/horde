@@ -212,6 +212,16 @@ $r = Send-Probe -Keys @((Typed "x"))
 Check ($r.drawn.answer.focus -ceq "4" -and (Get-Line $r 4).a -ceq "x") ("a letter typed with the caret nowhere goes to the first unanswered question, and the letter is in its field (caret in " + $r.drawn.answer.focus + ", field 4 holds '" + (Get-Line $r 4).a + "')")
 
 Write-Host ""
+Write-Host "=== Escape in a window that stands free: nothing is done ===" -ForegroundColor Cyan
+# Beside a terminal window, Escape hands that window the keyboard: proved against a terminal of the
+# scenario's own, in the terminal's own folder. This window stands beside none.
+$foregroundAtEscape = Get-Foreground
+[void](Send-Probe -Keys @((Key "Escape")))
+$r = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 40 -Until { param($x) $null -ne $x.handBack -and $x.handBack.asked -ge 1 }
+Check ($r.handBack.asked -eq 1 -and $r.handBack.handed -eq 0 -and $r.handBack.last -ceq "none") ("a real Escape asked Horde once to hand the keyboard back, and Horde, standing beside no terminal, handed it to nobody (asked " + $r.handBack.asked + ", handed " + $r.handBack.handed + ", " + $r.handBack.last + ")")
+Check ((Get-Foreground) -eq $foregroundAtEscape -and $r.drawn.answer.focus -ceq "4" -and (Get-Line $r 4).a -ceq "x" -and $r.drawn.foot -cnotlike "*Esc*") "the desktop's foreground window is the one it was, the caret and the letter are where they were, and the last line does not offer Escape"
+
+Write-Host ""
 Write-Host "=== every key counted, nothing refused, nobody's keyboard taken ===" -ForegroundColor Cyan
 Check ($r.drawn.answer.realKeys -eq $script:pressed) ("the page counted " + $r.drawn.answer.realKeys + " key presses the engine vouches for; this scenario pressed " + $script:pressed)
 Check ($r.says -eq 5 -and $r.saysRefused -eq 0 -and $r.refused -eq 0 -and @($r.errors).Count -eq 0) ("five answers stored, nothing refused, nothing failed inside the window (" + (@($r.errors) -join " | ") + ")")

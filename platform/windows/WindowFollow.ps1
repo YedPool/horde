@@ -68,6 +68,19 @@
 # A FREE WINDOW IS NOT A WINDOW THAT REFUSES THE KEYBOARD: the person clicks it and types. It is only
 # never GIVEN the keyboard by being set free. Stop does none of this: it is for a window that is closing.
 #
+# HANDING THE KEYBOARD TO THE OTHER WINDOW (the port's Switch-HordeWindowFollowKeyboard; TRIAL) is one
+# call, SetForegroundWindow on the window followed, AND WHAT WINDOWS THEN DID IS READ BACK: the
+# foreground window is asked for, and only when it is the other window is the answer "handed".
+# Windows makes a window the foreground one only for a program the person is using - as a rule, the
+# one whose window has the keyboard now - and that is exactly when this is asked: the person pressed
+# a key in the companion. Asked by a process that does not have the keyboard, Windows may refuse, and
+# the answer is "refused" with what it said. NOTHING IS DONE TO GET ROUND A REFUSAL: no key is made
+# up for the desktop and no thread is attached to another's input.
+# MEASURED 2026-10-07 against a terminal of a scenario's own, the companion standing where no screen
+# is and the person typing in another window: Windows said no, the foreground window stayed the one
+# it was, and the answer was "refused". NOT MEASURED: the ask made while the companion really has the
+# keyboard, which is the only time a person makes it - that needs his own key press.
+#
 # ONE FOLLOW AT A TIME: the native half keeps one hook and one target, so starting a second follow
 # ends the first.
 #
@@ -88,7 +101,7 @@ if ($null -eq (Get-Variable -Name HordeWindowsFollow -Scope Script -ErrorAction 
 function Get-HordeWindowsFollowSource { return @'
 using System;
 using System.Runtime.InteropServices;
-public static class HordeWindowsFollowV1 {
+public static class HordeWindowsFollowV2 {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     public delegate void WinEventDelegate(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
     [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate cb, uint pid, uint tid, uint flags);
@@ -104,6 +117,8 @@ public static class HordeWindowsFollowV1 {
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
 
     static IntPtr target = IntPtr.Zero, hook = IntPtr.Zero;
     static WinEventDelegate keep;       // held, or the delegate is collected while Windows still calls it
@@ -178,6 +193,13 @@ public static class HordeWindowsFollowV1 {
         TaskbarStyle(window, true);
         if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }     // SW_HIDE, then SW_SHOWNA: shown, not activated
     }
+    // { asked, foreground }: whether Windows said it took the ask, and whether the window is the
+    // foreground window when asked for straight afterwards. The second is the one that counts.
+    public static int[] Foreground(long window) {
+        bool asked = SetForegroundWindow(new IntPtr(window));
+        return new int[] { asked ? 1 : 0, GetForegroundWindow() == new IntPtr(window) ? 1 : 0 };
+    }
+    public static bool IsForeground(long window) { return GetForegroundWindow() == new IntPtr(window); }
     public static void Disown(long companion) {
         if (IsWindow(new IntPtr(companion))) { SetWindowLongPtr(new IntPtr(companion), -8, IntPtr.Zero); }
     }
@@ -185,7 +207,7 @@ public static class HordeWindowsFollowV1 {
 '@ }
 
 function Initialize-HordeWindowsFollowType {
-    if (-not ("HordeWindowsFollowV1" -as [type])) { Add-Type -TypeDefinition (Get-HordeWindowsFollowSource) -ErrorAction Stop }
+    if (-not ("HordeWindowsFollowV2" -as [type])) { Add-Type -TypeDefinition (Get-HordeWindowsFollowSource) -ErrorAction Stop }
 }
 
 function ConvertTo-HordeWindowsFollowStart {
@@ -202,7 +224,7 @@ function Get-HordeWindowsFollowRecord {
     # The follow as the port's record: what is in $script:HordeWindowsFollow, or "none".
     $s = $script:HordeWindowsFollow
     if ($null -eq $s) { return (New-HordeWindowFollowRecord -State "none") }
-    return (New-HordeWindowFollowRecord -State $s.state -Reason $s.reason -Target $s.target -Companion $s.companion -Mode $s.mode -Placed $s.placed -Placements $s.placements -Events ([HordeWindowsFollowV1]::Events))
+    return (New-HordeWindowFollowRecord -State $s.state -Reason $s.reason -Target $s.target -Companion $s.companion -Mode $s.mode -Placed $s.placed -Placements $s.placements -Events ([HordeWindowsFollowV2]::Events))
 }
 
 function Get-HordeWindowsFollowRectangle {
@@ -210,9 +232,9 @@ function Get-HordeWindowsFollowRectangle {
     # such window.
     param([Parameter(Mandatory = $true)][long]$Handle)
     Initialize-HordeWindowsFollowType
-    $r = [HordeWindowsFollowV1]::Rect($Handle)
+    $r = [HordeWindowsFollowV2]::Rect($Handle)
     if ($null -eq $r) { return (New-HordeAbsent -Note "there is no such window") }
-    return (New-HordeKnown -Value ([pscustomobject]@{ left = $r[0]; top = $r[1]; right = $r[2]; bottom = $r[3]; scale = ([HordeWindowsFollowV1]::Dpi($Handle) / 96.0) }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ left = $r[0]; top = $r[1]; right = $r[2]; bottom = $r[3]; scale = ([HordeWindowsFollowV2]::Dpi($Handle) / 96.0) }))
 }
 
 function Set-HordeWindowsFollowFree {
@@ -220,8 +242,8 @@ function Set-HordeWindowsFollowFree {
     # nothing, a taskbar window, and visible if it had been seen - never activated.
     param([Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][string]$Reason)
     $s = $script:HordeWindowsFollow
-    [HordeWindowsFollowV1]::Unhook()
-    [HordeWindowsFollowV1]::StandFree($s.companion, [bool]$s.seen)
+    [HordeWindowsFollowV2]::Unhook()
+    [HordeWindowsFollowV2]::StandFree($s.companion, [bool]$s.seen)
     $s.state = $State; $s.reason = $Reason
 }
 
@@ -232,19 +254,19 @@ function Update-HordeWindowsFollow {
     param([bool]$Place = $true)
     $s = $script:HordeWindowsFollow
     if ($null -eq $s -or $s.state -cne "following") { return (Get-HordeWindowsFollowRecord) }
-    if (-not [HordeWindowsFollowV1]::Exists($s.target)) {
+    if (-not [HordeWindowsFollowV2]::Exists($s.target)) {
         Set-HordeWindowsFollowFree -State "lost" -Reason "the window it stood beside no longer exists"
         return (Get-HordeWindowsFollowRecord)
     }
     # Seen once is seen: Windows hides a companion whose other window is minimised, and that is not its
     # maker keeping it out of sight. The first look is the one a start ends with.
-    if (-not $s.seen -and [HordeWindowsFollowV1]::Visible($s.companion)) { $s.seen = $true }
-    if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {
+    if (-not $s.seen -and [HordeWindowsFollowV2]::Visible($s.companion)) { $s.seen = $true }
+    if ($Place -and -not [HordeWindowsFollowV2]::Minimised($s.target)) {
         $beside = Get-HordeWindowsFollowRectangle -Handle $s.target
         if ($beside.state -ceq "known") {
             $at = Get-HordeWindowFollowPlacement -Target $beside.value -Scale $beside.value.scale -Mode $s.mode -Settings $s.settings
             if ($at.state -ceq "known") {
-                [void][HordeWindowsFollowV1]::Place($s.companion, $at.value.left, $at.value.top, $at.value.width, $at.value.height)
+                [void][HordeWindowsFollowV2]::Place($s.companion, $at.value.left, $at.value.top, $at.value.width, $at.value.height)
                 $s.placed = $at.value
                 $s.placements = [int]$s.placements + 1
             }
@@ -259,12 +281,12 @@ function Start-HordeWindowsFollow {
     param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [Parameter(Mandatory = $true)][string]$Mode, [Parameter(Mandatory = $true)]$Settings)
     Initialize-HordeWindowsFollowType
     if ($null -ne $script:HordeWindowsFollow) { [void](Stop-HordeWindowsFollow) }
-    if (-not [HordeWindowsFollowV1]::Exists($Target)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to stand beside does not exist") }
-    if (-not [HordeWindowsFollowV1]::Exists($Companion)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place does not exist") }
-    if ([HordeWindowsFollowV1]::ProcessOf($Companion) -ne [uint32]$PID) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place is not this process's own, and only its own window is ever moved") }
+    if (-not [HordeWindowsFollowV2]::Exists($Target)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to stand beside does not exist") }
+    if (-not [HordeWindowsFollowV2]::Exists($Companion)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place does not exist") }
+    if ([HordeWindowsFollowV2]::ProcessOf($Companion) -ne [uint32]$PID) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place is not this process's own, and only its own window is ever moved") }
     # One line, calling a named function that reads the state below: a script block given to .NET does
     # not keep the variables of the function that wrote it.
-    $attached = [HordeWindowsFollowV1]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
+    $attached = [HordeWindowsFollowV2]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
     $started = ConvertTo-HordeWindowsFollowStart -Code $attached[0] -ErrorCode $attached[1]
     if ($started.state -cne "following") { return (New-HordeWindowFollowRecord -State "failed" -Reason $started.reason) }
     $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; settings = $Settings; state = "following"; reason = ""; placed = $null; placements = 0; seen = $false }
@@ -278,19 +300,39 @@ function Disconnect-HordeWindowsFollow {
     return (Get-HordeWindowsFollowRecord)
 }
 
+function ConvertTo-HordeWindowsFollowHanded {
+    # PURE. What the native half answered an ask to make the other window the foreground one, as the
+    # port's { state; reason }. Decided on what was READ BACK (-Foreground), never on what the call
+    # itself said (-Asked): Windows has been seen to say yes and do nothing but flash a taskbar button.
+    param([Parameter(Mandatory = $true)][bool]$Asked, [Parameter(Mandatory = $true)][bool]$Foreground)
+    if ($Foreground) { return [pscustomobject]@{ state = "handed"; reason = "" } }
+    $said = "Windows said no"
+    if ($Asked) { $said = "Windows said yes, and the window is not the foreground one" }
+    return [pscustomobject]@{ state = "refused"; reason = ("the terminal window was not given the keyboard: " + $said + ". Windows gives it only on behalf of a program the person is using") }
+}
+
+function Switch-HordeWindowsFollowKeyboard {
+    # The port's Hand (header, HANDING THE KEYBOARD TO THE OTHER WINDOW): { state; reason }.
+    $s = $script:HordeWindowsFollow
+    if ($null -eq $s -or $s.state -cne "following") { return [pscustomobject]@{ state = "none"; reason = "no window is followed, so there is none to hand the keyboard to" } }
+    if (-not [HordeWindowsFollowV2]::Exists($s.target)) { return [pscustomobject]@{ state = "none"; reason = "the window it stood beside no longer exists" } }
+    $got = [HordeWindowsFollowV2]::Foreground($s.target)
+    return (ConvertTo-HordeWindowsFollowHanded -Asked ([bool]($got[0] -eq 1)) -Foreground ([bool]($got[1] -eq 1)))
+}
+
 function Stop-HordeWindowsFollow {
     # The port's Stop: Windows is told to stop reporting, and ours is no longer owned by the other
     # window if it still was.
     $s = $script:HordeWindowsFollow
     if ($null -ne $s) {
-        if ($s.state -ceq "following") { [HordeWindowsFollowV1]::Unhook(); [HordeWindowsFollowV1]::Disown($s.companion) }
+        if ($s.state -ceq "following") { [HordeWindowsFollowV2]::Unhook(); [HordeWindowsFollowV2]::Disown($s.companion) }
         $script:HordeWindowsFollow = $null
     }
     return (Get-HordeWindowsFollowRecord)
 }
 
 function Register-HordeWindowsFollower {
-    # This file's one line at the port: its name, and the seven blocks the port's header lists.
+    # This file's one line at the port: its name, the seven blocks the port's header lists, and Hand.
     $blocks = @{
         Name      = "windows"
         Applies   = { Test-HordeIsWindows }
@@ -300,6 +342,7 @@ function Register-HordeWindowsFollower {
         Update    = { param($Place) Update-HordeWindowsFollow -Place $Place }
         Release   = { Disconnect-HordeWindowsFollow }
         Stop      = { Stop-HordeWindowsFollow }
+        Hand      = { Switch-HordeWindowsFollowKeyboard }
     }
     Register-HordeWindowFollower @blocks
 }

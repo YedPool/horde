@@ -32,7 +32,7 @@
            Find = 'function Initialize-HordeWindowsFollowType {'
            Replace = 'Add-Type -TypeDefinition (Get-HordeWindowsFollowSource); function Initialize-HordeWindowsFollowType {' }
         @{ Name = "a-window-that-is-not-there-is-followed"
-           Find = 'if (-not [HordeWindowsFollowV1]::Exists($Target)) { return'
+           Find = 'if (-not [HordeWindowsFollowV2]::Exists($Target)) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "the-other-window-is-not-made-the-owner"
            Find = 'SetWindowLongPtr(new IntPtr(companion), -8, new IntPtr(targetWindow));     // GWLP_HWNDPARENT: the other window owns ours'
@@ -77,7 +77,7 @@
            Find = 'if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }'
            Replace = 'if (true) { ShowWindow(window, 0); ShowWindow(window, 8); }' }
         @{ Name = "a-window-seen-later-is-not-noticed"
-           Find = 'if (-not $s.seen -and [HordeWindowsFollowV1]::Visible($s.companion)) { $s.seen = $true }'
+           Find = 'if (-not $s.seen -and [HordeWindowsFollowV2]::Visible($s.companion)) { $s.seen = $true }'
            Replace = '' }
         @{ Name = "followed-again-it-keeps-the-taskbar-style"
            Find = 'if (hook != IntPtr.Zero) { TaskbarStyle(new IntPtr(companion), false); return new int[] { 0, 0 }; }'
@@ -92,26 +92,26 @@
            Find = 'if (moved != null) { moved(); }'
            Replace = '' }
         @{ Name = "placed-from-a-minimised-windows-rectangle"
-           Find = 'if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {'
+           Find = 'if ($Place -and -not [HordeWindowsFollowV2]::Minimised($s.target)) {'
            Replace = 'if ($Place) {' }
         @{ Name = "asking-places"
-           Find = 'if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {'
-           Replace = 'if (-not [HordeWindowsFollowV1]::Minimised($s.target)) {' }
+           Find = 'if ($Place -and -not [HordeWindowsFollowV2]::Minimised($s.target)) {'
+           Replace = 'if (-not [HordeWindowsFollowV2]::Minimised($s.target)) {' }
         @{ Name = "a-window-that-is-gone-is-still-followed"
-           Find = 'if (-not [HordeWindowsFollowV1]::Exists($s.target)) {'
+           Find = 'if (-not [HordeWindowsFollowV2]::Exists($s.target)) {'
            Replace = 'if ($false) {' }
         @{ Name = "another-programs-window-is-placed"
-           Find = 'if ([HordeWindowsFollowV1]::ProcessOf($Companion) -ne [uint32]$PID) { return'
+           Find = 'if ([HordeWindowsFollowV2]::ProcessOf($Companion) -ne [uint32]$PID) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "a-companion-that-is-no-window-is-looked-up"
-           Find = 'if (-not [HordeWindowsFollowV1]::Exists($Companion)) { return'
+           Find = 'if (-not [HordeWindowsFollowV2]::Exists($Companion)) { return'
            Replace = 'if ($false) { return' }
         @{ Name = "the-place-is-not-recorded"
            Find = '                $s.placed = $at.value'
            Replace = '' }
         @{ Name = "stopping-leaves-it-owned"
-           Find = 'if ($s.state -ceq "following") { [HordeWindowsFollowV1]::Unhook(); [HordeWindowsFollowV1]::Disown($s.companion) }'
-           Replace = 'if ($s.state -ceq "following") { [HordeWindowsFollowV1]::Unhook() }' }
+           Find = 'if ($s.state -ceq "following") { [HordeWindowsFollowV2]::Unhook(); [HordeWindowsFollowV2]::Disown($s.companion) }'
+           Replace = 'if ($s.state -ceq "following") { [HordeWindowsFollowV2]::Unhook() }' }
         @{ Name = "letting-go-changes-nothing"
            Find = 'if ($null -ne $s -and $s.state -ceq "following") { Set-HordeWindowsFollowFree -State "free"'
            Replace = 'if ($false) { Set-HordeWindowsFollowFree -State "free"' }

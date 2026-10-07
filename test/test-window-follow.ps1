@@ -52,9 +52,9 @@ $before = Get-HordeWindowFollower
 Check ($before.state -ceq "unknown") "CONTROL: before any follower's file is loaded the port has none"
 $files = @(Get-HordeWindowFollowerFiles -Root $root)
 Check ($files.Count -eq 1 -and $files[0] -like "*\platform\windows\WindowFollow.ps1") ("the port finds this follower's file by folder, and no other (" + $files.Count + ")")
-Check ($null -eq ("HordeWindowsFollowV1" -as [type])) "CONTROL: nothing native is loaded yet"
+Check ($null -eq ("HordeWindowsFollowV2" -as [type])) "CONTROL: nothing native is loaded yet"
 foreach ($file in $files) { . $file }
-Check ($null -eq ("HordeWindowsFollowV1" -as [type])) "loading the file compiles nothing and asks Windows nothing"
+Check ($null -eq ("HordeWindowsFollowV2" -as [type])) "loading the file compiles nothing and asks Windows nothing"
 $loaded = Get-HordeWindowFollower
 Check ($loaded.state -ceq "known" -and (Field $loaded.value "name") -ceq "windows") "loaded, it is the follower the port asks on this system"
 
@@ -78,6 +78,15 @@ $s = ConvertTo-HordeWindowsFollowStart -Code 2 -ErrorCode 0
 Check ((Field $s "state") -ceq "failed" -and (Field $s "reason") -ceq "Windows would not report the other window's moves, so it cannot be followed") "no reports of its moves: failed, in words"
 $s = ConvertTo-HordeWindowsFollowStart -Code 9 -ErrorCode 0
 Check ((Field $s "state") -ceq "failed" -and "$(Field $s 'reason')" -like "*9*") "an answer this file does not know is failed, never following"
+# Handing the keyboard to the other window: decided on what was read back, never on what the call said.
+$h = ConvertTo-HordeWindowsFollowHanded -Asked $true -Foreground $true
+Check ((Field $h "state") -ceq "handed" -and (Field $h "reason") -ceq "") "the other window is the foreground one: handed"
+$h = ConvertTo-HordeWindowsFollowHanded -Asked $false -Foreground $true
+Check ((Field $h "state") -ceq "handed") "handed whatever the call itself said, when the window is read back as the foreground one"
+$h = ConvertTo-HordeWindowsFollowHanded -Asked $true -Foreground $false
+Check ((Field $h "state") -ceq "refused" -and "$(Field $h 'reason')" -clike "*Windows said yes, and the window is not the foreground one*") "Windows said yes and did not do it: refused, saying so"
+$h = ConvertTo-HordeWindowsFollowHanded -Asked $false -Foreground $false
+Check ((Field $h "state") -ceq "refused" -and "$(Field $h 'reason')" -clike "*Windows said no*") "Windows said no: refused, saying so"
 
 if (-not (Test-HordeIsWindows)) {
     Write-Host "  [SKIP] everything that asks Windows: this is not Windows" -ForegroundColor Yellow
@@ -89,6 +98,8 @@ Write-Host "--- the follower refuses without touching any window ---" -Foregroun
 $r = Get-HordeWindowFollow
 Check ((Field $r "state") -ceq "none" -and (Field $r "target") -eq 0 -and $null -eq (Field $r "placed")) "CONTROL: nothing is followed until something is started"
 Check ((Field (Update-HordeWindowFollow) "state") -ceq "none") "placing again when nothing is followed places nothing"
+$h = Switch-HordeWindowFollowKeyboard
+Check ((Field $h "state") -ceq "none" -and "$(Field $h 'reason')" -clike "no window is followed*") "asked to hand the keyboard over when nothing is followed, the port answers none, and Windows is asked nothing"
 # 2147480001 and 2147480003: no window has such a handle (the first check proves it of the first).
 $gone = Get-HordeWindowFollowRectangle -Handle 2147480001
 Check ((Test-HordeAnswer $gone) -and $gone.state -ceq "absent") "a handle that is no window has no rectangle: absent, which is not unknown"
