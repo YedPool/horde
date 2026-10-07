@@ -1,0 +1,14 @@
+# The files outside surfaces/webview2/ that may name the WebView2 surface, and exactly how many times
+# (CONTRIBUTING rule 14; decisions design 2026-10-06, decision 2). A mention is one occurrence of any
+# name in names.txt, plus one if the file's path has one. tools/HostNames.ps1 fails
+# test/test-host-names.ps1 on a file not listed here, on a listed file that names the surface more
+# times than listed, and on an entry that allows more than its file needs - and, once this list is on
+# origin/main, on an entry origin/main lacks or a count above its count. When a mention must be added,
+# add or raise the entry here AND append a line to growth.txt in this folder:
+# path | old -> new | YYYY-MM-DD | reason.
+#
+# NO FILE IS LISTED, measured 2026-10-06 when the surfaces/ family came in: the surface is picked by
+# what it can do (Resolve-HordeSurface), its suites live in its own test folder, and the page talks
+# through the bridge this folder serves, so nothing outside needs its name.
+#
+# path | mentions | why this file may name the surface
