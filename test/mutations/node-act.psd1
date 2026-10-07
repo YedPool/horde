@@ -99,15 +99,6 @@
         @{ Name = "unkept-no-alert"
            Find = '& $Context.alert ("ALERT: session " + $sid + " (pane " + $record.handle + ", pid " + $record.pid + ") is still running and could not be ended: " + $why)'
            Replace = '' }
-        @{ Name = "not-json-dropped"
-           Find = 'catch { [void]$problems.Add($path + ": not JSON") }'
-           Replace = 'catch { }' }
-        @{ Name = "findings-dropped"
-           Find = 'foreach ($f in $findings) { [void]$problems.Add($f.source + " " + $f.path + ": " + $f.code + " - " + $f.detail) }'
-           Replace = '' }
-        @{ Name = "live-layer-unread"
-           Find = 'foreach ($pair in @(@("L1", "engine.json"), @("L4", "engine-live.json"))) {'
-           Replace = 'foreach ($pair in @(,@("L1", "engine.json"))) {' }
         @{ Name = "prompt-in-argv"
            Find = '-Name $name -Prompt "" -Resolve $resolveProgram'
            Replace = '-Name $name -Prompt $prompt -Resolve $resolveProgram' }

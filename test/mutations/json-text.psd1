@@ -49,5 +49,17 @@
         @{ Name = "stray-comma-unguarded"
            Find = 'elseif ($c -eq '','' -and $stack.Count -gt 0) {'
            Replace = 'elseif ($c -eq '','') {' }
+        @{ Name = "bom-accepted"
+           Find = '$Bytes[2] -eq 0xBF) { throw'
+           Replace = '$Bytes[2] -eq 0x00) { throw' }
+        @{ Name = "non-ascii-accepted"
+           Find = 'if ($b -gt 0x7F) { throw'
+           Replace = 'if ($b -gt 0xFF) { throw' }
+        @{ Name = "control-bytes-allowed"
+           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "tab-refused"
+           Find = '        if ($b -lt 0x20 -and $b -ne 0x09 -and $b -ne 0x0A -and $b -ne 0x0D) {'
+           Replace = '        if ($b -lt 0x20 -and $b -ne 0x0A -and $b -ne 0x0D) {' }
     )
 }
