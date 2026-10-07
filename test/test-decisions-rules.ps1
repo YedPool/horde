@@ -11,6 +11,10 @@
 #     refused; so is a question with neither background nor "what yes means".
 #   - NO SECRETS, AND NO ECHO. Every kind of credential is refused in any field, by name of the field,
 #     and the finding never repeats it. Controls show ordinary content is let through.
+#   - THE CONVERSATION UNDER A QUESTION. Words said are kept in store order, whatever the question's
+#     state and whatever wording they were said to; they change nothing of the question; whose turn it
+#     is and what is unread are worked out from the order and never stored; who may speak, by what
+#     route, and who may record whose words are closed lists.
 # The secrets below are assembled from pieces at run time, so that no credential-shaped text sits in
 # this file for a scanner to find.
 
@@ -69,7 +73,10 @@ $viewFields = @($defs.resultSchema.definitions.view.properties.PSObject.Properti
 Check (@($tableFields | Where-Object { $viewFields -cnotcontains $_ }).Count -eq 0) "and a question as shown (decision-result.v1) carries every one of them"
 $kindNames = @(Get-HordeDecisionEventKinds)
 $defNames = @($defs.eventSchema.definitions.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened") "the event kinds of this slice are the four of the design"
+Check (($kindNames -join ",") -ceq "question-added,question-updated,question-closed,question-reopened,message-said,messages-read") "the event kinds are the four that change a question, and the two of the conversation under it"
+Check (((Get-HordeDecisionSpeakers) -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionRoutes) -join ",") -ceq "window,chat-recorded,command" -and ((Get-HordeDecisionReaders) -join ",") -ceq "warchief") "who speaks, by what routes, and who has an inbox are the rules' closed lists"
+Check (@($kindNames | Where-Object { @("question", "list") -cnotcontains (Get-HordeDecisionKindAbout -Kind $_) }).Count -eq 0 -and (Get-HordeDecisionKindAbout -Kind "messages-read") -ceq "list" -and (Get-HordeDecisionKindAbout -Kind "message-said") -ceq "question" -and (Get-HordeDecisionKindAbout -Kind "no-such-kind") -ceq "") "every kind says what it is about: one question, or the whole list"
+Check (((Get-HordeDecisionKindActors -Kind "question-closed").roles -join ",") -ceq "warchief" -and ((Get-HordeDecisionKindActors -Kind "message-said").roles -join ",") -ceq "founder,warchief" -and ((Get-HordeDecisionKindActors -Kind "messages-read").roles -join ",") -ceq "founder,warchief") "a question's own records are written by its keepers, and what is said under it by its speakers"
 Check ((@($kindNames | Sort-Object) -join ",") -ceq (@($defNames | Sort-Object) -join ",")) "every event kind has its data definition in schema/decision-event.v1, and every definition has a kind"
 $unbacked = @($kindNames | Where-Object { $null -eq (Get-Command -Name $script:HordeDecisionEventKinds[$_].apply -CommandType Function -ErrorAction SilentlyContinue) })
 Check ($unbacked.Count -eq 0) "and every kind's function exists"
@@ -520,10 +527,210 @@ $st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ n
 Check ($st.ids[$sameId].sequence -eq 2 -and $st.ids[$sameId].kind -ceq "question-closed") "when two records carry one id, the first is the one a repost is answered from"
 Check ($st.ids.Count -eq 2 -and $st.ids[$sameId].number -eq 1 -and $st.ids[$sameId].applied -eq $true) "CONTROL: the list knows each id's record, its question and that it applied"
 
+function New-Said {
+    # A message-said record. The envelope's actor is who made the request, which for words recorded
+    # from chat is not the speaker.
+    param([long]$Seq, [int]$Number, [string]$Speaker = "founder", [string]$Route = "chat-recorded", [string]$Text = "Yes, do it.", $Wording = 1, [string]$Actor = "warchief")
+    $record = New-Record -Seq $Seq -Kind "message-said" -Data ([ordered]@{ number = $Number; speaker = $Speaker; route = $Route; text = $Text; wordingVersion = $Wording })
+    $record.data.actor = $Actor
+    return $record
+}
+function New-Reply { param([long]$Seq, [int]$Number, [string]$Text = "Done as you said.", $Wording = 1) return (New-Said -Seq $Seq -Number $Number -Speaker "warchief" -Route "command" -Text $Text -Wording $Wording) }
+function New-Read { param([long]$Seq, $UpTo, [string]$Reader = "warchief") return (New-Record -Seq $Seq -Kind "messages-read" -Data ([ordered]@{ reader = $Reader; upTo = $UpTo })) }
+function New-Closed { param([long]$Seq, [int]$Number) return (New-Record -Seq $Seq -Kind "question-closed" -Data ([ordered]@{ number = $Number; outcome = "Done." })) }
+function New-Reopened { param([long]$Seq, [int]$Number) return (New-Record -Seq $Seq -Kind "question-reopened" -Data ([ordered]@{ number = $Number; reason = "it came back" })) }
+function New-Reworded { param([long]$Seq, [int]$Number, [string]$Title) return (New-Record -Seq $Seq -Kind "question-updated" -Data ([ordered]@{ number = $Number; changes = @{ title = $Title } })) }
+function Get-Thread {
+    # A question's thread as it is shown, messages included; a throw becomes a thread of -1 messages.
+    param($State, [int]$Number = 1)
+    try { return (ConvertTo-HordeDecisionThreadView -Question $State.questions[$Number] -State $State -Messages) } catch { return [pscustomobject]@{ count = -1; turn = ("THREW: " + $_.Exception.Message); turnShown = ""; unread = @(); messages = @() } }
+}
+function Get-Unread { param($Thread, [string]$Reader = "warchief") $u = @($Thread.unread | Where-Object { $_.reader -ceq $Reader }) | Select-Object -First 1; if ($null -eq $u) { return -1 }; return [int]$u.count }
+function Get-Texts { param($Thread) return (@($Thread.messages | ForEach-Object { $_.text }) -join " | ") }
+
+Write-Host ""
+Write-Host "--- a thread is its messages in store order, and speaking changes nothing of the question ---" -ForegroundColor Cyan
+$before = Get-Fold @((New-Added 1 1), (New-Added 2 2))
+$st = Get-Fold @((New-Added 1 1), (New-Added 2 2), (New-Said 3 1 -Text "first"), (New-Said 4 2 -Text "to the other question"), (New-Said 5 1 -Text "second"), (New-Reply 6 1 -Text "third, a reply"))
+$t = Get-Thread $st 1
+Check ($t.count -eq 3 -and (Get-Texts $t) -ceq "first | second | third, a reply" -and (@($t.messages | ForEach-Object { $_.sequence }) -join ",") -ceq "3,5,6") ("question 1's thread is its three messages, in the order of their records (" + (Get-Texts $t) + ")")
+Check ((Get-Thread $st 2).count -eq 1 -and (Get-Texts (Get-Thread $st 2)) -ceq "to the other question") "and question 2's is its own one: two messages to one question are both kept, and none strays to another"
+Check ($st.unreadable.Count -eq 0 -and $st.ignored.Count -eq 0) "nothing was unreadable and nothing was ignored"
+$same = $true
+foreach ($n in 1, 2) {
+    $was = ConvertTo-HordeDecisionView -Question $before.questions[$n] -State $before
+    $is = ConvertTo-HordeDecisionView -Question $st.questions[$n] -State $st
+    foreach ($member in @($was.PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { $_ -cne "thread" })) {
+        if ((ConvertTo-Json -InputObject $was.$member -Compress -Depth 6) -cne (ConvertTo-Json -InputObject $is.$member -Compress -Depth 6)) { $same = $false; Write-Host ("         question " + $n + ": '" + $member + "' changed") -ForegroundColor Red }
+    }
+}
+Check $same "speaking changed nothing else of either question: not its number, its state, its wording, its history, nor when it was last changed"
+Check ((Get-Numbers $st) -ceq "1,2" -and (Get-HordeDecisionNextNumber -State $st) -eq 3) "and no number moved: the next question is still 3"
+$m = $t.messages[0]
+Check ($m.speaker -ceq "founder" -and $m.speakerShown -ceq "the founder" -and $m.route -ceq "chat-recorded" -and $m.routeShown -ceq "recorded by the warchief from chat" -and $m.recordedBy -ceq "warchief") "words the warchief wrote down from chat are the founder's words, stored and shown as recorded by the warchief from chat"
+$typed = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Route "window" -Actor "founder" -Text "typed by him"))
+$m = (Get-Thread $typed 1).messages[0]
+Check ($m.route -ceq "window" -and $m.routeShown -ceq "typed in the window" -and $m.recordedBy -ceq "founder" -and $m.routeShown -cne "recorded by the warchief from chat") "words he typed himself are another route, shown in other words: the two are never one"
+# VERBATIM: what the record holds is what the thread holds, character for character.
+$exact = "  leading spaces, a tab`there, a line`r`nand another`nand a last one with trailing spaces  `r`n`r`n"
+$dateLike = "/Date(1234567890)/"
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text $exact), (New-Said 3 1 -Text $dateLike), (New-Said 4 1 -Text "0012"), (New-Said 5 1 -Text "true"))
+$t = Get-Thread $st 1
+Check ($t.count -eq 4 -and [string]::Equals($t.messages[0].text, $exact, [System.StringComparison]::Ordinal)) "words with leading and trailing spaces, a tab, and line breaks of both kinds come back exactly: nothing trimmed, nothing re-wrapped"
+Check ($t.count -eq 4 -and $t.messages[1].text -is [string] -and $t.messages[1].text -ceq $dateLike -and $t.messages[2].text -is [string] -and $t.messages[2].text -ceq "0012" -and $t.messages[3].text -is [string] -and $t.messages[3].text -ceq "true") "words that look like a date, a number or a flag stay the words they are"
+
+Write-Host ""
+Write-Host "--- whose turn it is, through a whole exchange: derived at every step, stored nowhere ---" -ForegroundColor Cyan
+$exchange = @(
+    (New-Added 1 1),                                    # asked: the founder's turn
+    (New-Said 2 1 -Text "which one?"),                  # he speaks: the warchief's
+    (New-Said 3 1 -Text "and by when?"),                # he speaks again: still the warchief's
+    (New-Reply 4 1 -Text "the first; by Friday"),       # it replies: the founder's
+    (New-Reworded 5 1 "Should the first closing sound play by Friday?"),   # a rewording takes no turn
+    (New-Said 6 1 -Text "yes" -Wording 2),              # he speaks: the warchief's
+    (New-Closed 7 1),                                   # it closes instead of replying: nobody's
+    (New-Said 8 1 -Text "wait" -Wording 2),             # he speaks under a closed question: still nobody's
+    (New-Reopened 9 1),                                 # asked again: the founder's
+    (New-Reply 10 1 -Text "reopened for you" -Wording 2),   # it speaks first: still the founder's
+    (New-Said 11 1 -Text "thanks, yes" -Wording 2)      # he speaks: the warchief's
+)
+$turns = New-Object System.Collections.ArrayList
+for ($i = 1; $i -le $exchange.Count; $i++) { [void]$turns.Add((Get-Thread (Get-Fold @($exchange[0..($i - 1)])) 1).turn) }
+Check (($turns -join ",") -ceq "founder,warchief,warchief,founder,founder,warchief,nobody,nobody,founder,founder,warchief") ("after each record of the exchange the turn is whose it should be (" + ($turns -join ",") + ")")
+$st = Get-Fold $exchange
+$t = Get-Thread $st 1
+Check ($t.turnShown -ceq "the warchief" -and (Get-Thread (Get-Fold @($exchange[0..6])) 1).turnShown -ceq "nobody" -and (Get-Thread (Get-Fold @($exchange[0..0])) 1).turnShown -ceq "the founder") "and it is told to a person in words: the founder, the warchief, nobody"
+Check ($t.count -eq 7 -and $st.questions[1].state -ceq "open" -and $st.ignored.Count -eq 0 -and $st.unreadable.Count -eq 0) "all seven messages of the exchange are in the thread, the one said while it was closed among them"
+Check ($null -eq $st.questions[1].thread[0].PSObject.Properties["turn"] -and @($exchange | Where-Object { $null -ne $_.data.data.PSObject.Properties["turn"] -or $null -ne $_.data.data.PSObject.Properties["unread"] -or $null -ne $_.data.data.PSObject.Properties["arrivedAfterClosing"] -or $null -ne $_.data.data.PSObject.Properties["saidToEarlierWording"] }).Count -eq 0) "CONTROL: no record of the exchange holds a turn, a flag or what is unread: they were worked out"
+# A speaker this version does not list (a later version wrote the record) is read and shown, and takes no turn.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "first"), (New-Said 3 1 -Speaker "orc" -Route "relay" -Text "from a later version"))
+$t = Get-Thread $st 1
+Check ($t.count -eq 2 -and $t.messages[1].speakerShown -ceq "orc" -and $t.messages[1].routeShown -ceq "relay" -and $t.turn -ceq "warchief" -and $st.unreadable.Count -eq 0 -and $st.ignored.Count -eq 0) "a message by a speaker and a route this version does not list is still read and shown by their names, and the turn stays where it was"
+
+Write-Host ""
+Write-Host "--- words under a closed question are kept, flagged, and reopen nothing ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "said while open"), (New-Closed 3 1), (New-Said 4 1 -Text "said a moment too late"), (New-Said 5 1 -Text "and once more"))
+$t = Get-Thread $st 1
+Check ($t.count -eq 3 -and (Get-Texts $t) -ceq "said while open | said a moment too late | and once more") "every word said under a closed question is in its thread: none is dropped"
+Check ((@($t.messages | ForEach-Object { $_.arrivedAfterClosing }) -join ",") -ceq "False,True,True") "the ones that arrived after closing are flagged, and the one said while it was open is not"
+Check ($st.questions[1].state -ceq "closed" -and $st.questions[1].outcome -ceq "Done." -and @($st.questions[1].history).Count -eq 2 -and $t.turn -ceq "nobody") "and the question is still closed, with its outcome and a history of two: saying something reopened nothing"
+Check ($st.ignored.Count -eq 0 -and $st.unreadable.Count -eq 0) "they are not reported as records that did not apply: they applied"
+$st = Get-Fold @((New-Added 1 1), (New-Closed 2 1), (New-Said 3 1 -Text "late"), (New-Reopened 4 1), (New-Said 5 1 -Text "after it came back"))
+$t = Get-Thread $st 1
+Check ((@($t.messages | ForEach-Object { $_.arrivedAfterClosing }) -join ",") -ceq "True,False") "a message that arrived after closing stays flagged when the question is reopened later, and one said after the reopening is not flagged"
+
+Write-Host ""
+Write-Host "--- words said to an earlier wording are kept and flagged ---" -ForegroundColor Cyan
+$st = Get-Fold @((New-Added 1 1), (New-Reworded 2 1 "Should the closing sound play at the end of every session?"), (New-Said 3 1 -Text "to the old words" -Wording 1), (New-Said 4 1 -Text "to the new words" -Wording 2))
+$t = Get-Thread $st 1
+Check ($st.questions[1].wordingVersion -eq 2 -and $t.count -eq 2) "CONTROL: the question is at wording 2, and both messages are in its thread"
+Check ((@($t.messages | ForEach-Object { "" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") -ceq "1:True,2:False") "the message said to wording 1 is flagged as said to an earlier wording; the one said to wording 2 is not"
+# The wording moves on AFTER the words were said: they now answer something the question no longer says.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "yes" -Wording 1), (New-Reworded 3 1 "Should the closing sound play at the end of every session?"))
+Check ((Get-Thread $st 1).messages[0].saidToEarlierWording -eq $true -and (Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "yes" -Wording 1))) 1).messages[0].saidToEarlierWording -eq $false) "a message is flagged from the moment the wording is no longer the one it was said to, even when the change came after it"
+# A wording that does not exist yet cannot have been looked at.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "to a wording from the future" -Wording 2), (New-Said 3 1 -Text "to the real one" -Wording 1))
+Check ((Get-Thread $st 1).count -eq 1 -and $st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 2 -and $st.ignored[0].reason -like "*said to wording 2 of question 1, which has only reached wording 1*") "a record claiming a wording the question had not reached is reported as not applying, by name, and is not shown as said"
+Check ((Get-Thread $st 1).turn -ceq "warchief" -and $st.ignored[0].reason -cnotlike "*from the future*") "the next message is kept all the same, and the report does not repeat the words"
+
+Write-Host ""
+Write-Host "--- what the warchief has not read is worked out from its read mark ---" -ForegroundColor Cyan
+$said = @((New-Added 1 1), (New-Added 2 2), (New-Said 3 1 -Text "one"), (New-Reply 4 1 -Text "its own reply"), (New-Said 5 2 -Text "two"), (New-Said 6 1 -Text "three"))
+$st = Get-Fold $said
+Check ((Get-Unread (Get-Thread $st 1)) -eq 2 -and (Get-Unread (Get-Thread $st 2)) -eq 1 -and (Get-HordeDecisionReadMark -State $st -Reader "warchief") -eq 0) "with no read mark, every message by someone else is unread by the warchief: two under question 1, one under question 2"
+Check ((@((Get-Thread $st 1).messages | ForEach-Object { ($_.unreadBy -join "+") }) -join ",") -ceq "warchief,,warchief") "its own reply is never unread by it"
+$st = Get-Fold ($said + @((New-Read 7 5)))
+Check ((Get-Unread (Get-Thread $st 1)) -eq 1 -and (Get-Unread (Get-Thread $st 2)) -eq 0 -and (Get-HordeDecisionReadMark -State $st -Reader "warchief") -eq 5) "a mark up to record 5 leaves exactly the message after it unread: record 6"
+Check ((@((Get-Thread $st 1).messages | ForEach-Object { ($_.unreadBy -join "+") }) -join ",") -ceq ",,warchief" -and $st.ignored.Count -eq 0) "and each message says for itself whether it has been read"
+$st = Get-Fold ($said + @((New-Read 7 5), (New-Read 8 6)))
+Check ((Get-Unread (Get-Thread $st 1)) -eq 0 -and (Get-Unread (Get-Thread $st 2)) -eq 0) "a mark up to the last message leaves nothing unread"
+$st = Get-Fold ($said + @((New-Read 7 5), (New-Read 8 6), (New-Said 9 2 -Text "four")))
+Check ((Get-Unread (Get-Thread $st 2)) -eq 1 -and (Get-Unread (Get-Thread $st 1)) -eq 0) "and a message said after the mark is unread again"
+# A MARKING IS IDEMPOTENT: one that moves nothing changes nothing, and says so.
+$st = Get-Fold ($said + @((New-Read 7 5), (New-Read 8 5), (New-Read 9 3)))
+Check ((Get-HordeDecisionReadMark -State $st -Reader "warchief") -eq 5 -and $st.ignored.Count -eq 2 -and $st.ignored[0].sequence -eq 8 -and $st.ignored[0].reason -like "*marks nothing as read*already read up to record 5*") "the same mark again, and an earlier one, move nothing: the mark never goes back, and each is reported as changing nothing"
+Check ($st.readEvents.Count -eq 1 -and $st.readEvents[[long]7].from -eq 0 -and $st.readEvents[[long]7].upTo -eq 5) "CONTROL: the one marking that applied is known by its record, with where the reader was before it"
+# Nothing is read before it is written.
+$st = Get-Fold ($said + @((New-Read 7 7), (New-Read 8 99)))
+Check ((Get-HordeDecisionReadMark -State $st -Reader "warchief") -eq 0 -and $st.ignored.Count -eq 2 -and $st.ignored[0].reason -like "*not before this record*" -and (Get-Unread (Get-Thread $st 1)) -eq 2) "a mark that claims its own record, or one that does not exist yet, is not believed: nothing is marked read by it"
+$st = Get-Fold ($said + @((New-Read 7 6), (New-Said 8 1 -Text "after")))
+Check ((Get-Unread (Get-Thread $st 1)) -eq 1) "CONTROL: a mark up to the record just before its own is believed"
+# Readers are apart: one's mark is not another's.
+$st = Get-Fold ($said + @((New-Read 7 6 -Reader "founder")))
+Check ((Get-HordeDecisionReadMark -State $st -Reader "founder") -eq 6 -and (Get-HordeDecisionReadMark -State $st -Reader "warchief") -eq 0 -and (Get-Unread (Get-Thread $st 1)) -eq 2) "a mark of another reader moves that reader's mark only: the warchief has still read nothing"
+
+Write-Host ""
+Write-Host "--- what a reader is to read: every question, oldest first, between two records ---" -ForegroundColor Cyan
+$st = Get-Fold $said
+function Get-ForSequences { param($Items) return (@($Items | ForEach-Object { "" + $_.message.sequence + "@" + $_.question.number }) -join ",") }
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief")) -ceq "3@1,5@2,6@1") ("the warchief's unread messages come from every question, in the order they were said (" + (Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief")) + ")")
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief" -UpTo 5)) -ceq "3@1,5@2") "bounded at record 5, the one after it is left out"
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief" -UpTo 4)) -ceq "3@1" -and (Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief" -UpTo 2)) -ceq "") "a bound between two messages, or before the first, is honoured exactly"
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief" -After 3 -UpTo 6)) -ceq "5@2,6@1" -and (Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief" -After 3 -UpTo 5)) -ceq "5@2") "named from both ends, it is the messages after the first record and up to the second"
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "founder")) -ceq "4@1") "for the other reader it is the other speaker's words"
+$st = Get-Fold ($said + @((New-Read 7 5)))
+Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warchief")) -ceq "6@1") "with no start named it begins from the reader's own mark"
+
+Write-Host ""
+Write-Host "--- who may speak, by what route, and who may record whose words ---" -ForegroundColor Cyan
+function Get-Saying { param([string]$Speaker = "founder", [string]$Route = "chat-recorded", [string]$Actor = "warchief", [string]$Text = "Yes, do it.") $found = @(); try { $found = @(Test-HordeDecisionSaying -Speaker $Speaker -Route $Route -Actor $Actor -Text $Text) } catch { $found = @("THREW: " + $_.Exception.Message) }; return ,$found }
+Check ((Get-Saying).Count -eq 0 -and (Get-Saying -Speaker "warchief" -Route "command").Count -eq 0 -and (Get-Saying -Route "window" -Actor "founder").Count -eq 0) "CONTROL: the founder's chat words recorded by the warchief, the warchief's own reply, and the founder typing in the window may each be written"
+Check (Test-Says (Get-Saying -Speaker "orc") "'speaker' is 'orc', which is not someone who speaks") "a speaker outside the list is refused, with the list"
+Check (Test-Says (Get-Saying -Route "telepathy") "'route' is 'telepathy', which is not a way words arrive") "a route outside the list is refused, with the list"
+Check (Test-Says (Get-Saying -Speaker "warchief" -Route "chat-recorded") "recorded by the warchief from chat are never the warchief's") "the warchief cannot record its own words as the founder's chat: that route carries the founder's words only"
+Check (Test-Says (Get-Saying -Speaker "founder" -Route "command") "by command are never the founder's") "the founder's words do not arrive by command"
+Check (Test-Says (Get-Saying -Speaker "warchief" -Route "window" -Actor "founder") "typed in the window are never the warchief's") "nor the warchief's through the window"
+Check (Test-Says (Get-Saying -Route "window" -Actor "warchief") "typed in the window are recorded only by: founder") "words typed in the window are recorded by the founder's own window, never by the warchief in his name"
+Check (Test-Says (Get-Saying -Route "chat-recorded" -Actor "founder") "recorded by the warchief from chat are recorded only by: warchief") "and words from chat are recorded by the warchief, which is what the route says"
+Check (Test-Says (Get-Saying -Text "") "'text' is blank") "saying nothing is refused"
+Check (Test-Says (Get-Saying -Text "  `r`n `t ") "'text' is blank") "and so are words that are only spaces and line breaks"
+$hundredThousand = ("word " * 20000)
+Check ($hundredThousand.Length -eq 100000 -and (Get-Saying -Text $hundredThousand).Count -eq 0) "100,000 characters may be said"
+Check ((Get-Saying -Text ("x" * 500000)).Count -eq 0) "and so may 500,000, the most a text may be"
+$tooLong = Get-Saying -Text ("x" * 500001)
+Check ((Test-Says $tooLong "'text' is 500001 characters long; the most is 500000") -and (Test-Says $tooLong "refused whole, never cut") -and @($tooLong | Where-Object { "$_".Length -gt 300 }).Count -eq 0) "one character more is refused whole, with the count, and the finding does not hold the text"
+# Right-to-left text as it really arrives: the direction marks, and the embedding and isolate
+# characters a phone's keyboard and a chat program put around it. A question's field refuses those;
+# words said are kept exactly.
+$hebrewSaid = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x200E + "(yes)" + [char]0x200D + [char]0x2028 + "next"
+Check ((Get-Saying -Text $hebrewSaid).Count -eq 0) "Hebrew with direction marks, an embedding, an isolate and a line separator may be said as it is"
+Check (@(Test-HordeDecisionNote -Text $hebrewSaid -Name "outcome").Count -gt 0) "CONTROL: the same characters in a question's own text are refused, so this is the rule for words said and not the absence of one"
+Check ((Get-Saying -Text ("line one`r`nline two`n`tindented")).Count -eq 0) "line breaks of both kinds and a tab may be said"
+foreach ($bad in @(0x1B, 0x00, 0x07, 0x08, 0x7F, 0x85)) {
+    $withControl = "before" + [char]$bad + "after"
+    $found = Get-Saying -Text $withControl
+    Check ((Test-Says $found ("'text' holds the character U+" + $bad.ToString("X4"))) -and (Test-Says $found "refused, not removed") -and -not (Test-Says $found "before")) ("a control character (U+" + $bad.ToString("X4") + ") is refused by its code point, and the words around it are not repeated")
+}
+
+Write-Host ""
+Write-Host "--- a conversation record of the wrong shape never stops the list ---" -ForegroundColor Cyan
+$good = @((New-Added 1 1), (New-Said 2 1 -Text "kept"))
+foreach ($case in @(
+    @{ what = "a message with no text"; record = (New-Record 3 "message-said" ([ordered]@{ number = 1; speaker = "founder"; route = "window"; wordingVersion = 1 })); says = "is not what a message-said record holds" }
+    @{ what = "a message whose text is not text"; record = (New-Record 3 "message-said" ([ordered]@{ number = 1; speaker = "founder"; route = "window"; text = 5; wordingVersion = 1 })); says = "is not what a message-said record holds" }
+    @{ what = "a message with a member no message has"; record = (New-Record 3 "message-said" ([ordered]@{ number = 1; speaker = "founder"; route = "window"; text = "x"; wordingVersion = 1; turn = "founder" })); says = "is not what a message-said record holds" }
+    @{ what = "a message whose speaker is not a label"; record = (New-Said 3 1 -Speaker "The Founder"); says = "is not what a message-said record holds" }
+    @{ what = "a message said to wording 0"; record = (New-Said 3 1 -Wording 0); says = "is not what a message-said record holds" }
+    @{ what = "a message said to wording 1e30"; record = (New-Said 3 1 -Wording 1e30); says = "'wordingVersion' is beyond 999999999" }
+    @{ what = "a read mark with no reader"; record = (New-Record 3 "messages-read" ([ordered]@{ upTo = 2 })); says = "is not what a messages-read record holds" }
+    @{ what = "a read mark up to record 1e30"; record = (New-Read 3 1e30); says = "'upTo' is beyond 9999999999" }
+    @{ what = "a read mark up to record 0"; record = (New-Read 3 0); says = "is not what a messages-read record holds" }
+)) {
+    $st = Get-Fold ($good + @($case.record) + @((New-Said 4 1 -Text "and after")))
+    Check ($st.unreadable.Count -eq 1 -and $st.unreadable[0].sequence -eq 3 -and $st.unreadable[0].reason -like ("*" + $case.says + "*") -and (Get-Texts (Get-Thread $st 1)) -ceq "kept | and after") ($case.what + " is unreadable by name, and the messages before and after it are still in the thread" + $(if ($st.unreadable.Count -eq 1) { "" } else { " (unreadable: " + $st.unreadable.Count + ")" }))
+}
+$st = Get-Fold ($good + @((New-Said 3 99 -Text "to no question"), (New-Read 4 2)))
+Check ($st.ignored.Count -eq 1 -and $st.ignored[0].reason -like "*there is no question 99*" -and (Get-Unread (Get-Thread $st 1)) -eq 0 -and $st.ids.Count -eq 4) "a message to a question that does not exist is reported and changes nothing, and a read mark after it still applies: it needs no question number"
+Check ($st.ids[([long]4).ToString("x32")].number -eq 0 -and $st.ids[([long]2).ToString("x32")].number -eq 1) "the list knows a message's record by the question it is under, and a read mark's as being about no one question"
+
 Write-Host ""
 Write-Host "--- a question as shown ---" -ForegroundColor Cyan
-$st = Get-Fold @((New-Added 1 1), (New-Record 2 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })))
-$view = ConvertTo-HordeDecisionView -Question $st.questions[1]
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "said"), (New-Record 3 "question-closed" ([ordered]@{ number = 1; outcome = "Done." })))
+$view = ConvertTo-HordeDecisionView -Question $st.questions[1] -State $st -Messages
+$summary = ConvertTo-HordeDecisionView -Question $st.questions[1] -State $st
+Check ($view.thread.count -eq 1 -and @($view.thread.messages).Count -eq 1 -and $summary.thread.count -eq 1 -and $null -eq $summary.thread.PSObject.Properties["messages"]) "one question shown carries its messages; in a list it carries their count, whose turn it is and what is unread, and not the messages"
+$found = @(Test-HordeSchema -Value $summary -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
+Check ($found.Count -eq 0) ("the list's form of a question matches decision-result.v1's view too" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
 $found = @(Test-HordeSchema -Value $view -Schema $defs.resultSchema.definitions.view -Root $defs.resultSchema)
 Check ($found.Count -eq 0) ("a question of the list, as plain data, matches decision-result.v1's view" + $(if ($found.Count) { " (" + ($found -join "; ") + ")" } else { "" }))
 $view.title = "changed by the caller"
