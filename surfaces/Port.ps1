@@ -43,11 +43,18 @@
 #   state      anything: handed back, untouched, to every callback
 #   onOpened   param($Window, $State) once the page's engine is up; onTick the same, every tickMs
 #   onClosed   param($Window, $State) as the window goes
+# WHERE A PAGE FINDS A MOUNT. The page is plain files, and a file names another by an address, so
+# the address is part of this contract and not of any one surface: a mount named <name> is served at
+# https://<name>.horde.invalid/ (Get-HordeSurfaceMountHost). ".invalid" is reserved by RFC 2606 never
+# to resolve, so the address can only ever mean a folder a surface serves, never a machine. One
+# mount is the surface's own: "surface", holding bridge.js, the page's side of the bridge; a caller may
+# not give a mount that name.
+#
 # A callback is given the window as { handle; sync; post; setTitle; show; close }: handle is the
 # native window handle (capability window.native), sync an object events can be marshalled through to
 # the window's own thread, and the rest are script blocks. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
 # never from the variables of the function that wrote it: Windows PowerShell 5.1 does not keep them
-# (surfaces/webview2/Surface.ps1 says what was measured).
+# (the first surface's own Surface.ps1 says what was measured, and its suite measures it on every run).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
@@ -68,7 +75,20 @@ $script:HordeSurfaceArgTypes = @("string", "integer", "boolean")
 # The longest text one argument may hold unless its request says less.
 $script:HordeSurfaceArgChars = 16384
 
+# The mount every surface serves itself (header, WHERE A PAGE FINDS A MOUNT).
+$script:HordeSurfaceOwnMount = "surface"
+$script:HordeSurfaceMountSuffix = ".horde.invalid"
+
 function Get-HordeSurfaceRoot { return $PSScriptRoot }
+
+function Get-HordeSurfaceOwnMount { return $script:HordeSurfaceOwnMount }
+
+function Get-HordeSurfaceMountHost {
+    # The host name a mount is served to the page under (header, WHERE A PAGE FINDS A MOUNT).
+    param([Parameter(Mandatory = $true)][string]$Mount)
+    if ($Mount -cnotmatch '\A[a-z][a-z0-9-]{0,31}\z') { throw ("'" + $Mount + "' is not a mount name: lowercase letters, digits and hyphens") }
+    return ($Mount + $script:HordeSurfaceMountSuffix)
+}
 
 function Get-HordeSurfaceFiles {
     # Every surface's Surface.ps1, for the caller to dot-source:
@@ -295,6 +315,7 @@ function New-HordeSurfaceSpec {
     foreach ($name in @($Mounts.Keys)) {
         # A mount's name becomes part of an address the page uses, so it is held to a host label.
         if ("$name" -cnotmatch '\A[a-z][a-z0-9-]{0,31}\z') { throw ("'" + $name + "' is not a mount name: lowercase letters, digits and hyphens") }
+        if ("$name" -ceq $script:HordeSurfaceOwnMount) { throw ("the mount '" + $name + "' is the surface's own, where it serves the page's side of the bridge; a caller gives its page another name") }
         $folder = "$($Mounts[$name])"
         if (-not [System.IO.Path]::IsPathRooted($folder) -or -not (Test-Path -LiteralPath $folder -PathType Container)) { throw ("the mount '" + $name + "' is not a folder that exists: '" + $folder + "'") }
         $mountTable["$name"] = [System.IO.Path]::GetFullPath($folder)
