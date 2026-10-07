@@ -108,9 +108,21 @@ function Read-HordeWeztermWindowList {
         foreach ($need in @("pane_id", "window_id", "tab_id", "title", "is_active")) {
             if ($null -eq $p -or $null -eq $p.PSObject.Properties[$need]) { return (New-HordeUnknown -Reason ("a pane in the terminal's list has no " + $need + ", so its window cannot be told from the others")) }
         }
+        # EACH FIELD IS OF ITS OWN KIND OR THE LISTING IS UNKNOWN; none is converted. [bool] of any text
+        # that is not empty is true, and "" + $null is "": read that way, "is_active":"no" was an active
+        # pane and a missing title an empty one (review of 2026-10-06, finding C6).
+        foreach ($id in @("pane_id", "window_id", "tab_id")) {
+            $number = $p.PSObject.Properties[$id].Value
+            if (($number -isnot [int] -and $number -isnot [long]) -or $number -lt 0) { return (New-HordeUnknown -Reason ("a pane in the terminal's list has a " + $id + " that is not a whole number, so the list is not one this finder can read")) }
+        }
+        if ($p.title -isnot [string]) { return (New-HordeUnknown -Reason "a pane in the terminal's list has a title that is not text, so no window's title can be compared with it") }
+        if ($p.is_active -isnot [bool]) { return (New-HordeUnknown -Reason "a pane in the terminal's list has an is_active that is not true or false, so its window cannot be told from the others") }
         $zoomed = $false
-        if ($null -ne $p.PSObject.Properties["is_zoomed"]) { $zoomed = [bool]$p.is_zoomed }
-        [void]$rows.Add([pscustomobject]@{ pane = ("" + $p.pane_id); window = ("" + $p.window_id); tab = ("" + $p.tab_id); title = ("" + $p.title); active = [bool]$p.is_active; zoomed = $zoomed })
+        if ($null -ne $p.PSObject.Properties["is_zoomed"]) {
+            if ($p.is_zoomed -isnot [bool]) { return (New-HordeUnknown -Reason "a pane in the terminal's list has an is_zoomed that is not true or false, so its window's title cannot be worked out") }
+            $zoomed = $p.is_zoomed
+        }
+        [void]$rows.Add([pscustomobject]@{ pane = ("" + $p.pane_id); window = ("" + $p.window_id); tab = ("" + $p.tab_id); title = $p.title; active = $p.is_active; zoomed = $zoomed })
     }
     return (New-HordeKnown -Value $rows.ToArray())
 }

@@ -49,6 +49,26 @@ Check ((Read-HordeWeztermWindowList -Raw "").state -ceq "unknown") "empty output
 Check ((Read-HordeWeztermWindowList -Raw "not json").state -ceq "unknown") "output that is not JSON is unknown"
 Check ((Read-HordeWeztermWindowList -Raw '[{"window_id":0,"tab_id":0,"pane_id":1,"title":"t"}]').reason -like "*has no is_active*") "a pane with no is_active cannot tell windows apart, so the whole listing is unknown"
 Check ((Read-HordeWeztermWindowList -Raw '[7]').state -ceq "unknown" -and (Read-HordeWeztermWindowList -Raw '[null]').state -ceq "unknown") "a list of something that is not a pane is unknown"
+# A FIELD OF THE WRONG KIND IS NOT CONVERTED. PowerShell turns any text that is not empty into true and a
+# null into "", so "is_active":"no" was an active pane and a missing title an empty one (review of
+# 2026-10-06, finding C6): a row read that way can make a title fit, and a fit is believed.
+function Row { param([string]$Fields) return (Read-HordeWeztermWindowList -Raw ('[{' + $Fields + '}]')) }
+Check ((Row '"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":true,"is_zoomed":false').state -ceq "known") "CONTROL: a row whose every field is of its own kind is read"
+foreach ($wrong in @(
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":"yes"'; says = "*is_active that is not true or false*"; what = "is_active written as text" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":1'; says = "*is_active that is not true or false*"; what = "is_active written as a number" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":null'; says = "*is_active that is not true or false*"; what = "is_active that is null" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":null,"is_active":true'; says = "*title that is not text*"; what = "a title that is null" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":7,"is_active":true'; says = "*title that is not text*"; what = "a title that is a number" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":true,"is_zoomed":"no"'; says = "*is_zoomed that is not true or false*"; what = "is_zoomed written as text" }
+    @{ row = '"window_id":0,"tab_id":0,"pane_id":"1","title":"t","is_active":true'; says = "*pane_id that is not a whole number*"; what = "a pane id written as text" }
+    @{ row = '"window_id":1.5,"tab_id":0,"pane_id":1,"title":"t","is_active":true'; says = "*window_id that is not a whole number*"; what = "a window id that is a fraction" }
+    @{ row = '"window_id":0,"tab_id":-1,"pane_id":1,"title":"t","is_active":true'; says = "*tab_id that is not a whole number*"; what = "a tab id below zero" }
+    @{ row = '"window_id":0,"tab_id":null,"pane_id":1,"title":"t","is_active":true'; says = "*tab_id that is not a whole number*"; what = "a tab id that is null" }
+)) {
+    $r = Row $wrong.row
+    Check ($r.state -ceq "unknown" -and $r.reason -like $wrong.says) ($wrong.what + " is not converted: the listing is unknown, and says which field")
+}
 
 Write-Host ""
 Write-Host "--- one window ---" -ForegroundColor Cyan
