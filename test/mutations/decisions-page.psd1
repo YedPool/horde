@@ -33,6 +33,9 @@
         @{ Name = "the-suffix-does-not-say-recommended"
            Find = 'bits.push("Recommended: " + rec);'
            Replace = 'bits.push(rec);' }
+        @{ Name = "the-suffix-carries-the-reason-in-brackets"
+           Find = 'bits.push(listOf(q.waiting).map(whoOf).join(", ") + " waiting");'
+           Replace = 'bits.push(listOf(q.waiting).join(", ") + " waiting");' }
         @{ Name = "the-number-drawn-is-the-line-position"
            Find = 'var num = make("span", "hd-num", q.number);'
            Replace = 'var num = make("span", "hd-num", drawnLines.length + 1);' }

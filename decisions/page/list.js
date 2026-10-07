@@ -99,13 +99,24 @@
       return out;
     }
 
+    // WHO, WITHOUT WHY. A name in the waiting list may carry its reason in brackets ("Orc D (test
+    // deploy of email linking)"); the folded line's suffix names who and no more, and the unfolded
+    // question's own Waiting line gives every word. With the reasons in it the suffix took its full
+    // 46 percent of every line and cut the question's own words short (seen 2026-10-07 in pictures of
+    // a real window 980 device pixels wide, on a list of 22 real questions).
+    function whoOf(name) {
+      var words = textOf(name);
+      var at = words.indexOf(" (");
+      return at > 0 ? words.slice(0, at) : words;
+    }
+
     function suffixOf(q) {
       var bits = [];
       var rec = textOf(q.recommendation).replace(/\.$/, "");
       if (textOf(q.state) !== LISTED_STATE) { bits.push(textOf(q.state) + (textOf(q.outcome) ? ": " + textOf(q.outcome) : "")); }
       else {
         if (rec) { bits.push("Recommended: " + rec); }
-        if (listOf(q.waiting).length) { bits.push(listOf(q.waiting).join(", ") + " waiting"); }
+        if (listOf(q.waiting).length) { bits.push(listOf(q.waiting).map(whoOf).join(", ") + " waiting"); }
       }
       return bits.length ? " - " + bits.join(" - ") : "";
     }

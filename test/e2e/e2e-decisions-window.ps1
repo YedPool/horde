@@ -130,7 +130,7 @@ Check ((@($drawn.lines | Where-Object { $_.open } | ForEach-Object { $_.n }) -jo
 $sub = @($drawn.sub)
 Check ((@($sub | ForEach-Object { $_.n }) -join ",") -ceq "3.1,3.2,3.3,3.4,3.5,3.6,19.1,19.2,19.3,19.4,19.5,19.6") ("an unfolded question's lines are sub-numbered under its own number (" + (@($sub | ForEach-Object { $_.n }) -join ",") + ")")
 Check ($sub[0].t -ceq "What it is: Step 3 is ready and waits only for a yes. <script>this is shown as text</script>" -and $sub[1].t -ceq "Yes means: Step 3 is done today." -and $sub[2].t -ceq "Recommended: yes" -and $sub[3].t -ceq "Waiting: Orc D (step 3)" -and $sub[4].t -ceq "Asked by: Orc D" -and $sub[5].t -ceq "Answered with: yes or no") "in order: what it is, what yes means, the recommendation, who waits, who asked, how it is answered; and markup in a question is drawn as the text it is"
-Check ((@($drawn.lines | Where-Object { $_.n -ceq "1" })[0].s) -ceq " - Recommended: yes - Orc B (step 1) waiting") "a folded line carries its muted suffix: the recommendation and who is waiting"
+Check ((@($drawn.lines | Where-Object { $_.n -ceq "1" })[0].s) -ceq " - Recommended: yes - Orc B waiting") "a folded line carries its muted suffix: the recommendation and who is waiting, by name and without the reason in brackets, which the unfolded line gives in full"
 Check ($drawn.counts.open -eq 22 -and $drawn.counts.waiting -eq 17 -and $drawn.counts.other -eq 0 -and $first.title -ceq "Open decisions: 22, 17 waiting") ("22 open, 17 with someone waiting; the window's title says the same (" + $first.title + ")")
 
 Write-Host ""
