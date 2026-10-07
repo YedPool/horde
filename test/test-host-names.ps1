@@ -183,6 +183,27 @@ try {
     Refuses "own-folder-non-ascii" { Write-FakeBytes "hosts/zorbterm/adapter.ps1" ([System.Text.Encoding]::UTF8.GetBytes("# caf" + [char]0x00E9 + "`n")) } "not printable ASCII" "the host's own folder is held to ASCII too - rule 13 has no exemption"
     Passes "ascii-whitespace" { Write-FakeFile "core/ws.ps1" "`tif (`$x) {`r`n`t`t`$y`r`n}`r`n" } "CONTROL: tabs, CR and LF are printable enough, and pass"
     Passes "planning-prose-non-ascii" { Write-FakeBytes "planning/notes.md" ([System.Text.Encoding]::UTF8.GetBytes("caf" + [char]0x00E9 + "`n")) } "prose under planning/ is not scanned, so a non-ASCII letter there is not this suite's to refuse"
+    # A PINNED FILE IS THE ONE EXCEPTION (decisions design 2026-10-06, section 3.11): a program library an
+    # adapter cannot be written without sits in the adapter's folder beside a fingerprints.txt giving its
+    # SHA-256. It is not read as text; it is held to its fingerprint instead. Everything else about
+    # the ASCII rule stands: a binary no list names, and a list outside a port's folder, are refused.
+    $libBytes = [byte[]](0x4D, 0x5A, 0x00, 0xFF, 0x90, 0x00)
+    $libHasher = [System.Security.Cryptography.SHA256]::Create()
+    $libSha = -join ($libHasher.ComputeHash($libBytes) | ForEach-Object { $_.ToString("x2") })
+    $libHasher.Dispose()
+    $libLine = "zorb.dll | " + $libSha + " | the invented library the invented host cannot be written without`n"
+    Passes "pinned" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "a binary in a port's folder that a fingerprint list beside it names, with its SHA-256, is not read as text and passes"
+    Refuses "pinned-changed" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" ([byte[]](0x4D, 0x5A, 0x00, 0xFF, 0x90, 0x01)); Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "does not match its fingerprint" "one changed byte in a pinned file is refused"
+    Refuses "pinned-missing" { Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "is listed and is not there" "a listed file that is not there is refused"
+    Refuses "pinned-unlisted" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine; Write-FakeBytes "hosts/zorbterm/lib/other.dll" $libBytes } "not printable ASCII" "a binary beside the list that the list does not name is refused like any other"
+    Refuses "pinned-path" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ($libLine + "..\..\..\core\engine.ps1 | " + $libSha + " | a line reaching out of the list's own folder`n") } "is not a plain file name" "a list line that names a path, not a file in its own folder, is refused"
+    function RefusesPinnedOutsideAPort {
+        $f = @(Scan "pinned-outside" { Write-FakeBytes "core/lib/zorb.dll" $libBytes; Write-FakeFile "core/lib/fingerprints.txt" $libLine })
+        $ok = ((Says $f "outside a port's folder") -and (Says $f "not printable ASCII") -and $f.Count -eq 2)
+        Check $ok "a fingerprint list outside a port's folder pins nothing: the list is refused, and the binary beside it is refused as non-ASCII"
+        if (-not $ok) { Show $f }
+    }
+    RefusesPinnedOutsideAPort
     Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
     # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already
