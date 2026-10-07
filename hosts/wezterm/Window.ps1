@@ -1,7 +1,7 @@
 # hosts/wezterm/Window.ps1 - which native window of WezTerm shows a given pane.
 #
-# THE FINDER HALF OF THE WEZTERM HOST (decisions window attach design, 2026-10-06; core/HostWindow.ps1).
-# A Horde window is to stand beside the terminal window of one session. That session's record says
+# THE FINDER HALF OF THE WEZTERM HOST (window attach design, 2026-10-06; core/HostWindow.ps1).
+# A companion window is to stand beside the terminal window of one session. That session's record says
 # which pane it runs in and which terminal ("instance", the leaf name of the terminal's mux socket,
 # gui-sock-<gui pid>). This file turns those two texts into ONE native window handle, or says why it
 # cannot. It only reads: one `cli list`, and the titles of the terminal process's own windows. It never

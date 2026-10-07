@@ -1,15 +1,16 @@
 # core/HostWindow.ps1 - the port through which a terminal's adapter says which native window a session
 # is shown in, so that nothing outside hosts/<name>/ names a terminal to ask (CONTRIBUTING 14).
 #
-# WHY (decisions window attach design, 2026-10-06): a Horde window stands beside a session's terminal
+# WHY (window attach design, 2026-10-06): a companion window stands beside a session's terminal
 # window, and "which window is that" is knowledge about one terminal program - how it lists its panes,
 # what its windows are called. Each host that can answer has hosts/<name>/Window.ps1, which registers
 # one block here when it is dot-sourced, as hosts/<name>/Act.ps1 registers with core/HostAct.ps1, and
 # is found by folder, never by name.
 #
 #   Find  param($Seat) -> a core/Tristate.ps1 answer
-#         $Seat is { pane; instance } as core/SessionSeat.ps1 read them from the session's record: text
-#         only the session's own terminal understands. known { handle; ... } when exactly one window is
+#         $Seat is { pane; instance } as core/SessionSeat.ps1 read them from the session's record, and
+#         only once it has verified that the session is still running there: text only the session's
+#         own terminal understands. known { handle; ... } when exactly one window is
 #         proven to be the one showing that pane, handle being its native window handle; unknown, with
 #         the reason, in every other case - a seat that is not this host's, a terminal that is not
 #         running, a pane it does not list, two windows that cannot be told apart.

@@ -9,8 +9,8 @@
 # not exist, set as its first act, so a call that escaped the runner would fail to connect instead of
 # reaching the terminal the suite was started from.
 #
-# The finding of a real window - a terminal this repository's scenario starts, never the one in use -
-# is test/e2e/e2e-decisions-window.ps1's.
+# The finding of a real window - in a terminal the scenario starts, never the one in use - is
+# hosts/wezterm/test/e2e/e2e-session-window.ps1's.
 
 $env:WEZTERM_UNIX_SOCKET = Join-Path $env:TEMP ("horde-test-window-no-terminal-" + [guid]::NewGuid().ToString("N"))
 # A HOME OF THIS SUITE'S OWN, which does not exist until the suite makes it: the finder reads its
@@ -31,7 +31,7 @@ function Win { param([long]$Handle, [string]$Title) return [pscustomobject]@{ ha
 function Rows { param([object[]]$Panes) return @((Read-HordeWeztermWindowList -Raw (Listing $Panes)).value) }
 function Pick { param([object[]]$Panes, [string]$Pane, [object[]]$Native, [object[]]$After = @()) return (Select-HordeWeztermSessionWindow -Rows (Rows $Panes) -Pane $Pane -Native $Native -NativeAfter $After) }
 
-# A fleet as it was measured on 2026-10-06, cut down: the keeper of the list alone in window 10, an
+# A fleet as it was measured on 2026-10-06, cut down: the holder of a role ("keeper") alone in window 10, an
 # orchestrator with three tabs in window 11, a window with a split tab, and one more.
 $fleet = @(
     (Pane 10 16 18 ($star + " keeper")),
