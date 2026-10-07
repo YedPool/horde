@@ -76,7 +76,7 @@
         "recordedBy": {"type": "string", "description": "The role that made the request. For words recorded from chat it is not the speaker."},
         "text": {"type": "string", "description": "The words, verbatim."},
         "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording the speaker was looking at."},
-        "saidToEarlierWording": {"type": "boolean", "description": "True when the wording the speaker was looking at is not the wording of the question now - whether it had already moved on when the words arrived, or was changed afterwards. Either way they answer something the question no longer says."},
+        "saidToEarlierWording": {"type": "boolean", "description": "True when the question had already left that wording WHEN THE WORDS WERE SAID: they answered something the question no longer said. Judged at the record's place in the order, never against the wording now: a rewording made afterwards does not flag words said before it."},
         "arrivedAfterClosing": {"type": "boolean", "description": "True when the question was closed when the words were recorded. They are kept, and reopen nothing."},
         "unreadBy": {"type": "array", "items": {"type": "string"}, "description": "The roles with an inbox, other than the speaker, that have not read up to this record."}
       }

@@ -275,7 +275,7 @@ Check ((Get-InboxLine $replayed) -ceq "3@1,4@2,6@1 upTo=6 marked=3" -and (Get-In
 # The title an inbox shows is the question as it reads now.
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 2; changes = @{ title = "Which languages should the test talker speak first?" } }
 $now = Inbox $s
-Check ($now.value.messages[0].title -ceq "Which languages should the test talker speak first?" -and $now.value.messages[0].message.saidToEarlierWording -eq $true) "the inbox names a question by its words as they are now, and says the message was said to an earlier wording"
+Check ($now.value.messages[0].title -ceq "Which languages should the test talker speak first?" -and $now.value.messages[0].message.saidToEarlierWording -eq $false -and $now.value.messages[0].message.wordingVersion -eq 1) "the inbox names a question by its words as they are now; the message, said before the rewording, is NOT flagged: it was said to the wording of its moment"
 
 Write-Host ""
 Write-Host "--- inbox: only what is handed back is marked ---" -ForegroundColor Cyan
