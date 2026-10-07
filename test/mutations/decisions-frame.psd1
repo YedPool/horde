@@ -22,6 +22,9 @@
         @{ Name = "standing-free-is-not-said"
            Find = 'notices.attachment = (a && a.attached) ? "" : ('
            Replace = 'notices.attachment = (a) ? "" : (' }
+        @{ Name = "escape-offered-while-standing-free"
+           Find = 'foot.textContent = footWords + ((a && a.attached) ? " Esc: back to the terminal." : "");'
+           Replace = 'foot.textContent = footWords + " Esc: back to the terminal.";' }
         @{ Name = "the-family-is-not-the-settings"
            Find = 'root.style.setProperty("--font", setup.look.fontFamily);'
            Replace = 'root.style.setProperty("--font", "serif");' }
