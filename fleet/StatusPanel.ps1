@@ -47,6 +47,10 @@ $script:HordeFleetStatusFile = "status.txt"
 $script:HordeFleetStatusMostChars = 120
 # A record is six short lines. A file far past that is not one, and is not read into memory to find out.
 $script:HordeFleetStatusMostBytes = 8192
+# How many of the folders that claim one letter are named in each one's problem; the rest are counted.
+# Measured 2026-10-06 with every one named: 1,000 folders claiming one letter made 11 MB of answer,
+# 3,000 made 100 MB, and 10,000 ended in an out-of-memory error. More than 26 records must repeat one.
+$script:HordeFleetStatusMostNamed = 5
 # A bare pull-request or issue reference, or a Windows path: the record checker's own expression.
 $script:HordeFleetStatusBareReference = '(?i)\b(pr|pull request|issue)\s*#?\d+|#\d+|[A-Za-z]:\\'
 
@@ -169,7 +173,11 @@ function Get-HordeFleetStatus {
     $orcs = @($dirs | ForEach-Object { Read-HordeFleetStatusFolder -Path $_.FullName -Now $Now })
     # TWO FOLDERS, ONE LETTER: neither is shown as that Orc (header).
     foreach ($group in @($orcs | Where-Object { $_.written } | Group-Object -Property orc -CaseSensitive | Where-Object { $_.Count -gt 1 })) {
-        $names = @($group.Group | ForEach-Object { $_.folder }) -join ", "
+        # A FEW ARE NAMED AND THE REST COUNTED ($script:HordeFleetStatusMostNamed): every claimant's
+        # problem naming every other grew with the square of the folders.
+        $claimants = @($group.Group | ForEach-Object { $_.folder })
+        $names = @($claimants | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", "
+        if ($claimants.Count -gt $script:HordeFleetStatusMostNamed) { $names += " and " + ($claimants.Count - $script:HordeFleetStatusMostNamed) + " more" }
         foreach ($o in $group.Group) {
             $o.written = $false; $o.problems = @("says it is Orc " + $group.Name + ", and so does another folder (" + $names + "), so which is that Orc cannot be told")
             $o.orc = ""; $o.lane = ""; $o.doing = ""; $o.finished = ""; $o.blocked = $false; $o.blockedBy = ""

@@ -111,6 +111,13 @@ $twins = Get-HordeFleetStatus -Folder (Join-Path $work "twins") -Now $now
 $claimed = @($twins.orcs | Where-Object { $_.folder -ceq "one" -or $_.folder -ceq "two" })
 Check (@($claimed | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.doing -ceq "" -and $_.problems[0] -like "says it is Orc F, and so does another folder (one, two)*" }).Count -eq 2) "two folders that both say they are Orc F: neither is shown as F, and each says why"
 Check (@($twins.orcs | Where-Object { $_.folder -ceq "three" })[0].written -eq $true) "CONTROL: the third folder, alone in its letter, is read"
+# MANY FOLDERS, ONE LETTER: each one's problem names a few of the others and counts the rest. Naming
+# all of them in every one made the answer grow with the square of the folders (measured 2026-10-06 by
+# the review of this reader: 1,000 folders gave a panel 11 MB of text, 3,000 gave it 100 MB, and
+# 10,000 ended in an out-of-memory error) - and a folder of more than 26 records must repeat a letter.
+for ($i = 1; $i -le 40; $i++) { [void](New-Orc "crowd" ("orc-" + $i.ToString("D2")) $good) }
+$crowd = Get-HordeFleetStatus -Folder (Join-Path $work "crowd") -Now $now
+Check (@($crowd.orcs | Where-Object { $_.written -eq $false -and $_.orc -ceq "" -and $_.problems[0] -ceq "says it is Orc F, and so does another folder (orc-01, orc-02, orc-03, orc-04, orc-05 and 35 more), so which is that Orc cannot be told" }).Count -eq 40) "forty folders that all say they are Orc F: none is shown as F, and each names five of them and counts the other 35"
 
 [void](New-Orc "big" "huge" -Raw ([System.Text.Encoding]::ASCII.GetBytes(("x" * 9000))))
 $big = (Get-HordeFleetStatus -Folder (Join-Path $work "big") -Now $now).orcs[0]

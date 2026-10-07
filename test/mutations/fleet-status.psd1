@@ -68,6 +68,12 @@
         @{ Name = "two-folders-one-letter-both-shown"
            Find = '| Where-Object { $_.Count -gt 1 })) {'
            Replace = '| Where-Object { $_.Count -gt 2 })) {' }
+        @{ Name = "every-claimant-of-a-letter-is-named"
+           Find = '$names = @($claimants | Select-Object -First $script:HordeFleetStatusMostNamed) -join ", "'
+           Replace = '$names = @($claimants) -join ", "' }
+        @{ Name = "the-claimants-not-named-are-not-counted"
+           Find = 'if ($claimants.Count -gt $script:HordeFleetStatusMostNamed) { $names += '
+           Replace = 'if ($false) { $names += ' }
         @{ Name = "a-huge-file-read"
            Find = 'if ($info.Length -gt $script:HordeFleetStatusMostBytes) {'
            Replace = 'if ($false) {' }
