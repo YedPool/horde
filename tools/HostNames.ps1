@@ -163,7 +163,10 @@ $script:HordeHostNamesProseFolder = "planning"
 # THE FOURTH FAMILY (remote plan step R21, slice 3): nothing outside messengers/<name>/ names what
 # identifies a messenger, so a second way of handing a message to a session is a new folder too.
 # messengers/Port.ps1 belongs to no messenger, like transports/Port.ps1.
-$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")
+# THE FIFTH FAMILY (decisions design 2026-10-06, decision 2): nothing outside surfaces/<name>/ names
+# what shows a page in a window, so a second way of showing one - another platform's window, a file,
+# a remote view - is a new folder too. surfaces/Port.ps1 belongs to no surface.
+$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces")
 $script:HordeHostNamesProseTypes = @(".md", ".html")
 $script:HordeHostNameMinLength = 4
 # The cross-host import (header, THE ONE CROSS-HOST IMPORT): the count cell that marks it, matched
