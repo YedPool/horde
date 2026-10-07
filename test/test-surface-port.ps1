@@ -1,0 +1,200 @@
+# DOES THE SURFACE PORT REFUSE EVERYTHING A PAGE MAY NOT ASK, AND ANSWER ONLY WHAT IS ON THE LIST?
+#
+# surfaces/Port.ps1's Invoke-HordeSurfaceRequest stands between a page - text that may quote anything
+# a session wrote - and Horde. It is a pure function of a bridge and the text that arrived, so every
+# case here runs with no window: each named request, a request that is not on the list, a message that
+# is not a message, an oversized one, wrong arguments, a handler that throws. Then the port's own
+# promises: only a registered surface is opened, a surface is picked by what it can do and never by
+# name, and a spec a surface could only half honour is refused before any window exists.
+#
+# The surfaces here are invented in %TEMP% ("zorbview", "zorbfile"), so nothing in this file names a
+# real one (CONTRIBUTING 14).
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "surfaces\Port.ps1")
+
+$work = Join-Path $env:TEMP ("horde-surface-port-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $work | Out-Null
+
+$script:calls = New-Object System.Collections.ArrayList
+$bridge = New-HordeSurfaceBridge -Events @("list-changed") -Requests ([ordered]@{
+    "list"     = @{ run = { param($Arguments, $State, $Window) [void]$script:calls.Add("list"); return [pscustomobject]@{ questions = @(1, 2, 3); who = $State.who } } }
+    "rendered" = @{ args = @{ rows = @{ type = "integer"; most = 100000 }; note = @{ type = "string"; most = 20 }; whole = @{ type = "boolean" } }
+                    run = { param($Arguments, $State, $Window) [void]$script:calls.Add("rendered " + $Arguments["rows"] + " " + $Arguments["note"] + " " + $Arguments["whole"]); return $true } }
+    "breaks"   = @{ run = { param($Arguments, $State, $Window) throw "the store could not be read" } }
+})
+$state = [pscustomobject]@{ who = "the caller's own state" }
+function Ask { param([string]$Text) return (Invoke-HordeSurfaceRequest -Bridge $bridge -Text $Text -State $state -Now ([datetime]::new(2026, 10, 7, 9, 0, 0, [System.DateTimeKind]::Utc))) }
+function Reply { param($R) return ($R.reply | ConvertFrom-Json) }
+
+try {
+
+Write-Host ""
+Write-Host "--- every named request is answered, and only through its handler ---" -ForegroundColor Cyan
+$a = Ask '{"v":1,"id":7,"request":"list"}'
+$av = Reply $a
+Check ($a.refused -ceq "" -and $a.request -ceq "list" -and $av.ok -eq $true -and $av.reply -eq 7 -and $av.v -eq 1) "a request on the list is answered, under the id the page chose"
+Check (@($av.value.questions).Count -eq 3 -and $av.value.who -ceq "the caller's own state") "its handler is given the caller's state, and what it returns is the value"
+$b = Ask '{"v":1,"id":8,"request":"rendered","args":{"rows":22,"note":"ok","whole":true}}'
+Check ((Reply $b).ok -eq $true -and $script:calls[$script:calls.Count - 1] -ceq "rendered 22 ok True") "a request with arguments hands its handler exactly those arguments"
+$c = Ask '{"v":1,"id":9,"request":"list","args":{}}'
+Check ((Reply $c).ok -eq $true) "a request that takes no argument may give an empty args"
+Check ($bridge.answered -eq 3 -and $bridge.refused -eq 0) "CONTROL: three answered, none refused so far"
+$f = Ask '{"v":1,"id":10,"request":"breaks"}'
+$fv = Reply $f
+Check ($fv.ok -eq $false -and $fv.reply -eq 10 -and $fv.reason -ceq "'breaks' failed: the store could not be read" -and $f.refused -ceq "") "a handler that throws is answered as a failure with its own words, and is not a refusal"
+Check ($bridge.refused -eq 0) "and it is not counted as one"
+
+Write-Host ""
+Write-Host "--- a request that is not on the list ---" -ForegroundColor Cyan
+$callsBefore = $script:calls.Count
+$u = Ask '{"v":1,"id":11,"request":"run-program","args":{"path":"calc.exe"}}'
+$uv = Reply $u
+Check ($u.refused -like "*not on the list; the list is: list, rendered, breaks" -and $uv.ok -eq $false -and $uv.reply -eq 11 -and $uv.reason -like "refused: *") "an unknown request is refused, and the page is told so under its id"
+Check ($u.reply -notlike "*run-program*" -and $u.reply -notlike "*calc*") "the refusal does not repeat what the page sent"
+Check ($script:calls.Count -eq $callsBefore) "and no handler ran"
+Check ((Ask '{"v":1,"id":12,"request":"List"}').refused -like "*not on the list*") "a name is matched exactly: List is not list"
+Check ((Ask '{"v":1,"id":13,"request":7}').refused -like "*not on the list*") "a request that is not text is not on the list"
+Check ((Ask '{"v":1,"id":14}').refused -like "*not on the list*") "nor is a message with no request"
+Check ($bridge.refused -eq 4 -and $bridge.refusals.Count -eq 4 -and $bridge.refusals[0].at -ceq "2026-10-07T09:00:00.0000000Z" -and $bridge.refusals[0].reason -like "*not on the list*") "every refusal is counted and recorded, with when"
+
+Write-Host ""
+Write-Host "--- a message that is not a message ---" -ForegroundColor Cyan
+foreach ($bad in @(
+    @{ text = ""; says = "was empty"; what = "nothing at all" }
+    @{ text = "not json at all"; says = "not one JSON object"; what = "text that is not JSON" }
+    @{ text = '{"v":1,"id":1,"request":"list"'; says = "not one JSON object"; what = "JSON cut short" }
+    @{ text = '[{"v":1,"id":1,"request":"list"}]'; says = "not one JSON object"; what = "a list of messages" }
+    @{ text = '"list"'; says = "not one JSON object"; what = "a bare string" }
+    @{ text = 'null'; says = "not one JSON object"; what = "null" }
+    @{ text = '{"v":1,"request":"list"}'; says = "carried no id"; what = "no id" }
+    @{ text = '{"v":1,"id":0,"request":"list"}'; says = "carried no id"; what = "an id of 0" }
+    @{ text = '{"v":1,"id":-3,"request":"list"}'; says = "carried no id"; what = "a negative id" }
+    @{ text = '{"v":1,"id":1.5,"request":"list"}'; says = "carried no id"; what = "an id that is not whole" }
+    @{ text = '{"v":1,"id":"1","request":"list"}'; says = "carried no id"; what = "an id that is text" }
+    @{ text = '{"v":1,"id":99999999999,"request":"list"}'; says = "carried no id"; what = "an id too large to answer under" }
+)) {
+    $r = Ask $bad.text
+    Check ($r.refused -like ("*" + $bad.says + "*") -and $r.reply -ceq "" -and $r.request -ceq "") ($bad.what + " is refused, and nothing is sent back: there is no id to answer")
+}
+foreach ($bad in @(
+    @{ text = '{"v":2,"id":20,"request":"list"}'; says = "is not version 1"; what = "another version of the requests" }
+    @{ text = '{"id":20,"request":"list"}'; says = "is not version 1"; what = "no version" }
+    @{ text = '{"v":"1","id":20,"request":"list"}'; says = "is not version 1"; what = "a version that is text" }
+    @{ text = '{"v":1,"id":20,"request":"list","run":"calc.exe"}'; says = "a member that is not v, id, request or args"; what = "a member nobody defined" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":22,"note":"ok"}}'; says = "does not give 'whole'"; what = "a missing argument" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":22,"note":"ok","whole":true,"extra":1}}'; says = "gives an argument 'rendered' does not take"; what = "an argument nobody declared" }
+    @{ text = '{"v":1,"id":20,"request":"list","args":{"state":"all"}}'; says = "gives an argument 'list' does not take"; what = "an argument to a request that takes none" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":"22","note":"ok","whole":true}}'; says = "'rows' is not a whole number"; what = "text where a number is wanted" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":2.5,"note":"ok","whole":true}}'; says = "'rows' is not a whole number"; what = "a number that is not whole" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":1e30,"note":"ok","whole":true}}'; says = "'rows' is not a whole number"; what = "a number no count can be" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":-1,"note":"ok","whole":true}}'; says = "'rows' is not between 0 and 100000"; what = "a negative count" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":100001,"note":"ok","whole":true}}'; says = "'rows' is not between 0 and 100000"; what = "a count past its cap" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":1,"note":7,"whole":true}}'; says = "'note' is not text"; what = "a number where text is wanted" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":1,"note":"123456789012345678901","whole":true}}'; says = "'note' is 21 characters, more than the 20 it may be"; what = "text past its cap" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":{"rows":1,"note":"ok","whole":"true"}}'; says = "'whole' is not true or false"; what = "text where true or false is wanted" }
+    @{ text = '{"v":1,"id":20,"request":"rendered","args":[22,"ok",true]}'; says = "its args is not an object"; what = "args given as a list" }
+)) {
+    $before = $script:calls.Count
+    $r = Ask $bad.text
+    $rv = $null; if ($r.reply -ne "") { $rv = Reply $r }
+    Check ($r.refused -like ("*" + $bad.says + "*") -and $null -ne $rv -and $rv.ok -eq $false -and $rv.reply -eq 20 -and $script:calls.Count -eq $before) ($bad.what + " is refused under its id, and no handler runs")
+}
+$edge = Ask '{"v":1,"id":21,"request":"rendered","args":{"rows":100000,"note":"12345678901234567890","whole":false}}'
+Check ((Reply $edge).ok -eq $true -and $script:calls[$script:calls.Count - 1] -ceq "rendered 100000 12345678901234567890 False") "CONTROL: a count and a text exactly at their caps are taken"
+
+Write-Host ""
+Write-Host "--- an oversized message is refused before it is read ---" -ForegroundColor Cyan
+$big = '{"v":1,"id":30,"request":"rendered","args":{"rows":1,"note":"' + ("x" * 70000) + '","whole":true}}'
+$o = Ask $big
+Check ($o.refused -like "*characters, more than the 65536 one may be; it was not read" -and $o.reply -ceq "") "a message past 65536 characters is refused unread, so it has no id to answer"
+$fits = '{"v":1,"id":31,"request":"list"}' + (" " * (65536 - 32))
+Check ($fits.Length -eq 65536 -and (Reply (Ask $fits)).ok -eq $true) "CONTROL: one of exactly 65536 characters is read"
+
+Write-Host ""
+Write-Host "--- the record of refusals stays short ---" -ForegroundColor Cyan
+$small = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { return 1 } } })
+1..60 | ForEach-Object { [void](Invoke-HordeSurfaceRequest -Bridge $small -Text ('{"v":1,"id":' + $_ + ',"request":"nope"}')) }
+Check ($small.refused -eq 60 -and $small.refusals.Count -eq 50) "sixty refusals are all counted, and the last fifty are kept"
+
+Write-Host ""
+Write-Host "--- what Horde sends ---" -ForegroundColor Cyan
+$he = ([string][char]0x05E9) + [char]0x05DC + [char]0x05D5 + [char]0x05DD
+$line = ConvertTo-HordeSurfaceEvent -Bridge $bridge -Name "list-changed" -Value ([pscustomobject]@{ title = $he + " <b>&'" })
+Check ($line -cmatch '\A[\x20-\x7E]+\z' -and $line -notmatch "[\r\n]") "an event is one line of printable ASCII"
+$back = $line | ConvertFrom-Json
+Check ($back.v -eq 1 -and $back.event -ceq "list-changed" -and $back.value.title -ceq ($he + " <b>&'")) "and text in another alphabet, and markup, come back character for character"
+Check (Throws { ConvertTo-HordeSurfaceEvent -Bridge $bridge -Name "anything-else" } "is not an event this bridge pushes") "an event the bridge does not list is not pushed"
+Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "Run It" = @{ run = { } } }) } "is not a request name") "a bridge refuses a request name that is not lowercase letters and hyphens"
+Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ } }) } "has no run block") "and a request with nothing to answer it"
+Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ args = @{ x = @{ type = "object" } }; run = { } } }) } "not one of string, integer, boolean") "and an argument of a type that could carry anything"
+
+Write-Host ""
+Write-Host "--- a surface is registered, picked by what it can do, and only then opened ---" -ForegroundColor Cyan
+function New-FakeSurface {
+    param([string]$Name, [string]$Native = "yes", [string]$Declared = "")
+    $dir = Join-Path $work $Name
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $caps = [ordered]@{}
+    foreach ($c in @(Get-HordeSurfaceCapabilityNames)) { $caps[$c] = @{ support = "yes"; evidence = "invented for this suite" } }
+    $caps["window.native"] = @{ support = $Native; evidence = "invented for this suite" }
+    $named = $Name; if ($Declared -ne "") { $named = $Declared }
+    [System.IO.File]::WriteAllText((Join-Path $dir "capabilities.json"), (ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; surface = $named; capabilities = $caps }) -Depth 5))
+    return $dir
+}
+Check ((Get-HordeSurfaceCapabilityNames) -join "," -ceq "page.local,page.locked,requests.closed,push,window.native") "the capability names are the schema's five"
+Check (Throws { Register-HordeSurface -Folder (Join-Path $work "nothing-here") -Open { } } "has no capabilities.json") "a folder with no capabilities.json is not a surface"
+Check (Throws { Register-HordeSurface -Folder (New-FakeSurface "zorbwrong" -Declared "zorbother") -Open { } } "but sits in the folder 'zorbwrong'") "nor is one whose capabilities name another folder"
+Check (Throws { Register-HordeSurface -Folder (New-FakeSurface "zorbmaybe" -Native "perhaps") -Open { } } "refused") "nor one with a support word outside the vocabulary"
+$script:opened = New-Object System.Collections.ArrayList
+$fileDir = New-FakeSurface "zorbfile" -Native "no"
+$viewDir = New-FakeSurface "zorbview"
+$zFile = Register-HordeSurface -Folder $fileDir -Open { param($Spec) [void]$script:opened.Add("file " + $Spec.title); return [pscustomobject]@{ state = "closed"; reason = "" } }
+$zView = Register-HordeSurface -Folder $viewDir -Open { param($Spec) [void]$script:opened.Add("view " + $Spec.title); "noise on the way"; return [pscustomobject]@{ state = "closed"; reason = "" } }
+Check (Throws { Register-HordeSurface -Folder $viewDir -Open { } } "is already registered") "a second registration of one name is refused: the first stands"
+Check ((Get-HordeSurfaceNames) -join "," -ceq "zorbfile,zorbview") "CONTROL: both invented surfaces are registered"
+Check ((Resolve-HordeSurface -Requires @("page.local", "window.native")).name -ceq "zorbview") "a caller that needs a native window gets the one surface that has one"
+Check ((Resolve-HordeSurface -Requires @("page.local")).name -ceq "zorbfile") "and one that needs only a local page gets the first that has that"
+Check ($null -eq (Resolve-HordeSurface -Requires @("window.native", "push") | Where-Object { $_.name -ceq "zorbfile" })) "a surface that says no to a capability is never picked for it"
+Check (Throws { Test-HordeSurfaceCapability -Surface $zView -Capability "window.magic" } "is not a surface capability") "a capability outside the list is a programming error, not a no"
+
+$pageDir = Join-Path $work "page"; New-Item -ItemType Directory -Path $pageDir | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $pageDir "index.html"), "<!doctype html><title>x</title>")
+$spec = New-HordeSurfaceSpec -Title "a page" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data") -Hidden
+Check ($spec.startMount -ceq "shell" -and $spec.startFile -ceq "index.html" -and $spec.hidden -eq $true -and $spec.mounts["shell"] -ceq [System.IO.Path]::GetFullPath($pageDir)) "a spec keeps its mounts, its start page and whether it is hidden"
+$done = Open-HordeSurface -Surface $zView -Spec $spec
+Check ($done.state -ceq "closed" -and $script:opened[$script:opened.Count - 1] -ceq "view a page") "a registered surface is opened with the spec, and its last word is the answer whatever else it printed"
+$look = [pscustomobject]@{ PSTypeName = "Horde.Surface"; name = "zorbview"; open = { param($Spec) [void]$script:opened.Add("LOOK-ALIKE"); return [pscustomobject]@{ state = "closed"; reason = "" } } }
+$refusedLook = Open-HordeSurface -Surface $look -Spec $spec
+Check ($refusedLook.state -ceq "failed" -and $refusedLook.reason -like "*not a surface registered*" -and @($script:opened) -cnotcontains "LOOK-ALIKE") "an object that only looks like a registered surface is not opened"
+$zThrow = Register-HordeSurface -Folder (New-FakeSurface "zorbthrows") -Open { param($Spec) throw "the engine is not installed" }
+$failed = Open-HordeSurface -Surface $zThrow -Spec $spec
+Check ($failed.state -ceq "failed" -and $failed.reason -ceq "the surface could not be shown: the engine is not installed") "a surface that throws comes back failed, with its reason"
+$zMute = Register-HordeSurface -Folder (New-FakeSurface "zorbmute") -Open { param($Spec) return "shown, probably" }
+Check ((Open-HordeSurface -Surface $zMute -Spec $spec).reason -ceq "the surface did not say whether it was shown") "and one that answers with something else is failed too, never taken as shown"
+
+Write-Host ""
+Write-Host "--- a spec a surface could only half honour is refused ---" -ForegroundColor Cyan
+$m = [ordered]@{ shell = $pageDir }
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{ "Shell Page" = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder $work } "is not a mount name") "a mount name that could not be part of an address"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{ shell = (Join-Path $work "no-such-folder") }) -Start "shell/index.html" -Bridge $bridge -DataFolder $work } "is not a folder that exists") "a mount that is not a folder"
+# From the folder that holds it, so that the relative name does reach a real folder: without the
+# check for a rooted path this would be accepted, and then served from wherever the process stood.
+Push-Location -LiteralPath $work
+try { Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{ shell = "page" }) -Start "shell/index.html" -Bridge $bridge -DataFolder $work } "is not a folder that exists") "a mount given as a relative path, even one that exists from here" }
+finally { Pop-Location }
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{}) -Start "shell/index.html" -Bridge $bridge -DataFolder $work } "at least one mount") "no mount at all"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "other/index.html" -Bridge $bridge -DataFolder $work } "is not <mount>/<file> of a mount that was given") "a start page in a mount that was not given"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/../../secret.html" -Bridge $bridge -DataFolder $work } "is not <mount>/<file>") "a start page that climbs out of its mount"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/missing.html" -Bridge $bridge -DataFolder $work } "is not a file that exists") "a start page that is not there"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder "data" } "must be an absolute path") "a relative data folder"
+Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -TickMs 5 } "ticks no faster") "a tick faster than every 50 ms"
+
+} finally {
+    if ((Split-Path -Leaf $work) -match '\Ahorde-surface-port-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
+}
+
+Complete-HordeSuite -Success "a page reaches Horde only through the closed list of requests, and only a registered surface is opened"
