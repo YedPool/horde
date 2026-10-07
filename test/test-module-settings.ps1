@@ -111,7 +111,7 @@ Check ((Declared (Table "widthPx" @{ default = 200 }) "widthPx").default -eq 200
 Check ((Declared (Table "widthPx" @{ default = 4000 }) "widthPx").default -eq 4000) "a default equal to the largest allowed is accepted"
 Check ((Declared (Table "widthPx" @{ default = 7; min = 7; max = 7 }) "widthPx").default -eq 7) "a range of one value is a range"
 Check ((Declared (Table "widthPx" @{ default = -5; min = -10; max = -1 }) "widthPx").default -eq -5) "a range below zero is a range"
-foreach ($bad in @(199, 4001, 520.0, "520", $true, $null, 5000000000, [decimal]520)) {
+foreach ($bad in @(199, 4001, 520.0, "520", $true, $null, 5000000000, [long]520, [decimal]520)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + $bad })
     Check (Refused -Rows (Table "widthPx" @{ default = $bad }) -Like "widthPx", "default", "a whole number from 200 to 4000") ("a whole number's default may not be " + $shown)
 }
@@ -129,7 +129,7 @@ Check ((Declared (Table "share" @{ default = [decimal]0.5 }) "share").default -i
 Check ((Declared (Table "share" @{ default = 0.1 }) "share").default -eq 0.1) "a default equal to the smallest allowed is accepted"
 Check ((Declared (Table "share" @{ default = 0.9 }) "share").default -eq 0.9) "a default equal to the largest allowed is accepted"
 Check ((Declared (Table "share" @{ min = 0; max = 1 }) "share").min -eq 0.0) "a fraction may span the whole of 0 to 1"
-foreach ($bad in @(0.05, 0.95, "0.25", $true, $null, [double]::NaN, [double]::PositiveInfinity)) {
+foreach ($bad in @(0.05, 0.95, "0.25", $true, $null, [long]0, [double]::NaN, [double]::PositiveInfinity)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + $bad })
     Check (Refused -Rows (Table "share" @{ default = $bad }) -Like "share", "default", "a number from 0.1 to 0.9") ("a fraction's default may not be " + $shown)
 }

@@ -51,7 +51,7 @@
 #              a number to round or convert, because a person who wrote 1.5 would get 1 or 2 and never
 #              be told. (Measured 2026-10-07 on 5.1: ConvertFrom-Json reads 520 as Int32, 5000000000 as
 #              Int64, 520.0 and a whole number past Int64 as Decimal, 5.2e2 and 1e30 as Double; only the
-#              first two are whole numbers here, and the second only when min and max allow it.)
+#              first is a whole number here, and the others are told so with the number they gave.)
 #   fraction   A share of something: a number from 0 to 1, a Double. min and max are required and lie
 #              within 0 to 1. Written as a JSON number (0.25, 1e-1, 0, 1), never "25%" or "1/4". It is
 #              converted to a Double FIRST and that Double is both what is compared and what the module
@@ -164,15 +164,18 @@ function Test-HordeModuleSettingValue {
     $no = [pscustomobject]@{ ok = $false; value = $null }
     $kind = "" + $Entry.kind
     if ($kind -ceq "whole") {
-        if (-not ($Value -is [int] -or $Value -is [long])) { return $no }
+        # AN Int32 OR NOTHING. An Int64 is what the parser gives a whole number past Int32, which no
+        # range here can hold (min and max are Int32), so it needs no branch of its own.
+        if ($Value -isnot [int]) { return $no }
         if ($Value -lt $Entry.min -or $Value -gt $Entry.max) { return $no }
-        return [pscustomobject]@{ ok = $true; value = [int]$Value }
+        return [pscustomobject]@{ ok = $true; value = $Value }
     }
     if ($kind -ceq "fraction") {
-        if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }
+        if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }
         $asDouble = [double]$Value
-        # Not-a-number is below nothing and above nothing, so the range would pass it.
-        if ([double]::IsNaN($asDouble) -or [double]::IsInfinity($asDouble)) { return $no }
+        # Not-a-number is below nothing and above nothing, so the range would pass it. (An infinity is
+        # outside every range, and a file cannot say either: neither is JSON.)
+        if ([double]::IsNaN($asDouble)) { return $no }
         if ($asDouble -lt $Entry.min -or $asDouble -gt $Entry.max) { return $no }
         return [pscustomobject]@{ ok = $true; value = $asDouble }
     }
