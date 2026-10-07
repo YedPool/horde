@@ -40,7 +40,8 @@
 # THE PORT NEVER DECIDES. Whether a turn state means idle is the classifier's question; this file only
 # guarantees the shape and turns every failure into an unknown with its reason.
 #
-# No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1.
+# No Set-StrictMode here: dot-sourced (see core/Tristate.ps1). It loads what it calls (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
 
 $script:HordeIdleAdapters = New-Object System.Collections.ArrayList
 $script:HordeTurnStateFields = @("harness", "lineCount", "parseSkipped", "tornTail", "newestEventAt", "lastTurnEndAt", "atBoundary", "blockers", "remoteLink",
