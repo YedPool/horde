@@ -60,6 +60,8 @@ public static class HordeTestJob {
 
 $script:HordeSshdExe = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "sshd.exe")
 $script:HordeSshKeygenExe = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh-keygen.exe")
+# The watchdog's PowerShell, by its System32 path (review of PR #103, H5).
+$script:HordeSshdPowerShellExe = [System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
 
 function Get-HordeSshdServiceState {
     # The sshd service as "<State>/<StartMode>", e.g. "Stopped/Disabled", or "not installed".
@@ -84,9 +86,41 @@ function Get-HordeListenerCount {
 function Get-HordeSshFolderPrint {
     # Names, lengths and write times of every file under -Path: what a change to that folder would
     # change. Contents are not read - C:\ProgramData\ssh holds host keys this suite has no business reading.
+    # What cannot be listed is named in the print, not dropped: from an unelevated token part of
+    # C:\ProgramData\ssh is unreadable, and was invisible both before and after (review of PR #103, H4).
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return "(no folder)" }
-    return ((@(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object FullName | ForEach-Object { $_.FullName + " " + $_.Length + " " + $_.LastWriteTimeUtc.Ticks })) -join "`n")
+    $unread = $null
+    $lines = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable unread | Sort-Object FullName | ForEach-Object { $_.FullName + " " + $_.Length + " " + $_.LastWriteTimeUtc.Ticks })
+    $lines += @($unread | ForEach-Object { "unreadable: " + $_.TargetObject })
+    return ($lines -join "`n")
+}
+
+function Get-HordeSshKeyFolderPrint {
+    # Names, lengths and SHA-256 of every file under -Path: the user's ~/.ssh, byte for byte.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return "(no folder)" }
+    return ((@(Get-ChildItem -LiteralPath $Path -Recurse -File -Force | Sort-Object FullName | ForEach-Object { $_.FullName + " " + $_.Length + " " + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })) -join "`n")
+}
+
+# A crashed run leaves its folder, private keys included (review of PR #103, H3: the kill-on-close job
+# ends the processes, but nothing removed the folder). A live run's folder is never older than its
+# wall-clock limit - the watchdog ends it - so one older than twice the limit is a dead run's.
+$script:HordeSshdRootPattern = '\Ahorde-sshd-[0-9a-f]{12}\z'
+
+function Remove-HordeSshdStaleRoots {
+    # Remove each <Dir>\horde-sshd-<12 hex> folder created more than -OlderThanSeconds ago. Returns the
+    # names removed. Nothing else in -Dir is touched.
+    param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][int]$OlderThanSeconds)
+    $cut = [datetime]::UtcNow.AddSeconds(-$OlderThanSeconds)
+    $gone = New-Object System.Collections.ArrayList
+    foreach ($d in @(Get-ChildItem -LiteralPath $Dir -Directory -Force -ErrorAction SilentlyContinue)) {
+        if ($d.Name -cnotmatch $script:HordeSshdRootPattern) { continue }
+        if ($d.CreationTimeUtc -ge $cut) { continue }
+        Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $d.FullName)) { [void]$gone.Add($d.Name) }
+    }
+    return @($gone)
 }
 
 function New-HordeSshdRoot {
@@ -175,11 +209,12 @@ function Start-HordeTestSshd {
     $null = $p.StandardOutput.ReadToEndAsync()
     # The watchdog: kills this pid only if it is still the process started at $started.
     $kill = "Start-Sleep -Seconds " + $LimitSeconds + "; try { `$q = Get-Process -Id " + $p.Id + " -ErrorAction Stop; if (`$q.StartTime.ToUniversalTime().Ticks -eq " + $started + ") { `$q.Kill() } } catch { }"
-    $wsi = New-Object System.Diagnostics.ProcessStartInfo("powershell.exe", ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + $kill + '"'))
+    # By its System32 path, never a PATH lookup (review of PR #103, H5).
+    $wsi = New-Object System.Diagnostics.ProcessStartInfo($script:HordeSshdPowerShellExe, ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + $kill + '"'))
     $wsi.UseShellExecute = $false; $wsi.CreateNoWindow = $true
     $w = [System.Diagnostics.Process]::Start($wsi)
     [HordeTestJob]::Assign($job, $w.Handle)
-    return [pscustomobject]@{ process = $p; startedAt = $started; log = $log; watchdog = $w; watchdogStartedAt = $w.StartTime.ToUniversalTime().Ticks; job = $job }
+    return [pscustomobject]@{ process = $p; startedAt = $started; log = $log; watchdog = $w; watchdogStartedAt = $w.StartTime.ToUniversalTime().Ticks; watchdogExe = $wsi.FileName; job = $job }
 }
 
 function Stop-HordeTestSshd {

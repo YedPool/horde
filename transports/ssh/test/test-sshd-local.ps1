@@ -37,11 +37,7 @@ $t = Get-HordeTransport -Name "ssh"
 $skipped = ""
 
 # THE MACHINE BEFORE.
-function Get-UserSshPrint {
-    $d = Join-Path $env:USERPROFILE ".ssh"
-    if (-not (Test-Path -LiteralPath $d -PathType Container)) { return "(no ~/.ssh)" }
-    return ((@(Get-ChildItem -LiteralPath $d -Recurse -File -Force | Sort-Object FullName | ForEach-Object { $_.FullName + " " + $_.Length + " " + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash })) -join "`n")
-}
+function Get-UserSshPrint { return (Get-HordeSshKeyFolderPrint -Path (Join-Path $env:USERPROFILE ".ssh")) }
 $programData = Join-Path $env:ProgramData "ssh"
 $before = [pscustomobject]@{ service = (Get-HordeSshdServiceState); firewall = (Get-HordeSshdFirewallState); port22 = (Get-HordeListenerCount -Port 22); programData = (Get-HordeSshFolderPrint -Path $programData); userSsh = (Get-UserSshPrint) }
 Write-Host ("  at the start: sshd service " + $before.service + ", firewall rule enabled=" + $before.firewall + ", " + $before.port22 + " listener(s) on port 22") -ForegroundColor DarkGray
@@ -53,6 +49,39 @@ $sshdRoot = ""
 $sshd = $null
 $savedHome = $env:HORDE_HOME
 try {
+    Write-Host ""
+    Write-Host "--- the instruments: each print sees a planted change, and stale folders are swept ---" -ForegroundColor Cyan
+    # The machine-state comparisons below can only fail if the machine changes, so each print is shown
+    # here to change when a folder does (review of PR #103, H4).
+    $bench = Join-Path $env:TEMP ("horde-sshd-bench-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $bench | Out-Null
+    try {
+        [System.IO.File]::WriteAllText((Join-Path $bench "a"), "one")
+        $f0 = Get-HordeSshFolderPrint -Path $bench; $k0 = Get-HordeSshKeyFolderPrint -Path $bench
+        Check ($f0 -ceq (Get-HordeSshFolderPrint -Path $bench) -and $k0 -ceq (Get-HordeSshKeyFolderPrint -Path $bench)) "CONTROL: each print of an unchanged folder is the same twice"
+        [System.IO.File]::WriteAllText((Join-Path $bench "b"), "new")
+        Check ((Get-HordeSshFolderPrint -Path $bench) -cne $f0) "the folder print changes when a file is added"
+        Check ((Get-HordeSshKeyFolderPrint -Path $bench) -cne $k0) "the key-folder print changes when a file is added"
+        $k1 = Get-HordeSshKeyFolderPrint -Path $bench
+        $a = Join-Path $bench "a"
+        $was = (Get-Item -LiteralPath $a).LastWriteTimeUtc
+        [System.IO.File]::WriteAllText($a, "two")
+        [System.IO.File]::SetLastWriteTimeUtc($a, $was)
+        Check ((Get-HordeSshKeyFolderPrint -Path $bench) -cne $k1) "the key-folder print changes when a file's bytes change, its length and write time kept"
+    } finally { Remove-Item -LiteralPath $bench -Recurse -Force -ErrorAction SilentlyContinue }
+    # H3: a dead run's folder is swept; a live one's, and anything not named like one, is not.
+    $sweep = Join-Path $env:TEMP ("horde-sshd-sweep-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $old = Join-Path $sweep "horde-sshd-0123456789ab"; $young = Join-Path $sweep "horde-sshd-ba9876543210"; $notOurs = Join-Path $sweep "horde-sshd-notours-old"
+    foreach ($d in @($old, $young, $notOurs)) { New-Item -ItemType Directory -Path $d -Force | Out-Null; [System.IO.File]::WriteAllText((Join-Path $d "key"), "k") }
+    foreach ($d in @($old, $notOurs)) { [System.IO.Directory]::SetCreationTimeUtc($d, [datetime]::UtcNow.AddHours(-1)) }
+    try {
+        $swept = @(Remove-HordeSshdStaleRoots -Dir $sweep -OlderThanSeconds ($limitSeconds * 2))
+        Check (-not (Test-Path -LiteralPath $old) -and $swept.Count -eq 1 -and $swept[0] -ceq "horde-sshd-0123456789ab") ("a run's folder older than twice the limit is removed, and named (" + ($swept -join ", ") + ")")
+        Check ((Test-Path -LiteralPath $young) -and (Test-Path -LiteralPath $notOurs)) "CONTROL: a younger run's folder, and an old folder not named like one, are kept"
+    } finally { Remove-Item -LiteralPath $sweep -Recurse -Force -ErrorAction SilentlyContinue }
+    $stale = @(Remove-HordeSshdStaleRoots -Dir $env:TEMP -OlderThanSeconds ($limitSeconds * 2))
+    Check $true ("stale run folders under TEMP swept: " + $stale.Count + $(if ($stale.Count -gt 0) { " (" + ($stale -join ", ") + ")" } else { "" }))
+
     Write-Host ""
     Write-Host "--- a throwaway sshd: this suite's child, 127.0.0.1, everything under TEMP ---" -ForegroundColor Cyan
     if (-not (Test-Path -LiteralPath $script:HordeSshdExe -PathType Leaf)) { $skipped = "no sshd.exe at " + $script:HordeSshdExe }
@@ -96,6 +125,7 @@ try {
         if ($null -eq $up -or $up.state -cne "known" -or $up.value -ne $true) { $skipped = "the test sshd did not answer on 127.0.0.1:" + $port + " (" + "$($up.reason)" + "); its log: " + ((Stop-HordeTestSshd -Sshd $sshd) -replace "`r?`n", " | ") }
         else {
             Check $true ("the test sshd answers with an SSH banner on 127.0.0.1:" + $port + ", started from a token with Administrators " + $(if ($adminEnabled) { "enabled" } else { "not enabled" }))
+            Check ([System.IO.Path]::IsPathRooted($sshd.watchdogExe) -and $sshd.watchdogExe -ieq (Join-Path ([System.Environment]::SystemDirectory) "WindowsPowerShell\v1.0\powershell.exe")) ("its watchdog is System32's powershell.exe by full path, never a PATH lookup (" + $sshd.watchdogExe + ")")
             Check ((Get-HordeListenerCount -Port $port) -ge 1 -and @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -ne "127.0.0.1" }).Count -eq 0) "and listens on 127.0.0.1 only"
         }
     }
