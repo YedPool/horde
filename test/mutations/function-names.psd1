@@ -26,6 +26,9 @@
         @{ Name = "messengers-not-shipped"
            Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "surfaces", "platform", "fleet", "tools", "cli", "hosts", "agents")'
            Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "surfaces", "platform", "fleet", "tools", "cli", "hosts", "agents")' }
+        @{ Name = "surfaces-not-shipped"
+           Find = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "surfaces", "platform", "fleet", "tools", "cli", "hosts", "agents")'
+           Replace = '$script:HordeShippedCodeFolders = @("core", "remote", "transports", "messengers", "platform", "fleet", "tools", "cli", "hosts", "agents")' }
         @{ Name = "duplicates-not-reported"
            Find = 'if ($byName[$k].Count -gt 1) {'
            Replace = 'if ($byName[$k].Count -gt 2) {' }

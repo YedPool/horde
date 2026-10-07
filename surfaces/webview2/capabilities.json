@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "surface": "webview2",
+  "capabilities": {
+    "page.local": {
+      "support": "yes",
+      "evidence": "Each mount is a folder mapped to a made-up host name inside the engine; no web server is started and no port is opened. test/e2e/e2e-decisions-window.ps1 opens a real window on a real list this way, 2026-10-06."
+    },
+    "page.locked": {
+      "support": "yes",
+      "evidence": "A navigation to any address but the start page's own host is cancelled, every frame navigation is cancelled, and a new-window request is marked handled; each is recorded as a refusal. The address rule is tested with no window in surfaces/webview2/test/test-webview2-surface.ps1; the throwaway proof of 2026-10-06 measured a cancelled navigation in a real window."
+    },
+    "requests.closed": {
+      "support": "yes",
+      "evidence": "The page posts JSON text and is handed JSON text. Every message goes through Invoke-HordeSurfaceRequest of surfaces/Port.ps1, and a message whose source is not the page's own host is refused before that. No host object is added to the page: AddHostObjectToScript is never called (surfaces/webview2/test/test-webview2-surface.ps1 reads the adapter's syntax tree for it)."
+    },
+    "push": {
+      "support": "yes",
+      "evidence": "An event is posted to the page as one line of JSON. test/e2e/e2e-decisions-window.ps1 adds a question while the window is open and the page reports one more row without a reload, 2026-10-06."
+    },
+    "window.native": {
+      "support": "yes",
+      "evidence": "The surface is a top-level window of this process and hands its handle to the caller. test/e2e/e2e-decisions-window.ps1 has the window follow a terminal window the test started, 2026-10-06."
+    }
+  }
+}
