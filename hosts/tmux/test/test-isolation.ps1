@@ -101,6 +101,7 @@ function New-Entry {
 
 
 if (Enter-HordeSuiteSection "preflight" "preflight: WSL, the distro and tmux are really here (read-only, no server)") {
+    trap { Register-HordeSuiteError $_; continue }
     # FAIL LOUDLY. The e2e cannot run without these, and a suite that skipped green here would read as
     # "the tmux host is proven" on a machine where it was never measured.
     $pre = Invoke-HordeWsl -Distro $Distro -Argv @("tmux", "-V")
@@ -118,6 +119,7 @@ if (Enter-HordeSuiteSection "preflight" "preflight: WSL, the distro and tmux are
 }
 
 if (Enter-HordeSuiteSection "wsl-boundary" "the WSL boundary: arguments, bytes and exit codes") {
+    trap { Register-HordeSuiteError $_; continue }
     # Each argument must reach Linux exactly, through the command-line string wsl.exe parses. The e2e
     # proves the round trip on a real wsl.exe; these pin the quoting rules.
     $bs = [string][char]92; $q = [string][char]34
@@ -162,6 +164,7 @@ if (Enter-HordeSuiteSection "wsl-boundary" "the WSL boundary: arguments, bytes a
 }
 
 if (Enter-HordeSuiteSection "inherited-tmux" "an inherited TMUX cannot cross into WSL (read-only)") {
+    trap { Register-HordeSuiteError $_; continue }
     # The outer terminal sets WSLENV on this machine (measured: TERM:COLORTERM:TERM_PROGRAM:...), and
     # WSLENV is what carries a Windows variable into Linux. Poison all three, then prove the harness's
     # call does not carry them, against a control that does.
@@ -191,6 +194,7 @@ if (Enter-HordeSuiteSection "inherited-tmux" "an inherited TMUX cannot cross int
 
 $a = New-Entry
 if (Enter-HordeSuiteSection "argv" "every tmux call names our socket, our directory and no config") {
+    trap { Register-HordeSuiteError $_; continue }
     $argv = Get-HordeTmuxArgv -Entry $a.entry -Command @("list-sessions")
     $want = @("env", "-C", $a.entry.dir, "-u", "TMUX", "-u", "TMUX_PANE", ("TMUX_TMPDIR=" + $a.entry.dir), "tmux", "-L", $a.entry.name, "-f", "/dev/null", "list-sessions")
     Check (($argv -join " ") -ceq ($want -join " ")) "the argv is env -C <our dir> -u TMUX -u TMUX_PANE TMUX_TMPDIR=<our dir> tmux -L <our name> -f /dev/null <command>"
@@ -206,6 +210,7 @@ if (Enter-HordeSuiteSection "argv" "every tmux call names our socket, our direct
 }
 
 if (Enter-HordeSuiteSection "ours-isolated" "deciding whether a server is ours and isolated") {
+    trap { Register-HordeSuiteError $_; continue }
     $e = $a.entry
     Check ($null -eq (Test-HordeTmuxIdentity -Entry $e -Line ($e.socket + "|4242|1790000000`n"))) "CONTROL: the recorded socket, pid and start time are accepted"
     Check ((Test-HordeTmuxIdentity -Entry $e -Line ("/tmp/tmux-0/default|4242|1790000000")) -like "*not on our socket*") "a server answering on another socket is refused"
@@ -226,6 +231,7 @@ if (Enter-HordeSuiteSection "ours-isolated" "deciding whether a server is ours a
 }
 
 if (Enter-HordeSuiteSection "teardown" "teardown refuses what it did not start, and kills only by our socket") {
+    trap { Register-HordeSuiteError $_; continue }
     $script:HordeTmuxTransport = $fake
     try {
         $script:calls.Clear()
@@ -436,6 +442,7 @@ if (Enter-HordeSuiteSection "teardown" "teardown refuses what it did not start, 
 }
 
 if (Enter-HordeSuiteSection "reload" "loading the harness again forgets nothing") {
+    trap { Register-HordeSuiteError $_; continue }
     $n = New-Entry
     . $harnessPath
     Check ($script:HordeTmuxStarted.ContainsKey($n.inst.token)) "a second dot-source keeps the registry - teardown would otherwise refuse, and leak, every live server"
@@ -444,6 +451,7 @@ if (Enter-HordeSuiteSection "reload" "loading the harness again forgets nothing"
 }
 
 if (Enter-HordeSuiteSection "code" "the code: one way to reach WSL, one way to build a tmux call") {
+    trap { Register-HordeSuiteError $_; continue }
     function Get-CodeOnly { param([string]$Path) return ((Get-Content -LiteralPath $Path) | Where-Object { -not $_.TrimStart().StartsWith("#") }) -join "`n" }
     $code = Get-CodeOnly $harnessPath
     Check (([regex]::Matches($code, 'FileName\s*=')).Count -eq 1 -and $code -match '\$psi\.FileName = "wsl\.exe"' -and $code -notmatch 'Start-Process|Process\]::Start\(\s*"') "wsl.exe is started in exactly one place, Invoke-HordeWsl, and no other process is started at all"

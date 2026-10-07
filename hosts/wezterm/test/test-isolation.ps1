@@ -79,6 +79,7 @@ function Hold-OwnChild {
 
 
 if (Enter-HordeSuiteSection "pane-list" "parsing the pane list: the collapse that disarmed the old guard") {
+    trap { Register-HordeSuiteError $_; continue }
     # The CLI's JSON arrives as LINES. Three panes across two windows, split the way the CLI splits them.
     $lines = @('[', '  {"window_id":1,"tab_id":1,"pane_id":1},', '  {"window_id":1,"tab_id":2,"pane_id":2},',
                '  {"window_id":2,"tab_id":3,"pane_id":3}', ']')
@@ -93,12 +94,14 @@ if (Enter-HordeSuiteSection "pane-list" "parsing the pane list: the collapse tha
 }
 
 if (Enter-HordeSuiteSection "isolated" "deciding whether panes look isolated") {
+    trap { Register-HordeSuiteError $_; continue }
     Check ((Test-HordeIsolationPanes -Panes @()) -like "*unknown, not empty*") "zero panes is refused as unknown, never treated as an empty terminal"
     Check ($null -eq (Test-HordeIsolationPanes -Panes @($panes[0], $panes[1]))) "panes in one window look like a fresh instance"
     Check ((Test-HordeIsolationPanes -Panes $panes) -like "*looks like the user's terminal*") "panes across two windows are refused as the user's terminal"
 }
 
 if (Enter-HordeSuiteSection "pane-env" "a pane's environment is proven from inside the pane (issue #95)") {
+    trap { Register-HordeSuiteError $_; continue }
     $want = @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg" }
     Check ($null -eq (Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store"; CFG_DIR = "C:\t\cfg"; PATH = "x" } -Expect $want)) "CONTROL: a dump holding every expected variable, exactly, proves the pane's environment"
     Check ((Test-HordePaneEnvironment -Dump @{ HORDE_ROOT = "C:\t\store" } -Expect $want) -like "*CFG_DIR is not set inside the pane*") "a variable missing inside the pane is refused, naming it - the 2026-10-05 failure"
@@ -111,6 +114,7 @@ if (Enter-HordeSuiteSection "pane-env" "a pane's environment is proven from insi
 }
 
 if (Enter-HordeSuiteSection "refuse-doubt" "the isolation check refuses on any doubt") {
+    trap { Register-HordeSuiteError $_; continue }
     Check (Throws { Assert-HordeIsolated -Instance $null } "no instance") "no instance is refused"
     $saved = $env:WEZTERM_UNIX_SOCKET
     $env:WEZTERM_UNIX_SOCKET = "C:\nowhere\gui-sock-1"
@@ -120,6 +124,7 @@ if (Enter-HordeSuiteSection "refuse-doubt" "the isolation check refuses on any d
 }
 
 if (Enter-HordeSuiteSection "live-control" "CONTROL against the live terminal: read-only, and it must refuse") {
+    trap { Register-HordeSuiteError $_; continue }
     # The harness's whole reason to exist is to stop a test acting on the user's terminal. So point the
     # isolation CHECK at the user's terminal and require it to refuse. It only lists panes. This object is
     # never passed to the teardown - which would now refuse it for lack of a token, and is tested for that
@@ -143,6 +148,7 @@ if (Enter-HordeSuiteSection "live-control" "CONTROL against the live terminal: r
 }
 
 if (Enter-HordeSuiteSection "walker" "the process walker never wanders into a process that is not a descendant") {
+    trap { Register-HordeSuiteError $_; continue }
     # AN INJECTED TABLE, so the case the review found can be proven without a single real process. It
     # mirrors what was measured live: a process created BEFORE the process that now holds its recorded
     # parent pid - meaning its real parent died and the pid was reused.
@@ -222,6 +228,7 @@ if (Enter-HordeSuiteSection "walker" "the process walker never wanders into a pr
 }
 
 if (Enter-HordeSuiteSection "no-pid-kill" "nothing is killed on its pid alone") {
+    trap { Register-HordeSuiteError $_; continue }
     # ONE PROCESS, TWO READINGS, ONE ANSWER. The kill compares a creation time read through CIM with one
     # read through .NET. The first version converted with floating-point division and the two disagreed
     # for most processes on this machine, so the harness refused to kill its own. Checked on every
@@ -253,6 +260,7 @@ if (Enter-HordeSuiteSection "no-pid-kill" "nothing is killed on its pid alone") 
 }
 
 if (Enter-HordeSuiteSection "teardown-refuse" "teardown refuses any instance it did not create") {
+    trap { Register-HordeSuiteError $_; continue }
     $v = Stop-HordeIsolatedWezterm -Instance $null -KillWith $guard
     Check ($null -ne $v -and -not $v.stopped -and $v.refused) "passing no instance returns a refusal, not a claim that something stopped"
     Check ("$($v.reason)" -like "*nothing was verified*") "and it says nothing was verified"
@@ -389,6 +397,7 @@ if (Enter-HordeSuiteSection "teardown-refuse" "teardown refuses any instance it 
 }
 
 if (Enter-HordeSuiteSection "ran-inside" "finding what ran inside a process, on a real process tree this suite started") {
+    trap { Register-HordeSuiteError $_; continue }
     # The walker's answer is only CHECKED here, never acted on. The processes are stopped through the
     # handles this suite holds, so a broken walker cannot make this section kill anything else.
     $tree = Start-OwnProcess -File "cmd.exe" -Arguments "/c ping -n 30 127.0.0.1 >nul"
@@ -400,6 +409,7 @@ if (Enter-HordeSuiteSection "ran-inside" "finding what ran inside a process, on 
 }
 
 if (Enter-HordeSuiteSection "orphans" "a terminal that died first: its orphans are still found and killed") {
+    trap { Register-HordeSuiteError $_; continue }
     # A registered root that has ALREADY died, with a child still running. Teardown must find the orphan
     # through the pin and kill it. Without the pin, or without the orphan kill, the child leaks - both were
     # mutations the third review found no test would notice.
@@ -419,6 +429,7 @@ if (Enter-HordeSuiteSection "orphans" "a terminal that died first: its orphans a
 }
 
 if (Enter-HordeSuiteSection "launch-teardown" "tearing down a launch: only the launcher we recorded") {
+    trap { Register-HordeSuiteError $_; continue }
     $launch = Start-OwnProcess -File "cmd.exe" -Arguments "/c ping -n 60 127.0.0.1 >nul"
     $launchChild = Hold-OwnChild -Parent $launch -Name "PING.EXE"
     Stop-HordeLaunchTree -Launcher $launch.proc -LauncherUs ((Get-HordeMicroseconds $launch.created) - 1) -KillWith $guard
@@ -430,6 +441,7 @@ if (Enter-HordeSuiteSection "launch-teardown" "tearing down a launch: only the l
 }
 
 if (Enter-HordeSuiteSection "adopt" "adopting only the terminal our launcher started") {
+    trap { Register-HordeSuiteError $_; continue }
     $lt = Get-Date "2026-09-29T12:00:00"
     $lus = Get-HordeMicroseconds $lt
     $gui = [pscustomobject]@{ pid = 50; ppid = 40; name = "wezterm-gui.exe"; created = $lt.AddSeconds(1) }
@@ -440,6 +452,7 @@ if (Enter-HordeSuiteSection "adopt" "adopting only the terminal our launcher sta
 }
 
 if (Enter-HordeSuiteSection "cli-no-server" "the CLI can never start a server by accident") {
+    trap { Register-HordeSuiteError $_; continue }
     # Every wezterm CLI call in the harness goes through one function that adds --no-auto-start. Without
     # that flag, a call aimed at a socket that is not answering may start a mux that loads the user's
     # config - the thing --skip-config exists to prevent.
@@ -531,6 +544,7 @@ if (Enter-HordeSuiteSection "cli-no-server" "the CLI can never start a server by
 }
 
 if (Enter-HordeSuiteSection "scripts-teardown" "every script that starts an instance also tears it down, by the real name") {
+    trap { Register-HordeSuiteError $_; continue }
     # The old system's leak on 2026-09-29 was a NAME: a probe called a teardown function that did not
     # exist, so the teardown never ran and nothing inside it could have helped. This guards the class.
     #
@@ -560,6 +574,7 @@ if (Enter-HordeSuiteSection "scripts-teardown" "every script that starts an inst
 }
 
 if (Enter-HordeSuiteSection "nothing-outside" "nothing outside this suite was ever asked to be killed") {
+    trap { Register-HordeSuiteError $_; continue }
     Check ($script:violations.Count -eq 0) ("the harness asked to kill only processes this suite started (" + (@($script:violations) -join ", ") + ")")
 }
 
