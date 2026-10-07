@@ -109,12 +109,25 @@ $cases = @(
     @{ name = "short"; line = "b.txt | " + $shaB.Substring(0, 63) + " | one digit short"; says = "gives no SHA-256 for b.txt"; what = "a fingerprint one digit short" }
     @{ name = "blank-why"; line = "b.txt | " + $shaB + " | "; says = "does not say what b.txt is"; what = "a blank reason" }
     @{ name = "twice"; line = "A.DLL | " + $shaA + " | the first file again, in capitals"; says = "lists A.DLL a second time"; what = "one file listed twice, whatever its case" }
+    @{ name = "dot-end"; line = "a.dll. | " + $shaA + " | the first file again, under the name Windows reads as the same"; says = "is not a plain file name in this folder"; what = "a name ending in a dot, which Windows opens as the name without it: a second name for one file" }
+    @{ name = "dash-end"; line = "b.txt- | " + $shaB + " | a name ending in a hyphen"; says = "is not a plain file name in this folder"; what = "a name that does not end in a letter or a digit" }
 )
 foreach ($c in $cases) {
     $r = Test-HordeFingerprints -Folder (New-Case $c.name -List ($good + $c.line + "`r`n"))
     Check ($r.ok -eq $false -and (Says $r $c.says) -and @($r.findings).Count -eq 1) ($c.what + " is a finding, and the folder is not ok")
     Check (@($r.files).Count -eq 1 -and (Split-Path -Leaf $r.files[0]) -ceq "a.dll") ("and it pins nothing: only the well-formed line's file is handed back (" + $c.name + ")")
 }
+# THE LIST IS HORDE'S OWN PLAIN TEXT. Written in two-byte characters it used to be read all the same
+# (review of 2026-10-06, finding A11), while the gate's own scan would refuse the same file.
+$wide = New-Case "wide"
+[System.IO.File]::WriteAllText((Join-Path $wide "fingerprints.txt"), ("a.dll | " + $shaA + " | the first`r`nb.txt | " + $shaB + " | the second`r`n"), [System.Text.Encoding]::Unicode)
+$wideRead = Test-HordeFingerprints -Folder $wide
+Check ($wideRead.ok -eq $false -and (Says $wideRead "is not plain ASCII text") -and @($wideRead.files).Count -eq 0) "a list saved in two-byte characters pins nothing, and says why"
+$marked = New-Case "marked"
+[System.IO.File]::WriteAllBytes((Join-Path $marked "fingerprints.txt"), ([byte[]](0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes("a.dll | " + $shaA + " | the first`r`nb.txt | " + $shaB + " | the second`r`n")))
+Check ((Test-HordeFingerprints -Folder $marked).ok -eq $false -and (Says (Test-HordeFingerprints -Folder $marked) "is not plain ASCII text")) "nor one that begins with a byte-order mark"
+$tabbed = New-Case "tabbed" -List ("a.dll`t|`t" + $shaA + "`t| the first`r`nb.txt | " + $shaB + " | the second`r`n")
+Check ((Test-HordeFingerprints -Folder $tabbed).ok -eq $true) "CONTROL: tabs, carriage returns and line feeds are plain text"
 $read = Read-HordeFingerprintList -Path (Join-Path $work "ok\fingerprints.txt")
 Check (@($read.entries).Count -eq 2 -and @($read.problems).Count -eq 0 -and $read.entries[0].line -eq 3 -and $read.entries[1].what -ceq "the second") "CONTROL: comments and blank lines are skipped, each entry keeps its line number and its reason"
 

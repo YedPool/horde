@@ -21,7 +21,7 @@
            Find = 'foreach ($p in $read.problems) { [void]$findings.Add($script:HordeFingerprintListName + ": " + $p) }'
            Replace = '' }
         @{ Name = "a-path-may-be-pinned"
-           Find = 'if ($cells[0] -cnotmatch ''\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z'' -or $cells[0].Contains("..")) {'
+           Find = 'if ($cells[0] -cnotmatch ''\A[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?\z'' -or $cells[0].Contains("..")) {'
            Replace = 'if ($false) {' }
         @{ Name = "two-dots-allowed-in-a-name"
            Find = ' -or $cells[0].Contains("..")) {'
@@ -66,6 +66,19 @@
         @{ Name = "a-listed-file-is-called-unlisted"
            Find = 'Where-Object { $listed -cnotcontains $_ })'
            Replace = 'Where-Object { $true })' }
+        # --- the list is plain text, and a name is one name
+        @{ Name = "a-list-in-any-encoding-is-read"
+           Find = 'if (-not ($b -eq 9 -or $b -eq 10 -or $b -eq 13 -or ($b -ge 0x20 -and $b -le 0x7E))) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-list-that-is-not-plain-text-still-pins"
+           Find = 'return [pscustomobject]@{ entries = @(); problems = @("the list is not plain ASCII text'
+           Replace = '$ignored = [pscustomobject]@{ entries = @(); problems = @("the list is not plain ASCII text' }
+        @{ Name = "a-name-may-end-in-a-dot"
+           Find = 'if ($cells[0] -cnotmatch ''\A[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?\z'' -or'
+           Replace = 'if ($cells[0] -cnotmatch ''\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z'' -or' }
+        @{ Name = "a-tab-is-not-plain-text"
+           Find = 'if (-not ($b -eq 9 -or $b -eq 10'
+           Replace = 'if (-not ($b -eq 10' }
         # No mutant takes the fingerprint from a second look at the path instead of from the held
         # file: with nothing racing it the two read the same bytes, so no check here could tell.
     )

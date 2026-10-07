@@ -52,14 +52,27 @@ function Read-HordeFingerprintList {
     $problems = New-Object System.Collections.ArrayList
     $seen = @{}
     $n = 0
-    foreach ($raw in ([System.IO.File]::ReadAllText($Path) -split "`n")) {
+    # THE LIST IS PLAIN ASCII, like every text file of Horde's: tab, carriage return, line feed and
+    # 0x20 to 0x7E. Read as bytes first and refused whole otherwise, so that a list saved in two-byte
+    # characters, or with a byte-order mark, is not quietly read here while the gate's own scan of
+    # the same file refuses it (review of 2026-10-06, finding A11).
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $b = $bytes[$i]
+        if (-not ($b -eq 9 -or $b -eq 10 -or $b -eq 13 -or ($b -ge 0x20 -and $b -le 0x7E))) {
+            return [pscustomobject]@{ entries = @(); problems = @("the list is not plain ASCII text (byte " + $i + " is 0x" + $b.ToString("x2") + "), so it pins nothing; save it as ASCII") }
+        }
+    }
+    foreach ($raw in ([System.Text.Encoding]::ASCII.GetString($bytes) -split "`n")) {
         $n++
         $t = $raw.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
         $cells = @($t -split "\|" | ForEach-Object { $_.Trim() })
         if ($cells.Count -ne 3) { [void]$problems.Add("line " + $n + " is not '<file name> | <sha256> | <what it is and where it came from>'"); continue }
         # A NAME, NEVER A PATH: no separator, no drive, no "..", so the list reaches only its own folder.
-        if ($cells[0] -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $cells[0].Contains("..")) { [void]$problems.Add("line " + $n + " names '" + $cells[0] + "', which is not a plain file name in this folder"); continue }
+        # It begins and ends with a letter or a digit: Windows opens "a.dll." as a.dll, so a name with
+        # a dot at its end would be a second name for one file, and "listed twice" would not see it.
+        if ($cells[0] -cnotmatch '\A[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?\z' -or $cells[0].Contains("..")) { [void]$problems.Add("line " + $n + " names '" + $cells[0] + "', which is not a plain file name in this folder"); continue }
         if ($cells[1] -cnotmatch '\A[0-9a-f]{64}\z') { [void]$problems.Add("line " + $n + " gives no SHA-256 for " + $cells[0] + ": 64 lowercase hex digits are wanted"); continue }
         if ($cells[2] -eq "") { [void]$problems.Add("line " + $n + " does not say what " + $cells[0] + " is or where it came from"); continue }
         # A plain @{} ignores case, as the file system does: A.DLL and a.dll are one file listed twice.
