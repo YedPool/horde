@@ -40,6 +40,13 @@ foreach ($bad in @("..\x", ($id.ToUpperInvariant()), "", "*", ($id + "\x"))) {
 }
 $l = Start-HordeTransportListener -Transport $t -Endpoint "..\x"
 Check ($l.state -ceq "unknown") "listening on a malformed id is refused"
+# The hub's own pipe (R17a): "hub:<id>" and nothing looser.
+Check ((Get-HordeLocalPipeName -DeviceId ("hub:" + $id)) -ceq ("horde-hub-" + $id)) "hub:<id> names the hub's pipe horde-hub-<id>"
+foreach ($bad in @("hub:", ("hub:" + $id.ToUpperInvariant()), ("HUB:" + $id), ("hub:..\" + $id), ("hub:" + $id + "\x"), ("hub:hub:" + $id), (" hub:" + $id), ("hub:*"))) {
+    Check ($null -eq (Get-HordeLocalPipeName -DeviceId $bad)) "'$bad' names no pipe"
+}
+$l = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + "..\x")
+Check ($l.state -ceq "unknown") "listening on a malformed hub endpoint is refused"
 
 Write-Host ""
 Write-Host "--- the live pipe's ACL, read back ---" -ForegroundColor Cyan
@@ -69,6 +76,40 @@ if ($la.state -eq "known") {
         Check ($second.state -ceq "unknown" -and "$($second.reason)" -like "*already in use*") "the name cannot be taken twice: one instance only"
     } finally { Stop-HordeTransportListener -Listener $listener }
     Check (-not (Test-PipeListed ("horde-node-" + $id))) "a stopped listener leaves no pipe behind"
+}
+
+Write-Host ""
+Write-Host "--- the hub's own pipe (R17a): beside the node's, the same rules, the dialler a node ---" -ForegroundColor Cyan
+$id = New-Id
+$ln = Start-HordeTransportListener -Transport $t -Endpoint $id
+$lh = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+Check ($ln.state -ceq "known" -and $lh.state -ceq "known") "one device holds its node pipe and its hub pipe at once"
+if ($ln.state -eq "known" -and $lh.state -eq "known") {
+    $nl = Get-HordeValue $ln; $hl = Get-HordeValue $lh
+    try {
+        Check (Test-PipeListed ("horde-hub-" + $id)) "the hub's pipe is \\.\pipe\horde-hub-<hubId>"
+        $hs = $hl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        $ns = $nl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        Check ($hs -ceq $ns -and $hs.Contains("(D;;") -and $hs.Contains($me.Value)) ("its owner and ACL are the node pipe's, read back: " + $hs)
+        $second = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+        Check ($second.state -ceq "unknown" -and "$($second.reason)" -like "*already in use*") "the hub's name cannot be taken twice either"
+        $o = Open-HordeTransportLink -Transport $t -Endpoint ("hub:" + $id) -Role "node" -TimeoutMs 5000
+        $ka = Receive-HordeTransportLink -Listener $hl -TimeoutMs 5000
+        Check ($o.state -ceq "known" -and $ka.state -ceq "known" -and (Get-HordeValue $o).peer.verified -eq $true) "a node-role dial to hub:<id> is opened, verified and accepted by the hub's listener"
+        if ($o.state -eq "known" -and $ka.state -eq "known") {
+            $null = Send-HordeLinkFrame -Link (Get-HordeValue $o) -Frame "to-the-hub" -TimeoutMs 5000
+            $got = Receive-HordeLinkFrame -Link (Get-HordeValue $ka) -TimeoutMs 5000
+            Check ($got.state -ceq "known" -and "$($got.value)" -ceq "to-the-hub") "a frame crosses the hub's pipe"
+            $nobody = Receive-HordeTransportLink -Listener $nl -TimeoutMs 200
+            Check ($nobody.state -ceq "unknown") "and the node's own pipe saw no client: the two names are two pipes"
+        }
+        if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
+    } finally { Stop-HordeTransportListener -Listener $hl; Stop-HordeTransportListener -Listener $nl }
+    Check (-not (Test-PipeListed ("horde-hub-" + $id))) "a stopped hub listener leaves no pipe behind"
+} else {
+    if ($ln.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $ln) }
+    if ($lh.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $lh) }
 }
 
 Write-Host ""

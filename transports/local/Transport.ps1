@@ -8,6 +8,13 @@
 # THE ENDPOINT is the node's device id, one lowercase UUID; the pipe is \\.\pipe\horde-node-<deviceId>,
 # in the global namespace. The node listens; the hub dials.
 #
+# THE HUB'S OWN PIPE (remote plan R17a). A node on another machine reaches the hub through the hub's
+# listener, whose forced command (`horde attach`) relays the session to \\.\pipe\horde-hub-<hubId>, the
+# hub id being the hub's device id; transports/local/Relay.ps1 is that relay. Its endpoint is
+# "hub:<hubId>". Here the HUB listens and attach dials, and every rule below holds for it unchanged:
+# the same ACL, label, first-instance flag and checks of who is at the other end. Only the name
+# differs, so a hub, which is always also a node (remote design decision 1), holds both pipes at once.
+#
 # WHO MAY CONNECT (auth.peer). The pipe is made with CreateNamedPipe (transports/local/Native.ps1),
 # because System.IO.Pipes on .NET Framework cannot set what follows. Measured 2026-09-30 on Windows
 # PowerShell 5.1.26100.9444 unless said otherwise:
@@ -71,6 +78,8 @@
 $script:HordeLocalFolder = $PSScriptRoot
 $script:HordeLocalPipeRoot = '\\.\pipe\'
 $script:HordeLocalPipePrefix = "horde-node-"
+$script:HordeLocalHubPipePrefix = "horde-hub-"
+$script:HordeLocalHubEndpointPrefix = "hub:"
 # \A and \z, not ^ and $: in .NET, $ also matches before a final LF (review of PR #39).
 $script:HordeLocalIdPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeLocalBufferBytes = 65536
@@ -82,9 +91,15 @@ $script:HordeLocalNodeImages = @(
 )
 
 function Get-HordeLocalPipeName {
-    # The pipe for a device id, or $null when the id is not one lowercase UUID - so "..\x" or a name
-    # with a wildcard can never become a pipe name.
+    # The pipe for an endpoint, or $null when it is neither a device id (one lowercase UUID: a node's
+    # pipe) nor "hub:" followed by one (the hub's pipe) - so "..\x" or a name with a wildcard can never
+    # become a pipe name.
     param([string]$DeviceId)
+    if ($DeviceId.StartsWith($script:HordeLocalHubEndpointPrefix, [System.StringComparison]::Ordinal)) {
+        $hub = $DeviceId.Substring($script:HordeLocalHubEndpointPrefix.Length)
+        if ($hub -cnotmatch $script:HordeLocalIdPattern) { return $null }
+        return ($script:HordeLocalHubPipePrefix + $hub)
+    }
     if ($DeviceId -cnotmatch $script:HordeLocalIdPattern) { return $null }
     return ($script:HordeLocalPipePrefix + $DeviceId)
 }
@@ -197,7 +212,7 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
     -Open {
         param($Endpoint, [int]$TimeoutMs)
         $pipe = Get-HordeLocalPipeName -DeviceId $Endpoint
-        if ($null -eq $pipe) { return (New-HordeLocalResult -Ok $false -Reason ("'" + $Endpoint + "' is not a device id: one lowercase UUID")) }
+        if ($null -eq $pipe) { return (New-HordeLocalResult -Ok $false -Reason ("'" + $Endpoint + "' is not a device id (one lowercase UUID) or hub: followed by one")) }
         $cli = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipe, [System.IO.Pipes.PipeDirection]::InOut, [System.IO.Pipes.PipeOptions]::Asynchronous)
         try { $cli.Connect([Math]::Max(1, $TimeoutMs)) }
         catch {
@@ -249,7 +264,7 @@ $null = Register-HordeTransport -Folder $script:HordeLocalFolder `
     -Listen {
         param($Endpoint)
         $pipe = Get-HordeLocalPipeName -DeviceId $Endpoint
-        if ($null -eq $pipe) { return (New-HordeLocalResult -Ok $false -Reason ("'" + $Endpoint + "' is not a device id: one lowercase UUID")) }
+        if ($null -eq $pipe) { return (New-HordeLocalResult -Ok $false -Reason ("'" + $Endpoint + "' is not a device id (one lowercase UUID) or hub: followed by one")) }
         $made = New-HordeLocalServer -Pipe $pipe -First
         if ($null -eq $made.stream) { return (New-HordeLocalResult -Ok $false -Reason $made.reason) }
         return (New-HordeLocalResult -Ok $true -Listener @{ pipe = $pipe; server = $made.stream; wait = $null; broken = "" })
