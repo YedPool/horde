@@ -136,8 +136,10 @@ Check ([Math]::Abs([double]$text.fontPx - 14) -lt 0.5 -and [Math]::Abs([double]$
 
 Write-Host ""
 Write-Host "=== the window is given the keyboard: the caret is in the first unanswered field ===" -ForegroundColor Cyan
-$r = Send-Steps @((Step "keyboard"))
-Check ($r.drawn.answer.focus -ceq "1") ("the caret is in question 1's field (" + $r.drawn.answer.focus + ")")
+# The event itself, as the engine sends it to a page whose window was given the keyboard; that
+# Windows and the engine do send it when he clicks the window or switches to it is not checked here.
+$r = Send-Steps @((Step "window-focus"), (Step "sleep"))
+Check ($r.drawn.answer.focus -ceq "1") ("on the page's own focus event, with no field focused, the caret goes to question 1's field (" + $r.drawn.answer.focus + ")")
 
 Write-Host ""
 Write-Host "=== typed and Enter: ONE message, read back through the operation, and the caret in question 2 ===" -ForegroundColor Cyan
@@ -236,6 +238,9 @@ Check ("$($bad.toldMarks.problem)" -clike "*could not be read as JSON*" -and (Ge
 Write-Whole -Path $toldFile -Text (ConvertTo-Json -InputObject ([ordered]@{ schemaVersion = 1; rung = @([ordered]@{ question = 2; message = ("" + $seq2); at = "2026-10-07T12:00:00Z" }) }) -Depth 4 -Compress)
 $told = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) (@($x.drawn.lines | Where-Object { $_.n -ceq "2" })[0]).m -ceq "told Thrall" }
 Check ((Get-Line $told 2).m -ceq "told Thrall" -and (Get-Line $told 3).m -ceq "saved" -and "$($told.toldMarks.problem)" -ceq "" -and $told.toldMarks.told -eq 1) "once the file names question 2's message, its mark reads told Thrall; question 3's, which it does not name, stays saved"
+$r = Send-Steps @((Step "window-focus"), (Step "sleep"))
+Check ($r.drawn.answer.focus -ceq "1") "given the keyboard again later, the caret goes to question 1, which is his turn again since the reply; an answered question is passed over"
+$r = Send-Steps @((Step "focus" -Q 9))
 $inbox = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "inbox") -Env $cliEnv
 Check ($inbox.code -eq 0 -and $inbox.out -like "*Second answer*" -and $inbox.out -like "*line one*line two*line three*" -and $inbox.out -like "*Marked as read*") "the keeper of the list reads its inbox with the real command: his words are printed exactly, and marked read"
 $read = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) (@($x.drawn.lines | Where-Object { $_.n -ceq "2" })[0]).m -ceq "read by Thrall" }

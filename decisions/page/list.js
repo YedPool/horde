@@ -627,7 +627,8 @@
     // A CHECK'S STEPS, acted out on the page's own fields and nowhere else: a check cannot press a
     // key, so it hands the page these and the page's own handlers do the rest. Each step is
     //   { do: "focus", q }        the caret into that question's field
-    //   { do: "keyboard" }        the window is given the keyboard (what the page does then)
+    //   { do: "keyboard" }        the caret taken to the first unanswered field, as doc.takeKeyboard does
+    //   { do: "window-focus" }    the event a window given the keyboard sends its page, with no field focused
     //   { do: "type", text }      the text typed at the caret
     //   { do: "key", key, shift, ctrl }   that key pressed in the field that has the caret
     //   { do: "settle" }          wait until nothing sent is still unanswered
@@ -649,6 +650,7 @@
         var target;
         if (step.do === "focus") { target = lineOf(Number(step.q)); if (target) { enter(target); arrived.at = 0; } }
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
+        else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
         else if (step.do === "type") { if (line) { insert(line, textOf(step.text)); } }
         else if (step.do === "key") {
           (line ? line.field : (document.activeElement || document.body)).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
