@@ -82,6 +82,31 @@
         @{ Name = "no-window-on-screen-not-said"
            Find = 'if ($titles.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal''s process has no terminal window on screen, so there is none to stand beside") }'
            Replace = '' }
+        # --- a window is believed only when a second whole reading names it again (review finding C2)
+        @{ Name = "a-window-found-once-is-believed"
+           Find = '$last = Compare-HordeWeztermWindowReadings -First $last -Second $again -ApartMs $Values.confirmWaitMs'
+           Replace = '' }
+        @{ Name = "the-second-reading-is-the-first-again"
+           Find = '$again = Read-HordeWeztermWindowReading -Target $target.value -Pane $Pane -Runner $Runner -Windows $Windows -ReadAs $ReadAs'
+           Replace = '$again = $last' }
+        @{ Name = "the-second-reading-is-not-waited-for"
+           Find = 'Wait-HordeWeztermWindowMoment -Milliseconds $Values.confirmWaitMs -Wait $Wait'
+           Replace = '' }
+        @{ Name = "a-second-reading-that-found-nothing-is-ignored"
+           Find = 'if ($Second.state -cne "known") { return (New-HordeWeztermUnsettled'
+           Replace = 'if ($false) { return (New-HordeWeztermUnsettled' }
+        @{ Name = "two-different-windows-are-believed"
+           Find = 'if ([long]$First.value.handle -ne [long]$Second.value.handle) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-pane-in-another-window-id-is-believed"
+           Find = 'if ("" + $First.value.window -cne "" + $Second.value.window) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-disagreement-is-never-read-again"
+           Find = 'return (New-HordeWeztermUnsettled -Reason ("two readings " + $ApartMs + " ms apart named different windows'
+           Replace = 'return (New-HordeUnknown -Reason ("two readings " + $ApartMs + " ms apart named different windows' }
+        @{ Name = "an-unsettled-answer-carries-no-mark"
+           Find = 'Add-Member -InputObject $unsettled -NotePropertyName readAgain -NotePropertyValue $true'
+           Replace = '' }
         # --- the settings (core/ModuleSettings.ps1): one table, one file, and a finding is never silent
         @{ Name = "the-persons-file-is-not-read"
            Find = 'if ($null -eq $Settings) { $Settings = Get-HordeWeztermWindowSettings }'
@@ -115,10 +140,10 @@
            Find = 'for ($try = 1; $try -le $Values.attempts; $try++) {'
            Replace = 'for ($try = 1; $try -le 1; $try++) {' }
         @{ Name = "every-unknown-is-read-again"
-           Find = 'if ($last.state -ceq "known" -or $last.reason -notlike "none of the terminal''s*") { return $last }'
-           Replace = 'if ($last.state -ceq "known") { return $last }' }
+           Find = 'if ($null -eq $last.PSObject.Properties["readAgain"]) { return $last }'
+           Replace = '' }
         @{ Name = "the-windows-are-read-once"
-           Find = 'if ($null -ne $Windows) { $after = @(& $Windows ([long]$target.value.guiPid)) }'
+           Find = 'if ($null -ne $Windows) { $after = @(& $Windows ([long]$Target.guiPid)) }'
            Replace = 'if ($null -ne $Windows) { $after = @() }' }
     )
 }
