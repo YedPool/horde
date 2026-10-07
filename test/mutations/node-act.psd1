@@ -114,7 +114,7 @@
         @{ Name = "config-read-once"
            Find = 'try { $cfg = & $Context.readConfig $Context }'
            Replace = 'try { if ($null -eq $script:HordeNodeCfgCache) { $script:HordeNodeCfgCache = & $Context.readConfig $Context }; $cfg = $script:HordeNodeCfgCache }'
-           Sections = @("key-profile") }
+           Sections = @("owner-files") }
         @{ Name = "context-config-frozen"
            Find = 'readConfig = { param($c) Read-HordeNodeActConfig -Root $c.root -HordeHome $c.home -Descriptors $c.descriptors -Builtin $c.builtin }'
            Replace = 'readConfig = { param($c) $now }.GetNewClosure()'
