@@ -12,6 +12,14 @@
 # core/ReadShared.ps1, core/Home.ps1, core/Transcript.ps1, core/Price.ps1, core/Metrics.ps1,
 # core/MetricsStore.ps1, and the adapters loaded.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "Price.ps1")
+. (Join-Path $PSScriptRoot "Transcript.ps1")
+. (Join-Path $PSScriptRoot "Metrics.ps1")
+. (Join-Path $PSScriptRoot "MetricsStore.ps1")
+
 function Get-HordeTranscriptFiles {
     # The transcript files a path names: the file itself, or every file under a folder whose extension
     # an engine declares for its transcripts (agents/<name>/stores.json; CONTRIBUTING 14), in name order.

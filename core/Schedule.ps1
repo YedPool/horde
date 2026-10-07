@@ -15,6 +15,10 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1 and
 # core/Home.ps1.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "Home.ps1")
+
 $script:HordeSchedulers = New-Object System.Collections.ArrayList
 $script:HordeCollectJobName = "Horde metrics collect"
 $script:HordeJobFolders = @("Horde", "HordeTest")

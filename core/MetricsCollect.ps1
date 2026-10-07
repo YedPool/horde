@@ -45,6 +45,16 @@
 # core/ReadShared.ps1, core/Home.ps1, core/Transcript.ps1, core/Price.ps1, core/Metrics.ps1,
 # core/MetricsStore.ps1, core/MetricsReport.ps1, and the adapters loaded.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+. (Join-Path $PSScriptRoot "FileAtomic.ps1")
+. (Join-Path $PSScriptRoot "Price.ps1")
+. (Join-Path $PSScriptRoot "Schedule.ps1")
+. (Join-Path $PSScriptRoot "Transcript.ps1")
+. (Join-Path $PSScriptRoot "MetricsStore.ps1")
+. (Join-Path $PSScriptRoot "MetricsReport.ps1")
+
 $script:HordeCollectSettleMinutes = 10
 # A run's default time budget: 15 minutes, 5 under the scheduled task's 20-minute limit
 # (core/Schedule.ps1), so a scheduled run ends itself instead of being killed.

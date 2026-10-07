@@ -40,6 +40,10 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1). Needs core/Tristate.ps1
 # and core/ReadShared.ps1 loaded first.
 
+# What this file calls, loaded here so the file works on its own (tools/CoreLoad.ps1).
+. (Join-Path $PSScriptRoot "Tristate.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
+
 $script:HordeTranscriptKinds = @("call", "toolCall", "toolResult", "input", "usageTotal", "turnEnd", "compaction", "event")
 $script:HordeTranscriptAdapters = New-Object System.Collections.ArrayList
 # A READ DEADLINE, for a caller with a budget (core/MetricsCollect.ps1; review of #70: a budget checked
