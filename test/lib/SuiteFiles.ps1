@@ -29,6 +29,7 @@ $script:HordeMachineBoundSuites = [ordered]@{
     "transports/local/test/test-local.ps1" = "the local pipe and integrity levels; its Administrators-owned case runs only from an elevated token launched from PowerShell, and the suite exits 3 when it skips that case (issue #89)"
     "transports/local/test/test-node-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
     "transports/local/test/test-hub-serve-local.ps1" = "the real local pipe, from an interactive logon (its header)"
+    "transports/ssh/test/test-sshd-local.ps1" = "this machine's own server for the transport, run as the suite's own child on 127.0.0.1 (remote plan R16)"
     "test/test-transport-conformance.ps1" = "its [local] cases: on the always-on box its 27 [local] checks fail on main 54d97b3 exactly as on #85, and pass here (2026-10-05)"
 }
 
