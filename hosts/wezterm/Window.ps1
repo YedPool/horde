@@ -15,24 +15,41 @@
 #   that window id    -> one of the gui process's top-level windows
 # The last step is the only one Windows and the terminal do not share an id for. MEASURED 2026-10-06
 # (20240203): `cli list --format json` gives window_id, tab_id, pane_id, title and is_active for every
-# pane and no native handle; the gui process had 16 terminal windows and 16 window ids. So:
-#   - one window id listed, one terminal window in the process: that window, nothing to tell apart.
-#     ITS TITLE IS NOT ASKED TO FIT, on purpose (review of 2026-10-06, finding C3): the proof is the
-#     count, which does not rest on a title - text a session sets, and the weaker evidence of the two -
-#     and asking for both would make a certain answer unknown in every terminal that titles its
-#     windows its own way. A count can be wrong while a window opens or closes; it must hold twice.
-#   - otherwise, BY THAT EXACT WINDOW'S OWN DETAILS FROM THE SAME LISTING: a terminal window is titled
-#     after the active pane of its active tab, with "[<tab>/<tabs>] " in front when it has more than
-#     one tab and "[Z] " in front of everything when the pane is zoomed (measured 2026-10-06: "[6/6]
-#     <pane title>" on a six-tab window, the bare pane title on a one-tab window; measured 2026-10-07
-#     on an isolated instance: "[Z] <title>" with one tab, "[Z] [1/2] <title>" with two, and "[2/2]
-#     <title>" when the tab in front is not the zoomed one). The listing gives every tab's active pane and the
-#     number of tabs, so the titles the session's window can have are known. Exactly one terminal
-#     window must carry one of them, AND that window must not also fit another window id's titles.
-#     None, or two, or one that fits two ids: unknown, with the reason. Never the likeliest.
-# A title can change between the two reads (a busy session redraws its title several times a second),
-# so the windows are read before and after the listing and a match in either counts, and the whole
-# reading is tried a few times before the answer is unknown.
+# pane and no native handle; the gui process had 16 terminal windows and 16 window ids.
+#
+# NOT BY THE TITLE'S FORMAT (trial of 2026-10-07). The first finder asked a window's title to EQUAL the
+# title the listing gave for its pane, behind "[<tab>/<tabs>] ". Against the fleet's own terminal it
+# answered unknown for the one window it was built for. MEASURED that day, read-only: the window of
+# pane 18 was titled "[1/2] <U+25D0> name" when its process's windows were read, the listing a moment
+# later said "<U+25D1> name", and the windows 300 ms after that said "[1/2] <U+2733> name" - a working
+# session redraws a status glyph at the head of its title several times a second, one listing took
+# about a second on that machine, and so the three never agreed while the session worked (with the
+# session idle the same finder found the window six times of six). A title is text a session sets; the
+# finder now uses what the terminal itself decides and Windows can see too:
+#   - THE COUNT. One window id listed and one terminal window in the process: that window. ITS TITLE IS
+#     NOT ASKED TO FIT, on purpose (review of 2026-10-06, finding C3).
+#   - THE SIZE. The listing gives every pane's size in cells and in pixels, and where it starts in its
+#     tab (size.cols, size.rows, size.pixel_width, size.pixel_height, left_col, top_row); Windows gives
+#     every window's client size in real pixels. MEASURED 2026-10-07 on that terminal, 16 windows of
+#     six sizes, cells of 14 x 32 pixels: the client was wider than the tab's cells by 28 to 40 pixels
+#     and taller by 74 to 96, and in every one  cols = floor((client width - 28) / 14)  and
+#     rows = floor((client height - 74) / 32) - one padding for all its windows, and what is left over
+#     below one cell. THE PADDING IS NOT ASSUMED: it is whatever one pair of numbers explains every
+#     window of the process at once (Get-HordeWeztermSizeCandidates). A window whose size, under every
+#     padding that explains them all, is the size of the session's window and of no other listed window
+#     IS the session's window - when the process has as many windows as the listing has window ids.
+#   - THE TITLE, AS THE WEAKER SIGNAL, ONLY TO TELL APART WINDOWS OF ONE SIZE (or all of them, when
+#     sizes say nothing: a listing without sizes, minimised windows, no one padding). A window carries
+#     a listed window's title when its title CONTAINS the title of the active pane of one of that
+#     window's tabs, whatever the terminal wrote around it. Exactly one window of the right size must
+#     carry it, and it must not carry another same-sized window's title too.
+#   None, or two, or one that fits two ids: unknown, with the reason. Never the likeliest.
+# WHAT SIZE CANNOT TELL APART: two windows of the same size (then the title must); a window that is
+# minimised (it has no client size; it is found by title, or by being the only one left); a terminal
+# whose windows do not share one padding (a tab bar hidden on one-tab windows, screens of different
+# scale) - then no padding explains them all and only titles are used.
+# The windows are read before and after the listing; a title seen in either reading counts, a size must
+# be the same in both, and the whole reading is tried a few times before the answer is unknown.
 #
 # AND A WINDOW IS BELIEVED ONLY WHEN IT IS FOUND TWICE. One reading can name the wrong window: titles
 # stale in just the wrong way fit the session's window id and no other (review of 2026-10-06, finding
@@ -41,9 +58,6 @@
 # native window for the same window id (Compare-HordeWeztermWindowReadings, which also says what this
 # does not close). It costs one more call to the terminal and the wait, each time a window is found.
 # The one-window case is held to it too: the count of one must hold twice.
-#
-# A terminal configured to title its windows another way (its format-window-title event) will fit no
-# title: the answer is then unknown, and the caller's window stands free. That is the honest result.
 #
 # THE LISTING IS UTF-8, AND IS MENDED HERE. Titles hold characters outside ASCII. The host's one call
 # (hosts/wezterm/Act.ps1) leaves the decoding of the terminal's answer to .NET, which reads it in the
@@ -127,32 +141,73 @@ public static class HordeWeztermWindows {
     [DllImport("user32.dll")] static extern int GetWindowTextLengthW(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
-    // Every visible, unowned top-level window of one process: handle, then title.
-    public static List<KeyValuePair<long, string>> List(uint processId) {
-        var found = new List<KeyValuePair<long, string>>();
-        EnumWindows((h, l) => {
-            uint pid; GetWindowThreadProcessId(h, out pid);
-            if (pid != processId || !IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;   // GW_OWNER
-            var title = new StringBuilder(GetWindowTextLengthW(h) + 2); GetWindowTextW(h, title, title.Capacity);
-            found.Add(new KeyValuePair<long, string>(h.ToInt64(), title.ToString()));
-            return true;
-        }, IntPtr.Zero);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+    public class Entry { public long Handle; public string Title; public int Width; public int Height; }
+    // Every visible, unowned top-level window of one process: handle, title, client size in real pixels.
+    // THE SIZE IS ASKED FOR AS A PROCESS THAT KNOWS EACH SCREEN'S SCALE (per-monitor, version 2), for the
+    // length of the reading and on this thread only: a process that does not is told sizes divided by the
+    // screen's scale, which fit nothing the terminal lists. Where Windows cannot be asked that way, or
+    // the window is minimised, the size is 0 x 0: not known, never a guess.
+    public static List<Entry> List(uint processId) {
+        var found = new List<Entry>();
+        IntPtr was = IntPtr.Zero; bool real = false;
+        try { was = SetThreadDpiAwarenessContext((IntPtr)(-4)); real = was != IntPtr.Zero; } catch (EntryPointNotFoundException) { real = false; }
+        try {
+            EnumWindows((h, l) => {
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                if (pid != processId || !IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;   // GW_OWNER
+                var title = new StringBuilder(GetWindowTextLengthW(h) + 2); GetWindowTextW(h, title, title.Capacity);
+                var e = new Entry { Handle = h.ToInt64(), Title = title.ToString(), Width = 0, Height = 0 };
+                RECT c;
+                if (real && !IsIconic(h) && GetClientRect(h, out c)) { e.Width = c.R - c.L; e.Height = c.B - c.T; }
+                found.Add(e);
+                return true;
+            }, IntPtr.Zero);
+        } finally { if (real) SetThreadDpiAwarenessContext(was); }
         return found;
     }
 }
 '@
 
 function Get-HordeWeztermNativeWindows {
-    # The terminal windows of one gui process, as { handle; title }. A minimised window is listed: it
-    # is still the session's window.
+    # The terminal windows of one gui process, as { handle; title; width; height }, the size being the
+    # client area's in real pixels. A minimised window is listed, with no size (0 x 0): it is still the
+    # session's window.
     param([Parameter(Mandatory = $true)][long]$ProcessId)
     if ($null -eq ("HordeWeztermWindows" -as [type])) { Add-Type -TypeDefinition $script:HordeWeztermWindowSource }
-    return @([HordeWeztermWindows]::List([uint32]$ProcessId) | ForEach-Object { [pscustomobject]@{ handle = [long]$_.Key; title = "" + $_.Value } })
+    return @([HordeWeztermWindows]::List([uint32]$ProcessId) | ForEach-Object { [pscustomobject]@{ handle = [long]$_.Handle; title = "" + $_.Title; width = [long]$_.Width; height = [long]$_.Height } })
+}
+
+function Get-HordeWeztermPaneShape {
+    # Where one pane of the listing sits in its tab and how large its cells are, as { cols; rows; left;
+    # top; cellWidth; cellHeight }, or $null when the listing does not say so in whole numbers. NOTHING
+    # IS CONVERTED OR FILLED IN: a pane with no left_col would make a split tab look as narrow as one of
+    # its panes, and a narrower tab is another window's size. A listing without sizes is still a
+    # listing; it only cannot tell windows apart by size.
+    param($Pane)
+    if ($null -eq $Pane.PSObject.Properties["size"] -or $null -eq $Pane.size) { return $null }
+    $n = @{}
+    foreach ($f in @("cols", "rows", "pixel_width", "pixel_height")) {
+        $v = $Pane.size.PSObject.Properties[$f]
+        if ($null -eq $v -or ($v.Value -isnot [int] -and $v.Value -isnot [long]) -or $v.Value -le 0) { return $null }
+        $n[$f] = [long]$v.Value
+    }
+    foreach ($f in @("left_col", "top_row")) {
+        $v = $Pane.PSObject.Properties[$f]
+        if ($null -eq $v -or ($v.Value -isnot [int] -and $v.Value -isnot [long]) -or $v.Value -lt 0) { return $null }
+        $n[$f] = [long]$v.Value
+    }
+    if (($n["pixel_width"] % $n["cols"]) -ne 0 -or ($n["pixel_height"] % $n["rows"]) -ne 0) { return $null }
+    return [pscustomobject]@{ cols = $n["cols"]; rows = $n["rows"]; left = $n["left_col"]; top = $n["top_row"]; cellWidth = [long]($n["pixel_width"] / $n["cols"]); cellHeight = [long]($n["pixel_height"] / $n["rows"]) }
 }
 
 function Read-HordeWeztermWindowList {
     # The panes of `cli list --format json`, with what tells windows apart, as an answer: known list
-    # of { pane; window; tab; title; active; zoomed }, or unknown when the output is not that list.
+    # of { pane; window; tab; title; active; zoomed; shape }, or unknown when the output is not that
+    # list. shape is Get-HordeWeztermPaneShape's, $null where the listing gives no usable size.
     # hosts/wezterm/Act.ps1's Read-HordeWeztermPaneList reads the same output for the act path and
     # drops is_active, which only this file needs.
     param($Raw)
@@ -180,7 +235,7 @@ function Read-HordeWeztermWindowList {
             if ($p.is_zoomed -isnot [bool]) { return (New-HordeUnknown -Reason "a pane in the terminal's list has an is_zoomed that is not true or false, so its window's title cannot be worked out") }
             $zoomed = $p.is_zoomed
         }
-        [void]$rows.Add([pscustomobject]@{ pane = ("" + $p.pane_id); window = ("" + $p.window_id); tab = ("" + $p.tab_id); title = $p.title; active = $p.is_active; zoomed = $zoomed })
+        [void]$rows.Add([pscustomobject]@{ pane = ("" + $p.pane_id); window = ("" + $p.window_id); tab = ("" + $p.tab_id); title = $p.title; active = $p.is_active; zoomed = $zoomed; shape = (Get-HordeWeztermPaneShape -Pane $p) })
     }
     return (New-HordeKnown -Value $rows.ToArray())
 }
@@ -208,18 +263,113 @@ function ConvertTo-HordeWeztermAnswerText {
 }
 
 function Test-HordeWeztermWindowTitle {
-    # Could a terminal window with the panes -Rows (all of one window id) be titled -Title? The title
-    # of one of its tabs' active panes, behind "[<tab>/<tabs>] " when it has more than one tab, and
-    # behind "[Z] " - which comes first of all - when that pane is zoomed (header). Compared exactly.
+    # Does a window titled -Title carry the title of the listed window whose panes are -Rows (all of one
+    # window id)? It does when it CONTAINS, character for character, the title of the active pane of one
+    # of that window's tabs: whatever the terminal writes around a pane's title - a tab count, a zoom
+    # mark, a format of the person's own - is not this finder's to know (header). A pane with no title
+    # is carried by nothing: the empty text is inside every title.
     param([AllowEmptyString()][string]$Title, [Parameter(Mandatory = $true)][object[]]$Rows)
-    $tabs = @($Rows | ForEach-Object { $_.tab } | Sort-Object -Unique).Count
     foreach ($row in @($Rows | Where-Object { $_.active })) {
-        $zoom = ""
-        if ($row.zoomed) { $zoom = "[Z] " }
-        if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }
-        for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }
+        if ($row.title -cne "" -and $Title.IndexOf($row.title, [System.StringComparison]::Ordinal) -ge 0) { return $true }
     }
     return $false
+}
+
+function Get-HordeWeztermWindowShapes {
+    # The size of every listed window, from its panes: { shapes; why }. shapes is one { window; cols;
+    # rows; width; height; cellWidth; cellHeight } per window id - a tab is as wide as its panes reach
+    # (left + cols) and every tab of a window is the window's size (measured 2026-10-07: 37 panes in 16
+    # windows, every tab of a window the same size, in front or not) - or $null, with why, when the
+    # listing does not give ONE size for every window. A PURE FUNCTION.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Rows)
+    $shapes = New-Object System.Collections.ArrayList
+    foreach ($id in @($Rows | ForEach-Object { $_.window } | Sort-Object -Unique)) {
+        $tabs = @{}
+        $cell = $null
+        foreach ($row in @($Rows | Where-Object { $_.window -ceq $id })) {
+            if ($null -eq $row.shape) { return [pscustomobject]@{ shapes = $null; why = ("the listing gives no size for pane " + $row.pane) } }
+            if ($null -eq $cell) { $cell = $row.shape }
+            if ($row.shape.cellWidth -ne $cell.cellWidth -or $row.shape.cellHeight -ne $cell.cellHeight) { return [pscustomobject]@{ shapes = $null; why = ("the panes of window " + $id + " do not have cells of one size") } }
+            if (-not $tabs.ContainsKey($row.tab)) { $tabs[$row.tab] = [pscustomobject]@{ cols = [long]0; rows = [long]0 } }
+            $tabs[$row.tab].cols = [Math]::Max($tabs[$row.tab].cols, $row.shape.left + $row.shape.cols)
+            $tabs[$row.tab].rows = [Math]::Max($tabs[$row.tab].rows, $row.shape.top + $row.shape.rows)
+        }
+        if (@($tabs.Values | ForEach-Object { "" + $_.cols + "x" + $_.rows } | Sort-Object -Unique).Count -ne 1) { return [pscustomobject]@{ shapes = $null; why = ("the tabs of window " + $id + " are not of one size") } }
+        $tab = @($tabs.Values)[0]
+        [void]$shapes.Add([pscustomobject]@{ window = $id; cols = $tab.cols; rows = $tab.rows; width = ($tab.cols * $cell.cellWidth); height = ($tab.rows * $cell.cellHeight); cellWidth = $cell.cellWidth; cellHeight = $cell.cellHeight })
+    }
+    return [pscustomobject]@{ shapes = $shapes.ToArray(); why = "" }
+}
+
+function Get-HordeWeztermAxisFits {
+    # ONE DIRECTION OF THE PADDING (header, THE SIZE). -Lengths are the windows' client widths (or
+    # heights) in pixels, -Spans what the listed windows' cells cover in that direction, as texts
+    # "<pixels>|<cell>". A padding fits a length and a span when what is left of the length after the
+    # padding and the span is less than one cell. Returned: every DIFFERENT way some padding of zero or
+    # more gives every length at least one span, each as a table length -> the spans it then fits. The
+    # paddings tried are, for each length and span, the largest that still fits the pair: going up from
+    # any padding, nothing stops fitting before one of those is reached, so every way a padding can fit
+    # is one of theirs, or has less in it and so adds nothing a window could be. A PURE FUNCTION.
+    param([Parameter(Mandatory = $true)][long[]]$Lengths, [Parameter(Mandatory = $true)][string[]]$Spans)
+    $tried = @{}
+    $ways = [ordered]@{}
+    foreach ($length in $Lengths) {
+        foreach ($span in $Spans) {
+            $padding = $length - [long]($span -split "\|")[0]
+            if ($padding -lt 0 -or $tried.ContainsKey($padding)) { continue }
+            $tried[$padding] = $true
+            $way = @{}
+            $whole = $true
+            foreach ($l in $Lengths) {
+                $fits = @($Spans | Where-Object { $left = $l - $padding - [long]($_ -split "\|")[0]; ($left -ge 0 -and $left -lt [long]($_ -split "\|")[1]) })
+                if ($fits.Count -eq 0) { $whole = $false; break }
+                $way["" + $l] = $fits
+            }
+            if (-not $whole) { continue }
+            $key = (@($Lengths | ForEach-Object { "" + $_ + "=" + ($way["" + $_] -join ",") }) -join ";")
+            if (-not $ways.Contains($key)) { $ways[$key] = $way }
+        }
+    }
+    return @($ways.Values)
+}
+
+function Get-HordeWeztermSizeCandidates {
+    # WHICH LISTED WINDOWS EACH WINDOW ON SCREEN COULD BE, BY SIZE ALONE (header, THE SIZE): a table
+    # native handle -> window ids, or $null when no one padding explains every window that has a size.
+    # -Shapes is Get-HordeWeztermWindowShapes's, -Sized the windows with a client size. A window could be
+    # a listed window when, under SOME padding across and down that gives every sized window a listed
+    # window - and no group of windows fewer listed windows than it has members - its client area holds
+    # exactly that window's columns and rows. More than one padding may do; then a window could be any
+    # of what any of them says, so a doubt widens the answer and never narrows it. A PURE FUNCTION.
+    param([Parameter(Mandatory = $true)][object[]]$Shapes, [Parameter(Mandatory = $true)][object[]]$Sized)
+    $across = @(Get-HordeWeztermAxisFits -Lengths @($Sized | ForEach-Object { [long]$_.width } | Sort-Object -Unique) -Spans @($Shapes | ForEach-Object { "" + $_.width + "|" + $_.cellWidth } | Sort-Object -Unique))
+    $down = @(Get-HordeWeztermAxisFits -Lengths @($Sized | ForEach-Object { [long]$_.height } | Sort-Object -Unique) -Spans @($Shapes | ForEach-Object { "" + $_.height + "|" + $_.cellHeight } | Sort-Object -Unique))
+    $could = @{}
+    $explained = $false
+    foreach ($x in $across) {
+        foreach ($y in $down) {
+            $each = @{}
+            $groups = @{}
+            $whole = $true
+            foreach ($n in $Sized) {
+                $ids = @($Shapes | Where-Object { $x["" + [long]$n.width] -ccontains ("" + $_.width + "|" + $_.cellWidth) -and $y["" + [long]$n.height] -ccontains ("" + $_.height + "|" + $_.cellHeight) } | ForEach-Object { $_.window })
+                if ($ids.Count -eq 0) { $whole = $false; break }
+                $each["" + [long]$n.handle] = $ids
+                $group = $ids -join ","
+                if (-not $groups.ContainsKey($group)) { $groups[$group] = 0 }
+                $groups[$group]++
+                if ($groups[$group] -gt $ids.Count) { $whole = $false; break }
+            }
+            if (-not $whole) { continue }
+            $explained = $true
+            foreach ($handle in @($each.Keys)) {
+                if (-not $could.ContainsKey($handle)) { $could[$handle] = New-Object System.Collections.ArrayList }
+                foreach ($id in $each[$handle]) { if ($could[$handle] -cnotcontains $id) { [void]$could[$handle].Add($id) } }
+            }
+        }
+    }
+    if (-not $explained) { return $null }
+    return $could
 }
 
 function New-HordeWeztermUnsettled {
@@ -239,9 +389,9 @@ function Compare-HordeWeztermWindowReadings {
     # and the suite keeps it). So a window is believed only when a second whole reading, taken a moment
     # later, names the same native window for the same window id. -First and -Second are the answers
     # of the two readings, -ApartMs the wait between them. A PURE FUNCTION.
-    # WHAT THIS DOES NOT CLOSE: titles that stay stale in the same way through both readings. The
-    # wait shortens the time a coincidence must last; only an id shared by the terminal's listing and
-    # the operating system would end it, and this terminal gives none (header).
+    # WHAT THIS DOES NOT CLOSE: titles that stay stale in the same way through both readings, where a
+    # title is what decided. The wait shortens the time a coincidence must last; only an id shared by
+    # the terminal's listing and the operating system would end it, and this terminal gives none.
     param([Parameter(Mandatory = $true)]$First, [Parameter(Mandatory = $true)]$Second, [Parameter(Mandatory = $true)][int]$ApartMs)
     if ($First.state -cne "known") { return $First }
     if ($Second.state -cne "known") { return (New-HordeWeztermUnsettled -Reason ("a window was found for the pane and was not found again on a second reading " + $ApartMs + " ms later (" + $Second.reason + "), and a match that does not hold twice is not believed")) }
@@ -260,31 +410,70 @@ function Select-HordeWeztermSessionWindow {
     if ($mine.Count -eq 0) { return (New-HordeUnknown -Reason ("the terminal lists no pane " + $Pane + ": the session's record names a pane that is no longer there")) }
     if ($mine.Count -gt 1) { return (New-HordeUnknown -Reason ("the terminal lists pane " + $Pane + " " + $mine.Count + " times, so its window cannot be told")) }
     $windowId = $mine[0].window
-    # Each terminal window with every title it was seen to carry, before and after the listing.
-    $titles = [ordered]@{}
+    # Each terminal window with every title it was seen to carry, before and after the listing, and its
+    # client size - which must be the same in both readings, or it is not known.
+    $seen = [ordered]@{}
     foreach ($n in (@($Native) + @($NativeAfter))) {
         $key = "" + [long]$n.handle
-        if (-not $titles.Contains($key)) { $titles[$key] = New-Object System.Collections.ArrayList }
-        if ($titles[$key] -cnotcontains $n.title) { [void]$titles[$key].Add("" + $n.title) }
+        if (-not $seen.Contains($key)) { $seen[$key] = [pscustomobject]@{ handle = [long]$n.handle; titles = (New-Object System.Collections.ArrayList); width = [long]$n.width; height = [long]$n.height } }
+        if ($seen[$key].titles -cnotcontains $n.title) { [void]$seen[$key].titles.Add("" + $n.title) }
+        if ([long]$n.width -ne $seen[$key].width -or [long]$n.height -ne $seen[$key].height) { $seen[$key].width = [long]0; $seen[$key].height = [long]0 }
     }
-    if ($titles.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal's process has no terminal window on screen, so there is none to stand beside") }
+    $all = @($seen.Values)
+    if ($all.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal's process has no terminal window on screen, so there is none to stand beside") }
     $windowIds = @($Rows | ForEach-Object { $_.window } | Sort-Object -Unique)
-    if ($windowIds.Count -eq 1 -and $titles.Count -eq 1) {
-        return (New-HordeKnown -Value ([pscustomobject]@{ handle = [long](@($titles.Keys)[0]); window = $windowId; detail = "the terminal has one window" }))
+    if ($windowIds.Count -eq 1 -and $all.Count -eq 1) {
+        return (New-HordeKnown -Value ([pscustomobject]@{ handle = $all[0].handle; window = $windowId; detail = "the terminal has one window" }))
     }
-    $fits = { param([string]$Key, [string]$Id) $rowsOf = @($Rows | Where-Object { $_.window -ceq $Id }); foreach ($t in @($titles[$Key])) { if (Test-HordeWeztermWindowTitle -Title $t -Rows $rowsOf) { return $true } }; return $false }
-    $matched = @(@($titles.Keys) | Where-Object { & $fits $_ $windowId })
+    # BY SIZE (header). $could says which listed windows each sized window could be; $noSizes why sizes
+    # say nothing, when they do not.
+    $sized = @($all | Where-Object { $_.width -gt 0 -and $_.height -gt 0 })
+    $unsized = @($all | Where-Object { $_.width -le 0 -or $_.height -le 0 })
+    $listed = Get-HordeWeztermWindowShapes -Rows $Rows
+    $could = $null
+    $noSizes = $listed.why
+    if ($null -ne $listed.shapes) {
+        if ($sized.Count -eq 0) { $noSizes = "none of the terminal's windows has a size on screen" }
+        else { $could = Get-HordeWeztermSizeCandidates -Shapes $listed.shapes -Sized $sized; if ($null -eq $could) { $noSizes = "no one padding explains the sizes of the terminal's windows" } }
+    }
+    $pool = $all
+    $cells = ""
+    if ($null -ne $could) {
+        $shape = @($listed.shapes | Where-Object { $_.window -ceq $windowId })[0]
+        $cells = "" + $shape.cols + " x " + $shape.rows + " cells"
+        $bySize = @($sized | Where-Object { $could["" + $_.handle] -ccontains $windowId })
+        $theirs = @($bySize | ForEach-Object { $could["" + $_.handle] } | Sort-Object -Unique)
+        # AS MANY WINDOWS AS THE LISTED WINDOWS THEY COULD BE: each is one of those, so the session's
+        # window is among them and no window without a size can be it. Fewer, and one may be.
+        if ($bySize.Count -gt 0 -and $theirs.Count -le $bySize.Count) {
+            $pool = $bySize
+            if ($pool.Count -eq 1) { return (New-HordeKnown -Value ([pscustomobject]@{ handle = $pool[0].handle; window = $windowId; detail = ("the one of the terminal's " + $all.Count + " windows with the size of the pane's window (" + $cells + ")") })) }
+        } else {
+            $pool = @($bySize) + @($unsized)
+            # THE ONE LEFT OVER: no sized window could be the session's, one window has no size, and the
+            # process has exactly as many windows as the listing has window ids - so every other window
+            # is another's, and this one is the session's, minimised.
+            if ($bySize.Count -eq 0 -and $pool.Count -eq 1 -and $all.Count -eq $windowIds.Count) { return (New-HordeKnown -Value ([pscustomobject]@{ handle = $pool[0].handle; window = $windowId; detail = ("the one of the terminal's " + $all.Count + " windows that is not another's by size: the pane's window has no one size on screen (minimised, or its size was changing)") })) }
+        }
+        if ($pool.Count -eq 0) { return (New-HordeWeztermUnsettled -Reason ("none of the terminal's " + $all.Count + " windows has the size of the window of pane " + $Pane + " (" + $cells + "), so it is not on screen as the terminal lists it")) }
+    }
+    # BY TITLE, among the windows size has left (all of them when sizes say nothing).
+    $fits = { param($Window, [string]$Id) $rowsOf = @($Rows | Where-Object { $_.window -ceq $Id }); foreach ($t in @($Window.titles)) { if (Test-HordeWeztermWindowTitle -Title $t -Rows $rowsOf) { return $true } }; return $false }
+    $matched = @($pool | Where-Object { & $fits $_ $windowId })
     if ($matched.Count -eq 0) {
-        return (New-HordeWeztermUnsettled -Reason ("none of the terminal's " + $titles.Count + " windows is titled as the window of pane " + $Pane + " would be: its title changed while it was read, or this terminal titles its windows its own way"))
+        if ($null -ne $could) { return (New-HordeWeztermUnsettled -Reason ("" + $pool.Count + " of the terminal's " + $all.Count + " windows could be the window of pane " + $Pane + " by size (" + $cells + "), and none of them carries its title, so which it is cannot be told")) }
+        return (New-HordeWeztermUnsettled -Reason ("none of the terminal's " + $all.Count + " windows carries the title of the window of pane " + $Pane + ", and sizes do not tell them apart (" + $noSizes + "): its title changed while it was read, or this terminal titles its windows its own way"))
     }
     if ($matched.Count -gt 1) {
-        return (New-HordeUnknown -Reason ("" + $matched.Count + " of the terminal's windows are titled as the window of pane " + $Pane + " would be, and one is never chosen over another"))
+        return (New-HordeUnknown -Reason ("" + $matched.Count + " of the terminal's windows carry the title of the window of pane " + $Pane + $(if ($null -ne $could) { " and could be it by size (" + $cells + ")" } else { "" }) + ", and one is never chosen over another"))
     }
-    $others = @($windowIds | Where-Object { $_ -cne $windowId -and (& $fits $matched[0] $_) })
+    $one = $matched[0]
+    $others = @($windowIds | Where-Object { $_ -cne $windowId -and ($null -eq $could -or $one.width -le 0 -or $one.height -le 0 -or $could["" + $one.handle] -ccontains $_) -and (& $fits $one $_) })
     if ($others.Count -gt 0) {
-        return (New-HordeUnknown -Reason ("the one window titled as the window of pane " + $Pane + " would be is titled as another of the terminal's windows would be too, so which it is cannot be told"))
+        return (New-HordeUnknown -Reason ("the one window that carries the title of the window of pane " + $Pane + " carries the title of another of the terminal's windows too, so which it is cannot be told"))
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ handle = [long]$matched[0]; window = $windowId; detail = ("the one of the terminal's " + $titles.Count + " windows titled after its panes") }))
+    if ($null -ne $could) { return (New-HordeKnown -Value ([pscustomobject]@{ handle = $one.handle; window = $windowId; detail = ("the one of " + $pool.Count + " windows that could be the pane's window by size (" + $cells + ") that carries its title") })) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ handle = $one.handle; window = $windowId; detail = ("the one of the terminal's " + $all.Count + " windows that carries the title of its pane") }))
 }
 
 function Find-HordeWeztermSessionWindow {
