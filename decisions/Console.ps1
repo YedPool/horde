@@ -172,7 +172,9 @@ function Format-HordeDecisionMessage {
     # THE WORDS ARE NEVER CUT, JOINED OR RE-WRAPPED: each of their lines is one printed line, indented.
     param($Message, [string]$Indent = "  ", [int]$NowWording = 0)
     $lines = New-Object System.Collections.ArrayList
-    [void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " + (Format-HordeDecisionTime -At $Message.at) + " (record " + $Message.sequence + ", said to wording " + $Message.wordingVersion + ")")
+    $wording = "wording not stated"
+    if ($Message.wordingStated) { $wording = "said to wording " + $Message.wordingVersion }
+    [void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " + (Format-HordeDecisionTime -At $Message.at) + " (record " + $Message.sequence + ", " + $wording + ")")
     if ($Message.arrivedAfterClosing) { [void]$lines.Add($Indent + "  NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.") }
     if ($Message.saidToEarlierWording) {
         $now = ""

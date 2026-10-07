@@ -345,7 +345,7 @@ $shownText = ""
 try { $shownText = $strictUtf8.GetString($shown.bytes) } catch { $shownText = "NOT UTF-8" }
 $firstLine = @($said -split "\r?\n")[0]
 Check ($shown.code -eq 0 -and (Test-HoldsBytes $shown.bytes $utf8.GetBytes($firstLine)) -and -not (Test-HoldsBytes $shown.bytes ([byte[]]@(0x3F, 0x3F, 0x3F)))) "show, in plain text through a pipe from code page 437, carries the founder's Hebrew as its own UTF-8 bytes, marks included"
-Check ($shownText -like "*Conversation: 3 message(s); turn: the warchief*" -and $shownText -like "*the founder, recorded by the warchief from chat, 20*" -and $shownText -like "*the warchief, by command, 20*(record 3, said to wording 1)*" -and $shownText -like "*    It plays from the next build.*") "and the thread under the question: who said each thing, by what route, in which record, and the words"
+Check ($shownText -like "*Conversation: 3 message(s); turn: the warchief*" -and $shownText -like "*the founder, recorded by the warchief from chat, 20*" -and $shownText -like "*the warchief, by command, 20*(record 3, wording not stated)*" -and $shownText -like "*    It plays from the next build.*") "and the thread under the question: who said each thing, by what route, in which record, and the words"
 # A secret in the words: refused, exit 1, not printed back, nothing written.
 $talkToken = "gh" + "p_" + ("Zx9" * 12)
 $secretSaid = Invoke-Decisions @("answer", "1", "-File", (Write-Json "talk-secret.txt" ("the token is " + $talkToken + " - use it"))) $talkEnv

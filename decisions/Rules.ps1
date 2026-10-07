@@ -139,14 +139,19 @@ $script:HordeDecisionSpeakers = [ordered]@{
 $script:HordeDecisionFirstTurn = "founder"
 $script:HordeDecisionNoTurn = "nobody"
 # BY WHAT ROUTE WORDS ARRIVE: a closed list. speakers: whose words may arrive this way. actors: who may
-# make the request that records them. shown: how a way of showing says it.
+# make the request that records them. shown: how a way of showing says it. statesWording: whether
+# words by this route must say which wording of the question the speaker was looking at. The window
+# knows what it showed, and always says; the session writing down what was said in chat does not
+# know what was in front of the speaker, and a command has no screen. WHERE IT IS NOT STATED, NOTHING
+# IS GUESSED: the record holds no wording, the message says "wording not stated", and "said to an
+# earlier wording" is never worked out for it - that flag is only ever derived for a stated wording.
 # "chat-recorded" IS ITS OWN ROUTE ON PURPOSE. The founder's words, typed by him into the window, and
 # the founder's words as the warchief heard them in chat and wrote them down, are different evidence:
 # the second passed through another hand. They are stored distinctly and shown distinctly, always.
 $script:HordeDecisionRoutes = [ordered]@{
-    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window" }
-    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat" }
-    "command"       = @{ speakers = @("warchief"); actors = @("warchief"); shown = "by command" }
+    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window";                statesWording = $true }
+    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }
+    "command"       = @{ speakers = @("warchief"); actors = @("warchief"); shown = "by command";                         statesWording = $false }
 }
 
 # THE FIELDS OF A QUESTION, in the order they are stored and shown. type: text, list (of texts) or
@@ -609,7 +614,7 @@ function Test-HordeDecisionSaying {
     # route, who is making the request, and the words. Empty means they may be written. THE TEXT IS
     # NEVER REPEATED in a finding, and never changed: what cannot be stored is refused whole.
     # Secrets are not looked for here: Find-HordeDecisionSecrets runs over the whole request first.
-    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text)
+    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true)
     $out = New-Object System.Collections.ArrayList
     $speakerKnown = $script:HordeDecisionSpeakers.Contains($Speaker)
     $routeEntry = $script:HordeDecisionRoutes[$Route]
@@ -618,6 +623,7 @@ function Test-HordeDecisionSaying {
     if ($speakerKnown -and $null -ne $routeEntry) {
         if (@($routeEntry.speakers) -cnotcontains $Speaker) { [void]$out.Add("words " + $routeEntry.shown + " are never " + $script:HordeDecisionSpeakers[$Speaker].shown + "'s: by the route '" + $Route + "' only these speak: " + (@($routeEntry.speakers) -join ", ")) }
         if (@($routeEntry.actors) -cnotcontains $Actor) { [void]$out.Add("words " + $routeEntry.shown + " are recorded only by: " + (@($routeEntry.actors) -join ", ") + ". The request came from '" + $Actor + "'") }
+        if ([bool]$routeEntry.statesWording -and -not $WordingStated) { [void]$out.Add("words " + $routeEntry.shown + " always say which wording of the question was on screen ('wordingVersion'), and these do not") }
     }
     if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
     if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
@@ -794,8 +800,12 @@ function Step-HordeDecisionSaid {
     $target = Get-HordeDecisionTarget -State $State -Ev $Ev
     if ($null -eq $target.question) { return $target.why }
     $question = $target.question
-    $seen = [int]$Ev.data.wordingVersion
-    if ($seen -gt [int]$question.wordingVersion) {
+    # The wording the speaker was looking at, when the record states one. When it does not, nothing is
+    # put in its place: 0 here means "not stated", and is never compared with anything.
+    $stated = Test-HordeDecisionMember -Object $Ev.data -Name "wordingVersion"
+    $seen = 0
+    if ($stated) { $seen = [int]$Ev.data.wordingVersion }
+    if ($stated -and $seen -gt [int]$question.wordingVersion) {
         return ("it says it was said to wording " + $seen + " of question " + $question.number + ", which has only reached wording " + $question.wordingVersion + ": nobody can have been looking at a wording that was not written yet")
     }
     $speaker = "$($Ev.data.speaker)"
@@ -803,8 +813,9 @@ function Step-HordeDecisionSaid {
         sequence = [long]$Ev.sequence; at = "$($Ev.at)"; speaker = $speaker; route = "$($Ev.data.route)"; recordedBy = "$($Ev.actor)"
         # Exactly what the record holds: never trimmed, never re-wrapped.
         text = [string]$Ev.data.text
+        wordingStated = [bool]$stated
         wordingVersion = $seen
-        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)
+        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)
         arrivedAfterClosing = [bool]($question.state -cne "open")
     })
     # The turn passes only under an open question, and only for a speaker this version lists.
@@ -874,6 +885,8 @@ function Test-HordeDecisionEvent {
     foreach ($member in @($entry.counts.Keys)) {
         $most = $script:HordeDecisionMaxNumber
         if ($entry.counts[$member] -ceq "sequence") { $most = (Get-HordeDecisionMaxSequence) }
+        # A count the record does not carry is not asked: whether it must is its schema's to say.
+        if (-not (Test-HordeDecisionMember -Object $Ev.data -Name $member)) { continue }
         if (-not (Test-HordeDecisionCount -Value (Get-HordeDecisionMember -Object $Ev.data -Name $member) -Most $most)) { return @("its '" + $member + "' is beyond " + $most + ", the largest it can be") }
     }
     return @()
@@ -970,6 +983,7 @@ function ConvertTo-HordeDecisionMessageView {
         route = "$($Message.route)"; routeShown = (Get-HordeDecisionRouteShown -Route "$($Message.route)")
         recordedBy = "$($Message.recordedBy)"
         text = [string]$Message.text
+        wordingStated = [bool]$Message.wordingStated
         wordingVersion = [int]$Message.wordingVersion
         saidToEarlierWording = [bool]$Message.saidToEarlierWording
         arrivedAfterClosing = [bool]$Message.arrivedAfterClosing

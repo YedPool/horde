@@ -553,7 +553,10 @@ function New-Said {
     # A message-said record. The envelope's actor is who made the request, which for words recorded
     # from chat is not the speaker.
     param([long]$Seq, [int]$Number, [string]$Speaker = "founder", [string]$Route = "chat-recorded", [string]$Text = "Yes, do it.", $Wording = 1, [string]$Actor = "warchief")
-    $record = New-Record -Seq $Seq -Kind "message-said" -Data ([ordered]@{ number = $Number; speaker = $Speaker; route = $Route; text = $Text; wordingVersion = $Wording })
+    # -Wording $null is a speaker who did not say which wording they saw: the record has no such member.
+    $said = [ordered]@{ number = $Number; speaker = $Speaker; route = $Route; text = $Text }
+    if ($null -ne $Wording) { $said["wordingVersion"] = $Wording }
+    $record = New-Record -Seq $Seq -Kind "message-said" -Data $said
     $record.data.actor = $Actor
     return $record
 }
@@ -562,6 +565,7 @@ function New-Read { param([long]$Seq, $UpTo, [string]$Reader = "warchief") retur
 function New-Closed { param([long]$Seq, [int]$Number) return (New-Record -Seq $Seq -Kind "question-closed" -Data ([ordered]@{ number = $Number; outcome = "Done." })) }
 function New-Reopened { param([long]$Seq, [int]$Number) return (New-Record -Seq $Seq -Kind "question-reopened" -Data ([ordered]@{ number = $Number; reason = "it came back" })) }
 function New-Reworded { param([long]$Seq, [int]$Number, [string]$Title) return (New-Record -Seq $Seq -Kind "question-updated" -Data ([ordered]@{ number = $Number; changes = @{ title = $Title } })) }
+function Get-Saying { param([string]$Speaker = "founder", [string]$Route = "chat-recorded", [string]$Actor = "warchief", [string]$Text = "Yes, do it.", [bool]$WordingStated = $true) $found = @(); try { $found = @(Test-HordeDecisionSaying -Speaker $Speaker -Route $Route -Actor $Actor -Text $Text -WordingStated $WordingStated) } catch { $found = @("THREW: " + $_.Exception.Message) }; return ,$found }
 function Get-Thread {
     # A question's thread as it is shown, messages included; a throw becomes a thread of -1 messages.
     param($State, [int]$Number = 1)
@@ -658,6 +662,16 @@ Check ((@($t.messages | ForEach-Object { "" + $_.sequence + ":" + $_.wordingVers
 $flags = New-Object System.Collections.ArrayList
 for ($i = 2; $i -le $history.Count; $i++) { [void]$flags.Add("" + (Get-Thread (Get-Fold @($history[0..($i - 1)])) 1).messages[0].saidToEarlierWording) }
 Check (($flags -join ",") -ceq "False,False,False,False,False,False,False") ("and the first message's flag never changes as the history grows: a later rewording does not reach back (" + ($flags -join ",") + ")")
+# A SPEAKER WHO DID NOT SAY WHICH WORDING THEY SAW RECORDS "NOT STATED": nothing is guessed. Such words are
+# never flagged as said to an earlier wording - that is only ever worked out for a wording that was
+# stated - and they say of themselves that the wording is not stated.
+$st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "no wording named" -Wording $null), (New-Reworded 3 1 "Should the closing sound play at the end of every session?"), (New-Said 4 1 -Text "none named, after the rewording" -Wording $null), (New-Said 5 1 -Text "named: the first" -Wording 1))
+$t = Get-Thread $st 1
+Check ($t.count -eq 3 -and $st.unreadable.Count -eq 0 -and $st.ignored.Count -eq 0) ("words with no wording stated are read and kept like any other (" + $t.count + " message(s), " + $st.unreadable.Count + " unreadable)")
+Check ((@($t.messages | ForEach-Object { "" + $_.wordingStated + ":" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") -ceq "False:0:False,False:0:False,True:1:True") ("they say the wording was not stated, carry no wording number, and are never flagged as said to an earlier wording - before a rewording or after it; the one that named wording 1 is (" + (@($t.messages | ForEach-Object { "" + $_.wordingStated + ":" + $_.wordingVersion + ":" + $_.saidToEarlierWording }) -join ",") + ")")
+Check ($null -eq $st.questions[1].thread[0].PSObject.Properties["guess"] -and (Get-Thread (Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "named" -Wording 1))) 1).messages[0].wordingStated -eq $true) "CONTROL: a message that names its wording says it was stated"
+Check ((Get-Saying -Route "window" -Actor "founder" -WordingStated $false).Count -gt 0 -and (Test-Says (Get-Saying -Route "window" -Actor "founder" -WordingStated $false) "always say which wording") -and (Get-Saying -Route "window" -Actor "founder" -WordingStated $true).Count -eq 0) "words typed in the window always state the wording that was on screen: without it they are refused"
+Check ((Get-Saying -WordingStated $false).Count -eq 0 -and (Get-Saying -Speaker "warchief" -Route "command" -WordingStated $false).Count -eq 0) "words written down from chat, and a reply by command, may leave the wording unstated: nobody there knows what was on screen"
 # A wording that does not exist yet cannot have been looked at.
 $st = Get-Fold @((New-Added 1 1), (New-Said 2 1 -Text "to a wording from the future" -Wording 2), (New-Said 3 1 -Text "to the real one" -Wording 1))
 Check ((Get-Thread $st 1).count -eq 1 -and $st.ignored.Count -eq 1 -and $st.ignored[0].sequence -eq 2 -and $st.ignored[0].reason -like "*said to wording 2 of question 1, which has only reached wording 1*") "a record claiming a wording the question had not reached is reported as not applying, by name, and is not shown as said"
@@ -703,7 +717,6 @@ Check ((Get-ForSequences @(Get-HordeDecisionMessagesFor -State $st -Reader "warc
 
 Write-Host ""
 Write-Host "--- who may speak, by what route, and who may record whose words ---" -ForegroundColor Cyan
-function Get-Saying { param([string]$Speaker = "founder", [string]$Route = "chat-recorded", [string]$Actor = "warchief", [string]$Text = "Yes, do it.") $found = @(); try { $found = @(Test-HordeDecisionSaying -Speaker $Speaker -Route $Route -Actor $Actor -Text $Text) } catch { $found = @("THREW: " + $_.Exception.Message) }; return ,$found }
 Check ((Get-Saying).Count -eq 0 -and (Get-Saying -Speaker "warchief" -Route "command").Count -eq 0 -and (Get-Saying -Route "window" -Actor "founder").Count -eq 0) "CONTROL: the founder's chat words recorded by the warchief, the warchief's own reply, and the founder typing in the window may each be written"
 Check (Test-Says (Get-Saying -Speaker "orc") "'speaker' is 'orc', which is not someone who speaks") "a speaker outside the list is refused, with the list"
 Check (Test-Says (Get-Saying -Route "telepathy") "'route' is 'telepathy', which is not a way words arrive") "a route outside the list is refused, with the list"
