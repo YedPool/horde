@@ -4,7 +4,7 @@
 # byte of one changes, the rule for which address the page may be at, where a message may come from,
 # what a machine without the engine is told, and the Windows PowerShell 5.1 trap about event handlers
 # that this adapter is written around. The window itself - a real one, opened where nobody sees it,
-# on a real list - is test/e2e/e2e-decisions-window.ps1's.
+# on a page of this adapter's own - is surfaces/webview2/test/test-webview2-window.ps1's.
 #
 # NOTHING OF THE ENGINE IS LOADED INTO THIS PROCESS by the refusals: each damaged folder is refused
 # and the suite then looks for the engine's interface among the loaded assemblies. The one case that
@@ -194,7 +194,7 @@ Check ($loaded -ceq "" -and (Test-EngineLoaded) -eq $true) "CONTROL: the pinned 
 Check ($null -ne ("HordeSurfaceForm" -as [type]) -and (New-Object HordeSurfaceForm).Quiet -eq $false) "and with them the window type that can be shown without taking the keyboard"
 $version = Get-HordeWebView2RuntimeVersion
 if ($version -ne "") { Write-Host ("  the engine installed here is " + $version) -ForegroundColor DarkGray }
-else { Write-Host "  [SKIP] no engine is installed on this machine, so the end-to-end scenario cannot show a window here" -ForegroundColor Yellow }
+else { Write-Host "  [SKIP] no engine is installed on this machine, so the real-window suite beside this one cannot show a window here" -ForegroundColor Yellow }
 
 } finally {
     $script:HordeWebView2 = $null
