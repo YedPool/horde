@@ -91,6 +91,16 @@ if ($ln.state -eq "known" -and $lh.state -eq "known") {
         $hs = $hl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
         $ns = $nl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
         Check ($hs -ceq $ns -and $hs.Contains("(D;;") -and $hs.Contains($me.Value)) ("its owner and ACL are the node pipe's, read back: " + $hs)
+        # The ACL itself, rule by rule, not the owner: this session may be elevated, where a pipe made
+        # without an explicit owner comes out owned by Administrators (review of #138).
+        $hsec = $hl.state.server.GetAccessControl()
+        $hrules = @($hsec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+        $netSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::NetworkSid, $null)
+        Write-Host ("  hub pipe rules: " + (($hrules | ForEach-Object { "" + $_.IdentityReference + " " + $_.AccessControlType + " " + $_.PipeAccessRights }) -join "; ")) -ForegroundColor DarkGray
+        Check ($hsec.AreAccessRulesProtected -eq $true -and $hrules.Count -eq 2 -and @($hrules | Where-Object { $_.IsInherited }).Count -eq 0) "the hub pipe's ACL is protected and holds exactly two rules, neither inherited"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -ceq "$me" -and $_.AccessControlType -eq "Allow" -and $_.PipeAccessRights -eq [System.IO.Pipes.PipeAccessRights]::FullControl }).Count -eq 1) "one allows this user, the hub's own, full control"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -ceq "$netSid" -and $_.AccessControlType -eq "Deny" }).Count -eq 1) "one denies NETWORK"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -cne "$me" -and "$($_.IdentityReference)" -cne "$netSid" }).Count -eq 0) "no rule names anyone else: not Administrators, SYSTEM, Everyone or Users"
         $second = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
         Check ($second.state -ceq "unknown" -and "$($second.reason)" -like "*already in use*") "the hub's name cannot be taken twice either"
         $o = Open-HordeTransportLink -Transport $t -Endpoint ("hub:" + $id) -Role "node" -TimeoutMs 5000
@@ -211,6 +221,25 @@ try {
             Check ($holdText -notmatch "node-says-hello") "and reads nothing the node sent"
         } finally { Stop-HordeTransportListener -Listener $listener }
     } else { Check $false "a listener for the low-reader case" }
+
+    # 2b. The same for the hub's own pipe (R17a; review of #138): attach is the only client meant to
+    # reach it, and the hub binds whatever device the first line names, so a process of another
+    # identity - here this user at low integrity - must not reach it at all.
+    $id = New-Id
+    $lh = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+    if ($lh.state -eq "known") {
+        $hl = Get-HordeValue $lh
+        try {
+            $hold = Start-HordeLowChild -Mode "hold" -Pipe ("horde-hub-" + $id) -Folder $lowDir
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "hold: " -Ms 20000
+            $ka = Receive-HordeTransportLink -Listener $hl -TimeoutMs 3000
+            Check ($ka.state -ceq "unknown") "the hub's pipe accepts no link from a low-integrity process"
+            if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
+            $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
+            Check ($holdText -match "hold: UnauthorizedAccessException") "it is denied at open"
+        } finally { Stop-HordeTransportListener -Listener $hl }
+    } else { Check $false "a hub listener for the low-reader case" }
 
     # 3. The node's own check, reached past the label. The label stops a low reader before the node
     # sees it, so to exercise the node's check of its client's integrity, this suite builds a listener
