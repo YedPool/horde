@@ -51,11 +51,11 @@ try { $largestName = Get-HordeDecisionRecordName -Sequence 9999999999 } catch { 
 Check ($largestName -ceq "9999999999.json") ("the largest sequence number still has a ten-digit name (" + $largestName + ")")
 Check (Throws { Get-HordeDecisionRecordName -Sequence 0 } "1 to 9999999999") "sequence 0 is refused: the order starts at 1"
 Check (Throws { Get-HordeDecisionRecordName -Sequence 10000000000 } "1 to 9999999999") "a sequence number that would need eleven digits is refused, not written under a name that sorts wrongly"
-# ONE WIDTH, THREE THINGS WORKED OUT FROM IT (the setting decisions.store.sequenceDigits): the name, the
+# ONE WIDTH, THREE THINGS WORKED OUT FROM IT (decisions/Format.ps1's one constant): the name, the
 # pattern a name is recognised by, and the largest number. Each is asked of the store, so none can be
 # a second number written somewhere else.
-$digits = Get-HordeDecisionStoreDigits
-$largest = Get-HordeDecisionStoreMaxSequence
+$digits = Get-HordeDecisionSequenceDigits
+$largest = Get-HordeDecisionMaxSequence
 Check ($digits -eq 10 -and $largest -eq 9999999999) ("the width is ten digits, and the largest sequence number is the largest ten digits hold (" + $digits + ", " + $largest + ")")
 Check ((Get-HordeDecisionRecordName -Sequence $largest).Length -eq ($digits + 5) -and (Get-HordeDecisionRecordName -Sequence 1).Length -eq ($digits + 5)) "the first and the last record have names of one length"
 Check (((Get-HordeDecisionRecordName -Sequence 7) -cmatch (Get-HordeDecisionStoreNamePattern)) -and ("123456789.json" -cnotmatch (Get-HordeDecisionStoreNamePattern)) -and ("12345678901.json" -cnotmatch (Get-HordeDecisionStoreNamePattern)) -and ("0000000007.json`n" -cnotmatch (Get-HordeDecisionStoreNamePattern))) "a name the store makes matches the pattern it reads by; one digit fewer, one more, or a line break after it does not"

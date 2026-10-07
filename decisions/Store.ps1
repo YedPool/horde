@@ -10,10 +10,11 @@
 # Nothing else is kept: no index, no counter, no "current list". The folder is the single source of truth.
 #
 # EVERY NUMBER THIS FILE CAN BE TUNED BY IS A NAMED SETTING (decisions/Settings.ps1 and its table,
-# decisions/settings.json): the width of a name, the largest gap believed, how long a held record is
-# waited for, how old a leftover must be. None is written here. What is written here is what the store
-# IS - its name patterns and the error codes it reads - which no setting could change without making
-# it another store.
+# decisions/settings.json): the largest gap believed, how long a held record is waited for, how old a
+# leftover must be. None is written here. What is written here is what the store IS - its name
+# patterns and the error codes it reads - which no setting could change without making it another
+# store. THE WIDTH OF A NAME is that kind of thing too, and is not a setting: it is the one constant of
+# decisions/Format.ps1, which the rules read as well, and that file says why.
 #
 # THE RULES, and what makes each one hold:
 #   - ONE RECORD PER SEQUENCE NUMBER, PUT IN PLACE BY A MOVE THAT DOES NOT REPLACE. The record is written
@@ -109,6 +110,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path $PSScriptRoot "Settings.ps1")
+. (Join-Path $PSScriptRoot "Format.ps1")
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
 
@@ -142,22 +144,10 @@ $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
 # milliseconds (a few kilobytes, written through); ten minutes is far past any writer that is merely
 # slow, so what is removed was left by one that died.
 
-function Get-HordeDecisionStoreDigits {
-    # How many digits a record's name has: the setting decisions.store.sequenceDigits. The name, the
-    # pattern a name is recognised by and the largest sequence number are all worked out from this one
-    # number, below, so they cannot come to disagree.
-    return [int](Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits")
-}
-
-function Get-HordeDecisionStoreMaxSequence {
-    # The largest sequence number a name of that many digits can hold: 9999999999 for ten.
-    return [long]("9" * (Get-HordeDecisionStoreDigits))
-}
-
 function Get-HordeDecisionStoreNamePattern {
     # What a record's file name matches: exactly that many digits, then .json.
     # \A and \z, not ^ and $: in .NET, $ also matches before a final newline (remote/Journal.ps1).
-    return ('\A([0-9]{' + (Get-HordeDecisionStoreDigits) + '})\.json\z')
+    return ('\A([0-9]{' + (Get-HordeDecisionSequenceDigits) + '})\.json\z')
 }
 
 function Get-HordeDecisionStoreWin32Code {
@@ -172,9 +162,9 @@ function Get-HordeDecisionRecordName {
     # The file name of record -Sequence. Ten digits by default, so names sort in sequence order and a
     # store of 9,999,999,999 records fits; the name is the order, and nothing else is.
     param([Parameter(Mandatory = $true)][long]$Sequence)
-    $most = Get-HordeDecisionStoreMaxSequence
+    $most = Get-HordeDecisionMaxSequence
     if ($Sequence -lt 1 -or $Sequence -gt $most) { throw ("a record's sequence number is 1 to " + $most + ", not " + $Sequence) }
-    return ($Sequence.ToString(("D" + (Get-HordeDecisionStoreDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
+    return ($Sequence.ToString(("D" + (Get-HordeDecisionSequenceDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
 }
 
 function Remove-HordeDecisionStoreLeftovers {
@@ -302,7 +292,7 @@ function Get-HordeDecisionRecords {
     try { $names = [System.IO.Directory]::GetFiles($Root, "*.json") }
     catch { return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @(); strays = @() } }
     $namePattern = Get-HordeDecisionStoreNamePattern
-    $digits = Get-HordeDecisionStoreDigits
+    $digits = Get-HordeDecisionSequenceDigits
     $maxGap = Get-HordeDecisionSetting -Name "decisions.store.maxGap"
     $strays = New-Object System.Collections.ArrayList
     $numbered = New-Object 'System.Collections.Generic.List[long]'

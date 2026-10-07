@@ -73,11 +73,25 @@ function Get-Listed { param([string]$Store, [string]$State = "all") $a = Invoke-
 try {
 
 Write-Host ""
-Write-Host "--- the rules and the store agree on the largest record ---" -ForegroundColor Cyan
-# The rules hold the largest sequence number a RECORD may claim (decisions/Rules.ps1, which opens no
-# file and so asks no setting); the store works out the largest its file names hold from the setting
-# decisions.store.sequenceDigits. Two statements of one limit: held together here.
-Check ($script:HordeDecisionMaxSequence -eq (Get-HordeDecisionStoreMaxSequence)) ("the largest sequence number the rules accept is the largest the store can name (" + $script:HordeDecisionMaxSequence + " and " + (Get-HordeDecisionStoreMaxSequence) + ")")
+Write-Host "--- the rules and the store read ONE definition of how large a record's number can be ---" -ForegroundColor Cyan
+# decisions/Format.ps1 holds the width a sequence number is written in, as a constant, and the largest
+# number that width holds is worked out from it. The store names files by it and the rules refuse a
+# record beyond it. Before, each wrote its own number down, and this check held the two together.
+function Get-NumbersWritten {
+    # Every whole number at or above a hundred million written as a constant in a file of the module:
+    # the largest sequence number is ten digits, and must be written in none of them.
+    param([string]$Relative)
+    $tokens = $null; $errors = $null
+    $tree = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root $Relative), [ref]$tokens, [ref]$errors)
+    return @($tree.FindAll({ param($node) $node -is [System.Management.Automation.Language.ConstantExpressionAst] -and ($node.Value -is [int] -or $node.Value -is [long] -or $node.Value -is [double] -or $node.Value -is [decimal]) -and [double]$node.Value -ge 100000000 }, $true) | ForEach-Object { "$($_.Extent.Text)" })
+}
+Check ((Get-HordeDecisionSequenceDigits) -eq 10 -and (Get-HordeDecisionMaxSequence) -eq 9999999999 -and (Get-HordeDecisionMaxSequence) -is [long]) ("a sequence number is written in ten digits, and the largest is the largest ten digits hold (" + (Get-HordeDecisionMaxSequence) + ")")
+Check ((@(Get-NumbersWritten "decisions\Rules.ps1") -join ",") -ceq "999999999" -and @(Get-NumbersWritten "decisions\Store.ps1").Count -eq 0 -and @(Get-NumbersWritten "decisions\Format.ps1").Count -eq 0) ("the largest sequence number is written in none of the three files: the rules write only the largest QUESTION number, the store and the format none (rules: " + (@(Get-NumbersWritten "decisions\Rules.ps1") -join ",") + ")")
+Check ((Get-HordeDecisionRecordName -Sequence (Get-HordeDecisionMaxSequence)) -ceq "9999999999.json" -and (Throws { Get-HordeDecisionRecordName -Sequence ((Get-HordeDecisionMaxSequence) + 1) } "1 to 9999999999")) "the store names the largest record and refuses the one after it"
+$tooFar = '{"schemaVersion":1,"sequence":10000000000,"id":"' + ("a" * 32) + '","kind":"question-closed","at":"2026-10-06T12:00:00Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":1,"outcome":"x"}}'
+$atEnd = $tooFar.Replace('"sequence":10000000000', '"sequence":9999999999')
+Check ("$(@(Test-HordeDecisionEvent -Ev ($tooFar | ConvertFrom-Json) -Definitions $defs)[0])" -like "*sequence number is beyond 9999999999*" -and @(Test-HordeDecisionEvent -Ev ($atEnd | ConvertFrom-Json) -Definitions $defs).Count -eq 0) "and the rules refuse a record claiming the number after the largest, and accept the largest: the same limit, read from the same place"
+Check (Throws { Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits" } "is not a setting") "the width is not a setting: nothing can ask the settings for it"
 
 Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan

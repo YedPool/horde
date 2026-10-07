@@ -2,7 +2,6 @@
   "schemaVersion": 1,
   "about": "Every number the decisions module can be tuned by, with its default. decisions/Settings.ps1 reads this table and nothing else holds a copy. Each entry: kind (text, whole-number, fraction, true-false or folder), default, least and most (the range a value may be in; for text, its fewest and most characters), and means (what it is, in a sentence).",
   "settings": {
-    "decisions.store.sequenceDigits": { "kind": "whole-number", "default": 10, "least": 1, "most": 18, "means": "How many digits a record's file name has. This is the format of the store on disk, not a preference: records written under one width are not records under another, so it is changed only for a store that has none. It is in this table so that the width is written in one place." },
     "decisions.store.maxGap": { "kind": "whole-number", "default": 100, "least": 0, "most": 1000000, "means": "The largest run of missing records that is believed. A file named further than this past the last record before it is a stray, not a record." },
     "decisions.store.heldReadTries": { "kind": "whole-number", "default": 40, "least": 1, "most": 100000, "means": "How many times a reader tries a record that another process holds open before it reports the record as busy." },
     "decisions.store.heldReadWaitMs": { "kind": "whole-number", "default": 50, "least": 1, "most": 60000, "means": "How long a reader waits between two such tries, in milliseconds. Tries times wait is how long one read waits for one held record: 2 seconds by default." },

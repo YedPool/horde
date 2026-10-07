@@ -61,6 +61,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path $PSScriptRoot "Format.ps1")
 
 # THE EVENT KINDS. data: the definition of schema/decision-event.v1 its data must match. words: the
 # member of its data, if any, that holds question fields (schema/decision-question.v1). apply: the
@@ -122,9 +123,10 @@ $script:HordeDecisionMaxListItems = 100
 # add throw "Cannot convert value to type System.Int32" - the whole list unloadable for one record -
 # and one numbered 2147483647 made every later add throw. A question's number is nine digits, which
 # is what the command line takes (decisions/Console.ps1) and is inside the Int32 the list keeps it
-# in; a record's sequence number is ten, the length of its file name (decisions/Store.ps1).
+# in. The largest a record's sequence number can be is NOT written here: it is the largest its file
+# name can hold, and decisions/Format.ps1 is the one place that says how wide that name is. The
+# rules ask it there (Get-HordeDecisionMaxSequence), as the store does.
 $script:HordeDecisionMaxNumber = 999999999
-$script:HordeDecisionMaxSequence = 9999999999
 # CHARACTERS THAT ARE NOT TEXT. A terminal obeys a control character, and a format or separator
 # character changes how a line reads without being seen. Measured 2026-10-06, before these: a title
 # holding ESC [2J and a group holding BEL were stored, and the plain-text list printed both raw; a
@@ -628,7 +630,7 @@ function Test-HordeDecisionEnvelope {
     param($Ev, $Definitions)
     $found = @(Test-HordeSchema -Value $Ev -Schema $Definitions.eventSchema)
     if ($found.Count -gt 0) { return @("it is not a decision-event.v1 record: " + (@($found | Select-Object -First 3) -join "; ")) }
-    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) { return @("its sequence number is beyond " + $script:HordeDecisionMaxSequence + ", the largest a record can have") }
+    if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most (Get-HordeDecisionMaxSequence))) { return @("its sequence number is beyond " + (Get-HordeDecisionMaxSequence) + ", the largest a record can have") }
     return @()
 }
 

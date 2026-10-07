@@ -7,12 +7,6 @@
     Target = "decisions\settings.json"
     Suite  = "test\test-decisions-store.ps1"
     Mutations = @(
-        @{ Name = "name-of-nine-digits"
-           Find = '"decisions.store.sequenceDigits": { "kind": "whole-number", "default": 10,'
-           Replace = '"decisions.store.sequenceDigits": { "kind": "whole-number", "default": 9,' }
-        @{ Name = "name-of-eleven-digits"
-           Find = '"decisions.store.sequenceDigits": { "kind": "whole-number", "default": 10,'
-           Replace = '"decisions.store.sequenceDigits": { "kind": "whole-number", "default": 11,' }
         @{ Name = "gap-limit-one-more"
            Find = '"decisions.store.maxGap": { "kind": "whole-number", "default": 100,'
            Replace = '"decisions.store.maxGap": { "kind": "whole-number", "default": 101,' }

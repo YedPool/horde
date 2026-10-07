@@ -71,7 +71,7 @@
            Find = 'try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }'
            Replace = '$found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part"))' }
         @{ Name = "name-not-padded-to-its-width"
-           Find = 'return ($Sequence.ToString(("D" + (Get-HordeDecisionStoreDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")'
+           Find = 'return ($Sequence.ToString(("D" + (Get-HordeDecisionSequenceDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")'
            Replace = 'return ($Sequence.ToString([System.Globalization.CultureInfo]::InvariantCulture) + ".json")' }
         @{ Name = "sequence-zero-allowed"
            Find = 'if ($Sequence -lt 1 -or $Sequence -gt $most) {'
@@ -79,9 +79,6 @@
         @{ Name = "eleven-digit-sequence-allowed"
            Find = 'if ($Sequence -lt 1 -or $Sequence -gt $most) {'
            Replace = 'if ($Sequence -lt 1) {' }
-        @{ Name = "largest-sequence-one-digit-short"
-           Find = 'return [long]("9" * (Get-HordeDecisionStoreDigits))'
-           Replace = 'return [long]("9" * ((Get-HordeDecisionStoreDigits) - 1))' }
         @{ Name = "relative-root-written"
            Find = 'if (-not [System.IO.Path]::IsPathRooted("$Root")) { throw ("the decisions store needs an absolute folder, not ''" + $Root + "''") }'
            Replace = '' }
@@ -116,8 +113,8 @@
            Find = 'if ($code -eq 2 -or $code -eq 3) {'
            Replace = 'if ($false) {' }
         @{ Name = "other-names-read-as-records"
-           Find = 'return (''\A([0-9]{'' + (Get-HordeDecisionStoreDigits) + ''})\.json\z'')'
-           Replace = 'return (''([0-9]{'' + (Get-HordeDecisionStoreDigits) + ''})\.json'')' }
+           Find = 'return (''\A([0-9]{'' + (Get-HordeDecisionSequenceDigits) + ''})\.json\z'')'
+           Replace = 'return (''([0-9]{'' + (Get-HordeDecisionSequenceDigits) + ''})\.json'')' }
         @{ Name = "damaged-record-keeps-no-reason"
            Find = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })'
            Replace = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = "" })' }

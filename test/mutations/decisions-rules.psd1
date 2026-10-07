@@ -21,7 +21,7 @@
            Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'
            Replace = 'if ($false) {' }
         @{ Name = "huge-sequence-number-cast"
-           Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most $script:HordeDecisionMaxSequence)) {'
+           Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most (Get-HordeDecisionMaxSequence))) {'
            Replace = 'if ($false) {' }
         @{ Name = "ten-digit-question-number-believed"
            Find = '$script:HordeDecisionMaxNumber = 999999999'
