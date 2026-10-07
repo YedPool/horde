@@ -199,6 +199,7 @@ $list = @(Get-ListNow)
 Check ((@($after.drawn.lines | Sort-Object { [int]$_.n } | ForEach-Object { $_.n + "|" + $_.t }) -join "`n") -ceq (@($list | Sort-Object number | ForEach-Object { "" + $_.number + "|" + $_.title }) -join "`n")) "and all 23 lines drawn are again the list's, number by number and text by text"
 Check ((@($after.drawn.headings | Where-Object { $_.t -ceq "__proto__" })[0].count) -eq 3) "the group named __proto__ now holds three"
 Check ((@($after.drawn.lines | Where-Object { $_.open } | ForEach-Object { $_.n }) -join ",") -ceq "3,19" -and $after.drawn.fleet.open -eq $true -and $after.drawn.fleet.picked -ceq "orc:B") "THE REDRAW FOLDED NOTHING: 3 and 19 are still unfolded, the fleet line still unfolded, Orc B still picked"
+Check (@($after.drawn.lines | Where-Object { $_.dim }).Count -eq 16 -and @($after.drawn.lines | Where-Object { -not $_.dim }).Count -eq 7) "and it kept the dimming: Orc B's seven questions as they were, the other sixteen dimmed and drawn"
 Check ($after.pushes -ge 1 -and $after.changes -ge 1 -and $after.watching -eq $true -and $after.watchFailures -eq 0) "because the store's folder is watched and the new list was pushed to the page"
 Check ($after.handle -eq $first.handle -and $after.pid -eq $first.pid) "in the same window of the same process: nothing was reloaded or reopened"
 Check ($after.title -ceq "Open decisions: 23, 18 waiting" -and $after.drawn.fleet.head -clike "*B blocked, waiting on you (7)*") ("the title and the fleet line's count follow (" + $after.title + ")")
