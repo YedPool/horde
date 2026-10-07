@@ -2,7 +2,7 @@
 # on the in-process memory transport, answering from a fixed session view. Not a suite: the suite runs
 # it in a second runspace and is the hub.
 #
-# THE PREAMBLE AS THE HUB'S FORCED COMMAND WRITES IT. Over ssh the node dials sshd, and the forced
+# THE PREAMBLE AS THE HUB'S FORCED COMMAND WRITES IT. Live, the node dials the hub's listener, and the forced
 # command (R17a's cli\attach.ps1) dials the hub pipe and writes one preamble line before relaying the
 # node's bytes. Here the transport plays that part: its open dials the memory endpoint and, when
 # -Preamble is not empty, writes that line first. The node itself sends nothing before its hello.

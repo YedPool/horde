@@ -1,15 +1,15 @@
 # DOES THE HUB TAKE A LINK A NODE DIALLED, BOUND TO THE DEVICE ITS PREAMBLE NAMES, AND DOES THE NODE DIAL?
 #
-# Remote plan R17c, slices 1 and 2. A node behind NAT dials the hub's listener over ssh; the hub's forced
+# Remote plan R17c, slices 1 and 2. A node behind NAT dials the hub's listener over its link transport; the hub's forced
 # command (R17a's cli\attach.ps1) dials the hub pipe and writes one preamble line, "horde-attach 1
 # <device id>", the device the node's key is enrolled as. The hub reads it, binds the link to that device,
 # refuses a hello claiming another, and runs the same pull it runs on a link it opened
 # (cli/HubServe.ps1). The node dials, answers on its own link as it answers an accepted one, and dials
 # again with a growing wait while the hub cannot be reached (cli/NodeServe.ps1, Invoke-HordeNodeDial).
 #
-# Without ssh or a pipe: both ends on the in-process memory transport, the node in a second runspace
+# Without a server or a pipe: both ends on the in-process memory transport, the node in a second runspace
 # (test/fixtures/node-serve/dial-peer.ps1), whose transport writes the preamble as attach will. The live
-# ssh dial is R17c-3 (test-transport-conformance's ssh case against R16's child sshd).
+# dial is R17c-3 (test-transport-conformance's live far end).
 #
 # R17a OWNS THE PREAMBLE CONTRACT (remote/LinkBinding.ps1, not yet merged): the preamble cases here are
 # that contract's wire form, and keep holding when cli/HubServe.ps1's stand-ins become calls to it.
