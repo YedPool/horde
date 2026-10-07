@@ -80,14 +80,14 @@ Check ($stray.Count -eq 0) ("every test-*.ps1 in the repository is one the gate 
 # CONTROL: the same check on a planted tree finds what it should and nothing else.
 $plant = Join-Path $env:TEMP ("horde-suitefiles-" + [guid]::NewGuid().ToString("N"))
 try {
-    foreach ($rel in @("test/test-a.ps1", "hosts/h/test/test-b.ps1", "transports/t/test/test-c.ps1", "agents/g/test/test-d.ps1", "messengers/m/test/test-e.ps1", "messengers/m/test/Fixture.ps1",
+    foreach ($rel in @("test/test-a.ps1", "hosts/h/test/test-b.ps1", "transports/t/test/test-c.ps1", "agents/g/test/test-d.ps1", "messengers/m/test/test-e.ps1", "messengers/m/test/Fixture.ps1", "surfaces/s/test/test-f.ps1",
                        "test/fixtures/x/test-data.ps1", "tools/test-stray.ps1", "transports/t/test/deep/test-deeper.ps1", "transports/t/test-beside.ps1", "test/lib/test-lib.ps1", "test/test-notes.txt")) {
         $p = Join-Path $plant $rel
         New-Item -ItemType Directory -Path (Split-Path -Parent $p) -Force | Out-Null
         [System.IO.File]::WriteAllText($p, "# planted")
     }
     $plantedSuites = @(Get-HordeSuiteFiles -Root $plant | ForEach-Object { $_.Name })
-    Check (($plantedSuites -join ",") -ceq "test-a.ps1,test-b.ps1,test-c.ps1,test-d.ps1,test-e.ps1") ("CONTROL: in a planted tree the gate list is exactly the five suite folders' test-*.ps1 files, a messenger's fixture not among them (" + ($plantedSuites -join ",") + ")")
+    Check (($plantedSuites -join ",") -ceq "test-a.ps1,test-b.ps1,test-c.ps1,test-d.ps1,test-e.ps1,test-f.ps1") ("CONTROL: in a planted tree the gate list is exactly the six suite folders' test-*.ps1 files, a messenger's fixture not among them (" + ($plantedSuites -join ",") + ")")
     $plantedStray = @(Get-HordeStraySuiteFiles -Root $plant)
     Check (($plantedStray -join ",") -ceq "test/lib/test-lib.ps1,tools/test-stray.ps1,transports/t/test-beside.ps1,transports/t/test/deep/test-deeper.ps1") ("CONTROL: and the stray check names the four planted outside it, and not the fixture (" + ($plantedStray -join ",") + ")")
 } finally { if (Test-Path -LiteralPath $plant) { Remove-Item -LiteralPath $plant -Recurse -Force } }
