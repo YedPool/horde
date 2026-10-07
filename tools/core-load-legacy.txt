@@ -1,0 +1,66 @@
+# The core files that do not load what they call, as tools/CoreLoad.ps1 first found them (2026-10-06),
+# one call per line: file | function. test/test-core-load.ps1 fails on a finding not listed here, and on
+# a line here that is no longer a finding, so this list only shrinks. The follow-up to #109 removes it
+# by making each file load what it calls.
+
+core/Faults.ps1 | Get-HordeStoredField
+core/Metrics.ps1 | Get-HordeCallCost
+core/Metrics.ps1 | Get-HordePriceSource
+core/Metrics.ps1 | New-HordeAbsent
+core/Metrics.ps1 | New-HordeKnown
+core/Metrics.ps1 | New-HordeUnknown
+core/MetricsCollect.ps1 | Assert-HordeJobName
+core/MetricsCollect.ps1 | ConvertTo-HordeJsonSafe
+core/MetricsCollect.ps1 | Get-HordeAgentStores
+core/MetricsCollect.ps1 | Get-HordeMetricsDir
+core/MetricsCollect.ps1 | Get-HordeMetricsRecordPath
+core/MetricsCollect.ps1 | Get-HordeMetricsWriteDecision
+core/MetricsCollect.ps1 | Get-HordeScheduler
+core/MetricsCollect.ps1 | Measure-HordeTranscriptFile
+core/MetricsCollect.ps1 | Move-HordeFileAtomic
+core/MetricsCollect.ps1 | New-HordeCollectJob
+core/MetricsCollect.ps1 | New-HordeKnown
+core/MetricsCollect.ps1 | Read-HordeMetricsGate
+core/MetricsCollect.ps1 | Read-HordePriceBook
+core/MetricsCollect.ps1 | Read-HordeSharedText
+core/MetricsCollect.ps1 | Set-HordeReadDeadline
+core/MetricsCollect.ps1 | Test-HordeMetricsRecordName
+core/MetricsCollect.ps1 | Test-HordeReadDeadlineHit
+core/MetricsCollect.ps1 | Write-HordeMetricsFile
+core/MetricsCollect.ps1 | Write-HordeMetricsRecord
+core/MetricsReport.ps1 | Complete-HordeMetricsAccumulator
+core/MetricsReport.ps1 | ConvertTo-HordeJsonSafe
+core/MetricsReport.ps1 | Get-HordeAgentStores
+core/MetricsReport.ps1 | Get-HordeMetricsDir
+core/MetricsReport.ps1 | Get-HordeMetricsWriteDecision
+core/MetricsReport.ps1 | New-HordeKnown
+core/MetricsReport.ps1 | New-HordeMetricsAccumulator
+core/MetricsReport.ps1 | New-HordeTranscriptSummaryRecord
+core/MetricsReport.ps1 | Read-HordeMetricsGate
+core/MetricsReport.ps1 | Read-HordePriceBook
+core/MetricsReport.ps1 | Read-HordeSharedText
+core/MetricsReport.ps1 | Read-HordeTranscript
+core/MetricsReport.ps1 | Test-HordeAnswer
+core/MetricsReport.ps1 | Test-HordeMetricsRecordName
+core/MetricsReport.ps1 | Write-HordeMetricsRecord
+core/MetricsStore.ps1 | ConvertTo-HordeUtcTime
+core/MetricsStore.ps1 | Get-HordeHome
+core/MetricsStore.ps1 | New-HordeAbsent
+core/MetricsStore.ps1 | New-HordeKnown
+core/MetricsStore.ps1 | New-HordeUnknown
+core/MetricsStore.ps1 | Read-HordeSharedText
+core/MetricsStore.ps1 | Test-HordeAnswer
+core/Price.ps1 | Get-HordeHome
+core/Price.ps1 | New-HordeAbsent
+core/Price.ps1 | New-HordeKnown
+core/Price.ps1 | New-HordeUnknown
+core/Price.ps1 | Read-HordeSharedText
+core/Schedule.ps1 | Get-HordeHome
+core/Schedule.ps1 | New-HordeKnown
+core/Schedule.ps1 | New-HordeUnknown
+core/Transcript.ps1 | Assert-HordeAnswer
+core/Transcript.ps1 | New-HordeAbsent
+core/Transcript.ps1 | New-HordeKnown
+core/Transcript.ps1 | New-HordeUnknown
+core/Transcript.ps1 | Open-HordeSharedStream
+core/Transcript.ps1 | Test-HordeAnswer

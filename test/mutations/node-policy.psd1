@@ -68,5 +68,8 @@
         @{ Name = "device-name-allowed"
            Find = 'if ($name -imatch ''\A(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?\z'') {'
            Replace = 'if ($false) {' }
+        @{ Name = "policy-bytes-unchecked"
+           Find = '    try { Assert-HordeAsciiBytes -Bytes $bytes -What ("the node policy at " + $Path) } catch {'
+           Replace = '    try { } catch {' }
     )
 }

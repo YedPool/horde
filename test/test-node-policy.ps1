@@ -77,6 +77,21 @@ Check ($missing.state -eq "absent") "a node with no policy file has an absent po
 $d = Decide (Resolve @(Ask "ask")) -Pol $missing
 Check (-not $d.allowed -and (Has $d "*no policy file*")) "and a node with no policy file lets a hub start nothing"
 Check ((Get-HordeNodePolicyPath -HordeHome "C:\h") -ceq "C:\h\node\policy.json") "the policy file sits in the node folder of the Horde home"
+# THE FILE, AS BYTES (review of #109): each is refused with its real cause, never as 'not JSON'.
+$pf = Join-Path $env:TEMP ("horde-policy-bytes-" + [guid]::NewGuid().ToString("N") + ".json")
+try {
+    [System.IO.File]::WriteAllBytes($pf, [System.Text.Encoding]::ASCII.GetBytes($policyText))
+    Check ((Get-HordeNodePolicy -Path $pf).state -eq "known") "CONTROL: the policy text saved as plain ASCII is read from its file"
+    [System.IO.File]::WriteAllBytes($pf, [byte[]](@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::ASCII.GetBytes($policyText)))
+    $b = Get-HordeNodePolicy -Path $pf
+    Check ($b.state -eq "unknown" -and $b.reason -like "*not plain ASCII*byte-order mark*" -and $b.reason -like ("*" + $pf + "*")) ("a policy file with a byte-order mark is refused, naming the file and the mark (" + $b.reason + ")")
+    [System.IO.File]::WriteAllBytes($pf, [System.Text.Encoding]::UTF8.GetBytes($policyText.Replace('example/app', ('example/' + [char]0x00E9))))
+    $b = Get-HordeNodePolicy -Path $pf
+    Check ($b.state -eq "unknown" -and $b.reason -like "*not plain ASCII*holds a byte that is not ASCII*") ("a policy file holding a non-ASCII byte is refused, naming it (" + $b.reason + ")")
+    [System.IO.File]::WriteAllBytes($pf, [System.Text.Encoding]::Unicode.GetBytes($policyText))
+    $b = Get-HordeNodePolicy -Path $pf
+    Check ($b.state -eq "unknown" -and $b.reason -like "*not plain ASCII*UTF-16*") ("a policy file saved as UTF-16 with no mark is named as such (" + $b.reason + ")")
+} finally { if ((Split-Path -Leaf $pf) -match '^horde-policy-bytes-[0-9a-f]{32}\.json$') { Remove-Item -LiteralPath $pf -ErrorAction SilentlyContinue } }
 
 Write-Host ""
 Write-Host "--- where the session runs (decision 2: no worktree means the registered clone) ---" -ForegroundColor Cyan
