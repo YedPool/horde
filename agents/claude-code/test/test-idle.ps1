@@ -297,6 +297,8 @@ try {
     Check (@($s.unknownTasks).Count -eq 0 -and @($s.openTasks).Count -eq 0) "a final notification naming its call releases it"
     $s = State (Write-Lines "driftother" @($drift + @(Note "2026-10-02T10:30:00Z" "bzzz0000" "completed" "" "toolu_ZZ")))
     Check (@($s.unknownTasks).Count -eq 1) "a final notification for another call does not"
+    $s = State (Write-Lines "flagonly" @((ToolUse "2026-10-02T10:00:01Z" "toolu_D2" "PowerShell" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_D2" "Started job 7. Results will appear later."), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_D2") "a call that asked for the background holds the session even when its result never says so"
     $s = State (Write-Lines "fork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_F1" "Agent" @{ description = "x"; prompt = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_F1" ("Fork started " + [char]0x2014 + " processing in background")), (TurnEnd "2026-10-02T10:00:04Z")))
     Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_F1") "an Agent fork, which names no id, holds the session as an unknown task (11 in 30 days)"
     $s = State (Write-Lines "skillfork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_K9" "Skill" @{ skill = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_K9" ("Skill " + [char]34 + "x" + [char]34 + " launched (forked execution, running in the background).`n`nRunning in the background as @x")), (TurnEnd "2026-10-02T10:00:04Z")))
