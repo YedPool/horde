@@ -433,4 +433,141 @@ Check ((FromText $null).values.widthPx -eq 520 -and $decl.settings[0].default -e
 $hostile = FromText (Doc ('{ "caf' + [char]0xE9 + '": "x", "role": "' + [char]0x4E2D + '\u0001", "' + ("k" * 500) + '": [[[1]]] }'))
 Check (@($hostile.findings).Count -eq 3 -and @($hostile.findings | Where-Object { $_ -cmatch '[^\x20-\x7E]' -or $_.Length -gt 403 }).Count -eq 0) "every finding is printable ASCII, and at most 400 characters and a mark that it was cut"
 
+# ---------------------------------------------------------------------------------------------------
+# THE FILE. A home this suite makes under TEMP and removes; HORDE_HOME is put back as it was.
+
+function Tree {
+    # Everything under a folder - each path, its size and when it was last written - as one text, so
+    # "a read changed nothing" is one comparison. EACH ENTRY IS REFRESHED, so its size and time are
+    # asked of the file itself and not taken from the folder's listing, which NTFS may bring up to
+    # date late. Without Refresh the comparison failed 2 of its first 3 runs on 2026-10-07, on a file
+    # only ever opened for reading; with it, 5 of 5 passed. Which field differed was not captured, so
+    # a mismatch now prints both listings.
+    param([string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir)) { return "<absent>" }
+    return (@(Get-ChildItem -LiteralPath $Dir -Recurse -Force | Sort-Object FullName | ForEach-Object { $_.Refresh(); $_.FullName + "|" + $(if ($_.PSIsContainer) { "folder" } else { "" + $_.Length }) + "|" + $_.LastWriteTimeUtc.Ticks }) -join "`n")
+}
+$tempHome = Join-Path $env:TEMP ("horde-module-settings-" + [guid]::NewGuid().ToString("N"))
+$otherHome = Join-Path $env:TEMP ("horde-module-settings-other-" + [guid]::NewGuid().ToString("N"))
+$probeFile = Join-Path $tempHome "settings\probe.json"
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+function Put { param([byte[]]$Bytes, [string]$Path = $probeFile) [System.IO.File]::WriteAllBytes($Path, $Bytes) }
+function FromFile { return (Get-HordeModuleSettings -Declaration $decl -HordeHome $tempHome) }
+function FileUnreadable {
+    # The file as it stands gives exactly one finding holding -Like, and every default.
+    param([string]$Like)
+    $r = FromFile
+    $good = (@($r.findings).Count -eq 1 -and (AllDefaults $r) -and $r.findings[0] -like ("the settings file of probe *" + $Like + "*; every setting of probe is its default"))
+    if (-not $good) { foreach ($f in @($r.findings)) { Write-Host ("    finding: " + $f) -ForegroundColor DarkYellow } }
+    return $good
+}
+$homeBefore = $env:HORDE_HOME
+$widthBefore = $env:HORDE_WIDTHPX
+$held = $null
+try {
+    Section "the file: a home, a folder or a file that is not there"
+    $r = FromFile
+    Check ((AllDefaults $r) -and @($r.findings).Count -eq 0 -and $r.findings -is [array]) "with no home at all every setting is its default, and there is no finding"
+    Check ($r.path -ceq $probeFile) "the answer says which file was looked for: <home>\settings\<module>.json"
+    Check (-not (Test-Path -LiteralPath $tempHome)) "A READ DOES NOT CREATE THE HOME"
+    $null = New-Item -ItemType Directory -Path $tempHome
+    $r = FromFile
+    Check ((AllDefaults $r) -and @($r.findings).Count -eq 0) "with a home and no settings folder every setting is its default"
+    Check ((Tree $tempHome) -ceq "") "A READ DOES NOT CREATE THE SETTINGS FOLDER"
+    $null = New-Item -ItemType Directory -Path (Join-Path $tempHome "settings")
+    $r = FromFile
+    Check ((AllDefaults $r) -and @($r.findings).Count -eq 0) "with a settings folder and no file every setting is its default"
+    Check (@(Get-ChildItem -LiteralPath (Join-Path $tempHome "settings") -Force).Count -eq 0) "A READ DOES NOT CREATE THE FILE"
+
+    Section "the file: read"
+    $goodText = Doc '{ "widthPx": 640, "role": "scout" }'
+    Put ($utf8.GetBytes($goodText))
+    $before = Tree $tempHome
+    $r = FromFile
+    Check ($r.values.widthPx -eq 640 -and $r.values.role -ceq "scout" -and $r.values.share -eq 0.25 -and @($r.findings).Count -eq 0) "a file under the home overrides what it names"
+    Check (@($r.PSObject.Properties | ForEach-Object { $_.Name }) -join "," -ceq "values,findings,path") "the answer is values, findings and the path read"
+    $otherDecl = New-HordeModuleSettings -Module "other-module" -Settings (Table)
+    Check ((AllDefaults (Get-HordeModuleSettings -Declaration $otherDecl -HordeHome $tempHome))) "ONE FILE PER MODULE: another module is not touched by this one's file"
+    Put ($utf8.GetBytes((Doc '{ "widthPx": 300 }'))) (Join-Path $tempHome "settings\other-module.json")
+    Check ((Get-HordeModuleSettings -Declaration $otherDecl -HordeHome $tempHome).values.widthPx -eq 300 -and (FromFile).values.widthPx -eq 640) "each module reads its own file"
+    Remove-Item -LiteralPath (Join-Path $tempHome "settings\other-module.json")
+
+    Section "the file: where the home comes from"
+    $env:HORDE_HOME = $tempHome
+    $r = Get-HordeModuleSettings -Declaration $decl
+    Check ($r.values.widthPx -eq 640 -and $r.path -ceq $probeFile) "without -HordeHome the home is Horde's own (core/Home.ps1): HORDE_HOME says WHERE"
+    $env:HORDE_HOME = $otherHome
+    Check ((FromFile).values.widthPx -eq 640) "-HordeHome is used when given, whatever HORDE_HOME says"
+    Check ((AllDefaults (Get-HordeModuleSettings -Declaration $decl)) -and -not (Test-Path -LiteralPath $otherHome)) "and a HORDE_HOME that is not there is every default, and is not created"
+    $env:HORDE_HOME = "relative\home"
+    Check (Throws { Get-HordeModuleSettings -Declaration $decl } "absolute") "a relative HORDE_HOME is refused by core/Home.ps1, as everywhere: that is no file's fault"
+    Check (Throws { Get-HordeModuleSettings -Declaration $decl -HordeHome "relative\home" } "-HordeHome must be an absolute path") "a relative -HordeHome is a programming error"
+    Check (Throws { Get-HordeModuleSettings -Declaration $decl -HordeHome "C:relative" } "-HordeHome must be an absolute path") "and so is one relative to a drive's current folder"
+    Check (Throws { Get-HordeModuleSettings -Declaration "probe" -HordeHome $tempHome } "New-HordeModuleSettings") "a -Declaration that New-HordeModuleSettings did not make is a programming error here too"
+    $env:HORDE_HOME = $tempHome
+    $env:HORDE_WIDTHPX = "999"
+    Check ((Get-HordeModuleSettings -Declaration $decl).values.widthPx -eq 640) "THE ENVIRONMENT NEVER SETS A SETTING: a variable named after one changes nothing"
+    $source = [System.IO.File]::ReadAllText((Join-Path $root "core\ModuleSettings.ps1"))
+    Check ($source.IndexOf('$env:', [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and $source.IndexOf('GetEnvironmentVariable', [System.StringComparison]::OrdinalIgnoreCase) -lt 0) "and core/ModuleSettings.ps1 reads no environment variable at all: the home comes from core/Home.ps1"
+    $homeSource = [System.IO.File]::ReadAllText((Join-Path $root "core\Home.ps1"))
+    Check ($homeSource.IndexOf('$env:', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) "CONTROL: that search finds the variable core/Home.ps1 reads"
+
+    Section "the file: its bytes"
+    Put ([byte[]](0xEF, 0xBB, 0xBF) + $utf8.GetBytes($goodText))
+    $r = FromFile
+    Check ($r.values.widthPx -eq 640 -and @($r.findings).Count -eq 0) "A FILE SAVED WITH A UTF-8 BYTE-ORDER MARK is read"
+    Put ($utf8.GetBytes((Doc ('{ "role": "' + $accent + '" }'))))
+    Check ((FromFile).values.role -ceq $accent) "TEXT THAT IS NOT ASCII is read as UTF-8, character for character"
+    Put ([System.Text.Encoding]::Unicode.GetPreamble() + [System.Text.Encoding]::Unicode.GetBytes($goodText))
+    Check (FileUnreadable "is not UTF-8 text") "a file saved as UTF-16, as 5.1's redirection writes it, is one finding saying so, and every default"
+    Put ([System.Text.Encoding]::GetEncoding(1252).GetBytes((Doc ('{ "role": "caf' + [char]0xE9 + '" }'))))
+    Check (FileUnreadable "is not UTF-8 text") "a file saved in a code page is one finding: its letters are never guessed"
+    Put ([byte[]](0x7B, 0xFF, 0x7D))
+    Check (FileUnreadable "is not UTF-8 text") "bytes that are no text at all are one finding"
+    Put ([byte[]]@())
+    Check (FileUnreadable "does not fit schema/module-settings.v1") "an empty file is one finding"
+    $padded = $utf8.GetBytes($goodText + (" " * (262144 - $goodText.Length)))
+    Put $padded
+    $r = FromFile
+    Check ($padded.Length -eq 262144 -and $r.values.widthPx -eq 640 -and @($r.findings).Count -eq 0) "a file of 262144 bytes is read"
+    Put ($padded + [byte[]](0x20))
+    Check (FileUnreadable "is larger than 262144 bytes") "a file one byte larger is one finding and every default"
+    Put ($utf8.GetBytes((Doc '{ "widthPx": 640, "widthPx": 300, "colour": 1 }')))
+    $r = FromFile
+    $same = FromText (Doc '{ "widthPx": 640, "widthPx": 300, "colour": 1 }')
+    Check (@($r.findings).Count -eq 1 -and ($r.findings -join "|") -ceq ($same.findings -join "|") -and (AllDefaults $r)) "what is wrong inside a file is said in the words the pure reading uses"
+    Put ($utf8.GetBytes((Doc '{ "widthPx": 9999, "colour": 1, "role": "scout" }')))
+    $r = FromFile
+    Check (@($r.findings).Count -eq 2 -and $r.values.widthPx -eq 520 -and $r.values.role -ceq "scout") "a wrong value and an unknown key in a file are two findings, and the good value beside them is read"
+
+    Section "the file: when it cannot be opened"
+    Put ($utf8.GetBytes($goodText))
+    $held = [System.IO.File]::Open($probeFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    Check (FileUnreadable "cannot be read (IOException)") "a file another program holds for itself is one finding and every default, never an error"
+    $held.Dispose(); $held = $null
+    $held = [System.IO.File]::Open($probeFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    Check ((FromFile).values.widthPx -eq 640) "a file an editor has open for writing, and shares, is read"
+    $held.Dispose(); $held = $null
+    Remove-Item -LiteralPath $probeFile
+    $null = New-Item -ItemType Directory -Path $probeFile
+    Check (FileUnreadable "cannot be read (UnauthorizedAccessException)") "a FOLDER where the file should be is one finding and every default, never an error"
+    Remove-Item -LiteralPath $probeFile
+
+    Section "the file: a read writes nothing"
+    Put ($utf8.GetBytes((Doc '{ "widthPx": 9999, "colour": 1, "role": "scout" }')))
+    $r = FromFile
+    Check (@($r.findings).Count -eq 2 -and @($r.findings | Where-Object { $_ -like "*horde-module-settings-*" -or $_ -like "*:\*" }).Count -eq 0) "no finding holds the home's path: the answer's path says where"
+    $before = Tree $tempHome
+    $null = FromFile; $null = FromFile; $null = Get-HordeModuleSettings -Declaration $otherDecl -HordeHome $tempHome
+    if ((Tree $tempHome) -cne $before) { Write-Host ("    got: before " + ($before -replace "`n", " ; ")) -ForegroundColor DarkYellow; Write-Host ("    got: after  " + ((Tree $tempHome) -replace "`n", " ; ")) -ForegroundColor DarkYellow }
+    Check ($before -clike "*probe.json|*" -and (Tree $tempHome) -ceq $before) "after three reads the home holds the same files, of the same size, last written at the same time"
+    Check (@(Get-ChildItem -LiteralPath (Join-Path $tempHome "settings") -Force).Count -eq 1) "and nothing stands beside the file: no copy, no lock, no file for the module that has none"
+} finally {
+    if ($null -ne $held) { $held.Dispose() }
+    $env:HORDE_HOME = $homeBefore
+    $env:HORDE_WIDTHPX = $widthBefore
+    if (Test-Path -LiteralPath $tempHome) { Remove-Item -LiteralPath $tempHome -Recurse -Force }
+}
+Check (-not (Test-Path -LiteralPath $tempHome) -and -not (Test-Path -LiteralPath $otherHome)) "the suite leaves no home behind"
+
 Complete-HordeSuite -Success "a module's settings are its declared defaults, overridden by one file under the home, and everything wrong is said by name"
