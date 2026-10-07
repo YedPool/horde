@@ -18,18 +18,71 @@
            Find = '$Bridge.refused = [int]$Bridge.refused + 1'
            Replace = '' }
         @{ Name = "refusal-record-grows-for-ever"
-           Find = 'while ($Bridge.refusals.Count -gt $script:HordeSurfaceRefusalsKept) { $Bridge.refusals.RemoveAt(0) }'
+           Find = 'while ($Bridge.refusals.Count -gt $Bridge.limits.refusalsKept) { $Bridge.refusals.RemoveAt(0) }'
            Replace = '' }
         @{ Name = "refusal-answered-with-no-reason"
            Find = '$say.ok = $false; $say.reason = ("refused: " + $Why) })'
            Replace = '$say.ok = $true; $say.reason = ("refused: " + $Why) })' }
         # --- the message
         @{ Name = "oversized-message-read"
-           Find = 'if ($Text.Length -gt $script:HordeSurfaceRequestChars) {'
+           Find = 'if ($Text.Length -gt $Bridge.limits.messageChars) {'
            Replace = 'if ($false) {' }
         @{ Name = "size-cap-one-short"
-           Find = 'if ($Text.Length -gt $script:HordeSurfaceRequestChars) {'
-           Replace = 'if ($Text.Length -ge $script:HordeSurfaceRequestChars) {' }
+           Find = 'if ($Text.Length -gt $Bridge.limits.messageChars) {'
+           Replace = 'if ($Text.Length -ge $Bridge.limits.messageChars) {' }
+        # --- the module's settings
+        @{ Name = "a-bridge-ignores-the-message-size-it-was-given"
+           Find = 'messageChars = [int]$Settings.values.messageChars;'
+           Replace = 'messageChars = 65536;' }
+        @{ Name = "a-bridge-ignores-the-argument-length-it-was-given"
+           Find = 'argumentChars = [int]$Settings.values.argumentChars;'
+           Replace = 'argumentChars = 16384;' }
+        @{ Name = "a-bridge-ignores-how-many-refusals-to-keep"
+           Find = 'refusalsKept = [int]$Settings.values.refusalsKept }'
+           Replace = 'refusalsKept = 50 }' }
+        @{ Name = "an-argument-with-no-length-of-its-own-is-unbounded"
+           Find = '$most = [long]$limits.argumentChars'
+           Replace = '$most = [long][int]::MaxValue' }
+        @{ Name = "settings-handed-in-are-dropped-and-the-file-read-anyway"
+           Find = 'if ($null -eq $Settings) { $Settings = Get-HordeSurfaceSettings }'
+           Replace = '$Settings = Get-HordeSurfaceSettings' }
+        # --- a settings file that fails a check refuses the surface: nothing is made from it
+        @{ Name = "a-bridge-is-made-beside-a-refused-file"
+           Find = '$Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no bridge from a refused file'
+           Replace = 'if ($null -eq $Settings) { $Settings = Get-HordeSurfaceSettings }' }
+        @{ Name = "a-spec-is-tried-beside-a-refused-file"
+           Find = '$Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no spec from a refused file'
+           Replace = 'if ($null -eq $Settings) { $Settings = Get-HordeSurfaceSettings }' }
+        @{ Name = "a-refused-file-is-not-said-in-its-own-words"
+           Find = 'if ($state -ceq "refused") { throw (@($Settings.findings) -join [Environment]::NewLine) }'
+           Replace = '' }
+        @{ Name = "a-refusal-says-only-its-first-finding"
+           Find = 'if ($state -ceq "refused") { throw (@($Settings.findings) -join [Environment]::NewLine) }'
+           Replace = 'if ($state -ceq "refused") { throw ("" + @($Settings.findings)[0]) }' }
+        @{ Name = "anything-handed-in-is-taken-for-settings"
+           Find = 'if (@("defaults", "read") -cnotcontains $state) { throw'
+           Replace = 'if ($false) { throw' }
+        @{ Name = "a-spec-ignores-the-width-setting"
+           Find = 'if ($null -eq $Width) { $Width = $Settings.values.widthPx }'
+           Replace = 'if ($null -eq $Width) { $Width = 520 }' }
+        @{ Name = "a-spec-ignores-the-height-setting"
+           Find = 'if ($null -eq $Height) { $Height = $Settings.values.heightPx }'
+           Replace = 'if ($null -eq $Height) { $Height = 760 }' }
+        @{ Name = "a-spec-ignores-the-tick-setting"
+           Find = 'if ($null -eq $TickMs) { $TickMs = $Settings.values.tickMs }'
+           Replace = 'if ($null -eq $TickMs) { $TickMs = 250 }' }
+        @{ Name = "a-window-one-pixel-narrower-than-the-smallest"
+           Find = '$script:HordeSurfaceSmallestWidthPx = 200'
+           Replace = '$script:HordeSurfaceSmallestWidthPx = 199' }
+        @{ Name = "a-window-one-pixel-shorter-than-the-smallest"
+           Find = '$script:HordeSurfaceSmallestHeightPx = 150'
+           Replace = '$script:HordeSurfaceSmallestHeightPx = 149' }
+        @{ Name = "a-setting-may-go-below-the-smallest-window"
+           Find = 'min = $script:HordeSurfaceSmallestWidthPx; max = 8000;'
+           Replace = 'min = 1; max = 8000;' }
+        @{ Name = "a-tick-setting-may-be-a-busy-loop"
+           Find = 'min = $script:HordeSurfaceFastestTickMs; max = 60000;'
+           Replace = 'min = 1; max = 60000;' }
         @{ Name = "a-list-taken-as-a-message"
            Find = 'if ($null -eq $message -or $message -isnot [System.Management.Automation.PSCustomObject]) {'
            Replace = 'if ($null -eq $message) {' }

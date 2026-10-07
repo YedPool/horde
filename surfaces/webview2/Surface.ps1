@@ -175,6 +175,18 @@ function Get-HordeWebView2ScaleNote {
     return ("the window is not known to be drawn at the screen's real scale (awareness " + $Scale.awareness + "), so its text may be soft: " + $Scale.reason)
 }
 
+function Get-HordeWebView2OpeningNotes {
+    # What the caller is told as the window opens, before anything has failed: sentences that join the
+    # list of errors it reads. Today, what is said of the screen's scale. NOTHING OF THE PERSON'S
+    # SETTINGS FILE: a file with a fault is refused and no spec is made from it (surfaces/Port.ps1,
+    # A FILE THAT FAILS A CHECK IS REFUSED), so a window that opens has no setting it did not use.
+    param([Parameter(Mandatory = $true)]$Scale)
+    $notes = @()
+    $scaleNote = Get-HordeWebView2ScaleNote -Scale $Scale
+    if ($scaleNote -ne "") { $notes += $scaleNote }
+    return @($notes)
+}
+
 function Get-HordeWebView2RuntimeProblem {
     # "" when -Version is the version of an installed engine; otherwise what to tell a person.
     param([AllowNull()][AllowEmptyString()][string]$Version)
@@ -502,8 +514,7 @@ function Open-HordeWebView2Surface {
         opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
         errors = $errors
     }
-    $scaleNote = Get-HordeWebView2ScaleNote -Scale $scale
-    if ($scaleNote -ne "") { [void]$errors.Add($scaleNote) }
+    foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale)) { [void]$errors.Add($note) }
     $state = $script:HordeWebView2
     try {
         $view.add_CoreWebView2InitializationCompleted($handlers.initialized)

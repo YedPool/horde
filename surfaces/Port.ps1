@@ -45,7 +45,10 @@
 #   hidden     shown where nobody sees it and out of the taskbar: a start that must not interrupt, a test
 #   companion  it belongs beside another window: out of the taskbar, and shown without taking the
 #              keyboard from whatever has it
-#   left, top, width, height   where it first stands, in pixels; with no left and top, mid-screen
+#   left, top, width, height   where it first stands, in pixels; with no left and top, mid-screen;
+#              with no width or height, the module's settings (520 by 760 unless a person's file
+#              says otherwise); never smaller than Get-HordeSurfaceLimits says
+#   tickMs     how often onTick runs; with none, the module's setting (250 ms)
 #   state      anything: handed back, untouched, to every callback
 #   onOpened   param($Window, $State) once the page's engine is up; onTick the same, every tickMs
 #   onClosed   param($Window, $State) as the window goes
@@ -87,6 +90,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\ModuleSettings.ps1")
 
 if ($null -eq (Get-Variable -Name HordeSurfaces -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeSurfaces = @{} }
 $script:HordeSurfaceCapabilityNames = @("page.local", "page.locked", "requests.closed", "push", "window.native", "picture")
@@ -98,16 +102,46 @@ $script:HordeSurfaceThemes = @("system", "light", "dark")
 # sees every message follow it).
 $script:HordeSurfaceMessagesFile = "bridge-messages.json"
 $script:HordeSurfaceMessagesSchema = "surface-bridge-messages.v1"
-# The most one message from the page may be, in characters. The largest thing a page sends today is a
-# few numbers; a later answer in a person's own words is capped by the decisions rules, far below this.
-# Checked before the text is parsed, so an oversized message costs nothing to refuse.
-$script:HordeSurfaceRequestChars = 65536
-# How many refusals a bridge remembers. A page that misbehaves in a loop must not grow the process.
-$script:HordeSurfaceRefusalsKept = 50
 $script:HordeSurfaceNamePattern = '\A[a-z][a-z-]{0,31}\z'
 $script:HordeSurfaceArgTypes = @("string", "integer", "boolean")
-# The longest text one argument may hold unless its request says less.
-$script:HordeSurfaceArgChars = 16384
+
+# WHAT NO SURFACE IS ASKED TO GO BELOW. Named constants and not settings: they are what a spec may ask
+# of ANY surface, so a person's file must not be able to move them, and they are the settings' own
+# smallest values below, written here once (Get-HordeSurfaceLimits hands them to a caller that needs
+# them, so no caller keeps a copy). A window narrower or shorter than this cannot show a line of
+# text and its own frame; a tick faster than this is a busy loop on the window's own thread.
+$script:HordeSurfaceSmallestWidthPx = 200
+$script:HordeSurfaceSmallestHeightPx = 150
+$script:HordeSurfaceFastestTickMs = 50
+# How deep a value Horde hands a page may nest. A named constant and not a setting: it bounds
+# Horde's own data shapes, which only a change to Horde's code can deepen.
+$script:HordeSurfaceJsonDepth = 16
+
+# THE SETTINGS OF THE MODULE "surface" (core/ModuleSettings.ps1): one table, read from
+# <HORDE_HOME>\settings\surface.json. With no such file the defaults below are used.
+# A FILE THAT FAILS A CHECK IS REFUSED, AND SO IS THE SURFACE. The rule is the settings module's: an
+# override file that fails its checks refuses with a reason and never silently falls back to the
+# defaults - an unknown key, a wrong kind, a value out of range, text that is not JSON, each refuses
+# the whole file. So a bridge and a spec are NOT MADE from a refused file (Resolve-HordeSurfaceSettings):
+# New-HordeSurfaceBridge and New-HordeSurfaceSpec throw the file's own findings, one to a line, each
+# naming the file and the key. With no spec there is nothing for Open-HordeSurface to open, so no
+# surface is ever shown on defaults a person's file tried and failed to change; a command that
+# composes a surface lets the throw go, and horde exits 1 with those sentences. This holds for a
+# caller that names its own size and pace too: the file is the person's, and a fault in it is theirs
+# to hear of before anything is shown.
+# WHO READS THEM, AND WHEN: a bridge and a spec are each made with the settings of that moment and
+# keep them (New-HordeSurfaceBridge, New-HordeSurfaceSpec), so a file edited while a window is open
+# moves nothing under a page. A caller that wants one reading for both, or to say a refusal in its
+# own way before it makes either, reads once with Get-HordeSurfaceSettings, looks at state, and
+# hands the answer to both.
+$script:HordeSurfaceSettings = New-HordeModuleSettings -Module "surface" -Settings @(
+    @{ name = "widthPx"; kind = "whole"; default = 520; min = $script:HordeSurfaceSmallestWidthPx; max = 8000; what = "Width a surface first has when its caller names none, in pixels." }
+    @{ name = "heightPx"; kind = "whole"; default = 760; min = $script:HordeSurfaceSmallestHeightPx; max = 8000; what = "Height a surface first has when its caller names none, in pixels." }
+    @{ name = "tickMs"; kind = "whole"; default = 250; min = $script:HordeSurfaceFastestTickMs; max = 60000; what = "How often a caller's tick runs when the caller names no pace, in milliseconds." }
+    @{ name = "messageChars"; kind = "whole"; default = 65536; min = 1024; max = 1048576; what = "The most characters one message from a page may be; a longer one is refused before it is read." }
+    @{ name = "argumentChars"; kind = "whole"; default = 16384; min = 64; max = 1048576; what = "The longest text one argument of a request may hold, unless the request itself says less." }
+    @{ name = "refusalsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many refusals a bridge remembers; every one is counted, the oldest are dropped." }
+)
 
 # The mount every surface serves itself (header, WHERE A PAGE FINDS A FILE).
 $script:HordeSurfaceOwnMount = "surface"
@@ -115,6 +149,39 @@ $script:HordeSurfaceOwnMount = "surface"
 $script:HordeSurfaceMountPattern = '\A[a-z][a-z0-9-]{0,31}\z'
 
 function Get-HordeSurfaceRoot { return $PSScriptRoot }
+
+function Get-HordeSurfaceSettingsDeclaration { return $script:HordeSurfaceSettings }
+
+function Get-HordeSurfaceSettings {
+    # The module's settings as they are now: { state; values; findings; path } (core/ModuleSettings.ps1).
+    # state is defaults (no file), read (the file passed every check) or refused (it failed one:
+    # values is nothing and findings names every problem). It never throws for a bad file: what a
+    # refusal means for a surface is said by Resolve-HordeSurfaceSettings.
+    # Reads the one file and writes nothing. -HordeHome is for a caller that already knows the home.
+    param([string]$HordeHome = "")
+    return (Get-HordeModuleSettings -Declaration $script:HordeSurfaceSettings -HordeHome $HordeHome)
+}
+
+function Resolve-HordeSurfaceSettings {
+    # The settings a bridge or a spec is made with: -Settings as its caller handed it, or the file
+    # as it is now. THROWS when they are refused (header, A FILE THAT FAILS A CHECK IS REFUSED): the
+    # findings, one to a line, as the settings module wrote them. Only an answer whose state is
+    # defaults or read comes back; anything else handed in is a programming error and throws too, so
+    # nothing without values is ever read for one.
+    param($Settings = $null)
+    if ($null -eq $Settings) { $Settings = Get-HordeSurfaceSettings }
+    $state = ""
+    if ($Settings -is [System.Management.Automation.PSCustomObject] -and $null -ne $Settings.PSObject.Properties["state"]) { $state = "$($Settings.state)" }
+    if ($state -ceq "refused") { throw (@($Settings.findings) -join [Environment]::NewLine) }
+    if (@("defaults", "read") -cnotcontains $state) { throw "what was handed as the surface's settings is not an answer of Get-HordeSurfaceSettings" }
+    return $Settings
+}
+
+function Get-HordeSurfaceLimits {
+    # What no spec may go below, for a caller that sizes a surface itself (header, WHAT NO SURFACE IS
+    # ASKED TO GO BELOW): { smallestWidthPx; smallestHeightPx; fastestTickMs }.
+    return [pscustomobject]@{ smallestWidthPx = $script:HordeSurfaceSmallestWidthPx; smallestHeightPx = $script:HordeSurfaceSmallestHeightPx; fastestTickMs = $script:HordeSurfaceFastestTickMs }
+}
 
 function Get-HordeSurfaceMessagesPath {
     # The file that defines the bridge's messages. A surface serves this very file to the page.
@@ -310,7 +377,7 @@ function Resolve-HordeSurface {
 function ConvertTo-HordeSurfaceJson {
     # A value as one line of ASCII JSON (header, WHAT GOES BACK).
     param($Value)
-    $json = ConvertTo-Json -InputObject $Value -Compress -Depth 16
+    $json = ConvertTo-Json -InputObject $Value -Compress -Depth $script:HordeSurfaceJsonDepth
     return [regex]::Replace($json, '[^\x20-\x7E]', { param($m) '\u' + ([int][char]$m.Value).ToString("x4") })
 }
 
@@ -322,7 +389,13 @@ function New-HordeSurfaceBridge {
     #   run    answers it, with plain data. It is given the checked arguments as a table, and the
     #          caller's state and window as the surface holds them.
     # -Events is the names Horde may push. A malformed table is a programming error and throws.
-    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Requests, [string[]]$Events = @())
+    # -Settings is the answer of Get-HordeSurfaceSettings; without it the file is read here. A
+    # refused file THROWS its findings and no bridge is made (Resolve-HordeSurfaceSettings). Either
+    # way the bridge keeps the three limits it was made with: the most a message may be, the longest
+    # an argument may be unless it says less, and how many refusals are remembered.
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Requests, [string[]]$Events = @(), $Settings = $null)
+    $Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no bridge from a refused file
+    $limits = [pscustomobject]@{ messageChars = [int]$Settings.values.messageChars; argumentChars = [int]$Settings.values.argumentChars; refusalsKept = [int]$Settings.values.refusalsKept }
     $table = [ordered]@{}
     foreach ($name in @($Requests.Keys)) {
         if ("$name" -cnotmatch $script:HordeSurfaceNamePattern) { throw ("'" + $name + "' is not a request name: lowercase letters and hyphens") }
@@ -334,7 +407,7 @@ function New-HordeSurfaceBridge {
                 if ("$argName" -cnotmatch '\A[a-z][A-Za-z0-9]{0,31}\z') { throw ("'" + $argName + "' of request '" + $name + "' is not an argument name") }
                 $spec = $entry["args"][$argName]
                 if ($script:HordeSurfaceArgTypes -cnotcontains "$($spec["type"])") { throw ("argument '" + $argName + "' of request '" + $name + "' has the type '" + $spec["type"] + "', not one of " + ($script:HordeSurfaceArgTypes -join ", ")) }
-                $most = [long]$script:HordeSurfaceArgChars
+                $most = [long]$limits.argumentChars
                 if ("$($spec["type"])" -ceq "integer") { $most = [long][int]::MaxValue }
                 if ($null -ne $spec["most"]) { $most = [long]$spec["most"] }
                 $argTable["$argName"] = [pscustomobject]@{ type = "$($spec["type"])"; most = $most }
@@ -347,6 +420,7 @@ function New-HordeSurfaceBridge {
         PSTypeName = "Horde.SurfaceBridge"
         requests = $table
         events = @($Events)
+        limits = $limits
         # Counted for ever, kept only for the last few: what a page was refused, and when.
         refused = 0
         refusals = (New-Object System.Collections.ArrayList)
@@ -360,7 +434,7 @@ function Add-HordeSurfaceRefusal {
     param([Parameter(Mandatory = $true)]$Bridge, [Parameter(Mandatory = $true)][string]$Reason, [datetime]$Now = [datetime]::UtcNow)
     $Bridge.refused = [int]$Bridge.refused + 1
     [void]$Bridge.refusals.Add([pscustomobject]@{ at = $Now.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture); reason = $Reason })
-    while ($Bridge.refusals.Count -gt $script:HordeSurfaceRefusalsKept) { $Bridge.refusals.RemoveAt(0) }
+    while ($Bridge.refusals.Count -gt $Bridge.limits.refusalsKept) { $Bridge.refusals.RemoveAt(0) }
 }
 
 function Test-HordeSurfaceArguments {
@@ -410,7 +484,7 @@ function Invoke-HordeSurfaceRequest {
         return [pscustomobject]@{ reply = $line; refused = $Why; request = "" }
     }
     if ([string]::IsNullOrEmpty($Text)) { return (& $refuse "the message was empty" $null) }
-    if ($Text.Length -gt $script:HordeSurfaceRequestChars) { return (& $refuse ("the message was " + $Text.Length + " characters, more than the " + $script:HordeSurfaceRequestChars + " one may be; it was not read") $null) }
+    if ($Text.Length -gt $Bridge.limits.messageChars) { return (& $refuse ("the message was " + $Text.Length + " characters, more than the " + $Bridge.limits.messageChars + " one may be; it was not read") $null) }
     $message = $null
     try { $message = $Text | ConvertFrom-Json } catch { $message = $null }
     if ($null -eq $message -or $message -isnot [System.Management.Automation.PSCustomObject]) { return (& $refuse "the message was not one JSON object" $null) }
@@ -467,9 +541,18 @@ function New-HordeSurfaceSpec {
         [Parameter(Mandatory = $true)][string]$Start,
         [Parameter(Mandatory = $true)]$Bridge,
         [Parameter(Mandatory = $true)][string]$DataFolder,
-        [switch]$Hidden, [switch]$Companion, $Left = $null, $Top = $null, [int]$Width = 520, [int]$Height = 760, [string]$Theme = "system",
-        $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, [int]$TickMs = 250, [scriptblock]$OnClosed = $null
+        [switch]$Hidden, [switch]$Companion, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
+        $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, $TickMs = $null, [scriptblock]$OnClosed = $null,
+        $Settings = $null
     )
+    # A size or a pace the caller names is the caller's; one it leaves out is the module's setting.
+    # A refused settings file throws its findings here, whatever the caller named, and no spec is
+    # made (Resolve-HordeSurfaceSettings).
+    $Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no spec from a refused file
+    if ($null -eq $Width) { $Width = $Settings.values.widthPx }
+    if ($null -eq $Height) { $Height = $Settings.values.heightPx }
+    if ($null -eq $TickMs) { $TickMs = $Settings.values.tickMs }
+    $Width = [int]$Width; $Height = [int]$Height; $TickMs = [int]$TickMs
     $mountTable = [ordered]@{}
     foreach ($name in @($Mounts.Keys)) {
         # A mount's name is a step of the addresses a page writes, so it is held to a plain one.
@@ -484,7 +567,7 @@ function New-HordeSurfaceSpec {
     $startMount = $Matches[1]; $startFile = $Matches[2]
     if (-not (Test-Path -LiteralPath (Join-Path $mountTable[$startMount] $startFile) -PathType Leaf)) { throw ("the start page '" + $Start + "' is not a file that exists") }
     if (-not [System.IO.Path]::IsPathRooted($DataFolder)) { throw "the surface's data folder must be an absolute path" }
-    if ($Width -lt 200 -or $Height -lt 150 -or $TickMs -lt 50) { throw "a surface is at least 200 by 150 pixels, and ticks no faster than every 50 ms" }
+    if ($Width -lt $script:HordeSurfaceSmallestWidthPx -or $Height -lt $script:HordeSurfaceSmallestHeightPx -or $TickMs -lt $script:HordeSurfaceFastestTickMs) { throw ("a surface is at least " + $script:HordeSurfaceSmallestWidthPx + " by " + $script:HordeSurfaceSmallestHeightPx + " pixels, and ticks no faster than every " + $script:HordeSurfaceFastestTickMs + " ms") }
     if (($null -eq $Left) -ne ($null -eq $Top)) { throw "a surface is given both its left and its top, or neither" }
     if ($script:HordeSurfaceThemes -cnotcontains $Theme) { throw ("'" + $Theme + "' is not a theme; the themes are: " + ($script:HordeSurfaceThemes -join ", ")) }
     return [pscustomobject]@{

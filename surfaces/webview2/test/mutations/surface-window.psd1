@@ -40,6 +40,10 @@
         @{ Name = "the-engines-own-ask-is-recorded-in-the-real-engine"
            Find = 'if ($script:HordeWebView2EngineOwnPaths -ccontains $path) {'
            Replace = 'if ($false) {' }
+        # NO MUTANT DROPS THE NOTES A WINDOW OPENS WITH ANY MORE. The one that did was caught by a fault in
+        # the settings file reaching the caller; such a file now makes no spec at all (surfaces/Port.ps1).
+        # What is left in the notes is the screen's scale, said only where the process does not draw at
+        # the real scale, which this suite cannot arrange in a real window: a mutant here would survive.
         # --- what the real engine does with them
         @{ Name = "a-new-window-opens-in-the-real-engine"
            Find = '$What.Handled = $true'
