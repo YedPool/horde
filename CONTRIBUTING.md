@@ -305,14 +305,21 @@ its branch can break main when main moved under it").
    whose find string occurred twice from PR #57 on, so the mutant could not apply, and nothing
    reported it until the `-Changed` selector placed every mutant.
 
-   **A section map's catches are verified separately.** A spec whose mutants carry `Sections` runs
-   each one on just those sections (`tools\Mutate.ps1`, SECTIONS). A catch made that way is not
-   proven, because a section run alone can take another path than it takes inside the whole suite.
-   So the result line counts every such catch as `unverified catches: N`. `-Changed` always verifies
-   the mutants it selects on the whole suite, and that includes every mutant of a spec whose map
-   changed. Every spec also runs with `-VerifyMaps` (or `HORDE_MUTATE_VERIFY_MAPS=1`, for example
-   through the remote gate's `-Env`) before each batch merge, and at least weekly. A `[MAP-HIDES]`
-   line in that run is a survivor the map hid: fix the map, then the gap.
+   **A section map is for review rounds only: never merge on `-Fast`.** A spec whose mutants
+   carry `Sections` can run each one on just those sections, but only when the caller passes
+   `-Fast` (`tools\Mutate.ps1`, SECTIONS AND -Fast). A catch made that way is not proven, because
+   a section run alone can take another path than it takes inside the whole suite: the review of
+   #115 reproduced a mutant its section caught and the whole suite let through. So a plain
+   `-Spec` run - what the gate runs - does not use the map at all: every mutant gets the whole
+   suite, and the map saves no time there. `-Changed` is the same, unless it is given `-Fast`
+   itself. A run that left a catch unverified ends in a line beginning `mutations (fast,` and not
+   in the `mutations: N, as expected: N, not: N` line a gate reads, so it cannot be taken for a
+   result; its exit code is a reviewer's signal and nothing more. To check the maps themselves,
+   run `-Fast -VerifyMaps` (or `-Fast` with `HORDE_MUTATE_VERIFY_MAPS=1`): each mapped catch is
+   then confirmed on the whole suite, and the `maps:` line counts the `[MAP-MISS]` and
+   `[MAP-HIDES]` mutants. A `[MAP-HIDES]` mutant is a survivor: fix the gap, then the map.
+   `HORDE_MUTATE_VERIFY_MAPS` is `1`, `0` or unset (`0` and unset force nothing and never turn
+   verification off); any other value stops the tool with exit 2.
 3. **Reviewers do not rerun the author's suites.** The author's runs, and the logs they leave, are
    the author's evidence. A reviewer reads the code and writes **targeted probes**: the input the
    author did not think of, run against the shipped command (rule 6). Rerunning the same suites

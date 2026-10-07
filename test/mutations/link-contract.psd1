@@ -1,9 +1,10 @@
 # Mutations of the link contract checker. Run: powershell -File tools\Mutate.ps1 -Spec test\mutations\link-contract.psd1
 # Each mutation switches off, loosens or misreads one rule of remote/Contract.ps1, and
 # test\test-link-contracts.ps1 must fail for every one. Every find string occurs exactly once.
-# SECTIONS: each mutant runs only the suite section that kills it (tools\Mutate.ps1, SECTIONS; issue
-# #83). Each map is the cheapest section whose checks failed for that mutant in a whole-suite run on
-# the always-on box (bd6cdb5, 2026-10-07); a mutant its section misses is rerun on the whole suite.
+# SECTIONS: under -Fast each mutant runs only the suite section that kills it (tools\Mutate.ps1,
+# SECTIONS AND -Fast; issue #83). Each map is the cheapest section whose checks failed for that mutant
+# in a whole-suite run on the always-on box (bd6cdb5, 2026-10-07); a mutant its section misses is
+# rerun on the whole suite. A plain run - the gate's - uses no map: every mutant gets the whole suite.
 @{
     Target = "remote\Contract.ps1"
     Suite  = "test\test-link-contracts.ps1"

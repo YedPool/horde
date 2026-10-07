@@ -92,10 +92,12 @@ function Add-HordeSuiteProblem {
 # SECTIONS, FOR MUTATION RUNS (issues #82 and #83). A mutant of one rule is caught by the one part of a
 # suite that checks that rule, yet every mutant reran the whole suite: link-contract.psd1 took about
 # 2900 s on the always-on box. A suite that names its parts lets a mutation spec map each mutant to the
-# sections that kill it, and tools\Mutate.ps1 runs only those (it reruns the whole suite before it
-# reports a survivor, so a wrong map costs time, never a verdict). A suite declares its sections once,
-# as ONE LITERAL LIST - test\lib\SuiteSections.ps1 reads it from the text to check every map - and
-# guards each part:
+# sections that kill it, and tools\Mutate.ps1 -Fast runs only those. That is for review rounds: a
+# section run alone can catch a mutant the whole suite misses (a cache an earlier section fills), so
+# without -Fast the tool does not use the map at all and the whole suite gives every verdict
+# (tools\Mutate.ps1, SECTIONS AND -Fast; review of #115, rounds 2 and 3). A suite declares its
+# sections once, as ONE LITERAL LIST - test\lib\SuiteSections.ps1 reads it from the text to check
+# every map - and guards each part:
 #
 #   Register-HordeSuiteSections -Ids @("controls", "rows")
 #   if (Enter-HordeSuiteSection "controls" "the real contract is valid") {

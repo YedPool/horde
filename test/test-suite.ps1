@@ -152,8 +152,8 @@ Check ($ffOff.code -eq 1 -and $ffOff.out -like "*the second failing check*") "CO
 
 Write-Host ""
 Write-Host "--- sections, for mutation runs ---" -ForegroundColor Cyan
-# A mutation spec maps each mutant to the sections that kill it, and tools\Mutate.ps1 runs only those
-# (HORDE_SECTIONS). The selection must never read as a whole pass, and a wrong name must never read as
+# A mutation spec maps each mutant to the sections that kill it, and tools\Mutate.ps1 -Fast runs only
+# those (HORDE_SECTIONS). The selection must never read as a whole pass, and a wrong name must never read as
 # a caught mutant: Mutate.ps1 counts a catch only from a [FAIL] line.
 $sAll = Invoke-Fixture "sections"
 Check ($sAll.code -eq 0 -and $sAll.out -like "*[[]PASS] the alpha check*" -and $sAll.out -like "*[[]PASS] the beta check*") "with no selection every section runs and the suite exits 0"

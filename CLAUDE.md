@@ -46,6 +46,8 @@ reason.
 - Each review round: the suites covering the changed files, plus `tools\Mutate.ps1 -Changed <base-ref>`.
   `-Changed` is a review-round accelerator only: it is blind to edited helpers, config and schemas,
   and to a guard added above a mutant. Never merge on it alone.
+- `tools\Mutate.ps1 -Fast` runs a mapped mutant on its sections only and leaves the catch unverified.
+  It is for review rounds too: never merge on a `-Fast` result. A plain run uses no map.
 - Once per PR, on the final head merged with current `main`: the full suite and the full mutation
   specs. "Mergeable" is not "green".
 - Reviewers read the code and write targeted probes; they do not rerun the author's suites.
