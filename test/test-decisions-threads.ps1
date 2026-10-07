@@ -84,9 +84,17 @@ function Get-Thread {
     if ($a.state -cne "known" -or $a.value.outcome -cne "done") { return [pscustomobject]@{ count = -1; turn = (Get-Outcome $a); turnShown = ""; unread = @(); messages = @() } }
     return $a.value.question.thread
 }
-function Get-Texts { param($Thread) return (@($Thread.messages | ForEach-Object { $_.text }) -join " | ") }
+# A thread or an answer that lacks what it should hold must FAIL the check that reads it, by name -
+# not raise an error under strict mode, which tools/Mutate.ps1 does not count as a catch.
+function Get-Texts { param($Thread) if ($null -eq $Thread.PSObject.Properties["messages"]) { return "(the thread holds no messages)" }; return (@($Thread.messages | ForEach-Object { $_.text }) -join " | ") }
+function Get-Said {
+    # The message a say answered with; a stand-in that equals nothing when the answer holds none.
+    param($Answer)
+    if ($Answer.state -ceq "known" -and $null -ne $Answer.value.PSObject.Properties["message"]) { return $Answer.value.message }
+    return [pscustomobject]@{ sequence = -1; text = "(the answer holds no message)"; speaker = ""; speakerShown = ""; route = ""; routeShown = ""; recordedBy = ""; wordingVersion = -1; saidToEarlierWording = "none"; arrivedAfterClosing = "none" }
+}
 function Get-Unread { param($Thread) $u = @($Thread.unread | Where-Object { $_.reader -ceq "warchief" }) | Select-Object -First 1; if ($null -eq $u) { return -1 }; return [int]$u.count }
-function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo + " marked=" + $Answer.value.marked) }
+function Get-InboxLine { param($Answer) if ($Answer.state -cne "known" -or $Answer.value.outcome -ceq "refused") { return (Get-Outcome $Answer) }; if ($null -eq $Answer.value.PSObject.Properties["messages"]) { return "(the answer holds no messages)" }; return ((@($Answer.value.messages | ForEach-Object { "" + $_.message.sequence + "@" + $_.number }) -join ",") + " upTo=" + $Answer.value.upTo + " marked=" + $Answer.value.marked) }
 function Test-Echo { param($Answer, [string]$Text) return ((ConvertTo-Json -InputObject (ConvertTo-HordeAnswerRecord -Answer $Answer) -Compress -Depth 12).Contains($Text)) }
 
 try {
@@ -104,20 +112,20 @@ $s = New-TestStore
 $null = Add-Q $s
 $a = Say $s 1 "Yes, play it."
 Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 1 -and $a.value.sequence -eq 2 -and $a.value.attempts -eq 1) ("the founder's words are recorded under question 1, as record 2 (" + (Get-Outcome $a) + ")")
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.text -ceq "Yes, play it." -and $a.value.message.speaker -ceq "founder" -and $a.value.message.routeShown -ceq "recorded by the warchief from chat" -and $a.value.message.recordedBy -ceq "warchief" -and $a.value.message.sequence -eq 2) "the answer hands the message back: his words, his name, and that the warchief recorded them from chat"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).text -ceq "Yes, play it." -and (Get-Said $a).speaker -ceq "founder" -and (Get-Said $a).routeShown -ceq "recorded by the warchief from chat" -and (Get-Said $a).recordedBy -ceq "warchief" -and (Get-Said $a).sequence -eq 2) "the answer hands the message back: his words, his name, and that the warchief recorded them from chat"
 Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "one record was written for it"
 $rec = Read-Record $s 2
 Check ($rec.kind -ceq "message-said" -and $rec.actor -ceq "warchief" -and $rec.data.speaker -ceq "founder" -and $rec.data.route -ceq "chat-recorded" -and $rec.data.text -ceq "Yes, play it." -and $rec.data.number -eq 1 -and $rec.data.wordingVersion -eq 1) "the record holds who spoke, by what route, the words, the question and the wording he was looking at"
 Check ((@($rec.data.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object) -join ",") -ceq "number,route,speaker,text,wordingVersion") "and nothing else: no turn, no flag, no 'read' is stored in it"
 $a = Reply $s 1 "It plays from the next build."
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.speaker -ceq "warchief" -and $a.value.message.routeShown -ceq "by command" -and $a.value.sequence -eq 3) "the warchief's reply is recorded as its own words, by command"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).speaker -ceq "warchief" -and (Get-Said $a).routeShown -ceq "by command" -and $a.value.sequence -eq 3) "the warchief's reply is recorded as its own words, by command"
 $t = Get-Thread $s 1
 Check ($t.count -eq 2 -and (Get-Texts $t) -ceq "Yes, play it. | It plays from the next build.") ("show hands back the thread: both messages, in order (" + (Get-Texts $t) + ")")
 $listed = Invoke-Op $s "list" @{}
 Check ((Get-Outcome $listed) -ceq "done" -and $listed.value.questions[0].thread.count -eq 2 -and $listed.value.questions[0].thread.turn -ceq "founder" -and $null -eq $listed.value.questions[0].thread.PSObject.Properties["messages"]) "list hands back the counts and whose turn it is, and not the messages"
 # The founder typing in his own window is another caller sending the same request with other labels.
 $a = Say $s 1 "Typed by me." -Route "window" -Actor "founder"
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.routeShown -ceq "typed in the window" -and $a.value.message.recordedBy -ceq "founder" -and (Read-Record $s 4).actor -ceq "founder") "words typed in the window are recorded by the founder's own caller, under their own route"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).routeShown -ceq "typed in the window" -and (Get-Said $a).recordedBy -ceq "founder" -and (Read-Record $s 4).actor -ceq "founder") "words typed in the window are recorded by the founder's own caller, under their own route"
 
 Write-Host ""
 Write-Host "--- one id, one message; two messages, two ---" -ForegroundColor Cyan
@@ -127,7 +135,7 @@ $id = New-Id
 $first = Say $s 1 "Send it once." -Id $id
 $again = Say $s 1 "Send it once." -Id $id
 Check ((Get-Outcome $first) -ceq "done" -and (Get-Outcome $again) -ceq "replayed" -and $again.value.sequence -eq $first.value.sequence -and $again.value.number -eq 1) ("the same request with the same id is answered from the first record (" + (Get-Outcome $again) + ")")
-Check ((Get-Outcome $again) -ceq "replayed" -and $again.value.message.text -ceq "Send it once." -and $again.value.message.sequence -eq 2) "and the answer holds the same message again, for a caller that lost the first answer"
+Check ((Get-Outcome $again) -ceq "replayed" -and (Get-Said $again).text -ceq "Send it once." -and (Get-Said $again).sequence -eq 2) "and the answer holds the same message again, for a caller that lost the first answer"
 Check ((Get-Count $s) -eq 2 -and (Get-Thread $s 1).count -eq 1) "a double submit is one message: one record, one entry in the thread"
 $other = Say $s 1 "Other words under the same id." -Id $id
 Check ((Test-Refused $other "was already used for a different request") -and (Get-Count $s) -eq 2 -and -not (Test-Echo $other "Other words")) "the same id with other words is refused, nothing is written, and the words are not repeated"
@@ -139,7 +147,7 @@ $idDefault = New-Id
 $null = Say $s 1 "Said before the rewording." -Id $idDefault
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 1; changes = @{ title = "Should the closing sound play at the end of every session?" } }
 $again = Say $s 1 "Said before the rewording." -Id $idDefault
-Check ((Get-Outcome $again) -ceq "replayed" -and $again.value.message.wordingVersion -eq 1 -and (Get-Count $s) -eq 5) ("a repost after the question was reworded is still a repost, answered with the wording it was recorded under (" + (Get-Outcome $again) + ")")
+Check ((Get-Outcome $again) -ceq "replayed" -and (Get-Said $again).wordingVersion -eq 1 -and (Get-Count $s) -eq 5) ("a repost after the question was reworded is still a repost, answered with the wording it was recorded under (" + (Get-Outcome $again) + ")")
 
 Write-Host ""
 Write-Host "--- words under a closed question are kept, flagged, and reopen nothing ---" -ForegroundColor Cyan
@@ -148,7 +156,7 @@ $null = Add-Q $s
 $null = Invoke-Op $s "close" @{ id = (New-Id); actor = "warchief"; number = 1; outcome = "Done: it plays." }
 $a = Say $s 1 "Wait - not on the first launch."
 Check ((Get-Outcome $a) -ceq "done") ("words said under a closed question are recorded, not refused (" + (Get-Outcome $a) + ")")
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.arrivedAfterClosing -eq $true -and $a.value.question.state -ceq "closed" -and $a.value.question.outcome -ceq "Done: it plays.") "they are flagged as having arrived after closing, and the question is still closed with its outcome"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).arrivedAfterClosing -eq $true -and $a.value.question.state -ceq "closed" -and $a.value.question.outcome -ceq "Done: it plays.") "they are flagged as having arrived after closing, and the question is still closed with its outcome"
 $t = Get-Thread $s 1
 Check ($t.count -eq 1 -and $t.messages[0].text -ceq "Wait - not on the first launch." -and $t.messages[0].arrivedAfterClosing -eq $true -and $t.turn -ceq "nobody") "they are in the thread, flagged; it is nobody's turn under a closed question"
 $counts = (Invoke-Op $s "list" @{ state = "all" }).value.counts
@@ -161,11 +169,11 @@ $s = New-TestStore
 $null = Add-Q $s
 $null = Invoke-Op $s "update" @{ id = (New-Id); actor = "warchief"; number = 1; changes = @{ title = "Should the closing sound play at the end of every session?" } }
 $a = Say $s 1 "Yes." -Wording 1
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.wordingVersion -eq 1 -and $a.value.message.saidToEarlierWording -eq $true -and $a.value.question.wordingVersion -eq 2) ("words said to wording 1 of a question now at wording 2 are recorded, and flagged as said to an earlier wording (" + (Get-Outcome $a) + ")")
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).wordingVersion -eq 1 -and (Get-Said $a).saidToEarlierWording -eq $true -and $a.value.question.wordingVersion -eq 2) ("words said to wording 1 of a question now at wording 2 are recorded, and flagged as said to an earlier wording (" + (Get-Outcome $a) + ")")
 $a = Say $s 1 "Yes, to these words." -Wording 2
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.saidToEarlierWording -eq $false) "CONTROL: words said to the wording the question has are not flagged"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).saidToEarlierWording -eq $false) "CONTROL: words said to the wording the question has are not flagged"
 $a = Say $s 1 "Yes, with no wording named."
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.wordingVersion -eq 2 -and (Read-Record $s $a.value.sequence).data.wordingVersion -eq 2) "with no wording named, the record holds the wording the question had when the words were recorded"
+Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).wordingVersion -eq 2 -and (Read-Record $s $a.value.sequence).data.wordingVersion -eq 2) "with no wording named, the record holds the wording the question had when the words were recorded"
 $before = Get-Count $s
 $a = Say $s 1 "Yes, to a wording that does not exist." -Wording 3
 Check ((Test-Refused $a "said to wording 3 of question 1, which has only reached wording 2") -and (Get-Count $s) -eq $before -and -not (Test-Echo $a "does not exist")) "words said to a wording the question has not reached are refused before anything is written, without being repeated"
@@ -181,12 +189,12 @@ $null = Add-Q $s
 # text in brackets, a joiner, and a second line.
 $hebrew = "" + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x200E + "(yes)" + [char]0x200D + "`r`n  " + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
 $a = Say $s 1 $hebrew
-Check ((Get-Outcome $a) -ceq "done" -and [string]::Equals($a.value.message.text, $hebrew, [System.StringComparison]::Ordinal)) ("Hebrew with direction marks, an embedding and an isolate is recorded as it is (" + (Get-Outcome $a) + ")")
+Check ((Get-Outcome $a) -ceq "done" -and [string]::Equals((Get-Said $a).text, $hebrew, [System.StringComparison]::Ordinal)) ("Hebrew with direction marks, an embedding and an isolate is recorded as it is (" + (Get-Outcome $a) + ")")
 Check ([string]::Equals((Get-Thread $s 1).messages[0].text, $hebrew, [System.StringComparison]::Ordinal)) "and reads back from the store character for character: marks, line break and the spaces at both ends"
 Check ([string]::Equals((Read-Record $s 2).data.text, $hebrew, [System.StringComparison]::Ordinal)) "the record on disk holds exactly those characters"
 $long = ("word " * 19999) + "end!!"
 $a = Say $s 1 $long
-Check ($long.Length -eq 100000 -and (Get-Outcome $a) -ceq "done" -and $a.value.message.text.Length -eq 100000) ("a message of 100,000 characters is recorded whole (" + (Get-Outcome $a) + ")")
+Check ($long.Length -eq 100000 -and (Get-Outcome $a) -ceq "done" -and (Get-Said $a).text.Length -eq 100000) ("a message of 100,000 characters is recorded whole (" + (Get-Outcome $a) + ")")
 Check ([string]::Equals((Get-Thread $s 1).messages[1].text, $long, [System.StringComparison]::Ordinal)) "and all 100,000 read back, in order, nothing cut"
 $exact = "  leading spaces`ttab, CRLF`r`nthen LF`nthen two blank lines`r`n`r`n"
 $a = Say $s 1 $exact
@@ -311,7 +319,7 @@ try {
     $a = Say $s 1 "said as it was being closed"
     Check ($script:planted -eq 1) "CONTROL: the close was written first, into the sequence number the say wanted"
     Check ((Get-Outcome $a) -ceq "done" -and $a.value.sequence -eq 3 -and $a.value.attempts -eq 2) ("the say is written to the next sequence number, on its second try (" + (Get-Outcome $a) + ")")
-    Check ((Get-Outcome $a) -ceq "done" -and $a.value.message.arrivedAfterClosing -eq $true -and $a.value.question.state -ceq "closed") "and it is flagged as having arrived after closing: the words are kept, the close stands"
+    Check ((Get-Outcome $a) -ceq "done" -and (Get-Said $a).arrivedAfterClosing -eq $true -and $a.value.question.state -ceq "closed") "and it is flagged as having arrived after closing: the words are kept, the close stands"
     Check ((Get-Texts (Get-Thread $s 1)) -ceq "said as it was being closed") "the thread has the words"
     # A NEW MESSAGE WINS THE PLACE A MARKING WANTED. With no bound, the marking is worked out again and
     # hands back the new message too: what it marks is still exactly what it hands back.
