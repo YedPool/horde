@@ -11,14 +11,15 @@
     "surface": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under surfaces/." },
     "capabilities": {
       "type": "object",
-      "required": ["page.local", "page.locked", "requests.closed", "push", "window.native"],
+      "required": ["page.local", "page.locked", "requests.closed", "push", "window.native", "picture"],
       "additionalProperties": false,
       "properties": {
         "page.local": { "$ref": "#/definitions/capability", "description": "The page is loaded from folders on this machine with no web server and no listening port, so nothing else on the machine or the network can reach it." },
         "page.locked": { "$ref": "#/definitions/capability", "description": "The page cannot leave: a navigation anywhere but the page's own folders is refused, and so is a request for a new window." },
         "requests.closed": { "$ref": "#/definitions/capability", "description": "The page and Horde talk only through the closed list of named requests of surfaces/Port.ps1, each checked on arrival; the page is handed no object of Horde's to call." },
         "push": { "$ref": "#/definitions/capability", "description": "Horde can hand the page a named event while it is shown, so the page redraws without being reloaded." },
-        "window.native": { "$ref": "#/definitions/capability", "description": "The surface is a window of this machine with a native handle, which a window follower can own and place beside another window." }
+        "window.native": { "$ref": "#/definitions/capability", "description": "The surface is a window of this machine with a native handle, which a window follower can own and place beside another window." },
+        "picture": { "$ref": "#/definitions/capability", "description": "Horde can ask the surface to save a picture of the page exactly as it is drawn, so that what a person would see can be looked at without that person. Only Horde can ask: it is not one of the page's requests." }
       }
     }
   },

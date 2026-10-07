@@ -124,6 +124,9 @@
         @{ Name = "a-left-with-no-top"
            Find = 'if (($null -eq $Left) -ne ($null -eq $Top)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "any-theme-accepted"
+           Find = 'if ($script:HordeSurfaceThemes -cnotcontains $Theme) {'
+           Replace = 'if ($false) {' }
         @{ Name = "relative-data-folder-accepted"
            Find = 'if (-not [System.IO.Path]::IsPathRooted($DataFolder)) {'
            Replace = 'if ($false) {' }
