@@ -191,24 +191,24 @@
         @{ Name = "character-that-is-not-text-stored-in-a-note"
            Find = 'if ($unfit -ne "") {'
            Replace = 'if ($false) {' }
-        @{ Name = "tab-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]''' }
-        @{ Name = "format-character-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "separator-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "direction-mark-refused-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n]]''' }
-        @{ Name = "tab-refused-in-a-text-of-several-lines"
-           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "format-and-separators-allowed-in-a-text-of-several-lines"
-           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}-[\t\r\n\u200C-\u200F]]''' }
+        @{ Name = "format-characters-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Zl}\p{Zp}''' }
+        @{ Name = "line-and-paragraph-separators-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}''' }
+        @{ Name = "control-characters-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cf}\p{Zl}\p{Zp}''' }
+        @{ Name = "direction-marks-and-joiners-refused"
+           Find = '$script:HordeDecisionTextKept = ''\r\n\u200C-\u200F'''
+           Replace = '$script:HordeDecisionTextKept = ''\r\n''' }
+        @{ Name = "tab-allowed-in-one-line"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionTextKept + '']]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionTextKept + '']]''' }
+        @{ Name = "tab-refused-in-several-lines"
+           Find = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionTextKept + '']]'''
+           Replace = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionTextKept + '']]''' }
         @{ Name = "one-line-field-held-to-the-rule-for-several-lines"
            Find = '$notText = Get-HordeDecisionCharProblem -Text "$text" -OneLine:([bool]$spec.oneLine)'
            Replace = '$notText = Get-HordeDecisionCharProblem -Text "$text"' }
@@ -473,15 +473,12 @@
         @{ Name = "words-at-the-limit-refused"
            Find = 'if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "'
            Replace = 'if ($Text.Length -ge $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "' }
-        @{ Name = "control-characters-stored-in-words"
-           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
+        @{ Name = "words-held-to-no-characters"
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text'
            Replace = '    $notWords = ""' }
-        @{ Name = "words-held-to-a-fields-characters"
-           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
-           Replace = '    $notWords = Get-HordeDecisionCharProblem -Text $Text' }
-        @{ Name = "tab-refused-in-words"
-           Find = '$script:HordeDecisionNotTextInWords = ''[\p{Cc}-[\t\r\n]]'''
-           Replace = '$script:HordeDecisionNotTextInWords = ''[\p{Cc}-[\r\n]]''' }
+        @{ Name = "words-held-to-a-one-line-fields-characters"
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text'
+           Replace = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -OneLine' }
         # --- a conversation record of the wrong shape, and what a kind is about ---
         @{ Name = "huge-wording-or-mark-cast"
            Find = 'if (-not (Test-HordeDecisionCount -Value (Get-HordeDecisionMember -Object $Ev.data -Name $member) -Most $most)) { return'
