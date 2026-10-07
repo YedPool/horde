@@ -28,17 +28,36 @@
            Find = 'throw (New-Object System.ComponentModel.Win32Exception($moveError))'
            Replace = 'return "moved"' }
         @{ Name = "no-flush-after-the-move"
-           Find = 'if ($null -ne $Open) { try { $Open.Flush($true) } catch { return "unconfirmed" } }'
+           Find = 'if ($null -ne $Open -and (Confirm-HordeFileFlushed -Open $Open) -cne "confirmed") { return "unconfirmed" }'
            Replace = '' }
-        @{ Name = "flush-of-the-buffer-only"
-           Find = 'if ($null -ne $Open) { try { $Open.Flush($true) } catch { return "unconfirmed" } }'
-           Replace = 'if ($null -ne $Open) { try { $Open.Flush($false) } catch { return "unconfirmed" } }' }
         @{ Name = "failed-flush-reads-as-moved"
-           Find = 'if ($null -ne $Open) { try { $Open.Flush($true) } catch { return "unconfirmed" } }'
-           Replace = 'if ($null -ne $Open) { try { $Open.Flush($true) } catch { } }' }
+           Find = 'if ($null -ne $Open -and (Confirm-HordeFileFlushed -Open $Open) -cne "confirmed") { return "unconfirmed" }'
+           Replace = 'if ($null -ne $Open) { $null = Confirm-HordeFileFlushed -Open $Open }' }
+        # --- the one flush path, and the confirming of a file that already exists ---
+        @{ Name = "flush-of-the-buffer-only"
+           Find = '    try { $Open.Flush($true) } catch { return "unconfirmed" }'
+           Replace = '    try { $Open.Flush($false) } catch { return "unconfirmed" }' }
+        @{ Name = "failed-flush-reads-as-confirmed"
+           Find = '    try { $Open.Flush($true) } catch { return "unconfirmed" }'
+           Replace = '    try { $Open.Flush($true) } catch { }' }
         @{ Name = "failed-flush-throws"
-           Find = 'if ($null -ne $Open) { try { $Open.Flush($true) } catch { return "unconfirmed" } }'
-           Replace = 'if ($null -ne $Open) { $Open.Flush($true) }' }
+           Find = '    try { $Open.Flush($true) } catch { return "unconfirmed" }'
+           Replace = '    $Open.Flush($true)' }
+        @{ Name = "confirming-flushes-nothing"
+           Find = '    try { return (Confirm-HordeFileFlushed -Open $held) } finally { $held.Dispose() }'
+           Replace = '    try { return "confirmed" } finally { $held.Dispose() }' }
+        @{ Name = "confirming-a-file-that-is-not-there-creates-it"
+           Find = '    if (-not [System.IO.File]::Exists($Path)) { return "missing" }'
+           Replace = '    if (-not [System.IO.File]::Exists($Path)) { [System.IO.File]::WriteAllBytes($Path, [byte[]]@()) }' }
+        @{ Name = "confirming-truncates-the-file"
+           Find = '$held = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write,'
+           Replace = '$held = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write,' }
+        @{ Name = "file-that-cannot-be-opened-reads-as-confirmed"
+           Find = '    catch { return "unconfirmed" }'
+           Replace = '    catch { return "confirmed" }' }
+        @{ Name = "confirming-stands-in-a-readers-way"
+           Find = '([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)) }'
+           Replace = '[System.IO.FileShare]::None) }' }
         @{ Name = "another-system-moved-anyway"
            Find = 'if ("" + $OsPlatform -cne "Win32NT") { throw ('
            Replace = 'if ($false) { throw (' }

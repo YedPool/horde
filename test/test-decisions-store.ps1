@@ -389,6 +389,25 @@ Check ((Add-Safely $s 2 '{"n":2}') -like "THREW:*") "a folder of the record's na
 Check (@(Get-ChildItem -LiteralPath $s -Filter "*.part").Count -eq 0) "and the temporary file of that failed write is gone"
 
 Write-Host ""
+Write-Host "--- an existing record is confirmed on disk, and not changed ---" -ForegroundColor Cyan
+$s = New-TestStore
+$null = Add-Safely $s 1 '{"n":1}'
+$null = Add-Safely $s 2 '{"n":2,"body":"the one to confirm"}'
+$twoBefore = Base64 (Join-Path $s "0000000002.json")
+$realFlush = ${function:Confirm-HordeFileFlushed}
+$script:flushed = New-Object System.Collections.ArrayList
+function Confirm-HordeFileFlushed { param($Open) if ($Open -is [System.IO.FileStream]) { [void]$script:flushed.Add([System.IO.Path]::GetFileName($Open.Name)) }; return (& $realFlush -Open $Open) }
+try {
+    $sure = "THREW"
+    try { $sure = Confirm-HordeDecisionRecord -Root $s -Sequence 2 } catch { $sure = "THREW: " + $_.Exception.Message }
+    Check ($sure -ceq "confirmed" -and ($script:flushed -join ",") -ceq "0000000002.json") ("confirming record 2 flushes record 2, and only it, through core's one flush path (" + $sure + "; flushed: " + ($script:flushed -join ",") + ")")
+} finally { Remove-Item -LiteralPath function:Confirm-HordeFileFlushed; . (Join-Path $root "core\FileAtomic.ps1") }
+Check ((Base64 (Join-Path $s "0000000002.json")) -ceq $twoBefore -and (Get-Names $s) -ceq "0000000001.json,0000000002.json") "and the record's bytes are untouched, and nothing else is in the folder"
+$gone = "THREW"
+try { $gone = Confirm-HordeDecisionRecord -Root $s -Sequence 3 } catch { $gone = "THREW: " + $_.Exception.Message }
+Check ($gone -ceq "missing" -and (Get-Names $s) -ceq "0000000001.json,0000000002.json") ("a record that is not there is missing, and confirming did not make it (" + $gone + ")")
+
+Write-Host ""
 Write-Host "--- the store has no way to rewrite or delete a record ---" -ForegroundColor Cyan
 # Read from the syntax tree: a record that could be rewritten is not a write-once record, whatever the
 # tests above saw today. The store may move and delete exactly these: its temporary file to the record's
@@ -407,6 +426,8 @@ $durableMoves = @($ast.FindAll({ param($node) $node -is [System.Management.Autom
 Check (@($errors).Count -eq 0 -and ($members -ccontains "CreateNew") -and $durableMoves.Count -ge 1 -and $deletes.Count -ge 1) "CONTROL: the store file parses, and the search sees its CreateNew, its move and a delete"
 Check ($forbiddenMembers.Count -eq 0) ("no call in the store can overwrite, copy over, truncate or append to a file" + $(if ($forbiddenMembers.Count) { " (found: " + ($forbiddenMembers -join ", ") + ")" } else { "" }))
 Check ($forbiddenCommands.Count -eq 0) ("and no cmdlet in it can either" + $(if ($forbiddenCommands.Count) { " (found: " + ($forbiddenCommands -join ", ") + ")" } else { "" }))
+$confirms = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and "$($node.GetCommandName())" -ceq "Confirm-HordeFileDurable" }, $true) | ForEach-Object { "$_" })
+Check ($confirms.Count -eq 1) ("an existing record is confirmed on disk by core's function and by nothing of the store's own (" + $confirms.Count + ")")
 Check ($moves.Count -eq 0) ("the store makes no move of its own: File.Move is not written through (" + ($moves -join " | ") + ")")
 Check (($durableMoves -join " | ") -ceq 'Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs') ("its one move is the durable one, of the temporary file to the record's name, handed the writer's open handle (" + ($durableMoves -join " | ") + ")")
 Check (($deletes -join " | ") -ceq 'Delete($tmpPath)') ("the only delete by name is of the writer's own temporary file (" + ($deletes -join " | ") + ")")

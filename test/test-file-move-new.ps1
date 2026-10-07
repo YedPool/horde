@@ -126,6 +126,48 @@ $p = New-Pair
 Check ((Move-Safely $p.from $p.to $null) -ceq "moved") "CONTROL: with no stream given there is nothing to flush, and the move is made"
 
 Write-Host ""
+Write-Host "--- a file that already exists is confirmed on disk: flushed, by the same path, and not changed ---" -ForegroundColor Cyan
+# For a caller once told "unconfirmed" that is asked again (decisions/Store.ps1, a request sent again):
+# the existing file is opened as it is and flushed through the ONE flush path the move also takes.
+function Confirm-Safely { param([string]$Path) try { return (Confirm-HordeFileDurable -Path $Path) } catch { return ("THREW: " + $_.Exception.Message) } }
+$p = New-Pair "already here, and whole"
+$stamp = [System.IO.File]::GetLastWriteTimeUtc($p.from)
+Check ((Confirm-Safely $p.from) -ceq "confirmed") "a file that is there is confirmed"
+Check ([System.IO.File]::ReadAllText($p.from) -ceq "already here, and whole" -and [System.IO.File]::GetLastWriteTimeUtc($p.from) -eq $stamp) "and not one byte of it changed, nor when it was last written: it was opened to be flushed, and nothing was written"
+Check ((Confirm-Safely $p.to) -ceq "missing" -and -not [System.IO.File]::Exists($p.to)) "a file that is not there is missing, and confirming did not create it"
+# THE SAME FLUSH PATH: with the one flush function standing in, the confirming hands it the file's own
+# open stream, and its answer is the confirming's answer.
+$realFlush = ${function:Confirm-HordeFileFlushed}
+$script:handed = New-Object System.Collections.ArrayList
+function Confirm-HordeFileFlushed { param($Open) [void]$script:handed.Add([pscustomobject]@{ name = $(if ($Open -is [System.IO.FileStream]) { [System.IO.Path]::GetFileName($Open.Name) } else { "" }); canWrite = $(if ($Open -is [System.IO.FileStream]) { $Open.CanWrite } else { $false }) }); return "unconfirmed" }
+try {
+    $got = Confirm-Safely $p.from
+    Check ($got -ceq "unconfirmed" -and $script:handed.Count -eq 1 -and $script:handed[0].name -ceq "from.part" -and $script:handed[0].canWrite) ("confirming hands the file's open stream to the one flush path, once, and answers what it answers (" + $got + ", " + $script:handed.Count + " call(s))")
+    $script:handed.Clear()
+    $q = New-Pair "moved through the same path"
+    $stream = New-Object System.IO.FileStream($q.from, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Delete)
+    try { $got = Move-Safely $q.from $q.to $stream } finally { $stream.Dispose() }
+    Check ($got -ceq "unconfirmed" -and $script:handed.Count -eq 1 -and $script:handed[0].name -ceq "from.part" -and [System.IO.File]::Exists($q.to)) ("and the move's own flush goes through that same function, on the stream its caller held: one path, not two (" + $got + ")")
+} finally {
+    Remove-Item -LiteralPath function:Confirm-HordeFileFlushed
+    . (Join-Path $root "core\FileAtomic.ps1")
+}
+$fake = New-FakeStream $p.from $p.to -Fails
+Check ((Confirm-HordeFileFlushed -Open $fake) -ceq "unconfirmed" -and $fake.calls.Count -eq 1 -and $fake.calls[0].toDisk -is [bool] -and $fake.calls[0].toDisk) "CONTROL: the real flush path is back; a flush that fails is unconfirmed, and it was a flush to disk"
+Check ((Confirm-HordeFileFlushed -Open (New-FakeStream $p.from $p.to)) -ceq "confirmed") "and one that returns is confirmed"
+# A file another process holds without sharing cannot be opened for the flush: unconfirmed, not an error.
+$lock = New-Object System.IO.FileStream($p.from, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+try { Check ((Confirm-Safely $p.from) -ceq "unconfirmed") "a file held by another without sharing is unconfirmed: nothing says it is on disk" } finally { $lock.Dispose() }
+# And confirming never stands in a reader's way: a reader holding the file with ordinary read sharing does not stop it.
+$reader = New-Object System.IO.FileStream($p.from, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+try { Check ((Confirm-Safely $p.from) -ceq "confirmed") "CONTROL: a file a reader holds with sharing is confirmed all the same" } finally { $reader.Dispose() }
+# While the confirming holds the file, a reader can still open it: seen from inside the flush path.
+$script:readable = "not asked"
+function Confirm-HordeFileFlushed { param($Open) try { $r = New-Object System.IO.FileStream($Open.Name, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)); $r.Dispose(); $script:readable = "yes" } catch { $script:readable = "no" }; return "confirmed" }
+try { $null = Confirm-Safely $p.from } finally { Remove-Item -LiteralPath function:Confirm-HordeFileFlushed; . (Join-Path $root "core\FileAtomic.ps1") }
+Check ($script:readable -ceq "yes") ("and while it is being confirmed a reader can open it: confirming shares the file (" + $script:readable + ")")
+
+Write-Host ""
 Write-Host "--- the flags handed to the operating system ---" -ForegroundColor Cyan
 $flags = Get-HordeFileMoveNewFlags
 Check ($flags -is [int] -and ($flags -band 0x8) -eq 0x8) ("MOVEFILE_WRITE_THROUGH (0x8) is set: the move does not return until it is on disk (flags " + $flags + ")")

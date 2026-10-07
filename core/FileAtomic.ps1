@@ -59,6 +59,30 @@ function Get-HordeFileMoveNewFlags {
     return 0x8
 }
 
+function Confirm-HordeFileFlushed {
+    # THE ONE FLUSH PATH. Flush an open stream through to the disk (FileStream.Flush($true), which is
+    # FlushFileBuffers): "confirmed" when it returned, "unconfirmed" when it failed. Both callers below
+    # come through here, so "what was done to put this on disk" has one answer and one place to test.
+    param($Open)
+    try { $Open.Flush($true) } catch { return "unconfirmed" }
+    return "confirmed"
+}
+
+function Confirm-HordeFileDurable {
+    # Have a file that already exists flushed through to the disk, name included: for a caller that
+    # was once told "unconfirmed" and is asked again, or that must be sure before it says "saved".
+    # Returns "confirmed", "unconfirmed" (it could not be opened for the flush, or the flush failed)
+    # or "missing" (there is no such file). NOTHING IS WRITTEN TO THE FILE: it is opened as it is -
+    # never created, never truncated - only because a flush is asked of a handle, and a handle that
+    # may flush must be open for writing. It shares everything, so it never stands in a reader's way.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not [System.IO.File]::Exists($Path)) { return "missing" }
+    $held = $null
+    try { $held = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)) }
+    catch { return "unconfirmed" }
+    try { return (Confirm-HordeFileFlushed -Open $held) } finally { $held.Dispose() }
+}
+
 function Move-HordeFileNewDurable {
     # Give the file -From the name -To, only if nothing has that name. Returns
     #   "moved"        the file has the name, and both means above returned success;
@@ -80,6 +104,6 @@ function Move-HordeFileNewDurable {
         if ($moveError -eq 80 -or $moveError -eq 183) { return "exists" }
         throw (New-Object System.ComponentModel.Win32Exception($moveError))
     }
-    if ($null -ne $Open) { try { $Open.Flush($true) } catch { return "unconfirmed" } }
+    if ($null -ne $Open -and (Confirm-HordeFileFlushed -Open $Open) -cne "confirmed") { return "unconfirmed" }
     return "moved"
 }

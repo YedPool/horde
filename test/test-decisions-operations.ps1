@@ -508,14 +508,46 @@ try {
     Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 has its place in the store*could not be confirmed*NOT reported as saved*same id*") ("and the reason says the record is there, that it is not reported as saved, and what to do (" + $a.reason + ")")
     Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "the record does have its place: the answer did not claim that nothing was written"
     Check ($script:unconfirmedOnce -eq 0) "CONTROL: the move was made, and answered unconfirmed exactly once"
+    # THE RESEND CONFIRMS BEFORE IT ANSWERS. "replayed" says "this was recorded": after an unconfirmed
+    # save that is the very claim that could not be made, so the resend first has the record flushed
+    # to disk - through core's one flush path, the same the move uses - and only then answers. Here
+    # that path is replaced by one that writes down what it was handed and answers as the test says.
+    $realFlush = ${function:Confirm-HordeFileFlushed}
+    $script:flushes = New-Object System.Collections.ArrayList
+    $script:flushAnswer = "unconfirmed"
+    function Confirm-HordeFileFlushed {
+        param($Open)
+        $name = ""; $canWrite = $false; $length = [long]-1
+        if ($Open -is [System.IO.FileStream]) { $name = [System.IO.Path]::GetFileName($Open.Name); $canWrite = $Open.CanWrite; $length = $Open.Length }
+        [void]$script:flushes.Add([pscustomobject]@{ name = $name; canWrite = $canWrite; length = $length })
+        if ($script:flushAnswer -ceq "real") { return (& $realFlush -Open $Open) }
+        return $script:flushAnswer
+    }
+    $bytesBefore = [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $s "0000000002.json")))
     $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
-    Check ((Get-Outcome $a) -ceq "replayed" -and $a.value.number -eq 2 -and (Get-Files $s) -ceq "0000000001.json,0000000002.json") ("sending the same request again, with the same id, is answered from that record and writes nothing (" + (Get-Outcome $a) + ")")
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 holds this request*could not be confirmed*NOT reported as saved*") ("a resend whose flush of the record fails is unknown AGAIN: it is not answered 'replayed' on the strength of a flush that did not happen (" + (Get-Outcome $a) + ")")
+    Check ($script:flushes.Count -eq 1 -and $script:flushes[0].name -ceq "0000000002.json" -and $script:flushes[0].canWrite -and $script:flushes[0].length -gt 0) ("the resend opened the EXISTING record and handed it to the flush path, once (" + $script:flushes.Count + " flush(es)" + $(if ($script:flushes.Count -ge 1) { " of " + $script:flushes[0].name } else { "" }) + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "and wrote nothing"
+    $script:flushes.Clear(); $script:flushAnswer = "real"
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ((Get-Outcome $a) -ceq "replayed" -and $a.value.number -eq 2 -and (Get-Files $s) -ceq "0000000001.json,0000000002.json") ("once the flush succeeds, the same request with the same id is answered from that record and writes nothing (" + (Get-Outcome $a) + ")")
+    Check ($script:flushes.Count -eq 1 -and $script:flushes[0].name -ceq "0000000002.json") "and that answer too came after the record was flushed: every 'replayed' is confirmed first, since nothing records which saves were not"
+    Check ([System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $s "0000000002.json"))) -ceq $bytesBefore) "confirming changed no byte of the record: it is opened to be flushed, and nothing is written to it"
+    # A request that is NOT a repost flushes nothing but its own new record, through the move.
+    $script:flushes.Clear()
+    $a = Add-Q $s
+    Check ((Get-Outcome $a) -ceq "done" -and @($script:flushes | Where-Object { $_.name -cmatch '\A[0-9]{10}\.json\z' -and $_.name -cne "0000000003.json" }).Count -eq 0) "CONTROL: a new request flushes no earlier record"
+    # The id of a DIFFERENT request is refused without any flush: nothing is being claimed saved.
+    $script:flushes.Clear()
+    $a = Add-Q $s @{ title = "Is another question under a used id ever confirmed as saved?" } $unsureId
+    Check ((Get-Outcome $a) -ceq "refused" -and $script:flushes.Count -eq 0) "CONTROL: the same id with another request is refused, and nothing is flushed for it"
 } finally {
     Remove-Item -LiteralPath function:Move-HordeFileNewDurable
+    if (Test-Path -LiteralPath function:Confirm-HordeFileFlushed) { Remove-Item -LiteralPath function:Confirm-HordeFileFlushed }
     . (Join-Path $root "core\FileAtomic.ps1")
 }
 $a = Add-Q $s
-Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3) "CONTROL: the real move is back in place for the rest of the suite"
+Check ((Get-Outcome $a) -ceq "done") "CONTROL: the real move and the real flush are back in place for the rest of the suite"
 
 Write-Host ""
 Write-Host "--- a write does not wait for ever on a record another process holds open ---" -ForegroundColor Cyan

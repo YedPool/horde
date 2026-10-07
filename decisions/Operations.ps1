@@ -285,6 +285,15 @@ function Invoke-HordeDecisionWrite {
         if ($list.ids.ContainsKey($id)) {
             $prior = $list.ids[$id]
             if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {
+                # "REPLAYED" SAYS "THIS WAS RECORDED", so the record is flushed to disk before it is said.
+                # A save that answered "unconfirmed" left its record in place, and nothing records which
+                # saves those were; so every repost confirms, by the same flush the move makes. If that
+                # flush fails the answer is unknown again - never "replayed" on the strength of it.
+                $sure = "unconfirmed"
+                try { $sure = Confirm-HordeDecisionRecord -Root $Root -Sequence ([long]$prior.sequence) } catch { $sure = "unconfirmed" }
+                if ($sure -cne "confirmed") {
+                    return (New-HordeUnknown -Reason ("record " + $prior.sequence + " holds this request, but it could not be confirmed written through to the disk (" + $sure + "), so it is NOT reported as saved. Send the same request again, with the same id"))
+                }
                 $more = [ordered]@{ sequence = $prior.sequence; number = [int]$prior.number }
                 if ($list.questions.ContainsKey([int]$prior.number)) { $more["question"] = ConvertTo-HordeDecisionView -Question $list.questions[[int]$prior.number] }
                 return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "replayed" -State $list -More $more) -Definitions $Definitions -Now $Now)

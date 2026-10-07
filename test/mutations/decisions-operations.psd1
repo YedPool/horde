@@ -107,6 +107,12 @@
         @{ Name = "unconfirmed-record-reported-as-saved"
            Find = 'if ($made -ceq "unconfirmed") {'
            Replace = 'if ($false) {' }
+        @{ Name = "repost-answered-without-confirming-the-record"
+           Find = 'if ($sure -cne "confirmed") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "repost-confirmed-without-asking-the-store"
+           Find = 'try { $sure = Confirm-HordeDecisionRecord -Root $Root -Sequence ([long]$prior.sequence) } catch { $sure = "unconfirmed" }'
+           Replace = '$sure = "confirmed"' }
         @{ Name = "sequence-not-from-the-list-read"
            Find = '$sequence = [long]$list.lastSequence + 1'
            Replace = '$sequence = [long]$list.lastSequence + 2' }

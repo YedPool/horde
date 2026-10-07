@@ -231,6 +231,16 @@ function Add-HordeDecisionRecord {
     throw ("record " + $Sequence + " could not be put in place: its name is taken by something that is not a record (the move answered '" + $moved + "')")
 }
 
+function Confirm-HordeDecisionRecord {
+    # Have record -Sequence, which is already in the store, flushed through to the disk: "confirmed",
+    # "unconfirmed" or "missing". For a caller about to say of an existing record "this was saved" -
+    # a request sent again under the id of a save that may have been unconfirmed. The flush is core's
+    # (Confirm-HordeFileDurable), the same path the move's own flush takes; this file still opens no
+    # record for writing, and no byte of a record is ever changed.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][long]$Sequence)
+    return (Confirm-HordeFileDurable -Path (Join-Path $Root (Get-HordeDecisionRecordName -Sequence $Sequence)))
+}
+
 function Read-HordeDecisionRecordFile {
     # Read one record file. Returns { kind: ok | missing | busy | torn | error; data; reason }.
     param([Parameter(Mandatory = $true)][string]$Path)

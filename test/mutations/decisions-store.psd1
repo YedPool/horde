@@ -51,6 +51,12 @@
         @{ Name = "live-writers-file-swept"
            Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
            Replace = '.TotalSeconds -lt 0) { continue }' }
+        @{ Name = "resend-confirms-another-record"
+           Find = 'return (Confirm-HordeFileDurable -Path (Join-Path $Root (Get-HordeDecisionRecordName -Sequence $Sequence)))'
+           Replace = 'return (Confirm-HordeFileDurable -Path (Join-Path $Root (Get-HordeDecisionRecordName -Sequence 1)))' }
+        @{ Name = "resend-confirmed-without-a-flush"
+           Find = 'return (Confirm-HordeFileDurable -Path (Join-Path $Root (Get-HordeDecisionRecordName -Sequence $Sequence)))'
+           Replace = 'return "confirmed"' }
         # --- the sweep's invariant: never a file some process holds open ---
         @{ Name = "held-leftover-deleted-by-name"
            Find = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)'
