@@ -230,8 +230,9 @@ try { Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{ shell
 finally { Pop-Location }
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{}) -Start "shell/index.html" -Bridge $bridge -DataFolder $work } "at least one mount") "no mount at all"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts ([ordered]@{ surface = $pageDir }) -Start "surface/index.html" -Bridge $bridge -DataFolder $work } "is the surface's own") "a mount under the name the surface serves its own bridge at"
-Check ((Get-HordeSurfaceMountHost -Mount "shell") -ceq "shell.horde.invalid" -and (Get-HordeSurfaceOwnMount) -ceq "surface") "a mount is served at <name>.horde.invalid, an address that can never be a machine"
-Check (Throws { Get-HordeSurfaceMountHost -Mount "evil.example.com/x" } "is not a mount name") "and only a plain name becomes part of an address"
+$portText = [System.IO.File]::ReadAllText((Join-Path $root "surfaces\Port.ps1"))
+Check ((Get-HordeSurfaceOwnMount) -ceq "surface" -and $portText.Contains("WHERE A PAGE FINDS A FILE: BY A RELATIVE ADDRESS, ALWAYS")) "CONTROL: the port's own text is read, and it says how a page addresses a file"
+Check (-not $portText.Contains("://") -and -not $portText.Contains(".invalid") -and $null -eq (Get-Command -Name "Get-HordeSurfaceMountHost" -ErrorAction SilentlyContinue)) "the port names no address at all: where a surface serves the mounts is that surface's private detail, so a page cannot be written against it"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/index.html" -Bridge $bridge -DataFolder $work -Left 10 } "both its left and its top") "a left with no top"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "other/index.html" -Bridge $bridge -DataFolder $work } "is not <mount>/<file> of a mount that was given") "a start page in a mount that was not given"
 Check (Throws { New-HordeSurfaceSpec -Title "t" -Mounts $m -Start "shell/../../secret.html" -Bridge $bridge -DataFolder $work } "is not <mount>/<file>") "a start page that climbs out of its mount"

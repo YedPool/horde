@@ -37,7 +37,7 @@
 # -Spec is plain data and script blocks, made by New-HordeSurfaceSpec:
 #   title      the window's first title
 #   mounts     an ordered table, name -> folder: each folder is served to the page under the name
-#   start      "<mount>/<file>": the page to show
+#   start      "<mount>/<file>": the page to show, a file at the top of one of the mounts
 #   bridge     a bridge from New-HordeSurfaceBridge
 #   dataFolder where the surface may keep its own files (a web engine's profile)
 #   theme      system, light or dark: which of its two looks the page is drawn in; system is the
@@ -49,12 +49,29 @@
 #   state      anything: handed back, untouched, to every callback
 #   onOpened   param($Window, $State) once the page's engine is up; onTick the same, every tickMs
 #   onClosed   param($Window, $State) as the window goes
-# WHERE A PAGE FINDS A MOUNT. The page is plain files, and a file names another by an address, so
-# the address is part of this contract and not of any one surface: a mount named <name> is served at
-# https://<name>.horde.invalid/ (Get-HordeSurfaceMountHost). ".invalid" is reserved by RFC 2606 never
-# to resolve, so the address can only ever mean a folder a surface serves, never a machine. One
-# mount is the surface's own: "surface", holding bridge.js, the page's side of the bridge; a caller may
-# not give a mount that name.
+# WHERE A PAGE FINDS A FILE: BY A RELATIVE ADDRESS, ALWAYS. The page is plain files, and a file names
+# another by an address, so what a page may write is part of this contract and not of any one
+# surface. The mounts stand side by side as the folders of one tree, <mount>/<file> or
+# <mount>/<folder>/.../<file>, and a file of a page writes
+#     <file>                 a file beside it                       list.js   img/dot.png
+#     ../<mount>/<file>      a file of another mount                ../fleet/panel.js
+#     ../surface/bridge.js   the page's side of the bridge, which every surface serves by that name
+# (from a file at the top of its mount; one more ../ for each folder the writing file is deep), AND
+# NOTHING ELSE: no scheme, no host name, no leading slash. WHERE the tree stands - an origin inside a
+# web engine, a folder a snapshot was copied into, a path across a link - is each surface's private
+# detail, and a page that wrote it could be shown by that one surface only.
+#   - WHAT AN ADDRESS NAMES is decided by Resolve-HordeSurfacePageFile, for every surface alike: a
+#     file of a mount that was given, at most eight steps under it, each step a plain name in the
+#     file's own letter case, of a kind on the port's list (Get-HordeSurfaceFileTypes: .html .css .js
+#     .json .txt .svg .png .jpg .gif .webp .ico .woff2).
+#   - A SURFACE SERVES THAT AND REFUSES EVERYTHING ELSE - an address outside the tree, a climb out of
+#     it, a file of another kind - and records each refusal on the bridge as it records a refused
+#     request. A page loads nothing from anywhere else, whatever policy line it carries or lacks.
+#   - A page may USE the files of every mount (run a script of another, read its data). It may only
+#     BE at a file of the mount its start page is in: going anywhere else is refused.
+#   - One mount is the surface's own, "surface", a closed list of two files: bridge.js, and
+#     bridge-messages.json, the definition of the messages that bridge.js reads. A caller may not give
+#     a mount that name.
 #
 # A callback is given the window as { handle; sync; errors; post; setTitle; show; close }: handle is
 # the native window handle (capability window.native), sync an object events can be marshalled through
@@ -92,9 +109,10 @@ $script:HordeSurfaceArgTypes = @("string", "integer", "boolean")
 # The longest text one argument may hold unless its request says less.
 $script:HordeSurfaceArgChars = 16384
 
-# The mount every surface serves itself (header, WHERE A PAGE FINDS A MOUNT).
+# The mount every surface serves itself (header, WHERE A PAGE FINDS A FILE).
 $script:HordeSurfaceOwnMount = "surface"
-$script:HordeSurfaceMountSuffix = ".horde.invalid"
+# A mount's name is one step of an address a page writes.
+$script:HordeSurfaceMountPattern = '\A[a-z][a-z0-9-]{0,31}\z'
 
 function Get-HordeSurfaceRoot { return $PSScriptRoot }
 
@@ -141,13 +159,6 @@ function Get-HordeSurfaceMessages { return $script:HordeSurfaceMessages }
 
 function Get-HordeSurfaceOwnMount { return $script:HordeSurfaceOwnMount }
 
-function Get-HordeSurfaceMountHost {
-    # The host name a mount is served to the page under (header, WHERE A PAGE FINDS A MOUNT).
-    param([Parameter(Mandatory = $true)][string]$Mount)
-    if ($Mount -cnotmatch '\A[a-z][a-z0-9-]{0,31}\z') { throw ("'" + $Mount + "' is not a mount name: lowercase letters, digits and hyphens") }
-    return ($Mount + $script:HordeSurfaceMountSuffix)
-}
-
 # WHAT A PAGE IS MADE OF: the kinds of file a surface serves from a mount, each with the type it is
 # served as. A closed list, the port's and not any one surface's, so that a page shown by one
 # surface is shown the same by the next. Compared exactly: index.HTML is not on it.
@@ -166,7 +177,7 @@ $script:HordeSurfacePathStep = '[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?'
 $script:HordeSurfacePathSteps = 8
 # Names Windows keeps for devices, with any extension: opening shell\nul.js opens the device.
 $script:HordeSurfaceDeviceNamePattern = '\A(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|\z)'
-# The two files of the surface's own mount (header, WHERE A PAGE FINDS A MOUNT).
+# The two files of the surface's own mount (header, WHERE A PAGE FINDS A FILE).
 $script:HordeSurfaceBridgeScript = "bridge.js"
 
 function Get-HordeSurfaceFileTypes {
@@ -461,8 +472,8 @@ function New-HordeSurfaceSpec {
     )
     $mountTable = [ordered]@{}
     foreach ($name in @($Mounts.Keys)) {
-        # A mount's name becomes part of an address the page uses, so it is held to a host label.
-        if ("$name" -cnotmatch '\A[a-z][a-z0-9-]{0,31}\z') { throw ("'" + $name + "' is not a mount name: lowercase letters, digits and hyphens") }
+        # A mount's name is a step of the addresses a page writes, so it is held to a plain one.
+        if ("$name" -cnotmatch $script:HordeSurfaceMountPattern) { throw ("'" + $name + "' is not a mount name: lowercase letters, digits and hyphens") }
         if ("$name" -ceq $script:HordeSurfaceOwnMount) { throw ("the mount '" + $name + "' is the surface's own, where it serves the page's side of the bridge; a caller gives its page another name") }
         $folder = "$($Mounts[$name])"
         if (-not [System.IO.Path]::IsPathRooted($folder) -or -not (Test-Path -LiteralPath $folder -PathType Container)) { throw ("the mount '" + $name + "' is not a folder that exists: '" + $folder + "'") }

@@ -72,17 +72,59 @@ Check ((Open-HordeWebView2Surface -Spec $spec -LibFolder (Join-Path $work "no-su
 Check ((Test-EngineLoaded) -eq $false) "after every one of those refusals, nothing of the engine's interface is loaded in this process"
 
 Write-Host ""
-Write-Host "--- the page may be at its own address, and nowhere else ---" -ForegroundColor Cyan
-$hostName = Get-HordeSurfaceMountHost -Mount "shell"
-foreach ($ok in @("https://shell.horde.invalid/index.html", "https://shell.horde.invalid/", "https://SHELL.horde.invalid/index.html?x=1#top")) {
-    Check ((Test-HordeWebView2Address -Uri $ok -StartHost $hostName) -eq $true) ("CONTROL: " + $ok + " is the page's own address")
+Write-Host "--- the page may be at a file of its own mount, and nowhere else ---" -ForegroundColor Cyan
+$at = $script:HordeWebView2Origin
+Check ($at -cmatch '\Ahttps://[a-z.]+\.invalid\z') ("CONTROL: the one origin this adapter serves under is a name that can never be a machine (" + $at + ")")
+foreach ($ok in @(($at + "/shell/index.html"), ($at + "/shell/img/dot.png"), ($at + "/shell/index.html?x=1#top"))) {
+    Check ((Test-HordeWebView2Address -Uri $ok -StartMount "shell") -eq $true) ("CONTROL: " + $ok + " is a place the page may be")
 }
-foreach ($no in @(
-    "https://example.com/", "http://shell.horde.invalid/index.html", "https://shell.horde.invalid.example.com/", "https://shell.horde.invalid@example.com/",
-    "https://user@shell.horde.invalid/", "https://shell.horde.invalid:8443/", "https://fleet.horde.invalid/panel.js", "https://xshell.horde.invalid/",
-    "file:///C:/Windows/win.ini", "data:text/html,<script>1</script>", "javascript:alert(1)", "about:blank", "ms-settings:", "shell.horde.invalid/index.html", "", "   ")) {
-    Check ((Test-HordeWebView2Address -Uri $no -StartHost $hostName) -eq $false) ("'" + $no + "' is not")
+$elsewhere = @(
+    "https://example.com/", "https://example.com/shell/index.html", (($at -replace '\Ahttps', 'http') + "/shell/index.html"), ($at + ".example.com/shell/index.html"), ($at + "@example.com/shell/index.html"),
+    (($at -replace '://', '://user@') + "/shell/index.html"), ($at + ":8443/shell/index.html"), (($at -replace '://', '://x') + "/shell/index.html"), (($at -replace '://', '://shell.') + "/index.html"),
+    "file:///C:/Windows/win.ini", "data:text/html,<script>1</script>", "javascript:alert(1)", "about:blank", "ms-settings:", "horde.invalid/shell/index.html", "", "   ")
+foreach ($no in $elsewhere) {
+    Check ((Test-HordeWebView2Address -Uri $no -StartMount "shell") -eq $false -and $null -eq (Get-HordeWebView2PagePath -Uri $no)) ("'" + $no + "' is not this adapter's address at all")
 }
+foreach ($no in @(($at + "/"), ($at + "/shell"), ($at + "/other/other.js"), ($at + "/shellx/index.html"), ($at + "/SHELL/index.html"), ($at + "/surface/bridge.js"))) {
+    Check ((Test-HordeWebView2Address -Uri $no -StartMount "shell") -eq $false -and $null -ne (Get-HordeWebView2PagePath -Uri $no)) ("'" + $no + "' is this adapter's address but not a file of the page's own mount: the page may not go there")
+}
+Check ((Get-HordeWebView2PagePath -Uri ($at + "/shell/a%2e%2e/..%2fx.js?q=1#f")) -ceq "/shell/a%2e%2e/..%2fx.js") "the path is handed on exactly as it was written, escapes and all, cut at the question mark: the port decides what it names"
+Check ((Get-HordeWebView2PagePath -Uri $at) -ceq "/") "an address with no path is the root"
+$dotted = $at + "/other/../shell/index.html"
+Check ((Get-HordeWebView2PagePath -Uri $dotted) -ceq "/other/../shell/index.html" -and (Test-HordeWebView2Address -Uri $dotted -StartMount "shell") -eq $false -and (Get-HordeWebView2ResourceAnswer -Uri $dotted -Kind "Document" -Mounts ([ordered]@{ shell = $pageDir })).status -eq 403) "a path with a dot-dot step is not tidied into the file it would reach: it is handed on as written, and refused"
+
+Write-Host ""
+Write-Host "--- every load is answered here: a file of a mount, or a refusal ---" -ForegroundColor Cyan
+$treeDir = Join-Path $work "served"; $otherDir = Join-Path $treeDir "other"; New-Item -ItemType Directory -Path $otherDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $otherDir "data.json"), '{"n":1}')
+$servedMounts = [ordered]@{ shell = $pageDir; other = $otherDir; surface = (Get-HordeSurfaceOwnFiles -BridgeScript (Join-Path $adapter "page\bridge.js")) }
+function Answer { param([string]$Uri, [string]$Kind = "Script") return (Get-HordeWebView2ResourceAnswer -Uri $Uri -Kind $Kind -Mounts $servedMounts) }
+$page = Answer ($at + "/shell/index.html") "Document"
+Check ($page.status -eq 200 -and $page.file -ceq (Join-Path $pageDir "index.html") -and $page.type -ceq "text/html; charset=utf-8" -and $page.refusal -ceq "") "CONTROL: the start page is answered with its file and its type"
+$otherFile = Answer ($at + "/other/data.json?v=2") "XmlHttpRequest"
+Check ($otherFile.status -eq 200 -and $otherFile.file -ceq (Join-Path $otherDir "data.json") -and $otherFile.type -ceq "application/json; charset=utf-8") "a file of another mount is answered the same way: a page may use it"
+$ownBridge = Answer ($at + "/surface/bridge.js")
+$ownShapes = Answer ($at + "/surface/bridge-messages.json") "Fetch"
+Check ($ownBridge.status -eq 200 -and $ownBridge.file -ceq (Join-Path $adapter "page\bridge.js") -and $ownShapes.status -eq 200 -and $ownShapes.file -ceq (Get-HordeSurfaceMessagesPath)) "the surface's own mount answers with this adapter's bridge script and the port's definition of the messages"
+foreach ($out in @("https://example.com/lib.js", "http://127.0.0.1:8080/x.js", ($at + ".example.com/shell/index.html"), "https://cdn.example.com/shell/index.html", "file:///C:/Windows/win.ini", "ftp://example.com/x", "")) {
+    $refusedLoad = Answer $out "Script"
+    Check ($refusedLoad.status -eq 403 -and $refusedLoad.file -ceq "" -and $refusedLoad.refusal -like "*not one of its own files (the engine's word for the load: Script), and nothing was fetched") ("a load from '" + $out + "' is refused, with the kind of load in the record")
+    Check ($out -eq "" -or (-not $refusedLoad.refusal.Contains($out) -and $refusedLoad.refusal -notlike "*example*" -and $refusedLoad.refusal -notlike "*127.0.0.1*")) "and the record does not repeat the address"
+}
+Check ((Answer "https://example.com/x" "<img src=x onerror=alert(1)>").refusal -like "*the load: something)*" -and (Answer "https://example.com/x" "").refusal -like "*the load: something)*") "a kind that is not one plain word is never put in the record"
+foreach ($inside in @(
+    @{ uri = ($at + "/shell/missing.js"); says = "a file that is not there, and nothing was served" }
+    @{ uri = ($at + "/shell/../secret.txt"); says = "not a file of a mount, and nothing was served" }
+    @{ uri = ($at + "/shell/..%2fsecret.txt"); says = "not a file of a mount, and nothing was served" }
+    @{ uri = ($at + "/nowhere/index.html"); says = "a mount that was not given, and nothing was served" }
+    @{ uri = ($at + "/surface/Surface.ps1"); says = "not a kind of file a page is made of, and nothing was served" }
+    @{ uri = ($at + "/"); says = "not a file of a mount, and nothing was served" }
+)) {
+    $refusedLoad = Answer $inside.uri
+    Check ($refusedLoad.status -eq 403 -and $refusedLoad.file -ceq "" -and $refusedLoad.refusal -like ("*" + $inside.says)) ("'" + $inside.uri + "' is this adapter's address and names no file: refused, in the port's words")
+}
+$icon = Answer ($at + "/favicon.ico") "Other"
+Check ($icon.status -eq 404 -and $icon.file -ceq "" -and $icon.refusal -ceq "") "the icon the engine asks for by itself is answered 'not there' and is not held against the page"
 
 Write-Host ""
 Write-Host "--- a message is read only when it comes from the page ---" -ForegroundColor Cyan
@@ -90,15 +132,28 @@ $script:asked = 0
 $liveBridge = New-HordeSurfaceBridge -Requests ([ordered]@{ "list" = @{ run = { param($Arguments, $State, $Window) $script:asked++; return ("for " + $State.who) } } })
 $liveSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $liveBridge -DataFolder (Join-Path $work "data") -State ([pscustomobject]@{ who = "the caller" })
 # The state a window would hold, with no window: only the members the message path reads.
-$script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; startHost = $hostName; window = $null; opened = $false; view = $null; failure = ""; errors = (New-Object System.Collections.ArrayList) }
-$fromPage = Receive-HordeWebView2Message -Json '{"v":1,"id":3,"request":"list"}' -Source "https://shell.horde.invalid/index.html"
+$script:made = New-Object System.Collections.ArrayList
+$fakeEnvironment = [pscustomobject]@{ }
+$fakeEnvironment | Add-Member -MemberType ScriptMethod -Name CreateWebResourceResponse -Value {
+    param($Body, $Status, $Phrase, $Headers)
+    $text = $null
+    if ($null -ne $Body) { $text = [System.Text.Encoding]::UTF8.GetString($Body.ToArray()) }
+    $made = [pscustomobject]@{ body = $text; status = $Status; phrase = $Phrase; headers = $Headers }
+    [void]$script:made.Add($made)
+    return $made
+}
+$fakeView = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ Environment = $fakeEnvironment } }
+$script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; mounts = $servedMounts; window = $null; opened = $false; view = $fakeView; failure = ""; errors = (New-Object System.Collections.ArrayList) }
+$fromPage = Receive-HordeWebView2Message -Json '{"v":1,"id":3,"request":"list"}' -Source ($at + "/shell/index.html")
 Check (($fromPage | ConvertFrom-Json).value -ceq "for the caller" -and $script:asked -eq 1) "a message from the page's own address reaches the bridge, with the caller's state"
-$fromElsewhere = Receive-HordeWebView2Message -Json '{"v":1,"id":4,"request":"list"}' -Source "https://example.com/frame.html"
+$fromElsewhere = Receive-HordeWebView2Message -Json '{"v":1,"id":4,"request":"list"}' -Source "https://example.com/shell/index.html"
 Check ($fromElsewhere -ceq "" -and $script:asked -eq 1 -and $liveBridge.refused -eq 1 -and $liveBridge.refusals[0].reason -like "*not the page's own, and was not read") "the same message from another address is not read, not answered, and recorded as a refusal"
 $fromNowhere = Receive-HordeWebView2Message -Json '{"v":1,"id":5,"request":"list"}' -Source ""
 Check ($fromNowhere -ceq "" -and $script:asked -eq 1 -and $liveBridge.refused -eq 2) "and so is one that says nothing of where it came from"
-$unknown = Receive-HordeWebView2Message -Json '{"v":1,"id":6,"request":"open-file"}' -Source "https://shell.horde.invalid/index.html"
-Check (($unknown | ConvertFrom-Json).ok -eq $false -and $liveBridge.refused -eq 3) "a request off the list, from the page itself, is refused by the bridge and recorded"
+$fromOtherMount = Receive-HordeWebView2Message -Json '{"v":1,"id":5,"request":"list"}' -Source ($at + "/other/data.json")
+Check ($fromOtherMount -ceq "" -and $script:asked -eq 1 -and $liveBridge.refused -eq 3) "and one from a file of another mount: only the page's own mount speaks"
+$unknown = Receive-HordeWebView2Message -Json '{"v":1,"id":6,"request":"open-file"}' -Source ($at + "/shell/index.html")
+Check (($unknown | ConvertFrom-Json).ok -eq $false -and $liveBridge.refused -eq 4) "a request off the list, from the page itself, is refused by the bridge and recorded"
 
 Write-Host ""
 Write-Host "--- an event handler does not keep the variables of the function that wrote it ---" -ForegroundColor Cyan
@@ -111,25 +166,53 @@ Check ((& $naive) -eq $false) "CONTROL: a handler that reads a local of the func
 # THE ADAPTER'S HANDLERS are made by a function that has returned, and still find their window: they
 # read the one state object in the script scope.
 $handlers = Get-HordeWebView2Handlers
-Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,message,navigation,newWindow,shown,tick") "the adapter hands .NET nine handlers"
+Check (@($handlers.Keys | Sort-Object) -join "," -ceq "closed,download,frame,initialized,message,navigation,newWindow,resource,shown,tick") "the adapter hands .NET ten handlers"
 $nav = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $nav
-Check ($nav.Cancel -eq $true -and $liveBridge.refused -eq 4 -and $liveBridge.refusals[3].reason -like "*an address that is not its own*") "its navigation handler, called after the function that made it returned, cancels a navigation elsewhere and records it"
-$stay = [pscustomobject]@{ Uri = "https://shell.horde.invalid/index.html"; Cancel = $false }
+Check ($nav.Cancel -eq $true -and $liveBridge.refused -eq 5 -and $liveBridge.refusals[4].reason -like "*an address that is not its own*") "its navigation handler, called after the function that made it returned, cancels a navigation elsewhere and records it"
+$stay = [pscustomobject]@{ Uri = ($at + "/shell/index.html"); Cancel = $false }
 & $handlers.navigation $null $stay
-Check ($stay.Cancel -eq $false -and $liveBridge.refused -eq 4) "CONTROL: and leaves a navigation to the page's own address alone"
-$frame = [pscustomobject]@{ Uri = "https://shell.horde.invalid/inner.html"; Cancel = $false }
+Check ($stay.Cancel -eq $false -and $liveBridge.refused -eq 5) "CONTROL: and leaves a navigation to a file of the page's own mount alone"
+$toOther = [pscustomobject]@{ Uri = ($at + "/other/data.json"); Cancel = $false }
+& $handlers.navigation $null $toOther
+Check ($toOther.Cancel -eq $true -and $liveBridge.refused -eq 6) "a navigation to a file of another mount is cancelled and recorded: the page may use it, not go to it"
+$frame = [pscustomobject]@{ Uri = ($at + "/shell/inner.html"); Cancel = $false }
 & $handlers.frame $null $frame
-Check ($frame.Cancel -eq $true -and $liveBridge.refused -eq 5) "every frame is refused, even one at the page's own address"
-$pop = [pscustomobject]@{ Uri = "https://shell.horde.invalid/index.html"; Handled = $false }
+Check ($frame.Cancel -eq $true -and $liveBridge.refused -eq 7) "every frame is refused, even one at the page's own address"
+$pop = [pscustomobject]@{ Uri = ($at + "/shell/index.html"); Handled = $false }
 & $handlers.newWindow $null $pop
-Check ($pop.Handled -eq $true -and $liveBridge.refused -eq 6) "a request for a new window is marked handled, so nothing opens, and recorded"
+Check ($pop.Handled -eq $true -and $liveBridge.refused -eq 8) "a request for a new window is marked handled, so nothing opens, and recorded"
+# THE LOAD HANDLER, with an engine stood in for by an object that only records what it is asked to
+# answer with. The real engine is surfaces/webview2/test/test-webview2-window.ps1's.
+$script:made.Clear()
+$load = [pscustomobject]@{ Request = [pscustomobject]@{ Uri = ($at + "/shell/index.html") }; ResourceContext = "Document"; Response = $null }
+& $handlers.resource $null $load
+Check ($null -ne $load.Response -and $load.Response.status -eq 200 -and $load.Response.body -ceq "<!doctype html><title>x</title>" -and $liveBridge.refused -eq 8) "its load handler answers a file of a mount with that file's bytes, and records nothing"
+Check ($load.Response.headers -ceq "Content-Type: text/html; charset=utf-8`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff") "with its kind's type, never kept by the engine, and never guessed at"
+$leak = [pscustomobject]@{ Request = [pscustomobject]@{ Uri = "https://example.com/lib.js" }; ResourceContext = "Script"; Response = $null }
+& $handlers.resource $null $leak
+Check ($null -ne $leak.Response -and $leak.Response.status -eq 403 -and $null -eq $leak.Response.body -and $liveBridge.refused -eq 9 -and $liveBridge.refusals[8].reason -like "*not one of its own files*Script*nothing was fetched") "a load from outside is answered with a refusal and no bytes, and recorded like a refused navigation"
+$climb = [pscustomobject]@{ Request = [pscustomobject]@{ Uri = ($at + "/shell/..%2f..%2fsecret.txt") }; ResourceContext = "Fetch"; Response = $null }
+& $handlers.resource $null $climb
+Check ($climb.Response.status -eq 403 -and $liveBridge.refused -eq 10 -and $liveBridge.refusals[9].reason -like "*not a file of a mount, and nothing was served") "and so is a climb out of the mounts"
+$engineAsk = [pscustomobject]@{ Request = [pscustomobject]@{ Uri = ($at + "/favicon.ico") }; ResourceContext = "Other"; Response = $null }
+& $handlers.resource $null $engineAsk
+Check ($engineAsk.Response.status -eq 404 -and $liveBridge.refused -eq 10) "the engine's own ask for an icon is answered and not recorded"
+# DEFAULT DENY WHEN THE CODE ITSELF FAILS: a file that cannot be read is still answered, with a refusal.
+$lockedPath = Join-Path $otherDir "data.json"
+$lock = [System.IO.File]::Open($lockedPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+try {
+    $unreadable = [pscustomobject]@{ Request = [pscustomobject]@{ Uri = ($at + "/other/data.json") }; ResourceContext = "Fetch"; Response = $null }
+    & $handlers.resource $null $unreadable
+} finally { $lock.Dispose() }
+Check ($null -ne $unreadable.Response -and $unreadable.Response.status -eq 403 -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "a file the page asked for could not be served:*") "a file that cannot be read is answered with a refusal all the same, and the failure is kept for the caller"
+$script:HordeWebView2.errors.Clear()
 # A DOWNLOAD IS A FILE WRITTEN WHEREVER THE ENGINE KEEPS DOWNLOADS, outside anything of Horde's. Measured
 # 2026-10-06 by the review of this adapter, in a real hidden window on a page that made a link with a
 # download name and clicked it: the file appeared in the user's own Downloads folder.
 $save = [pscustomobject]@{ ResultFilePath = "C:\elsewhere\saved.txt"; Cancel = $false; Handled = $false }
 if ($handlers.ContainsKey("download")) { & $handlers.download $null $save }
-Check ($save.Cancel -eq $true -and $liveBridge.refused -eq 7 -and $liveBridge.refusals[6].reason -like "*save a file*") "a download is cancelled, so a page writes no file anywhere, and recorded"
+Check ($save.Cancel -eq $true -and $liveBridge.refused -eq 11 -and $liveBridge.refusals[10].reason -like "*save a file*") "a download is cancelled, so a page writes no file anywhere, and recorded"
 $script:ticked = 0
 $tickSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $liveBridge -DataFolder (Join-Path $work "data") -State ([pscustomobject]@{ n = 5 }) -OnTick { param($Window, $State) $script:ticked += $State.n; if ($script:ticked -ge 10) { throw "a tick that fails" } }
 $script:HordeWebView2.spec = $tickSpec
@@ -138,7 +221,7 @@ Check ($script:ticked -eq 10 -and $script:HordeWebView2.errors.Count -eq 1 -and 
 Write-Host ""
 Write-Host "--- a picture is Horde's to ask for, and only of a page that is being drawn ---" -ForegroundColor Cyan
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and -not (Test-Path -LiteralPath (Join-Path $work "p.png"))) "with no engine up there is nothing to take a picture of: not asked, and no file made"
-$script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; startHost = $hostName; window = $null; opened = $true; view = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ } }; failure = ""; capture = $null; pictures = 0; errors = (New-Object System.Collections.ArrayList) }
+$script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; mounts = $servedMounts; window = $null; opened = $true; view = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ } }; failure = ""; capture = $null; pictures = 0; errors = (New-Object System.Collections.ArrayList) }
 Check ((Start-HordeWebView2Capture -Path "p.png") -eq $false -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*an absolute path ending .png*") "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.txt")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "and so is a path that is not a .png; neither left a file behind"
 $script:HordeWebView2.capture = [pscustomobject]@{ task = [pscustomobject]@{ IsCompleted = $false } }
@@ -146,7 +229,7 @@ Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -
 Complete-HordeWebView2Capture
 Check ($null -ne $script:HordeWebView2.capture -and $script:HordeWebView2.pictures -eq 0) "a picture the engine has not finished is left alone"
 $replies = @($liveBridge.requests.Keys)
-Check ($replies -cnotcontains "capture" -and (Receive-HordeWebView2Message -Json '{"v":1,"id":9,"request":"capture","args":{}}' -Source "https://shell.horde.invalid/index.html") -like "*refused*") "and a page that asks for one is refused like any request off the list"
+Check ($replies -cnotcontains "capture" -and (Receive-HordeWebView2Message -Json '{"v":1,"id":9,"request":"capture","args":{}}' -Source ($at + "/shell/index.html")) -like "*refused*") "and a page that asks for one is refused like any request off the list"
 $script:HordeWebView2 = $null
 $quiet = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 & $handlers.navigation $null $quiet
@@ -157,7 +240,12 @@ Write-Host "--- no object of Horde's is ever handed to the page ---" -Foreground
 $tokens = $null; $errs = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $adapter "Surface.ps1"), [ref]$tokens, [ref]$errs)
 $calls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object { $_.Member.Value })
-Check (@($errs).Count -eq 0 -and $calls -ccontains "PostWebMessageAsJson" -and $calls -ccontains "SetVirtualHostNameToFolderMapping") "CONTROL: the adapter's method calls are read from its syntax tree, and the two it must make are there"
+Check (@($errs).Count -eq 0 -and $calls -ccontains "PostWebMessageAsJson" -and $calls -ccontains "Navigate") "CONTROL: the adapter's method calls are read from its syntax tree, and the two it must make are there"
+$filters = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member.Extent.Text -ceq "AddWebResourceRequestedFilter" }, $true) | ForEach-Object { @($_.Arguments | ForEach-Object { $_.Extent.Text }) -join " | " })
+Check ($filters.Count -eq 1 -and $filters[0] -ceq '"*" | [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::All' -and $calls -ccontains "add_WebResourceRequested") "the engine is told to ask this adapter about every address and every kind of load, and is handed the handler that answers"
+Check ($calls -cnotcontains "SetVirtualHostNameToFolderMapping") "no folder is mapped to a host name for the engine to serve by itself: a load the adapter does not answer has nowhere to come from"
+$browserArgs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$props.AdditionalBrowserArguments' }, $true) | ForEach-Object { $_.Right.Extent.Text })
+Check ($browserArgs.Count -eq 1 -and $browserArgs[0] -ceq '$script:HordeWebView2NoNetwork' -and $script:HordeWebView2NoNetwork -ceq "--proxy-server=http://0.0.0.0:0 --proxy-bypass-list=<-loopback>") "the engine is started with every connection sent to an address nothing can listen at, loopback included"
 Check ($calls -ccontains "add_DownloadStarting") "the handler that cancels a download is given to the engine: a handler nobody was handed cancels nothing"
 Check (@($calls | Where-Object { $_ -like "AddHostObject*" -or $_ -like "*ExecuteScript*" -or $_ -ceq "NavigateToString" -or $_ -ceq "AddScriptToExecuteOnDocumentCreatedAsync" }).Count -eq 0) "it never adds a host object, never runs script it built in the page, and never shows text as a page"
 $settings = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -like '$core.Settings.*' }, $true) | ForEach-Object { $_.Left.Extent.Text.Substring(15) + "=" + $_.Right.Extent.Text })

@@ -21,6 +21,25 @@
         @{ Name = "the-download-lock-is-not-given-to-the-engine-seen-live"
            Find = '$core.add_DownloadStarting($h.download)'
            Replace = '' }
+        # --- every load is answered by the surface, in the real engine
+        @{ Name = "the-engine-is-asked-about-pages-only"
+           Find = '$core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::All)'
+           Replace = '$core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::Document)' }
+        @{ Name = "a-refused-load-is-left-to-the-real-engine"
+           Find = '$What.Response = $environment.CreateWebResourceResponse($null, [int]$answer.status, "Refused", "")'
+           Replace = '' }
+        @{ Name = "the-real-engine-keeps-its-way-to-the-network"
+           Find = '$props.AdditionalBrowserArguments = $script:HordeWebView2NoNetwork'
+           Replace = '' }
+        @{ Name = "loopback-is-excused-in-the-real-engine"
+           Find = '$script:HordeWebView2NoNetwork = "--proxy-server=http://0.0.0.0:0 --proxy-bypass-list=<-loopback>"'
+           Replace = '$script:HordeWebView2NoNetwork = "--proxy-server=http://0.0.0.0:0"' }
+        @{ Name = "a-served-file-carries-no-type"
+           Find = '("Content-Type: " + $answer.type + '
+           Replace = '("X-Type: " + $answer.type + ' }
+        @{ Name = "the-engines-own-ask-is-recorded-in-the-real-engine"
+           Find = 'if ($script:HordeWebView2EngineOwnPaths -ccontains $path) {'
+           Replace = 'if ($false) {' }
         # --- what the real engine does with them
         @{ Name = "a-new-window-opens-in-the-real-engine"
            Find = '$What.Handled = $true'

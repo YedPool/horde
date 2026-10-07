@@ -177,12 +177,9 @@
         @{ Name = "a-caller-may-take-the-surface-own-mount"
            Find = 'if ("$name" -ceq $script:HordeSurfaceOwnMount) {'
            Replace = 'if ($false) {' }
-        @{ Name = "a-mount-served-at-an-address-that-could-resolve"
-           Find = '$script:HordeSurfaceMountSuffix = ".horde.invalid"'
-           Replace = '$script:HordeSurfaceMountSuffix = ".horde.example.com"' }
-        @{ Name = "any-text-becomes-part-of-an-address"
-           Find = 'if ($Mount -cnotmatch ''\A[a-z][a-z0-9-]{0,31}\z'') { throw ('
-           Replace = 'if ($false) { throw (' }
+        @{ Name = "any-text-is-a-mount-name"
+           Find = 'if ("$name" -cnotmatch $script:HordeSurfaceMountPattern) {'
+           Replace = 'if ($false) {' }
         @{ Name = "a-left-with-no-top"
            Find = 'if (($null -eq $Left) -ne ($null -eq $Top)) {'
            Replace = 'if ($false) {' }
