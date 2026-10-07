@@ -292,15 +292,16 @@
       // A QUESTION THE READER WAS POINTED AT MUST BE IN VIEW. A question unfolded far down the list
       // was unfolded where nobody saw it: opened to show question 15 of 22, the window showed 1 to 12
       // (seen 2026-10-07 in a picture of the real window). A question wholly in view is left where
-      // it is; another is moved to the top of the view, under whatever the host keeps fixed there,
-      // with the line before it left in sight so that it is seen to belong to a list.
+      // it is; another is moved to the very top of the view, under whatever the host keeps fixed
+      // there. To the very top, and not a line below it: what stands above a question is a line, a
+      // heading of two lines or a gap, and a fixed step back left half a line or the tail of a
+      // heading cut off under the bar (seen the same day, in the pictures of the first try).
       reveal: function (number) {
-        var i, box, row;
+        var i, box;
         for (i = 0; i < drawnLines.length; i += 1) {
           if (drawnLines[i].q.number !== number) { continue; }
           box = drawnLines[i].wrap.getBoundingClientRect();
-          row = drawnLines[i].row.getBoundingClientRect();
-          if (box.height > 0 && (box.top < topInset() || box.bottom > window.innerHeight)) { window.scrollBy(0, box.top - topInset() - row.height); }
+          if (box.height > 0 && (box.top < topInset() || box.bottom > window.innerHeight)) { window.scrollBy(0, box.top - topInset()); }
           return;
         }
       },
