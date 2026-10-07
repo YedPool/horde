@@ -9,6 +9,12 @@
 #   0000000001.json, 0000000002.json, ...   one record each, named by its sequence number in ten digits.
 # Nothing else is kept: no index, no counter, no "current list". The folder is the single source of truth.
 #
+# EVERY NUMBER THIS FILE CAN BE TUNED BY IS A NAMED SETTING (decisions/Settings.ps1 and its table,
+# decisions/settings.json): the width of a name, the largest gap believed, how long a held record is
+# waited for, how old a leftover must be. None is written here. What is written here is what the store
+# IS - its name patterns and the error codes it reads - which no setting could change without making
+# it another store.
+#
 # THE RULES, and what makes each one hold:
 #   - ONE RECORD PER SEQUENCE NUMBER, PUT IN PLACE BY A MOVE THAT DOES NOT REPLACE. The record is written
 #     whole into a temporary file of its own (writing-<32 hex>.part), and that file is then moved to the
@@ -62,6 +68,8 @@
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
+. (Join-Path $PSScriptRoot "Settings.ps1")
+
 # Win32 error codes, read from the low 16 bits of an IOException's HResult: 80 ERROR_FILE_EXISTS,
 # 183 ERROR_ALREADY_EXISTS (what a move onto a taken name raises, measured 2026-10-06, for a file and
 # for a folder alike); 32 ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION.
@@ -70,12 +78,10 @@ $script:HordeDecisionStoreBusyCodes = @(32, 33)
 # Strict: bytes that are not UTF-8 throw instead of becoming U+FFFD, so a damaged record is reported
 # and never read as different words.
 $script:HordeDecisionStoreUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-# \A and \z, not ^ and $: in .NET, $ also matches before a final newline (remote/Journal.ps1).
-$script:HordeDecisionStoreNamePattern = '\A([0-9]{10})\.json\z'
-# How long a reader waits for a record another process holds open: 40 tries 50 ms apart, 2 s. A record
-# is a few kilobytes written through, which takes milliseconds, so a healthy writer is done long before.
-$script:HordeDecisionStoreBusyTries = 40
-$script:HordeDecisionStoreBusyWaitMs = 50
+# HOW LONG A READER WAITS FOR A RECORD ANOTHER PROCESS HOLDS OPEN is two settings,
+# decisions.store.heldReadTries and decisions.store.heldReadWaitMs: by default 40 tries 50 ms apart,
+# 2 s. A record is a few kilobytes written through, which takes milliseconds, so a healthy writer is
+# done long before.
 # Any name made only of digits: a record's name when it is exactly ten of them and not zero, a stray
 # otherwise. A name with anything else in it is somebody else's file and is not looked at.
 $script:HordeDecisionStoreDigitsPattern = '\A([0-9]+)\.json\z'
@@ -86,14 +92,32 @@ $script:HordeDecisionStoreDigitsPattern = '\A([0-9]+)\.json\z'
 # records, and number the next question 2001 for good; one named 9999999999.json and the list never
 # came back. A hundred lost records in a row is not something a hand or a crash does to a folder of
 # small files; a stray copy or a mistyped name is. So a name more than this far past the last record
-# before it is a stray, and so is every name after it.
-$script:HordeDecisionStoreMaxGap = 100
+# before it is a stray, and so is every name after it. The limit is the setting decisions.store.maxGap,
+# 100 by default.
 # A writer's temporary file: the only other name this file makes, and the only kind it ever deletes.
 $script:HordeDecisionStoreTempPattern = '\Awriting-[0-9a-f]{32}\.part\z'
-# How old a temporary file must be before the next writer removes it. A live writer holds its file for
+# How old a temporary file must be before the next writer removes it is the setting
+# decisions.store.leftoverMinAgeSeconds, ten minutes by default. A live writer holds its file for
 # milliseconds (a few kilobytes, written through); ten minutes is far past any writer that is merely
 # slow, so what is removed was left by one that died.
-$script:HordeDecisionStoreTempStaleMinutes = 10
+
+function Get-HordeDecisionStoreDigits {
+    # How many digits a record's name has: the setting decisions.store.sequenceDigits. The name, the
+    # pattern a name is recognised by and the largest sequence number are all worked out from this one
+    # number, below, so they cannot come to disagree.
+    return [int](Get-HordeDecisionSetting -Name "decisions.store.sequenceDigits")
+}
+
+function Get-HordeDecisionStoreMaxSequence {
+    # The largest sequence number a name of that many digits can hold: 9999999999 for ten.
+    return [long]("9" * (Get-HordeDecisionStoreDigits))
+}
+
+function Get-HordeDecisionStoreNamePattern {
+    # What a record's file name matches: exactly that many digits, then .json.
+    # \A and \z, not ^ and $: in .NET, $ also matches before a final newline (remote/Journal.ps1).
+    return ('\A([0-9]{' + (Get-HordeDecisionStoreDigits) + '})\.json\z')
+}
 
 function Get-HordeDecisionStoreWin32Code {
     param($ErrorRecord)
@@ -104,11 +128,12 @@ function Get-HordeDecisionStoreWin32Code {
 }
 
 function Get-HordeDecisionRecordName {
-    # The file name of record -Sequence. Ten digits, so names sort in sequence order and a store of
-    # 9,999,999,999 records fits; the name is the order, and nothing else is.
+    # The file name of record -Sequence. Ten digits by default, so names sort in sequence order and a
+    # store of 9,999,999,999 records fits; the name is the order, and nothing else is.
     param([Parameter(Mandatory = $true)][long]$Sequence)
-    if ($Sequence -lt 1 -or $Sequence -gt 9999999999) { throw ("a record's sequence number is 1 to 9999999999, not " + $Sequence) }
-    return ($Sequence.ToString("D10", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
+    $most = Get-HordeDecisionStoreMaxSequence
+    if ($Sequence -lt 1 -or $Sequence -gt $most) { throw ("a record's sequence number is 1 to " + $most + ", not " + $Sequence) }
+    return ($Sequence.ToString(("D" + (Get-HordeDecisionStoreDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
 }
 
 function Remove-HordeDecisionStoreLeftovers {
@@ -118,12 +143,13 @@ function Remove-HordeDecisionStoreLeftovers {
     # that cannot be removed is left for the next write; this never fails a write.
     param([Parameter(Mandatory = $true)][string]$Root, [datetime]$Now = [datetime]::UtcNow)
     $removed = 0
+    $minAgeSeconds = Get-HordeDecisionSetting -Name "decisions.store.leftoverMinAgeSeconds"
     $found = @()
     try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }
     foreach ($leftover in $found) {
         if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }
         try {
-            if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalMinutes -lt $script:HordeDecisionStoreTempStaleMinutes) { continue }
+            if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalSeconds -lt $minAgeSeconds) { continue }
             [System.IO.File]::Delete($leftover)
             $removed++
         } catch { }
@@ -165,7 +191,9 @@ function Read-HordeDecisionRecordFile {
     # Read one record file. Returns { kind: ok | missing | busy | torn | error; data; reason }.
     param([Parameter(Mandatory = $true)][string]$Path)
     $text = $null
-    for ($try = 1; $try -le $script:HordeDecisionStoreBusyTries; $try++) {
+    $heldTries = Get-HordeDecisionSetting -Name "decisions.store.heldReadTries"
+    $heldWaitMs = Get-HordeDecisionSetting -Name "decisions.store.heldReadWaitMs"
+    for ($try = 1; $try -le $heldTries; $try++) {
         $busy = $false
         try {
             $fs = New-Object System.IO.FileStream($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
@@ -180,10 +208,10 @@ function Read-HordeDecisionRecordFile {
             else { return [pscustomobject]@{ kind = "error"; data = $null; reason = ("it could not be read: " + $_.Exception.Message) } }
         }
         if (-not $busy) { break }
-        if ($try -eq $script:HordeDecisionStoreBusyTries) {
-            return [pscustomobject]@{ kind = "busy"; data = $null; reason = ("it is still open in another process after " + ($script:HordeDecisionStoreBusyTries * $script:HordeDecisionStoreBusyWaitMs) + " ms; a writer is slow or stuck") }
+        if ($try -eq $heldTries) {
+            return [pscustomobject]@{ kind = "busy"; data = $null; reason = ("it is still open in another process after " + ($heldTries * $heldWaitMs) + " ms; a writer is slow or stuck") }
         }
-        Start-Sleep -Milliseconds $script:HordeDecisionStoreBusyWaitMs
+        Start-Sleep -Milliseconds $heldWaitMs
     }
     if ("$text".Trim() -eq "") { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is empty: its writer stopped before writing it" } }
     try { $data = $text | ConvertFrom-Json } catch { return [pscustomobject]@{ kind = "torn"; data = $null; reason = "it is not complete JSON: its writer stopped while writing it, or it was damaged" } }
@@ -219,13 +247,16 @@ function Get-HordeDecisionRecords {
     $names = $null
     try { $names = [System.IO.Directory]::GetFiles($Root, "*.json") }
     catch { return [pscustomobject]@{ state = "unknown"; reason = ("the decisions store '" + $Root + "' could not be listed: " + $_.Exception.Message); last = [long]0; records = @(); strays = @() } }
+    $namePattern = Get-HordeDecisionStoreNamePattern
+    $digits = Get-HordeDecisionStoreDigits
+    $maxGap = Get-HordeDecisionSetting -Name "decisions.store.maxGap"
     $strays = New-Object System.Collections.ArrayList
     $numbered = New-Object 'System.Collections.Generic.List[long]'
     foreach ($full in $names) {
         $leaf = [System.IO.Path]::GetFileName($full)
         if ($leaf -cnotmatch $script:HordeDecisionStoreDigitsPattern) { continue }
-        if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {
-            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = "its name is not a sequence number from 1 written in ten digits, so it is not a record" })
+        if ($leaf -cnotmatch $namePattern -or [long]$Matches[1] -lt 1) {
+            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = ("its name is not a sequence number from 1 written in " + $digits + " digits, so it is not a record") })
             continue
         }
         $numbered.Add([long]$Matches[1])
@@ -236,8 +267,8 @@ function Get-HordeDecisionRecords {
     foreach ($seq in $numbered) {
         $leaf = Get-HordeDecisionRecordName -Sequence $seq
         $gap = $seq - $last - 1
-        if ($gap -gt $script:HordeDecisionStoreMaxGap) {
-            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = ("it is " + $gap + " places past record " + $last + ", the last before it; more than " + $script:HordeDecisionStoreMaxGap + " is too far to be a record, so it is not read and not counted") })
+        if ($gap -gt $maxGap) {
+            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = ("it is " + $gap + " places past record " + $last + ", the last before it; more than " + $maxGap + " is too far to be a record, so it is not read and not counted") })
             continue
         }
         if ($gap -gt 0) {

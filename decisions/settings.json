@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "about": "Every number the decisions module can be tuned by, with its default. decisions/Settings.ps1 reads this table and nothing else holds a copy. Each entry: default (a whole number), least and most (the range a value must be in), and means (what it is, in a sentence).",
+  "settings": {
+    "decisions.store.sequenceDigits": { "default": 10, "least": 1, "most": 18, "means": "How many digits a record's file name has. This is the format of the store on disk, not a preference: records written under one width are not records under another, so it is changed only for a store that has none. It is in this table so that the width is written in one place." },
+    "decisions.store.maxGap": { "default": 100, "least": 0, "most": 1000000, "means": "The largest run of missing records that is believed. A file named further than this past the last record before it is a stray, not a record." },
+    "decisions.store.heldReadTries": { "default": 40, "least": 1, "most": 100000, "means": "How many times a reader tries a record that another process holds open before it reports the record as busy." },
+    "decisions.store.heldReadWaitMs": { "default": 50, "least": 1, "most": 60000, "means": "How long a reader waits between two such tries, in milliseconds. Tries times wait is how long one read waits for one held record: 2 seconds by default." },
+    "decisions.store.leftoverMinAgeSeconds": { "default": 600, "least": 0, "most": 31536000, "means": "How old a writer's temporary file must be, in seconds, before the next writer may remove it - and then only if no process holds it open." },
+    "decisions.write.raceTries": { "default": 200, "least": 1, "most": 100000, "means": "How many times one write tries for the next place in the order, each try lost to another writer, before it says it cannot." },
+    "decisions.write.heldReads": { "default": 5, "least": 1, "most": 1000, "means": "How many reads in a row may find a record held open by another process before a write gives up. Each read has already waited the store's own time, so by default a write waits about 10 seconds." }
+  }
+}

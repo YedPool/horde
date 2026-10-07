@@ -73,6 +73,13 @@ function Get-Listed { param([string]$Store, [string]$State = "all") $a = Invoke-
 try {
 
 Write-Host ""
+Write-Host "--- the rules and the store agree on the largest record ---" -ForegroundColor Cyan
+# The rules hold the largest sequence number a RECORD may claim (decisions/Rules.ps1, which opens no
+# file and so asks no setting); the store works out the largest its file names hold from the setting
+# decisions.store.sequenceDigits. Two statements of one limit: held together here.
+Check ($script:HordeDecisionMaxSequence -eq (Get-HordeDecisionStoreMaxSequence)) ("the largest sequence number the rules accept is the largest the store can name (" + $script:HordeDecisionMaxSequence + " and " + (Get-HordeDecisionStoreMaxSequence) + ")")
+
+Write-Host ""
 Write-Host "--- the operations, as a caller may list them ---" -ForegroundColor Cyan
 $ops = @(Get-HordeDecisionOperations)
 Check ((@($ops | ForEach-Object { $_.name }) -join ",") -ceq "add,update,close,reopen,list,show,kinds") "the operations of this slice are add, update, close, reopen, list, show and kinds"

@@ -2,7 +2,8 @@
 #   powershell -File tools\Mutate.ps1 -Spec test\mutations\decisions-store.psd1
 # Each breaks one promise of the store; test\test-decisions-store.ps1 must fail for every one, except
 # those declared Expect = "survives". The mutants only racing processes can see are in
-# test\mutations\decisions-store-race.psd1.
+# test\mutations\decisions-store-race.psd1. The store's numbers are settings: the mutants of their
+# defaults are in test\mutations\decisions-settings.psd1.
 @{
     Target = "decisions\Store.ps1"
     Suite  = "test\test-decisions-store.ps1"
@@ -29,23 +30,29 @@
            Find = '$null = Remove-HordeDecisionStoreLeftovers -Root $Root'
            Replace = '' }
         @{ Name = "live-writers-file-swept"
-           Find = '.TotalMinutes -lt $script:HordeDecisionStoreTempStaleMinutes) { continue }'
-           Replace = '.TotalMinutes -lt 0) { continue }' }
+           Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
+           Replace = '.TotalSeconds -lt 0) { continue }' }
+        @{ Name = "leftover-age-counted-in-minutes"
+           Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
+           Replace = '.TotalMinutes -lt $minAgeSeconds) { continue }' }
         @{ Name = "sweep-takes-names-that-are-not-its-own"
            Find = 'if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }'
            Replace = '' }
         @{ Name = "sweep-fails-the-write-with-no-store"
            Find = 'try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }'
            Replace = '$found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part"))' }
-        @{ Name = "name-of-nine-digits"
-           Find = 'return ($Sequence.ToString("D10", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")'
-           Replace = 'return ($Sequence.ToString("D9", [System.Globalization.CultureInfo]::InvariantCulture) + ".json")' }
+        @{ Name = "name-not-padded-to-its-width"
+           Find = 'return ($Sequence.ToString(("D" + (Get-HordeDecisionStoreDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")'
+           Replace = 'return ($Sequence.ToString([System.Globalization.CultureInfo]::InvariantCulture) + ".json")' }
         @{ Name = "sequence-zero-allowed"
-           Find = 'if ($Sequence -lt 1 -or $Sequence -gt 9999999999) {'
-           Replace = 'if ($Sequence -gt 9999999999) {' }
+           Find = 'if ($Sequence -lt 1 -or $Sequence -gt $most) {'
+           Replace = 'if ($Sequence -gt $most) {' }
         @{ Name = "eleven-digit-sequence-allowed"
-           Find = 'if ($Sequence -lt 1 -or $Sequence -gt 9999999999) {'
+           Find = 'if ($Sequence -lt 1 -or $Sequence -gt $most) {'
            Replace = 'if ($Sequence -lt 1) {' }
+        @{ Name = "largest-sequence-one-digit-short"
+           Find = 'return [long]("9" * (Get-HordeDecisionStoreDigits))'
+           Replace = 'return [long]("9" * ((Get-HordeDecisionStoreDigits) - 1))' }
         @{ Name = "relative-root-written"
            Find = 'if (-not [System.IO.Path]::IsPathRooted("$Root")) { throw ("the decisions store needs an absolute folder, not ''" + $Root + "''") }'
            Replace = '' }
@@ -70,28 +77,28 @@
         @{ Name = "held-record-is-an-error"
            Find = 'if ($script:HordeDecisionStoreBusyCodes -contains $code) { $busy = $true }'
            Replace = 'if ($false) { $busy = $true }' }
-        @{ Name = "held-record-not-waited-for"
-           Find = '$script:HordeDecisionStoreBusyTries = 40'
-           Replace = '$script:HordeDecisionStoreBusyTries = 1' }
+        @{ Name = "held-record-tried-once-whatever-the-setting"
+           Find = 'for ($try = 1; $try -le $heldTries; $try++) {'
+           Replace = 'for ($try = 1; $try -le 1; $try++) {' }
+        @{ Name = "held-record-retried-without-a-wait"
+           Find = '        Start-Sleep -Milliseconds $heldWaitMs'
+           Replace = '' }
         @{ Name = "missing-record-is-an-error"
            Find = 'if ($code -eq 2 -or $code -eq 3) {'
            Replace = 'if ($false) {' }
         @{ Name = "other-names-read-as-records"
-           Find = '$script:HordeDecisionStoreNamePattern = ''\A([0-9]{10})\.json\z'''
-           Replace = '$script:HordeDecisionStoreNamePattern = ''([0-9]{10})\.json''' }
+           Find = 'return (''\A([0-9]{'' + (Get-HordeDecisionStoreDigits) + ''})\.json\z'')'
+           Replace = 'return (''([0-9]{'' + (Get-HordeDecisionStoreDigits) + ''})\.json'')' }
         @{ Name = "damaged-record-keeps-no-reason"
            Find = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = $read.reason })'
            Replace = '[void]$records.Add([pscustomobject]@{ sequence = $seq; span = [long]1; file = $leaf; kind = $read.kind; data = $read.data; reason = "" })' }
         # --- gaps and strays ---
         @{ Name = "file-far-ahead-believed"
-           Find = 'if ($gap -gt $script:HordeDecisionStoreMaxGap) {'
+           Find = 'if ($gap -gt $maxGap) {'
            Replace = 'if ($false) {' }
-        @{ Name = "gap-limit-one-more"
-           Find = '$script:HordeDecisionStoreMaxGap = 100'
-           Replace = '$script:HordeDecisionStoreMaxGap = 101' }
-        @{ Name = "gap-limit-one-less"
-           Find = '$script:HordeDecisionStoreMaxGap = 100'
-           Replace = '$script:HordeDecisionStoreMaxGap = 99' }
+        @{ Name = "gap-at-the-limit-is-a-stray"
+           Find = 'if ($gap -gt $maxGap) {'
+           Replace = 'if ($gap -ge $maxGap) {' }
         @{ Name = "gap-of-several-covers-one-number"
            Find = 'span = $gap;'
            Replace = 'span = [long]1;' }
@@ -102,11 +109,11 @@
            Find = 'if ($gap -gt 1) { $why ='
            Replace = 'if ($false) { $why =' }
         @{ Name = "number-of-another-width-read-as-a-record"
-           Find = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {'
+           Find = 'if ($leaf -cnotmatch $namePattern -or [long]$Matches[1] -lt 1) {'
            Replace = 'if ($false) {' }
         @{ Name = "record-zero-read"
-           Find = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern -or [long]$Matches[1] -lt 1) {'
-           Replace = 'if ($leaf -cnotmatch $script:HordeDecisionStoreNamePattern) {' }
+           Find = 'if ($leaf -cnotmatch $namePattern -or [long]$Matches[1] -lt 1) {'
+           Replace = 'if ($leaf -cnotmatch $namePattern) {' }
         @{ Name = "records-read-in-the-order-of-their-names-as-listed"
            Find = '    $numbered.Sort()'
            Replace = '    $numbered.Reverse()' }

@@ -41,6 +41,7 @@
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Home.ps1")
+. (Join-Path $PSScriptRoot "Settings.ps1")
 . (Join-Path $PSScriptRoot "Store.ps1")
 . (Join-Path $PSScriptRoot "Rules.ps1")
 . (Join-Path $PSScriptRoot "Definitions.ps1")
@@ -58,17 +59,18 @@ $script:HordeDecisionOperations = [ordered]@{
     # Answered from the definitions alone: no store is read, so it answers where a list could not.
     kinds  = @{ writes = $false; read = "Get-HordeDecisionKindsAnswer"; noStore = $true }
 }
-# How many times a write tries for a sequence number before it says it cannot. Each failed try means
-# another writer's record was written, so 200 is 200 other writes landing first; a write that still
-# has not won is reported, never spun for ever.
-$script:HordeDecisionWriteTries = 200
-# How many reads in a row may find a record held open by another process before a write gives up. The
-# store has already waited its own 2 s for that record on each read (decisions/Store.ps1), so 5 is
-# about ten seconds - far longer than any writer holds a record, and short enough to wait for at a
-# command line. It has a limit of its own because the tries above were sized for losing a race,
-# which costs milliseconds: measured 2026-10-06, counted against them, a write with record 1 held
-# open was still waiting after 40 s and could have waited 400.
-$script:HordeDecisionWriteBusyReads = 5
+# HOW LONG A WRITE KEEPS TRYING is two settings (decisions/Settings.ps1 and its table), written nowhere
+# here:
+#   decisions.write.raceTries  how many times a write tries for a sequence number before it says it
+#     cannot. Each failed try means another writer's record was written, so the default of 200 is 200
+#     other writes landing first; a write that still has not won is reported, never spun for ever.
+#   decisions.write.heldReads  how many reads in a row may find a record held open by another process
+#     before a write gives up. The store has already waited its own 2 s for that record on each read
+#     (decisions/Store.ps1), so the default of 5 is about ten seconds - far longer than any writer
+#     holds a record, and short enough to wait for at a command line. It has a limit of its own
+#     because the tries above were sized for losing a race, which costs milliseconds: measured
+#     2026-10-06, counted against them, a write with record 1 held open was still waiting after 40 s
+#     and could have waited 400.
 
 function Get-HordeDecisionOperations {
     # The operations, as { name; writes }, for a caller that offers them (a bridge, a help text).
@@ -258,8 +260,10 @@ function Invoke-HordeDecisionWrite {
     }
     $id = [string]$Request.id
 
+    $raceTries = Get-HordeDecisionSetting -Name "decisions.write.raceTries"
+    $heldReads = Get-HordeDecisionSetting -Name "decisions.write.heldReads"
     $busyReads = 0
-    for ($attempt = 1; $attempt -le $script:HordeDecisionWriteTries; $attempt++) {
+    for ($attempt = 1; $attempt -le $raceTries; $attempt++) {
         $read = Read-HordeDecisionState -Root $Root -Definitions $Definitions
         if ($read.state -ceq "unknown") { return (New-HordeUnknown -Reason ("nothing was written: " + $read.reason)) }
         if ($null -ne $read.busy) {
@@ -267,7 +271,7 @@ function Invoke-HordeDecisionWrite {
             # whether this request may be written, so this request waits for it rather than guess -
             # for about ten seconds, and then says which record, and that nothing was written.
             $busyReads++
-            if ($busyReads -ge $script:HordeDecisionWriteBusyReads) {
+            if ($busyReads -ge $heldReads) {
                 return (New-HordeUnknown -Reason ("nothing was written: another process holds record " + $read.busy.sequence + " open, and still did after " + $busyReads + " reads that each waited for it. Try again when it has let go"))
             }
             continue
@@ -325,7 +329,7 @@ function Invoke-HordeDecisionWrite {
         $value = New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $more
         return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now -Written ("Record " + $sequence + " WAS written"))
     }
-    return (New-HordeUnknown -Reason ("nothing was written: " + $script:HordeDecisionWriteTries + " tries each found another writer had taken the next sequence number first"))
+    return (New-HordeUnknown -Reason ("nothing was written: " + $raceTries + " tries each found another writer had taken the next sequence number first"))
 }
 
 function Invoke-HordeDecision {

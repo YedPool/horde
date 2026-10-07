@@ -49,6 +49,14 @@ Check ((Get-HordeDecisionRecordName -Sequence 7) -ceq "0000000007.json") "record
 Check ((Get-HordeDecisionRecordName -Sequence 9999999999) -ceq "9999999999.json") "the largest sequence number still has a ten-digit name"
 Check (Throws { Get-HordeDecisionRecordName -Sequence 0 } "1 to 9999999999") "sequence 0 is refused: the order starts at 1"
 Check (Throws { Get-HordeDecisionRecordName -Sequence 10000000000 } "1 to 9999999999") "a sequence number that would need eleven digits is refused, not written under a name that sorts wrongly"
+# ONE WIDTH, THREE THINGS WORKED OUT FROM IT (the setting decisions.store.sequenceDigits): the name, the
+# pattern a name is recognised by, and the largest number. Each is asked of the store, so none can be
+# a second number written somewhere else.
+$digits = Get-HordeDecisionStoreDigits
+$largest = Get-HordeDecisionStoreMaxSequence
+Check ($digits -eq 10 -and $largest -eq 9999999999) ("the width is ten digits, and the largest sequence number is the largest ten digits hold (" + $digits + ", " + $largest + ")")
+Check ((Get-HordeDecisionRecordName -Sequence $largest).Length -eq ($digits + 5) -and (Get-HordeDecisionRecordName -Sequence 1).Length -eq ($digits + 5)) "the first and the last record have names of one length"
+Check (((Get-HordeDecisionRecordName -Sequence 7) -cmatch (Get-HordeDecisionStoreNamePattern)) -and ("123456789.json" -cnotmatch (Get-HordeDecisionStoreNamePattern)) -and ("12345678901.json" -cnotmatch (Get-HordeDecisionStoreNamePattern)) -and ("0000000007.json`n" -cnotmatch (Get-HordeDecisionStoreNamePattern))) "a name the store makes matches the pattern it reads by; one digit fewer, one more, or a line break after it does not"
 
 Write-Host ""
 Write-Host "--- no store yet is an empty list, and reading makes nothing ---" -ForegroundColor Cyan
@@ -256,6 +264,11 @@ Check (-not (Test-Path -LiteralPath $stale)) "and it swept the temporary file a 
 Check (Test-Path -LiteralPath $fresh) "a temporary file written a moment ago is left: its writer may be alive"
 Check (Test-Path -LiteralPath (Join-Path $s "0000000001.json")) "a RECORD is never swept, however old it is"
 Check (@($notOurs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $s $_)) }).Count -eq 0) "nor is any file whose name is not exactly the store's own temporary pattern"
+# THE AGE, on both sides (the setting decisions.store.leftoverMinAgeSeconds, ten minutes): nine minutes
+# on it is left, eleven minutes on it is swept.
+$removedNow = -1
+try { $removedNow = Remove-HordeDecisionStoreLeftovers -Root $s -Now ([datetime]::UtcNow.AddMinutes(9)) } catch { $removedNow = -2 }
+Check ($removedNow -eq 0 -and (Test-Path -LiteralPath $fresh)) ("nine minutes on, that file is still under the age and is left (" + $removedNow + " removed)")
 $removedNow = -1
 try { $removedNow = Remove-HordeDecisionStoreLeftovers -Root $s -Now ([datetime]::UtcNow.AddMinutes(11)) } catch { $removedNow = -2 }
 Check ($removedNow -eq 1 -and -not (Test-Path -LiteralPath $fresh)) ("eleven minutes on, that file is past the age and is swept too (" + $removedNow + " removed)")

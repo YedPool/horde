@@ -274,7 +274,8 @@ Check ($kills.strays -eq 0) "and nothing but records and the store's own tempora
 # CONTROL: the same kills against a copy of the store that creates the record under its own name and
 # writes into it. It runs until a kill leaves a damaged record, or gives up; one is enough to show
 # these kills can land inside a write and that the reading above would have seen it.
-$inPlace = Join-Path $script:work "store-in-place.ps1"
+# Beside the broken tree's own store, because the store loads its settings from its own folder.
+$inPlace = Join-Path $broken "decisions\Store-in-place.ps1"
 $nameFind = '$tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")'
 $moveFind = 'try { [System.IO.File]::Move($tmpPath, $recPath) }'
 Check (([regex]::Matches($src, [regex]::Escape($nameFind))).Count -eq 1 -and ([regex]::Matches($src, [regex]::Escape($moveFind))).Count -eq 1) "the kill control's two edits each match exactly once in decisions/Store.ps1"
