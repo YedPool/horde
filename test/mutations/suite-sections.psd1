@@ -21,6 +21,9 @@
         @{ Name = "unknown-selection-is-a-fail"
            Find = 'Add-HordeSuiteProblem ("HORDE_SECTIONS names " + $u + ", which is not a section of this suite")'
            Replace = 'Check $false ("HORDE_SECTIONS names " + $u + ", which is not a section of this suite")' }
+        @{ Name = "selection-reaches-children"
+           Find = '[System.Environment]::SetEnvironmentVariable("HORDE_SECTIONS", $null, "Process")'
+           Replace = '' }
         @{ Name = "empty-selection-is-whole"
            Find = 'if ($script:HordeSuiteSectionsWanted.Count -eq 0) { Add-HordeSuiteProblem ("HORDE_SECTIONS names no section'
            Replace = 'if ($false) { Add-HordeSuiteProblem ("HORDE_SECTIONS names no section' }

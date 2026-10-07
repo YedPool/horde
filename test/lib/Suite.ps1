@@ -105,6 +105,7 @@ function Add-HordeSuiteProblem {
 #   - A selected name the suite does not declare is an [ERROR], never a [FAIL]: tools\Mutate.ps1
 #     counts a mutant caught only from a [FAIL], so a typo in a map cannot read as a catch.
 #   - A selection that names nothing is an error, not "every section".
+#   - The selection is read once and removed from the environment, so nothing the suite starts sees it.
 #   - A declared section the suite never enters, or one entered that was never declared, fails the
 #     suite: the list a map is checked against is the list that runs.
 function Register-HordeSuiteSections {
@@ -118,6 +119,10 @@ function Register-HordeSuiteSections {
     }
     $script:HordeSuiteSectionIds = @($Ids | ForEach-Object { "$_" })
     $raw = "$env:HORDE_SECTIONS"
+    # The selection is this suite's alone: a suite or tool it starts would inherit it and read it as its
+    # own - and a child suite given a name it does not have fails, which its parent's check would print
+    # as a [FAIL], a catch (review of #115, B2). So it leaves this process once read.
+    [System.Environment]::SetEnvironmentVariable("HORDE_SECTIONS", $null, "Process")
     if ($raw -eq "") { return }
     $script:HordeSuiteSectionsWanted = @($raw -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
     if ($script:HordeSuiteSectionsWanted.Count -eq 0) { Add-HordeSuiteProblem ("HORDE_SECTIONS names no section ('" + $raw + "')"); return }

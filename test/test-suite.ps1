@@ -166,6 +166,9 @@ $sUn = Invoke-Fixture "sections-unentered"
 Check ($sUn.code -eq 1 -and $sUn.out -like "*[[]ERROR]*beta*never entered*") "a declared section the suite never enters fails the suite"
 $sUd = Invoke-Fixture "sections-undeclared"
 Check ($sUd.code -eq 1 -and $sUd.out -like "*[[]ERROR]*gamma*not declared*") "entering a section that was never declared fails the suite"
+$sCh = Invoke-Fixture "sections-child" -Vars @{ HORDE_SECTIONS = "alpha" }
+Check ($sCh.code -eq 0 -and $sCh.out -like "*[[]PASS] the alpha check*") "CONTROL: the selected section ran"
+Check ($sCh.out.Contains("child saw []")) ("a selection never reaches what a suite starts: the child saw no HORDE_SECTIONS (review of #115, B2)" + $(if (-not $sCh.out.Contains("child saw []")) { " - " + (@(($sCh.out -split "`r?`n") | Where-Object { $_ -like "*child saw*" }) -join " ") } else { "" }))
 $sTw = Invoke-Fixture "sections-twice"
 Check ($sTw.code -eq 1 -and $sTw.out -like "*[[]ERROR]*declares its sections more than once*") "a suite that declares its sections twice fails"
 Check ($sTw.out -like "*[[]ERROR]*section alpha is entered twice*") "a section entered twice fails the suite"
