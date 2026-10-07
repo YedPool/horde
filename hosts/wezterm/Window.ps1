@@ -31,8 +31,15 @@
 # A terminal configured to title its windows another way (its format-window-title event) will fit no
 # title: the answer is then unknown, and the caller's window stands free. That is the honest result.
 #
-# THE LISTING IS READ AS UTF-8. Titles hold characters outside ASCII, and read in the console's code
-# page a title would not equal itself (hosts/wezterm/Act.ps1 sets the encoding; its suite pins it).
+# THE LISTING IS UTF-8, AND IS MENDED HERE. Titles hold characters outside ASCII. The host's one call
+# (hosts/wezterm/Act.ps1) leaves the decoding of the terminal's answer to .NET, which reads it in the
+# console's code page, or the machine's when there is no console: a title of one character outside
+# ASCII came back as three others and did not equal itself (measured 2026-10-06). That file is the
+# act path's and is not changed for this one: the finder notes the code page the answer was read in,
+# turns the text back into the bytes the terminal wrote, and reads those as UTF-8
+# (ConvertTo-HordeWeztermAnswerText). Where the bytes cannot be had back, or are not UTF-8, the answer
+# is unknown. WHEN THE HOST'S CALL ITSELF READS UTF-8, this mending goes: it would then mend text
+# that is already right, and its suite's control - the same call, measured each run - fails first.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
@@ -108,6 +115,28 @@ function Read-HordeWeztermWindowList {
     return (New-HordeKnown -Value $rows.ToArray())
 }
 
+function Get-HordeWeztermAnswerEncoding {
+    # The code page .NET reads a child process's answer in when the call names none: the console's
+    # output code page, or the machine's own when this process has no console. Read just before the call.
+    try { return [Console]::OutputEncoding } catch { return [System.Text.Encoding]::Default }
+}
+
+function ConvertTo-HordeWeztermAnswerText {
+    # The terminal's answer as the terminal wrote it (header, THE LISTING IS UTF-8, AND IS MENDED HERE),
+    # as an answer: known text, or unknown with the reason. -Text is the answer as it was read, -ReadAs
+    # the code page it was read in. A PURE FUNCTION. Text that is all ASCII is the same in every code
+    # page Windows has, and an answer already read as UTF-8 is right: both are handed back untouched.
+    param([AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)][System.Text.Encoding]$ReadAs)
+    if ($ReadAs.CodePage -eq 65001 -or $Text -cnotmatch '[^\u0000-\u007F]') { return (New-HordeKnown -Value $Text) }
+    # Back to the terminal's bytes: only where the code page gives one character for every byte, and
+    # this very text comes back from its bytes unchanged. Otherwise a byte was lost when it was read.
+    $bytes = $null
+    if ($ReadAs.IsSingleByte) { $bytes = $ReadAs.GetBytes($Text); if ($ReadAs.GetString($bytes) -cne $Text) { $bytes = $null } }
+    if ($null -eq $bytes) { return (New-HordeUnknown -Reason ("the terminal's answer was read in code page " + $ReadAs.CodePage + ", from which it cannot be turned back into what the terminal wrote")) }
+    try { return (New-HordeKnown -Value (New-Object System.Text.UTF8Encoding($false, $true)).GetString($bytes)) }
+    catch { return (New-HordeUnknown -Reason "the terminal's answer is not UTF-8, so its titles cannot be compared") }
+}
+
 function Test-HordeWeztermWindowTitle {
     # Could a terminal window with the panes -Rows (all of one window id) be titled -Title? The title
     # of one of its tabs' active panes, behind "[<tab>/<tabs>] " when it has more than one tab and
@@ -163,10 +192,11 @@ function Select-HordeWeztermSessionWindow {
 function Find-HordeWeztermSessionWindow {
     # The native window showing pane -Pane of the terminal -Instance, as an answer (header). -SockDir,
     # -Runner, -Windows and -ProcessStart replace the socket folder, the terminal's command, the window
-    # reader and the process clock in a test.
+    # reader and the process clock in a test; -ReadAs says which code page a runner's answer was read
+    # in, and the real call's is always this process's own.
     param([AllowEmptyString()][string]$Pane, [AllowEmptyString()][string]$Instance,
         [string]$SockDir = (Join-Path $env:USERPROFILE ".local\share\wezterm"),
-        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [scriptblock]$ProcessStart = $null,
+        [scriptblock]$Runner = $null, [scriptblock]$Windows = $null, [scriptblock]$ProcessStart = $null, [System.Text.Encoding]$ReadAs = $null,
         [int]$Attempts = $script:HordeWeztermWindowAttempts, [int]$RetryMs = $script:HordeWeztermWindowRetryMs)
     if ($Pane -cnotmatch '\A[0-9]{1,9}\z') { return (New-HordeUnknown -Reason "the session's record names a pane this terminal does not number that way, so it is not one of this terminal's") }
     # The leaf name only: a record never chooses the folder the socket is looked for in.
@@ -178,9 +208,17 @@ function Find-HordeWeztermSessionWindow {
         if ($try -gt 1 -and $RetryMs -gt 0) { Start-Sleep -Milliseconds $RetryMs }
         $before = $null; $after = $null
         if ($null -ne $Windows) { $before = @(& $Windows ([long]$target.value.guiPid)) } else { $before = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$target.value.guiPid)) }
+        $readIn = $ReadAs
+        if ($null -eq $Runner) { $readIn = Get-HordeWeztermAnswerEncoding }
         $call = Invoke-HordeWeztermCall -Rest @("list", "--format", "json") -Target $target.value -Runner $Runner
         if ($call.code -ne 0) { return (New-HordeUnknown -Reason ("the terminal did not list its panes (exit " + $call.code + "): " + ("" + $call.err).Trim())) }
-        $rows = Read-HordeWeztermWindowList -Raw $call.out
+        $listing = $call.out
+        if ($null -ne $readIn) {
+            $mended = ConvertTo-HordeWeztermAnswerText -Text (@($call.out) -join "`n") -ReadAs $readIn
+            if ($mended.state -cne "known") { return $mended }
+            $listing = $mended.value
+        }
+        $rows = Read-HordeWeztermWindowList -Raw $listing
         if ($rows.state -cne "known") { return $rows }
         if ($null -ne $Windows) { $after = @(& $Windows ([long]$target.value.guiPid)) } else { $after = @(Get-HordeWeztermNativeWindows -ProcessId ([long]$target.value.guiPid)) }
         $last = Select-HordeWeztermSessionWindow -Rows @($rows.value) -Pane $Pane -Native $before -NativeAfter $after
