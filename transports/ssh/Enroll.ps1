@@ -27,6 +27,7 @@
 
 . (Join-Path $PSScriptRoot "Argv.ps1")
 . (Join-Path $PSScriptRoot "Attach.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")
 
 # A public key line Horde accepts: ed25519 only, base64 of the 51-byte blob (68 characters), and an
 # optional comment of plain characters. Anything else is refused, never cleaned.
@@ -36,8 +37,8 @@ $script:HordeSshDevicePattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 $script:HordeSshEnrolDays = 365
 
 function New-HordeSshEnrolResult {
-    param([bool]$Ok, [string]$Line = "", [string]$Reason = "")
-    return [pscustomobject]@{ ok = $Ok; line = $Line; reason = $Reason }
+    param([bool]$Ok, [string]$Line = "", [string]$Reason = "", [string]$Said = "")
+    return [pscustomobject]@{ ok = $Ok; line = $Line; reason = $Reason; said = $Said }
 }
 
 function Test-HordeSshInHome {
@@ -135,11 +136,19 @@ function Read-HordeSshLines {
 }
 
 function Write-HordeSshLines {
-    # The whole file at once, LF line ends, ASCII: sshd reads these.
+    # The whole file at once, LF line ends, ASCII: sshd reads these. Written beside it and renamed over
+    # it in one step (core/FileAtomic.ps1), never rewritten in place: a kill mid-write of an in-place
+    # write left authorized_keys empty, every device locked out (review of PR #111, N5).
     param([string]$Path, [string[]]$Lines)
     $text = ""
     foreach ($l in @($Lines)) { $text = $text + $l + "`n" }
-    [System.IO.File]::WriteAllText($Path, $text, [System.Text.Encoding]::ASCII)
+    $tmp = $Path + ".tmp-" + [System.IO.Path]::GetRandomFileName()
+    try {
+        [System.IO.File]::WriteAllText($tmp, $text, [System.Text.Encoding]::ASCII)
+        Move-HordeFileAtomic -From $tmp -To $Path
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Initialize-HordeSshNode {
@@ -232,11 +241,22 @@ function Get-HordeSshEnrolment {
     return $null
 }
 
+function New-HordeSshEnrolLine {
+    # The one shape of an enrolled device's authorized_keys line: command= and restrict always, then
+    # the expiry, the key and the device's comment. -Key is ConvertFrom-HordeSshKeyLine's answer.
+    param([Parameter(Mandatory = $true)][string]$Command, [Parameter(Mandatory = $true)][string]$Expiry, [Parameter(Mandatory = $true)]$Key, [Parameter(Mandatory = $true)][string]$DeviceId)
+    return ('command="' + $Command + '",restrict,expiry-time="' + $Expiry + '" ' + $Key.type + " " + $Key.b64 + " horde-device-" + $DeviceId)
+}
+
 function Add-HordeSshEnrolment {
     # Admit device -DeviceId's key: one authorized_keys line with command= (Attach.ps1's attach for
     # this device, Horde at -HordeRoot), restrict and expiry-time, always all three: the listener runs
     # no ForceCommand (Attach.ps1). No caller names the command. Refused: a device already enrolled
     # with another key, a key already enrolled for another device, and a revoked key.
+    # ENROLLING AGAIN RENEWS (review of PR #111, B1): the same device and key enrolled again had its old
+    # line kept, expiry and all, and was told it was enrolled, so every link died a year on. Its line is
+    # now written afresh - this command, restrict, and the later of the old and the new expiry - and
+    # said "renewed until"; an expiry is never shortened.
     param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$HordeRoot, [int]$Days = $script:HordeSshEnrolDays, $Now = $null)
     if ($DeviceId -cnotmatch $script:HordeSshDevicePattern) { return (New-HordeSshEnrolResult -Ok $false -Reason ("not a device id: '" + $DeviceId + "'")) }
     $Command = ""
@@ -244,9 +264,6 @@ function Add-HordeSshEnrolment {
     $k = ConvertFrom-HordeSshKeyLine -Line $Key
     if (-not $k.ok) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the node's key: " + $k.reason)) }
     if ($Days -lt 1 -or $Days -gt 366) { return (New-HordeSshEnrolResult -Ok $false -Reason "an enrolment lasts 1 to 366 days") }
-    # The command is quoted inside command="...": it may hold no double quote and no backslash before
-    # one, and nothing outside printable ASCII.
-    if ($Command -cnotmatch '\A[\x20-\x7E]{1,1000}\z' -or $Command.Contains('"')) { return (New-HordeSshEnrolResult -Ok $false -Reason "the forced command may hold only printable ASCII and no double quote") }
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $lp = Get-HordeSshListenPaths -HordeHome $HordeHome
     $null = [System.IO.Directory]::CreateDirectory($lp.dir)
@@ -256,13 +273,18 @@ function Add-HordeSshEnrolment {
     }
     $lines = @(Read-HordeSshLines -Path $lp.authorized)
     $mine = Get-HordeSshEnrolment -Lines $lines -DeviceId $DeviceId
+    $expiry = $Now.AddDays($Days).ToString("yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture)
     if ($null -ne $mine) {
-        if ($mine.Contains(" " + $k.b64 + " ")) { return (New-HordeSshEnrolResult -Ok $true -Line $mine) }
-        return (New-HordeSshEnrolResult -Ok $false -Reason ("device " + $DeviceId + " is already enrolled with another key; revoke it first"))
+        if (-not $mine.Contains(" " + $k.b64 + " ")) { return (New-HordeSshEnrolResult -Ok $false -Reason ("device " + $DeviceId + " is already enrolled with another key; revoke it first")) }
+        $was = [regex]::Match($mine, 'expiry-time="([0-9]{8})"').Groups[1].Value
+        if ($was -gt $expiry) { $expiry = $was }
+        $fresh = New-HordeSshEnrolLine -Command $Command -Expiry $expiry -Key $k -DeviceId $DeviceId
+        if ($fresh -ceq $mine) { return (New-HordeSshEnrolResult -Ok $true -Line $mine -Said ("device " + $DeviceId + " is already enrolled until " + $expiry + "; nothing changed.")) }
+        Write-HordeSshLines -Path $lp.authorized -Lines @($lines | ForEach-Object { if ($_ -ceq $mine) { $fresh } else { $_ } })
+        return (New-HordeSshEnrolResult -Ok $true -Line $fresh -Said ("device " + $DeviceId + " is renewed until " + $expiry + " (it was until " + $was + ")."))
     }
     foreach ($l in $lines) { if ($l.Contains(" " + $k.b64 + " ")) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the key " + $k.fingerprint + " is already enrolled for another device")) } }
-    $expiry = $Now.AddDays($Days).ToString("yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture)
-    $line = 'command="' + $Command + '",restrict,expiry-time="' + $expiry + '" ' + $k.type + " " + $k.b64 + " horde-device-" + $DeviceId
+    $line = New-HordeSshEnrolLine -Command $Command -Expiry $expiry -Key $k -DeviceId $DeviceId
     Write-HordeSshLines -Path $lp.authorized -Lines (@($lines) + @($line))
     return (New-HordeSshEnrolResult -Ok $true -Line $line)
 }

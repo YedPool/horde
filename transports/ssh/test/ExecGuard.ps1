@@ -52,16 +52,16 @@
 # system directory; and its argv assigned once, in one pinned expression, so no caller's flag reaches
 # it. Anything else that starts a program, anywhere in the folder, is a finding as before.
 
-$script:HordeSshGuardCmdlets = @("Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome", "Add-Type",
+$script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome", "Add-Type",
     # Enroll.ps1 (R17b): its own files under Horde's home, the key's ACL, and its registration.
     "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment")
-$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
+$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
 # Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
 $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
 # Add-Type: only here, and only this source (SHA-256 of the C# with line endings as LF).
 $script:HordeSshGuardNativeFile = "Native.ps1"
 $script:HordeSshGuardNativeSha = "E0714A27FBFC3DEB7488E28FF6E5AD0BB15502AB76CEFC2D700275B361A2A478"
-$script:HordeSshGuardMethods = @("Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Contains", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
+$script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Contains", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
     "IsMatch", "Kill", "Match", "Max", "Min", "Assign", "Combine", "NewKillOnCloseJob", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
     "ToCharArray", "ToString", "Trim", "TrimEnd", "Wait", "WaitAny", "WaitForExit", "WriteAsync",
     # Enroll.ps1 (R17b), measured 2026-10-06: paths, its own files, the key's ACL, the key's fingerprint

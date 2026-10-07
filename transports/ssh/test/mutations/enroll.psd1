@@ -55,17 +55,24 @@
            Find = 'foreach ($l in $lines) { if ($l.Contains(" " + $k.b64 + " ")) { return'
            Replace = 'foreach ($l in $lines) { if ($false) { return' }
         @{ Name = "no-expiry-time"
-           Find = '''",restrict,expiry-time="'' + $expiry + ''" '''
+           Find = '''",restrict,expiry-time="'' + $Expiry + ''" '''
            Replace = '''",restrict '' + '''' + '''' + '' ''' }
+        # Review of PR #111, B1 and N5.
+        @{ Name = "renewal-keeps-old-line"
+           Find = 'if (-not $mine.Contains(" " + $k.b64 + " ")) {'
+           Replace = 'if ($mine.Contains(" " + $k.b64 + " ")) { return (New-HordeSshEnrolResult -Ok $true -Line $mine) }; if ($true) {' }
+        @{ Name = "expiry-shortened"
+           Find = 'if ($was -gt $expiry) { $expiry = $was }'
+           Replace = '' }
+        @{ Name = "written-in-place"
+           Find = 'Move-HordeFileAtomic -From $tmp -To $Path'
+           Replace = '[System.IO.File]::WriteAllText($Path, $text, [System.Text.Encoding]::ASCII)' }
         @{ Name = "no-command"
-           Find = '$line = ''command="'' + $Command + ''",restrict,expiry-time="'''
-           Replace = '$line = ''restrict,expiry-time="''' }
+           Find = 'return (''command="'' + $Command + ''",restrict,expiry-time="'''
+           Replace = 'return (''restrict,expiry-time="''' }
         @{ Name = "no-restrict"
            Find = '''",restrict,expiry-time="'''
            Replace = '''",expiry-time="''' }
-        @{ Name = "unprintable-command-accepted"
-           Find = 'if ($Command -cnotmatch ''\A[\x20-\x7E]{1,1000}\z'' -or $Command.Contains(''"'')) {'
-           Replace = 'if ($false) {' }
         @{ Name = "revoked-key-not-recorded"
            Find = 'Write-HordeSshLines -Path $lp.revoked -Lines (@(Read-HordeSshLines -Path $lp.revoked) + @($m.Groups["key"].Value))'
            Replace = '' }

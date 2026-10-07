@@ -131,7 +131,7 @@ try {
     Check (-not $r.ok -and $r.reason -clike "*already enrolled for another device*") "a key already enrolled for another device is refused"
     Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'C:\ho"rde' -Now $now).ok) "a Horde root holding a double quote is refused"
     $sp = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'C:\Program Files\horde' -Now $now
-    Check (-not $sp.ok -and $sp.reason -clike "*space or a quote*") ("a Horde root holding a space is refused, never half-run (" + $sp.reason + ")")
+    Check (-not $sp.ok -and $sp.reason -clike "*cannot carry*") ("a Horde root holding a space is refused, never half-run (" + $sp.reason + ")")
     Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'horde' -Now $now).ok) "a Horde root that is not a full path is refused"
     Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot $hr -Days 0 -Now $now).ok -and -not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot $hr -Days 400 -Now $now).ok) "an enrolment of 0 days or of more than a year and a day is refused"
     Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId "not-a-device" -Key $other -HordeRoot $hr -Now $now).ok) "a device id that is not one is refused"
@@ -150,11 +150,53 @@ try {
     Check ((Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId $dev) -ceq $cmd) "the forced command is System32's powershell.exe by full path running cli\attach.ps1 for the device"
     $bad = ""; try { $null = Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId "not-a-device" } catch { $bad = $_.Exception.Message }
     Check ($bad -clike "*not a device id*") "the builder itself refuses a device id that is not one"
-    # A root the builder passes but the key line cannot carry: outside printable ASCII. (A quote never
-    # gets this far; the builder refuses it first.)
+    # The builder's allowlist is the one check on what the key line carries: nothing outside it, a
+    # non-ASCII letter included, reaches command="...".
     $wide = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot ("C:\h" + [char]0x00F6 + "rde") -Now $now
-    Check (-not $wide.ok -and $wide.reason -clike "*printable ASCII*") ("a Horde root outside printable ASCII is refused by the line's own check (" + $wide.reason + ")")
+    Check (-not $wide.ok -and $wide.reason -clike "*cannot carry*") ("a Horde root outside the builder's characters, a non-ASCII letter, is refused (" + $wide.reason + ")")
     Check (-not (Remove-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2).ok) "revoking a device that is not enrolled is refused"
+
+    Write-Host ""
+    Write-Host "--- renewal, Horde's root, and files replaced whole (review of PR #111) ---" -ForegroundColor Cyan
+    # B1: the same device and key enrolled again renews its line; it never keeps a past expiry.
+    $rdev = "6e8a4b2c-1d3f-4a5b-8c7d-9e0f1a2b3c4d"
+    $rkey = (New-HordeSshKey -Path (Join-Path $kgDir "renew") -Passphrase "" -HordeHome $hh).line
+    $then = [datetime]::SpecifyKind([datetime]"2024-10-07T12:00:00", [System.DateTimeKind]::Utc)
+    $old = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $rdev -Key $rkey -HordeRoot $hr -Days 365 -Now $then
+    Check ($old.ok -and $old.line -clike '*expiry-time="20251007"*') ("CONTROL: enrolled two years ago, the line expired on 20251007 (" + $old.line + ")")
+    $ren = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $rdev -Key $rkey -HordeRoot $hr -Days 365 -Now $now
+    $mineNow = @(Read-HordeSshLines -Path $lp.authorized | Where-Object { $_.EndsWith(" horde-device-" + $rdev) })
+    Check ($ren.ok -and $mineNow.Count -eq 1 -and $mineNow[0] -clike '*,restrict,expiry-time="20271006" *' -and $mineNow[0].StartsWith('command="' + (Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId $rdev) + '"')) ("enrolling the same device and key again renews its one line to a year from now (" + "$($mineNow -join ' | ')" + ")")
+    Check ($ren.said -clike "*renewed until 20271006*it was until 20251007*") ("and says it was renewed, and from when (" + $ren.said + ")")
+    $short = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $rdev -Key $rkey -HordeRoot $hr -Days 30 -Now $now
+    Check ($short.ok -and $short.line -clike '*expiry-time="20271006"*' -and $short.said -clike "*already enrolled until 20271006*nothing changed*") ("a shorter enrolment never shortens the expiry (" + $short.said + ")")
+    $null = Remove-HordeSshEnrolment -HordeHome $hh -DeviceId $rdev
+    $back = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $rdev -Key $rkey -HordeRoot $hr -Now $now
+    Check (-not $back.ok -and $back.reason -clike "*was revoked*") "a revoked key is not renewed: it stays refused"
+    # N1, N2: the root must be a drive path of plain characters; cmd.exe runs the forced command.
+    foreach ($bad in @('C:\R&D\horde', 'C:\x%PATH%y', 'C:\x^y', 'C:\a!b', 'C:\a(b)', 'C:\a|b', 'C:\a<b', 'C:\a>b', 'C:\ho"rde')) {
+        $msg = ""; try { $null = Get-HordeSshAttachCommand -HordeRoot $bad -DeviceId $dev } catch { $msg = $_.Exception.Message }
+        Check ($msg -clike "*cannot carry*") ("the root '" + $bad + "' is refused by the builder's own reason (" + $msg + ")")
+    }
+    foreach ($bad in @('C:h', '\h', 'horde', '\\server\share\horde')) {
+        $msg = ""; try { $null = Get-HordeSshAttachCommand -HordeRoot $bad -DeviceId $dev } catch { $msg = $_.Exception.Message }
+        Check ($msg -clike "*starts with a drive letter*") ("the root '" + $bad + "', not a drive path, is refused (" + $msg + ")")
+    }
+    Check ((Get-HordeSshAttachCommand -HordeRoot 'C:\Users\a.b\horde-1_0' -DeviceId $dev).EndsWith(' -File C:\Users\a.b\horde-1_0\cli\attach.ps1 -Device ' + $dev)) "CONTROL: a root of letters, digits, dot, underscore and dash is taken as it is"
+    # N5: written beside and renamed over, never in place. A hard link made to the old file before the
+    # write still holds the old file whole after it: a rename gives the name a new file, while an
+    # in-place write would change the one file both names point at. (A reader holding the file open
+    # cannot show this: Windows refuses to rename over an open file, delete sharing or not, measured.)
+    $authBefore = [System.IO.File]::ReadAllText($lp.authorized)
+    $hard = Join-Path $hh "authorized_keys.before"
+    $null = New-Item -ItemType HardLink -Path $hard -Target $lp.authorized
+    $wkey = (New-HordeSshKey -Path (Join-Path $kgDir "whole") -Passphrase "" -HordeHome $hh).line
+    $null = Add-HordeSshEnrolment -HordeHome $hh -DeviceId "7f9b5c3d-2e4a-4b6c-9d8e-0f1a2b3c4d5e" -Key $wkey -HordeRoot $hr -Now $now
+    $authAfter = [System.IO.File]::ReadAllText($lp.authorized)
+    $seen = [System.IO.File]::ReadAllText($hard)
+    Check ($authAfter -cne $authBefore -and $authAfter.Contains("horde-device-7f9b5c3d-2e4a-4b6c-9d8e-0f1a2b3c4d5e")) "CONTROL: the enrolment did change authorized_keys"
+    Check ($seen -ceq $authBefore) "a hard link to the old authorized_keys still holds it whole: the file was replaced by a rename, not rewritten in place"
+    Check (@(Get-ChildItem -LiteralPath $lp.dir -File -Filter "*.tmp-*").Count -eq 0) "and no temporary file is left beside it"
 
     Write-Host ""
     Write-Host "--- the exec guard: the second start, exactly as approved, and nothing like it ---" -ForegroundColor Cyan
@@ -207,6 +249,8 @@ try {
     Check ($e.code -eq 0 -and $auth.StartsWith('command="' + $wantCmd + '",restrict,expiry-time="') -and $wantCmd.EndsWith("\cli\attach.ps1 -Device " + $enCmd.Groups["dev"].Value)) ("horde hub enroll admits the key, forced to cli\attach.ps1 for that device, with restrict (" + $auth.Trim() + ")")
     $pn = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "pin", "-Hub", $pinCmd.Groups["hub"].Value, "-HostKey", $pinCmd.Groups["key"].Value) -Env $envs
     Check ($pn.code -eq 0 -and [System.IO.File]::ReadAllText((Join-Path $ch "node\known_hosts")) -clike ("horde-hub-" + $pinCmd.Groups["hub"].Value + " ssh-ed25519 *")) "horde node pin pins the hub's host key"
+    $e1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
+    Check ($e1.code -eq 0 -and $e1.out -clike "*already enrolled until*nothing changed*") ("horde hub enroll run again says what it did with the line, not a bare 'enrolled' (" + $e1.out.Trim() + ")")
     $rv = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", $enCmd.Groups["dev"].Value) -Env $envs
     $e2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
     Check ($rv.code -eq 0 -and $e2.code -eq 1 -and $e2.out -clike "*was revoked*") "horde hub revoke, then the same key enrolled again: exit 1, saying it was revoked"

@@ -71,6 +71,7 @@ function Invoke-HordeHubEnrollVerb {
         "enroll" {
             if ($Device -eq "" -or $Key -eq "") { throw "hub enroll needs -Device <device id> and -Key `"<key>`", exactly as horde node init printed them" }
             $r = Invoke-HordeEnrollStep -Op $e.hubEnroll -ArgList @($hh, $Device, $Key, $Root, $Days)
+            if ("$($r.said)" -ne "") { return @("$($r.said)") }
             return @(("device " + $Device + " is enrolled until " + ([regex]::Match($r.line, 'expiry-time="([0-9]{8})"').Groups[1].Value) + "."))
         }
         "revoke" {
