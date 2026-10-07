@@ -7,8 +7,8 @@
 # name | why it identifies this surface
 WebView2 | the web engine's own name: as a substring it also catches the package, its three files, every type of its interface, the engine's process and every Horde function named after it
 chrome.webview | the object the engine gives a page to post messages through, which a page file outside this folder must never touch: it talks through the bridge this folder serves
+horde.invalid | the made-up origin this surface serves every mount under, its private detail: a page that wrote it could be shown by this surface only, so a page addresses its files relatively (surfaces/Port.ps1, WHERE A PAGE FINDS A FILE)
 #
 # CONSIDERED AND LEFT OUT:
 #   webview - a general word for a web page shown inside a program; another platform's surface will be one too.
 #   WinForms - the window toolkit this surface happens to use; a surface with no web engine could use it as well.
-#   horde.invalid - the address a mount is served at is the port's contract (surfaces/Port.ps1), not this surface's.

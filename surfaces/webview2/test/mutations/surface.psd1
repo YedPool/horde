@@ -1,8 +1,8 @@
 # Mutations of surfaces/webview2/Surface.ps1, the window surface. Run:
 #   powershell -File tools\Mutate.ps1 -Spec surfaces\webview2\test\mutations\surface.psd1
 # surfaces\webview2\test\test-webview2-surface.ps1 must fail for each. That suite opens no window, so
-# this spec holds only what can be broken without one: the pinned files, the address rule, where a
-# message may come from, the handlers and the settings. What only a real window can catch is in
+# this spec holds only what can be broken without one: the pinned files, the address rule, what a
+# load is answered with, where a message may come from, the handlers and the settings. What only a real window can catch is in
 # surface-window.psd1 beside this file, held by surfaces\webview2\test\test-webview2-window.ps1.
 @{
     Target = "surfaces\webview2\Surface.ps1"
@@ -23,14 +23,72 @@
            Replace = '' }
         # --- the page's own address
         @{ Name = "plain-http-allowed"
-           Find = '$parsed.Scheme -ceq "https" -and '
+           Find = '$parsed.Scheme -ceq $origin.Scheme -and '
            Replace = '' }
         @{ Name = "any-host-allowed"
-           Find = '$parsed.Host -ceq $StartHost.ToLowerInvariant() -and '
+           Find = '$parsed.Host -ceq $origin.Host -and '
            Replace = '' }
         @{ Name = "a-host-that-begins-with-ours-allowed"
-           Find = '$parsed.Host -ceq $StartHost.ToLowerInvariant() -and '
-           Replace = '$parsed.Host.StartsWith($StartHost.ToLowerInvariant()) -and ' }
+           Find = '$parsed.Host -ceq $origin.Host -and '
+           Replace = '$parsed.Host.StartsWith($origin.Host) -and ' }
+        @{ Name = "a-host-that-ends-with-ours-allowed"
+           Find = '$parsed.Host -ceq $origin.Host -and '
+           Replace = '$parsed.Host.EndsWith($origin.Host) -and ' }
+        @{ Name = "the-page-may-go-to-another-mount"
+           Find = 'return [bool]($null -ne $path -and $path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::Ordinal))'
+           Replace = 'return [bool]($null -ne $path)' }
+        @{ Name = "a-mount-that-only-begins-with-the-pages-own"
+           Find = '$path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::Ordinal))'
+           Replace = '$path.StartsWith(("/" + $StartMount), [System.StringComparison]::Ordinal))' }
+        @{ Name = "the-pages-own-mount-matched-without-case"
+           Find = '$path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::Ordinal))'
+           Replace = '$path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::OrdinalIgnoreCase))' }
+        @{ Name = "the-path-is-tidied-before-the-port-sees-it"
+           Find = 'return ("" + $Matches["path"])'
+           Replace = 'return $parsed.AbsolutePath' }
+        @{ Name = "the-question-mark-is-part-of-the-path"
+           Find = '(?<path>/[^?#]*)?'') { return $null }'
+           Replace = '(?<path>/[^#]*)?'') { return $null }' }
+        # --- every load is answered here
+        @{ Name = "a-load-from-outside-is-let-through"
+           Find = 'return [pscustomobject]@{ file = ""; type = ""; status = 403; refusal = ("the page asked for something that is not one of its own files'
+           Replace = 'return [pscustomobject]@{ file = ""; type = ""; status = 200; refusal = ("the page asked for something that is not one of its own files' }
+        @{ Name = "a-load-from-outside-is-not-recorded"
+           Find = '($answer.refusal -ne "") { Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason $answer.refusal }'
+           Replace = '($false) { Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason $answer.refusal }' }
+        @{ Name = "the-record-of-a-load-holds-whatever-kind-it-was-given"
+           Find = 'if ("$Kind" -cmatch ''\A[A-Za-z]{1,32}\z'') { $word = "$Kind" }'
+           Replace = '$word = "$Kind"' }
+        @{ Name = "a-climb-out-of-the-mounts-is-not-refused"
+           Find = 'if ($found.file -eq "") { return [pscustomobject]@{ file = ""; type = ""; status = 403; refusal = ($found.reason + ", and nothing was served") } }'
+           Replace = 'if ($found.file -eq "") { return [pscustomobject]@{ file = ""; type = ""; status = 200; refusal = "" } }' }
+        @{ Name = "the-engines-own-ask-is-held-against-the-page"
+           Find = 'if ($script:HordeWebView2EngineOwnPaths -ccontains $path) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-refused-load-is-answered-as-found"
+           Find = '$What.Response = $environment.CreateWebResourceResponse($null, [int]$answer.status, "Refused", "")'
+           Replace = '$What.Response = $environment.CreateWebResourceResponse($null, 200, "Refused", "")' }
+        @{ Name = "a-refused-load-is-left-to-the-engine"
+           Find = '$What.Response = $environment.CreateWebResourceResponse($null, [int]$answer.status, "Refused", "")'
+           Replace = '' }
+        @{ Name = "a-file-that-cannot-be-read-is-left-to-the-engine"
+           Find = 'try { $What.Response = $environment.CreateWebResourceResponse($null, 403, "Refused", "") } catch { }'
+           Replace = '' }
+        @{ Name = "a-served-file-may-be-kept-by-the-engine"
+           Find = '`r`nCache-Control: no-store'
+           Replace = '' }
+        @{ Name = "the-engine-is-not-told-to-ask-about-every-load"
+           Find = '$core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::All)'
+           Replace = '$core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::Document)' }
+        @{ Name = "the-load-handler-is-not-given-to-the-engine"
+           Find = '$core.add_WebResourceRequested($h.resource)'
+           Replace = '' }
+        @{ Name = "the-engine-keeps-its-way-to-the-network"
+           Find = '$props.AdditionalBrowserArguments = $script:HordeWebView2NoNetwork'
+           Replace = '' }
+        @{ Name = "loopback-is-excused-from-the-closed-network"
+           Find = '$script:HordeWebView2NoNetwork = "--proxy-server=http://0.0.0.0:0 --proxy-bypass-list=<-loopback>"'
+           Replace = '$script:HordeWebView2NoNetwork = "--proxy-server=http://0.0.0.0:0"' }
         @{ Name = "a-user-name-in-front-allowed"
            Find = ' -and $parsed.UserInfo -eq ""'
            Replace = '' }
@@ -38,11 +96,11 @@
            Find = ' -and $parsed.IsDefaultPort)'
            Replace = ')' }
         @{ Name = "text-that-is-no-address-allowed"
-           Find = 'if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $false }'
-           Replace = 'if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $true }' }
+           Find = 'if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $null }'
+           Replace = 'if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return "/shell/index.html" }' }
         # --- where a message may come from, and what is refused
         @{ Name = "a-message-from-anywhere-is-read"
-           Find = 'if (-not (Test-HordeWebView2Address -Uri $Source -StartHost $s.startHost)) {'
+           Find = 'if (-not (Test-HordeWebView2Address -Uri $Source -StartMount $s.spec.startMount)) {'
            Replace = 'if ($false) {' }
         @{ Name = "a-message-from-elsewhere-not-recorded"
            Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "a message came from an address that is not the page''s own, and was not read"'
@@ -54,7 +112,7 @@
            Find = '$Frame.Cancel = $true'
            Replace = '$Frame.Cancel = $false' }
         @{ Name = "navigation-to-the-page-itself-cancelled"
-           Find = 'if (Test-HordeWebView2Address -Uri ("" + $What.Uri) -StartHost $s.startHost) { return }'
+           Find = 'if (Test-HordeWebView2Address -Uri ("" + $What.Uri) -StartMount $s.spec.startMount) { return }'
            Replace = '' }
         @{ Name = "navigation-elsewhere-not-recorded"
            Find = 'Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page tried to go to an address that is not its own, and was kept where it is"'

@@ -5,17 +5,37 @@
 # the page from going anywhere else, and carries text between the page and surfaces/Port.ps1's bridge.
 # What the page is about, where the window stands and whose window it stands beside are its caller's.
 #
-# NO WEB SERVER, NO PORT. Each mount is a folder mapped to a host name that exists only inside the
-# engine (surfaces/Port.ps1, WHERE A PAGE FINDS A MOUNT). Nothing listens, so no other page, program or
-# machine can reach it: the whole question of who may post to it does not arise.
+# NO WEB SERVER, NO PORT, AND EVERY LOAD IS ANSWERED HERE. The engine asks this adapter for every
+# resource a page loads - the page itself, a script, a style sheet, an image, a font, a call - before
+# it would go to any network (the engine's resource-request hook, with a filter for every address and
+# every kind). The adapter answers each one itself:
+#   - an address under its one made-up origin that names a file of a mount (surfaces/Port.ps1,
+#     Resolve-HordeSurfacePageFile) is answered with that file's bytes;
+#   - EVERYTHING ELSE IS ANSWERED WITH A REFUSAL (403) AND RECORDED on the bridge: default deny.
+# Nothing listens, so no other page, program or machine can reach it, and nothing a page asks for is
+# fetched from anywhere. WHERE the origin is, is this file's private detail: a page never writes it
+# (surfaces/Port.ps1, WHERE A PAGE FINDS A FILE), so another surface serves the same pages unchanged.
+#
+# WHAT THE HOOK DOES NOT SEE, measured 2026-10-07 on engine 154.0.4258.62 with a listener on the
+# loopback address standing for "outside":
+#   - a WebSocket, from the page or from a worker: it reached the listener with the hook in place.
+#   - the engine's early connection for a navigation this adapter then cancels: the listener received
+#     "GET /nav-out" although the page stayed where it was.
+#   - a service worker's own script (it failed only because the origin's name does not resolve).
+# So the engine is ALSO started with no way to any network: every connection it would make is sent to
+# a proxy at an address no program can listen at (port 0), loopback included. With that, the same
+# probe reached the listener zero times. These are not recorded on the bridge: nothing tells the
+# adapter they were tried. NOT MEASURED: WebRTC's own UDP, which no proxy setting governs.
+# data: and blob: addresses are not asked of the hook either; they are bytes the page already has.
 #
 # THE PAGE CANNOT LEAVE, AND CANNOT REACH HORDE EXCEPT BY TEXT.
-#   - a navigation to any address but the start page's own host is cancelled; every frame navigation
-#     is cancelled; a request for a new window is marked handled and opens nothing. Each is recorded
-#     on the bridge as a refusal.
+#   - a navigation to any address but a file of the start page's own mount is cancelled; every frame
+#     navigation is cancelled; a request for a new window is marked handled and opens nothing. Each
+#     is recorded on the bridge as a refusal.
 #   - the page is handed NO object of Horde's: AddHostObjectToScript is never called (the suite reads
-#     this file's syntax tree for it). The page posts text; a message whose source is not the start
-#     page's host is refused; everything else goes to Invoke-HordeSurfaceRequest, which checks it.
+#     this file's syntax tree for it). The page posts text; a message whose source is not a file of
+#     the start page's mount is refused; everything else goes to Invoke-HordeSurfaceRequest, which
+#     checks it.
 #   - developer tools, the context menu, the browser's own keys (reload, find, print), the status bar
 #     and saved form data are off.
 #   - a download is cancelled, and recorded as a refusal. Left to the engine, a page that makes a link
@@ -30,9 +50,12 @@
 # THE ENGINE ITSELF is not in this folder. It is the "WebView2 Runtime", part of Windows 11 and updated
 # with Edge. Where it is not installed the surface says so in plain words and fails.
 #
-# MEASURED 2026-10-06 on a machine slowed on purpose, Windows PowerShell 5.1, engine 154.0.4258.53, a
-# hidden window on a one-file page: the engine was up 1.2 s after the surface was asked to open, and
-# the page's first request was answered 0.1 s after that.
+# START TIME, measured 2026-10-07 on a machine slowed on purpose, Windows PowerShell 5.1, engine
+# 154.0.4258.62, a hidden window on a page of three files, five runs each way. With folders mapped to
+# host names by the engine (how this adapter served pages before): the engine up 677 to 896 ms after
+# the surface was asked to open, the page's first request answered at 756 to 971 ms. With every load
+# answered here: the engine up 777 to 835 ms, the first request answered at 951 to 1039 ms. So the
+# engine starts as fast, and answering a page's files here costs about 30 ms a file on that machine.
 #
 # A HANDLER TAKES WHAT IT NEEDS FROM $script:HordeWebView2, NEVER FROM A LOCAL. A script block given to
 # a .NET event is run later with PowerShell's scoping of the moment it runs, not of the function that
@@ -62,6 +85,19 @@ $script:HordeWebView2 = $null
 # Where a hidden window stands: far outside any screen, the coordinates Windows itself gives a
 # minimised window, so nothing is drawn where a person can see it.
 $script:HordeWebView2HiddenAt = -32000
+# THE ONE ORIGIN EVERY MOUNT IS SERVED UNDER, as <origin>/<mount>/<file>. Private to this file: a
+# page is written with relative addresses only. ".invalid" is reserved by RFC 2606 never to resolve,
+# so the address can only ever mean a file this adapter answers with, never a machine.
+$script:HordeWebView2Origin = "https://horde.invalid"
+# What the engine asks for by itself, of every page: answered "not there", and not held against the
+# page as a refusal (measured 2026-10-07: one such ask per page load).
+$script:HordeWebView2EngineOwnPaths = @("/favicon.ico")
+# The engine's way to any network, closed (header, WHAT THE HOOK DOES NOT SEE): every connection goes
+# to a proxy at port 0, where nothing can listen, and the loopback address is not excused. Measured
+# 2026-10-07: with these two arguments a page's WebSocket and a cancelled navigation's early
+# connection reached a loopback listener zero times; without them, both arrived. A proxy named by a
+# script in a data address was tried and did NOT stop them.
+$script:HordeWebView2NoNetwork = "--proxy-server=http://0.0.0.0:0 --proxy-bypass-list=<-loopback>"
 
 # The window: a form that can be shown without taking the keyboard, and how it is brought forward.
 # Compiled once per process.
@@ -84,14 +120,48 @@ public static class HordeSurfaceNative {
 }
 '@
 
-function Test-HordeWebView2Address {
-    # Is -Uri an address on the start page's own host, and nothing cleverer? https, exactly that host,
-    # no user name in front of it, no port of its own. Everything else - another host, a host that only
-    # begins with ours, a file, a data address, text that is no address - is not.
-    param([AllowNull()][AllowEmptyString()][string]$Uri, [Parameter(Mandatory = $true)][string]$StartHost)
+function Get-HordeWebView2PagePath {
+    # The path of -Uri when it is an address under this adapter's one origin and nothing cleverer:
+    # https, exactly that host, no user name in front of it, no port of its own. $null for everything
+    # else - another host, a host that only begins with ours, a file, a data address, text that is no
+    # address. THE PATH IS HANDED BACK AS IT WAS WRITTEN, cut at the first ? or #, and not as .NET
+    # would tidy it: which file it names is decided once, by the port, on what was asked.
+    param([AllowNull()][AllowEmptyString()][string]$Uri)
     $parsed = $null
-    if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $false }
-    return [bool]($parsed.Scheme -ceq "https" -and $parsed.Host -ceq $StartHost.ToLowerInvariant() -and $parsed.UserInfo -eq "" -and $parsed.IsDefaultPort)
+    if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $null }
+    $origin = [System.Uri]$script:HordeWebView2Origin
+    if (-not ($parsed.Scheme -ceq $origin.Scheme -and $parsed.Host -ceq $origin.Host -and $parsed.UserInfo -eq "" -and $parsed.IsDefaultPort)) { return $null }
+    if ("$Uri" -cnotmatch '\A[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*(?<path>/[^?#]*)?') { return $null }
+    if (("" + $Matches["path"]) -eq "") { return "/" }
+    return ("" + $Matches["path"])
+}
+
+function Test-HordeWebView2Address {
+    # May the page BE at -Uri, or a message come from it? Only a file of the start page's own mount:
+    # this adapter's origin (Get-HordeWebView2PagePath) and a path under /<start mount>/. A file of
+    # another mount may be USED by the page; the page may not go there.
+    param([AllowNull()][AllowEmptyString()][string]$Uri, [Parameter(Mandatory = $true)][string]$StartMount)
+    $path = Get-HordeWebView2PagePath -Uri $Uri
+    return [bool]($null -ne $path -and $path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::Ordinal))
+}
+
+function Get-HordeWebView2ResourceAnswer {
+    # What one load is answered with: { file; type; status; refusal }. file and type are set only for
+    # a file of a mount (status 200). Otherwise the status is a refusal's, and refusal is the sentence
+    # to record on the bridge - Horde's own words, with the engine's word for the kind of load and
+    # never the address - or "" for the one thing the engine asks for by itself. PURE but for the
+    # port's look at the disk. THE DEFAULT IS TO REFUSE: only an address that names a file is served.
+    param([AllowNull()][AllowEmptyString()][string]$Uri, [AllowNull()][AllowEmptyString()][string]$Kind, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Mounts)
+    $path = Get-HordeWebView2PagePath -Uri $Uri
+    if ($null -eq $path) {
+        $word = "something"
+        if ("$Kind" -cmatch '\A[A-Za-z]{1,32}\z') { $word = "$Kind" }
+        return [pscustomobject]@{ file = ""; type = ""; status = 403; refusal = ("the page asked for something that is not one of its own files (the engine's word for the load: " + $word + "), and nothing was fetched") }
+    }
+    if ($script:HordeWebView2EngineOwnPaths -ccontains $path) { return [pscustomobject]@{ file = ""; type = ""; status = 404; refusal = "" } }
+    $found = Resolve-HordeSurfacePageFile -Mounts $Mounts -Path $path
+    if ($found.file -eq "") { return [pscustomobject]@{ file = ""; type = ""; status = 403; refusal = ($found.reason + ", and nothing was served") } }
+    return [pscustomobject]@{ file = $found.file; type = $found.type; status = 200; refusal = "" }
 }
 
 function Get-HordeWebView2ScaleNote {
@@ -169,7 +239,7 @@ function Receive-HordeWebView2Message {
     param([AllowNull()][AllowEmptyString()][string]$Json, [AllowNull()][AllowEmptyString()][string]$Source)
     $s = $script:HordeWebView2
     if ($null -eq $s) { return "" }
-    if (-not (Test-HordeWebView2Address -Uri $Source -StartHost $s.startHost)) {
+    if (-not (Test-HordeWebView2Address -Uri $Source -StartMount $s.spec.startMount)) {
         Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "a message came from an address that is not the page's own, and was not read"
         return ""
     }
@@ -197,20 +267,20 @@ function Invoke-HordeWebView2Initialized {
         $core.Settings.IsPasswordAutosaveEnabled = $false
         $core.Settings.IsGeneralAutofillEnabled = $false
         $core.Settings.AreHostObjectsAllowed = $false
-        # DenyCors: a page on one mount may use a script or a style sheet of another, as a page uses a
-        # file beside it, and may not read another mount's files as data.
         # The page has a light and a dark look and follows the machine's setting unless the caller chose.
         if ($s.spec.theme -ceq "dark") { $core.Profile.PreferredColorScheme = [Microsoft.Web.WebView2.Core.CoreWebView2PreferredColorScheme]::Dark }
         elseif ($s.spec.theme -ceq "light") { $core.Profile.PreferredColorScheme = [Microsoft.Web.WebView2.Core.CoreWebView2PreferredColorScheme]::Light }
-        $kind = [Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind]::DenyCors
-        foreach ($mount in @($s.mounts.Keys)) { $core.SetVirtualHostNameToFolderMapping((Get-HordeSurfaceMountHost -Mount $mount), $s.mounts[$mount], $kind) }
         $h = $s.handlers
+        # EVERY address and EVERY kind of load is asked of this adapter first (header, EVERY LOAD IS
+        # ANSWERED HERE), and the handler is in place before the first page is asked for.
+        $core.AddWebResourceRequestedFilter("*", [Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext]::All)
+        $core.add_WebResourceRequested($h.resource)
         $core.add_NavigationStarting($h.navigation)
         $core.add_FrameNavigationStarting($h.frame)
         $core.add_NewWindowRequested($h.newWindow)
         $core.add_DownloadStarting($h.download)
         $core.add_WebMessageReceived($h.message)
-        $core.Navigate("https://" + $s.startHost + "/" + $s.spec.startFile)
+        $core.Navigate($script:HordeWebView2Origin + "/" + $s.spec.startMount + "/" + $s.spec.startFile)
         $s.opened = $true
         if ($null -ne $s.spec.onOpened) { & $s.spec.onOpened $s.window $s.spec.state }
         $s.timer.Start()
@@ -221,9 +291,36 @@ function Invoke-HordeWebView2Navigation {
     param($What)
     $s = $script:HordeWebView2
     if ($null -eq $s) { return }
-    if (Test-HordeWebView2Address -Uri ("" + $What.Uri) -StartHost $s.startHost) { return }
+    if (Test-HordeWebView2Address -Uri ("" + $What.Uri) -StartMount $s.spec.startMount) { return }
     $What.Cancel = $true
     Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason "the page tried to go to an address that is not its own, and was kept where it is"
+}
+
+function Invoke-HordeWebView2Resource {
+    # One load the engine is about to make: answered here, with a file of a mount or with a refusal
+    # (Get-HordeWebView2ResourceAnswer), and never left to the engine to fetch.
+    param($What)
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return }
+    $environment = $s.view.CoreWebView2.Environment
+    try {
+        $answer = Get-HordeWebView2ResourceAnswer -Uri ("" + $What.Request.Uri) -Kind ("" + $What.ResourceContext) -Mounts $s.mounts
+        if ($answer.file -ne "") {
+            # Read whole and handed over as bytes: a page's files are small, and nothing of the file
+            # stays open once the engine has them. Never kept by the engine: a file changed on disk
+            # is the file the next load gets.
+            $bytes = [System.IO.File]::ReadAllBytes($answer.file)
+            $What.Response = $environment.CreateWebResourceResponse((New-Object System.IO.MemoryStream(, $bytes)), 200, "OK", ("Content-Type: " + $answer.type + "`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff"))
+            return
+        }
+        $What.Response = $environment.CreateWebResourceResponse($null, [int]$answer.status, "Refused", "")
+        if ($answer.refusal -ne "") { Add-HordeSurfaceRefusal -Bridge $s.spec.bridge -Reason $answer.refusal }
+    } catch {
+        # DEFAULT DENY HOLDS WHEN THIS CODE FAILS: the load is still answered with a refusal, and what
+        # went wrong is kept for the caller.
+        try { $What.Response = $environment.CreateWebResourceResponse($null, 403, "Refused", "") } catch { }
+        [void]$s.errors.Add("a file the page asked for could not be served: " + $_.Exception.Message)
+    }
 }
 
 function Invoke-HordeWebView2Frame {
@@ -327,6 +424,7 @@ function Get-HordeWebView2Handlers {
         shown       = { Invoke-HordeWebView2Shown }
         initialized = { param($From, $What) Invoke-HordeWebView2Initialized -What $What }
         navigation  = { param($From, $What) Invoke-HordeWebView2Navigation -What $What }
+        resource    = { param($From, $What) Invoke-HordeWebView2Resource -What $What }
         frame       = { param($From, $What) Invoke-HordeWebView2Frame -Frame $What }
         newWindow   = { param($From, $What) Invoke-HordeWebView2NewWindow -What $What }
         download    = { param($From, $What) Invoke-HordeWebView2Download -Download $What }
@@ -383,22 +481,23 @@ function Open-HordeWebView2Surface {
     $view = New-Object Microsoft.Web.WebView2.WinForms.WebView2
     $props = New-Object Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties
     $props.UserDataFolder = $Spec.dataFolder
+    $props.AdditionalBrowserArguments = $script:HordeWebView2NoNetwork
     $view.CreationProperties = $props
     $view.Dock = [System.Windows.Forms.DockStyle]::Fill
     $form.Controls.Add($view)
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = [int]$Spec.tickMs
 
-    # The caller's mounts, and the surface's own: the page's side of the bridge.
+    # The caller's mounts, and the surface's own: this adapter's page side of the bridge, and the
+    # port's definition of the messages it reads.
     $mounts = [ordered]@{}
     foreach ($m in @($Spec.mounts.Keys)) { $mounts[$m] = $Spec.mounts[$m] }
-    $mounts[(Get-HordeSurfaceOwnMount)] = (Join-Path $script:HordeWebView2Folder "page")
+    $mounts[(Get-HordeSurfaceOwnMount)] = (Get-HordeSurfaceOwnFiles -BridgeScript (Join-Path $script:HordeWebView2Folder "page\bridge.js"))
 
     $handlers = Get-HordeWebView2Handlers
     $errors = New-Object System.Collections.ArrayList
     $script:HordeWebView2 = [pscustomobject]@{
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
-        startHost = (Get-HordeSurfaceMountHost -Mount $Spec.startMount)
         window = (Get-HordeWebView2Window -Form $form -Errors $errors)
         opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
         errors = $errors

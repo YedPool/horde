@@ -178,7 +178,11 @@ $tookMs = $probe.clock.ElapsedMilliseconds
 Receive-ProbeConnections -State $probe
 $r = $probe.results
 function Saw { param([string]$Key) if ($r.Contains($Key)) { return $r[$Key] }; return [pscustomobject]@{ value = "<the page never reported " + $Key + ">"; refusals = -1; reasons = @() } }
-$steps = @("where", "bridge", "unknown-request", "host-objects", "raw-message", "nav-out", "nav-lookalike", "nav-other-mount", "nav-scheme", "frame-own", "frame-out", "new-window", "download", "push")
+$steps = @("where", "bridge", "unknown-request", "host-objects", "raw-message",
+    "own-fetch", "other-script", "other-fetch", "definition-fetch",
+    "in-missing", "in-kind", "in-above", "in-escaped", "in-dots", "in-backslash", "in-port-file",
+    "out-script", "out-style", "out-image", "out-fetch", "out-fetch-blind", "out-xhr", "out-beacon", "out-events", "out-font", "out-socket", "out-worker",
+    "nav-out", "nav-lookalike", "nav-other-mount", "nav-scheme", "frame-own", "frame-out", "new-window", "download", "push")
 
 Write-Host ""
 Write-Host "--- the window opened, ran the whole probe and closed ---" -ForegroundColor Cyan
@@ -190,11 +194,51 @@ Check (@($probe.errorsAtEnd).Count -eq 0) ("the window recorded no error of its 
 Write-Host ""
 Write-Host "--- page.local: the page is files of this machine, and nothing listens ---" -ForegroundColor Cyan
 $home1 = (Saw "where").value
-Check ($home1 -like "https://*/index.html" -and (Saw "bridge").value -ceq "function function live=true") ("the page was drawn from its mount and found the bridge the surface serves (" + $home1 + "; " + (Saw "bridge").value + ")")
+Check ($home1 -like "https://*/probe/index.html" -and (Saw "bridge").value -ceq "function function live=true") ("the page was drawn from its mount and found the bridge by a relative address (" + $home1 + "; " + (Saw "bridge").value + ")")
+Check ((Saw "where").refusals -eq 0) "and loading it recorded no refusal: what the engine asks for by itself is not held against the page"
 $engines = @($probe.tree | Where-Object { $_.name -like "msedgewebview2*" })
 Check ($engines.Count -ge 1) ("CONTROL: the engine's own processes were found under this one while the window stood (" + $engines.Count + ")")
 $ownListener = "" + $PID + " 127.0.0.1:" + $port
 Check (@($probe.listeners) -ccontains $ownListener -and @($probe.listeners | Where-Object { $_ -cne $ownListener }).Count -eq 0) ("while the page was shown, no process of the window listened on any port but the suite's own listener (" + (@($probe.listeners) -join ", ") + ")")
+
+Write-Host ""
+Write-Host "--- a page uses its own files and another mount's by relative address ---" -ForegroundColor Cyan
+$ownFetch = Saw "own-fetch"
+Check ($ownFetch.value -like "status 200 text/css; charset=utf-8 * characters" -and $ownFetch.refusals -eq 0) ("a file beside the page is served with its kind's type (" + $ownFetch.value + ")")
+Check ((Saw "other-script").value -ceq "LOADED the other mount" -and (Saw "other-script").refusals -eq 0) ("a script of another mount, asked for as ../other/other.js, runs (" + (Saw "other-script").value + ")")
+Check ((Saw "other-fetch").value -ceq 'status 200 { "from": "the other mount" }') ("and another mount's data can be read the same way (" + (Saw "other-fetch").value + ")")
+Check ((Saw "definition-fetch").value -ceq "status 200 protocol 1") ("the surface's own mount serves the port's one definition of the messages (" + (Saw "definition-fetch").value + ")")
+
+Write-Host ""
+Write-Host "--- what is not a file of a mount is not served, and is recorded ---" -ForegroundColor Cyan
+foreach ($try in @(
+    @{ key = "in-missing"; what = "a file that is not there"; says = "*a file that is not there*" }
+    @{ key = "in-kind"; what = "a kind of file no page is made of, though it is there"; says = "*not a kind of file a page is made of*" }
+    @{ key = "in-above"; what = "a climb above the mounts"; says = "*not a file of a mount*" }
+    @{ key = "in-escaped"; what = "a climb written with escaped slashes"; says = "*not a file of a mount*" }
+    @{ key = "in-dots"; what = "a climb written with escaped dots"; says = "*not a file of a mount*" }
+    @{ key = "in-backslash"; what = "a climb written with escaped backslashes"; says = "*not a file of a mount*" }
+    @{ key = "in-port-file"; what = "a file of Horde's own beside the two the surface serves"; says = "*not a kind of file a page is made of*" }
+)) {
+    $seen = Saw $try.key
+    Check ($seen.value -ceq "status 403" -and $seen.refusals -eq 1 -and @($seen.reasons)[0] -like $try.says) ("asked for " + $try.what + ", the page is answered 403 and the refusal is recorded once (" + $seen.value + "; " + $seen.refusals + "; " + (@($seen.reasons) -join " | ") + ")")
+}
+
+Write-Host ""
+Write-Host "--- the surface itself refuses every load from outside ---" -ForegroundColor Cyan
+foreach ($try in @(
+    @{ key = "out-script"; what = "a script" }, @{ key = "out-style"; what = "a style sheet" }, @{ key = "out-image"; what = "an image" }
+    @{ key = "out-fetch"; what = "a call" }, @{ key = "out-fetch-blind"; what = "a call that asks to see no answer" }, @{ key = "out-xhr"; what = "a call of the older kind" }
+    @{ key = "out-beacon"; what = "a beacon" }, @{ key = "out-events"; what = "an event stream" }, @{ key = "out-font"; what = "a font" }
+)) {
+    $seen = Saw $try.key
+    Check ($seen.value -notlike "*LOADED*" -and $seen.refusals -ge 1 -and @($seen.reasons) -like "*not one of its own files*") (($try.what + " from outside is not loaded, and the refusal is recorded (" + $seen.value + "; " + $seen.refusals + ")"))
+}
+$socket = Saw "out-socket"
+Check ($socket.value -ceq "blocked") ("a socket to outside does not open (" + $socket.value + "). THE ENGINE HANDS NO SOCKET TO THE SURFACE, so this one is stopped by the engine having no network and is not recorded")
+$worker = Saw "out-worker"
+Check ($worker.value -notlike "*LOADED*" -and $worker.value -notlike "*OPEN*" -and $worker.value -like "*socket blocked" -and $worker.refusals -ge 1) ("a worker of the page gets no further: its call is refused and recorded, its socket does not open (" + $worker.value + ")")
+Check (@($probe.connections).Count -eq 0) ("THROUGH ALL OF IT - loads, sockets, and below the navigations, frames and the download - nothing reached the suite's listener (" + (@($probe.connections) -join " | ") + ")")
 
 Write-Host ""
 Write-Host "--- requests.closed: only the list, only as text ---" -ForegroundColor Cyan
@@ -215,7 +259,7 @@ foreach ($try in @(
     @{ key = "nav-scheme"; what = "an address for another program to open" }
 )) {
     $seen = Saw $try.key
-    Check ($seen.value -ceq ("still at " + $home1) -and $seen.refusals -eq 1 -and @($seen.reasons)[0] -like "*an address that is not its own*") ("sent to " + $try.what + ", the page stays where it is and the refusal is recorded once (" + $seen.value + "; " + $seen.refusals + ")")
+    Check ($seen.value -ceq ("still at " + $home1) -and $seen.refusals -ge 1 -and @($seen.reasons) -like "*an address that is not its own*") ("sent to " + $try.what + ", the page stays where it is and the refusal is recorded (" + $seen.value + "; " + $seen.refusals + ")")
 }
 foreach ($try in @(@{ key = "frame-own"; what = "a file of its own" }, @{ key = "frame-out"; what = "an address outside" })) {
     $seen = Saw $try.key
