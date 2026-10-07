@@ -86,6 +86,8 @@ try {
         if ($n -eq 19 -or $n -eq 20) { $group = "__proto__" }
         if ($n -eq 21 -or $n -eq 22) { $group = "constructor" }
         $question = [ordered]@{ title = ("Should step " + $n + " of the plan go ahead as it is written?"); kind = "yes-no"; whatItIs = ("Step " + $n + " is ready and waits only for a yes. <script>this is shown as text</script>"); yesMeans = ("Step " + $n + " is done today."); recommendation = "yes"; group = $group; askedBy = $asked; waiting = $waiting }
+        # One group carries a note of background, as real lists do: the page keeps it folded behind a word.
+        if ($n -eq 2) { $question["groupNote"] = "Settled already: she asks after 12 seconds of quiet." }
         $added = Invoke-HordeDecision -Operation "add" -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = $question }
         if ($added.state -cne "known" -or $added.value.outcome -cne "done" -or $added.value.number -ne $n) { throw ("question " + $n + " was not added: " + $added.state + " " + $added.reason) }
     }
@@ -119,6 +121,7 @@ Check ($list.Count -eq 22 -and $got -ceq $want) "THE NUMBER AND THE TEXT OF EVER
 Check (@($drawn.lines | Group-Object n | Where-Object { $_.Count -ne 1 }).Count -eq 0) "no number is drawn twice"
 $heads = @($drawn.headings)
 Check ((@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") -ceq "Unblocks work now=5, The closing behaviour=5, Security and accounts=4, The study=4, __proto__=2, constructor=2") ("the headings, in the order their first question comes, each with its count (" + (@($heads | ForEach-Object { $_.t + "=" + $_.count }) -join ", ") + ")")
+Check ((@($heads | ForEach-Object { "[" + $_.note + "]" }) -join "") -ceq "[][folded][][][][]") ("a group's note of background is there and FOLDED until the reader asks for it, so that a note of several lines does not stand between the questions; a group with none says none (" + (@($heads | ForEach-Object { "[" + $_.note + "]" }) -join "") + ")")
 foreach ($named in @(@{ group = "__proto__"; numbers = "19,20" }, @{ group = "constructor"; numbers = "21,22" })) {
     $at = -1; for ($i = 0; $i -lt $heads.Count; $i++) { if ($heads[$i].t -ceq $named.group) { $at = $i } }
     $under = @($drawn.lines | Where-Object { $_.g -eq $at } | ForEach-Object { $_.n }) -join ","

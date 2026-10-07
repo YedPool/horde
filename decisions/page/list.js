@@ -1,5 +1,6 @@
 // decisions/page/list.js - the list of questions drawn as a document: group headings, one line per
-// question with its permanent number, and each question unfolding into sub-numbered lines.
+// question with its permanent number, and each question unfolding into sub-numbered lines. A group's
+// note of background is folded behind the word "background" in its heading.
 //
 // ITS ONE JOB is to draw what the decisions operations answered (decisions/Operations.ps1: kinds and
 // list), exactly as it was handed over. It asks nobody for anything, knows no bridge and no fleet,
@@ -72,6 +73,12 @@
     // Keyed by a question's number and by a heading's key: maps with no prototype (header).
     var unfolded = Object.create(null);
     var headFolded = Object.create(null);
+    // Which headings have their note of background shown. FOLDED UNTIL ASKED FOR: a note is several
+    // lines, and shown always it stood between the questions - at the width the window has beside a
+    // terminal, two notes took 13 of the 26 lines in view and 8 questions were left (seen 2026-10-07
+    // in a picture of the real window, 567 device pixels wide, on a list of 22 real questions). The
+    // heading says there is one with the word "background", which unfolds it.
+    var noteShown = Object.create(null);
     var drawnHeads = [];
     var drawnLines = [];
 
@@ -208,25 +215,39 @@
       var heads = headingsOf();
       heads.forEach(function (head, index) {
         var folded = isFolded(head);
-        var group = make("div", "hd-group" + (folded ? " folded" : ""));
+        var group = make("div", "hd-group" + (folded ? " folded" : "") + (head.note && noteShown[head.key] === true ? " note-open" : ""));
         var row = make("div", "hd-row hd-head");
         var tri = make("button", "hd-tri");
         tri.type = "button";
         tri.setAttribute("aria-expanded", folded ? "false" : "true");
         tri.setAttribute("aria-label", (folded ? "Unfold " : "Fold ") + head.name);
         var txt = make("span", "hd-txt", head.name);
-        var suf = make("span", "hd-suf", " - " + head.qs.length + (head.qs.length === 1 ? " question" : " questions"));
+        var suf = make("span", "hd-suf");
+        suf.appendChild(make("span", "hd-count", " - " + head.qs.length + (head.qs.length === 1 ? " question" : " questions")));
+        var note = null;
+        if (head.note) {
+          var more = make("span", "hd-more", " - ");
+          var word = make("button", "hd-bg", "background");
+          word.type = "button";
+          word.setAttribute("aria-expanded", noteShown[head.key] === true ? "true" : "false");
+          word.setAttribute("aria-label", (noteShown[head.key] === true ? "Fold the background of " : "Unfold the background of ") + head.name);
+          // The word is in the heading's row, and a click on the row folds the whole group.
+          word.addEventListener("click", function (e) { e.stopPropagation(); noteShown[head.key] = noteShown[head.key] !== true; draw(); });
+          more.appendChild(word);
+          suf.appendChild(more);
+          note = make("div", "hd-note", head.note);
+        }
         row.appendChild(tri); row.appendChild(txt); row.appendChild(suf);
         row.addEventListener("click", function () { headFolded[head.key] = !isFolded(head); draw(); });
         group.appendChild(row);
-        if (head.note) { group.appendChild(make("div", "hd-note", head.note)); }
+        if (note) { group.appendChild(note); }
         var kids = make("div", "hd-kids");
         var first = drawnLines.length;
         head.qs.forEach(function (q) { kids.appendChild(drawQuestion(q)); });
         for (var i = first; i < drawnLines.length; i += 1) { drawnLines[i].head = index; }
         group.appendChild(kids);
         root.appendChild(group);
-        drawnHeads.push({ head: head, txt: txt, folded: folded });
+        drawnHeads.push({ head: head, txt: txt, folded: folded, group: group, note: note });
       });
       if (before) {
         for (var j = 0; j < drawnLines.length; j += 1) {
@@ -269,12 +290,13 @@
       },
       unfoldAll: function () {
         questions.forEach(function (q) { unfolded[q.number] = true; });
-        headingsOf().forEach(function (head) { headFolded[head.key] = false; });
+        headingsOf().forEach(function (head) { headFolded[head.key] = false; if (head.note) { noteShown[head.key] = true; } });
         draw();
       },
       foldAll: function () {
         unfolded = Object.create(null);
         headFolded = Object.create(null);
+        noteShown = Object.create(null);
         draw();
       },
       counts: function () {
@@ -285,7 +307,8 @@
         return { open: open, waiting: waiting, other: other };
       },
       // WHAT IS DRAWN, from the elements themselves and not from the data they were made of:
-      //   headings  [{ t, count, folded }]
+      //   headings  [{ t, count, folded, note }]  note is "" for a group with no note of background,
+      //                                           "folded" or "shown" for one that has it
       //   lines     [{ n, t, s, g, open, dim }]   n the number as text drawn, t the question's line,
       //                                           s its muted suffix, g which heading it is under
       //   sub       [{ n, t }]                    the sub-numbered lines of the unfolded questions
@@ -293,7 +316,7 @@
       // limits is { lines, subLines, lineChars }: the most of each, and the most characters of a text.
       snapshot: function (limits) {
         var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 } };
-        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded }); });
+        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
           if (out.lines.length >= limits.lines) { out.left.lines += 1; return; }
           out.lines.push({ n: line.num.textContent, t: cut(line.txt.textContent, limits.lineChars), s: cut(line.suf.textContent, limits.lineChars), g: line.head, open: line.wrap.classList.contains("open"), dim: line.wrap.classList.contains("dim") });

@@ -8,6 +8,10 @@
    colour, never a faded letter) and no clamp on a line's height. A line too long for its row ends in
    an ellipsis until the question is unfolded, when it wraps in full.
 
+   A GROUP'S NOTE OF BACKGROUND is not drawn until its heading's word "background" is pressed
+   (list.js says what was seen). In a narrow window a question's suffix and a heading's count are
+   left out, and that word stays: it is the only way to the note.
+
    The colours are the host page's variables: --ink, --muted, --faint, --dim. --line-px is the host's
    line height, which the fold mark is centred in. */
 .hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
@@ -27,11 +31,14 @@
 .hd-group { margin-top: 10px; }
 .hd-group:first-child { margin-top: 0; }
 .hd-head > .hd-txt { font-weight: 600; }
-.hd-note { color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-note { display: none; color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-group.note-open > .hd-note { display: block; }
+.hd-bg { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-decoration: underline; }
+.hd-bg:focus-visible { outline: 1px solid var(--muted); }
 .hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
 .hd-sub { padding-left: 58px; }
 .hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-suf, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
   .hd-sub { padding-left: 40px; }
-  .hd-suf { display: none; }
+  .hd-q .hd-suf, .hd-count { display: none; }
 }

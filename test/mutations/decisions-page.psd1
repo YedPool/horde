@@ -36,6 +36,9 @@
         @{ Name = "the-suffix-carries-the-reason-in-brackets"
            Find = 'bits.push(listOf(q.waiting).map(whoOf).join(", ") + " waiting");'
            Replace = 'bits.push(listOf(q.waiting).join(", ") + " waiting");' }
+        @{ Name = "a-note-of-background-is-shown-unasked"
+           Find = '+ (head.note && noteShown[head.key] === true ? " note-open" : ""));'
+           Replace = '+ (head.note ? " note-open" : ""));' }
         @{ Name = "the-number-drawn-is-the-line-position"
            Find = 'var num = make("span", "hd-num", q.number);'
            Replace = 'var num = make("span", "hd-num", drawnLines.length + 1);' }
