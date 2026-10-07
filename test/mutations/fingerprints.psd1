@@ -44,5 +44,29 @@
         @{ Name = "list-under-another-name"
            Find = '$script:HordeFingerprintListName = "fingerprints.txt"'
            Replace = '$script:HordeFingerprintListName = "pinned.txt"' }
+        # --- held from the check until the load, and what else is in the folder
+        @{ Name = "a-held-file-may-be-written-to"
+           Find = '[System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)'
+           Replace = '[System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)' }
+        @{ Name = "a-held-file-may-be-moved-away"
+           Find = '[System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)'
+           Replace = '[System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::Read -bor [System.IO.FileShare]::Delete))' }
+        @{ Name = "nothing-is-held-when-asked"
+           Find = 'if ($Hold) { [void]$held.Add($stream) } else { $stream.Dispose() }'
+           Replace = '$stream.Dispose()' }
+        @{ Name = "a-check-alone-leaves-the-files-held"
+           Find = 'if ($Hold) { [void]$held.Add($stream) } else { $stream.Dispose() }'
+           Replace = '[void]$held.Add($stream)' }
+        @{ Name = "a-refused-folder-keeps-its-good-files-held"
+           Find = 'if ($findings.Count -gt 0) { foreach ($h in @($held)) { $h.Dispose() }; $held.Clear() }'
+           Replace = '' }
+        @{ Name = "the-list-itself-is-called-unlisted"
+           Find = ' + @($script:HordeFingerprintListName)'
+           Replace = '' }
+        @{ Name = "a-listed-file-is-called-unlisted"
+           Find = 'Where-Object { $listed -cnotcontains $_ })'
+           Replace = 'Where-Object { $true })' }
+        # No mutant takes the fingerprint from a second look at the path instead of from the held
+        # file: with nothing racing it the two read the same bytes, so no check here could tell.
     )
 }

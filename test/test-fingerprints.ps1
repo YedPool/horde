@@ -57,6 +57,48 @@ $empty = Test-HordeFingerprints -Folder (New-Case "empty" -List "# nothing`r`n")
 Check ($empty.ok -eq $false -and (Says $empty "lists no file")) "a list that names no file: not ok"
 
 Write-Host ""
+Write-Host "--- what else is in the folder is said, and left to the caller to judge ---" -ForegroundColor Cyan
+Check (@($ok.unlisted).Count -eq 0) "CONTROL: a folder holding only its list and its listed files has nothing unlisted: the list itself is not counted"
+$crowded = Test-HordeFingerprints -Folder (New-Case "crowded" -Change { param($d) [System.IO.File]::WriteAllText((Join-Path $d "version.dll"), "planted"); [System.IO.File]::WriteAllText((Join-Path $d "LICENSE.txt"), "words"); New-Item -ItemType Directory -Path (Join-Path $d "plugins") | Out-Null })
+Check ($crowded.ok -eq $true -and (@($crowded.unlisted) -join ",") -ceq "LICENSE.txt,plugins,version.dll") ("a file or a folder beside the listed files is named, in order, and is not by itself a finding: what may stand there is the caller's rule (" + (@($crowded.unlisted) -join ",") + ")")
+
+Write-Host ""
+Write-Host "--- the files can be held from the check until they are loaded ---" -ForegroundColor Cyan
+# BETWEEN CHECKING A FILE AND LOADING IT, another program could swap it (review of 2026-10-06, finding
+# A6). With -Hold each listed file is opened once, its fingerprint is taken from THAT open file, and
+# the file stays open - readable by others, not writable, not removable - until the caller lets go.
+function Test-CanChange {
+    # Can the file be written to, or taken away, right now? (It is put back.)
+    param([string]$Path)
+    $moved = $Path + ".moved"
+    try { $w = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite); $w.Dispose(); return "written" } catch { }
+    try { [System.IO.File]::Move($Path, $moved); [System.IO.File]::Move($moved, $Path); return "moved" } catch { }
+    return "no"
+}
+$heldDir = New-Case "held"
+Check ((Test-CanChange (Join-Path $heldDir "a.dll")) -ceq "written") "CONTROL: a file nobody holds can be changed"
+$held = Test-HordeFingerprints -Folder $heldDir -Hold
+try {
+    Check ($held.ok -eq $true -and @($held.held).Count -eq 2 -and @($held.files).Count -eq 2) "a folder that matches is handed back with one open file for each listed file"
+    Check ((Test-CanChange (Join-Path $heldDir "a.dll")) -ceq "no" -and (Test-CanChange (Join-Path $heldDir "b.txt")) -ceq "no") "while they are held, a listed file can be neither written to nor moved away"
+    Check ([System.IO.File]::ReadAllBytes((Join-Path $heldDir "a.dll")).Length -eq $bytesA.Length -and (Get-HordeFileSha256 -Path (Join-Path $heldDir "a.dll")) -ceq $shaA) "and can still be read, which is all a loader does"
+    $renamed = $heldDir + "-elsewhere"
+    $folderMoved = $true
+    try { [System.IO.Directory]::Move($heldDir, $renamed); [System.IO.Directory]::Move($renamed, $heldDir) } catch { $folderMoved = $false }
+    Check ($folderMoved -eq $false) "nor can the folder be swapped whole from under them"
+} finally { foreach ($h in @($held.held)) { $h.Dispose() } }
+Check ((Test-CanChange (Join-Path $heldDir "a.dll")) -ceq "written") "once the caller lets go, the file is free again"
+$notHeld = Test-HordeFingerprints -Folder $heldDir
+Check (@($notHeld.held).Count -eq 0 -and (Test-CanChange (Join-Path $heldDir "a.dll")) -ceq "written") "without -Hold nothing is kept open: a check alone leaves no file held"
+$badHeld = Test-HordeFingerprints -Folder (New-Case "held-changed" -Change { param($d) [System.IO.File]::WriteAllBytes((Join-Path $d "b.txt"), [byte[]](1, 2, 3)) }) -Hold
+Check ($badHeld.ok -eq $false -and @($badHeld.held).Count -eq 0 -and (Test-CanChange (Join-Path $work "held-changed\a.dll")) -ceq "written") "a folder that does not match holds nothing open, the good file included: there is nothing to load"
+# THE FINGERPRINT IS TAKEN FROM THE FILE THAT IS HELD, not from a second look at the path: a file
+# another program holds for itself cannot be opened here, and that is a finding, not a pass.
+$mine = [System.IO.File]::Open((Join-Path $heldDir "a.dll"), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+try { $locked = Test-HordeFingerprints -Folder $heldDir -Hold } finally { $mine.Dispose() }
+Check ($locked.ok -eq $false -and (Says $locked "a.dll could not be read to check its fingerprint") -and @($locked.held).Count -eq 0) "a listed file another program holds for itself cannot be checked, so the folder is not ok"
+
+Write-Host ""
 Write-Host "--- a list line that is not one ---" -ForegroundColor Cyan
 $good = "a.dll | " + $shaA + " | the first invented file`r`n"
 $cases = @(
