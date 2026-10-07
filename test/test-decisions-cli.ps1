@@ -185,7 +185,9 @@ Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count 
 # Every verb is an operation - its own name, or the one its entry names - and every operation has a verb.
 $operationNames = @(Get-HordeDecisionOperations | ForEach-Object { $_.name })
 $verbOperations = @($verbNames | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
-Check (@($verbOperations | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0 -and @($operationNames | Where-Object { $verbOperations -cnotcontains $_ }).Count -eq 0) ("every verb is an operation, and every operation has a verb (" + (@($verbOperations | Sort-Object -Unique) -join ",") + ")")
+$thenOperations = @($verbNames | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("then")) { "$($entry.then)" } })
+Check (@(@($verbOperations) + @($thenOperations) | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0 -and @($operationNames | Where-Object { $verbOperations -cnotcontains $_ -and $thenOperations -cnotcontains $_ }).Count -eq 0) ("every verb is an operation, and every operation is a verb's own or what a verb asks for once its lines are out (" + (@(@($verbOperations) + @($thenOperations) | Sort-Object -Unique) -join ",") + ")")
+Check (($thenOperations -join ",") -ceq "mark-read" -and "$($script:HordeDecisionCommandVerbs['inbox'].then)" -ceq "mark-read") "inbox reads, and then asks for mark-read: two operations, in that order"
 Check ((@($verbNames | Where-Object { $script:HordeDecisionCommandVerbs[$_].ContainsKey("says") }) -join ",") -ceq "answer,reply" -and $script:HordeDecisionCommandVerbs["answer"].says.speaker -ceq "founder" -and $script:HordeDecisionCommandVerbs["answer"].says.route -ceq "chat-recorded" -and $script:HordeDecisionCommandVerbs["reply"].says.speaker -ceq "warchief" -and $script:HordeDecisionCommandVerbs["reply"].says.route -ceq "command") "answer is the founder's words recorded from chat, and reply is the warchief's own: who speaks is the verb's, never a flag's"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
@@ -332,6 +334,7 @@ Check ((Get-TalkKinds) -ceq "added,said,said,said") ("and -Peek wrote nothing ("
 $inbox = Invoke-Decisions @("inbox", "-Json") $talkEnv
 $j = Get-JsonLine $inbox
 Check ($inbox.code -eq 0 -and $null -ne $j -and @($inbox.lines | Where-Object { $_.Trim() -ne "" }).Count -eq 1 -and $inbox.out -cnotmatch '[^\x00-\x7F]') "inbox -Json is exactly one line, all ASCII"
+Check ($null -ne $j -and $null -ne $j.PSObject.Properties["marking"] -and $j.marking.done -eq $true -and $j.marking.upTo -eq 4 -and $j.marking.marked -eq 2) "and that one line says what the whole command did: it marked two messages, up to record 4"
 Check ($null -ne $j -and @($j.value.messages).Count -eq 2 -and $j.value.messages[0].number -eq 1 -and $j.value.messages[0].title -ceq $talkTitle -and [string]::Equals($j.value.messages[0].message.text, $said, [System.StringComparison]::Ordinal)) "the Hebrew comes back out of the inbox character for character, under its question's number and title"
 Check ($null -ne $j -and $j.value.messages[1].message.text.Length -eq 100000 -and [string]::Equals($j.value.messages[1].message.text, $long, [System.StringComparison]::Ordinal) -and $j.value.upTo -eq 4) "and so do all 100,000 characters of the long one: nothing cut on the way in or out"
 $markRecord = $null

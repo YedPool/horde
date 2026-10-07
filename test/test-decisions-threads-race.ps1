@@ -11,7 +11,7 @@
 #        between a printing and its marking. No message may be marked read that was not printed.
 #   III. A WRITER KILLED INSIDE A SAY, AND INSIDE A MARKING, at a named step: before its record has its
 #        name, and just after. Either the whole message is in the store or nothing is; the writer was
-#        told nothing; and the same request sent again leaves exactly one message, and loses no word.
+#        told nothing; and the same request sent again leaves exactly one message, or one marking.
 #
 # A RACE THAT NEVER COLLIDES PROVES NOTHING, so each has its controls:
 #   - I:  two rounds are not races - the close is sent well before the say, and well after - and must
@@ -19,7 +19,8 @@
 #         rounds at least one write must say it took more than one try, which happens only when the
 #         other process took its place.
 #   - II: at least one message must have landed between a printing and its marking; and the same race
-#         against a copy of the module that marks everything unread, ignoring what was printed, must
+#         against a copy of the module whose marking marks everything written so far, whatever record it was
+#         told, must
 #         be seen to lose a message - or this harness could not have seen it here.
 #
 # Every store is a fresh folder under %TEMP% that this suite made and removes (CONTRIBUTING 9). The
@@ -250,15 +251,15 @@ Check (@($real.said | Where-Object { $real.printed -notcontains $_ -and $real.un
 Check (@($real.marks).Count -ge 2) ("CONTROL: the inbox did mark, several times (" + @($real.marks).Count + " markings)")
 Check (@($real.between).Count -ge 1) ("CONTROL: at least one message landed between a printing and its marking, so the race was run (" + @($real.between).Count + ")")
 Check (@($real.between | Where-Object { $real.printed -notcontains $_ -and $real.unreadAtEnd -notcontains $_ }).Count -eq 0) "and each message that landed there was left unread by that marking, and printed by a later one or still unread"
-# CONTROL: the same race against a copy of the module whose marking ignores what was printed and marks
-# everything unread. It must be seen to mark a message nobody printed.
+# CONTROL: the same race against a copy of the module whose marking ignores the record it was told and
+# marks everything written so far. It must be seen to mark a message nobody printed.
 $broken = Join-Path $script:work "broken-tree"
 foreach ($folder in @("decisions", "core", "schema")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $broken $folder) -Recurse }
 $opsCopy = Join-Path $broken "decisions\Operations.ps1"
 $src = [System.IO.File]::ReadAllText($opsCopy)
-$find = 'if ([long]$Data["upTo"] -gt 0) { $bound = [long]$Data["upTo"] }'
+$find = '    $upTo = [long]$Data["upTo"]'
 Check (([regex]::Matches($src, [regex]::Escape($find))).Count -eq 1) "the control's edit matches exactly once in decisions/Operations.ps1"
-[System.IO.File]::WriteAllText($opsCopy, $src.Replace($find, ''))
+[System.IO.File]::WriteAllText($opsCopy, $src.Replace($find, '    $upTo = [long]$List.lastSequence'))
 $bad = Invoke-InboxRace -Name "inbox-broken" -CodeRoot $broken -Messages $messages
 Write-Host ("  module that marks everything unread: said " + ($bad.said -join ",") + "; printed " + (@($bad.printed | Sort-Object) -join ",") + "; markings " + (@($bad.marks | ForEach-Object { "" + $_.sequence + " up to " + $_.upTo }) -join "; ") + "; lost " + ($bad.lost -join ",")) -ForegroundColor DarkGray
 Check (@($bad.problems).Count -eq 0) "the control's racers ran cleanly"
@@ -291,21 +292,20 @@ foreach ($step in @("stall-before-move", "stall-after-move")) {
     $f = New-RaceFolder ("mark-" + $step)
     $null = Add-Question $f.store 1
     $null = Invoke-HordeDecision -Operation "say" -Root $f.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = $words }
-    $request = @{ id = ("ef" * 16); actor = "warchief"; mark = $true }
+    $request = @{ id = ("ef" * 16); actor = "warchief"; upTo = 2 }
     $requestFile = Join-Path $f.dir "request.json"
-    Write-RequestFile $requestFile @{ operation = "inbox"; request = $request }
+    Write-RequestFile $requestFile @{ operation = "mark-read"; request = $request }
     $w = Start-StalledWriter -Folder $f -Name "reader" -Mode $step -RequestFile $requestFile
     Stop-StalledWriter $w
     foreach ($pr in @($w.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
-    Check (@($w.problems).Count -eq 0 -and -not (Test-Path -LiteralPath $w.log)) ("a marking was stopped at " + $step + " and killed before it was handed the words")
+    Check (@($w.problems).Count -eq 0 -and -not (Test-Path -LiteralPath $w.log)) ("a marking was stopped at " + $step + " and killed before it was told anything")
     $unread = @((Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" } -Root $f.store).value.messages).Count
-    if ($step -ceq "stall-before-move") { Check ($unread -eq 1) ("killed before the move, nothing is marked: the message is still unread (" + $unread + ")") }
-    else { Check ($unread -eq 0) ("killed after the move, the marking is in the store - and its caller never got the words (" + $unread + " unread)") }
-    # THE WORDS ARE NOT LOST EITHER WAY: the same request sent again, same id, hands them over.
-    $again = Invoke-HordeDecision -Operation "inbox" -Request $request -Root $f.store
+    if ($step -ceq "stall-before-move") { Check ($unread -eq 1) ("killed before the move, nothing is marked: the message is still unread, and the next inbox shows it again (" + $unread + ")") }
+    else { Check ($unread -eq 0) ("killed after the move, the whole marking is in the store (" + $unread + " unread)") }
+    $again = Invoke-HordeDecision -Operation "mark-read" -Request $request -Root $f.store
     $expected = "done"; if ($step -ceq "stall-after-move") { $expected = "replayed" }
-    Check ($again.state -ceq "known" -and $again.value.outcome -ceq $expected -and @($again.value.messages).Count -eq 1 -and [string]::Equals($again.value.messages[0].message.text, $words, [System.StringComparison]::Ordinal) -and $again.value.marked -eq 1) ("the same marking sent again, same id, is " + $expected + " and hands over the words: a reader that died holding a marking has not lost them (" + $again.state + $(if ($again.state -ceq "known") { " " + $again.value.outcome } else { ": " + $again.reason }) + ")")
-    Check (@(Get-StoreRecords $f.store | Where-Object { $_.kind -ceq "messages-read" }).Count -eq 1) "and there is exactly one marking in the store"
+    Check ($again.state -ceq "known" -and $again.value.outcome -ceq $expected -and $again.value.upTo -eq 2 -and $again.value.marked -eq 1) ("the same marking sent again, same id, is " + $expected + " and says what it marked (" + $again.state + $(if ($again.state -ceq "known") { " " + $again.value.outcome } else { ": " + $again.reason }) + ")")
+    Check (@(Get-StoreRecords $f.store | Where-Object { $_.kind -ceq "messages-read" }).Count -eq 1 -and @((Invoke-HordeDecision -Operation "inbox" -Request @{ actor = "warchief" } -Root $f.store).value.messages).Count -eq 0) "and there is exactly one marking in the store, and nothing left unread"
 }
 
 } finally {

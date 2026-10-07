@@ -78,28 +78,43 @@
         @{ Name = "show-does-not-say-what-is-unread"
            Find = 'if ($null -ne $who) { [void]$lines.Add("    (not yet read by " + $who.readerShown + ")") }'
            Replace = '' }
-        # --- inbox: prints, then marks what it printed ---
-        @{ Name = "inbox-marks-everything-unread-not-what-it-printed"
-           Find = 'request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; mark = $true; upTo = [long]$answer.value.upTo } }'
-           Replace = 'request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; mark = $true } }' }
+        # --- inbox: prints, then marks up to the last record it printed ---
+        @{ Name = "inbox-marks-up-to-a-record-it-did-not-print"
+           Find = 'request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; upTo = [long]$answer.value.upTo } }'
+           Replace = 'request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; upTo = ([long]$answer.value.upTo + 1) } }' }
         @{ Name = "peek-marks"
-           Find = 'if ($Verb -ceq "inbox" -and -not $peek -and $answer.state -ceq "known"'
-           Replace = 'if ($Verb -ceq "inbox" -and $answer.state -ceq "known"' }
-        @{ Name = "inbox-marks-in-the-same-call-as-it-reads"
-           Find = '    if ($Verb -ceq "inbox") { $writes = $false }'
-           Replace = '    if ($Verb -ceq "inbox") { $writes = $false; $request["mark"] = $true; $request["id"] = $id }' }
+           Find = '    if ($isInbox -and -not $peek -and $unread -gt 0) {'
+           Replace = '    if ($isInbox -and $unread -gt 0) {' }
+        @{ Name = "marking-asked-for-with-nothing-unread"
+           Find = '    if ($isInbox -and -not $peek -and $unread -gt 0) {'
+           Replace = '    if ($isInbox -and -not $peek -and $answer.state -ceq "known") {' }
         @{ Name = "failed-marking-reads-as-done"
-           Find = 'if ($answer.state -cne "known") { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $answer.reason) } }'
-           Replace = 'if ($answer.state -cne "known") { return [pscustomobject]@{ lines = @(); failure = "" } }' }
+           Find = 'if (-not $marking.done) { return [pscustomobject]@{ lines = @(); failure = ("the messages above were NOT marked as read, and will be shown again: " + $marking.reason) } }'
+           Replace = 'if (-not $marking.done) { return [pscustomobject]@{ lines = @(); failure = "" } }' }
+        @{ Name = "refused-marking-reads-as-done"
+           Find = 'if ($answer.value.outcome -ceq "refused") { return [pscustomobject]@{ done = $false; upTo = [long]0; marked = 0; reason = "$($answer.value.reason)" } }'
+           Replace = '' }
         @{ Name = "marking-not-said"
-           Find = 'if (-not [bool]$After.quiet) { $lines = @("", ("Marked as read: "'
-           Replace = 'if ($false) { $lines = @("", ("Marked as read: "' }
+           Find = '    $lines = @("", ("Marked as read: " + $marking.marked + " message(s), up to record " + $marking.upTo + "."))'
+           Replace = '    $lines = @()' }
         @{ Name = "marking-of-nothing-said-as-a-marking"
-           Find = 'if (-not [bool]$After.quiet -and [int]$answer.value.marked -eq 0) { $lines ='
-           Replace = 'if ($false) { $lines =' }
-        @{ Name = "json-inbox-prints-a-second-line"
-           Find = '$after = [pscustomobject]@{ operation = "inbox"; quiet = $asJson'
-           Replace = '$after = [pscustomobject]@{ operation = "inbox"; quiet = $false' }
+           Find = '    if ([int]$marking.marked -eq 0) { $lines ='
+           Replace = '    if ($false) { $lines =' }
+        @{ Name = "json-inbox-does-not-mark"
+           Find = '            $made = Invoke-HordeDecisionMarking -After $after'
+           Replace = '            $made = [pscustomobject]@{ done = $true; upTo = [long]$answer.value.upTo; marked = $unread; reason = "" }' }
+        @{ Name = "json-inbox-marks-a-second-time-after-its-line"
+           Find = '            $after = $null'
+           Replace = '' }
+        @{ Name = "json-inbox-says-nothing-of-the-marking"
+           Find = '        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marking = [pscustomobject]$marking }))'
+           Replace = '        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer)' }
+        @{ Name = "json-inbox-failed-marking-exits-clean"
+           Find = '            if (-not $made.done) { $markFailure ='
+           Replace = '            if ($false) { $markFailure =' }
+        @{ Name = "json-peek-not-said-to-be-a-peek"
+           Find = '        if ($peek) { $marking["reason"] = "not asked: -Peek marks nothing" }'
+           Replace = '' }
         @{ Name = "peek-does-not-say-nothing-was-marked"
            Find = '{ $lines += @("", "Nothing was marked as read (-Peek).") }'
            Replace = '{ }' }
