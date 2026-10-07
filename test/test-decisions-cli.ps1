@@ -179,7 +179,10 @@ $tokens = $null; $errors = $null
 $cmdAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\decisions.ps1"), [ref]$tokens, [ref]$errors)
 $setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.AttributeAst] -and $node.TypeName.Name -ceq "ValidateSet" }, $true) | Select-Object -First 1 | ForEach-Object { $_.PositionalArguments } | ForEach-Object { "$($_.Value)" })
 Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
-Check ((@(Get-HordeDecisionOperations | ForEach-Object { $_.name }) -join ",") -ceq ($verbNames -join ",")) "and they are the operations, one verb for each"
+# Every verb is an operation. (The two operations of the conversation under a question have no verb
+# until the next commit gives them theirs.)
+$operationNames = @(Get-HordeDecisionOperations | ForEach-Object { $_.name })
+Check (@($verbNames | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0) "and every verb is an operation"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
 foreach ($verbName in $verbNames) {

@@ -40,6 +40,19 @@
 # SECRETS ARE LOOKED FOR FIRST, over every text of the request, before the schema check, so that no
 # later finding - "the actor is 'x', not one of ..." - can repeat one.
 #
+# THE CONVERSATION UNDER A QUESTION is two operations and nothing else:
+#   say    someone's words under a question, kept verbatim. Who may speak, by what route, and who may
+#          record whose words are the rules' closed lists (decisions/Rules.ps1); a caller across a
+#          bridge or a link sends the same request the command line does.
+#   inbox  what others have said that the actor has not read, under every question, oldest first.
+#          With mark it records, as one record of its own, that exactly the messages it hands back
+#          are now read. The messages and the mark are worked out from ONE reading of the list, and
+#          the mark is written only if nothing was written in between (the write loop above), so no
+#          message is ever marked that was not handed back. A caller that shows a person the messages
+#          first and marks afterwards sends upTo, the last one it showed: one that arrived in between
+#          is beyond it, and stays unread.
+# The thread itself comes back with show, and its counts and whose turn it is with every list.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -57,6 +70,12 @@ $script:HordeDecisionOperations = [ordered]@{
     update = @{ writes = $true;  kind = "question-updated";  content = "Get-HordeDecisionUpdateContent" }
     close  = @{ writes = $true;  kind = "question-closed";   content = "Get-HordeDecisionCloseContent" }
     reopen = @{ writes = $true;  kind = "question-reopened"; content = "Get-HordeDecisionReopenContent" }
+    # complete: a function that finishes the record's data from the list as it stands at each try, or
+    # says the request is answered from the list with nothing written. parts: a function that gives
+    # what the answer holds besides the question, from the list and the record's sequence number - the
+    # same function for a write and for a repost of it, so the two answers cannot differ.
+    say    = @{ writes = $true;  kind = "message-said";      content = "Get-HordeDecisionSayContent";   complete = "Complete-HordeDecisionSayData";   parts = "Get-HordeDecisionSayParts" }
+    inbox  = @{ writes = $true;  kind = "messages-read";     content = "Get-HordeDecisionInboxContent"; complete = "Complete-HordeDecisionInboxData"; parts = "Get-HordeDecisionInboxParts" }
     list   = @{ writes = $false; read = "Get-HordeDecisionListAnswer" }
     show   = @{ writes = $false; read = "Get-HordeDecisionShowAnswer" }
     # Answered from the definitions alone: no store is read, so it answers where a list could not.
@@ -159,6 +178,100 @@ function Get-HordeDecisionReopenContent {
     return [pscustomobject]@{ body = [ordered]@{ reason = [string]$Request.reason }; findings = @(Test-HordeDecisionNote -Text ([string]$Request.reason) -Name "reason" -OneLine) }
 }
 
+function Get-HordeDecisionSayContent {
+    # A checked say request as { body; findings }. The words go into the body exactly as they came.
+    param($Request, $Definitions)
+    $body = [ordered]@{ speaker = [string]$Request.speaker; route = [string]$Request.route; text = [string]$Request.text }
+    $found = New-Object System.Collections.ArrayList
+    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"])) { [void]$found.Add($f) }
+    if (Test-HordeDecisionMember -Object $Request -Name "wordingVersion") {
+        if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }
+        else { [void]$found.Add("'wordingVersion' is not a wording a question can have: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
+    }
+    return [pscustomobject]@{ body = $body; findings = @($found) }
+}
+
+function Complete-HordeDecisionSayData {
+    # The wording the speaker was looking at, when the request did not say: the question's wording as
+    # it stands at this try. It is not part of what is hashed, so the same request sent again is the
+    # same request whatever the wording has become.
+    param($Request, $List, $Data)
+    if (-not $Data.Contains("wordingVersion")) { $Data["wordingVersion"] = [int]$List.questions[[int]$Data["number"]].wordingVersion }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = $Data }
+}
+
+function Get-HordeDecisionSayParts {
+    # What a say answers with besides the question: the message of record -Sequence, as the list has it.
+    param($List, [long]$Sequence)
+    foreach ($question in $List.questions.Values) {
+        foreach ($message in $question.thread) {
+            if ([long]$message.sequence -eq $Sequence) { return [ordered]@{ message = (ConvertTo-HordeDecisionMessageView -Message $message -Question $question -State $List) } }
+        }
+    }
+    return [ordered]@{}
+}
+
+function Get-HordeDecisionInboxContent {
+    # A checked inbox request as { body; findings }. The body is what is hashed: whether to mark, and
+    # the bound the caller gave (0 for none).
+    param($Request, $Definitions)
+    $found = New-Object System.Collections.ArrayList
+    $mark = ((Test-HordeDecisionMember -Object $Request -Name "mark") -and $Request.mark -eq $true)
+    $upTo = [long]0
+    if (Test-HordeDecisionMember -Object $Request -Name "upTo") {
+        if (Test-HordeDecisionCount -Value $Request.upTo -Most (Get-HordeDecisionMaxSequence)) { $upTo = [long]$Request.upTo }
+        else { [void]$found.Add("'upTo' is not a record's sequence number: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxSequence)) }
+    }
+    $hasId = Test-HordeDecisionMember -Object $Request -Name "id"
+    if ($mark -and -not $hasId) { [void]$found.Add("to mark messages as read the request needs an 'id': marking writes a record, and the id is what makes sending it twice one marking") }
+    if (-not $mark -and $hasId) { [void]$found.Add("an 'id' is given and nothing is to be marked: an id belongs to a request that writes. Leave it out, or ask to mark") }
+    $readers = @(Get-HordeDecisionReaders)
+    if ($readers -cnotcontains ([string]$Request.actor)) { [void]$found.Add("'" + [string]$Request.actor + "' has no inbox; the roles that have one are: " + ($readers -join ", ")) }
+    return [pscustomobject]@{ body = [ordered]@{ mark = $mark; upTo = $upTo }; findings = @($found) }
+}
+
+function Get-HordeDecisionInboxMore {
+    # What an inbox answers with: the messages, the last one's sequence number, and how many of them
+    # this call marked.
+    param($List, $Items, [int]$Marked)
+    $last = [long]0
+    $views = New-Object System.Collections.ArrayList
+    foreach ($item in @($Items)) {
+        $last = [long]$item.message.sequence
+        [void]$views.Add([pscustomobject]@{ number = [int]$item.question.number; title = "$($item.question.title)"; state = "$($item.question.state)"; message = (ConvertTo-HordeDecisionMessageView -Message $item.message -Question $item.question -State $List) })
+    }
+    return [ordered]@{ messages = @($views); upTo = $last; marked = $Marked }
+}
+
+function Complete-HordeDecisionInboxData {
+    # THE MESSAGES AND THE MARK COME FROM ONE READING OF THE LIST. What the actor has not read, up to
+    # the caller's bound, is worked out from the list as it stands at this try. Not asked to mark, or
+    # nothing unread: that is the answer, and nothing is written. Asked to mark: the record says the
+    # reader has read up to the LAST MESSAGE HANDED BACK - not up to the end of the list - and the
+    # write loop writes it only if no record was written since this reading. So what is marked is
+    # exactly what is handed back.
+    param($Request, $List, $Data)
+    $reader = [string]$Request.actor
+    $bound = [long]::MaxValue
+    if ([long]$Data["upTo"] -gt 0) { $bound = [long]$Data["upTo"] }
+    $unread = @(Get-HordeDecisionMessagesFor -State $List -Reader $reader -UpTo $bound)
+    if (-not [bool]$Data["mark"] -or $unread.Count -eq 0) {
+        return [pscustomobject]@{ why = ""; write = $false; more = (Get-HordeDecisionInboxMore -List $List -Items $unread -Marked 0); data = $null }
+    }
+    return [pscustomobject]@{ why = ""; write = $true; more = $null; data = [ordered]@{ reader = $reader; upTo = [long]$unread[-1].message.sequence } }
+}
+
+function Get-HordeDecisionInboxParts {
+    # What a marking answers with: the messages that record -Sequence marked - those between how far
+    # the reader had read before it and how far it says. Worked out from the list, so a repost of the
+    # request is answered with the same messages the first answer held.
+    param($List, [long]$Sequence)
+    if (-not $List.readEvents.ContainsKey($Sequence)) { return [ordered]@{} }
+    $marking = $List.readEvents[$Sequence]
+    $items = @(Get-HordeDecisionMessagesFor -State $List -Reader "$($marking.reader)" -After ([long]$marking.from) -UpTo ([long]$marking.upTo))
+    return (Get-HordeDecisionInboxMore -List $List -Items $items -Marked $items.Count)
+}
+
 function Get-HordeDecisionNumberAnswer {
     # For an operation about one question: $null when the list has it, else the answer to give -
     # absent when the number was never given, unknown when its record cannot be read.
@@ -248,13 +361,16 @@ function Invoke-HordeDecisionWrite {
     $entry = $script:HordeDecisionOperations[$Operation]
     $refuse = { param($why, $found, $list) return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "refused" -Reason $why -Findings $found -State $list) -Definitions $Definitions -Now $Now) }
 
+    # WHO MAY WRITE THIS KIND OF RECORD is the rules' answer, by kind: the keepers of the list for a
+    # question's own records, the speakers for what is said under one.
     $actor = [string]$Request.actor
-    $actors = @(Get-HordeDecisionActors)
-    if ($actors -cnotcontains $actor) {
-        $why = "'" + $actor + "' is not a role that may change the list; the roles that may are: " + ($actors -join ", ")
+    $allowed = Get-HordeDecisionKindActors -Kind $entry.kind
+    if (@($allowed.roles) -cnotcontains $actor) {
+        $why = "'" + $actor + "' is not a role that may " + $allowed.may + "; the roles that may are: " + (@($allowed.roles) -join ", ")
         return (& $refuse $why @($why) $null)
     }
     $content = & $entry.content $Request $Definitions
+    $about = Get-HordeDecisionKindAbout -Kind $entry.kind
     $hasNumber = Test-HordeDecisionMember -Object $Request -Name "number"
     $number = [long]0
     if ($hasNumber) { $number = [long]$Request.number }
@@ -263,7 +379,9 @@ function Invoke-HordeDecisionWrite {
         $hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $content.body }
         $requestHash = Get-HordeDecisionHash -Value $hashed
     }
-    $id = [string]$Request.id
+    # A request that only reads through this path (an inbox that marks nothing) has no id.
+    $id = ""
+    if (Test-HordeDecisionMember -Object $Request -Name "id") { $id = [string]$Request.id }
 
     $raceTries = Get-HordeDecisionSetting -Name "decisions.write.raceTries"
     $heldReads = Get-HordeDecisionSetting -Name "decisions.write.heldReads"
@@ -284,7 +402,7 @@ function Invoke-HordeDecisionWrite {
         $list = $read.list
 
         # A REPOST IS ANSWERED BEFORE THE REQUEST IS JUDGED: what was recorded stands.
-        if ($list.ids.ContainsKey($id)) {
+        if ($id -ne "" -and $list.ids.ContainsKey($id)) {
             $prior = $list.ids[$id]
             if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {
                 # "REPLAYED" SAYS "THIS WAS RECORDED", so the record is flushed to disk before it is said.
@@ -296,8 +414,10 @@ function Invoke-HordeDecisionWrite {
                 if ($sure -cne "confirmed") {
                     return (New-HordeUnknown -Reason ("record " + $prior.sequence + " holds this request, but it could not be confirmed written through to the disk (" + $sure + "), so it is NOT reported as saved. Send the same request again, with the same id"))
                 }
-                $more = [ordered]@{ sequence = $prior.sequence; number = [int]$prior.number }
+                $more = [ordered]@{ sequence = $prior.sequence }
+                if ([int]$prior.number -ge 1) { $more["number"] = [int]$prior.number }
                 if ($list.questions.ContainsKey([int]$prior.number)) { $more["question"] = ConvertTo-HordeDecisionView -Question $list.questions[[int]$prior.number] -State $list }
+                if ($entry.ContainsKey("parts")) { $again = & $entry.parts $list ([long]$prior.sequence); foreach ($k in @($again.Keys)) { $more[$k] = $again[$k] } }
                 return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "replayed" -State $list -More $more) -Definitions $Definitions -Now $Now)
             }
             $why = "the id " + $id + " was already used for a different request (record " + $prior.sequence + ", " + $prior.kind + "); nothing was written. A new request needs a new id"
@@ -314,8 +434,15 @@ function Invoke-HordeDecisionWrite {
         # THE RECORD, built as text and read back, so that what is checked and applied below is exactly
         # what a later reader will parse - not the objects it was built from.
         $data = [ordered]@{}
-        if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list }
+        if ($about -ceq "question") { if ($hasNumber) { $data["number"] = [int]$number } else { $data["number"] = Get-HordeDecisionNextNumber -State $list } }
         foreach ($k in @($content.body.Keys)) { $data[$k] = $content.body[$k] }
+        if ($entry.ContainsKey("complete")) {
+            $step = & $entry.complete $Request $list $data
+            if ("$($step.why)" -ne "") { return (& $refuse ("nothing was written: " + $step.why) @("$($step.why)") $list) }
+            # Answered from the list as it stands, with nothing to write.
+            if (-not $step.write) { return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $step.more) -Definitions $Definitions -Now $Now) }
+            $data = $step.data
+        }
         $sequence = [long]$list.lastSequence + 1
         $envelope = [ordered]@{
             schemaVersion = 1; sequence = $sequence; id = $id; kind = $entry.kind
@@ -329,7 +456,8 @@ function Invoke-HordeDecisionWrite {
         $before = [pscustomobject]@{ unreadable = @($list.unreadable); ignored = @($list.ignored); strays = @($list.strays); notUnderstood = $list.notUnderstood }
         $why = Add-HordeDecisionRecordToState -State $list -Record $record -Definitions $Definitions
         if ($why -ne "") { return (& $refuse ("nothing was written: " + $why) @($why) $before) }
-        $question = $list.questions[[int]$data["number"]]
+        $question = $null
+        if ($about -ceq "question") { $question = $list.questions[[int]$data["number"]] }
         if ($Operation -ceq "update") {
             $found = @(Test-HordeDecisionQuestion -Question $question -Kinds $Definitions.kinds)
             if ($found.Count -gt 0) { return (& $refuse ("the question as changed would break " + $found.Count + " rule(s); nothing was written") $found $before) }
@@ -347,7 +475,9 @@ function Invoke-HordeDecisionWrite {
             return (New-HordeUnknown -Reason ("record " + $sequence + " has its place in the store, but it could not be confirmed written through to the disk, so it is NOT reported as saved. Send the same request again, with the same id: it is answered from the record if the record is still there"))
         }
         if ($made -cne "created") { continue }
-        $more = [ordered]@{ sequence = $sequence; attempts = $attempt; number = [int]$data["number"]; question = (ConvertTo-HordeDecisionView -Question $question -State $list) }
+        $more = [ordered]@{ sequence = $sequence; attempts = $attempt }
+        if ($null -ne $question) { $more["number"] = [int]$data["number"]; $more["question"] = (ConvertTo-HordeDecisionView -Question $question -State $list) }
+        if ($entry.ContainsKey("parts")) { $beside = & $entry.parts $list $sequence; foreach ($k in @($beside.Keys)) { $more[$k] = $beside[$k] } }
         $value = New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $more
         return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now -Written ("Record " + $sequence + " WAS written"))
     }
