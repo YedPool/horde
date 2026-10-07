@@ -259,14 +259,16 @@ try {
         Check ($fended -and $fwd.process.ExitCode -ne 0 -and (Get-ListenText $ferr) -match "(?i)prohibited|forward|refused") ("a stdio forward (-W) is refused (exit " + $(if ($fended) { $fwd.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $ferr).Trim() + ")")
         $nobody = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 500
         Check ($nobody.state -ceq "unknown") "and it reached nothing: the hub's pipe saw no session from it"
+        # With no Subsystem line a subsystem request names nothing sshd offers, so it is refused and
+        # nothing runs, not even the forced attach (measured 2026-10-07, round 2 of the hardening gate).
         $sub = Start-RawSsh -Extra @("-s") -After @("sftp")
-        $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
-        $pre = $null; if ($a.state -ceq "known") { $pre = Receive-HordeLinkFrame -Link (Get-HordeValue $a) -TimeoutMs (Left 15000) }
-        Check ($null -ne $pre -and $pre.state -ceq "known" -and "$($pre.value)" -ceq ("horde-attach 1 " + $nodeDev)) "a session that asks for the sftp subsystem reaches the hub through attach instead (issue #147, item 8)"
-        try { $sub.process.StandardInput.Close() } catch { }
+        $suberr = $sub.process.StandardError.ReadToEndAsync(); $null = $sub.process.StandardOutput.ReadToEndAsync()
+        $subEnded = $sub.process.WaitForExit((Left 20000))
+        Check ($subEnded -and $sub.process.ExitCode -ne 0 -and (Get-ListenText $suberr) -match "(?i)subsystem") ("a request for the sftp subsystem is refused: no subsystem is offered (issue #147, item 8; exit " + $(if ($subEnded) { $sub.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $suberr).Trim() + ")")
+        $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 1000
+        Check ($a.state -ceq "unknown") "and it reached nothing: the hub's pipe saw no session from it"
         if ($a.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $a) }
-        $null = $sub.process.WaitForExit((Left 15000))
-        $null = Wait-AttachGone -Ms (Left 15000)
+        if (-not $sub.process.HasExited) { try { $sub.process.Kill() } catch { } }
 
         Write-Host ""
         Write-Host "--- a line longer than any frame ends the link (issue #147, item 1) ---" -ForegroundColor Cyan
@@ -353,7 +355,7 @@ try {
             if (-not $gone -and $victim.Count -eq 1) { $d = [datetime]::UtcNow.AddSeconds(10); while ($null -ne (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue) -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 250 }; $gone = ($null -eq (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue)) }
             Check ($victim.Count -eq 1 -and $gone) ("the attach fed a line with no end is ended by the job's memory cap (" + $sent + " MiB sent)")
             Check ((Get-ListenListeners -Port $p2) -ge 1 -and -not $listen.process.HasExited) "the listener goes on: sshd still listens, horde listen still runs"
-            $null = $other.process.StandardInput.BaseStream.WriteAsync(([System.Text.Encoding]::ASCII.GetBytes("still-alive`n")), 0, 12)
+            $other.process.StandardInput.Write("still-alive`n"); $other.process.StandardInput.Flush()
             $s = $null; if ($ao.state -ceq "known") { $s = Receive-HordeLinkFrame -Link (Get-HordeValue $ao) -TimeoutMs (Left 15000) }
             Check ($null -ne $s -and "$($s.value)" -ceq "still-alive") "and the other device's session still relays"
         } finally {

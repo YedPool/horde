@@ -19,6 +19,11 @@
 #
 # EXIT CODES: 0 the session ended (stdin closed, or the hub closed the pipe); 1 the relay could not
 # start or a line could not be relayed, with the reason on stderr; 2 -Device is not a device id.
+# EVERY EXIT IS [Environment]::Exit, NOT exit. This script mentions $input, so PowerShell waits after an
+# ordinary exit until stdin ends (the measurement above); a refused second link or a line over the
+# ceiling then lived on until the client hung up (measured 2026-10-07, issue #147's live cases). attach
+# is always a process of its own, the forced command of one session, so ending the process is right.
+# [Console]::Error.WriteLine is unbuffered, so nothing written before it is lost.
 
 param([string]$Device)
 
@@ -30,7 +35,7 @@ $private:root = Split-Path -Parent $PSScriptRoot
 $private:preamble = New-HordeAttachPreamble -DeviceId $Device
 if (-not $preamble.ok) {
     [Console]::Error.WriteLine("horde attach: " + $preamble.reason)
-    exit 2
+    [Environment]::Exit(2)
 }
 try {
     foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
@@ -58,6 +63,6 @@ try {
     if (-not $result.ok) { throw $result.reason }
 } catch {
     [Console]::Error.WriteLine("horde attach: " + $_.Exception.Message)
-    exit 1
+    [Environment]::Exit(1)
 }
-exit 0
+[Environment]::Exit(0)
