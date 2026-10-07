@@ -312,10 +312,10 @@ $talkEnv = @{ HORDE_HOME = $talkHome }
 function Get-TalkKinds { if (-not (Test-Path -LiteralPath $talkStore)) { return "" }; return (@(Get-ChildItem -LiteralPath $talkStore -File | Sort-Object Name | ForEach-Object { ([System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json).kind -creplace '\Aquestion-', '' -creplace '\Amessages?-', '' }) -join ",") }
 $talkTitle = "Should the closing sound play when the assistant closes?"
 $null = Invoke-Decisions @("add", "-File", (Write-Json "talk-question.json" ('{"title":"' + $talkTitle + '","kind":"yes-no","whatItIs":"The app has no closing sound today.","group":"voice","askedBy":"orc-b"}'))) $talkEnv
-# What the founder said, as a file: Hebrew with a right-to-left mark and a left-to-right mark, then a
-# second line, with spaces at both ends. Written as escapes
+# What the founder said, as a file: a Hebrew sentence as a phone sends it - an embedding, an isolate
+# pair, the marks, a zero-width space and a word joiner - then a second line, with spaces at both ends. Written as escapes
 # (CONTRIBUTING 13); the file holds the letters themselves, as an editor would save them.
-$said = "  " + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + " " + [char]0x200E + "(yes)`r`n" + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
+$said = "  " + [char]0x202B + [char]0x05DB + [char]0x05DF + [char]0x200F + ", " + [char]0x2067 + [char]0x05EA + [char]0x05DE + [char]0x05E9 + [char]0x05D9 + [char]0x05DA + [char]0x2069 + [char]0x202C + " " + [char]0x061C + [char]0x200B + [char]0x2060 + [char]0x200E + "(yes)" + [char]0x200D + "`r`n" + [char]0x05EA + [char]0x05D5 + [char]0x05D3 + [char]0x05D4 + "  "
 $answered = Invoke-Decisions @("answer", "1", "-File", (Write-Json "said.txt" $said), "-Json") $talkEnv
 $j = Get-JsonLine $answered
 Check ($answered.code -eq 0 -and $null -ne $j -and $j.value.outcome -ceq "done" -and $j.value.number -eq 1 -and $answered.out -cnotmatch '[^\x00-\x7F]') ("answer, from a file, exits 0 with one ASCII line of data saying done (exit " + $answered.code + ")")
