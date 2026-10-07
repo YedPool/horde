@@ -65,6 +65,7 @@ try {
 
 
     if (Enter-HordeSuiteSection "gate" "the gate: off, refused, before consent") {
+        trap { Register-HordeSuiteError $_; continue }
         $off = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
         Check ($off.state -eq "off" -and -not (Test-Path -LiteralPath (Get-HordeHome))) "with no gate file collect is off, and the home is not even created"
         Set-Gate '{ "schemaVersion": 1, "level": "off", "enabledAt": "2026-09-01T00:00:00Z" }'
@@ -94,6 +95,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "consent" "consent before every fixture: new files are recorded") {
+        trap { Register-HordeSuiteError $_; continue }
         Remove-Item -LiteralPath (Get-HordeCollectIndexPath) -Force
         Set-Gate '{ "schemaVersion": 1, "level": "usage", "enabledAt": "2026-09-01T00:00:00Z" }'
         $r1 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
@@ -111,6 +113,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "changes" "unchanged, changed, new, deleted") {
+        trap { Register-HordeSuiteError $_; continue }
         $snap = Get-StoreSnapshot
         $r2 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root
         Check ($r2.unchanged -eq $filled -and $r2.read -eq 0 -and -not $r2.wroteIndex -and (Get-StoreSnapshot) -eq $snap) "a second run with nothing changed reads nothing and writes nothing, byte for byte"
@@ -167,6 +170,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "provisional" "a transcript still being written is provisional") {
+        trap { Register-HordeSuiteError $_; continue }
         [System.IO.File]::AppendAllText($planted, "`n")
         Set-Old $planted $now.AddMinutes(-2)
         $p1 = Invoke-HordeMetricsCollect -Now $now -RepoRoot $root -SettleMinutes 10
@@ -183,6 +187,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "lock" "one run at a time; never inside an engine's folder") {
+        trap { Register-HordeSuiteError $_; continue }
         $held = [System.IO.File]::Open((Join-Path (Get-HordeMetricsDir) "collect.lock"), [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
         try {
             [System.IO.File]::AppendAllText($planted, "`n"); Set-Old $planted $settledAt.AddMinutes(3)
@@ -202,6 +207,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "bad-files" "one bad file never stops a run, and every failure is said (review of PR #70)") {
+        trap { Register-HordeSuiteError $_; continue }
         $later = $now.AddMinutes(100)
         # F3: a transcript whose identity cannot name a record.
         $subCopy = @($copies | Where-Object { $_ -like "*subagents*" })[0]
@@ -262,6 +268,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "backlog" "a large backlog: progress is kept, and a run ends within its budget (review of #70, NEW-1)") {
+        trap { Register-HordeSuiteError $_; continue }
         $backlogDir = Join-Path (Split-Path -Parent $cleanSrc) "backlog"
         [void][System.IO.Directory]::CreateDirectory($backlogDir)
         $cleanText = [System.IO.File]::ReadAllText($cleanSrc)
@@ -316,6 +323,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "giant" "one file too big for a run never starves the rest (review of #70, the budget)") {
+        trap { Register-HordeSuiteError $_; continue }
         # A run's budget is checked INSIDE a file too: a giant file is abandoned uncommitted ("deferred"),
         # read last in the next run, and after three deferrals in a row is "tooLarge": skipped, and said.
         $gDir = Join-Path (Split-Path -Parent $cleanSrc) "giant-backlog"
@@ -385,6 +393,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "recovery" "a write killed half way: the index is recovered, and no copy of it is ever deleted (review of #70)") {
+        trap { Register-HordeSuiteError $_; continue }
         # Measured by the reviewer: a kill inside the replace left NO index, the new one only in its temp file,
         # and the next run's cleanup deleted that temp - all progress lost. Now the temp is recovered first,
         # and cleanup removes only temps older than a valid index.
@@ -443,6 +452,7 @@ try {
     }
 
     if (Enter-HordeSuiteSection "command" "through the real horde command") {
+        trap { Register-HordeSuiteError $_; continue }
         $envs = @{ HORDE_HOME = $env:HORDE_HOME; USERPROFILE = $env:USERPROFILE }
         [System.IO.File]::AppendAllText($planted, "`n"); Set-Old $planted $settledAt.AddMinutes(4)
         $c1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("metrics", "collect") -Env $envs
