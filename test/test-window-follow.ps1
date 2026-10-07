@@ -418,12 +418,44 @@ try {
     Look "the companion is let go"
     Check ((Field $r "state") -ceq "free" -and (Field $r "reason") -ceq "it was let go, and stands free" -and (Field $r "companion") -eq $mine) "let go: free, in words"
     Check ([FollowTestProbe]::Owner($mine) -eq 0) "it is no longer owned"
+    Check ((WaitFor { Told 1 $mine }) -and [FollowTestProbe]::Visible($mine)) "Windows announced it to the taskbar: it is an ordinary taskbar window now, and is visible"
+    Look "the free companion is in the taskbar"
+    Check ((Quiet)) ("and becoming so took no keyboard (" + ($script:loud -join "; ") + ")")
     $stood = [FollowTestProbe]::Rect($mine)
     [void][FollowTestProbe]::Move($other, -31700, -31800, 1500, 520)
     Pump 1200
     Check ([FollowTestProbe]::Rect($mine) -ceq $stood -and (Field (Get-HordeWindowFollow) "state") -ceq "free") ("the other window moves on and the free one stays where it stood (" + [FollowTestProbe]::Rect($mine) + ")")
     Check ([FollowTestProbe]::Exists($other)) "CONTROL: the other window is still there; it was let go, not lost"
 
+    Write-Host ""
+    Write-Host "--- whatever made the window ---" -ForegroundColor Cyan
+    $hidden = New-TestWindow -Title "horde follow test: never shown" -Top -29500 -Hidden
+    $hiddenHandle = $hidden.Handle.ToInt64()
+    $r = Start-HordeWindowFollow -Target $other -Companion $hiddenHandle
+    Check ((Field $r "state") -ceq "following" -and -not [FollowTestProbe]::Visible($hiddenHandle)) "CONTROL: a window its maker never showed follows, and stays unseen"
+    $r = Disconnect-HordeWindowFollow
+    Pump 300
+    Check ((Field $r "state") -ceq "free" -and [FollowTestProbe]::Owner($hiddenHandle) -eq 0 -and -not [FollowTestProbe]::Visible($hiddenHandle)) "let go, it is free and STILL unseen: only a window that was seen is shown again"
+    $r = Start-HordeWindowFollow -Target $other -Companion $hiddenHandle
+    $hidden.Show()
+    Pump 300
+    Look "a window is shown by its maker while it follows"
+    [void](Get-HordeWindowFollow)
+    Forget
+    $r = Disconnect-HordeWindowFollow
+    Check ((Field $r "state") -ceq "free" -and (WaitFor { Told 1 $hiddenHandle }) -and [FollowTestProbe]::Visible($hiddenHandle)) "shown by its maker while it followed, and seen at an ask, it IS announced when let go"
+    $tool = New-TestWindow -Title "horde follow test: a tool window" -Top -29500 -Tool
+    $toolHandle = $tool.Handle.ToInt64()
+    Look "a tool window appears"
+    Forget
+    $r = Start-HordeWindowFollow -Target $other -Companion $toolHandle
+    Check ((Field $r "state") -ceq "following" -and ([FollowTestProbe]::ExStyle($toolHandle) -band 0x80) -ne 0 -and -not (Told 1 $toolHandle)) "CONTROL: a tool window, which Windows keeps out of the taskbar, follows"
+    $r = Disconnect-HordeWindowFollow
+    Check ((Field $r "state") -ceq "free" -and (WaitFor { Told 1 $toolHandle })) "let go, even it is announced to the taskbar"
+    Look "the tool window is let go"
+    [void](Stop-HordeWindowFollow)
+    $tool.Close(); $hidden.Close()
+    Pump 200
 
     Write-Host ""
     Write-Host "--- followed again ---" -ForegroundColor Cyan
@@ -433,6 +465,14 @@ try {
     $want = Expected $other
     Check ((Field $r "state") -ceq "following" -and [FollowTestProbe]::Owner($mine) -eq $other -and [FollowTestProbe]::Rect($mine) -ceq $want) ("the free window is made a companion again: owned, and placed beside the other window where it now is (" + [FollowTestProbe]::Rect($mine) + ")")
     Check ((Field $r "events") -eq 0) ("the reports counted are this follow's own: none yet, where the last follow had counted " + $countedBefore + " (" + (Field $r "events") + ")")
+    Check ((WaitFor { Told 2 $mine })) "Windows told the taskbar it is no longer a taskbar window"
+    Forget
+    [void][FollowTestProbe]::Show($other, 7)
+    Check ((WaitFor { -not [FollowTestProbe]::Visible($mine) })) "minimised again: hidden again"
+    [void][FollowTestProbe]::Show($other, 4)
+    Check ((WaitFor { [FollowTestProbe]::Visible($mine) })) "restored again: back again"
+    Pump 400
+    Check (-not (Told 1 $mine)) "and coming back did not put the companion in the taskbar: what made it a taskbar window was taken off when it was followed"
     Look "after the second follow"
 
     Write-Host ""
@@ -446,13 +486,14 @@ try {
     Check ([FollowTestProbe]::Exists($mine)) "the companion was NOT destroyed with the window that owned it"
     Check ((Field $r "reason") -ceq "the window it stood beside no longer exists" -and (Field $r "companion") -eq $mine -and (Placed $r) -ceq $want) "the record says why, and where the companion last stood"
     Check ([FollowTestProbe]::Owner($mine) -eq 0) "it is owned by nothing"
+    Check ((WaitFor { Told 1 $mine }) -and [FollowTestProbe]::Visible($mine)) "lost, it stands free without its caller doing anything: visible, and announced to the taskbar"
     Look "after the other window was closed"
     Check ((Quiet)) ("and nothing took the keyboard (" + ($script:loud -join "; ") + ")")
     Check ((Field (Stop-HordeWindowFollow) "state") -ceq "none" -and (Field (Get-HordeWindowFollow) "state") -ceq "none") "stopped: nothing is followed"
     $a.process.Kill(); [void]$a.process.WaitForExit(10000)
 
     Write-Host ""
-    Write-Host "--- the other PROCESS ends: lost ---" -ForegroundColor Cyan
+    Write-Host "--- the other PROCESS ends, while its window was minimised: lost, and not left hidden ---" -ForegroundColor Cyan
     $b = Start-OtherWindow -Title "horde follow test: the second other window"
     $second = $b.handle
     [void][FollowTestProbe]::Move($second, -32000, -32000, 600, 400)
@@ -460,11 +501,14 @@ try {
     $r = Start-HordeWindowFollow -Target $second -Companion $mine
     $want = Expected $second
     Check ((Field $r "state") -ceq "following" -and [FollowTestProbe]::Owner($mine) -eq $second -and [FollowTestProbe]::Rect($mine) -ceq $want) "the companion follows a second program's window"
+    [void][FollowTestProbe]::Show($second, 7)
+    Check ((WaitFor { -not [FollowTestProbe]::Visible($mine) })) "CONTROL: that window is minimised, so Windows has hidden the companion"
     Forget
     $b.process.Kill(); [void]$b.process.WaitForExit(10000)
     Check ((WaitFor { -not [FollowTestProbe]::Exists($second) })) "the other process is ended, and its window is gone with it"
     Check ((WaitFor { (Field (Get-HordeWindowFollow) "state") -ceq "lost" })) "asked, the follow answers lost"
     Check ([FollowTestProbe]::Exists($mine) -and [FollowTestProbe]::Owner($mine) -eq 0) "the companion is still there, owned by nothing"
+    Check ((WaitFor { [FollowTestProbe]::Visible($mine) -and (Told 1 $mine) })) "and it is NOT left hidden: it is visible again, and announced to the taskbar"
     Look "after the other process ended"
     [void](Stop-HordeWindowFollow)
 

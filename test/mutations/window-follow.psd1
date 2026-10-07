@@ -61,6 +61,27 @@
         @{ Name = "reports-counted-across-follows"
            Find = 'Events = 0;     // the reports counted are'
            Replace = '// the reports counted are' }
+        @{ Name = "a-free-window-keeps-its-owner"
+           Find = 'SetWindowLongPtr(window, -8, IntPtr.Zero);'
+           Replace = '' }
+        @{ Name = "a-free-window-is-not-made-a-taskbar-window"
+           Find = 'TaskbarStyle(window, true);'
+           Replace = '' }
+        @{ Name = "a-free-window-is-not-shown-again"
+           Find = 'if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }'
+           Replace = '' }
+        @{ Name = "a-free-window-is-shown-and-activated"
+           Find = 'if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }'
+           Replace = 'if (seen) { ShowWindow(window, 0); ShowWindow(window, 5); }' }
+        @{ Name = "a-window-never-seen-is-shown"
+           Find = 'if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }'
+           Replace = 'if (true) { ShowWindow(window, 0); ShowWindow(window, 8); }' }
+        @{ Name = "a-window-seen-later-is-not-noticed"
+           Find = 'if (-not $s.seen -and [HordeWindowsFollowV1]::Visible($s.companion)) { $s.seen = $true }'
+           Replace = '' }
+        @{ Name = "followed-again-it-keeps-the-taskbar-style"
+           Find = 'if (hook != IntPtr.Zero) { TaskbarStyle(new IntPtr(companion), false); return new int[] { 0, 0 }; }'
+           Replace = 'if (hook != IntPtr.Zero) { return new int[] { 0, 0 }; }' }
         @{ Name = "placing-takes-the-keyboard"
            Find = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004 | 0x0010); }'
            Replace = 'return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004); }' }
