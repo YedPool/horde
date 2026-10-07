@@ -48,7 +48,8 @@ function Read-HordeFingerprintList {
         if ($cells[0] -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $cells[0].Contains("..")) { [void]$problems.Add("line " + $n + " names '" + $cells[0] + "', which is not a plain file name in this folder"); continue }
         if ($cells[1] -cnotmatch '\A[0-9a-f]{64}\z') { [void]$problems.Add("line " + $n + " gives no SHA-256 for " + $cells[0] + ": 64 lowercase hex digits are wanted"); continue }
         if ($cells[2] -eq "") { [void]$problems.Add("line " + $n + " does not say what " + $cells[0] + " is or where it came from"); continue }
-        $key = $cells[0].ToLowerInvariant()
+        # A plain @{} ignores case, as the file system does: A.DLL and a.dll are one file listed twice.
+        $key = $cells[0]
         if ($seen.ContainsKey($key)) { [void]$problems.Add("line " + $n + " lists " + $cells[0] + " a second time"); continue }
         $seen[$key] = $true
         [void]$entries.Add([pscustomobject]@{ name = $cells[0]; sha256 = $cells[1]; what = $cells[2]; line = $n })
