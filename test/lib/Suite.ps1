@@ -98,7 +98,17 @@ function Add-HordeSuiteProblem {
 # guards each part:
 #
 #   Register-HordeSuiteSections -Ids @("controls", "rows")
-#   if (Enter-HordeSuiteSection "controls" "the real contract is valid") { ...checks... }
+#   if (Enter-HordeSuiteSection "controls" "the real contract is valid") {
+#       trap { Register-HordeSuiteError $_; continue }
+#       ...checks...
+#   }
+#
+# EVERY SECTION CARRIES THE TRAP LINE TOO. After an unexpected error the suite's own trap resumes at
+# the next statement of the SCRIPT, and a whole section is one statement: every check after the error
+# in that section would be skipped, so a mutant that throws first and fails a check later read as a
+# suite that broke, not a catch (measured on test-link-protocol's version section, 2026-10-07). A trap
+# inside the section resumes at the next statement of the section, as the suite's does at top level
+# (measured). test\test-suite.ps1 fails a section without one (test\lib\SuiteSections.ps1).
 #
 # HORDE_SECTIONS=<id,id> selects. The rules, each because the opposite would let a run lie:
 #   - A run that skipped any section exits 3, never 0, so no gate reads a part as the whole.
