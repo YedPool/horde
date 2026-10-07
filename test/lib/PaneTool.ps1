@@ -12,6 +12,8 @@
 #                                         the terminal; with exit, the line /exit ends it with code 0;
 #                                         with never, nothing does (a session that ignores a close).
 #   env-dump <out>                        write every environment variable, NAME=base64(value).
+#   say <base64>                          write those bytes, exactly, to standard output: what a
+#                                         terminal's command printed, for a test of how it is read.
 #   cli --no-auto-start <mode> ...        run <mode>: the tool standing in for the terminal's command,
 #                                         so a test sees what a terminal call's process received.
 #
@@ -51,6 +53,11 @@ public static class HordePaneTool {
                 if (l == null) { if (exitOn) return 0; System.Threading.Thread.Sleep(1000); continue; }
                 if (exitOn && l.Trim() == "/exit") { Console.WriteLine("PANETOOL-EXIT"); return 0; }
             }
+        }
+        if (args[0] == "say" && args.Length == 2) {
+            byte[] bytes = Convert.FromBase64String(args[1]);
+            using (Stream o = Console.OpenStandardOutput()) { o.Write(bytes, 0, bytes.Length); }
+            return 0;
         }
         if (args[0] == "env-dump" && args.Length == 2) {
             var lines = new List<string>();
