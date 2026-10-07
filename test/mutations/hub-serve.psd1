@@ -110,6 +110,25 @@
         @{ Name = "held-mirror-not-told-apart"
            Find = '$u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld'
            Replace = '$u | Add-Member -NotePropertyName held -NotePropertyValue $false' }
+        # --- re-review of PR #88: held means a sharing or lock violation; the reviewer's three survivors ---
+        @{ Name = "denied-read-as-held"
+           Find = '$isHeld = ($inner -is [System.IO.IOException] -and ($inner.HResult -eq $script:HordeHubSharingViolation -or $inner.HResult -eq $script:HordeHubLockViolation))'
+           Replace = '$isHeld = ($inner -is [System.UnauthorizedAccessException] -or $inner -is [System.IO.IOException])' }
+        @{ Name = "refused-mirror-unsaid"
+           Find = 'if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["refused"] -and $old.refused -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refusal-cause-dropped"
+           Find = '$u | Add-Member -NotePropertyName cause -NotePropertyValue $inner.Message'
+           Replace = '$u | Add-Member -NotePropertyName cause -NotePropertyValue "it could not be opened"' }
+        @{ Name = "lock-shared-readwrite"
+           Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) }'
+           Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }
+        @{ Name = "open-not-bounded"
+           Find = '-TimeoutMs ([Math]::Max(1, (Get-HordeHubWaitMs -Bound $bound -TimeoutMs ([Math]::Min($TimeoutMs, 15000)))))'
+           Replace = '-TimeoutMs ([Math]::Min($TimeoutMs, 15000))' }
+        @{ Name = "aside-failure-throws"
+           Find = 'catch { return ("it could not be kept aside, and is overwritten: " + $_.Exception.Message) }'
+           Replace = 'catch { throw }' }
         @{ Name = "aside-copies-uncapped"
            Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
            Replace = '$old = @()' }

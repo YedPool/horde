@@ -315,6 +315,41 @@ try {
         Check (@(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1 -and [System.IO.File]::ReadAllText($f8Path) -ceq $marker) "and nothing is moved aside or written over it"
     }
 
+    # HELD IS A SHARING VIOLATION, NOTHING ELSE (re-review of PR #88, F1): any access or I/O failure
+    # was read as "held open by another process", so a mirror its ACL denied was skipped every round
+    # under that wrong reason (probe P7acl: 3 of 3 rounds). Only ERROR_SHARING_VIOLATION or
+    # ERROR_LOCK_VIOLATION is held; anything else is refused, naming its own cause, and left as it is.
+    $none = [System.IO.File]::Open($f8Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+    try { $r = Read-HordeHubMirror -Path $f8Path -DeviceId $device -Contract $contract } finally { $none.Dispose() }
+    Check ($r.state -ceq "unknown" -and $r.held -eq $true -and $r.refused -eq $false) "CONTROL: a mirror held with no sharing reads as held, not refused"
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $denyRule = New-Object System.Security.AccessControl.FileSystemAccessRule($me, "ReadData", "Deny")
+    $acl = Get-Acl -LiteralPath $f8Path
+    $acl.AddAccessRule($denyRule)
+    Set-Acl -LiteralPath $f8Path -AclObject $acl
+    try {
+        $r = Read-HordeHubMirror -Path $f8Path -DeviceId $device -Contract $contract
+        $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000)
+    } finally {
+        $acl = Get-Acl -LiteralPath $f8Path
+        [void]$acl.RemoveAccessRule($denyRule)
+        Set-Acl -LiteralPath $f8Path -AclObject $acl
+    }
+    Check ($r.state -ceq "unknown" -and $r.held -eq $false -and $r.refused -eq $true) ("a mirror its ACL denies is refused, not held (held=" + $r.held + ", refused=" + $r.refused + ")")
+    $deniedOut = @($rounds[0].outcomes | Where-Object { $_ -clike "*its mirror could not be opened:*denied*left as it is*" })
+    Check ($deniedOut.Count -eq 1 -and @($rounds[0].outcomes | Where-Object { $_ -clike "*held open*" }).Count -eq 0) ("and the round names that cause, never 'held open' (" + ($rounds[0].outcomes -join " | ") + ")")
+    Check (@(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1 -and [System.IO.File]::ReadAllText($f8Path) -ceq $marker) "and the denied mirror is neither moved aside nor written over"
+
+    # A MOVE ASIDE THAT FAILS IS SAID, NOT THROWN (re-review of PR #88, F2): a reader sharing read but
+    # not delete lets the hub read the bad file and refuses the rename. The round says the copy could
+    # not be kept aside; it is never a bare failure that hides why.
+    [System.IO.File]::WriteAllText($f8Path, "garbage held by a reader")
+    $reader = [System.IO.File]::Open($f8Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try { $rounds = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f8 -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000) } finally { $reader.Dispose() }
+    Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*could not be kept aside*" }).Count -eq 1) ("a mirror that cannot be renamed aside is said so (" + ($rounds[0].outcomes -join " | ") + ")")
+    Check ([System.IO.File]::ReadAllText($f8Path) -ceq "garbage held by a reader" -and @(Get-ChildItem -LiteralPath $f8 -File -Filter "*.bad-*").Count -eq 1) "CONTROL: the rename really failed: the file is where it was, and no new copy is aside"
+    [System.IO.File]::WriteAllText($f8Path, $marker)
+
     # KEPT ASIDE, BUT NOT WITHOUT END (review of PR #88): a mirror unreadable round after round left one
     # more copy each round (5 rounds, 5 copies). The newest three are kept; older ones are removed, said so.
     foreach ($i in 1..5) {
@@ -343,6 +378,16 @@ try {
     Check ($rounds.Count -eq 1 -and @(Get-ChildItem -LiteralPath $f9Mirror -File).Count -eq 1) "CONTROL: with the lock free, the same call runs its round"
     $again = $null; try { $again = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) } catch { } finally { if ($null -ne $again) { $again.Dispose() } }
     Check ($null -ne $again) "and it lets the lock go when it returns"
+    # TWO HUBS, NOT A HUB AND A STRANGER (re-review of PR #88, F2): the check above holds the lock with
+    # no sharing itself, which refuses any second open whatever share the hub asks for. Here the first
+    # holder is the hub's own Enter-HordeHubLock. Sharing is decided per handle, the same within one
+    # process as across two (a lock taken this way refused 7 of 8 processes in the review's probe).
+    $first = Enter-HordeHubLock -Path $lockPath
+    $busy = ""
+    try { $null = Invoke-HordeHubServe -Nodes @(Entry -Transport $null -TransportError "no transport") -Root $f9Mirror -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 } catch { $busy = $_.Exception.Message } finally { $first.Dispose() }
+    Check ($busy -clike "*another horde hub serve is running*") ("while one hub holds the run lock, a second hub is refused (" + $busy + ")")
+    $second = $null; try { $second = Enter-HordeHubLock -Path $lockPath } finally { if ($null -ne $second) { $second.Dispose() } }
+    Check ($null -ne $second) "CONTROL: once the first hub lets it go, the second takes it"
     $denied = Join-Path $f9 "denied"
     New-Item -ItemType Directory -Path (Join-Path $denied "serve.lock") -Force | Out-Null
     $other = ""
@@ -368,6 +413,17 @@ try {
     $rounds = @(Invoke-HordeHubServe -Nodes @((Entry -Expect $slowDev -At $slowDev)) -Root $slowRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 -NodeBudgetMs 15000)
     $null = Stop-Node $slow
     Check (@($rounds[0].outcomes | Where-Object { $_ -clike "*heard, 2 session(s)*" }).Count -eq 1) ("CONTROL: the same slow node inside a bound it fits is heard (" + ($rounds[0].outcomes -join " | ") + ")")
+
+    # OPENING COUNTS AGAINST THE BOUND (re-review of PR #88, F2): the open is the first wait of a node's
+    # part, so it is asked to wait no longer than the bound has left, not the 15 s open timeout.
+    $asked = @{ ms = -1 }
+    $slowOpen = $mem.PSObject.Copy()
+    $slowOpen.open = { param($Endpoint, $TimeoutMs) $asked.ms = $TimeoutMs; throw ("no node answered within " + $TimeoutMs + " ms") }.GetNewClosure()
+    $null = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $slowOpen) -Root $slowRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 -NodeBudgetMs 2000)
+    Check ($asked.ms -gt 0 -and $asked.ms -le 2000) ("with a 2 s bound, the open is asked to wait at most 2000 ms (" + $asked.ms + ")")
+    $asked.ms = -1
+    $null = @(Invoke-HordeHubServe -Nodes @(Entry -Transport $slowOpen) -Root $slowRoot -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 0 -TimeoutMs 30000 -NodeBudgetMs 0)
+    Check ($asked.ms -eq 15000) ("CONTROL: with no bound, the same open is asked to wait its own 15000 ms (" + $asked.ms + ")")
 
     Write-Host ""
     Write-Host "--- the registry ---" -ForegroundColor Cyan
