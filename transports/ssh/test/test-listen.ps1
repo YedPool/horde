@@ -30,6 +30,7 @@ Check ((Keys @(('command="' + $attach + '",restrict,expiry-time="20991231" ' + $
 Check ((Keys @($good, ('command="' + (Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $other) + '",restrict ' + $pub.Replace("AAAA", "BBBB") + " horde-device-" + $other))).Count -eq 0) "two devices, each forced to its own attach"
 $cases = [ordered]@{
     "a bare key, with no command= (it would be a shell)" = ($pub + " horde-device-" + $dev)
+    "restrict with no command=" = ("restrict " + $pub + " horde-device-" + $dev)
     "a key with command= but no restrict" = ('command="' + $attach + '" ' + $pub + " horde-device-" + $dev)
     "restrict before command=" = ('restrict,command="' + $attach + '" ' + $pub + " horde-device-" + $dev)
     "a key forced to another device's attach than the one it names" = ('command="' + (Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $other) + '",restrict ' + $pub + " horde-device-" + $dev)

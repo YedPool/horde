@@ -93,7 +93,7 @@ try {
         $r = Start-Listen -Port $p0 -Seconds 20
         $err = $r.process.StandardError.ReadToEndAsync(); $null = $r.process.StandardOutput.ReadToEndAsync()
         $ended = $r.process.WaitForExit((Left 60000))
-        Check ($ended -and $r.process.ExitCode -eq 1 -and "$($err.Result)" -like "*line 2 of authorized_keys*") ("a key line without command= makes horde listen exit 1, naming the line (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + "$($err.Result)".Trim() + ")")
+        Check ($ended -and $r.process.ExitCode -eq 1 -and (Get-ListenText $err) -like "*line 2 of authorized_keys*") ("a key line without command= makes horde listen exit 1, naming the line (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $err).Trim() + ")")
         Check ((Get-ListenListeners -Port $p0) -eq 0 -and @(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -eq 0) "and no sshd was started: nothing listens on its port"
 
         Write-Host ""
@@ -110,9 +110,22 @@ try {
         Check ($cfg.Contains($hh.Replace('\', '/') + "/hub/listen/authorized_keys") -and -not $cfg.ToLowerInvariant().Contains("programdata") -and -not $cfg.Contains(".ssh")) "and every file it names is under Horde's home: never ProgramData\ssh, never ~/.ssh"
         $out = $r.process.StandardOutput.ReadToEndAsync(); $err = $r.process.StandardError.ReadToEndAsync()
         $ended = $r.process.WaitForExit((Left 60000))
-        Check ($ended -and $r.process.ExitCode -eq 0 -and "$($out.Result)" -like ("*listener on 127.0.0.1:" + $p1 + " stopped*")) ("after -Seconds it stops and exits 0 (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + "$($out.Result)".Trim() + " " + "$($err.Result)".Trim() + ")")
+        Check ($ended -and $r.process.ExitCode -eq 0 -and (Get-ListenText $out) -like ("*listener on 127.0.0.1:" + $p1 + " stopped*")) ("after -Seconds it stops and exits 0 (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $out).Trim() + " " + (Get-ListenText $err).Trim() + ")")
         Start-Sleep -Milliseconds 500
         Check ((Get-ListenListeners -Port $p1) -eq 0 -and @(Get-ListenProcesses -Marker $work | Where-Object { $_.Name -ieq "sshd.exe" }).Count -eq 0) "and its sshd is gone: nothing listens on its port"
+        # Stop itself, not the caller's exit: when horde listen exits, its job's last handle closes and
+        # ends sshd whatever Stop did (a mutant that skipped Stop's work survived that case, 2026-10-07),
+        # so here the listener is started and stopped in this process, which lives on.
+        $ad = Get-HordeListenerAdapter -Name "ssh"
+        $p1b = Get-ListenFreePort; [void]$ports.Add($p1b)
+        $run = Start-HordeListener -Adapter $ad.value -HordeHome $hh -HubId $hubId -Root $root -Port $p1b
+        Check ($run.state -ceq "known" -and (Get-ListenListeners -Port $p1b) -ge 1) ("CONTROL: started in this process, it listens on " + $p1b + " " + $run.reason)
+        if ($run.state -ceq "known") {
+            $null = Stop-HordeListener -Running $run.value
+            $d = [datetime]::UtcNow.AddSeconds(10)
+            while (((Get-ListenListeners -Port $p1b) -gt 0 -or -not $run.value.listener.process.HasExited) -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 200 }
+            Check ($run.value.listener.process.HasExited -and (Get-ListenListeners -Port $p1b) -eq 0) "Stop ends sshd while its caller lives on: nothing listens on its port"
+        }
 
         Write-Host ""
         Write-Host "--- a node dials in: the session reaches the hub's pipe, bound to the key's device ---" -ForegroundColor Cyan
@@ -225,7 +238,7 @@ try {
         $fwd = Start-RawSsh -Extra @("-W", ("127.0.0.1:" + $p2)) -After @()
         $ferr = $fwd.process.StandardError.ReadToEndAsync(); $null = $fwd.process.StandardOutput.ReadToEndAsync()
         $fended = $fwd.process.WaitForExit((Left 20000))
-        Check ($fended -and $fwd.process.ExitCode -ne 0 -and "$($ferr.Result)" -match "(?i)prohibited|forward|refused") ("a stdio forward (-W) is refused (exit " + $(if ($fended) { $fwd.process.ExitCode } else { "none" }) + ": " + "$($ferr.Result)".Trim() + ")")
+        Check ($fended -and $fwd.process.ExitCode -ne 0 -and (Get-ListenText $ferr) -match "(?i)prohibited|forward|refused") ("a stdio forward (-W) is refused (exit " + $(if ($fended) { $fwd.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $ferr).Trim() + ")")
         $nobody = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 500
         Check ($nobody.state -ceq "unknown") "and it reached nothing: the hub's pipe saw no session from it"
 

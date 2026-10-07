@@ -104,3 +104,12 @@ function Get-ListenProcesses {
     param([Parameter(Mandatory = $true)][string]$Marker)
     return @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue | Where-Object { "$($_.CommandLine)".IndexOf($Marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.ProcessId -ne $PID })
 }
+
+function Get-ListenText {
+    # What -Task (a ReadToEndAsync) read, waiting at most -Ms. A pipe another process still holds never
+    # ends: a mutant that left sshd outside its job kept horde listen's stdout open through the handle
+    # sshd inherited, and an unbounded .Result hung the suite for 900 s (2026-10-07).
+    param([Parameter(Mandatory = $true)]$Task, [int]$Ms = 5000)
+    if ($Task.Wait($Ms)) { return ("" + $Task.Result) }
+    return ("(the stream was still open after " + $Ms + " ms: another process holds it)")
+}

@@ -24,9 +24,11 @@
 # admitted key without them would be a shell. The same measurement showed the command the client
 # asks for is never run (the forced one ran instead).
 #
-# HORDE'S HOME REACHES THE SESSION THROUGH SetEnv. A session's environment is built by sshd, not
-# inherited from `horde listen`; SetEnv HORDE_HOME in the configuration gives attach the listener's own
-# home, so it finds the same device id and so the same hub pipe (measured 2026-10-07).
+# HORDE'S HOME REACHES THE SESSION, AND SetEnv SAYS SO. attach must use the listener's own home, to
+# find the same device id and so the same hub pipe. Measured 2026-10-07: SetEnv HORDE_HOME reaches the
+# session; and a session of this non-SYSTEM sshd also inherits `horde listen`'s environment, so the
+# live suite passed with SetEnv removed. SetEnv stays so the home does not rest on an inheritance
+# nothing documents (the sshd service, as SYSTEM, builds the user's environment afresh; unmeasured here).
 #
 # ONE PROGRAM, STARTED ONE WAY (transports/ssh/test/ExecGuard.ps1): Start-HordeSshServer starts the
 # System32 sshd.exe, named by its absolute path, with one fixed argv - -D -e -f and the configuration

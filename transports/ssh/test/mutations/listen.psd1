@@ -1,8 +1,8 @@
 # Mutations of the hub's listener (transports/ssh/Listen.ps1, remote plan R17a): what it admits and the
 # configuration it writes, both decided before anything starts. Run:
 #   powershell -File tools\Mutate.ps1 -Spec transports\ssh\test\mutations\listen.psd1
-# transports\ssh\test\test-listen.ps1 (pure, no server) must fail for each. What only a running sshd
-# shows is listen-live.psd1.
+# transports\ssh\test\test-listen.ps1 (pure, no server) must fail for each, except the one declared to
+# survive. What only a running sshd shows is listen-live.psd1.
 @{
     Target = "transports\ssh\Listen.ps1"
     Suite  = "transports\ssh\test\test-listen.ps1"
@@ -16,7 +16,9 @@
            Replace = '",restrict(?:,[^ ]+)? ssh-ed25519' }
         @{ Name = "command-optional"
            Find = "'\Acommand=""(?<cmd>[^""]+)"",restrict"
-           Replace = "'\A(?:command=""(?<cmd>[^""]+)"",)?restrict" }
+           Replace = "'\A(?:command=""(?<cmd>[^""]+)"",)?restrict"
+           Expect = "survives"
+           Reason = "equivalent: a line with restrict and no command= still fails the forced-command comparison (an empty command is never this Horde's attach), which the case 'restrict with no command=' shows and forced-command-not-compared holds" }
         @{ Name = "forced-command-not-compared"
            Find = 'if ($m.Groups["cmd"].Value -cne'
            Replace = 'if ($false -and $m.Groups["cmd"].Value -cne' }
