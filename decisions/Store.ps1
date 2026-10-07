@@ -203,6 +203,9 @@ function Remove-HordeDecisionStoreLeftovers {
         try {
             # NEVER THROUGH A LINK: the claim below deletes what it opens, and an open by name follows a
             # link to its target. Judged by the entry's own attributes, which are not its target's.
+            # NOT CLOSED: a link swapped in between this check and the open below is still followed.
+            # Closing that needs an open by handle that refuses reparse points, which FileStream cannot
+            # do. Whoever can swap a link here can already write to the store folder (review of PR 110).
             if (Test-HordeDecisionStoreLink -Path $leftover) { continue }
             if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalSeconds -lt $minAgeSeconds) { continue }
             # CLAIMED, NOT JUST DELETED. A delete by name succeeds on a file its writer holds with

@@ -58,7 +58,9 @@
 #     exactly right.
 # What this asks of whoever adds a kind: never reuse a kind's name for another meaning; never make an
 # existing kind's record mean something only together with a later kind's (an older version sees the
-# first without the second); and keep the envelope as it is - a change to the envelope is a new
+# first without the second); never give a later kind a data member named "number" that is anything but
+# a question number, or this version raises its floor over it and hides questions the later version
+# numbered; and keep the envelope as it is - a change to the envelope is a new
 # schema version, which an older version reads as unreadable, with the conservative rule below.
 # A RECORD THAT IS DAMAGED KEEPS THE CONSERVATIVE RULE: torn, missing, held, not this schema's
 # envelope, out of its place, or of a KNOWN kind with data that is not that kind's. Any of those may
