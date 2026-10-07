@@ -73,10 +73,5 @@
         @{ Name = "the-windows-are-read-once"
            Find = 'if ($null -ne $Windows) { $after = @(& $Windows ([long]$target.value.guiPid)) }'
            Replace = 'if ($null -ne $Windows) { $after = @() }' }
-        @{ Name = "another-window-class-counts"
-           Find = '$script:HordeWeztermWindowClass = "org.wezfurlong.wezterm"'
-           Replace = '$script:HordeWeztermWindowClass = ""'
-           Expect = "survives"
-           Reason = "the window class is read only when a real process's windows are listed, which this suite never does; test/e2e/e2e-decisions-window.ps1 finds a real terminal window by it" }
     )
 }
