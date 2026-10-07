@@ -51,6 +51,7 @@
 #   tickMs     how often onTick runs; with none, the module's setting (250 ms)
 #   findings   what was wrong in the person's settings file, when the spec read it itself: sentences,
 #              which a surface adds to the errors its caller reads
+#   errorsKept how many of its own errors the surface keeps (the module's setting, 50)
 #   state      anything: handed back, untouched, to every callback
 #   onOpened   param($Window, $State) once the page's engine is up; onTick the same, every tickMs
 #   onClosed   param($Window, $State) as the window goes
@@ -82,7 +83,7 @@
 # the native window handle (capability window.native), sync an object events can be marshalled through
 # to the window's own thread, errors the list the surface adds to when a callback or a message fails
 # (a failure inside a window has no console to be printed on, so a caller that reports must be able
-# to read it), and the rest are script blocks. With the capability picture there is one more, capture:
+# to read it; it holds the last errorsKept of them, oldest first), and the rest are script blocks. With the capability picture there is one more, capture:
 # & $Window.capture <absolute path.png> asks the surface to save a picture of the page as it is drawn
 # now, and answers whether it was asked; the file appears, whole, a moment later. ONLY HORDE CAN ASK:
 # capture is not a request, and no message from the page reaches it. A CALLBACK TAKES WHAT IT NEEDS FROM $State,
@@ -133,6 +134,7 @@ $script:HordeSurfaceSettings = New-HordeModuleSettings -Module "surface" -Settin
     @{ name = "messageChars"; kind = "whole"; default = 65536; min = 1024; max = 1048576; what = "The most characters one message from a page may be; a longer one is refused before it is read." }
     @{ name = "argumentChars"; kind = "whole"; default = 16384; min = 64; max = 1048576; what = "The longest text one argument of a request may hold, unless the request itself says less." }
     @{ name = "refusalsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many refusals a bridge remembers; every one is counted, the oldest are dropped." }
+    @{ name = "errorsKept"; kind = "whole"; default = 50; min = 1; max = 1000; what = "How many of its own errors a surface keeps for its caller to read; the oldest are dropped." }
 )
 
 # The mount every surface serves itself (header, WHERE A PAGE FINDS A FILE).
@@ -410,6 +412,16 @@ function Add-HordeSurfaceRefusal {
     while ($Bridge.refusals.Count -gt $Bridge.limits.refusalsKept) { $Bridge.refusals.RemoveAt(0) }
 }
 
+function Add-HordeSurfaceError {
+    # Add one line to the list of errors a surface keeps for its caller, and drop the oldest past
+    # -Kept (a spec's errorsKept). A surface adds every error this way: something that fails on every
+    # tick must not grow the process for as long as the window is open. An empty line is no error.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Errors, [AllowNull()][AllowEmptyString()][string]$Text, [Parameter(Mandatory = $true)][int]$Kept)
+    if ("$Text" -eq "") { return }
+    [void]$Errors.Add($Text)
+    while ($Errors.Count -gt $Kept) { $Errors.RemoveAt(0) }
+}
+
 function Test-HordeSurfaceArguments {
     # Why -Given is not what -Request takes, in words, or "" when it is. -Checked is filled with the
     # arguments as a plain table for the handler. A name is never repeated back unless it is one the
@@ -548,7 +560,7 @@ function New-HordeSurfaceSpec {
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
         hidden = [bool]$Hidden; companion = [bool]$Companion; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
-        findings = @($findings)
+        findings = @($findings); errorsKept = [int]$Settings.values.errorsKept
     }
 }
 

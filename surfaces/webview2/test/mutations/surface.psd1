@@ -137,11 +137,14 @@
            Replace = '' }
         # --- the handlers
         @{ Name = "a-failed-tick-closes-the-window-unrecorded"
-           Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { [void]$s.errors.Add("a tick failed: " + $_.Exception.Message) }'
+           Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { Add-HordeWebView2Error -Text ("a tick failed: " + $_.Exception.Message) }'
            Replace = 'try { & $s.spec.onTick $s.window $s.spec.state } catch { }' }
         @{ Name = "the-tick-is-not-handed-the-callers-state"
            Find = 'try { & $s.spec.onTick $s.window $s.spec.state } catch {'
            Replace = 'try { & $s.spec.onTick $s.window $null } catch {' }
+        @{ Name = "the-list-of-errors-grows-for-ever"
+           Find = 'Add-HordeSurfaceError -Errors $s.errors -Text $Text -Kept $s.spec.errorsKept'
+           Replace = '[void]$s.errors.Add($Text)' }
         # --- what the page can do
         @{ Name = "developer-tools-left-on"
            Find = '$core.Settings.AreDevToolsEnabled = $false'

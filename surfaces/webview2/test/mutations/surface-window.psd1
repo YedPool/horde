@@ -41,7 +41,7 @@
            Find = 'if ($script:HordeWebView2EngineOwnPaths -ccontains $path) {'
            Replace = 'if ($false) {' }
         @{ Name = "what-was-wrong-in-the-settings-file-reaches-nobody"
-           Find = 'foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale -Spec $Spec)) { [void]$errors.Add($note) }'
+           Find = 'foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale -Spec $Spec)) { Add-HordeSurfaceError -Errors $errors -Text $note -Kept $Spec.errorsKept }'
            Replace = '' }
         # --- what the real engine does with them
         @{ Name = "a-new-window-opens-in-the-real-engine"

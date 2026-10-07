@@ -229,6 +229,14 @@ function Get-HordeWebView2RuntimeVersion {
     try { return ("" + [Microsoft.Web.WebView2.Core.CoreWebView2Environment]::GetAvailableBrowserVersionString()) } catch { return "" }
 }
 
+function Add-HordeWebView2Error {
+    # One more line for the caller to read, the oldest dropped past what the spec keeps (surfaces/Port.ps1).
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return }
+    Add-HordeSurfaceError -Errors $s.errors -Text $Text -Kept $s.spec.errorsKept
+}
+
 function Stop-HordeWebView2 {
     # Close the window because it cannot go on; the first reason given is the one reported.
     param([Parameter(Mandatory = $true)][string]$Reason)
@@ -332,7 +340,7 @@ function Invoke-HordeWebView2Resource {
         # DEFAULT DENY HOLDS WHEN THIS CODE FAILS: the load is still answered with a refusal, and what
         # went wrong is kept for the caller.
         try { $What.Response = $environment.CreateWebResourceResponse($null, 403, "Refused", "") } catch { }
-        [void]$s.errors.Add("a file the page asked for could not be served: " + $_.Exception.Message)
+        Add-HordeWebView2Error -Text ("a file the page asked for could not be served: " + $_.Exception.Message)
     }
 }
 
@@ -369,7 +377,7 @@ function Invoke-HordeWebView2Message {
     try {
         $reply = Receive-HordeWebView2Message -Json ("" + $What.WebMessageAsJson) -Source ("" + $What.Source)
         if ("$reply" -ne "") { Send-HordeWebView2Json -Json $reply }
-    } catch { [void]$s.errors.Add("a message from the page could not be answered: " + $_.Exception.Message) }
+    } catch { Add-HordeWebView2Error -Text ("a message from the page could not be answered: " + $_.Exception.Message) }
 }
 
 function Start-HordeWebView2Capture {
@@ -381,7 +389,7 @@ function Start-HordeWebView2Capture {
     param([AllowEmptyString()][string]$Path)
     $s = $script:HordeWebView2
     if ($null -eq $s -or -not $s.opened -or $null -eq $s.view -or $null -eq $s.view.CoreWebView2 -or $null -ne $s.capture) { return $false }
-    if (-not [System.IO.Path]::IsPathRooted("$Path") -or [System.IO.Path]::GetExtension("$Path") -ine ".png") { [void]$s.errors.Add("a picture is saved at an absolute path ending .png, and none was made"); return $false }
+    if (-not [System.IO.Path]::IsPathRooted("$Path") -or [System.IO.Path]::GetExtension("$Path") -ine ".png") { Add-HordeWebView2Error -Text ("a picture is saved at an absolute path ending .png, and none was made"); return $false }
     $stream = $null
     try {
         $temp = $Path + "." + $PID + ".tmp"
@@ -391,7 +399,7 @@ function Start-HordeWebView2Capture {
         return $true
     } catch {
         if ($null -ne $stream) { $stream.Dispose() }
-        [void]$s.errors.Add("a picture could not be asked for: " + $_.Exception.Message)
+        Add-HordeWebView2Error -Text ("a picture could not be asked for: " + $_.Exception.Message)
         return $false
     }
 }
@@ -408,7 +416,7 @@ function Complete-HordeWebView2Capture {
         if (Test-Path -LiteralPath $c.path -PathType Leaf) { [System.IO.File]::Replace($c.temp, $c.path, [NullString]::Value) } else { [System.IO.File]::Move($c.temp, $c.path) }
         $s.pictures = [int]$s.pictures + 1
     } catch {
-        [void]$s.errors.Add("a picture could not be saved: " + $_.Exception.Message)
+        Add-HordeWebView2Error -Text ("a picture could not be saved: " + $_.Exception.Message)
         try { if (Test-Path -LiteralPath $c.temp) { [System.IO.File]::Delete($c.temp) } } catch { }
     }
 }
@@ -420,13 +428,13 @@ function Invoke-HordeWebView2Tick {
     if ($null -eq $s.spec.onTick) { return }
     # A tick that throws is recorded and the window stays: it will be asked again a moment later, and
     # a window that closed on one bad tick would lose what the person was reading.
-    try { & $s.spec.onTick $s.window $s.spec.state } catch { [void]$s.errors.Add("a tick failed: " + $_.Exception.Message) }
+    try { & $s.spec.onTick $s.window $s.spec.state } catch { Add-HordeWebView2Error -Text ("a tick failed: " + $_.Exception.Message) }
 }
 
 function Invoke-HordeWebView2Closed {
     $s = $script:HordeWebView2
     if ($null -eq $s -or $null -eq $s.spec.onClosed) { return }
-    try { & $s.spec.onClosed $s.window $s.spec.state } catch { [void]$s.errors.Add("closing failed: " + $_.Exception.Message) }
+    try { & $s.spec.onClosed $s.window $s.spec.state } catch { Add-HordeWebView2Error -Text ("closing failed: " + $_.Exception.Message) }
 }
 
 function Get-HordeWebView2Handlers {
@@ -515,7 +523,7 @@ function Open-HordeWebView2Surface {
         opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
         errors = $errors
     }
-    foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale -Spec $Spec)) { [void]$errors.Add($note) }
+    foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale -Spec $Spec)) { Add-HordeSurfaceError -Errors $errors -Text $note -Kept $Spec.errorsKept }
     $state = $script:HordeWebView2
     try {
         $view.add_CoreWebView2InitializationCompleted($handlers.initialized)
