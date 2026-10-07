@@ -49,6 +49,9 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Fingerprints.ps1")
+# The one owner of "this process draws at each screen's real scale"; this adapter asks it and keeps
+# no call to Windows of its own for that.
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "platform\windows\Scale.ps1")
 
 $script:HordeWebView2Folder = $PSScriptRoot
 $script:HordeWebView2LibFolder = Join-Path $PSScriptRoot "lib"
@@ -60,8 +63,8 @@ $script:HordeWebView2 = $null
 # minimised window, so nothing is drawn where a person can see it.
 $script:HordeWebView2HiddenAt = -32000
 
-# The window: a form that can be shown without taking the keyboard, and the one call that makes this
-# process see real pixels on every screen. Compiled once per process.
+# The window: a form that can be shown without taking the keyboard, and how it is brought forward.
+# Compiled once per process.
 $script:HordeWebView2NativeSource = @'
 using System;
 using System.Runtime.InteropServices;
@@ -71,16 +74,9 @@ public class HordeSurfaceForm : Form {
     protected override bool ShowWithoutActivation { get { return Quiet; } }
 }
 public static class HordeSurfaceNative {
-    [DllImport("user32.dll", SetLastError = true)] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
-    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. False when the process already has an awareness, or
-    // on a Windows older than 10 1703, where the entry point is missing: the window then still works,
-    // drawn by Windows at the wrong scale.
-    public static bool PerMonitorDpi() {
-        try { return SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch (EntryPointNotFoundException) { return false; }
-    }
     public static void BringForward(IntPtr h) {
         if (IsIconic(h)) { ShowWindow(h, 9); }   // SW_RESTORE
         SetForegroundWindow(h);
@@ -96,6 +92,17 @@ function Test-HordeWebView2Address {
     $parsed = $null
     if (-not [System.Uri]::TryCreate("$Uri", [System.UriKind]::Absolute, [ref]$parsed)) { return $false }
     return [bool]($parsed.Scheme -ceq "https" -and $parsed.Host -ceq $StartHost.ToLowerInvariant() -and $parsed.UserInfo -eq "" -and $parsed.IsDefaultPort)
+}
+
+function Get-HordeWebView2ScaleNote {
+    # What to tell the caller about -Scale, the answer of Enable-HordeWindowsRealScale: "" when the
+    # process draws at the screen's real scale, else one sentence. DECIDED ON realScale, never on
+    # whether the call was taken: "already" can be a process that is not aware, and unknown is not yes
+    # (platform/windows/Scale.ps1). The window still opens; its text is then drawn soft, which a
+    # person sees and a report should be able to explain.
+    param([Parameter(Mandatory = $true)]$Scale)
+    if ("$($Scale.realScale)" -ceq "yes") { return "" }
+    return ("the window is not known to be drawn at the screen's real scale (awareness " + $Scale.awareness + "), so its text may be soft: " + $Scale.reason)
 }
 
 function Get-HordeWebView2RuntimeProblem {
@@ -357,8 +364,8 @@ function Open-HordeWebView2Surface {
     $noEngine = Get-HordeWebView2RuntimeProblem -Version (Get-HordeWebView2RuntimeVersion)
     if ($noEngine -ne "") { return (& $fail $noEngine) }
 
-    # Before the first window of the process exists, or Windows will not take it.
-    $realPixels = [HordeSurfaceNative]::PerMonitorDpi()
+    # Before the first window of the process exists, which is when Windows documents the call.
+    $scale = Enable-HordeWindowsRealScale
     $form = New-Object HordeSurfaceForm
     $form.Text = $Spec.title
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -393,9 +400,11 @@ function Open-HordeWebView2Surface {
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
         startHost = (Get-HordeSurfaceMountHost -Mount $Spec.startMount)
         window = (Get-HordeWebView2Window -Form $form -Errors $errors)
-        opened = $false; failure = ""; realPixels = $realPixels; capture = $null; pictures = 0
+        opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
         errors = $errors
     }
+    $scaleNote = Get-HordeWebView2ScaleNote -Scale $scale
+    if ($scaleNote -ne "") { [void]$errors.Add($scaleNote) }
     $state = $script:HordeWebView2
     try {
         $view.add_CoreWebView2InitializationCompleted($handlers.initialized)
