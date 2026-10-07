@@ -159,17 +159,14 @@ try {
         & $pin ($hostPub[0] + " " + $hostPub[1])
         $env:HORDE_HOME = $hh
 
-        # THROUGH THE ADAPTER'S OWN OPEN, then the port's link: the port refuses to dial a transport
-        # whose dial.out is "unverified" (transports/ssh/capabilities.json), which it is until a live
-        # link has been shown - this suite is that showing, so it cannot ask the port's permission
-        # first. Everything after the open (Send, Receive, Close) is the port's own.
+        # THROUGH THE PORT: dial.out and auth.peer are yes since R17c-3 (shown live by
+        # test/test-transport-conformance.ps1 against transports/ssh/test/FarEnd.ps1), so this suite
+        # asks the port for its links as every caller does.
         function Open-Link {
-            $o = & $t.open $endpoint (Left 15000)
-            if (-not $o.ok) { Write-Host ("         no link: " + $o.reason) -ForegroundColor DarkYellow; return $null }
-            return (New-HordeLink -Transport $t -Role "node" -Endpoint $endpoint -Channel $o.channel -Peer $o.peer)
+            $o = Open-HordeTransportLink -Transport $t -Endpoint $endpoint -Role "node" -TimeoutMs (Left 15000)
+            if ($o.state -cne "known") { Write-Host ("         no link: " + $o.reason) -ForegroundColor DarkYellow; return $null }
+            return $o.value
         }
-        $refusedByPort = Open-HordeTransportLink -Transport $t -Endpoint $endpoint -Role "node" -TimeoutMs 1000
-        Check ($refusedByPort.state -ceq "unknown" -and "$($refusedByPort.reason)" -clike "*dial.out is unverified*") "CONTROL: the port itself still refuses to dial ssh, its dial.out unverified; this suite opens through the adapter"
 
         Write-Host ""
         Write-Host "--- through the transport: the forced command, frames both ways ---" -ForegroundColor Cyan
