@@ -325,6 +325,53 @@ Check ($swept -eq 2 -and -not (Test-Named $asScanner) -and -not (Test-Named $asR
 Check ((Get-Names $s) -ceq "0000000001.json,0000000002.json") ("and the records are untouched: a record is never a candidate, at any age (" + (Get-Names $s) + ")")
 
 Write-Host ""
+Write-Host "--- a link named like a leftover is never followed, never removed, and is reported ---" -ForegroundColor Cyan
+# The claim deletes what it opens when it closes, and an open by name FOLLOWS a symbolic link: closing
+# it deleted the link's TARGET and left the link. Observed in review on 2026-10-07: two links named like
+# leftovers, one to record 1 and one to a file outside the store; the sweep said "removed: 2", record 1
+# and the outside file were gone, the links were still there, nothing was reported, and the next
+# question was given number 1 again. So a candidate that is a reparse point - judged by the entry
+# itself, never by its target - is not claimed, and the list names it.
+# Making a file link needs a right Windows gives with developer mode or to an administrator; a machine
+# without it cannot run these checks, and they fail saying so rather than pass on nothing.
+function New-FileLink { param([string]$Link, [string]$Target) $said = (& cmd.exe /c mklink "$Link" "$Target" 2>&1 | Out-String); return ([System.IO.File]::Exists($Link) -and (([System.IO.File]::GetAttributes($Link) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)), $said }
+$s = New-TestStore
+$null = Add-Safely $s 1 '{"n":1}'
+$recordBytes = Base64 (Join-Path $s "0000000001.json")
+$outsideFolder = Join-Path $script:work "outside-the-store"
+New-Item -ItemType Directory -Path $outsideFolder | Out-Null
+$outside = Join-Path $outsideFolder "someone-elses.txt"
+[System.IO.File]::WriteAllText($outside, "not the store's", $utf8)
+$toRecord = Join-Path $s ("writing-" + ("8" * 32) + ".part")
+$toOutside = Join-Path $s ("writing-" + ("6" * 32) + ".part")
+$made1 = New-FileLink $toRecord (Join-Path $s "0000000001.json")
+$made2 = New-FileLink $toOutside $outside
+Check ($made1[0] -and $made2[0]) ("two symbolic links named like leftovers were made in the store, one to record 1 and one to a file outside it (" + ("$($made1[1]) $($made2[1])").Trim() + ")")
+$plain = New-Leftover $s "e"
+$swept = Invoke-Sweep $s
+Check ([System.IO.File]::Exists((Join-Path $s "0000000001.json")) -and (Base64 (Join-Path $s "0000000001.json")) -ceq $recordBytes) "record 1 is still there, byte for byte: the sweep did not delete it through a link"
+Check ([System.IO.File]::Exists($outside) -and [System.IO.File]::ReadAllText($outside) -ceq "not the store's") "and the file outside the store is still there: nothing outside the store is ever deleted"
+Check ((Test-Named $toRecord) -and (Test-Named $toOutside)) "the links are left where they are: they are not this store's to remove"
+Check ($swept -eq 1 -and -not (Test-Named $plain)) ("CONTROL: the ordinary leftover beside them is removed, and the sweep counts only it (" + $swept + " removed)")
+$got = Get-Safely $s
+$linkStrays = @($got.strays | Where-Object { "$($_.file)" -like "writing-*" })
+Check ((Kinds $got) -ceq "ok" -and (@($linkStrays | ForEach-Object { $_.file } | Sort-Object) -join ",") -ceq (("writing-" + ("6" * 32) + ".part") + "," + ("writing-" + ("8" * 32) + ".part"))) ("the list names both links, so that somebody sees them (" + (@($got.strays | ForEach-Object { $_.file }) -join ",") + ")")
+Check (@($linkStrays | Where-Object { "$($_.reason)" -like "*link*" -and "$($_.reason)" -like "*never followed*" }).Count -eq 2) "and says what each is: a link, never followed and never removed"
+# A STORE FOLDER THAT IS ITSELF A LINK: the sweep claims nothing in it. A leftover seen through a
+# junction is a real file somewhere else, and this store cannot know whose.
+$realFolder = New-TestStore
+$null = Add-Safely $realFolder 1 '{"n":1}'
+$heldThere = New-Leftover $realFolder "f"
+$viaJunction = Join-Path $script:work "store-through-a-junction"
+$null = & cmd.exe /c mklink /J "$viaJunction" "$realFolder" 2>&1
+Check ([System.IO.Directory]::Exists($viaJunction) -and (([System.IO.File]::GetAttributes($viaJunction) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) "a junction to a store folder was made"
+$swept = Invoke-Sweep $viaJunction
+Check ($swept -eq 0 -and (Test-Named $heldThere)) ("a store folder that is a junction has nothing claimed in it: the leftover is still there (" + $swept + " removed)")
+$swept = Invoke-Sweep $realFolder
+Check ($swept -eq 1 -and -not (Test-Named $heldThere)) ("CONTROL: the same leftover, swept through the folder's own path, is removed (" + $swept + " removed)")
+[System.IO.Directory]::Delete($viaJunction)
+
+Write-Host ""
 Write-Host "--- THE ORDER OF A WRITE: whole and on disk, then named by a durable move, and only then 'created' ---" -ForegroundColor Cyan
 # The store's one move is core/FileAtomic.ps1's Move-HordeFileNewDurable. Here that function is
 # replaced by one that looks at the world at the moment it is called, then makes the real move (or

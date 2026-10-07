@@ -25,7 +25,8 @@
 #     races separate processes, and runs a control store that overwrites instead, to show the race can
 #     see a lost record.
 #   - A RECORD IS NEVER REWRITTEN AND NEVER DELETED. Nothing here opens a record for writing, and the
-#     only files deleted are this file's own temporary ones, by their name pattern.
+#     only files deleted are this file's own temporary ones, by their name pattern, and never through
+#     a link: a candidate that is a link, or a store folder that is one, has nothing claimed in it.
 #   - THE RECORD'S BYTES ARE ON DISK BEFORE IT TAKES ITS NAME: written through
 #     (FileOptions.WriteThrough, then Flush($true)), and only then moved.
 #   - A RECORD IS NEVER SEEN HALF-WRITTEN. It has no name until it is whole.
@@ -73,8 +74,14 @@
 # pruned after its replay window; a decision record is kept for good, so the damage is too.
 #
 # TEMPORARY FILES LEFT BY A KILLED WRITER are swept at the start of the next write. THE SWEEP'S
-# INVARIANT: a file is removed only when ALL THREE hold -
-#   (1) its name is exactly this file's own temporary pattern: a record is never a candidate;
+# INVARIANT: a file is removed only when ALL FOUR hold -
+#   (0) neither it nor the store folder is a link (a symbolic link, a junction, any reparse point),
+#       judged by the entry's own attributes. The claim in (3) deletes what it opens, and an open by
+#       name follows a link: observed in review on 2026-10-07, a link named like a leftover had its
+#       TARGET deleted - record 1, and a file outside the store - while the link stayed, nothing was
+#       reported, and the next question took number 1 again. A link so named is skipped, and the
+#       list names it as a stray (Get-HordeDecisionRecords), since nothing else ever would;
+#   (1) its name is exactly this file's own temporary pattern: a record's name is never a candidate;
 #   (2) it was last written longer ago than the age (the setting decisions.store.leftoverMinAgeSeconds);
 #   (3) NO PROCESS HOLDS IT OPEN. It is removed by opening it with no sharing at all, to be deleted
 #       when that handle closes: the operating system refuses that open while any other handle exists.
@@ -99,12 +106,15 @@
 # This file never decides what a damaged record costs. It reports; Rules.ps1 decides.
 # And one thing that is not damage: a STRAY, a file with a record's kind of name that is too far past
 # the end of the order to be a record (see the gap limit below), or whose number is not ten digits or
-# is zero. A stray is reported by name and is not part of the order at all.
+# is zero. A stray is reported by name and is not part of the order at all. So is a LINK named like a
+# writer's temporary file, which the sweep never follows and never removes (see (0) below).
 #
 # NOT DONE HERE, AND WHY. remote/Journal.ps1 refuses a root reached through a junction and a name that
 # is not a plain file name, because its names come from the far end of a link. Every name here is ten
 # digits this file formats from an integer, and the root is Horde's own home, so there is no name to
-# refuse. And there is no marker file saying "this folder is a store": a home with no store folder is
+# refuse; records are still read and written through a store folder that is a junction (a home moved
+# to another disk is one). Only the sweep, the one thing here that deletes, refuses links - see (0).
+# And there is no marker file saying "this folder is a store": a home with no store folder is
 # a list nobody has added to yet, which is what a first run must see.
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
@@ -167,6 +177,15 @@ function Get-HordeDecisionRecordName {
     return ($Sequence.ToString(("D" + (Get-HordeDecisionSequenceDigits)), [System.Globalization.CultureInfo]::InvariantCulture) + ".json")
 }
 
+function Test-HordeDecisionStoreLink {
+    # Is the entry at -Path itself a link of any kind (a symbolic link, a junction, any reparse point)?
+    # Its OWN attributes are read - the call does not follow a link - so a link to a record answers
+    # true, never the record's false. An entry that cannot be read answers true: when it cannot be
+    # told, it is treated as what must not be followed.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try { return (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) } catch { return $true }
+}
+
 function Remove-HordeDecisionStoreLeftovers {
     # Remove the temporary files dead writers left in -Root. Returns how many were removed. The header
     # states the invariant: this file's own name pattern, older than the age, AND held open by no
@@ -174,11 +193,17 @@ function Remove-HordeDecisionStoreLeftovers {
     param([Parameter(Mandatory = $true)][string]$Root, [datetime]$Now = [datetime]::UtcNow)
     $removed = 0
     $minAgeSeconds = Get-HordeDecisionSetting -Name "decisions.store.leftoverMinAgeSeconds"
+    # A STORE FOLDER THAT IS ITSELF A LINK has nothing claimed in it (the header's condition (0)).
+    # Only a folder that is there is asked: a store not yet made is not a link, and has nothing to sweep.
+    if ([System.IO.Directory]::Exists($Root) -and (Test-HordeDecisionStoreLink -Path $Root)) { return 0 }
     $found = @()
     try { $found = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { return 0 }
     foreach ($leftover in $found) {
         if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }
         try {
+            # NEVER THROUGH A LINK: the claim below deletes what it opens, and an open by name follows a
+            # link to its target. Judged by the entry's own attributes, which are not its target's.
+            if (Test-HordeDecisionStoreLink -Path $leftover) { continue }
             if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalSeconds -lt $minAgeSeconds) { continue }
             # CLAIMED, NOT JUST DELETED. A delete by name succeeds on a file its writer holds with
             # delete sharing, and takes it from under a live writer. This open is refused while ANY
@@ -286,6 +311,7 @@ function Get-HordeDecisionRecords {
     # strays is { file; reason } for every stray (see the gap limit above); none is in records or in last.
     #
     # Files whose name is not digits and .json are not looked at: they cannot be mistaken for a record.
+    # The one exception is a link named like a writer's temporary file, which is named as a stray.
     param([Parameter(Mandatory = $true)][string]$Root)
     $none = [pscustomobject]@{ state = "absent"; reason = "there is no decisions store yet"; last = [long]0; records = @(); strays = @() }
     $absolute = [System.IO.Path]::IsPathRooted("$Root")
@@ -314,6 +340,16 @@ function Get-HordeDecisionRecords {
             continue
         }
         $numbered.Add([long]$Matches[1])
+    }
+    # A LINK NAMED LIKE A WRITER'S TEMPORARY FILE is never followed and never removed by the sweep, so it
+    # would stay unseen for good. It is named here, where every result carries it.
+    $temporaries = @()
+    try { $temporaries = @([System.IO.Directory]::GetFiles($Root, "writing-*.part")) } catch { }
+    foreach ($full in $temporaries) {
+        $leaf = [System.IO.Path]::GetFileName($full)
+        if ($leaf -cmatch $script:HordeDecisionStoreTempPattern -and (Test-HordeDecisionStoreLink -Path $full)) {
+            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = "it is a link named like a writer's temporary file; it is never followed and never removed, so whoever made it should remove it" })
+        }
     }
     $numbered.Sort()
     $records = New-Object System.Collections.ArrayList

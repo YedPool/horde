@@ -67,6 +67,19 @@
         @{ Name = "leftover-claimed-and-not-removed"
            Find = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)'
            Replace = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::None)' }
+        # --- never through a link: a leftover's link, or a store folder that is one ---
+        @{ Name = "leftover-claimed-through-a-link"
+           Find = '            if (Test-HordeDecisionStoreLink -Path $leftover) { continue }'
+           Replace = '' }
+        @{ Name = "sweep-in-a-store-folder-that-is-a-link"
+           Find = '    if ([System.IO.Directory]::Exists($Root) -and (Test-HordeDecisionStoreLink -Path $Root)) { return 0 }'
+           Replace = '' }
+        @{ Name = "no-entry-is-ever-a-link"
+           Find = '    try { return (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) } catch { return $true }'
+           Replace = '    return $false' }
+        @{ Name = "link-named-like-a-leftover-not-reported"
+           Find = '            [void]$strays.Add([pscustomobject]@{ file = $leaf; reason = "it is a link named like a writer''s temporary file; it is never followed and never removed, so whoever made it should remove it" })'
+           Replace = '' }
         @{ Name = "leftover-age-counted-in-minutes"
            Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
            Replace = '.TotalMinutes -lt $minAgeSeconds) { continue }' }
