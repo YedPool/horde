@@ -84,7 +84,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # that is another caller of the same operations (decisions/Window.ps1). It is in this table so
     # that its flags are checked and its usage is printed like any verb's; `opens` is what tells the
     # dispatch below to hand it on instead of calling an operation of its name.
-    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc", "ToldMarks"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>] [-ToldMarks <file.json>]"; opens = $true }
+    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc", "ToldMarks", "Probe"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>] [-ToldMarks <file.json>] [-Probe <file.json>]"; opens = $true }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.

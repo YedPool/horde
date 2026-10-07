@@ -1,55 +1,66 @@
-/* decisions/page/list.css - the list of questions as a document (list.js): headings, one line per
-   question, sub-numbered lines under an unfolded one. No boxes, columns, chips or panels.
+/* decisions/page/list.css - the list of questions as a document the reader answers in (list.js):
+   headings, and under each a line per question - letter and number, the question in full, the
+   answer's field - with sub-numbered lines of context under an unfolded one. No boxes, chips or panels.
 
    SHARP LETTERS (a measured complaint about the earlier page on a screen at one and a half times
    the ordinary scale): no size is set here at all - the letters and the line height are the host
    page's, which sets them in whole device pixels (decisions/window/frame.js) - and this file adds
    weights 400 and 600 only, no letter-spacing, no transform, no opacity (a muted or dimmed line is a
-   colour, never a faded letter) and no clamp on a line's height. A line too long for its row ends in
-   an ellipsis until the question is unfolded, when it wraps in full.
+   colour, never a faded letter) and no clamp on a line's height. A FIELD'S UNDERLINE IS A SHADOW
+   INSIDE IT, never a border: a border of one pixel is one and a half of the screen's own at that
+   scale, and every line under it would then start on half a pixel.
+
+   THE QUESTION IS NEVER CUT: no ellipsis, no clamp, no nowrap anywhere on it. It wraps to as many
+   lines as it needs. Its row wraps too: the answer stands to the right of a question only when the
+   whole question fits on one line with at least 220 pixels left for the field, and otherwise on a
+   line of its own, under the question's words (the row's left padding is where the words begin, and
+   the fold mark and the number hang back into it).
 
    A GROUP'S NOTE OF BACKGROUND is not drawn until its heading's word "background" is pressed
-   (list.js says what was seen). In a narrow window a question's suffix and a heading's count are
-   left out, and that word stays: it is the only way to the note.
+   (list.js says what was seen). In a narrow window a heading's count is left out, and that word stays.
 
-   The colours are the host page's variables: --ink, --muted, --faint, --dim. --line-px is the host's
-   line height, which the fold mark is centred in. */
+   The colours are the host page's variables: --ink, --muted, --faint, --dim, --line, --accent,
+   --warn. --line-px is the host's line height, which the fold mark is centred in. */
 .hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
-/* A FOLDED QUESTION AND ITS SUFFIX SHARE THE LINE BY NEED, and so do a heading and its count. Each
-   of the two is given room up to what its words take, in equal steps: a short one keeps all its
-   words and the other has the rest, and when both are long each has half. A fixed share (the suffix
-   at most 46 percent of the line, the question the rest) cut a suffix short beside a short question
-   with a fifth of the line left empty (seen 2026-10-07 in a picture of the real window, 980 device
-   pixels wide: "Test near and far distances too? - Recommended: no, not in this pass - Orc..."). */
-.hd-head, .hd-q:not(.open) > .hd-row { display: grid; justify-content: start; }
-.hd-head { grid-template-columns: 14px minmax(0, auto) minmax(0, auto); }
-.hd-q:not(.open) > .hd-row { grid-template-columns: 14px auto minmax(0, auto) minmax(0, auto); }
-.hd-head, .hd-q > .hd-row { cursor: pointer; }
+.hd-head { display: grid; justify-content: start; grid-template-columns: 14px minmax(0, auto) minmax(0, auto); cursor: pointer; }
+.hd-qrow { --hang: 58px; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 14px; padding-left: var(--hang); min-height: var(--line-px); }
+.hd-qt { display: flex; align-items: baseline; flex: 0 1 auto; min-width: 0; max-width: calc(100% + var(--hang)); margin-left: calc(-1 * var(--hang)); cursor: pointer; }
 .hd-tri { flex: 0 0 14px; width: 14px; height: var(--line-px); align-self: flex-start; position: relative; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
 .hd-tri::before { content: ""; position: absolute; left: 4px; top: calc((var(--line-px) - 8px) / 2); border-left: 6px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
 .hd-tri[aria-expanded="true"]::before { left: 2px; top: calc((var(--line-px) - 6px) / 2); border-top: 6px solid var(--faint); border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 0; }
 .hd-tri:focus-visible { outline: 1px solid var(--muted); }
-.hd-num { flex: 0 0 auto; min-width: 30px; color: var(--ink); font-weight: 600; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; }
+.hd-num { flex: 0 0 auto; min-width: 30px; color: var(--ink); font-weight: 600; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hd-qt > .hd-num { flex: 0 0 44px; width: 44px; }
+.hd-let { color: var(--muted); font-weight: 400; padding-right: 4px; }
 .hd-line > .hd-num { min-width: 0; color: var(--muted); font-weight: 400; }
 .hd-lab { flex: 0 0 auto; color: var(--muted); padding-right: 6px; }
-.hd-txt { flex: 0 1 auto; min-width: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: plaintext; }
-.hd-q.open > .hd-row > .hd-txt, .hd-body > .hd-txt { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.hd-txt { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; unicode-bidi: plaintext; }
 .hd-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hd-ans { flex: 1 1 220px; min-width: 0; }
+.hd-fl { display: flex; align-items: flex-start; column-gap: 8px; }
+.hd-field { flex: 1 1 auto; min-width: 0; display: block; height: var(--line-px); font: inherit; line-height: var(--line-px); color: var(--ink); background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 2px; resize: none; overflow: hidden; outline: 0; box-shadow: inset 0 -1px 0 var(--line); unicode-bidi: plaintext; }
+.hd-field:focus { box-shadow: inset 0 -2px 0 var(--accent); }
+.hd-field::placeholder { color: var(--faint); }
+.hd-mark { flex: 0 0 auto; max-width: 50%; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); }
+.hd-mark:empty { display: none; }
+.hd-refusal { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
+.hd-msg { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-who { font-weight: 600; padding-right: 6px; }
+.hd-said { unicode-bidi: isolate; }
+.hd-flag { font-size: var(--small-px); }
 .hd-suf { min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
-.hd-q.open > .hd-row > .hd-suf { display: none; }
 .hd-group { margin-top: 10px; }
 .hd-group:first-child { margin-top: 0; }
 /* A heading is never cut short: nothing unfolds it, so words lost to an ellipsis could not be read
    at all. In a narrow window it takes a second line. */
-.hd-head > .hd-txt { font-weight: 600; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.hd-head > .hd-txt { font-weight: 600; }
 .hd-note { display: none; color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hd-group.note-open > .hd-note { display: block; }
 .hd-bg { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-decoration: underline; }
 .hd-bg:focus-visible { outline: 1px solid var(--muted); }
 .hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
 .hd-sub { padding-left: 58px; }
-.hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-suf, .hd-q.dim .hd-lab { color: var(--dim); }
+.hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
-  .hd-sub { padding-left: 40px; }
-  .hd-q .hd-suf, .hd-count { display: none; }
+  .hd-count { display: none; }
 }

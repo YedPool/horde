@@ -7,7 +7,8 @@
 // document DIMS - never hides - the questions that are not the picked entry's.
 //
 // EVERYTHING DRAWN COMES THROUGH window.HordeBridge, by the closed list of requests the window's
-// composer keeps (decisions/Window.ps1): setup, kinds, list, fleet, attachment. A sixth, report,
+// composer keeps (decisions/Window.ps1): setup, kinds, list, fleet, attachment, and say - the reader's
+// words under a question, handed to Horde to be stored, answered with whether they were. A seventh, report,
 // tells Horde WHAT THE PAGE DREW after each change - every question line's number and text as they
 // stand in the page, the headings, what is unfolded, the fleet line, and the computed size of the
 // letters - so that a script can hold the page to the list without looking at it. Horde pushes
@@ -34,11 +35,15 @@
   var picked = null;
   var open = [];
   var reportTimer = null;
-  var notices = { bridge: "", settings: "", attachment: "", list: "" };
+  var notices = { bridge: "", settings: "", attachment: "", list: "", drafts: "" };
+  // The last set of a check's steps the page has acted out (decisions/Window.ps1, -Probe).
+  var probed = 0;
 
   var doc = window.HordeDecisionsDocument.mount(document.getElementById("list"), {
     topInset: function () { return topBar.getBoundingClientRect().bottom; },
-    onDraw: function () { draws += 1; report(); }
+    onDraw: function () { draws += 1; report(); },
+    onChange: function () { report(); },
+    say: function (number, text, wording, id) { return bridge.request("say", { number: number, text: text, wording: wording, id: id }); }
   });
   var fleet = Fleet.mount(document.getElementById("fleet"), { countWords: "waiting on you", onPick: pick, onChange: report });
 
@@ -146,8 +151,10 @@
     var line = fleet.snapshot(bounds.fleetRows);
     var letters = doc.measure();
     var small = window.getComputedStyle(foot);
+    snap.answer.probe = probed;
+    if (notices.drafts !== snap.answer.storage) { notices.drafts = snap.answer.storage; showNotices(); }
     var value = {
-      v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub,
+      v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer,
       fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead },
       notice: noticeBox.textContent.slice(0, bounds.textChars), foot: foot.textContent.slice(0, bounds.lineChars),
       text: {
@@ -188,6 +195,10 @@
   bridge.on("list-changed", showList);
   bridge.on("fleet-changed", function (status) { fleet.update(status); });
   bridge.on("attachment-changed", showAttachment);
+  bridge.on("probe", function (probe) {
+    if (!probe || typeof probe.n !== "number") { return; }
+    doc.drive(probe.steps).then(function () { probed = probe.n; report(); });
+  });
   bridge.request("setup").then(function (answer) {
     setup = answer;
     applyLook();
@@ -199,6 +210,8 @@
     fleet.update(answers[2]);
     showAttachment(answers[3]);
     applyView(setup.view);
+    // Shown with the keyboard already its own: the caret goes where a window given it later puts it.
+    if (document.hasFocus()) { doc.takeKeyboard(); }
     report();
   }).catch(function (e) {
     notices.bridge = "This page could not ask Horde for the list: " + (e && e.message ? e.message : e);

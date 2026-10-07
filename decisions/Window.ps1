@@ -15,11 +15,26 @@
 # None of the four knows another. A later way of showing the list - a file for a phone, a view across
 # a link - is another surface under the same bridge, and nothing here but the choice of surface moves.
 #
-# WHAT THE PAGE MAY ASK is the closed list below, six requests, and nothing else (surfaces/Port.ps1
-# checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report.
+# WHAT THE PAGE MAY ASK is the closed list below, seven requests, and nothing else (surfaces/Port.ps1
+# checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report, say.
 # kinds and list are the decisions operations of those names, called through decisions/Operations.ps1's
-# one entry point and handed on as they came: THIS FILE READS NO RECORD OF THE STORE. READ-ONLY:
-# nothing the page can ask changes the list.
+# one entry point: THIS FILE READS NO RECORD OF THE STORE.
+#
+# ANSWERING (TRIAL). say is the one request that writes: the founder's words under a question, typed
+# in the window. It is the operation say, asked with speaker founder, route window, the wording the
+# page showed and an id the page chose (so the same words sent twice are one record). What may be
+# said is decided by the operation and its rules alone; a refusal is ANSWERED, as { ok = false;
+# reason }, in the rule's own sentence, so that the page can show it under the words it keeps.
+# THE LIST THE PAGE IS HANDED CARRIES EACH CONVERSATION: the list operation gives a thread's counts
+# and whose turn it is, and for a question somebody has spoken under the operation show is asked for
+# its messages, once per change of that thread (Add-HordeDecisionWindowThreads keeps what it was
+# given by what the list said of the thread). Each message says who has not read it (the store's
+# own), and "told": whether a notifier has announced it, read from the file -ToldMarks names -
+# { schemaVersion: 1, rung: [ { question, message, at } ] }, message being the record's number. That
+# file is somebody else's and is only ever read; missing or not what it should be, nothing is marked
+# told, the report says why, and answering goes on.
+# -Probe names a file of steps for a check of the page that cannot press keys: { n; steps }, pushed
+# to the page once per n, which acts them out on its own fields and nowhere else.
 #
 # WHAT THE PAGE DREW, IN ITS OWN WORDS (the request report). After each change the page says what
 # stands in it: every question line's number and text as drawn, the headings, which are unfolded, the
@@ -140,6 +155,11 @@ $script:HordeDecisionWindowSettings = New-HordeModuleSettings -Module $script:Ho
     @{ name = "smallLinePx"; kind = "whole"; default = 18; min = 10; max = 56; what = "The height of a line of small marks, in pixels at the ordinary scale." }
 )
 $script:HordeDecisionWindow = $null
+# Who types in the window, and by what route: the two labels of decisions/Rules.ps1 a say from here carries.
+$script:HordeDecisionWindowSpeaker = "founder"
+$script:HordeDecisionWindowRoute = "window"
+# The most a file of announced messages, or of a check's steps, may be before it is left unread.
+$script:HordeDecisionWindowSideFileBytes = 1048576
 
 function Get-HordeDecisionWindowSettingsDeclaration { return $script:HordeDecisionWindowSettings }
 
@@ -185,9 +205,122 @@ function Get-HordeDecisionWindowRecord {
     return [pscustomobject]@{ state = "$($record.state)"; value = $record.value; reason = "$($record.reason)" }
 }
 
+function Read-HordeDecisionWindowToldMarks {
+    # The messages a notifier has announced, from the file -Path names (header): { told; problem }.
+    # told is a table keyed by a message's record number as text. A file that is not there, too
+    # large, or not the agreed shape marks NOTHING, and problem says why in words; it never throws.
+    param([string]$Path)
+    $none = { param([string]$Why) return [pscustomobject]@{ told = @{}; problem = $Why } }
+    if ("$Path" -eq "") { return (& $none "") }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (& $none "the file of announced messages is not there yet, so no message is marked as told") }
+    $parsed = $null
+    try {
+        if ((Get-Item -LiteralPath $Path).Length -gt $script:HordeDecisionWindowSideFileBytes) { return (& $none "the file of announced messages is larger than it may be, so no message is marked as told") }
+        $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    } catch { return (& $none "the file of announced messages could not be read as JSON, so no message is marked as told") }
+    if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $parsed.PSObject.Properties["schemaVersion"] -or "$($parsed.schemaVersion)" -cne "1" -or $null -eq $parsed.PSObject.Properties["rung"]) {
+        return (& $none "the file of announced messages is not version 1 with a list named rung, so no message is marked as told")
+    }
+    $told = @{}
+    foreach ($entry in @($parsed.rung)) {
+        if ($null -eq $entry -or $entry -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $entry.PSObject.Properties["message"]) { continue }
+        $id = "$($entry.message)"
+        if ($id -cmatch '\A[1-9][0-9]{0,17}\z') { $told[$id] = $true }
+    }
+    return [pscustomobject]@{ told = $told; problem = "" }
+}
+
+function Add-HordeDecisionWindowThreads {
+    # Put each conversation into a list record (header, THE LIST THE PAGE IS HANDED): for every
+    # question somebody has spoken under, thread.messages, each with told. -Cache is a table this
+    # function keeps between calls: a thread is asked for again only when what the list says of it
+    # has changed. -Told is the table of announced messages. -Show answers the operation show for a
+    # number, for a test that hands one in. A thread that could not be had says so (thread.problem)
+    # and holds no message: never an old one passed off as current.
+    param($Record, [System.Collections.IDictionary]$Cache, [System.Collections.IDictionary]$Told = @{}, [scriptblock]$Show = $null)
+    if ($null -eq $Record -or "$($Record.state)" -cne "known" -or $null -eq $Record.value -or "$($Record.value.outcome)" -cne "done") { return $Record }
+    if ($null -eq $Show) { $Show = { param($Number) return (Invoke-HordeDecision -Operation "show" -Request @{ number = [int]$Number }) } }
+    foreach ($q in @($Record.value.questions)) {
+        $messages = @(); $problem = ""
+        if ([int]$q.thread.count -gt 0) {
+            $key = "" + $q.state + "|" + $q.wordingVersion + "|" + (ConvertTo-Json -InputObject $q.thread -Compress -Depth 6)
+            $kept = $Cache["" + $q.number]
+            if ($null -ne $kept -and $kept.key -ceq $key) { $messages = @($kept.messages) }
+            else {
+                $shown = & $Show ([int]$q.number)
+                if ($null -ne $shown -and "$($shown.state)" -ceq "known" -and "$($shown.value.outcome)" -ceq "done") {
+                    $messages = @($shown.value.question.thread.messages)
+                    $Cache["" + $q.number] = [pscustomobject]@{ key = $key; messages = $messages }
+                }
+                else { $problem = "the conversation under this question could not be read: " + $(if ($null -ne $shown) { "$($shown.reason)" } else { "no answer" }) }
+            }
+        }
+        $views = @($messages | ForEach-Object {
+            $view = [ordered]@{}
+            foreach ($p in $_.PSObject.Properties) { $view[$p.Name] = $p.Value }
+            $view["told"] = [bool]$Told.Contains("" + $_.sequence)
+            [pscustomobject]$view
+        })
+        Add-Member -InputObject $q.thread -NotePropertyName messages -NotePropertyValue $views -Force
+        Add-Member -InputObject $q.thread -NotePropertyName problem -NotePropertyValue $problem -Force
+    }
+    return $Record
+}
+
 function Get-HordeDecisionWindowList {
-    # The whole list, every state: the page lists what is not open under its own heading.
-    return (Get-HordeDecisionWindowRecord -Operation "list" -Request @{ state = "all" })
+    # The whole list, every state: the page lists what is not open under its own heading. With
+    # -State, each conversation is in it (Add-HordeDecisionWindowThreads).
+    param($State = $null)
+    $record = Get-HordeDecisionWindowRecord -Operation "list" -Request @{ state = "all" }
+    if ($null -eq $State) { return $record }
+    return (Add-HordeDecisionWindowThreads -Record $record -Cache $State.threadCache -Told $State.told)
+}
+
+function Invoke-HordeDecisionWindowSay {
+    # The request say (header, ANSWERING): -Arguments is { number; text; wording; id } as the page
+    # sent them. A PURE FUNCTION of them and of what -Invoke answers (the operations' entry point,
+    # for a test that hands one in). IT NEVER THROWS FOR ANYTHING THE PAGE SENT and it decides
+    # nothing about the words: the operation and its rules do. Returns
+    #   { ok = true;  sequence; replayed; arrivedAfterClosing; saidToEarlierWording }  the words are stored
+    #   { ok = false; reason }                                                         they are not, and why
+    # A reason is the operation's own sentences, which never repeat the words.
+    param($Arguments, [scriptblock]$Invoke = $null)
+    $no = { param([string]$Why) return [pscustomobject]@{ ok = $false; reason = $Why } }
+    $get = { param([string]$Name) if ($Arguments -is [System.Collections.IDictionary]) { if ($Arguments.Contains($Name)) { return $Arguments[$Name] }; return $null }; if ($null -ne $Arguments -and $null -ne $Arguments.PSObject.Properties[$Name]) { return $Arguments.PSObject.Properties[$Name].Value }; return $null }
+    $number = & $get "number"; $text = & $get "text"; $wording = & $get "wording"; $id = & $get "id"
+    if (($number -isnot [int] -and $number -isnot [long]) -or [long]$number -lt 1) { return (& $no "Not saved: the question's number did not arrive as a whole number from 1.") }
+    if (($wording -isnot [int] -and $wording -isnot [long]) -or [long]$wording -lt 1) { return (& $no "Not saved: the wording that was on screen did not arrive as a whole number from 1.") }
+    if ($text -isnot [string]) { return (& $no "Not saved: the words did not arrive as text.") }
+    if ($id -isnot [string] -or $id -cnotmatch '\A[0-9a-f]{32}\z') { return (& $no "Not saved: the request carried no id of 32 lowercase hex digits.") }
+    if ($null -eq $Invoke) { $Invoke = { param($Request) return (Invoke-HordeDecision -Operation "say" -Request $Request) } }
+    $request = [ordered]@{ id = $id; actor = $script:HordeDecisionWindowSpeaker; number = [long]$number; speaker = $script:HordeDecisionWindowSpeaker; route = $script:HordeDecisionWindowRoute; text = $text; wordingVersion = [long]$wording }
+    $answer = $null
+    try { $answer = & $Invoke $request } catch { return (& $no ("Not saved: the list could not be asked: " + $_.Exception.Message)) }
+    if ($null -eq $answer) { return (& $no "Not saved: the list gave no answer.") }
+    if ("$($answer.state)" -cne "known") { return (& $no ("Not saved: " + $answer.reason)) }
+    $value = $answer.value
+    if ("$($value.outcome)" -ceq "refused") {
+        $why = "$($value.reason)"
+        $found = @($value.findings | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" -and $_ -cne $why })
+        if ($found.Count -gt 0) { $why = $why + ": " + ($found -join "; ") }
+        return (& $no ("Not saved: " + $why))
+    }
+    $message = $value.message
+    return [pscustomobject]@{ ok = $true; sequence = [long]$value.sequence; replayed = [bool]("$($value.outcome)" -ceq "replayed")
+        arrivedAfterClosing = [bool]($null -ne $message -and $message.arrivedAfterClosing); saidToEarlierWording = [bool]($null -ne $message -and $message.saidToEarlierWording) }
+}
+
+function Read-HordeDecisionWindowProbe {
+    # A check's steps from the file -Path names (header, -Probe): { n; steps } or $null when the file
+    # is not there, too large, or not that shape. Never throws.
+    param([string]$Path)
+    if ("$Path" -eq "" -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        if ((Get-Item -LiteralPath $Path).Length -gt $script:HordeDecisionWindowSideFileBytes) { return $null }
+        $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ($null -eq $parsed -or ($parsed.n -isnot [int] -and $parsed.n -isnot [long]) -or [long]$parsed.n -lt 1) { return $null }
+        return [pscustomobject]@{ n = [long]$parsed.n; steps = @($parsed.steps) }
+    } catch { return $null }
 }
 
 function Get-HordeDecisionWindowFleet {
@@ -284,7 +417,7 @@ function New-HordeDecisionWindowBridge {
     # Get-HordeSurfaceSettings, read once by the caller.
     param($SurfaceSettings = $null)
     $most = [long]$script:HordeDecisionWindowReportBounds.chars
-    return (New-HordeSurfaceBridge -Settings $SurfaceSettings -Events @("list-changed", "fleet-changed", "attachment-changed") -Requests ([ordered]@{
+    return (New-HordeSurfaceBridge -Settings $SurfaceSettings -Events @("list-changed", "fleet-changed", "attachment-changed", "probe") -Requests ([ordered]@{
         # What the page needs before it draws a letter: the letters themselves, the bounds of its
         # report, what to show first, and what was wrong in the settings files.
         "setup" = @{ run = { param($Arguments, $State, $Window)
@@ -297,7 +430,7 @@ function New-HordeDecisionWindowBridge {
             } } }
         "kinds" = @{ run = { param($Arguments, $State, $Window) return (Get-HordeDecisionWindowRecord -Operation "kinds") } }
         "list" = @{ run = { param($Arguments, $State, $Window)
-            $record = Get-HordeDecisionWindowList
+            $record = Get-HordeDecisionWindowList -State $State
             # What the page now has, so that the next change is compared with it and not pushed twice.
             $State.listJson = ConvertTo-HordeSurfaceJson -Value $record
             $State.listReadAt = [datetime]::UtcNow
@@ -321,13 +454,23 @@ function New-HordeDecisionWindowBridge {
                 $State.reportDue = $true
                 return $true }
         }
+        # THE ONE REQUEST THAT WRITES (header, ANSWERING). The words' most is the rules' own for any
+        # text; one message of the bridge may be less, and a longer one is refused there unread.
+        "say" = @{
+            args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; text = @{ type = "string"; most = $script:HordeDecisionMaxTextChars }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 } }
+            run = { param($Arguments, $State, $Window)
+                $said = Invoke-HordeDecisionWindowSay -Arguments $Arguments
+                if ($said.ok) { $State.says = [int]$State.says + 1; $State.dirtyAt = [datetime]::UtcNow } else { $State.saysRefused = [int]$State.saysRefused + 1 }
+                $State.reportDue = $true
+                return $said }
+        }
     }))
 }
 
 function New-HordeDecisionWindowState {
     # The one object every callback and handler of an open window reads and writes. -Settings is the
     # module's values; -Findings what was wrong in any settings file read for this window.
-    param([string]$ReportPath = "", $Attachment = $null, [datetime]$Now = [datetime]::UtcNow, [string]$PicturePath = "", $Settings = $null, $SurfaceSettings = $null, $FollowSettings = $null, [string[]]$Findings = @(), $View = $null)
+    param([string]$ReportPath = "", $Attachment = $null, [datetime]$Now = [datetime]::UtcNow, [string]$PicturePath = "", $Settings = $null, $SurfaceSettings = $null, $FollowSettings = $null, [string[]]$Findings = @(), $View = $null, [string]$ToldPath = "", [string]$ProbePath = "")
     if ($null -eq $Attachment) { $Attachment = [pscustomobject]@{ attached = $false; handle = [long]0; reason = "" } }
     if ($null -eq $Settings) { $Settings = (Read-HordeModuleSettingsText -Declaration $script:HordeDecisionWindowSettings -Text $null).values }
     if ($null -eq $View) { $View = ConvertTo-HordeDecisionWindowView }
@@ -341,6 +484,8 @@ function New-HordeDecisionWindowState {
         reportPath = $ReportPath; reportDue = $true; drawn = $null; reports = 0; reportsRefused = 0; pushes = 0; changes = 0; errors = $null
         showEvent = $null; shows = 0; handle = [long]0; openedAt = $Now; firstReportAt = $null
         picturePath = $PicturePath; pictureAsked = $false; pictureSeen = $false; lastReportAt = $null
+        threadCache = @{}; told = @{}; toldPath = $ToldPath; toldStamp = ""; toldProblem = ""; says = 0; saysRefused = 0
+        probePath = $ProbePath; probeStamp = ""; probeSent = [long]0
     }
 }
 
@@ -408,6 +553,7 @@ function Write-HordeDecisionWindowReport {
         picture = [ordered]@{ path = "$($State.picturePath)"; asked = [bool]$State.pictureAsked; saved = [bool]($State.picturePath -ne "" -and (Test-Path -LiteralPath $State.picturePath -PathType Leaf)) }
         refused = [int]$State.bridge.refused; watching = ($null -ne $State.watcher); watchFailures = [int]$State.watchFailures; changes = [int]$State.changes
         askedForward = [int]$State.shows
+        says = [int]$State.says; saysRefused = [int]$State.saysRefused; toldMarks = [ordered]@{ path = "$($State.toldPath)"; told = @($State.told.Keys).Count; problem = "$($State.toldProblem)" }
         findings = @($State.findings)
         errors = @($State.errors | Where-Object { $null -ne $_ } | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ })
         secondsToFirstReport = $seconds
@@ -426,7 +572,7 @@ function Update-HordeDecisionWindowList {
     # Ask for the list again and push it to the page if it is not what the page has. Returns whether
     # it was pushed.
     param([Parameter(Mandatory = $true)]$State, $Window = $null, [datetime]$Now = [datetime]::UtcNow)
-    $record = Get-HordeDecisionWindowList
+    $record = Get-HordeDecisionWindowList -State $State
     $State.listReadAt = $Now
     $json = ConvertTo-HordeSurfaceJson -Value $record
     if ($json -ceq $State.listJson) { return $false }
@@ -472,6 +618,30 @@ function Invoke-HordeDecisionWindowTick {
     if ($null -ne $State.showEvent -and $State.showEvent.WaitOne(0)) { $State.shows = [int]$State.shows + 1; $State.reportDue = $true; & $Window.show }
     if ($State.watchFailed) { Stop-HordeDecisionWindowWatch -State $State }
     if ($null -eq $State.watcher) { [void](Start-HordeDecisionWindowWatch -State $State -Sync $Window.sync) }
+    # THE FILE OF ANNOUNCED MESSAGES (header): read again when it is not as it was last seen, and the
+    # list with it. Its stamp is its time and size; a file that comes or goes is a change too.
+    if ($State.toldPath -ne "") {
+        $stamp = "none"
+        try { $file = Get-Item -LiteralPath $State.toldPath -ErrorAction Stop; $stamp = "" + $file.LastWriteTimeUtc.Ticks + "|" + $file.Length } catch { $stamp = "none" }
+        if ($stamp -cne $State.toldStamp) {
+            $State.toldStamp = $stamp
+            $marks = Read-HordeDecisionWindowToldMarks -Path $State.toldPath
+            $State.told = $marks.told; $State.toldProblem = $marks.problem; $State.reportDue = $true
+            if ($null -eq $State.dirtyAt) { $State.dirtyAt = $Now.AddMilliseconds(-1 * [int]$State.settings.changeQuietMs) }
+        }
+    }
+    if ($State.probePath -ne "" -and [int]$State.reports -ge 1) {
+        $stamp = "none"
+        try { $file = Get-Item -LiteralPath $State.probePath -ErrorAction Stop; $stamp = "" + $file.LastWriteTimeUtc.Ticks + "|" + $file.Length } catch { $stamp = "none" }
+        if ($stamp -cne $State.probeStamp) {
+            $State.probeStamp = $stamp
+            $probe = Read-HordeDecisionWindowProbe -Path $State.probePath
+            if ($null -ne $probe -and [long]$probe.n -gt [long]$State.probeSent) {
+                $State.probeSent = [long]$probe.n
+                & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "probe" -Value $probe)
+            }
+        }
+    }
     if ($null -ne $State.dirtyAt -and ($Now - $State.dirtyAt).TotalMilliseconds -ge $State.settings.changeQuietMs) {
         $State.dirtyAt = $null
         [void](Update-HordeDecisionWindowList -State $State -Window $Window -Now $Now)
@@ -523,7 +693,7 @@ function Open-HordeDecisionWindow {
     # what the window shows in; -Picture a .png to save a picture of the page in; -Hidden opens it
     # where nobody sees it and out of the taskbar; -OffScreen as an ordinary window where no screen
     # is; -Unfold and -Orc say what the reader is shown first (header).
-    param([switch]$Hidden, [switch]$OffScreen, [string]$Report = "", [string]$Picture = "", [string]$Unfold = "", [string]$Orc = "")
+    param([switch]$Hidden, [switch]$OffScreen, [string]$Report = "", [string]$Picture = "", [string]$Unfold = "", [string]$Orc = "", [string]$ToldMarks = "", [string]$Probe = "")
     $hordeHome = Get-HordeHome
     if ($Hidden -and $OffScreen) { throw "-Hidden and -OffScreen are two ways of standing where nobody sees it; give one of them" }
     $view = ConvertTo-HordeDecisionWindowView -Unfold $Unfold -Orc $Orc
@@ -532,6 +702,13 @@ function Open-HordeDecisionWindow {
         $picturePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Picture)
         if ([System.IO.Path]::GetExtension($picturePath) -ine ".png") { throw "-Picture names the file a picture of the window is saved in, and it must end .png" }
     }
+    $toldPath = ""
+    if ($ToldMarks -ne "") {
+        if (-not [System.IO.Path]::IsPathRooted($ToldMarks)) { throw "-ToldMarks names the file of messages a notifier has announced, by its full path" }
+        $toldPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ToldMarks)
+    }
+    $probePath = ""
+    if ($Probe -ne "") { $probePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Probe) }
     $reportPath = ""
     if ($Report -ne "") { $reportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
     # ONE WINDOW PER HOME, by this platform's named objects (header).
@@ -570,7 +747,7 @@ function Open-HordeDecisionWindow {
                 $attachment = [pscustomobject]@{ attached = $false; handle = [long]0; reason = $why }
             }
         }
-        $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment -PicturePath $picturePath -Settings $own.values -SurfaceSettings $surfaceSettings -FollowSettings $followSettings.values -Findings $findings -View $view
+        $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment -PicturePath $picturePath -Settings $own.values -SurfaceSettings $surfaceSettings -FollowSettings $followSettings.values -Findings $findings -View $view -ToldPath $toldPath -ProbePath $probePath
         $state.showEvent = $show
         $script:HordeDecisionWindow = $state
         $root = Split-Path -Parent $PSScriptRoot
