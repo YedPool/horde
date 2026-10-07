@@ -21,7 +21,7 @@
 #
 #   { "schemaVersion": 1, "settings": { "widthPx": 640, "theme": "dark" } }
 #
-# THE THREE ENTRY POINTS, and nothing else is meant to be called from outside:
+# THE THREE ENTRY POINTS a module calls:
 #   New-HordeModuleSettings -Module <name> -Settings <table>          the declaration; THROWS on a
 #                                                                     malformed table, naming every problem
 #   Read-HordeModuleSettingsText -Declaration <it> -Text <text|$null> { values; findings }, PURE given
@@ -31,15 +31,19 @@
 # values is an object with one property per declared name ($s.values.widthPx): the file's value where it
 # gave a good one, the default everywhere else. findings is a list of sentences, empty when nothing is
 # wrong. A module decides what to do with a finding (print it, show it); this file never prints.
+# Two more are for whatever will SHOW a module's settings, which is not built here:
+# Get-HordeModuleSettingRule (an entry's allowed range, in words) and Get-HordeModuleSettingsPath
+# (where the file is). The rest of the file is its own.
 #
 # WHAT IS WRONG IN A FILE IS SAID BY NAME, AND THE DEFAULT IS USED. A name the module did not declare, a
 # value of the wrong kind and a value outside the allowed range are one finding each, and that setting
 # is its default: never a throw, because a typo in a person's file must not stop a window opening, and
 # never a silent ignore, because a setting that quietly did nothing is the worst of the three. A file
-# that is not there is every default and no finding. A file that cannot be read as a whole - not UTF-8,
-# not JSON, a key written twice, not the shape of schema/module-settings.v1 - is its findings and EVERY
-# default: half of a file nobody can vouch for is not used. Only a malformed DECLARATION throws, when
-# it is declared: that is a programming error, and the suite of the module that made it must fail.
+# that is not there is every default and no finding. A file that cannot be read as a whole - held by
+# another program, over 262144 bytes, not UTF-8, not JSON, a key written twice, not the shape of
+# schema/module-settings.v1 - is its findings and EVERY default: half of a file nobody can vouch for
+# is not used. Only a malformed DECLARATION throws, when it is declared: that is a programming error,
+# and the suite of the module that made it must fail.
 #
 # THE KINDS, and what "allowed range" means for each. min and max are inclusive.
 #   whole      A whole number, an Int32. min and max are required: no number here is unbounded. In the
@@ -101,8 +105,10 @@
 #
 # No Set-StrictMode here: this file is dot-sourced, so a file-scope Set-StrictMode would set the
 # caller's mode (see core/Tristate.ps1). The functions run under -Version Latest.
+. (Join-Path $PSScriptRoot "Home.ps1")
 . (Join-Path $PSScriptRoot "Schema.ps1")
 . (Join-Path $PSScriptRoot "JsonText.ps1")
+. (Join-Path $PSScriptRoot "ReadShared.ps1")
 
 $script:HordeModuleSettingKinds = @("text", "whole", "fraction", "truefalse", "folder")
 $script:HordeModuleSettingFields = @("name", "kind", "default", "what", "min", "max", "values")
@@ -119,6 +125,8 @@ $script:HordeModuleSettingWhatPattern = '\A[\x20-\x7E]{1,200}\z'
 $script:HordeModuleSettingTextCap = 4096
 $script:HordeModuleSettingFolderCap = 1024
 $script:HordeModuleSettingsSchemaName = "module-settings.v1"
+# The folder under the home that holds one file per module, <module>.json.
+$script:HordeModuleSettingsFolder = "settings"
 # THE LONGEST FILE THAT IS READ, in characters of text and, for the file itself, in bytes. Forty
 # settings, each with a forty-character name and a short value, come to about 2500 characters
 # (reckoned, not measured), so this is a hundred times a large file and still small to hold in memory.
@@ -316,6 +324,13 @@ function ConvertTo-HordeModuleSettingsPlain {
     return $sb.ToString()
 }
 
+function Get-HordeModuleSettingsFileSentence {
+    # The one sentence for a file that cannot be used as a whole, whoever found out: the text reading
+    # or the file reading.
+    param([string]$Module, [string]$Problem)
+    return ("the settings file of " + $Module + " " + $Problem + "; every setting of " + $Module + " is its default")
+}
+
 function Assert-HordeModuleSettingsDeclaration {
     # Only what New-HordeModuleSettings returned is a declaration: a hand-built table was never checked.
     param($Declaration)
@@ -369,7 +384,7 @@ function Read-HordeModuleSettingsText {
         $body = $Text
         if ($body.Length -gt 0 -and [int]$body[0] -eq 0xFEFF) { $body = $body.Substring(1) }
         $doc = Read-HordeModuleSettingsDocument -Text $body
-        foreach ($problem in @($doc.problems)) { [void]$sentences.Add("the settings file of " + $module + " " + $problem + "; every setting of " + $module + " is its default") }
+        foreach ($problem in @($doc.problems)) { [void]$sentences.Add((Get-HordeModuleSettingsFileSentence -Module $module -Problem $problem)) }
         if ($null -ne $doc.settings) {
             # NAMES ARE COMPARED EXACTLY, so the file's keys go through an ordinal dictionary as the
             # declaration's fields did: a property read on the parsed object would ignore case.
@@ -395,4 +410,52 @@ function Read-HordeModuleSettingsText {
     foreach ($name in @($values.Keys)) { Add-Member -InputObject $answer -NotePropertyName $name -NotePropertyValue $values[$name] }
     $findings = [string[]]@($sentences | ForEach-Object { ConvertTo-HordeModuleSettingsPlain -Text $_ -Max $script:HordeModuleSettingsFindingShown })
     return [pscustomobject]@{ values = $answer; findings = $findings }
+}
+
+function Get-HordeModuleSettingsPath {
+    # Where a module's file is: <home>\settings\<module>.json. A path only: nothing is looked at.
+    # Without -HordeHome the home is Horde's own (core/Home.ps1), whose refusal of a relative HORDE_HOME
+    # is passed on as it is: that is no file's fault, and no default would be the right answer to it.
+    param([Parameter(Mandatory = $true)]$Declaration, [string]$HordeHome = "")
+    Assert-HordeModuleSettingsDeclaration -Declaration $Declaration
+    $base = $HordeHome
+    if ($base -eq "") { $base = Get-HordeHome }
+    elseif (-not (Test-HordeModuleSettingFolder -Path $base)) { throw ("-HordeHome must be an absolute path, not '" + $base + "'") }
+    return [System.IO.Path]::Combine($base, $script:HordeModuleSettingsFolder, ($Declaration.module + ".json"))
+}
+
+function Get-HordeModuleSettings {
+    # A module's settings from its file under the home: { values; findings; path }. READS THAT ONE
+    # FILE AND WRITES NOTHING: no home, no settings folder and no file is ever created here (core/Home.ps1:
+    # "a reader must not make folders"), so a module with no file leaves no trace of having asked.
+    # A file or folder that is not there is every default and no finding. A file that is there and
+    # cannot be used is ONE finding and every default: larger than the limit (its length is asked
+    # before a byte is read), held by another program for itself, a folder in its place, or bytes that
+    # are not UTF-8 - which is what Windows PowerShell 5.1's own > writes (UTF-16), so the finding
+    # says how to save it. The decoder throws on a bad byte; a lenient one would put U+FFFD in a
+    # folder's name and say nothing.
+    param([Parameter(Mandatory = $true)]$Declaration, [string]$HordeHome = "")
+    $path = Get-HordeModuleSettingsPath -Declaration $Declaration -HordeHome $HordeHome
+    $text = $null
+    $trouble = ""
+    $stream = $null
+    try {
+        # Shared for reading, writing and deleting (core/ReadShared.ps1): an editor saving the file by
+        # swapping a new one into place must not fail because a window was reading it.
+        $stream = Open-HordeSharedStream -Path $path
+        if ($stream.Length -gt $script:HordeModuleSettingsMaxLength) { $trouble = "is larger than " + $script:HordeModuleSettingsMaxLength + " bytes" }
+        else {
+            $buffer = New-Object System.IO.MemoryStream
+            $stream.CopyTo($buffer)
+            try { $text = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($buffer.ToArray()) }
+            catch { $trouble = "is not UTF-8 text; save it as UTF-8" }
+        }
+    } catch {
+        $cause = $_.Exception.GetBaseException()
+        if (-not ($cause -is [System.IO.FileNotFoundException] -or $cause -is [System.IO.DirectoryNotFoundException])) { $trouble = "cannot be read (" + $cause.GetType().Name + ")" }
+    } finally { if ($null -ne $stream) { $stream.Dispose() } }
+    $read = Read-HordeModuleSettingsText -Declaration $Declaration -Text $text
+    $findings = $read.findings
+    if ($trouble -ne "") { $findings = [string[]]@(Get-HordeModuleSettingsFileSentence -Module $Declaration.module -Problem $trouble) }
+    return [pscustomobject]@{ values = $read.values; findings = $findings; path = $path }
 }
