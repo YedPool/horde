@@ -78,6 +78,14 @@
 .hd-bg:focus-visible { outline: 1px solid var(--muted); }
 .hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
 .hd-sub { padding-left: 54px; }
+/* A QUESTION OF PARTS (list.js): a row per part - its letter and words, then its own field under
+   them - one after another, the mark beside the whole. */
+.hd-parts { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; row-gap: 2px; }
+.hd-partlab { display: flex; align-items: baseline; column-gap: 6px; color: var(--muted); overflow-wrap: anywhere; }
+.hd-partlet { flex: 0 0 auto; color: var(--ink); font-weight: 600; }
+.hd-partwords { flex: 1 1 auto; min-width: 0; unicode-bidi: plaintext; }
+.hd-partfield { margin-left: 20px; width: calc(100% - 20px); box-sizing: border-box; }
+.hd-partsrec { color: var(--muted); overflow-wrap: anywhere; }
 .hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
   .hd-count { display: none; }

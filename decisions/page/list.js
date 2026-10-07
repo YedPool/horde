@@ -130,6 +130,83 @@
     return out;
   }
 
+  // A QUESTION OF SEVERAL PARTS IS ANSWERED PART BY PART (the owner's question 28, 2026-10-07: five
+  // parts, (a) to (e), and his stored answer was the one letter "a" - he began "a ..." and a key saved
+  // it). Each part gets a small field of its own, labelled with its letter and its words; Enter and
+  // Tab go from part to part; the answer is sent ONCE, when the last part is left (or on Ctrl+Enter),
+  // as one message with a line per part, "(a) ...", so that the keeper reads it whole. The store keeps
+  // parts as the question's list "parts" (decisions/Rules.ps1), each written by the keeper as
+  // "(a) words" (seen in the real list that day: questions 6 and 28 to 31); a part that does not begin
+  // so is given the next letter. ONE RECOMMENDATION FOR ALL PARTS, written "(a) approve; (b) approve;
+  // ..." as the keeper writes it, gives each part its own grey suggestion; written any other way it is
+  // shown once, above the fields.
+  var PART_MARK = /^\s*\(([a-z])\)\s*/;
+  function partsOf(q) {
+    var list = Array.isArray(q.parts) ? q.parts : [];
+    if (textOf(q.kind) !== "parts" || list.length < 2) { return null; }
+    var out = [];
+    for (var i = 0; i < list.length; i += 1) {
+      var words = textOf(list[i]);
+      var mark = PART_MARK.exec(words);
+      var letter = mark ? mark[1] : String.fromCharCode(97 + i);
+      out.push({ letter: letter, words: mark ? words.slice(mark[0].length) : words, rec: "" });
+    }
+    // Each letter once, or they are not parts that can be told apart: then one field, as before.
+    var seen = Object.create(null);
+    for (var j = 0; j < out.length; j += 1) { if (seen[out[j].letter]) { return null; } seen[out[j].letter] = true; }
+    var rec = textOf(q.recommendation);
+    var each = splitByParts(rec, out);
+    if (each) { for (var k = 0; k < out.length; k += 1) { out[k].rec = each[k]; } }
+    return { parts: out, recOnce: each ? "" : rec };
+  }
+  // A text written "(a) ...; (b) ..." cut at each part's letter, in the parts' order: the words of
+  // each, or null when the text does not name every part, in order, at the start of a line or after a
+  // separator. Used for the recommendation and for a saved answer alike.
+  function splitByParts(text, parts) {
+    if (!text) { return null; }
+    var at = [];
+    var from = 0;
+    for (var i = 0; i < parts.length; i += 1) {
+      var re = new RegExp("(^|[\\s;,.])\\(" + parts[i].letter + "\\)\\s*", "g");
+      re.lastIndex = from;
+      var hit = re.exec(text);
+      if (!hit || (i === 0 && text.slice(0, hit.index + hit[1].length).trim() !== "")) { return null; }
+      at.push({ start: hit.index + hit[1].length, body: hit.index + hit[0].length });
+      from = hit.index + hit[0].length;
+    }
+    var out = [];
+    for (var j = 0; j < at.length; j += 1) {
+      var end = j + 1 < at.length ? at[j + 1].start : text.length;
+      out.push(text.slice(at[j].body, end).replace(/[\s;,]+$/, "").replace(/\s+$/, ""));
+    }
+    return out;
+  }
+  // A message the parts made (joinParts), read back into the parts' fields: the words of each, "" for
+  // a part it leaves out; or null when it is not such a message (an answer given before the parts had
+  // fields, or by chat, is shown as what was said, never pulled apart by guesswork).
+  function readParts(text, parts) {
+    if (!text) { return null; }
+    var values = parts.map(function () { return null; });
+    var current = -1;
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i += 1) {
+      var mark = /^\(([a-z])\) ?/.exec(lines[i]);
+      var index = -1;
+      if (mark) { for (var j = current + 1; j < parts.length; j += 1) { if (parts[j].letter === mark[1]) { index = j; break; } } }
+      if (index >= 0) { current = index; values[index] = lines[i].slice(mark[0].length); }
+      else if (current >= 0) { values[current] += "\n" + lines[i]; }
+      else { return null; }
+    }
+    return values.map(function (v) { return v === null ? "" : v; });
+  }
+  // The one message the parts make: a line per answered part, "(a) words". A part left empty is left
+  // out; nothing answered is no message.
+  function joinParts(parts, values) {
+    var lines = [];
+    for (var i = 0; i < parts.length; i += 1) { if (textOf(values[i]).trim() !== "") { lines.push("(" + parts[i].letter + ") " + values[i]); } }
+    return lines.join("\n");
+  }
+
   // THE LETTER BEFORE THE NUMBER: who asked. "Orc D" is D; a name that begins with one capital
   // letter standing alone ("M (...)") is that letter; anybody else is the keeper of the list, M.
   function letterOf(askedBy) {
@@ -216,6 +293,12 @@
       return standing ? textOf(standing.text) : "";
     }
     function recOf(q) { return textOf(q.recommendation); }
+    // What stands in a line's field, or in its parts' fields put together as the one message they make.
+    function lineValue(line) {
+      if (!line.parts) { return line.field.value; }
+      return joinParts(line.parts, line.fields.map(function (f) { return f.value; }));
+    }
+    function fieldIndex(line, field) { return line.fields.indexOf(field); }
     // What became of what stands in a field: { full, short, note } - the mark in words, its short
     // form, and what else must be said of a saved answer, which goes on a line of its own under it.
     function markOf(q, value) {
@@ -304,8 +387,12 @@
     function shownLines() { return drawnLines.filter(function (line) { return line.field.offsetParent !== null; }); }
     function focusedLine() {
       var act = document.activeElement;
-      for (var i = 0; i < drawnLines.length; i += 1) { if (drawnLines[i].field === act) { return drawnLines[i]; } }
+      for (var i = 0; i < drawnLines.length; i += 1) { if (drawnLines[i].fields.indexOf(act) >= 0) { return drawnLines[i]; } }
       return null;
+    }
+    function focusedField() {
+      var line = focusedLine();
+      return line ? document.activeElement : null;
     }
 
     // A FIELD IS AS TALL AS ITS WORDS, in whole lines: one when empty, unless the grey suggestion
@@ -313,6 +400,7 @@
     // A SAVED ANSWER THE CARET IS NOT IN RESTS AT REST_LINES, and the mark says how many more it has
     // (header, ROOM IS KEPT). Words that are not saved are never shortened.
     function fit(line) {
+      if (line.parts) { line.fields.forEach(fitPart); return; }
       var field = line.field;
       if (field.offsetParent === null) { return; }
       var linePx = parseFloat(window.getComputedStyle(field).lineHeight) || 22;
@@ -328,10 +416,22 @@
       line.more.textContent = shown < lines ? ("+" + (lines - shown) + (lines - shown === 1 ? " line" : " lines")) : "";
     }
 
+    // A part's field: as tall as its words, never rested (its words are short, and they are the answer).
+    function fitPart(field) {
+      if (field.offsetParent === null) { return; }
+      var linePx = parseFloat(window.getComputedStyle(field).lineHeight) || 22;
+      var empty = field.value === "" && field.placeholder !== "";
+      if (empty) { field.value = field.placeholder; }
+      field.style.height = "auto";
+      var lines = Math.max(1, Math.round(field.scrollHeight / linePx));
+      if (empty) { field.value = ""; }
+      field.style.height = "calc(" + lines + " * var(--line-px))";
+    }
+
     function refresh(line) {
       // The mark and the refusal of one line, from what is known now. No redraw.
       var s = sent[line.q.number];
-      var mark = markOf(line.q, line.field.value);
+      var mark = markOf(line.q, lineValue(line));
       line.markFull.textContent = mark.full;
       line.markShort.textContent = mark.short;
       line.mark.hidden = mark.full === "";
@@ -347,10 +447,11 @@
       if (box.top < inset) { window.scrollBy(0, box.top - inset); }
       else if (box.bottom > window.innerHeight) { window.scrollBy(0, Math.min(box.top - inset, box.bottom - window.innerHeight + 8)); }
     }
-    function enter(line) {
-      line.field.focus({ preventScroll: true });
-      var end = line.field.value.length;
-      try { line.field.setSelectionRange(end, end); } catch (e) { /* a field not drawn has no caret */ }
+    function enter(line, part) {
+      var field = line.fields[Math.max(0, Math.min(line.fields.length - 1, part === undefined ? 0 : (part < 0 ? line.fields.length + part : part)))];
+      field.focus({ preventScroll: true });
+      var end = field.value.length;
+      try { field.setSelectionRange(end, end); } catch (e) { /* a field not drawn has no caret */ }
       arrived = { number: line.q.number, at: Date.now(), bySave: false };
       intoView(line);
       onChange();
@@ -359,7 +460,8 @@
       var shown = shownLines();
       var at = shown.indexOf(line);
       var next = shown[at + step];
-      if (at >= 0 && next) { enter(next); return true; }
+      // Back into a question of parts: its last part, the one just above.
+      if (at >= 0 && next) { enter(next, step < 0 ? -1 : 0); return true; }
       // Past the last field in view: on to the folded line of what is parked, where a key unfolds it.
       if (at >= 0 && step > 0) {
         for (var i = 0; i < drawnHeads.length; i += 1) {
@@ -381,7 +483,7 @@
     function typed(line) {
       // What stands in the field now: a draft unless it is the standing answer, word for word.
       var q = line.q;
-      var value = line.field.value;
+      var value = lineValue(line);
       var standing = standingOf(q);
       if (value === (standing ? textOf(standing.text) : "")) { delete drafts[q.number]; } else { drafts[q.number] = value; }
       keepDrafts();
@@ -392,13 +494,14 @@
       refresh(line);
       onChange();
     }
-    function setValue(line, value) {
-      line.field.value = value;
-      try { line.field.setSelectionRange(value.length, value.length); } catch (e) { /* not drawn */ }
+    function setValue(line, value, field) {
+      field = field || line.field;
+      field.value = value;
+      try { field.setSelectionRange(value.length, value.length); } catch (e) { /* not drawn */ }
       typed(line);
     }
-    function insert(line, text) {
-      var f = line.field;
+    function insert(line, text, field) {
+      var f = field || line.field;
       var from = f.selectionStart, to = f.selectionEnd;
       f.value = f.value.slice(0, from) + text + f.value.slice(to);
       try { f.setSelectionRange(from + text.length, from + text.length); } catch (e) { /* not drawn */ }
@@ -418,7 +521,7 @@
         s.refusal = textOf(result && result.reason) || "Not saved, and no reason was given.";
         // BACK TO THE WORDS THAT WERE NOT SAVED, unless the reader is typing somewhere else.
         var now = focusedLine();
-        if (line && now !== line && (!now || now.field.value === "" || drafts[now.q.number] === undefined)) { enter(line); }
+        if (line && now !== line && (!now || lineValue(now) === "" || drafts[now.q.number] === undefined)) { enter(line); }
       }
       if (line) { refresh(line); fit(line); }
       onChange();
@@ -427,7 +530,7 @@
       // Send what stands in the field, if it says something and is not already the standing answer.
       // Returns whether there was anything to send.
       var q = line.q;
-      var text = line.field.value;
+      var text = lineValue(line);
       var standing = standingOf(q);
       if (text.trim() === "" || (standing && text === textOf(standing.text))) { return false; }
       var s = sentOf(q.number);
@@ -447,15 +550,55 @@
       draw();
     }
 
-    function onKey(e, line) {
+    // THE KEYS IN A PART'S FIELD (header, A QUESTION OF SEVERAL PARTS): Enter and Tab go to the next
+    // part, and from the last part they send the whole answer once and go to the next question;
+    // Shift+Tab goes back a part. A Tab on an empty part with a suggestion fills it and stays; a Tab
+    // on a part of one character moves on. Ctrl+Enter in an empty part takes its suggestion; on the
+    // first part with every part empty it takes every part's; then the answer is sent and the caret
+    // goes to the next question.
+    function onPartKey(e, line, field) {
+      var at = fieldIndex(line, field);
+      var last = at === line.fields.length - 1;
+      var key = e.key;
+      var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
+      var rec = line.parts[at].rec;
+      var leave = function () { var sentNow = save(line); move(line, 1); if (sentNow) { arrived.bySave = true; } };
+      if (key === "Enter" && e.ctrlKey) {
+        e.preventDefault();
+        var allEmpty = line.fields.every(function (f) { return f.value.trim() === ""; });
+        if (at === 0 && allEmpty) { line.fields.forEach(function (f, i) { if (line.parts[i].rec) { f.value = line.parts[i].rec; } }); typed(line); }
+        else if (field.value.trim() === "" && rec) { setValue(line, rec, field); }
+        leave();
+        return true;
+      }
+      if (key === "Enter" && plain && !e.shiftKey) {
+        e.preventDefault();
+        if (last) { leave(); } else { enter(line, at + 1); }
+        return true;
+      }
+      if (key === "Tab" && e.shiftKey) { e.preventDefault(); if (at > 0) { enter(line, at - 1); } else { move(line, -1); } return true; }
+      if (key === "Tab" && plain) {
+        e.preventDefault();
+        if (field.value === "" && rec) { setValue(line, rec, field); return true; }
+        if (!last) { enter(line, at + 1); return true; }
+        if (field.value.trim().length === 1) { move(line, 1); return true; }
+        leave();
+        return true;
+      }
+      if (key === "ArrowRight" && plain && !e.shiftKey && field.value === "" && rec) { e.preventDefault(); setValue(line, rec, field); return true; }
+      return false;
+    }
+
+    function onKey(e, line, field) {
       if (e.isComposing) { return; }
+      field = field || line.field;
+      if ((e.key === "Enter" && e.shiftKey) || ((e.key === "j" || e.key === "J") && e.ctrlKey && !e.altKey)) { e.preventDefault(); insert(line, "\n", field); return; }
+      if (line.parts && onPartKey(e, line, field)) { return; }
       var q = line.q;
-      var field = line.field;
       var key = e.key;
       var plain = !e.ctrlKey && !e.altKey && !e.metaKey;
       var blank = field.value.trim() === "";
       var rec = recOf(q);
-      if ((key === "Enter" && e.shiftKey) || ((key === "j" || key === "J") && e.ctrlKey && !e.altKey)) { e.preventDefault(); insert(line, "\n"); return; }
       if (key === "Enter" && e.ctrlKey) {
         e.preventDefault();
         if (blank) { if (!rec) { return; } setValue(line, rec); }
@@ -544,20 +687,60 @@
         said.push(drawn);
       });
       if (q.thread && textOf(q.thread.problem)) { ans.appendChild(make("div", "hd-refusal", q.thread.problem)); }
+      var info = partsOf(q);
       var fl = make("div", "hd-fl");
-      var field = make("textarea", "hd-field");
-      field.rows = 1;
-      field.setAttribute("dir", "auto");
-      field.setAttribute("aria-label", "Your answer to question " + q.number);
-      field.spellcheck = false;
-      field.placeholder = recOf(q);
-      field.value = valueOf(q);
       var mark = make("span", "hd-mark");
       var markFull = make("span", "hd-mark-full");
       var markShort = make("span", "hd-mark-short");
       var more = make("span", "hd-mark-more");
       mark.appendChild(markFull); mark.appendChild(markShort); mark.appendChild(more);
-      fl.appendChild(field); fl.appendChild(mark);
+      var fields = [];
+      var field;
+      if (info) {
+        // A field per part (header, A QUESTION OF SEVERAL PARTS), across the whole row.
+        ans.classList.add("wide");
+        var standingNow = standingOf(q);
+        var values = readParts(valueOf(q), info.parts);
+        if (standingNow && !readParts(textOf(standingNow.text), info.parts)) {
+          // His answer from before the parts had fields: shown as what he said, one line, never pulled apart.
+          var earlierAnswer = drawMessage(standingNow);
+          earlierAnswer.row.classList.add("brief");
+          ans.appendChild(earlierAnswer.row);
+          said.push(earlierAnswer);
+        }
+        if (!values) { values = info.parts.map(function () { return ""; }); }
+        if (info.recOnce) { ans.appendChild(make("div", "hd-partsrec", "Recommended: " + info.recOnce)); }
+        var box = make("div", "hd-parts");
+        info.parts.forEach(function (part, i) {
+          var prow = make("div", "hd-part");
+          var label = make("div", "hd-partlab");
+          label.appendChild(make("span", "hd-partlet", "(" + part.letter + ")"));
+          label.appendChild(make("span", "hd-partwords", part.words));
+          var pf = make("textarea", "hd-field hd-partfield");
+          pf.rows = 1;
+          pf.setAttribute("dir", "auto");
+          pf.setAttribute("aria-label", "Your answer to part " + part.letter + " of question " + q.number);
+          pf.spellcheck = false;
+          pf.placeholder = part.rec;
+          pf.value = values[i];
+          prow.appendChild(label); prow.appendChild(pf);
+          box.appendChild(prow);
+          fields.push(pf);
+        });
+        fl.appendChild(box); fl.appendChild(mark);
+        fl.classList.add("parts");
+        field = fields[0];
+      } else {
+        field = make("textarea", "hd-field");
+        field.rows = 1;
+        field.setAttribute("dir", "auto");
+        field.setAttribute("aria-label", "Your answer to question " + q.number);
+        field.spellcheck = false;
+        field.placeholder = recOf(q);
+        field.value = valueOf(q);
+        fields.push(field);
+        fl.appendChild(field); fl.appendChild(mark);
+      }
       var markNote = make("div", "hd-marknote");
       markNote.hidden = true;
       var refusal = make("div", "hd-refusal");
@@ -585,12 +768,14 @@
         }
         wrap.appendChild(kids);
       }
-      var drawn = { q: q, wrap: wrap, row: row, num: no, letter: letter, txt: txt, field: field, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
-      field.addEventListener("input", function () { typed(drawn); });
-      field.addEventListener("keydown", function (e) { onKey(e, drawn); });
-      // The caret in it, an answer is whole; the caret gone, a saved one rests again.
-      field.addEventListener("focus", function () { fit(drawn); onChange(); });
-      field.addEventListener("blur", function () { fit(drawn); onChange(); });
+      var drawn = { q: q, wrap: wrap, row: row, num: no, letter: letter, txt: txt, field: field, fields: fields, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
+      fields.forEach(function (f) {
+        f.addEventListener("input", function () { typed(drawn); });
+        f.addEventListener("keydown", function (e) { onKey(e, drawn, f); });
+        // The caret in it, an answer is whole; the caret gone, a saved one rests again.
+        f.addEventListener("focus", function () { fit(drawn); onChange(); });
+        f.addEventListener("blur", function () { fit(drawn); onChange(); });
+      });
       refresh(drawn);
       drawnLines.push(drawn);
       return wrap;
@@ -601,7 +786,8 @@
       var before = place();
       // The caret, to be put back where it was: a redraw makes every field anew.
       var had = focusedLine();
-      var caret = had ? { number: had.q.number, from: had.field.selectionStart, to: had.field.selectionEnd } : null;
+      var hadField = had ? document.activeElement : null;
+      var caret = had ? { number: had.q.number, part: had.fields.indexOf(hadField), from: hadField.selectionStart, to: hadField.selectionEnd } : null;
       while (root.firstChild) { root.removeChild(root.firstChild); }
       drawnHeads = [];
       drawnLines = [];
@@ -676,10 +862,11 @@
       }
       if (caret) {
         var again = lineOf(caret.number);
-        if (again && again.field.offsetParent !== null) {
-          again.field.focus({ preventScroll: true });
+        var back = again ? (again.fields[caret.part] || again.field) : null;
+        if (back && back.offsetParent !== null) {
+          back.focus({ preventScroll: true });
           fit(again);
-          try { again.field.setSelectionRange(Math.min(caret.from, again.field.value.length), Math.min(caret.to, again.field.value.length)); } catch (e) { /* not drawn */ }
+          try { back.setSelectionRange(Math.min(caret.from, back.value.length), Math.min(caret.to, back.value.length)); } catch (e) { /* not drawn */ }
         }
       }
       timing.draws += 1;
@@ -733,9 +920,9 @@
         else if (step.do === "keyboard") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } takeKeyboard(); arrived.at = 0; }
         else if (step.do === "window-focus") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } window.dispatchEvent(new Event("focus")); }
         else if (step.do === "blur") { if (document.activeElement && document.activeElement.blur) { document.activeElement.blur(); } onChange(); }
-        else if (step.do === "type") { if (line) { insert(line, textOf(step.text)); } }
+        else if (step.do === "type") { if (line) { insert(line, textOf(step.text), focusedField()); } }
         else if (step.do === "key") {
-          (line ? line.field : (document.activeElement || document.body)).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
+          (line ? focusedField() : (document.activeElement || document.body)).dispatchEvent(new KeyboardEvent("keydown", { key: textOf(step.key), shiftKey: step.shift === true, ctrlKey: step.ctrl === true, bubbles: true, cancelable: true }));
         }
         else if (step.do === "settle") { return settle().then(next); }
         else if (step.do === "sleep") { return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, Math.min(Number(step.ms) || 0, 5000))); }).then(next); }
@@ -884,7 +1071,9 @@
             n: line.num.textContent, l: line.letter.textContent, t: cut(line.txt.textContent, limits.lineChars), s: "", g: line.head,
             open: line.wrap.classList.contains("open"), dim: line.wrap.classList.contains("dim"),
             rows: Math.round(line.txt.getBoundingClientRect().height / linePx), clip: clipped(line.txt),
-            a: cut(line.field.value, limits.lineChars), p: cut(line.field.placeholder, limits.lineChars), m: cut(line.markFull.textContent + (line.markNote.textContent ? " (" + line.markNote.textContent + ")" : ""), limits.lineChars), more: cut(line.more.textContent, limits.lineChars),
+            a: cut(lineValue(line), limits.lineChars), p: cut(line.field.placeholder, limits.lineChars),
+            pa: line.parts ? line.fields.map(function (f) { return cut(f.value, limits.lineChars); }) : [],
+            pp: line.parts ? line.fields.map(function (f) { return cut(f.placeholder, limits.lineChars); }) : [], m: cut(line.markFull.textContent + (line.markNote.textContent ? " (" + line.markNote.textContent + ")" : ""), limits.lineChars), more: cut(line.more.textContent, limits.lineChars),
             r: cut(line.refusal.textContent, limits.lineChars), fh: Math.round(line.field.getBoundingClientRect().height / linePx),
             th: line.said.slice(0, 8).map(function (s) { return cut(s.who + ": " + s.said.textContent, limits.lineChars); }),
             brief: line.said.filter(function (s) { return s.row.classList.contains("brief"); }).length
@@ -899,7 +1088,7 @@
         drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { onHead = h.txt.textContent; } });
         var frames = timing.frames.slice().sort(function (a, b) { return a - b; });
         var at = function (share) { return frames.length ? Math.round(frames[Math.min(frames.length - 1, Math.floor(share * frames.length))]) : 0; };
-        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus(),
+        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusPart: has && has.parts ? has.fields.indexOf(document.activeElement) : -1, focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus(),
           timing: { keys: timing.keys, waitMaxMs: Math.round(timing.waitMax), frameP50Ms: at(0.5), frameP95Ms: at(0.95), frameMaxMs: frames.length ? Math.round(frames[frames.length - 1]) : 0, draws: timing.draws, drawMaxMs: Math.round(timing.drawMax), drawLastMs: Math.round(timing.drawLast) } };
         return out;
       },
