@@ -1,13 +1,18 @@
-# platform/windows/WindowFollow.ps1 - keep one window beside another window this process does not own.
+# platform/windows/WindowFollow.ps1 - the Windows follower of core/WindowFollowPort.ps1: keep one
+# window of this process beside another window this process does not own.
 #
-# WHAT IT DOES, and nothing else (decisions window attach design, 2026-10-06): given the native handle
-# of a window - any window, of any program - and the handle of a window of this process, it makes the
-# second a companion of the first: placed relative to it, re-placed when it moves or is resized, above
-# it, hidden while it is minimised and back when it is restored, and never given the keyboard by any
-# of that. It does not know what either window shows, how the first one was found, or what a terminal
-# is. The same part can later put any Horde window beside any session's window.
+# A CALLER NEVER NAMES THIS FILE'S FUNCTIONS. It loads the port and every follower found by folder,
+# and asks the port; this file registers itself there at its last line. What the verbs mean, and what a
+# follow record is, is written once, in the port's header. This file is HOW Windows does them.
 #
-# HOW, as the proof of 2026-10-06 measured it against a terminal window started for the purpose:
+# WHAT IT DOES, and nothing else: given the native handle of a window - any window, of any program -
+# and the handle of a window of this process, it makes the second a companion of the first: placed
+# relative to it, re-placed when it moves or is resized, above it, hidden while it is minimised and
+# back when it is restored, and never given the keyboard by any of that. It does not know what either
+# window shows or how the first one was found.
+#
+# HOW, as the proof of 2026-10-06 measured it against a window of another program started for the
+# purpose:
 #   - THE OTHER WINDOW IS MADE THE OWNER of ours (GWLP_HWNDPARENT), which Windows allows across
 #     programs. An owned window always stands above its owner, is hidden when the owner is minimised
 #     and returns when it is restored; Windows does all three, and nothing here polls for them.
@@ -17,49 +22,47 @@
 #     restore and a maximise, above again, with the foreground window the same throughout.
 #   - EVERY PLACEMENT IS SWP_NOACTIVATE, so placing never takes the keyboard.
 #
-# WHERE IT IS PLACED IS A PURE FUNCTION, Get-HordeWindowFollowPlacement: the other window's rectangle
-# and the screen's scale in, a rectangle out. It is tested with no window (test/test-window-follow.ps1),
-# and the native half only carries its answer to Windows.
-#
-# ONE MODE IS BUILT: floating, at the top right of the other window, about a third of its width and
-# most of its height. THE SEAMS LEFT FOR LATER, and not built: a mode is a name handed to the pure
-# function, which refuses any it does not know, so side-by-side is a second branch there and a call
-# that sizes the other window here; a place the person dragged it to is an offset handed to the same
-# function; the small tab is a size. None of the three exists yet.
+# WHERE IT IS PLACED is the port's pure function, Get-HordeWindowFollowPlacement, and nothing of this
+# file's: the native half only carries its answer to Windows.
 #
 # PIXELS ARE REAL PIXELS only when the process draws at each screen's real scale, and asking Windows
-# for that has ONE owner, platform/windows/Scale.ps1, loaded here: a caller that works out a place
-# before its window exists calls Enable-HordeWindowsRealScale first, or the rectangle it reads is a
-# scaled one. (Measured 2026-10-06 with the process made aware first, at one and a half times the
-# ordinary scale: a terminal window at 60,60 of 1100 by 640 real pixels, and the companion standing at
-# 644,132, 480 by 532 - exactly the place worked out for it. What it looked like in the first second,
-# before it was followed, was not observed.) This file only reads the other window's scale
-# (GetDpiForWindow) so that margins and smallest sizes are the same physical size on every screen.
-# NOT MEASURED: a second monitor or a second scale - the measuring machine has one screen.
+# for that has ONE owner, platform/windows/Scale.ps1, loaded here and handed to the port as this
+# follower's RealScale: a caller that works out a place before its window exists asks for it first, or
+# the rectangle it reads is a scaled one. (Measured 2026-10-06 with the process made aware first, at
+# one and a half times the ordinary scale: a window at 60,60 of 1100 by 640 real pixels, and the
+# companion standing at 644,132, 480 by 532 - exactly the place worked out for it. What it looked like
+# in the first second, before it was followed, was not observed.) This file reads the other window's
+# scale (GetDpiForWindow, over 96) so that margins and smallest sizes are the same physical size on
+# every screen. NOT MEASURED: a second monitor or a second scale - the measuring machine has one screen.
 #
 # WHAT A CALLER MUST KNOW ABOUT THE OTHER WINDOW GOING AWAY.
-#   - Its PROCESS ENDS: measured 2026-10-06 (the terminal process ended by its handle), our window
-#     stays, owned by nothing that exists. Update-HordeWindowFollow then answers "lost", and the
-#     caller stops following (Stop-HordeWindowFollow clears the owner) and says so.
+#   - Its PROCESS ENDS: measured 2026-10-06 (the other program ended by its handle), our window
+#     stays, owned by nothing that exists. The next ask answers "lost".
 #   - Its WINDOW IS CLOSED while its process lives on: Windows documents that an owned window is
-#     destroyed with its owner. NOT MEASURED here - the test terminal asks before it closes a window.
+#     destroyed with its owner. NOT MEASURED here.
 # Following a session into a new window is a later slice's.
 #
+# ONE FOLLOW AT A TIME: the native half keeps one hook and one target, so starting a second follow
+# ends the first.
+#
+# THE TYPE IS COMPILED ON FIRST USE, not when this file is loaded, and its name carries a version, so
+# a later change is a new type and never a clash with one already loaded in the session
+# (platform/windows/Scale.ps1 does the same). NOT MEASURED: a 32-bit process, where user32 has no
+# SetWindowLongPtrW; the port answers "unavailable" with what Windows said.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
-
 . (Join-Path $PSScriptRoot "Scale.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Platform.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\WindowFollowPort.ps1")
 
-$script:HordeWindowFollowModes = @("floating")
-# The floating mode's numbers, in pixels at the ordinary scale of 96 dots per inch; each is multiplied
-# by the other window's scale. The margins are the proof's: 24 from the right edge, and 48 from the top
-# so that the other window's title and tab bar stay visible above ours.
-$script:HordeWindowFollowFloating = @{ marginTop = 48; marginRight = 24; marginBottom = 24; widthShare = 3; minWidth = 320; minHeight = 200 }
-$script:HordeWindowFollow = $null
+# The one follow of this process: { target; companion; mode; state; reason; placed; placements }, or
+# nothing. Kept across a second load of this file.
+if ($null -eq (Get-Variable -Name HordeWindowsFollow -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeWindowsFollow = $null }
 
-$script:HordeWindowFollowSource = @'
+function Get-HordeWindowsFollowSource { return @'
 using System;
 using System.Runtime.InteropServices;
-public static class HordeWindowFollowNative {
+public static class HordeWindowsFollowV1 {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     public delegate void WinEventDelegate(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
     [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate cb, uint pid, uint tid, uint flags);
@@ -68,12 +71,8 @@ public static class HordeWindowFollowNative {
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
-    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
-    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
 
     static IntPtr target = IntPtr.Zero, hook = IntPtr.Zero;
@@ -89,132 +88,140 @@ public static class HordeWindowFollowNative {
     }
     public static bool Exists(long h) { return IsWindow(new IntPtr(h)); }
     public static bool Minimised(long h) { return IsIconic(new IntPtr(h)); }
-    public static bool Visible(long h) { return IsWindowVisible(new IntPtr(h)); }
-    public static long Foreground() { return GetForegroundWindow().ToInt64(); }
-    public static long Owner(long h) { return GetWindowLongPtr(new IntPtr(h), -8).ToInt64(); }
     public static uint ProcessOf(long h) { uint pid; GetWindowThreadProcessId(new IntPtr(h), out pid); return pid; }
     public static int Dpi(long h) { try { uint d = GetDpiForWindow(new IntPtr(h)); return d == 0 ? 96 : (int)d; } catch (EntryPointNotFoundException) { return 96; } }
     public static int[] Rect(long h) { RECT r; if (!GetWindowRect(new IntPtr(h), out r)) return null; return new int[] { r.Left, r.Top, r.Right, r.Bottom }; }
     // SWP_NOZORDER (4) | SWP_NOACTIVATE (0x10): the size and the place, never the order, never the keyboard.
     public static bool Place(long h, int x, int y, int cx, int cy) { return SetWindowPos(new IntPtr(h), IntPtr.Zero, x, y, cx, cy, 0x0004 | 0x0010); }
-    public static bool IsAbove(long top, long below) {
-        IntPtr h = new IntPtr(below); int guard = 0;
-        while (h != IntPtr.Zero && guard++ < 4000) { h = GetWindow(h, 3); if (h.ToInt64() == top) return true; }   // GW_HWNDPREV
-        return false;
-    }
-    public static bool Attach(long targetWindow, long follower, Action onMoved) {
-        Detach(0);
+    public static bool Attach(long targetWindow, long companion, Action onMoved) {
+        Unhook();
         target = new IntPtr(targetWindow);
         moved = onMoved;
-        SetWindowLongPtr(new IntPtr(follower), -8, target);     // GWLP_HWNDPARENT: the other window owns ours
+        SetWindowLongPtr(new IntPtr(companion), -8, target);     // GWLP_HWNDPARENT: the other window owns ours
         keep = new WinEventDelegate(OnEvent);
         // EVENT_OBJECT_LOCATIONCHANGE of the other window's process, delivered to this thread's message loop.
         hook = SetWinEventHook(0x800B, 0x800B, IntPtr.Zero, keep, ProcessOf(targetWindow), 0, 0);
         return hook != IntPtr.Zero;
     }
-    public static void Detach(long follower) {
+    // The delegate is NOT let go here: this may be called from inside it, when a report of a move
+    // finds the other window gone, and Windows is still on its way back through it. The next Attach
+    // replaces it.
+    public static void Unhook() {
         if (hook != IntPtr.Zero) { UnhookWinEvent(hook); hook = IntPtr.Zero; }
-        if (follower != 0 && IsWindow(new IntPtr(follower))) { SetWindowLongPtr(new IntPtr(follower), -8, IntPtr.Zero); }
-        target = IntPtr.Zero; moved = null; keep = null;
+        target = IntPtr.Zero; moved = null;
+    }
+    public static void Disown(long companion) {
+        if (IsWindow(new IntPtr(companion))) { SetWindowLongPtr(new IntPtr(companion), -8, IntPtr.Zero); }
     }
 }
-'@
+'@ }
 
-function Get-HordeWindowFollowModes { return @($script:HordeWindowFollowModes) }
-
-function Get-HordeWindowFollowPlacement {
-    # Where the companion stands, as { left; top; width; height } in pixels. -Target is the other
-    # window's rectangle { left; top; right; bottom }; -Dpi its screen's dots per inch (96 is the
-    # ordinary scale). A PURE FUNCTION: no window is read or moved here.
-    #
-    # FLOATING: the right edge 24 in from the other window's, the top 48 down from its top, a third of
-    # its width and all of its height but the margins - and never smaller than a list can be read in,
-    # nor wider than the other window allows.
-    param([Parameter(Mandatory = $true)]$Target, [string]$Mode = "floating", [int]$Dpi = 96)
-    if ($script:HordeWindowFollowModes -cnotcontains $Mode) { throw ("'" + $Mode + "' is not a way a window is followed; the ways built are: " + ($script:HordeWindowFollowModes -join ", ")) }
-    if ($Dpi -lt 48 -or $Dpi -gt 960) { throw ("" + $Dpi + " dots per inch is not a screen's scale") }
-    $left = [int]$Target.left; $top = [int]$Target.top; $right = [int]$Target.right; $bottom = [int]$Target.bottom
-    if ($right -le $left -or $bottom -le $top) { throw "the other window's rectangle is empty, so there is nowhere beside it" }
-    $f = $script:HordeWindowFollowFloating
-    # Whole pixels, rounded once per number, so that two placements from one rectangle are the same.
-    $scale = { param([int]$n) return [int][Math]::Round($n * $Dpi / 96.0) }
-    $marginTop = & $scale $f.marginTop; $marginRight = & $scale $f.marginRight; $marginBottom = & $scale $f.marginBottom
-    $targetWidth = $right - $left; $targetHeight = $bottom - $top
-    $width = [Math]::Max([int][Math]::Round($targetWidth / [double]$f.widthShare), (& $scale $f.minWidth))
-    # Never wider than the other window less a margin each side: on a narrow window it shrinks with it.
-    $width = [Math]::Min($width, [Math]::Max($targetWidth - 2 * $marginRight, 1))
-    $height = [Math]::Max($targetHeight - $marginTop - $marginBottom, [Math]::Min((& $scale $f.minHeight), [Math]::Max($targetHeight - $marginTop, 1)))
-    return [pscustomobject]@{ left = ($right - $marginRight - $width); top = ($top + $marginTop); width = $width; height = $height }
+function Initialize-HordeWindowsFollowType {
+    if (-not ("HordeWindowsFollowV1" -as [type])) { Add-Type -TypeDefinition (Get-HordeWindowsFollowSource) -ErrorAction Stop }
 }
 
-function Initialize-HordeWindowFollow {
-    if ($null -eq ("HordeWindowFollowNative" -as [type])) { Add-Type -TypeDefinition $script:HordeWindowFollowSource }
+function Get-HordeWindowsFollowRecord {
+    # The follow as the port's record: what is in $script:HordeWindowsFollow, or "none".
+    $s = $script:HordeWindowsFollow
+    if ($null -eq $s) { return (New-HordeWindowFollowRecord -State "none") }
+    return (New-HordeWindowFollowRecord -State $s.state -Reason $s.reason -Target $s.target -Companion $s.companion -Mode $s.mode -Placed $s.placed -Placements $s.placements -Events ([HordeWindowsFollowV1]::Events))
 }
 
-function Get-HordeWindowRectangle {
-    # A window's rectangle { left; top; right; bottom } and its screen's scale, or $null when Windows
-    # will not give one (the window is gone).
+function Get-HordeWindowsFollowRectangle {
+    # The port's Rectangle: known { left; top; right; bottom; scale }, or absent when Windows has no
+    # such window.
     param([Parameter(Mandatory = $true)][long]$Handle)
-    Initialize-HordeWindowFollow
-    $r = [HordeWindowFollowNative]::Rect($Handle)
-    if ($null -eq $r) { return $null }
-    return [pscustomobject]@{ left = $r[0]; top = $r[1]; right = $r[2]; bottom = $r[3]; dpi = [HordeWindowFollowNative]::Dpi($Handle) }
+    Initialize-HordeWindowsFollowType
+    $r = [HordeWindowsFollowV1]::Rect($Handle)
+    if ($null -eq $r) { return (New-HordeAbsent -Note "there is no such window") }
+    return (New-HordeKnown -Value ([pscustomobject]@{ left = $r[0]; top = $r[1]; right = $r[2]; bottom = $r[3]; scale = ([HordeWindowsFollowV1]::Dpi($Handle) / 96.0) }))
 }
 
-function Update-HordeWindowFollow {
-    # Place the companion again from where the other window is now. Returns the follow's state:
-    # following, or lost when the other window no longer exists. While the other window is minimised
-    # nothing is placed: Windows has hidden ours, and a minimised window's rectangle is not a place.
-    $s = $script:HordeWindowFollow
-    if ($null -eq $s) { return "none" }
-    if (-not [HordeWindowFollowNative]::Exists($s.target)) { $s.state = "lost"; return "lost" }
-    if ([HordeWindowFollowNative]::Minimised($s.target)) { return $s.state }
-    $rect = Get-HordeWindowRectangle -Handle $s.target
-    if ($null -eq $rect) { $s.state = "lost"; return "lost" }
-    $at = Get-HordeWindowFollowPlacement -Target $rect -Mode $s.mode -Dpi $rect.dpi
-    [void][HordeWindowFollowNative]::Place($s.follower, $at.left, $at.top, $at.width, $at.height)
-    $s.placed = $at
-    $s.placements = [int]$s.placements + 1
-    return $s.state
+function Set-HordeWindowsFollowFree {
+    # The companion stands free: Windows is told to stop reporting, and ours is no longer owned.
+    param([Parameter(Mandatory = $true)][string]$State, [Parameter(Mandatory = $true)][string]$Reason)
+    $s = $script:HordeWindowsFollow
+    [HordeWindowsFollowV1]::Unhook()
+    [HordeWindowsFollowV1]::Disown($s.companion)
+    $s.state = $State; $s.reason = $Reason
 }
 
-function Start-HordeWindowFollow {
-    # Make the window -Follower (of this process) a companion of the window -Target (anyone's), and
-    # place it. Returns { state; reason }: following, or failed with why. Call it on the thread that
-    # runs the follower's message loop: that is where Windows delivers the other window's moves.
-    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Follower, [string]$Mode = "floating")
-    if ($script:HordeWindowFollowModes -cnotcontains $Mode) { return [pscustomobject]@{ state = "failed"; reason = ("'" + $Mode + "' is not a way a window is followed") } }
-    Initialize-HordeWindowFollow
-    if ($Target -eq 0 -or -not [HordeWindowFollowNative]::Exists($Target)) { return [pscustomobject]@{ state = "failed"; reason = "the window to stand beside does not exist" } }
-    if ($Follower -eq 0 -or -not [HordeWindowFollowNative]::Exists($Follower)) { return [pscustomobject]@{ state = "failed"; reason = "the window to place does not exist" } }
-    if ($Target -eq $Follower) { return [pscustomobject]@{ state = "failed"; reason = "a window cannot stand beside itself" } }
-    if ([HordeWindowFollowNative]::ProcessOf($Follower) -ne [uint32]$PID) { return [pscustomobject]@{ state = "failed"; reason = "the window to place is not this process's own, and only its own window is ever moved" } }
-    $script:HordeWindowFollow = [pscustomobject]@{ target = $Target; follower = $Follower; mode = $Mode; state = "following"; placed = $null; placements = 0 }
-    # One line, calling a named function that reads the state above: a script block given to .NET does
-    # not keep the variables of the function that wrote it (the first surface's suite measures this).
-    $hooked = [HordeWindowFollowNative]::Attach($Target, $Follower, [Action]{ [void](Update-HordeWindowFollow) })
-    if (-not $hooked) {
-        [HordeWindowFollowNative]::Detach($Follower)
-        $script:HordeWindowFollow = $null
-        return [pscustomobject]@{ state = "failed"; reason = "Windows would not report the other window's moves, so it cannot be followed" }
+function Update-HordeWindowsFollow {
+    # The port's Update: look whether the other window still exists and, when -Place, place the
+    # companion again from where it is now. While the other window is minimised nothing is placed:
+    # Windows has hidden ours, and a minimised window's rectangle is not a place.
+    param([bool]$Place = $true)
+    $s = $script:HordeWindowsFollow
+    if ($null -eq $s -or $s.state -cne "following") { return (Get-HordeWindowsFollowRecord) }
+    if (-not [HordeWindowsFollowV1]::Exists($s.target)) {
+        Set-HordeWindowsFollowFree -State "lost" -Reason "the window it stood beside no longer exists"
+        return (Get-HordeWindowsFollowRecord)
     }
-    [void](Update-HordeWindowFollow)
-    return [pscustomobject]@{ state = "following"; reason = "" }
+    if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {
+        $beside = Get-HordeWindowsFollowRectangle -Handle $s.target
+        if ($beside.state -ceq "known") {
+            $at = Get-HordeWindowFollowPlacement -Target $beside.value -Scale $beside.value.scale -Mode $s.mode
+            if ($at.state -ceq "known") {
+                [void][HordeWindowsFollowV1]::Place($s.companion, $at.value.left, $at.value.top, $at.value.width, $at.value.height)
+                $s.placed = $at.value
+                $s.placements = [int]$s.placements + 1
+            }
+        }
+    }
+    return (Get-HordeWindowsFollowRecord)
 }
 
-function Get-HordeWindowFollow {
-    # What is being followed, for a caller that reports it: { target; follower; mode; state; placed;
-    # placements; events }, or $null when nothing is.
-    $s = $script:HordeWindowFollow
-    if ($null -eq $s) { return $null }
-    return [pscustomobject]@{ target = $s.target; follower = $s.follower; mode = $s.mode; state = $s.state; placed = $s.placed; placements = $s.placements; events = [HordeWindowFollowNative]::Events }
+function Start-HordeWindowsFollow {
+    # The port's Start. The port has already refused a mode that is not built, a handle that is not
+    # above zero and a window beside itself.
+    param([Parameter(Mandatory = $true)][long]$Target, [Parameter(Mandatory = $true)][long]$Companion, [Parameter(Mandatory = $true)][string]$Mode)
+    Initialize-HordeWindowsFollowType
+    if ($null -ne $script:HordeWindowsFollow) { [void](Stop-HordeWindowsFollow) }
+    if (-not [HordeWindowsFollowV1]::Exists($Target)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to stand beside does not exist") }
+    if (-not [HordeWindowsFollowV1]::Exists($Companion)) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place does not exist") }
+    if ([HordeWindowsFollowV1]::ProcessOf($Companion) -ne [uint32]$PID) { return (New-HordeWindowFollowRecord -State "failed" -Reason "the window to place is not this process's own, and only its own window is ever moved") }
+    # One line, calling a named function that reads the state below: a script block given to .NET does
+    # not keep the variables of the function that wrote it.
+    $hooked = [HordeWindowsFollowV1]::Attach($Target, $Companion, [Action]{ [void](Update-HordeWindowsFollow) })
+    if (-not $hooked) {
+        [HordeWindowsFollowV1]::Unhook()
+        [HordeWindowsFollowV1]::Disown($Companion)
+        return (New-HordeWindowFollowRecord -State "failed" -Reason "Windows would not report the other window's moves, so it cannot be followed")
+    }
+    $script:HordeWindowsFollow = [pscustomobject]@{ target = $Target; companion = $Companion; mode = $Mode; state = "following"; reason = ""; placed = $null; placements = 0 }
+    return (Update-HordeWindowsFollow -Place $true)
 }
 
-function Stop-HordeWindowFollow {
-    # Stop following: Windows is told to stop reporting, and ours is no longer owned by the other window
-    # if it still exists.
-    $s = $script:HordeWindowFollow
-    if ($null -eq $s) { return }
-    [HordeWindowFollowNative]::Detach($s.follower)
-    $script:HordeWindowFollow = $null
+function Disconnect-HordeWindowsFollow {
+    # The port's Release: a companion that is followed stands free; one that is lost already does.
+    $s = $script:HordeWindowsFollow
+    if ($null -ne $s -and $s.state -ceq "following") { Set-HordeWindowsFollowFree -State "free" -Reason "it was let go, and stands free" }
+    return (Get-HordeWindowsFollowRecord)
 }
+
+function Stop-HordeWindowsFollow {
+    # The port's Stop: Windows is told to stop reporting, and ours is no longer owned by the other
+    # window if it still was.
+    $s = $script:HordeWindowsFollow
+    if ($null -ne $s) {
+        if ($s.state -ceq "following") { [HordeWindowsFollowV1]::Unhook(); [HordeWindowsFollowV1]::Disown($s.companion) }
+        $script:HordeWindowsFollow = $null
+    }
+    return (Get-HordeWindowsFollowRecord)
+}
+
+function Register-HordeWindowsFollower {
+    # This file's one line at the port: its name, and the seven blocks the port's header lists.
+    $blocks = @{
+        Name      = "windows"
+        Applies   = { Test-HordeIsWindows }
+        RealScale = { Enable-HordeWindowsRealScale }
+        Rectangle = { param($Handle) Get-HordeWindowsFollowRectangle -Handle $Handle }
+        Start     = { param($Target, $Companion, $Mode) Start-HordeWindowsFollow -Target $Target -Companion $Companion -Mode $Mode }
+        Update    = { param($Place) Update-HordeWindowsFollow -Place $Place }
+        Release   = { Disconnect-HordeWindowsFollow }
+        Stop      = { Stop-HordeWindowsFollow }
+    }
+    Register-HordeWindowFollower @blocks
+}
+Register-HordeWindowsFollower
