@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/decision-event.v1",
+  "title": "decision-event v1",
+  "description": "ONE WRITE-ONCE RECORD OF THE DECISIONS STORE: something that happened to the list of questions waiting for a person. The store is a folder, <HordeHome>\\store\\decisions\\, holding one file per record named by its sequence number in ten digits (0000000007.json). A record is written whole and then given its name once, by a move that the operating system lets exactly one caller win, and is never rewritten or deleted (decisions/Store.ps1). The records in sequence order are the single source of truth: the current list is worked out from them each time (decisions/Rules.ps1) and nothing else is kept. ON DISK: UTF-8 with no byte-order mark, one JSON object. VERSIONING: a reader treats a record that does not match this schema, or whose kind it does not know, as unreadable and says so by sequence number; it never guesses and never skips it silently. A later kind of event is a new entry in the kind table of decisions/Rules.ps1 and a new definition here; a change to an existing kind's data is a v2.",
+  "type": "object",
+  "required": ["schemaVersion", "sequence", "id", "kind", "at", "actor", "requestHash", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"type": "integer", "enum": [1], "description": "Always 1 for this schema."},
+    "sequence": {"type": "integer", "minimum": 1, "description": "The record's place in the one total order, from 1 with no gaps. It must equal the number in the record's file name."},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The idempotency id the caller chose for the request that made this record: 32 lowercase hex digits. The same id with the same request is answered from this record and writes nothing; the same id with another request is refused."},
+    "kind": {"type": "string", "pattern": "^[a-z][a-z-]{0,39}$", "description": "What happened. The closed list is the kind table of decisions/Rules.ps1; each kind's data is a definition below of the same name."},
+    "at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", "description": "When the record was written, ISO 8601 in UTC with a Z, by the writer's clock. Order is the sequence, never this time."},
+    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Who made the request, as one lowercase role label (core/roles.json names the roles). WHICH labels may write is not said here: it is the closed list of actors in decisions/Rules.ps1, asked of a request before it is written, so that a new actor is one entry there and not a new version of this schema, and so that a record written under an actor an older version does not list is still read by it."},
+    "requestHash": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the request as the rules normalised it (operation, actor and what was asked), so that a repost of an id can be told from a reuse of it without comparing whole texts."},
+    "data": {"type": "object", "description": "What the kind carries, checked against the definition named for the kind."}
+  },
+  "definitions": {
+    "question-added": {
+      "type": "object",
+      "required": ["number", "question"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1, "description": "The permanent number the question was given. It is DERIVED, not counted anywhere: the Nth question-added record is question N. It is written down here as a check on that derivation, so that a record which later becomes unreadable cannot shift the number of any question added after it."},
+        "question": {"type": "object", "description": "The question's words, schema/decision-question.v1, complete."}
+      }
+    },
+    "question-updated": {
+      "type": "object",
+      "required": ["number", "changes"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "changes": {"type": "object", "description": "The fields that change and their new values, schema/decision-question.v1. A field not named keeps its value."}
+      }
+    },
+    "question-closed": {
+      "type": "object",
+      "required": ["number", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "outcome": {"type": "string", "pattern": "\\S", "description": "What was done, in plain words. Never blank."}
+      }
+    },
+    "question-reopened": {
+      "type": "object",
+      "required": ["number", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "pattern": "\\S", "description": "Why it is open again, on one line. Never blank."}
+      }
+    }
+  }
+}
