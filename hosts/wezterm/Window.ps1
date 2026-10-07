@@ -15,8 +15,7 @@
 #   that window id    -> one of the gui process's top-level windows
 # The last step is the only one Windows and the terminal do not share an id for. MEASURED 2026-10-06
 # (20240203): `cli list --format json` gives window_id, tab_id, pane_id, title and is_active for every
-# pane and no native handle; the gui process had 16 terminal windows (class org.wezfurlong.wezterm)
-# and 16 window ids. So:
+# pane and no native handle; the gui process had 16 terminal windows and 16 window ids. So:
 #   - one window id listed, one terminal window in the process: that window, nothing to tell apart.
 #   - otherwise, BY THAT EXACT WINDOW'S OWN DETAILS FROM THE SAME LISTING: a terminal window is titled
 #     after the active pane of its active tab, with "[<tab>/<tabs>] " in front when it has more than
@@ -41,10 +40,11 @@
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\HostWindow.ps1")
 . (Join-Path $PSScriptRoot "Act.ps1")
 
-# The window class of a terminal window of this program, as the gui process registers it (measured
-# 2026-10-06). Its other top-level windows - a hidden probing window per terminal window, the input
-# method's - have other classes or are owned, and are not terminal windows.
-$script:HordeWeztermWindowClass = "org.wezfurlong.wezterm"
+# A TERMINAL WINDOW IS A VISIBLE, UNOWNED TOP-LEVEL WINDOW OF THE GUI PROCESS. Its other top-level windows
+# - a probing window per terminal window, the input method's - are hidden or owned (measured
+# 2026-10-06: 16 visible unowned windows, 16 hidden probing windows, 2 owned). NOT BY WINDOW CLASS: the
+# class is whatever the terminal was started with (--class), and the first run against an isolated
+# instance, started with a class of its own, found no window at all by the default class.
 # How many times the windows and the listing are read before a title that fits nothing is believed.
 $script:HordeWeztermWindowAttempts = 3
 $script:HordeWeztermWindowRetryMs = 200
@@ -58,19 +58,16 @@ public static class HordeWeztermWindows {
     delegate bool EnumProc(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder sb, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder sb, int n);
     [DllImport("user32.dll")] static extern int GetWindowTextLengthW(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
-    // Every visible, unowned top-level window of one process with one class: handle, then title.
-    public static List<KeyValuePair<long, string>> List(uint processId, string windowClass) {
+    // Every visible, unowned top-level window of one process: handle, then title.
+    public static List<KeyValuePair<long, string>> List(uint processId) {
         var found = new List<KeyValuePair<long, string>>();
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             if (pid != processId || !IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;   // GW_OWNER
-            var cls = new StringBuilder(256); GetClassNameW(h, cls, 256);
-            if (cls.ToString() != windowClass) return true;
             var title = new StringBuilder(GetWindowTextLengthW(h) + 2); GetWindowTextW(h, title, title.Capacity);
             found.Add(new KeyValuePair<long, string>(h.ToInt64(), title.ToString()));
             return true;
@@ -85,7 +82,7 @@ function Get-HordeWeztermNativeWindows {
     # is still the session's window.
     param([Parameter(Mandatory = $true)][long]$ProcessId)
     if ($null -eq ("HordeWeztermWindows" -as [type])) { Add-Type -TypeDefinition $script:HordeWeztermWindowSource }
-    return @([HordeWeztermWindows]::List([uint32]$ProcessId, $script:HordeWeztermWindowClass) | ForEach-Object { [pscustomobject]@{ handle = [long]$_.Key; title = "" + $_.Value } })
+    return @([HordeWeztermWindows]::List([uint32]$ProcessId) | ForEach-Object { [pscustomobject]@{ handle = [long]$_.Key; title = "" + $_.Value } })
 }
 
 function Read-HordeWeztermWindowList {
