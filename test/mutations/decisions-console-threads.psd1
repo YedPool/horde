@@ -100,21 +100,34 @@
         @{ Name = "marking-of-nothing-said-as-a-marking"
            Find = '    if ([int]$marking.marked -eq 0) { $lines ='
            Replace = '    if ($false) { $lines =' }
-        @{ Name = "json-inbox-does-not-mark"
-           Find = '            $made = Invoke-HordeDecisionMarking -After $after'
-           Replace = '            $made = [pscustomobject]@{ done = $true; upTo = [long]$answer.value.upTo; marked = $unread; reason = "" }' }
-        @{ Name = "json-inbox-marks-a-second-time-after-its-line"
-           Find = '            $after = $null'
+        # --- inbox -Json never marks; the caller marks with the verb mark-read ---
+        @{ Name = "json-inbox-marks-after-its-line"
+           Find = '        $after = $null'
            Replace = '' }
-        @{ Name = "json-inbox-says-nothing-of-the-marking"
-           Find = '        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marking = [pscustomobject]$marking }))'
-           Replace = '        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer)' }
-        @{ Name = "json-inbox-failed-marking-exits-clean"
-           Find = '            if (-not $made.done) { $markFailure ='
-           Replace = '            if ($false) { $markFailure =' }
-        @{ Name = "json-peek-not-said-to-be-a-peek"
-           Find = '        if ($peek) { $marking["reason"] = "not asked: -Peek marks nothing" }'
+        @{ Name = "json-inbox-says-it-marked"
+           Find = '-Beside ([ordered]@{ marked = $false; upTo = $shownUpTo }))'
+           Replace = '-Beside ([ordered]@{ marked = $true; upTo = $shownUpTo }))' }
+        @{ Name = "json-inbox-does-not-say-whether-it-marked"
+           Find = '-Beside ([ordered]@{ marked = $false; upTo = $shownUpTo }))'
+           Replace = '-Beside ([ordered]@{ upTo = $shownUpTo }))' }
+        @{ Name = "json-inbox-does-not-name-its-last-record"
+           Find = '        if ($unread -gt 0) { $shownUpTo = [long]$answer.value.upTo }'
            Replace = '' }
+        @{ Name = "mark-read-with-no-record-named"
+           Find = 'if (-not $have.ContainsKey("UpTo")) { throw ('
+           Replace = 'if ($false) { throw (' }
+        @{ Name = "record-to-mark-up-to-not-checked"
+           Find = 'if ($upToText -cnotmatch ''\A[1-9][0-9]{0,9}\z'') { throw ('
+           Replace = 'if ($false) { throw (' }
+        @{ Name = "mark-read-marks-up-to-another-record"
+           Find = '            $request["upTo"] = [long]$upToText'
+           Replace = '            $request["upTo"] = [long]$upToText - 1' }
+        @{ Name = "marking-of-nothing-said-as-marked"
+           Find = '        elseif ([int]$value.marked -eq 0) { [void]$lines.Add("Nothing to mark:'
+           Replace = '        elseif ($false) { [void]$lines.Add("Nothing to mark:' }
+        @{ Name = "repeated-marking-said-as-new"
+           Find = '        if ($value.outcome -ceq "replayed") { [void]$lines.Add("This marking was already recorded'
+           Replace = '        if ($false) { [void]$lines.Add("This marking was already recorded' }
         @{ Name = "peek-does-not-say-nothing-was-marked"
            Find = '{ $lines += @("", "Nothing was marked as read (-Peek).") }'
            Replace = '{ }' }

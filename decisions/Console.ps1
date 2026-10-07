@@ -26,9 +26,11 @@
 # stored as recorded from chat and never as typed by him. `inbox` is two operations, in this order:
 # inbox, which only reads what is unread; and - after the lines are out - mark-read, naming the last
 # record that was printed (Complete-HordeDecisionCommand). So a command stopped between the two leaves
-# messages unread that were seen, never messages marked that nobody saw. `inbox -Json` is one line and
-# must say what the WHOLE command did, the marking included, so there the marking is made before the
-# line is written; the line says whether it was made and up to which record. The words of a message
+# messages unread that were seen, never messages marked that nobody saw. `inbox -Json` NEVER MARKS: its
+# one line holds the unread messages, says "marked": false, and names the last record it showed (upTo);
+# the caller, once it HAS the line, marks explicitly with `mark-read -UpTo <record>`. A line cannot be
+# added to after it is written, so a -Json that marked would have to mark before printing - and a
+# caller killed in between would have marked words it never received. The words of a message
 # are printed line for line as they are.
 #
 # THE PLAIN-TEXT OUTPUT IS UTF-8 WHEN IT GOES TO A PIPE. Typed at a terminal it is written as it is, and
@@ -75,6 +77,9 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     reply  = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
     # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
     inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
+    # mark-read: record that everything said up to a record has been read. What `inbox` does by itself
+    # in plain text, and what a caller of `inbox -Json` does once it has the line.
+    "mark-read" = @{ number = $false; flags = @("UpTo", "Id", "Json");              usage = "mark-read -UpTo <record> [-Id <32 hex>] [-Json]" }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
@@ -372,6 +377,11 @@ function Format-HordeDecisionAnswer {
         }
     }
     elseif ($Verb -ceq "inbox") { foreach ($l in @(Format-HordeDecisionInbox -Value $value)) { [void]$lines.Add($l) } }
+    elseif ($Verb -ceq "mark-read") {
+        if ($value.outcome -ceq "replayed") { [void]$lines.Add("This marking was already recorded (record " + $value.sequence + "), so nothing was written again.") }
+        elseif ([int]$value.marked -eq 0) { [void]$lines.Add("Nothing to mark: everything up to record " + $value.upTo + " was already read.") }
+        else { [void]$lines.Add("Marked as read: " + $value.marked + " message(s), up to record " + $value.upTo + ".") }
+    }
     elseif ($value.outcome -ceq "replayed") {
         [void]$lines.Add("Question " + $value.number + ": this request was already recorded (record " + $value.sequence + "), so nothing was written again.")
     }
@@ -498,6 +508,12 @@ function Invoke-HordeDecisionCommand {
         }
         "list" { if ($have.ContainsKey("State")) { $showing = "$($have['State'])"; $request["state"] = $showing } }
         "inbox" { $request["actor"] = $script:HordeDecisionCommandActor }
+        "mark-read" {
+            if (-not $have.ContainsKey("UpTo")) { throw ("decisions mark-read needs -UpTo <record>: the last record that was read, as `inbox -Json` names it. There is no way to mark everything" + $usageNote) }
+            $upToText = "$($have['UpTo'])"
+            if ($upToText -cnotmatch '\A[1-9][0-9]{0,9}\z') { throw ("-UpTo is a record's number, as in: -UpTo 12" + $usageNote) }
+            $request["upTo"] = [long]$upToText
+        }
     }
     if ($spec.ContainsKey("says")) {
         # THE WORDS: one line as an argument, or anything longer from a file, exactly as the file holds
@@ -533,21 +549,13 @@ function Invoke-HordeDecisionCommand {
         $after = [pscustomobject]@{ operation = "$($spec.then)"; request = [ordered]@{ actor = $script:HordeDecisionCommandActor; id = $id; upTo = [long]$answer.value.upTo } }
     }
     $lines = @()
-    $markFailure = ""
     if ($asJson -and $isInbox) {
-        # ONE LINE THAT SAYS WHAT THE WHOLE COMMAND DID: the messages, and whether and up to where it
-        # marked. A line cannot be added to after it is written, so here - and only here - the marking
-        # is made before the printing. If it fails the line says so, and the command fails.
-        $marking = [ordered]@{ done = $false; upTo = [long]0; marked = 0; reason = "nothing was unread" }
-        if ($peek) { $marking["reason"] = "not asked: -Peek marks nothing" }
-        if ($answer.state -cne "known" -or $answer.value.outcome -cne "done") { $marking["reason"] = "the messages could not be read, so nothing was marked" }
-        if ($null -ne $after) {
-            $made = Invoke-HordeDecisionMarking -After $after
-            $marking = [ordered]@{ done = [bool]$made.done; upTo = [long]$made.upTo; marked = [int]$made.marked; reason = "$($made.reason)" }
-            if (-not $made.done) { $markFailure = "the messages were NOT marked as read, and will be shown again: " + $made.reason }
-            $after = $null
-        }
-        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marking = [pscustomobject]$marking }))
+        # -Json NEVER MARKS (see the header): the line says so, and names the last record it shows, which
+        # is what the caller hands to `mark-read -UpTo` once it has received the line.
+        $after = $null
+        $shownUpTo = [long]0
+        if ($unread -gt 0) { $shownUpTo = [long]$answer.value.upTo }
+        $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer -Beside ([ordered]@{ marked = $false; upTo = $shownUpTo }))
     }
     elseif ($asJson) { $lines = @(ConvertTo-HordeDecisionJsonLine -Answer $answer) }
     else {
@@ -562,6 +570,5 @@ function Invoke-HordeDecisionCommand {
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    elseif ($markFailure -ne "") { $failure = $markFailure }
     return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after }
 }

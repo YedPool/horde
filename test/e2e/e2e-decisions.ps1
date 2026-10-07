@@ -135,20 +135,30 @@ Check (@($thread.lines | Where-Object { $_ -ceq "Question 2 - open (wording 2)" 
 $close2 = Invoke-Decisions @("close", "2", "-Outcome", "Hebrew first, then Spanish with a second voice.")
 $late = Invoke-Decisions @("answer", "2", "-Text", "Keep the English one too.")
 Check ($close2.code -eq 0 -and $late.code -eq 0 -and $late.out -like "*under question 2 (record 12)*" -and $late.out -like "*NOTE: question 2 is closed. The words are kept under it, and it stays closed: saying something reopens nothing.*") "what he says a moment after the question is closed is kept, and the command says the question stays closed"
-$peek = Invoke-Decisions @("inbox", "-Peek")
-Check ($peek.code -eq 0 -and @($peek.lines | Where-Object { $_ -ceq "Question 2: Which languages besides English should the test talker speak? [closed]" }).Count -eq 1 -and @($peek.lines | Where-Object { $_ -ceq "      Keep the English one too." }).Count -eq 1 -and $peek.out -like "*NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.*" -and @($peek.lines | Where-Object { $_ -ceq "Nothing was marked as read (-Peek)." }).Count -eq 1) "inbox -Peek shows it, under the closed question, flagged as having arrived after closing, and marks nothing"
+# The session reads its inbox as data this time. With -Json nothing is marked: the line says so and
+# names the last record it holds; the session, having received it, marks explicitly.
+$asData = Invoke-Decisions @("inbox", "-Json")
+$line = @($asData.lines | Where-Object { $_.StartsWith('{"state":') }) | Select-Object -First 1
+$data = $null
+try { $data = ($line | ConvertFrom-Json) } catch { }
+Check ($asData.code -eq 0 -and $null -ne $data -and @($data.value.messages).Count -eq 1 -and $data.value.messages[0].number -eq 2 -and $data.value.messages[0].state -ceq "closed" -and $data.value.messages[0].message.text -ceq "Keep the English one too." -and $data.value.messages[0].message.arrivedAfterClosing -eq $true) "inbox -Json hands the late words over as data, under the closed question, flagged as having arrived after closing"
+Check ($null -ne $data -and $data.marked -eq $false -and $data.upTo -eq 12 -and @(Get-ChildItem -LiteralPath $store -File).Count -eq 12) "and marks nothing: the line says so, names record 12 as the last it showed, and the store has no new record"
+$marked = Invoke-Decisions @("mark-read", "-UpTo", "12")
+Check ($marked.code -eq 0 -and @($marked.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 12." }).Count -eq 1) "mark-read -UpTo 12 then marks what the session received"
+$drained = Invoke-Decisions @("inbox")
+Check ($drained.code -eq 0 -and $drained.out -like "*Nothing unread*") "and the inbox is empty"
 $end = Invoke-Decisions @("list", "-State", "all")
 Check ($end.out -like "*Decisions: 3 open, 1 closed.*" -and (Get-QuestionLines $end) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "at the end of the day every question has the number it was given, and question 2 is closed: his late words reopened nothing"
 
 Write-Host ""
 Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $names = @(Get-ChildItem -LiteralPath $store -File | Sort-Object Name | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq ((1..12 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds twelve records, one for each command that changed the list or marked something read, named 1 to 12"
+Check (($names -join ",") -ceq ((1..13 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds thirteen records, one for each command that changed the list or marked something read, named 1 to 12"
 $kinds = @($names | ForEach-Object { ([System.IO.File]::ReadAllText((Join-Path $store $_)) | ConvertFrom-Json).kind })
-Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-reopened,message-said,messages-read,message-said,question-closed,message-said") "in the order the day went: three asked, one reworded, one closed, one asked, one reopened; then said, read, replied, closed, and said once more"
+Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-reopened,message-said,messages-read,message-said,question-closed,message-said,messages-read") "in the order the day went: three asked, one reworded, one closed, one asked, one reopened; then said, read, replied, closed, said once more, and read"
 $kept = ([System.IO.File]::ReadAllText((Join-Path $store "0000000008.json"), $utf8) | ConvertFrom-Json)
 Check ($kept.data.text -ceq ("Both, but Hebrew first." + "`r`n" + "Which voice would the Spanish one be?") -and $kept.data.speaker -ceq "founder" -and $kept.data.route -ceq "chat-recorded" -and $kept.actor -ceq "warchief") "his words are in their record exactly as the file held them, line break and all, as his, recorded by the session"
-Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 12) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
+Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 13) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-e2e-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }
