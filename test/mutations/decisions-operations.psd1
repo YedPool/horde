@@ -104,6 +104,9 @@
         @{ Name = "lost-sequence-number-reported-as-written"
            Find = 'if ($made -cne "created") { continue }'
            Replace = '' }
+        @{ Name = "unconfirmed-record-reported-as-saved"
+           Find = 'if ($made -ceq "unconfirmed") {'
+           Replace = 'if ($false) {' }
         @{ Name = "sequence-not-from-the-list-read"
            Find = '$sequence = [long]$list.lastSequence + 1'
            Replace = '$sequence = [long]$list.lastSequence + 2' }

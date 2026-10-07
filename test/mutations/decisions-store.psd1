@@ -12,19 +12,38 @@
            Find = 'if ([System.IO.File]::Exists($Root)) {'
            Replace = 'if ($false) {' }
         @{ Name = "move-overwrites"
-           Find = '[System.IO.File]::Move($tmpPath, $recPath)'
-           Replace = '[System.IO.File]::Copy($tmpPath, $recPath, $true)' }
+           Find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs'
+           Replace = '[System.IO.File]::WriteAllBytes($recPath, $bytes); $moved = "moved"' }
         @{ Name = "taken-number-is-an-error"
-           Find = 'if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }'
+           Find = 'if ($moved -ceq "exists" -and [System.IO.File]::Exists($recPath)) { return "exists" }'
            Replace = '' }
         @{ Name = "folder-of-the-record-name-reads-as-taken"
-           Find = 'if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }'
-           Replace = 'if ($script:HordeDecisionStoreExistsCodes -contains $code) { return "exists" }' }
+           Find = 'if ($moved -ceq "exists" -and [System.IO.File]::Exists($recPath)) { return "exists" }'
+           Replace = 'if ($moved -ceq "exists") { return "exists" }' }
+        # --- durable before "created": the order of a write, and what the store says of each answer ---
+        @{ Name = "writer-lets-go-before-the-move"
+           Find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs'
+           Replace = '$fs.Dispose(); $moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $null' }
+        @{ Name = "move-not-handed-the-writers-handle"
+           Find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs'
+           Replace = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $null' }
+        @{ Name = "moved-before-it-is-written"
+           Find = '        $fs.Write($bytes, 0, $bytes.Length)'
+           Replace = '        $moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs; $fs.Write($bytes, 0, $bytes.Length); return "created"' }
+        @{ Name = "unconfirmed-reads-as-created"
+           Find = 'if ($moved -ceq "unconfirmed") { return "unconfirmed" }'
+           Replace = 'if ($moved -ceq "unconfirmed") { return "created" }' }
+        @{ Name = "any-answer-of-the-move-reads-as-created"
+           Find = 'if ($moved -ceq "moved") { return "created" }'
+           Replace = 'if ($true) { return "created" }' }
+        @{ Name = "name-taken-by-no-record-reads-as-taken"
+           Find = 'throw ("record " + $Sequence + " could not be put in place: its name is taken by something that is not a record (the move answered ''" + $moved + "'')")'
+           Replace = 'return "exists"' }
         @{ Name = "record-written-under-its-own-name"
            Find = '$tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")'
            Replace = '$tmpPath = $recPath' }
         @{ Name = "loser-leaves-its-temporary-file"
-           Find = 'try { [System.IO.File]::Delete($tmpPath) } catch { }'
+           Find = 'if ($moved -cne "moved" -and $moved -cne "unconfirmed") { try { [System.IO.File]::Delete($tmpPath) } catch { } }'
            Replace = '' }
         @{ Name = "dead-writers-file-never-swept"
            Find = '$null = Remove-HordeDecisionStoreLeftovers -Root $Root'
@@ -32,6 +51,16 @@
         @{ Name = "live-writers-file-swept"
            Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
            Replace = '.TotalSeconds -lt 0) { continue }' }
+        # --- the sweep's invariant: never a file some process holds open ---
+        @{ Name = "held-leftover-deleted-by-name"
+           Find = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)'
+           Replace = '[System.IO.File]::Delete($leftover); $claim = New-Object System.IO.MemoryStream' }
+        @{ Name = "leftover-claimed-beside-other-holders"
+           Find = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)'
+           Replace = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete), 1, [System.IO.FileOptions]::DeleteOnClose)' }
+        @{ Name = "leftover-claimed-and-not-removed"
+           Find = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)'
+           Replace = '$claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::None)' }
         @{ Name = "leftover-age-counted-in-minutes"
            Find = '.TotalSeconds -lt $minAgeSeconds) { continue }'
            Replace = '.TotalMinutes -lt $minAgeSeconds) { continue }' }
@@ -121,6 +150,6 @@
            Find = '$fs.Flush($true)'
            Replace = '$fs.Flush()'
            Expect = "survives"
-           Reason = "whether the bytes reached the disk before the record took its name can only be seen by cutting the power; no suite can observe it, and the line is kept on remote/Journal.ps1's reasoning" }
+           Reason = "whether the bytes reached the disk before the record took its name can only be seen by cutting the power; no suite can observe it, and the line is kept on remote/Journal.ps1's reasoning. The move's own durability is not this mutant: core/FileAtomic.ps1's flag and flush are mutated in test\mutations\file-move-new.psd1, and there each is caught" }
     )
 }

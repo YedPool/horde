@@ -16,6 +16,9 @@
 #            recorded before; nothing was written) or refused (nothing was written; findings says why).
 #   absent   the store was read and there is no question of that number.
 #   unknown  the store, or the one record asked about, could not be read or written; the reason says.
+#            Also: a record was given its place but could not be confirmed on disk. That is never
+#            "done" - a caller is told its words are saved only when everything that makes them
+#            durable returned success (decisions/Store.ps1) - and the reason says the record is there.
 # A refusal is KNOWN on purpose: "I will not" is a fact with reasons, and a caller must never retry it
 # as if the store had been unreachable.
 #
@@ -324,6 +327,14 @@ function Invoke-HordeDecisionWrite {
         $made = ""
         try { $made = Add-HordeDecisionRecord -Root $Root -Sequence $sequence -Text $text }
         catch { return (New-HordeUnknown -Reason ("record " + $sequence + " could not be written, so nothing changed") -ErrorRecord $_) }
+        # THE RECORD HAS ITS PLACE, AND NOTHING SAYS IT IS ON DISK (decisions/Store.ps1, "unconfirmed").
+        # Not "done": the caller would be told its words are saved on the strength of a flush that
+        # failed. Not "nothing was written": the record is there, and every reader sees it. And not
+        # another turn of this loop, which would find the record by its id and answer "replayed" -
+        # the same claim in other words.
+        if ($made -ceq "unconfirmed") {
+            return (New-HordeUnknown -Reason ("record " + $sequence + " has its place in the store, but it could not be confirmed written through to the disk, so it is NOT reported as saved. Send the same request again, with the same id: it is answered from the record if the record is still there"))
+        }
         if ($made -cne "created") { continue }
         $more = [ordered]@{ sequence = $sequence; attempts = $attempt; number = [int]$data["number"]; question = (ConvertTo-HordeDecisionView -Question $question) }
         $value = New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $more

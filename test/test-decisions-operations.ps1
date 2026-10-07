@@ -472,6 +472,38 @@ try {
 Check ((Add-HordeDecisionRecord -Root $s -Sequence 1 -Text "{}") -ceq "exists") "CONTROL: the real create is back in place for the rest of the suite"
 
 Write-Host ""
+Write-Host "--- a record that could not be confirmed on disk is never reported as saved ---" -ForegroundColor Cyan
+# The store says "unconfirmed" when a record HAS its name but the flush after its move failed
+# (decisions/Store.ps1). The caller must not be told "done" - nothing says the record would survive a
+# power cut - and must not be told "nothing was written" either, because the record is there. Here
+# the durable move is replaced by one that makes the real move and then answers as a failed flush does.
+$s = New-TestStore
+$null = Add-Q $s
+$realMove = ${function:Move-HordeFileNewDurable}
+$script:unconfirmedOnce = 1
+function Move-HordeFileNewDurable {
+    param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null)
+    $answer = & $realMove -From $From -To $To -Open $Open
+    if ($script:unconfirmedOnce -gt 0 -and $answer -ceq "moved") { $script:unconfirmedOnce--; return "unconfirmed" }
+    return $answer
+}
+try {
+    $unsureId = New-Id
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ($a.state -ceq "unknown") ("an add whose record could not be confirmed on disk is unknown: not done, and not replayed as if it had been recorded before (" + (Get-Outcome $a) + ")")
+    Check ($a.state -ceq "unknown" -and $a.reason -like "*record 2 has its place in the store*could not be confirmed*NOT reported as saved*same id*") ("and the reason says the record is there, that it is not reported as saved, and what to do (" + $a.reason + ")")
+    Check ((Get-Files $s) -ceq "0000000001.json,0000000002.json") "the record does have its place: the answer did not claim that nothing was written"
+    Check ($script:unconfirmedOnce -eq 0) "CONTROL: the move was made, and answered unconfirmed exactly once"
+    $a = Add-Q $s @{ title = "Is a record nobody could confirm ever called saved?" } $unsureId
+    Check ((Get-Outcome $a) -ceq "replayed" -and $a.value.number -eq 2 -and (Get-Files $s) -ceq "0000000001.json,0000000002.json") ("sending the same request again, with the same id, is answered from that record and writes nothing (" + (Get-Outcome $a) + ")")
+} finally {
+    Remove-Item -LiteralPath function:Move-HordeFileNewDurable
+    . (Join-Path $root "core\FileAtomic.ps1")
+}
+$a = Add-Q $s
+Check ((Get-Outcome $a) -ceq "done" -and $a.value.number -eq 3) "CONTROL: the real move is back in place for the rest of the suite"
+
+Write-Host ""
 Write-Host "--- a write does not wait for ever on a record another process holds open ---" -ForegroundColor Cyan
 # Measured 2026-10-06, before the wait had a limit of its own: with record 1 held open, an add was
 # still waiting after 40 s, and the code allowed it 400. Here this process holds the record without

@@ -14,6 +14,14 @@
 # -Mode loop: it writes records 1, 2, 3, ... through the store as fast as it can, with no tick and no
 #   log, until it is killed. This is the writer the suite kills mid-write, to see what a kill leaves.
 #
+# -Mode stall-before-move, stall-after-move: it makes ONE write and stops inside it, at a named step,
+#   until the suite kills it: before the record's temporary file is given the record's name, or just
+#   after. With decisions/Store.ps1 at -CodePath the write is record 1; with decisions/Operations.ps1
+#   it is an add of one question under a fixed id. It writes -GoFile when it has reached the step (the
+#   suite waits for that), and writes -LogFile only if the write RETURNS - which it never does, so a
+#   log means the writer was told something. The step is reached by standing in for the store's one
+#   move (core/FileAtomic.ps1's Move-HordeFileNewDurable) with a function that waits.
+#
 # What it is TOLD goes to -LogFile, one line an attempt, fields separated by |:
 #   store:       index|created or exists or threw|reason
 #   operations:  index|state|outcome|number|sequence|attempts|reason
@@ -23,7 +31,7 @@
 # its coarse resolution (about 15.6 ms on Windows by default) makes the racers start together rather
 # than take turns.
 param(
-    [Parameter(Mandatory = $true)][ValidateSet("store", "operations", "loop")][string]$Mode,
+    [Parameter(Mandatory = $true)][ValidateSet("store", "operations", "loop", "stall-before-move", "stall-after-move")][string]$Mode,
     [Parameter(Mandatory = $true)][string]$CodePath,
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$GoFile,
@@ -45,6 +53,30 @@ if ($Mode -ceq "loop") {
     # time a suite waits; -Count bounds it all the same, so a suite that forgot it leaves no process.
     $text = '{"racer":' + $Racer + ',"body":"' + ("word " * 120) + '"}'
     for ($seq = [long]1; $seq -le $Count; $seq++) { $null = Add-HordeDecisionRecord -Root $Root -Sequence $seq -Text $text }
+    exit 0
+}
+
+if ($Mode -clike "stall-*") {
+    $script:realMove = ${function:Move-HordeFileNewDurable}
+    $script:stallMode = $Mode
+    $script:stallMark = $GoFile
+    function Move-HordeFileNewDurable {
+        param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null)
+        if ($script:stallMode -ceq "stall-after-move") { $null = & $script:realMove -From $From -To $To -Open $Open }
+        [System.IO.File]::WriteAllText($script:stallMark, $script:stallMode)
+        # Never returns: the suite kills this process here. Bounded all the same, so a suite that
+        # forgot it leaves no process.
+        Start-Sleep -Seconds 600
+        exit 3
+    }
+    $told = ""
+    if ($null -ne (Get-Command -Name "Invoke-HordeDecision" -ErrorAction SilentlyContinue)) {
+        # The same request the suite sends again afterwards: its id and its question are fixed.
+        $question = @{ title = "Is a question whose writer was killed either whole or absent?"; kind = "yes-no"; whatItIs = "A writer is stopped inside its write and killed."; group = "the kill"; askedBy = "the-suite" }
+        $answer = Invoke-HordeDecision -Operation "add" -Request @{ id = ("ab" * 16); actor = "warchief"; question = $question } -Root $Root
+        $told = "operations|" + $answer.state
+    } else { $told = "store|" + (Add-HordeDecisionRecord -Root $Root -Sequence 1 -Text ('{"racer":' + $Racer + ',"body":"' + ("word " * 120) + '"}')) }
+    [System.IO.File]::WriteAllLines($LogFile, [string[]]@($told, "END"))
     exit 0
 }
 

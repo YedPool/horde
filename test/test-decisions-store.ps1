@@ -46,7 +46,9 @@ try {
 Write-Host ""
 Write-Host "--- a record's name is its place in the order ---" -ForegroundColor Cyan
 Check ((Get-HordeDecisionRecordName -Sequence 7) -ceq "0000000007.json") "record 7 is 0000000007.json: ten digits, so names sort as numbers do"
-Check ((Get-HordeDecisionRecordName -Sequence 9999999999) -ceq "9999999999.json") "the largest sequence number still has a ten-digit name"
+$largestName = "THREW"
+try { $largestName = Get-HordeDecisionRecordName -Sequence 9999999999 } catch { $largestName = "THREW: " + $_.Exception.Message }
+Check ($largestName -ceq "9999999999.json") ("the largest sequence number still has a ten-digit name (" + $largestName + ")")
 Check (Throws { Get-HordeDecisionRecordName -Sequence 0 } "1 to 9999999999") "sequence 0 is refused: the order starts at 1"
 Check (Throws { Get-HordeDecisionRecordName -Sequence 10000000000 } "1 to 9999999999") "a sequence number that would need eleven digits is refused, not written under a name that sorts wrongly"
 # ONE WIDTH, THREE THINGS WORKED OUT FROM IT (the setting decisions.store.sequenceDigits): the name, the
@@ -275,6 +277,107 @@ Check ($removedNow -eq 1 -and -not (Test-Path -LiteralPath $fresh)) ("eleven min
 $removedNow = -1
 try { $removedNow = Remove-HordeDecisionStoreLeftovers -Root (New-TestStore) } catch { $removedNow = -2 }
 Check ($removedNow -eq 0) "sweeping a store that does not exist removes nothing and does not throw"
+
+Write-Host ""
+Write-Host "--- THE SWEEP'S INVARIANT: a file some process holds open is never removed, whatever its age ---" -ForegroundColor Cyan
+# The invariant, as decisions/Store.ps1 states it: the sweep removes a file only when (1) its name is
+# the store's own temporary pattern, (2) it is older than the age, AND (3) NO PROCESS HOLDS IT OPEN. A
+# writer holds its file open from the moment it exists until it has its record's name, so (3) is
+# "its writer is dead" - with no clock in it. Age alone is not that: a writer suspended for an hour,
+# or a machine put to sleep between a write and its move, is alive and old.
+# Before this was the rule the sweep went by age alone, and removed all three of the held files below.
+$s = New-TestStore
+$null = Add-Safely $s 1 '{"n":1}'
+$veryOld = [datetime]::UtcNow.AddDays(-400)
+$farAhead = [datetime]::UtcNow.AddDays(400)
+function New-Leftover { param([string]$Store, [string]$Letter) $path = Join-Path $Store ("writing-" + ($Letter * 32) + ".part"); [System.IO.File]::WriteAllText($path, '{"whole":"record"}', $utf8); [System.IO.File]::SetLastWriteTimeUtc($path, $veryOld); return $path }
+function Test-Named { param([string]$Path) return (@(Get-ChildItem -LiteralPath (Split-Path -Parent $Path) -Force | Where-Object { $_.Name -ceq (Split-Path -Leaf $Path) }).Count -eq 1) }
+function Invoke-Sweep { param([string]$Store) try { return (Remove-HordeDecisionStoreLeftovers -Root $Store -Now $farAhead) } catch { return -2 } }
+# (a) held the way the store's own writer holds its file: for writing, sharing only delete.
+$asWriter = New-Leftover $s "a"
+$writerHandle = New-Object System.IO.FileStream($asWriter, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Delete)
+# (b) held by a process that shares everything, as a scanner or a backup does.
+$asScanner = New-Leftover $s "b"
+$scannerHandle = New-Object System.IO.FileStream($asScanner, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+# (c) held by a reader that shares reading only.
+$asReader = New-Leftover $s "c"
+$readerHandle = New-Object System.IO.FileStream($asReader, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+# (d) held by nobody: its writer is dead.
+$asDead = New-Leftover $s "d"
+try {
+    $swept = Invoke-Sweep $s
+    Check ($swept -eq 1) ("of four leftovers 400 days old, the sweep removes exactly the one nobody holds (" + $swept + " removed)")
+    Check (-not (Test-Named $asDead)) "the leftover of a dead writer is gone"
+    # Test-Named lists the folder: a file whose delete is only pending still answers File.Exists with
+    # false, and a sweep that marked a live writer's file for deletion must be seen here.
+    Check ((Test-Named $asWriter) -and [System.IO.File]::Exists($asWriter)) "a leftover held as a writer holds it is still there, 400 days old or not"
+    Check ((Test-Named $asScanner) -and [System.IO.File]::Exists($asScanner)) "so is one held by a process that shares everything, delete included"
+    Check ((Test-Named $asReader) -and [System.IO.File]::Exists($asReader)) "and one held by a reader"
+    # The live writer can still do the one thing it is alive to do: give its file its record's name.
+    $moved = "THREW"
+    try { $moved = Move-HordeFileNewDurable -From $asWriter -To (Join-Path $s "0000000002.json") -Open $writerHandle } catch { $moved = "THREW: " + $_.Exception.Message }
+    Check ($moved -ceq "moved") ("and the writer whose file the sweep passed over can still move it into place (" + $moved + ")")
+} finally { $writerHandle.Dispose(); $scannerHandle.Dispose(); $readerHandle.Dispose() }
+$got = Get-Safely $s
+Check ((Kinds $got) -ceq "ok,ok" -and "$($got.records[1].data.whole)" -ceq "record") ("that record is in the store, whole: the sweep did not cost a live writer its record (" + (Kinds $got) + ")")
+$swept = Invoke-Sweep $s
+Check ($swept -eq 2 -and -not (Test-Named $asScanner) -and -not (Test-Named $asReader)) ("CONTROL: once let go, the other two are leftovers like any other and are swept (" + $swept + " removed)")
+Check ((Get-Names $s) -ceq "0000000001.json,0000000002.json") ("and the records are untouched: a record is never a candidate, at any age (" + (Get-Names $s) + ")")
+
+Write-Host ""
+Write-Host "--- THE ORDER OF A WRITE: whole and on disk, then named by a durable move, and only then 'created' ---" -ForegroundColor Cyan
+# The store's one move is core/FileAtomic.ps1's Move-HordeFileNewDurable. Here that function is
+# replaced by one that looks at the world at the moment it is called, then makes the real move (or
+# answers as the test says), so each step of the order is seen and not assumed. No test can cut the
+# power: what is proven is the ORDER and what each step was handed, not that a disk keeps its word.
+$realMove = ${function:Move-HordeFileNewDurable}
+$script:seen = New-Object System.Collections.ArrayList
+$script:moveAnswer = "real"
+function Move-HordeFileNewDurable {
+    param([string]$From, [string]$To, $Open = $null, $OsPlatform = $null)
+    $at = [ordered]@{ from = $From; to = $To; fromLeaf = (Split-Path -Leaf $From); open = $Open; length = [long]-1; position = [long]-1; canWrite = $false; toThere = [System.IO.File]::Exists($To); sweptWhileHeld = -9; stillNamed = $false }
+    try { $at.length = (New-Object System.IO.FileInfo($From)).Length } catch { }
+    if ($Open -is [System.IO.FileStream]) { $at.position = $Open.Position; $at.canWrite = $Open.CanWrite }
+    # A sweep run by anyone at this moment, however far its clock has run on, must not take the file.
+    try { $at.sweptWhileHeld = Remove-HordeDecisionStoreLeftovers -Root (Split-Path -Parent $From) -Now ([datetime]::UtcNow.AddDays(400)) } catch { $at.sweptWhileHeld = -2 }
+    $at.stillNamed = (@(Get-ChildItem -LiteralPath (Split-Path -Parent $From) -Force | Where-Object { $_.Name -ceq (Split-Path -Leaf $From) }).Count -eq 1)
+    [void]$script:seen.Add([pscustomobject]$at)
+    if ($script:moveAnswer -ceq "real") { return (& $realMove -From $From -To $To -Open $Open) }
+    if ($script:moveAnswer -ceq "unconfirmed") { $null = & $realMove -From $From -To $To -Open $Open; return "unconfirmed" }
+    if ($script:moveAnswer -ceq "throws") { throw "the move failed" }
+    return $script:moveAnswer
+}
+try {
+    $s = New-TestStore
+    $text = '{"n":1,"body":"' + ("word " * 200) + '"}'
+    $made = Add-Safely $s 1 $text
+    Check ($made -ceq "created" -and $script:seen.Count -eq 1) ("a create makes exactly one move, through the durable move and nothing else (" + $made + ", " + $script:seen.Count + " move(s))")
+    $m = $null; if ($script:seen.Count -ge 1) { $m = $script:seen[0] }
+    Check ($null -ne $m -and $m.fromLeaf -cmatch '\Awriting-[0-9a-f]{32}\.part\z' -and $m.to -ceq (Join-Path $s "0000000001.json") -and -not $m.toThere) "it moves the store's own temporary file to the record's name, which nothing had"
+    Check ($null -ne $m -and $m.length -eq $utf8.GetByteCount($text)) ("the WHOLE record was in that file before the move began (" + $(if ($null -ne $m) { $m.length } else { "no move" }) + " of " + $utf8.GetByteCount($text) + " bytes)")
+    Check ($null -ne $m -and $m.open -is [System.IO.FileStream] -and $m.canWrite -and $m.position -eq $utf8.GetByteCount($text)) "the writer STILL HOLDS the file open, at its end, and hands that handle to the move to be flushed after it"
+    Check ($null -ne $m -and $m.sweptWhileHeld -eq 0 -and $m.stillNamed) ("a sweep run at that very moment, 400 days ahead by its clock, takes nothing: the file is its live writer's (" + $(if ($null -ne $m) { $m.sweptWhileHeld } else { "no move" }) + " removed)")
+    Check ([System.IO.File]::ReadAllText((Join-Path $s "0000000001.json")) -ceq $text -and (Get-Names $s) -ceq "0000000001.json") "CONTROL: after it the record reads back exactly, and nothing else is in the folder"
+    # "created" is said only for "moved". Each other answer of the move:
+    $script:seen.Clear(); $script:moveAnswer = "unconfirmed"
+    $made = Add-Safely $s 2 '{"n":2}'
+    Check ($made -ceq "unconfirmed") ("when the move could not be confirmed on disk the store says unconfirmed, never created (" + $made + ")")
+    Check ((Get-Names $s) -ceq "0000000001.json,0000000002.json") "the record does have its name then, which is why this is not 'nothing was written' either"
+    $script:seen.Clear(); $script:moveAnswer = "throws"
+    $made = Add-Safely $s 3 '{"n":3}'
+    Check ($made -like "THREW:*the move failed*" -and (Get-Names $s) -ceq "0000000001.json,0000000002.json") ("a move that fails is a failed write, and the writer's temporary file is gone with it (" + (Get-Names $s) + ")")
+    $script:seen.Clear(); $script:moveAnswer = "exists"
+    $made = Add-Safely $s 3 '{"n":3}'
+    Check ($made -like "THREW:*" -and (Get-Names $s) -ceq "0000000001.json,0000000002.json") ("'exists' for a name no RECORD has is a failed write, not 'another writer took it' (" + $made + ")")
+    $script:seen.Clear(); $script:moveAnswer = "moved"
+    $made = Add-Safely $s 3 '{"n":3}'
+    Check ($made -ceq "created" -and -not (Test-Path -LiteralPath (Join-Path $s "0000000003.json"))) ("CONTROL: the store believes the move's answer, here a 'moved' that moved nothing - which is why the move is one small function to get right (" + $made + ")")
+} finally {
+    Remove-Item -LiteralPath function:Move-HordeFileNewDurable
+    . (Join-Path $root "core\FileAtomic.ps1")
+}
+$s = New-TestStore
+Check ((Add-Safely $s 1 '{"n":1}') -ceq "created" -and (Get-Names $s) -ceq "0000000001.json") "CONTROL: the real move is back in place for the rest of the suite"
 # Text that cannot be written as UTF-8 (a lone surrogate) must leave nothing behind, not an empty record.
 $s = New-TestStore
 $null = Add-Safely $s 1 '{"n":1}'
@@ -300,12 +403,16 @@ $forbiddenCommands = @($commands | Where-Object { @("Remove-Item", "Set-Content"
 $moves = @($calls | Where-Object { $_ -clike "Move(*" })
 $deletes = @($calls | Where-Object { $_ -clike "Delete(*" })
 $opensForWriting = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { "$_" } | Where-Object { $_ -clike "*FileAccess]::Write*" -or $_ -clike "*FileAccess]::ReadWrite*" })
-Check (@($errors).Count -eq 0 -and ($members -ccontains "CreateNew") -and $moves.Count -ge 1) "CONTROL: the store file parses, and the search sees its CreateNew and its Move"
+$durableMoves = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and "$($node.GetCommandName())" -ceq "Move-HordeFileNewDurable" }, $true) | ForEach-Object { "$_" })
+Check (@($errors).Count -eq 0 -and ($members -ccontains "CreateNew") -and $durableMoves.Count -ge 1 -and $deletes.Count -ge 1) "CONTROL: the store file parses, and the search sees its CreateNew, its move and a delete"
 Check ($forbiddenMembers.Count -eq 0) ("no call in the store can overwrite, copy over, truncate or append to a file" + $(if ($forbiddenMembers.Count) { " (found: " + ($forbiddenMembers -join ", ") + ")" } else { "" }))
 Check ($forbiddenCommands.Count -eq 0) ("and no cmdlet in it can either" + $(if ($forbiddenCommands.Count) { " (found: " + ($forbiddenCommands -join ", ") + ")" } else { "" }))
-Check (($moves -join " | ") -ceq 'Move($tmpPath, $recPath)') ("the one move is the temporary file to the record's name (" + ($moves -join " | ") + ")")
-Check ($deletes.Count -eq 2 -and @($deletes | Where-Object { @('Delete($tmpPath)', 'Delete($leftover)') -cnotcontains $_ }).Count -eq 0) ("the only deletes are of the writer's own temporary file and of a swept one (" + ($deletes -join " | ") + ")")
-Check ($opensForWriting.Count -eq 1 -and $opensForWriting[0] -clike 'New-Object System.IO.FileStream($tmpPath,*CreateNew*') ("the one file opened for writing is the temporary one, created new (" + $opensForWriting.Count + ")")
+Check ($moves.Count -eq 0) ("the store makes no move of its own: File.Move is not written through (" + ($moves -join " | ") + ")")
+Check (($durableMoves -join " | ") -ceq 'Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs') ("its one move is the durable one, of the temporary file to the record's name, handed the writer's open handle (" + ($durableMoves -join " | ") + ")")
+Check (($deletes -join " | ") -ceq 'Delete($tmpPath)') ("the only delete by name is of the writer's own temporary file (" + ($deletes -join " | ") + ")")
+Check ($opensForWriting.Count -eq 1 -and $opensForWriting[0] -clike 'New-Object System.IO.FileStream($tmpPath,*CreateNew*FileShare]::Delete,*') ("the one file opened for writing is the temporary one, created new, sharing only delete so that it can be renamed while held (" + $opensForWriting.Count + ")")
+$claims = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { "$_" } | Where-Object { $_ -clike "*DeleteOnClose*" })
+Check ($claims.Count -eq 1 -and $claims[0] -clike 'New-Object System.IO.FileStream($leftover,*FileMode]::Open,*FileShare]::None,*DeleteOnClose*') ("a leftover is removed one way only: opened with no sharing at all, to be deleted when that handle closes (" + $claims.Count + ")")
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-store-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

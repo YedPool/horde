@@ -11,6 +11,10 @@
 # And a third thing only a real process can show:
 #   III. A KILLED WRITER. A process that does nothing but write records is killed at a random moment,
 #       again and again. No kill may leave a record that cannot be read.
+#   IV. A WRITER KILLED AT A NAMED STEP. A process is stopped inside one write - before its file has the
+#       record's name, and just after - and killed there. At each step: either the whole record is in
+#       the store, or nothing is; the writer was told nothing; and while it lived, no sweep by another
+#       process took its file, however old that sweep's clock said the file was.
 #
 # A RACE THAT NEVER COLLIDES PROVES NOTHING, so each race has its controls, as test/test-journal-race.ps1
 # has:
@@ -123,6 +127,41 @@ function Get-StoreRaceFacts {
         threw = @($told | Where-Object { $_.answer -ceq "threw" })
         refused = @($told | Where-Object { $_.answer -ceq "exists" }) }
 }
+
+function Start-StalledWriter {
+    # Start a writer that makes one write and stops inside it at -Mode's step (the worker says how).
+    # Returns { problems; proc; dir; store; log }. THE CALLER KILLS IT, by the handle here, with
+    # Stop-StalledWriter; only the process this started is ever killed.
+    param([string]$Name, [string]$Mode, [string]$Code)
+    $dir = Join-Path $script:work $Name
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $store = Join-Path $dir "home\store\decisions"
+    $mark = Join-Path $dir "stalled"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = ("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + $worker + "`" -Mode " + $Mode + " -CodePath `"" + $Code + "`" -Root `"" + $store +
+        "`" -GoFile `"" + $mark + "`" -ReadyFile `"" + (Join-Path $dir "ready") + "`" -LogFile `"" + (Join-Path $dir "log.txt") + "`" -Racer 1 -Count 1 -TickMs 0")
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["HORDE_HOME"] = (Join-Path $dir "home")
+    $problems = New-Object System.Collections.ArrayList
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $deadline = (Get-Date).AddSeconds(240)
+    while (-not (Test-Path -LiteralPath $mark) -and -not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+    if (-not (Test-Path -LiteralPath $mark)) { [void]$problems.Add("the writer did not reach its step within 240 s" + $(if ($p.HasExited) { " (it exited " + $p.ExitCode + ")" } else { "" })) }
+    elseif ($p.HasExited) { [void]$problems.Add("the writer had ended by itself at its step") }
+    return [pscustomobject]@{ problems = $problems; proc = $p; dir = $dir; store = $store; log = (Join-Path $dir "log.txt") }
+}
+
+function Stop-StalledWriter {
+    param($Writer)
+    try {
+        if (-not $Writer.proc.HasExited) { try { $Writer.proc.Kill() } catch { [void]$Writer.problems.Add("the writer could not be killed: " + $_.Exception.Message) } }
+        if (-not $Writer.proc.WaitForExit(30000)) { [void]$Writer.problems.Add("the writer was still running 30 s after the kill") }
+    } finally { $Writer.proc.Dispose() }
+}
+
+function Get-StoreNames { param([string]$Store) if (-not (Test-Path -LiteralPath $Store)) { return "" }; return (@(Get-ChildItem -LiteralPath $Store -Force | Sort-Object Name | ForEach-Object { $_.Name -creplace '\Awriting-[0-9a-f]{32}\.part\z', 'writing-<id>.part' }) -join ",") }
 
 function Get-AddRaceFacts {
     # Race II: what the store holds, set against what the racers were told.
@@ -243,9 +282,9 @@ $broken = Join-Path $script:work "broken-tree"
 foreach ($folder in @("decisions", "core", "schema")) { Copy-Item -LiteralPath (Join-Path $root $folder) -Destination (Join-Path $broken $folder) -Recurse }
 $storeCopy = Join-Path $broken "decisions\Store.ps1"
 $src = [System.IO.File]::ReadAllText($storeCopy)
-$find = '[System.IO.File]::Move($tmpPath, $recPath)'
+$find = '$moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs'
 Check (([regex]::Matches($src, [regex]::Escape($find))).Count -eq 1) "the control's edit matches exactly once in decisions/Store.ps1"
-[System.IO.File]::WriteAllText($storeCopy, $src.Replace($find, '[System.IO.File]::Copy($tmpPath, $recPath, $true)'))
+[System.IO.File]::WriteAllText($storeCopy, $src.Replace($find, '[System.IO.File]::WriteAllBytes($recPath, $bytes); $moved = "moved"'))
 
 $bad = Invoke-Race -Name "store-broken" -Mode "store" -Code $storeCopy -Count $storeCount -TickMs $storeTickMs
 $badFacts = Get-StoreRaceFacts $bad
@@ -277,13 +316,67 @@ Check ($kills.strays -eq 0) "and nothing but records and the store's own tempora
 # Beside the broken tree's own store, because the store loads its settings from its own folder.
 $inPlace = Join-Path $broken "decisions\Store-in-place.ps1"
 $nameFind = '$tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")'
-$moveFind = 'try { [System.IO.File]::Move($tmpPath, $recPath) }'
+$moveFind = $find
 Check (([regex]::Matches($src, [regex]::Escape($nameFind))).Count -eq 1 -and ([regex]::Matches($src, [regex]::Escape($moveFind))).Count -eq 1) "the kill control's two edits each match exactly once in decisions/Store.ps1"
-[System.IO.File]::WriteAllText($inPlace, $src.Replace($nameFind, '$tmpPath = $recPath').Replace($moveFind, 'try { }'))
+[System.IO.File]::WriteAllText($inPlace, $src.Replace($nameFind, '$tmpPath = $recPath').Replace($moveFind, '$moved = "moved"'))
 $badKills = Invoke-KillRounds -Name "kill-in-place" -Code $inPlace -Rounds $killControlRounds -StopAtDamage
 Write-Host ("  store that writes in place: " + $badKills.rounds + " kills, " + $badKills.records + " records written, damaged " + $badKills.damaged) -ForegroundColor DarkGray
 Check (@($badKills.problems).Count -eq 0) "the control's writers ran and were killed by this suite"
 Check ($badKills.damaged -gt 0) ("CONTROL: a kill does leave a damaged record when the record is written under its own name (after " + $badKills.rounds + " kill(s))")
+
+Write-Host ""
+Write-Host "--- IV. a writer stopped at a named step of one write, and killed there ---" -ForegroundColor Cyan
+# decisions/Store.ps1 gives the order of a write and what a kill after each step leaves. Here a real
+# process is stopped at the two steps a random kill almost never lands on, and what it left is read.
+$farAhead = [datetime]::UtcNow.AddDays(400)
+
+# BEFORE THE MOVE: the record is whole in the writer's temporary file, which the writer holds open.
+$w = Start-StalledWriter -Name "stall-before" -Mode "stall-before-move" -Code $storeCode
+try {
+    Check (@($w.problems).Count -eq 0) "a writer was stopped just before its file takes the record's name"
+    Check ((Get-StoreNames $w.store) -ceq "writing-<id>.part") ("at that step the store holds its temporary file and no record (" + (Get-StoreNames $w.store) + ")")
+    Check ((Get-HordeDecisionRecords -Root $w.store).last -eq 0) "and a reader sees no record: nothing is in the list"
+    # THE SWEEP'S INVARIANT, ACROSS PROCESSES: this process sweeps, with a clock 400 days ahead, while
+    # that one is alive and holds its file. It must take nothing.
+    $swept = Remove-HordeDecisionStoreLeftovers -Root $w.store -Now $farAhead
+    Check ($swept -eq 0 -and (Get-StoreNames $w.store) -ceq "writing-<id>.part") ("a sweep from another process, its clock 400 days ahead, takes nothing while the writer lives (" + $swept + " removed)")
+} finally { Stop-StalledWriter $w }
+foreach ($pr in @($w.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
+Check (-not (Test-Path -LiteralPath $w.log)) "the writer was killed before it was told anything"
+Check ((Get-HordeDecisionRecords -Root $w.store).last -eq 0 -and (Get-StoreNames $w.store) -ceq "writing-<id>.part") "after the kill: nothing in the list, and the leftover of a dead writer"
+$swept = Remove-HordeDecisionStoreLeftovers -Root $w.store -Now $farAhead
+Check ($swept -eq 1 -and (Get-StoreNames $w.store) -ceq "") ("CONTROL: now that its writer is dead the same sweep removes it (" + $swept + " removed)")
+
+# AFTER THE MOVE: the record has its name; the writer still holds it and has not been told.
+$w = Start-StalledWriter -Name "stall-after" -Mode "stall-after-move" -Code $storeCode
+try {
+    Check (@($w.problems).Count -eq 0) "a writer was stopped just after its file took the record's name"
+    Check ((Get-StoreNames $w.store) -ceq "0000000001.json") ("at that step the store holds the record and no temporary file (" + (Get-StoreNames $w.store) + ")")
+} finally { Stop-StalledWriter $w }
+foreach ($pr in @($w.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
+Check (-not (Test-Path -LiteralPath $w.log)) "the writer was killed before it was told anything"
+$left = Get-HordeDecisionRecords -Root $w.store
+Check ($left.last -eq 1 -and @($left.records).Count -eq 1 -and $left.records[0].kind -ceq "ok" -and "$($left.records[0].data.body)".Length -eq 600) ("after the kill the WHOLE record is in the store and reads: a writer killed here lost nothing (" + $(if (@($left.records).Count -eq 1) { $left.records[0].kind } else { "no record" }) + ")")
+Check ((Get-StoreNames $w.store) -ceq "0000000001.json") "and it left no temporary file"
+
+# THE SAME TWO STEPS THROUGH A WHOLE WRITE (decisions/Operations.ps1): the caller that was told nothing
+# sends its request again, with the same id, and the list must then hold its question exactly once.
+$resend = @{ id = ("ab" * 16); actor = "warchief"; question = @{ title = "Is a question whose writer was killed either whole or absent?"; kind = "yes-no"; whatItIs = "A writer is stopped inside its write and killed."; group = "the kill"; askedBy = "the-suite" } }
+foreach ($step in @("stall-before-move", "stall-after-move")) {
+    $w = Start-StalledWriter -Name ("add-" + $step) -Mode $step -Code $opsCode
+    Stop-StalledWriter $w
+    foreach ($pr in @($w.problems)) { Write-Host ("         " + $pr) -ForegroundColor Red }
+    Check (@($w.problems).Count -eq 0 -and -not (Test-Path -LiteralPath $w.log)) ("an add was stopped at " + $step + " and killed before it was told anything")
+    $seen = Invoke-HordeDecision -Operation "list" -Request @{ state = "all" } -Root $w.store
+    $had = -1; if ($seen.state -ceq "known") { $had = @($seen.value.questions).Count }
+    if ($step -ceq "stall-before-move") { Check ($had -eq 0 -and @($seen.value.unreadable).Count -eq 0) ("killed before the move, the list has no question and nothing unreadable: nothing is in the store (" + $had + ")") }
+    else { Check ($had -eq 1 -and @($seen.value.unreadable).Count -eq 0) ("killed after the move, the list has the whole question: the whole record is in the store (" + $had + ")") }
+    $again = Invoke-HordeDecision -Operation "add" -Request $resend -Root $w.store
+    $expected = "done"; if ($step -ceq "stall-after-move") { $expected = "replayed" }
+    Check ($again.state -ceq "known" -and $again.value.outcome -ceq $expected -and $again.value.number -eq 1) ("the same request sent again is " + $expected + " as question 1 (" + $again.state + $(if ($again.state -ceq "known") { " " + $again.value.outcome } else { ": " + $again.reason }) + ")")
+    $after = Invoke-HordeDecision -Operation "list" -Request @{ state = "all" } -Root $w.store
+    Check ($after.state -ceq "known" -and @($after.value.questions).Count -eq 1 -and @(Get-ChildItem -LiteralPath $w.store -Filter "*.json").Count -eq 1) "and the list holds that question exactly once, in one record"
+}
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-race-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }

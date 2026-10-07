@@ -26,8 +26,37 @@
 #   - A RECORD IS NEVER REWRITTEN AND NEVER DELETED. Nothing here opens a record for writing, and the
 #     only files deleted are this file's own temporary ones, by their name pattern.
 #   - THE RECORD'S BYTES ARE ON DISK BEFORE IT TAKES ITS NAME: written through
-#     (FileOptions.WriteThrough, then Flush($true)) and closed, and only then moved.
+#     (FileOptions.WriteThrough, then Flush($true)), and only then moved.
 #   - A RECORD IS NEVER SEEN HALF-WRITTEN. It has no name until it is whole.
+#   - THE RECORD IS DURABLE BEFORE ITS WRITER IS TOLD "CREATED". See the next section.
+#
+# THE ORDER OF A WRITE, and what a writer killed after each step leaves:
+#   1. the temporary file is created, new, and HELD OPEN from here to the end;
+#        killed: an empty leftover. Nothing in the list. The caller was told nothing.
+#   2. the record is written into it and flushed to disk;
+#        killed: a leftover, part or whole. Nothing in the list. The caller was told nothing.
+#   3. the file is given the record's name by core/FileAtomic.ps1's Move-HordeFileNewDurable: a move
+#      that does not replace, written through, and then a flush of the handle this writer still holds;
+#        killed after the move: the WHOLE record is in the list. The caller was told nothing, and
+#        sending the same request again is answered from that record (decisions/Operations.ps1).
+#   4. the handle is let go, and only now is the caller told "created".
+# So at every step: either the whole record is in the store, or nothing is and its writer was not told
+# it was saved. test/test-decisions-store-race.ps1 stops a real writer at steps 2 and 3 and kills it.
+#
+# WHY THE MOVE ITSELF MUST BE DURABLE. With a plain File.Move, as this file first had, the record's
+# bytes were on disk but its NAME was not: after a power cut in the seconds after a write the record
+# could be absent though its writer had been told "created", its bytes sitting in a temporary file
+# the next writer's sweep would then remove. The durable move closes that: "created" is said only
+# after the operating system has been asked, by two means, to put the rename on disk.
+# THE HONEST LIMIT: no test can cut the power. What IS proven, by test/test-decisions-store.ps1 and
+# test/test-file-move-new.ps1: the order above, step by step; that the move is handed the
+# write-through flag and not the replace flag; that the handle is flushed to disk after the move; that
+# "created" is said for the move's "moved" and for nothing else. That the operating system and the
+# disk then keep their word is reasoned (core/FileAtomic.ps1 has the reasoning and one measurement),
+# and a disk that acknowledges a flush it has not done defeats it.
+#
+# THE PLATFORM IS NOT HERE. How a move is made durable differs by system, and is core/FileAtomic.ps1's:
+# this file asks for "that name, if free, durably" and is answered moved, exists or unconfirmed.
 #
 # WHERE THIS DIFFERS FROM remote/Journal.ps1, AND WHY. The journal creates the record itself with
 # FileMode.CreateNew and writes into it; this store did the same at first. A writer killed between the
@@ -41,12 +70,23 @@
 # for a kill landing while a record is being written, not for a kill of a real command, which spends
 # about a second starting and milliseconds writing; what differs is what is left. A journal entry is
 # pruned after its replay window; a decision record is kept for good, so the damage is too.
-# WHAT THE MOVE DOES NOT GIVE: the rename itself is not written through (.NET Framework has no call
-# for it), so after a power cut in the seconds after a write the record may be absent - never torn -
-# though its writer was told "created". No test here can cut the power.
 #
-# TEMPORARY FILES LEFT BY A KILLED WRITER are swept at the start of the next write: only names of this
-# file's own pattern, and only ones older than the age below, so a live writer's file is never taken.
+# TEMPORARY FILES LEFT BY A KILLED WRITER are swept at the start of the next write. THE SWEEP'S
+# INVARIANT: a file is removed only when ALL THREE hold -
+#   (1) its name is exactly this file's own temporary pattern: a record is never a candidate;
+#   (2) it was last written longer ago than the age (the setting decisions.store.leftoverMinAgeSeconds);
+#   (3) NO PROCESS HOLDS IT OPEN. It is removed by opening it with no sharing at all, to be deleted
+#       when that handle closes: the operating system refuses that open while any other handle exists.
+# (3) is what makes it safe, and has no clock in it. A writer holds its file open from the moment the
+# file exists until it has its record's name (the order above), and the operating system closes a
+# dead process's handles; so "nobody holds it" is "its writer is dead, and never moved it". A writer
+# that is merely slow - suspended, or on a machine put to sleep between its write and its move - is
+# old and alive, and age alone took its file (measured 2026-10-06 against the sweep by age: of four
+# leftovers 400 days old, three of them held open, it removed three).
+# (2) is kept as a second condition for a store on a file system that does not enforce sharing (some
+# network shares): there (3) may prove nothing, and the age is what is left.
+# AND IT NEVER REMOVES THE ONLY COPY OF A RECORD ITS WRITER WAS TOLD IS SAVED: "created" is said only
+# after the file has its record's name, durably, and a file with a record's name is not a candidate.
 #
 # WHAT A CRASH OR A DAMAGED DISK LEAVES, and what the reader says of each. The list is still handed
 # back, every time; the damaged record is in it, marked, with the reason:
@@ -70,10 +110,11 @@
 
 . (Join-Path $PSScriptRoot "Settings.ps1")
 
-# Win32 error codes, read from the low 16 bits of an IOException's HResult: 80 ERROR_FILE_EXISTS,
-# 183 ERROR_ALREADY_EXISTS (what a move onto a taken name raises, measured 2026-10-06, for a file and
-# for a folder alike); 32 ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION.
-$script:HordeDecisionStoreExistsCodes = @(80, 183)
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\FileAtomic.ps1")
+
+# Win32 error codes of a READ, from the low 16 bits of an IOException's HResult: 32
+# ERROR_SHARING_VIOLATION, 33 ERROR_LOCK_VIOLATION. (What a move onto a taken name raises is no longer
+# read here: the durable move answers "exists" in words.)
 $script:HordeDecisionStoreBusyCodes = @(32, 33)
 # Strict: bytes that are not UTF-8 throw instead of becoming U+FFFD, so a damaged record is reported
 # and never read as different words.
@@ -137,10 +178,9 @@ function Get-HordeDecisionRecordName {
 }
 
 function Remove-HordeDecisionStoreLeftovers {
-    # Remove the temporary files dead writers left in -Root. Returns how many were removed. Only a name
-    # of this file's own temporary pattern, and only one last written more than the stale age ago: a
-    # record is never a candidate, whatever its age, and a live writer's file is too young. A file
-    # that cannot be removed is left for the next write; this never fails a write.
+    # Remove the temporary files dead writers left in -Root. Returns how many were removed. The header
+    # states the invariant: this file's own name pattern, older than the age, AND held open by no
+    # process. A file that cannot be removed is left for the next write; this never fails a write.
     param([Parameter(Mandatory = $true)][string]$Root, [datetime]$Now = [datetime]::UtcNow)
     $removed = 0
     $minAgeSeconds = Get-HordeDecisionSetting -Name "decisions.store.leftoverMinAgeSeconds"
@@ -150,7 +190,11 @@ function Remove-HordeDecisionStoreLeftovers {
         if ([System.IO.Path]::GetFileName($leftover) -cnotmatch $script:HordeDecisionStoreTempPattern) { continue }
         try {
             if (($Now - [System.IO.File]::GetLastWriteTimeUtc($leftover)).TotalSeconds -lt $minAgeSeconds) { continue }
-            [System.IO.File]::Delete($leftover)
+            # CLAIMED, NOT JUST DELETED. A delete by name succeeds on a file its writer holds with
+            # delete sharing, and takes it from under a live writer. This open is refused while ANY
+            # other handle exists; if it is granted, nobody else has the file, and closing it deletes it.
+            $claim = New-Object System.IO.FileStream($leftover, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None, 1, [System.IO.FileOptions]::DeleteOnClose)
+            $claim.Dispose()
             $removed++
         } catch { }
     }
@@ -158,10 +202,15 @@ function Remove-HordeDecisionStoreLeftovers {
 }
 
 function Add-HordeDecisionRecord {
-    # Put record -Sequence, holding -Text, in the store: written whole into a temporary file, written
-    # through to disk, closed, and then moved to the record's name by a move that does not replace.
-    # Returns "created" or "exists"; throws when the folder or the file cannot be made.
-    # "exists" is not an error: it is how a writer learns another one took that place in the order.
+    # Put record -Sequence, holding -Text, in the store, in the order the header gives: written whole
+    # into a temporary file this writer holds open, flushed to disk, and given the record's name by a
+    # durable move that does not replace. Returns
+    #   "created"      the record is in the store, and everything that makes it durable returned success;
+    #   "exists"       another writer has that place in the order. Not an error: it is how a writer
+    #                  learns it lost, and its caller reads the list again;
+    #   "unconfirmed"  the record HAS its name, but the flush after the move failed. It must not be
+    #                  reported as saved, and it must not be reported as "nothing was written" either.
+    # Throws when the folder or the file cannot be made, or the move fails any other way.
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][long]$Sequence, [Parameter(Mandatory = $true)][string]$Text)
     if (-not [System.IO.Path]::IsPathRooted("$Root")) { throw ("the decisions store needs an absolute folder, not '" + $Root + "'") }
     [void][System.IO.Directory]::CreateDirectory($Root)
@@ -170,21 +219,26 @@ function Add-HordeDecisionRecord {
     # Encoded before any file is made: text that cannot be written as UTF-8 throws here and leaves nothing.
     $bytes = $script:HordeDecisionStoreUtf8.GetBytes($Text)
     $tmpPath = Join-Path $Root ("writing-" + [guid]::NewGuid().ToString("N") + ".part")
-    $fs = New-Object System.IO.FileStream($tmpPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 4096, [System.IO.FileOptions]::WriteThrough)
+    # Sharing delete and nothing else: the file can be renamed while this handle is open, and nothing
+    # can read or write it until it is whole and let go.
+    $fs = New-Object System.IO.FileStream($tmpPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Delete, 4096, [System.IO.FileOptions]::WriteThrough)
+    $moved = ""
     try {
         $fs.Write($bytes, 0, $bytes.Length)
         $fs.Flush($true)
-    } finally { $fs.Dispose() }
-    try { [System.IO.File]::Move($tmpPath, $recPath) }
-    catch {
-        $code = Get-HordeDecisionStoreWin32Code $_
-        try { [System.IO.File]::Delete($tmpPath) } catch { }
-        # "exists" only when a RECORD has the name. A folder of that name raises the same code, and
-        # answering "exists" for it would send the caller round its retry loop for nothing.
-        if (($script:HordeDecisionStoreExistsCodes -contains $code) -and [System.IO.File]::Exists($recPath)) { return "exists" }
-        throw
+        $moved = Move-HordeFileNewDurable -From $tmpPath -To $recPath -Open $fs
+    } finally {
+        $fs.Dispose()
+        # Whatever went wrong, this writer's own temporary file does not stay. After a move there is no
+        # file of that name, and this does nothing.
+        if ($moved -cne "moved" -and $moved -cne "unconfirmed") { try { [System.IO.File]::Delete($tmpPath) } catch { } }
     }
-    return "created"
+    if ($moved -ceq "moved") { return "created" }
+    if ($moved -ceq "unconfirmed") { return "unconfirmed" }
+    # "exists" only when a RECORD has the name. A folder of that name is answered the same way by the
+    # move, and answering "exists" for it would send the caller round its retry loop for nothing.
+    if ($moved -ceq "exists" -and [System.IO.File]::Exists($recPath)) { return "exists" }
+    throw ("record " + $Sequence + " could not be put in place: its name is taken by something that is not a record (the move answered '" + $moved + "')")
 }
 
 function Read-HordeDecisionRecordFile {
