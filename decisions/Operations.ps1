@@ -194,7 +194,7 @@ function Get-HordeDecisionListAnswer {
     $views = New-Object System.Collections.ArrayList
     foreach ($question in $State.questions.Values) {
         if ($counts.Contains("$($question.state)")) { $counts["$($question.state)"] = [int]$counts["$($question.state)"] + 1 }
-        if ($want -ceq "all" -or "$($question.state)" -ceq $want) { [void]$views.Add((ConvertTo-HordeDecisionView -Question $question)) }
+        if ($want -ceq "all" -or "$($question.state)" -ceq $want) { [void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State)) }
     }
     $value = New-HordeDecisionResult -Operation "list" -Outcome "done" -State $State -More ([ordered]@{ questions = @($views); counts = [pscustomobject]$counts })
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
@@ -205,7 +205,7 @@ function Get-HordeDecisionShowAnswer {
     $number = [long]$Request.number
     $missing = Get-HordeDecisionNumberAnswer -State $State -Number $number -Operation "show"
     if ($null -ne $missing) { return $missing }
-    $view = ConvertTo-HordeDecisionView -Question $State.questions[[int]$number]
+    $view = ConvertTo-HordeDecisionView -Question $State.questions[[int]$number] -State $State -Messages
     $value = New-HordeDecisionResult -Operation "show" -Outcome "done" -State $State -More ([ordered]@{ number = [int]$number; question = $view })
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
 }
@@ -297,7 +297,7 @@ function Invoke-HordeDecisionWrite {
                     return (New-HordeUnknown -Reason ("record " + $prior.sequence + " holds this request, but it could not be confirmed written through to the disk (" + $sure + "), so it is NOT reported as saved. Send the same request again, with the same id"))
                 }
                 $more = [ordered]@{ sequence = $prior.sequence; number = [int]$prior.number }
-                if ($list.questions.ContainsKey([int]$prior.number)) { $more["question"] = ConvertTo-HordeDecisionView -Question $list.questions[[int]$prior.number] }
+                if ($list.questions.ContainsKey([int]$prior.number)) { $more["question"] = ConvertTo-HordeDecisionView -Question $list.questions[[int]$prior.number] -State $list }
                 return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation $Operation -Outcome "replayed" -State $list -More $more) -Definitions $Definitions -Now $Now)
             }
             $why = "the id " + $id + " was already used for a different request (record " + $prior.sequence + ", " + $prior.kind + "); nothing was written. A new request needs a new id"
@@ -347,7 +347,7 @@ function Invoke-HordeDecisionWrite {
             return (New-HordeUnknown -Reason ("record " + $sequence + " has its place in the store, but it could not be confirmed written through to the disk, so it is NOT reported as saved. Send the same request again, with the same id: it is answered from the record if the record is still there"))
         }
         if ($made -cne "created") { continue }
-        $more = [ordered]@{ sequence = $sequence; attempts = $attempt; number = [int]$data["number"]; question = (ConvertTo-HordeDecisionView -Question $question) }
+        $more = [ordered]@{ sequence = $sequence; attempts = $attempt; number = [int]$data["number"]; question = (ConvertTo-HordeDecisionView -Question $question -State $list) }
         $value = New-HordeDecisionResult -Operation $Operation -Outcome "done" -State $list -More $more
         return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now -Written ("Record " + $sequence + " WAS written"))
     }
