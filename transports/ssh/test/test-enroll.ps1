@@ -33,7 +33,9 @@ $hh = Join-Path $tmp "home"
 $dev = "0f8fad5b-d9cb-469f-a165-70867728950e"
 $dev2 = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 $hub = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b"
-$cmd = "powershell.exe -NoProfile -File C:\horde\horde.ps1 attach -Device " + $dev
+$hr = "C:\horde"
+$ps = Join-Path ([System.Environment]::SystemDirectory) "WindowsPowerShell\v1.0\powershell.exe"
+$cmd = $ps + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\horde\cli\attach.ps1 -Device " + $dev
 
 try {
     New-Item -ItemType Directory -Path $hh | Out-Null
@@ -118,23 +120,34 @@ try {
     Check ($hi.ok -and $hi.line -cmatch ('\A' + $hub + ' ssh-ed25519 [A-Za-z0-9+/]{68}\z') -and (Test-HordeSshKeyAcl -Path $lp.hostKey) -eq "") "hub init makes the listener's host key, this user's alone, and returns the line a node pins"
     Check ((Initialize-HordeSshHub -HordeHome $hh -HubId $hub).line -ceq $hi.line) "run again, it returns the same line and makes nothing"
     $now = [datetime]::SpecifyKind([datetime]"2026-10-06T12:00:00", [System.DateTimeKind]::Utc)
-    $en = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -Command $cmd -Days 365 -Now $now
+    $en = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -HordeRoot $hr -Days 365 -Now $now
     Check ($en.ok -and $en.line -ceq ('command="' + $cmd + '",restrict,expiry-time="20271006" ' + $newKey + ' horde-device-' + $dev)) ("hub enroll writes one line: the forced command, restrict, and an expiry a year on (" + $en.line + ")")
     Check (@(Get-Content -LiteralPath $lp.authorized).Count -eq 1) "authorized_keys holds that one line"
-    Check ((Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -Command $cmd -Now $now).ok -and @(Get-Content -LiteralPath $lp.authorized).Count -eq 1) "enrolling the same device and key again changes nothing"
+    Check ((Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -HordeRoot $hr -Now $now).ok -and @(Get-Content -LiteralPath $lp.authorized).Count -eq 1) "enrolling the same device and key again changes nothing"
     $other = (New-HordeSshKey -Path (Join-Path $kgDir "other") -Passphrase "" -HordeHome $hh).line
-    $r = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $other -Command $cmd -Now $now
+    $r = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $other -HordeRoot $hr -Now $now
     Check (-not $r.ok -and $r.reason -clike "*already enrolled with another key*") "a device already enrolled with another key is refused"
-    $r = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $newKey -Command $cmd -Now $now
+    $r = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $newKey -HordeRoot $hr -Now $now
     Check (-not $r.ok -and $r.reason -clike "*already enrolled for another device*") "a key already enrolled for another device is refused"
-    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -Command 'x" y' -Now $now).ok) "a forced command holding a double quote is refused"
-    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -Command $cmd -Days 0 -Now $now).ok -and -not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -Command $cmd -Days 400 -Now $now).ok) "an enrolment of 0 days or of more than a year and a day is refused"
-    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId "not-a-device" -Key $other -Command $cmd -Now $now).ok) "a device id that is not one is refused"
+    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'C:\ho"rde' -Now $now).ok) "a Horde root holding a double quote is refused"
+    $sp = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'C:\Program Files\horde' -Now $now
+    Check (-not $sp.ok -and $sp.reason -clike "*space or a quote*") ("a Horde root holding a space is refused, never half-run (" + $sp.reason + ")")
+    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot 'horde' -Now $now).ok) "a Horde root that is not a full path is refused"
+    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot $hr -Days 0 -Now $now).ok -and -not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2 -Key $other -HordeRoot $hr -Days 400 -Now $now).ok) "an enrolment of 0 days or of more than a year and a day is refused"
+    Check (-not (Add-HordeSshEnrolment -HordeHome $hh -DeviceId "not-a-device" -Key $other -HordeRoot $hr -Now $now).ok) "a device id that is not one is refused"
     $rv = Remove-HordeSshEnrolment -HordeHome $hh -DeviceId $dev
     Check ($rv.ok -and @(Read-HordeSshLines -Path $lp.authorized).Count -eq 0 -and @(Read-HordeSshLines -Path $lp.revoked) -ccontains $newKey) "hub revoke removes the line and adds the key to revoked_keys"
-    $again = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -Command $cmd -Now $now
+    $again = Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $newKey -HordeRoot $hr -Now $now
     Check (-not $again.ok -and $again.reason -clike "*was revoked*") "a revoked key is never enrolled again"
-    Check ((Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $other -Command $cmd -Now $now).ok) "CONTROL: the same device with a new key is enrolled"
+    Check ((Add-HordeSshEnrolment -HordeHome $hh -DeviceId $dev -Key $other -HordeRoot $hr -Now $now).ok) "CONTROL: the same device with a new key is enrolled"
+    # EVERY LINE CARRIES command= AND restrict (R17a: the listener runs no ForceCommand, which would
+    # override each key's command=, so these two are the whole guard).
+    $third = (New-HordeSshKey -Path (Join-Path $kgDir "third") -Passphrase "" -HordeHome $hh).line
+    $null = Add-HordeSshEnrolment -HordeHome $hh -DeviceId "5d7f3c2a-8e41-4b6a-9c0d-1e2f3a4b5c6d" -Key $third -HordeRoot $hr -Days 30 -Now $now
+    $all = @(Read-HordeSshLines -Path $lp.authorized)
+    $shaped = @($all | Where-Object { $_ -cmatch ('\Acommand="' + [regex]::Escape($ps) + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\horde\\cli\\attach\.ps1 -Device (?<d>[0-9a-f-]{36})",restrict,expiry-time="[0-9]{8}" ssh-ed25519 [A-Za-z0-9+/]{68} horde-device-(?<e>[0-9a-f-]{36})\z') -and $Matches["d"] -ceq $Matches["e"] })
+    Check ($all.Count -eq 2 -and $shaped.Count -eq 2) ("every enrolled line forces attach.ps1 for its own device and carries restrict (" + ($all -join " | ") + ")")
+    Check ((Get-HordeSshAttachCommand -HordeRoot $hr -DeviceId $dev) -ceq $cmd) "the forced command is System32's powershell.exe by full path running cli\attach.ps1 for the device"
     Check (-not (Remove-HordeSshEnrolment -HordeHome $hh -DeviceId $dev2).ok) "revoking a device that is not enrolled is refused"
 
     Write-Host ""
@@ -146,7 +159,7 @@ try {
     function Test-GuardWith { param([string]$EnrollText, [string]$Extra = "")
         $md = Join-Path $tmp ("guard-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
         New-Item -ItemType Directory -Path $md | Out-Null
-        foreach ($f in @("Argv.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
+        foreach ($f in @("Argv.ps1", "Attach.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
         [System.IO.File]::WriteAllText((Join-Path $md "Enroll.ps1"), $EnrollText)
         if ($Extra -ne "") { [System.IO.File]::WriteAllText((Join-Path $md "Other.ps1"), $Extra) }
         return @(Get-HordeSshExecFindings -Dir $md) }
@@ -184,7 +197,8 @@ try {
     Check ($n.code -eq 0 -and $enCmd.Success) ("horde node init prints the hub enroll to run (exit " + $n.code + ")")
     $e = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
     $auth = ""; if (Test-Path (Join-Path $ch "hub\listen\authorized_keys")) { $auth = [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys")) }
-    Check ($e.code -eq 0 -and $auth -clike ('command="powershell.exe *\horde.ps1 attach -Device ' + $enCmd.Groups["dev"].Value + '",restrict,expiry-time="*" ssh-ed25519 *')) "horde hub enroll admits the key, forced to horde.ps1's attach for that device"
+    $wantCmd = Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $enCmd.Groups["dev"].Value
+    Check ($e.code -eq 0 -and $auth.StartsWith('command="' + $wantCmd + '",restrict,expiry-time="') -and $wantCmd.EndsWith("\cli\attach.ps1 -Device " + $enCmd.Groups["dev"].Value)) ("horde hub enroll admits the key, forced to cli\attach.ps1 for that device, with restrict (" + $auth.Trim() + ")")
     $pn = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "pin", "-Hub", $pinCmd.Groups["hub"].Value, "-HostKey", $pinCmd.Groups["key"].Value) -Env $envs
     Check ($pn.code -eq 0 -and [System.IO.File]::ReadAllText((Join-Path $ch "node\known_hosts")) -clike ("horde-hub-" + $pinCmd.Groups["hub"].Value + " ssh-ed25519 *")) "horde node pin pins the hub's host key"
     $rv = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", $enCmd.Groups["dev"].Value) -Env $envs

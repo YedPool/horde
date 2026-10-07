@@ -57,6 +57,9 @@
         @{ Name = "no-expiry-time"
            Find = '''",restrict,expiry-time="'' + $expiry + ''" '''
            Replace = '''",restrict '' + '''' + '''' + '' ''' }
+        @{ Name = "no-command"
+           Find = '$line = ''command="'' + $Command + ''",restrict,expiry-time="'''
+           Replace = '$line = ''restrict,expiry-time="''' }
         @{ Name = "no-restrict"
            Find = '''",restrict,expiry-time="'''
            Replace = '''",expiry-time="''' }

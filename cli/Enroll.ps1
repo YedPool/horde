@@ -21,16 +21,6 @@ function Get-HordeEnrollTransport {
     return $e.value
 }
 
-function Get-HordeAttachCommand {
-    # The command a hub forces on an enrolled device's key: horde.ps1's own attach verb (remote plan
-    # R17a), for -DeviceId. The path is written unquoted inside the key's command="...", so a Horde
-    # installed under a path with a space or a quote is refused here rather than half-run.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$DeviceId)
-    $script = Join-Path $Root "horde.ps1"
-    if ($script -match '[\s"]') { throw ("Horde is installed under a path with a space or a quote (" + $script + "); the hub's forced command cannot name it unquoted") }
-    return ("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + $script + " attach -Device " + $DeviceId)
-}
-
 function Invoke-HordeEnrollStep {
     # Run one enrolment operation and return its result, or throw its reason.
     param([Parameter(Mandatory = $true)][scriptblock]$Op, [object[]]$ArgList)
@@ -80,7 +70,7 @@ function Invoke-HordeHubEnrollVerb {
         }
         "enroll" {
             if ($Device -eq "" -or $Key -eq "") { throw "hub enroll needs -Device <device id> and -Key `"<key>`", exactly as horde node init printed them" }
-            $r = Invoke-HordeEnrollStep -Op $e.hubEnroll -ArgList @($hh, $Device, $Key, (Get-HordeAttachCommand -Root $Root -DeviceId $Device), $Days)
+            $r = Invoke-HordeEnrollStep -Op $e.hubEnroll -ArgList @($hh, $Device, $Key, $Root, $Days)
             return @(("device " + $Device + " is enrolled until " + ([regex]::Match($r.line, 'expiry-time="([0-9]{8})"').Groups[1].Value) + "."))
         }
         "revoke" {

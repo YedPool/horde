@@ -125,7 +125,8 @@ function Register-HordeTransport {
 # transports/<name>/Enroll.ps1, and the commands that enrol (horde node init, horde hub enroll, ...)
 # reach it through Get-HordeEnrollment without naming a transport (CONTRIBUTING rule 14). Each
 # operation takes Horde's home and plain strings and returns { ok; line; reason }: the line is what
-# the founder carries to the other machine.
+# the founder carries to the other machine. hubEnroll is given Horde's root, never a command: what a
+# device's link may run is the transport's to build (transports/ssh/Attach.ps1), not a caller's.
 if ($null -eq (Get-Variable -Name HordeEnrollments -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeEnrollments = @{} }
 
 function Get-HordeEnrollmentFiles {

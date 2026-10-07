@@ -9,6 +9,8 @@
 #   <home>\hub\listen\host_ed25519(.pub) the hub's listener host key (R17a's sshd uses it)
 #   <home>\hub\listen\authorized_keys    one line per enrolled device:
 #        command="<attach>",restrict,expiry-time="YYYYMMDD" ssh-ed25519 <key> horde-device-<id>
+#                                        <attach> is Attach.ps1's, and nothing else: the listener runs
+#                                        no ForceCommand, so command= and restrict are the whole guard
 #   <home>\hub\listen\revoked_keys       every key revoked, for sshd's RevokedKeys (R17a): a revoked
 #                                        key stays refused even if its line is restored by hand
 # Enrolment and pinning move strings the founder carries between machines; no host key is ever taken
@@ -24,6 +26,7 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path $PSScriptRoot "Argv.ps1")
+. (Join-Path $PSScriptRoot "Attach.ps1")
 
 # A public key line Horde accepts: ed25519 only, base64 of the 51-byte blob (68 characters), and an
 # optional comment of plain characters. Anything else is refused, never cleaned.
@@ -230,11 +233,14 @@ function Get-HordeSshEnrolment {
 }
 
 function Add-HordeSshEnrolment {
-    # Admit device -DeviceId's key: one authorized_keys line with command= (-Command, the attach the hub
-    # forces), restrict and expiry-time. Refused: a device already enrolled with another key, a key
-    # already enrolled for another device, and a revoked key.
-    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Command, [int]$Days = $script:HordeSshEnrolDays, $Now = $null)
+    # Admit device -DeviceId's key: one authorized_keys line with command= (Attach.ps1's attach for
+    # this device, Horde at -HordeRoot), restrict and expiry-time, always all three: the listener runs
+    # no ForceCommand (Attach.ps1). No caller names the command. Refused: a device already enrolled
+    # with another key, a key already enrolled for another device, and a revoked key.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$HordeRoot, [int]$Days = $script:HordeSshEnrolDays, $Now = $null)
     if ($DeviceId -cnotmatch $script:HordeSshDevicePattern) { return (New-HordeSshEnrolResult -Ok $false -Reason ("not a device id: '" + $DeviceId + "'")) }
+    $Command = ""
+    try { $Command = Get-HordeSshAttachCommand -HordeRoot $HordeRoot -DeviceId $DeviceId } catch { return (New-HordeSshEnrolResult -Ok $false -Reason $_.Exception.Message) }
     $k = ConvertFrom-HordeSshKeyLine -Line $Key
     if (-not $k.ok) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the node's key: " + $k.reason)) }
     if ($Days -lt 1 -or $Days -gt 366) { return (New-HordeSshEnrolResult -Ok $false -Reason "an enrolment lasts 1 to 366 days") }
@@ -282,5 +288,5 @@ $null = Register-HordeEnrollment -Folder $PSScriptRoot `
     -NodeRotate { param($HordeHome, $DeviceId) Reset-HordeSshNodeKey -HordeHome $HordeHome -DeviceId $DeviceId } `
     -NodePin { param($HordeHome, $HubId, $HostKey, $Replace) Add-HordeSshPin -HordeHome $HordeHome -HubId $HubId -HostKey $HostKey -Replace:$Replace } `
     -HubInit { param($HordeHome, $HubId) Initialize-HordeSshHub -HordeHome $HordeHome -HubId $HubId } `
-    -HubEnroll { param($HordeHome, $DeviceId, $Key, $Command, $Days) Add-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId -Key $Key -Command $Command -Days $Days } `
+    -HubEnroll { param($HordeHome, $DeviceId, $Key, $HordeRoot, $Days) Add-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId -Key $Key -HordeRoot $HordeRoot -Days $Days } `
     -HubRevoke { param($HordeHome, $DeviceId) Remove-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId }
