@@ -1,0 +1,14 @@
+/* fleet/line/line.css - the fleet line (line.js). One folded line, a line per Orc when unfolded.
+   IT TAKES ITS LETTERS AND COLOURS FROM THE PAGE THAT HOSTS IT: the font is inherited, and the three
+   colours are the host's own variables (--ink, --muted, --line), so the line looks like the page it
+   stands under, in light and in dark. No size is set here; weights are 400 and 600 only; a state is
+   never shown by a faded letter (no opacity), only by a muted colour and by words. */
+.fl { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 4px; padding-left: 28px; color: var(--muted); }
+.fl button { font: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.fl .fl-lead { color: var(--muted); }
+.fl .fl-orc { color: var(--ink); }
+.fl .fl-orc.on { font-weight: 600; text-decoration: underline; }
+.fl .fl-head { overflow-wrap: anywhere; }
+.fl .fl-row { display: none; padding-left: 14px; overflow-wrap: anywhere; }
+.fl.open .fl-row { display: block; }
+.fl button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
