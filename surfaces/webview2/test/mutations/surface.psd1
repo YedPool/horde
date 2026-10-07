@@ -88,6 +88,16 @@
         @{ Name = "context-menu-left-on"
            Find = '$core.Settings.AreDefaultContextMenusEnabled = $false'
            Replace = '' }
+        # --- a picture
+        @{ Name = "a-picture-written-at-a-relative-path"
+           Find = 'if (-not [System.IO.Path]::IsPathRooted("$Path") -or '
+           Replace = 'if (' }
+        @{ Name = "a-second-picture-taken-while-one-is-drawn"
+           Find = ' -or $null -ne $s.capture) { return $false }'
+           Replace = ') { return $false }' }
+        @{ Name = "an-unfinished-picture-is-saved"
+           Find = 'if ($null -eq $s -or $null -eq $s.capture -or -not $s.capture.task.IsCompleted) { return }'
+           Replace = 'if ($null -eq $s -or $null -eq $s.capture) { return }' }
         # --- a machine without the engine
         @{ Name = "no-engine-reads-as-an-engine"
            Find = 'if ("$Version".Trim() -ne "") { return "" }'
