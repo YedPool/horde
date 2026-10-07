@@ -345,6 +345,7 @@ try {
         Check ($why -like ("*of type '" + $kind + "'*")) ("a profile on a drive of type " + $kind + " is refused (" + $why + ")")
     }
     Check ((Test-HordeWeztermProfileDir -Path $pp -DriveType { param($root) "Removable" }) -eq "") "CONTROL: a removable local drive passes"
+Check ((Test-HordeWeztermProfileDir -Path "\\server\share\profile" -DriveType { param($root) "Fixed" }) -like "*not a full path on a local drive*") "a share is refused by its form first, even where the drive type would pass"
 } finally { if ((Split-Path -Leaf $pp) -match '^horde-act-profile-[0-9a-f]{32}$') { Remove-Item -LiteralPath $pp -Recurse -Force -ErrorAction SilentlyContinue } }
 
 Remove-HordePaneTool
