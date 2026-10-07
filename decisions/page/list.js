@@ -13,6 +13,7 @@
 //                            answer is not a list: what was drawn stays, and the caller says why)
 //   doc.setDim(fnOrNull)     fn(question) is true for a question to draw dimmed. DIMMED, NEVER HIDDEN
 //   doc.setUnfolded(numbers) these questions unfolded as well; doc.unfoldAll(); doc.foldAll()
+//   doc.reveal(number)       that question brought into view, if it is not wholly in it already
 //   doc.counts()             { open, waiting, other }
 //   doc.snapshot(limits)     WHAT IS DRAWN, read back from the page's own elements: the headings, and
 //                            every question line's number, text and suffix; see snapshot below
@@ -287,6 +288,21 @@
       setUnfolded: function (numbers) {
         listOf(numbers).forEach(function (n) { unfolded[n] = true; });
         draw();
+      },
+      // A QUESTION THE READER WAS POINTED AT MUST BE IN VIEW. A question unfolded far down the list
+      // was unfolded where nobody saw it: opened to show question 15 of 22, the window showed 1 to 12
+      // (seen 2026-10-07 in a picture of the real window). A question wholly in view is left where
+      // it is; another is moved to the top of the view, under whatever the host keeps fixed there,
+      // with the line before it left in sight so that it is seen to belong to a list.
+      reveal: function (number) {
+        var i, box, row;
+        for (i = 0; i < drawnLines.length; i += 1) {
+          if (drawnLines[i].q.number !== number) { continue; }
+          box = drawnLines[i].wrap.getBoundingClientRect();
+          row = drawnLines[i].row.getBoundingClientRect();
+          if (box.height > 0 && (box.top < topInset() || box.bottom > window.innerHeight)) { window.scrollBy(0, box.top - topInset() - row.height); }
+          return;
+        }
       },
       unfoldAll: function () {
         questions.forEach(function (q) { unfolded[q.number] = true; });

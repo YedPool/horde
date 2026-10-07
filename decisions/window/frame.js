@@ -128,6 +128,8 @@
     if (view.unfold && view.unfold.length) { doc.setUnfolded(view.unfold); }
     if (view.fleetOpen) { fleet.setOpen(true); }
     if (view.pick) { fleet.setPicked("orc:" + view.pick); pick("orc:" + view.pick); }
+    // The first question asked for is the one the reader was pointed at: it is brought into view.
+    if (view.unfold && view.unfold.length) { doc.reveal(view.unfold[0]); }
   }
 
   // WHAT THE PAGE DREW, a moment after the last change so that a burst of them is one report. It is
