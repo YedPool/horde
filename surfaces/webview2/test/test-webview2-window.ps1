@@ -320,6 +320,53 @@ while ($waited.ElapsedMilliseconds -lt 20000) {
 }
 Check ($left.Count -eq 0) ("every engine process the window started has gone, " + $waited.ElapsedMilliseconds + " ms after it closed (" + (@($left | ForEach-Object { $_.name + " " + $_.id }) -join ", ") + ")")
 
+Write-Host ""
+Write-Host "--- both sides of the bridge read the one definition of the messages ---" -ForegroundColor Cyan
+# A SECOND WINDOW, OPENED WITH ANOTHER DEFINITION IN FORCE: protocol 7 and other member names, in a
+# file of this run. The port is handed it, and the surface serves it to the page as it serves the
+# shipped one. The page (pages/probe/echo.js) names no member of any message. If either side carried
+# a name or a number of its own, not one message would cross.
+$otherShapes = [ordered]@{ schemaVersion = 1; protocol = 7
+    request = [ordered]@{ version = "ver"; id = "n"; name = "ask"; arguments = "with" }
+    reply = [ordered]@{ version = "ver"; id = "re"; ok = "fine"; value = "got"; reason = "why" }
+    event = [ordered]@{ version = "ver"; name = "happened"; value = "got" } }
+$otherShapesPath = Join-Path $work "bridge-messages.json"
+[System.IO.File]::WriteAllText($otherShapesPath, (ConvertTo-Json -InputObject $otherShapes -Depth 5))
+$echo = [pscustomobject]@{ bridge = $null; heard = (New-Object System.Collections.ArrayList); phase = "talk"; timedOut = ""; limitMs = 30000; clock = [System.Diagnostics.Stopwatch]::StartNew(); inForce = "" }
+$echo.bridge = New-HordeSurfaceBridge -Events @("poke") -Requests ([ordered]@{
+    "echo" = @{ args = @{ text = @{ type = "string"; most = 600 } }; run = { param($Arguments, $State, $Window) [void]$State.heard.Add($Arguments["text"]); return ("heard " + $Arguments["text"]) } }
+    "done" = @{ run = { param($Arguments, $State, $Window) $State.phase = "push"; return $true } }
+})
+function Step-Echo {
+    param($Window, $State)
+    if ($State.clock.ElapsedMilliseconds -gt $State.limitMs) { $State.timedOut = $State.phase; & $Window.close; return }
+    if ($State.phase -ceq "push") {
+        $shapesNow = Get-HordeSurfaceMessages
+        $State.inForce = "protocol " + $shapesNow.protocol + ", a request's id is '" + $shapesNow.request.id + "'"
+        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "poke" -Value "again")
+        $State.phase = "pushed"
+    }
+    elseif ($State.phase -ceq "pushed" -and @($State.heard) -ccontains "pushed again") { & $Window.close }
+}
+$echoSpec = New-HordeSurfaceSpec -Title "surface echo" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe") }) -Start "probe/echo.html" -Bridge $echo.bridge -DataFolder (Join-Path $work "data-echo") `
+    -Hidden -Width 320 -Height 200 -TickMs 50 -State $echo -OnTick { param($Window, $State) Step-Echo -Window $Window -State $State }
+$shippedShapes = $script:HordeSurfaceMessages
+$shapesPath = $otherShapesPath
+# The suite's own answer to "where is the definition", for this one window (a suite may replace a
+# function in its own process: test/test-identity.ps1 does the same).
+function Get-HordeSurfaceMessagesPath { return $shapesPath }
+try {
+    $script:HordeSurfaceMessages = Read-HordeSurfaceMessages -Path $otherShapesPath
+    $echo.clock.Restart()
+    $echoShown = Open-HordeSurface -Surface $surface -Spec $echoSpec
+} finally { $script:HordeSurfaceMessages = $shippedShapes; $shapesPath = Join-Path $root "surfaces\bridge-messages.json" }
+Check ($echo.inForce -ceq "protocol 7, a request's id is 'n'" -and (Get-HordeSurfaceMessages).protocol -eq 1) ("CONTROL: while that window stood, the other definition was the one in force (" + $echo.inForce + "), and the shipped one is back")
+Check ($echoShown.state -ceq "closed" -and $echo.timedOut -ceq "") ("a second window opens in the same process after the first has closed, and the page finished talking (" + $echoShown.state + " " + $echoShown.reason + "; stopped in '" + $echo.timedOut + "')")
+Check (@($echo.heard).Count -eq 3 -and $echo.heard[0] -ceq "hello") ("a request crosses in the other vocabulary (" + (@($echo.heard) -join " || ") + ")")
+Check (@($echo.heard).Count -eq 3 -and $echo.heard[1] -like "heard hello | rejected: refused: *not on the list*") "so does the answer, and so does a refusal with its reason"
+Check (@($echo.heard).Count -eq 3 -and $echo.heard[2] -ceq "pushed again") "and an event pushed to the page"
+Check ($echo.bridge.answered -eq 4 -and $echo.bridge.refused -eq 1) ("nothing else was refused: " + $echo.bridge.answered + " answered, " + $echo.bridge.refused + " refused")
+
 } finally {
     if ($null -ne (Get-Variable -Name listener -ErrorAction SilentlyContinue) -and $null -ne $listener) { try { $listener.Stop() } catch { } }
     if ((Split-Path -Leaf $work) -match '\Ahorde-webview2-window-[0-9a-f]{32}\z') {
