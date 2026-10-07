@@ -13,7 +13,7 @@
            Find = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = [long]$p }'
            Replace = 'elseif ($p -is [int] -or $p -is [long]) { $st.pending = 0 }' }
         @{ Name = "task-starts-not-read"
-           Find = 'if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; break }'
+           Find = 'if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; return }'
            Replace = 'if ($false) { break }' }
         @{ Name = "unrecognised-task-finished"
            Find = 'if ($final) { $St.unknownTasks.Remove($n.taskId) } else { $St.unknownTasks[$n.taskId] = $n.status }'
@@ -131,5 +131,24 @@
         @{ Name = "remote-link-not-reported"
            Find = 'if ($kind -ceq "bridge-session" -and $v["bridgeSessionId"] -is [string] -and $v["bridgeSessionId"] -ne "") { $st.link = $v["bridgeSessionId"] }'
            Replace = '$null = 0' }
+        # The re-review of #93: a start the reader does not recognise fails closed.
+        @{ Name = "unrecognised-start-is-nothing"
+           Find = 'if ($asked -or $says) { $St.unknownStarts[$Id] = $true }'
+           Replace = '$null = 0' }
+        @{ Name = "background-call-not-noticed"
+           Find = '$asked = ($null -ne $call -and $call.bg)'
+           Replace = '$asked = $false' }
+        @{ Name = "background-wording-not-noticed"
+           Find = '$says = ($first -match ''background'') -and -not ($null -ne $call -and $script:ClaudeCodeReadOnlyTools -ccontains $call.name)'
+           Replace = '$says = $false' }
+        @{ Name = "read-only-result-starts-something"
+           Find = '$says = ($first -match ''background'') -and -not ($null -ne $call -and $script:ClaudeCodeReadOnlyTools -ccontains $call.name)'
+           Replace = '$says = ($first -match ''background'')' }
+        @{ Name = "any-notification-releases-an-unknown-start"
+           Find = 'if ($final -and $n.toolCallId -ne "" -and $St.unknownStarts.ContainsKey($n.toolCallId)) { $St.unknownStarts.Remove($n.toolCallId) }'
+           Replace = 'if ($final) { $St.unknownStarts.Clear() }' }
+        @{ Name = "resume-not-a-task"
+           Find = '    @{ kind = "agent"; pattern = ''"resumedAgentId":"([A-Za-z0-9]+)"'' }'
+           Replace = '    @{ kind = "agent"; pattern = ''(?!)'' }' }
     )
 }

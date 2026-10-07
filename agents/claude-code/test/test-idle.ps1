@@ -36,7 +36,7 @@ function Say { param($ts) $script:n++; @{ type = "assistant"; timestamp = $ts; v
 function TurnEnd { param($ts, $pending = $null) $h = @{ type = "system"; subtype = "turn_duration"; timestamp = $ts; version = $V; sessionId = $sid; durationMs = 1000 }; if ($null -ne $pending) { $h["pendingBackgroundAgentCount"] = $pending }; $h }
 function Sys { param($ts, $sub, $ver = $V) @{ type = "system"; subtype = $sub; timestamp = $ts; version = $ver; sessionId = $sid } }
 function Meta { param($type) @{ type = $type; sessionId = $sid } }
-function Note { param($ts, $task, $status, $note = "") @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = ("<task-notification>`n<task-id>" + $task + "</task-id>`n<status>" + $status + "</status>`n<note>" + $note + "</note>`n</task-notification>") } } }
+function Note { param($ts, $task, $status, $note = "", $call = "") @{ type = "user"; timestamp = $ts; version = $V; sessionId = $sid; origin = @{ kind = "task-notification" }; message = @{ role = "user"; content = ("<task-notification>`n<task-id>" + $task + "</task-id>`n<tool-use-id>" + $call + "</tool-use-id>`n<status>" + $status + "</status>`n<note>" + $note + "</note>`n</task-notification>") } } }
 function Queue { param($ts, $op) @{ type = "queue-operation"; operation = $op; timestamp = $ts; sessionId = $sid } }
 function Fire { param($ts, $task) @{ type = "system"; subtype = "scheduled_task_fire"; timestamp = $ts; version = $V; sessionId = $sid; taskId = $task; cron = "*/5 * * * *" } }
 
@@ -284,6 +284,34 @@ try {
     $p = Write-Lines "hugepending" @((Prompt "2026-10-02T10:00:00Z" "go"), (TurnEnd "2026-10-02T10:00:06Z" ([long]3000000000)))
     $hp = $null; try { $hp = (State $p).pendingAgents } catch { $hp = $null }
     Check ($hp -eq [long]3000000000) "a pending count too large for 32 bits is read whole and still holds the session"
+
+    Write-Host ""
+    Write-Host "--- re-review of #93: a start the reader does not recognise fails closed ---" -ForegroundColor Cyan
+    # The reviewer's probe: the harness changes its wording (18 versions in 30 days). A call that asked for
+    # the background, or a result whose first line says background, that matches no known start is an
+    # UNKNOWN task: it holds the session until a final notification names its call.
+    $drift = @((Prompt "2026-10-02T10:00:00Z" "go"), (ToolUse "2026-10-02T10:00:01Z" "toolu_D1" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_D1" "Command running in background with ID: b123abc. Output will be saved to C:\tmp\b123abc.output"), (Say "2026-10-02T10:00:03Z"), (TurnEnd "2026-10-02T10:00:04Z"))
+    $s = State (Write-Lines "drift" $drift)
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_D1") "a background call whose result matches no known start is an unknown task, so a wording change cannot read idle"
+    $s = State (Write-Lines "driftdone" @($drift + @(Note "2026-10-02T10:30:00Z" "b123abc" "completed" "" "toolu_D1")))
+    Check (@($s.unknownTasks).Count -eq 0 -and @($s.openTasks).Count -eq 0) "a final notification naming its call releases it"
+    $s = State (Write-Lines "driftother" @($drift + @(Note "2026-10-02T10:30:00Z" "bzzz0000" "completed" "" "toolu_ZZ")))
+    Check (@($s.unknownTasks).Count -eq 1) "a final notification for another call does not"
+    $s = State (Write-Lines "fork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_F1" "Agent" @{ description = "x"; prompt = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_F1" ("Fork started " + [char]0x2014 + " processing in background")), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1 -and $s.unknownTasks[0].id -ceq "call:toolu_F1") "an Agent fork, which names no id, holds the session as an unknown task (11 in 30 days)"
+    $s = State (Write-Lines "skillfork" @((ToolUse "2026-10-02T10:00:01Z" "toolu_K9" "Skill" @{ skill = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_K9" ("Skill " + [char]34 + "x" + [char]34 + " launched (forked execution, running in the background).`n`nRunning in the background as @x")), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 1) "a forked Skill holds the session as an unknown task (6 in 30 days)"
+    $resume = @((ToolUse "2026-10-02T10:00:01Z" "toolu_R1" "SendMessage" @{ to = "x"; message = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_R1" ('{"success":true,"message":"Agent \"a1b2c3d4e5f600001\" had no active task; resumed from transcript in the background with your message.","resumedAgentId":"a1b2c3d4e5f600001"}')), (TurnEnd "2026-10-02T10:00:04Z"))
+    $s = State (Write-Lines "resume" $resume)
+    Check (@($s.openTasks).Count -eq 1 -and $s.openTasks[0].id -ceq "a1b2c3d4e5f600001" -and $s.openTasks[0].kind -ceq "agent") "a subagent resumed by SendMessage is an open agent task, whatever the pending count says (7 in 30 days)"
+    $s = State (Write-Lines "resumedone" @($resume + @(Note "2026-10-02T10:30:00Z" "a1b2c3d4e5f600001" "completed" $finalNote)))
+    Check (@($s.openTasks).Count -eq 0) "its final notification finishes it"
+    $s = State (Write-Lines "readbg" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q1" "Read" @{ file_path = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q1" "     1  the background colour is blue"), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: a read-only tool's result that says background starts nothing"
+    $s = State (Write-Lines "bgerr" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q2" "Bash" @{ command = "x"; run_in_background = $true }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q2" "permission denied" $true), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: a background call that failed started nothing"
+    $s = State (Write-Lines "fgplain" @((ToolUse "2026-10-02T10:00:01Z" "toolu_Q3" "Bash" @{ command = "x" }), (ToolResult "2026-10-02T10:00:02Z" "toolu_Q3" "done"), (TurnEnd "2026-10-02T10:00:04Z")))
+    Check (@($s.unknownTasks).Count -eq 0) "CONTROL: an ordinary foreground call starts nothing"
 
     Write-Host ""
     Write-Host "--- the Remote Control link, reported (design S8) ---" -ForegroundColor Cyan

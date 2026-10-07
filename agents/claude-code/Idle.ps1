@@ -52,6 +52,15 @@
 #   - THE VERSION SURVEY (design 1.6): every kind each harness version wrote since -Since is checked
 #     against $script:ClaudeCodeKnownKinds, the kinds seen in 224 transcripts over 30 days (versions
 #     2.1.268 to 2.1.285). A version that wrote anything else is unsurveyed for this session.
+#   - A START THE READER DOES NOT RECOGNISE FAILS CLOSED (re-review of #93: the harness shipped 18
+#     versions in 30 days, so a start's wording can change under it). A tool result that is not an error
+#     and matches no start pattern, from a call that asked for the background (run_in_background) or
+#     whose first line says "background" (outside the read-only tools of $script:ClaudeCodeReadOnlyTools,
+#     whose output is file content), is an UNKNOWN task named after its call. It holds the session until
+#     a final notification names that call (<tool-use-id>). This also holds the starts that name no task
+#     id: Agent forks ("Fork started - processing in background", 11 in 30 days) and forked Skills
+#     ("launched (forked execution, running in the background)", 6). A SendMessage resume names its
+#     agent ("resumedAgentId", 7) and is an agent task, so neither depends on the pending-agent count.
 #   - ANY LINE AFTER THE LAST TURN END THAT CANNOT BE READ MAKES THE BOUNDARY UNKNOWN, never idle: a line
 #     that does not parse, one nested past the parser's limit, a NUL-filled crash tail (all skipped by
 #     the shared reader, seen here as a gap in the line numbers), a last line still being written, and an
@@ -84,8 +93,11 @@ $script:ClaudeCodeTaskStarts = @(
     @{ kind = "shell"; pattern = 'ID: ([A-Za-z0-9]+)\)?\.?\s*Output is being written to' },
     @{ kind = "monitor"; pattern = 'Monitor started \(task ([A-Za-z0-9]+)' },
     @{ kind = "workflow"; pattern = 'Workflow launched in [^\r\n]*?Task ID: ([A-Za-z0-9]+)' },
-    @{ kind = "agent"; pattern = 'Async agent launched successfully[\s\S]*?agentId: ([A-Za-z0-9]+)' }
+    @{ kind = "agent"; pattern = 'Async agent launched successfully[\s\S]*?agentId: ([A-Za-z0-9]+)' },
+    @{ kind = "agent"; pattern = '"resumedAgentId":"([A-Za-z0-9]+)"' }
 )
+# Tools whose results are file or search content: a word in them starts nothing.
+$script:ClaudeCodeReadOnlyTools = @("Read", "Grep", "Glob", "WebFetch", "WebSearch", "NotebookRead")
 
 function Get-ClaudeCodeIdleKind {
     # A line's kind: its type, or system/<subtype>.
@@ -107,8 +119,9 @@ function Add-ClaudeCodeIdleNotification {
     # Apply one harness-marked notification to the open and unknown task lists.
     param($St, [string]$Text)
     $n = Get-ClaudeCodeNotification -Text $Text
-    if ($n.taskId -eq "") { return }
     $final = ($script:ClaudeCodeFinalTaskStatuses -ccontains $n.status) -and (@("final", "none") -ccontains $n.noteKind)
+    if ($final -and $n.toolCallId -ne "" -and $St.unknownStarts.ContainsKey($n.toolCallId)) { $St.unknownStarts.Remove($n.toolCallId) }
+    if ($n.taskId -eq "") { return }
     if ($St.tasks.ContainsKey($n.taskId)) { if ($final) { $St.tasks.Remove($n.taskId) }; return }
     if ($final) { $St.unknownTasks.Remove($n.taskId) } else { $St.unknownTasks[$n.taskId] = $n.status }
 }
@@ -126,11 +139,20 @@ function Add-ClaudeCodeIdleToolResult {
     }
     if ($St.stops.ContainsKey($Id)) { if (-not $Err) { $St.tasks.Remove($St.stops[$Id]) }; $St.stops.Remove($Id) }
     if ($St.deletes.ContainsKey($Id)) { if (-not $Err) { $St.crons.Remove($St.deletes[$Id]) }; $St.deletes.Remove($Id) }
+    $call = $null
+    if ($St.calls.ContainsKey($Id)) { $call = $St.calls[$Id]; $St.calls.Remove($Id) }
     if ($Err) { return }
     foreach ($s in $script:ClaudeCodeTaskStarts) {
         $m = [regex]::Match($Text, $s.pattern)
-        if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; break }
+        if ($m.Success) { $St.tasks[$m.Groups[1].Value] = $s.kind; return }
     }
+    # No start recognised. Fail closed when the call asked for the background or the result's first line
+    # says it went there.
+    $first = ($Text -split "`n", 2)[0]
+    if ($first.Length -gt 300) { $first = $first.Substring(0, 300) }
+    $asked = ($null -ne $call -and $call.bg)
+    $says = ($first -match 'background') -and -not ($null -ne $call -and $script:ClaudeCodeReadOnlyTools -ccontains $call.name)
+    if ($asked -or $says) { $St.unknownStarts[$Id] = $true }
 }
 
 function Read-ClaudeCodeSubagentTasks {
@@ -150,7 +172,9 @@ function Read-ClaudeCodeSubagentTasks {
             $content = Get-HordeJsonPath $v "message.content"
             if ("$($v["type"])" -ceq "assistant") {
                 foreach ($b in @($content)) {
-                    if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_use" -or $b["input"] -isnot [System.Collections.IDictionary]) { continue }
+                    if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_use") { continue }
+                    $St.calls["$($b["id"])"] = @{ name = "$($b["name"])"; bg = ($b["input"] -is [System.Collections.IDictionary] -and $b["input"]["run_in_background"] -eq $true) }
+                    if ($b["input"] -isnot [System.Collections.IDictionary]) { continue }
                     if ("$($b["name"])" -ceq "TaskStop") { $St.stops["$($b["id"])"] = "$($b["input"]["task_id"])" }
                 }
                 return
@@ -173,7 +197,7 @@ function Read-ClaudeCodeTurnState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][datetime]$Since, [Parameter(Mandatory = $true)][datetime]$Now)
     $st = @{
         newest = $null; badTime = ""; hasEnd = $false; endAt = $null; endTimeBad = $false; pending = 0; blockers = (New-Object System.Collections.ArrayList)
-        tools = @{}; tasks = @{}; unknownTasks = @{}; queued = 0; crons = @{}; cronCalls = @{}; stops = @{}; deletes = @{}; wakes = (New-Object System.Collections.ArrayList)
+        tools = @{}; tasks = @{}; unknownTasks = @{}; queued = 0; crons = @{}; cronCalls = @{}; stops = @{}; deletes = @{}; calls = @{}; unknownStarts = @{}; wakes = (New-Object System.Collections.ArrayList)
         versions = @{}; lastLn = 0; unreadable = ""; link = $null
     }
     Read-ClaudeCodeSubagentTasks -St $st -Path $Path -Since $Since
@@ -224,6 +248,7 @@ function Read-ClaudeCodeTurnState {
                 if ($b -isnot [System.Collections.IDictionary] -or $b["type"] -ne "tool_use") { continue }
                 $id = "$($b["id"])"; $name = "$($b["name"])"; $in = $b["input"]
                 $st.tools[$id] = $name
+                if ($cur) { $st.calls[$id] = @{ name = $name; bg = ($in -is [System.Collections.IDictionary] -and $in["run_in_background"] -eq $true) } }
                 if (-not $cur -or $in -isnot [System.Collections.IDictionary]) { continue }
                 if ($name -ceq "CronCreate") { $st.cronCalls[$id] = @{ recurring = ($in["recurring"] -eq $true); at = $t } }
                 elseif ($name -ceq "CronDelete") { $st.deletes[$id] = "$($in["id"])" }
@@ -298,7 +323,8 @@ function Read-ClaudeCodeTurnState {
         pendingAgents = [long]$st.pending
         openTools = @($st.tools.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; name = $st.tools[$_] } })
         openTasks = @($st.tasks.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; kind = $st.tasks[$_] } })
-        unknownTasks = @($st.unknownTasks.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; status = $st.unknownTasks[$_] } })
+        unknownTasks = @(@($st.unknownTasks.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = $_; status = $st.unknownTasks[$_] } }) +
+            @($st.unknownStarts.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ id = ("call:" + $_); status = "started, kind not recognised" } }))
         queued = [int]$st.queued
         wakes = @($st.wakes)
         crons = $crons
