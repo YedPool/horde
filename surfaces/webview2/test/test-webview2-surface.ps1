@@ -133,10 +133,10 @@ Write-Host ""
 Write-Host "--- a picture is Horde's to ask for, and only of a page that is being drawn ---" -ForegroundColor Cyan
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and -not (Test-Path -LiteralPath (Join-Path $work "p.png"))) "with no engine up there is nothing to take a picture of: not asked, and no file made"
 $script:HordeWebView2 = [pscustomobject]@{ spec = $liveSpec; startHost = $hostName; window = $null; opened = $true; view = [pscustomobject]@{ CoreWebView2 = [pscustomobject]@{ } }; failure = ""; capture = $null; pictures = 0; errors = (New-Object System.Collections.ArrayList) }
-Check ((Start-HordeWebView2Capture -Path "p.png") -eq $false -and $script:HordeWebView2.errors.Count -eq 1) "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
+Check ((Start-HordeWebView2Capture -Path "p.png") -eq $false -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*an absolute path ending .png*") "a relative path is refused and recorded: a picture is never written wherever the process happens to stand"
 Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.txt")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "and so is a path that is not a .png; neither left a file behind"
 $script:HordeWebView2.capture = [pscustomobject]@{ task = [pscustomobject]@{ IsCompleted = $false } }
-Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false) "while one picture is being drawn a second is not taken"
+Check ((Start-HordeWebView2Capture -Path (Join-Path $work "p.png")) -eq $false -and $script:HordeWebView2.errors.Count -eq 2 -and @(Get-ChildItem -LiteralPath $work -Filter "p.*").Count -eq 0) "while one picture is being drawn a second is not taken: nothing is asked of the engine, and no file is opened"
 Complete-HordeWebView2Capture
 Check ($null -ne $script:HordeWebView2.capture -and $script:HordeWebView2.pictures -eq 0) "a picture the engine has not finished is left alone"
 $replies = @($liveBridge.requests.Keys)
