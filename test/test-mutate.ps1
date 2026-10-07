@@ -111,9 +111,10 @@ $nosuiteCode = $LASTEXITCODE
 Check ($secCode -eq 0) ("a spec with a section map, one map miss and one declared survivor passes (exit " + $secCode + ")")
 Check (@($sec | Where-Object { $_ -match '\[OK\] mapped: caught \(expected caught\)' }).Count -eq 1) "a mutant its sections catch is reported caught"
 Check (@($sec | Where-Object { $_ -match '\[FAIL\] Get-Two returns two' }).Count -eq 1) "and the check in its section that caught it is named"
-# The runs, in order: the whole baseline; mapped in its section; map-miss in its section, then whole;
-# survivor in its section, then whole; unmapped whole; the whole baseline again.
-$wantRuns = "run sections=[] | run sections=[two] | run sections=[two] | run sections=[] | run sections=[four] | run sections=[] | run sections=[] | run sections=[]"
+# The runs, in order: the whole baseline; a baseline of each distinct map (two, four); mapped in its
+# section; map-miss in its section, then whole; survivor in its section, then whole; unmapped whole;
+# the whole baseline again, and each map's baseline again.
+$wantRuns = "run sections=[] | run sections=[two] | run sections=[four] | run sections=[two] | run sections=[two] | run sections=[] | run sections=[four] | run sections=[] | run sections=[] | run sections=[] | run sections=[two] | run sections=[four]"
 Check (($secRuns -join " | ") -ceq $wantRuns) ("the tool ran each mapped mutant in its sections only, reran on the whole suite only what passed them, and ran the baselines and the unmapped mutant whole, whatever the shell's HORDE_SECTIONS (" + ($secRuns -join " | ") + ")")
 Check (@($sec | Where-Object { $_ -match '\[OK\] map-miss: caught \(expected caught\)' }).Count -eq 1) "a mutant its sections miss and the whole suite catches is caught: a wrong map costs time, never a verdict"
 Check (@($sec | Where-Object { $_ -match '\[MAP-MISS\] map-miss: its sections \(two\) passed; the whole suite caught it' }).Count -eq 1) "and is named as a map miss, so the map gets fixed"
@@ -126,11 +127,28 @@ Check ($badCode -eq 1) ("a spec whose map is wrong fails the run (exit " + $badC
 Check (@($bad | Where-Object { $_ -match "\[BAD\] misspelt: invalid: section 'tow' is not one test\\fixtures\\mutate\\suite-sections\.ps1 declares" }).Count -eq 1) "a mapped section the suite does not declare is refused, not run"
 Check (@($bad | Where-Object { $_ -match '\[BAD\] empty-map: invalid: its Sections names no section' }).Count -eq 1) "an empty map is refused, not read as a whole run"
 Check (@($bad | Where-Object { $_ -match '\[OK\] good: caught' }).Count -eq 1) "CONTROL: a good map in the same spec runs"
-Check (($badRuns -join " | ") -ceq "run sections=[] | run sections=[four] | run sections=[]") ("a refused mutant never runs (" + ($badRuns -join " | ") + ")")
+Check (($badRuns -join " | ") -ceq "run sections=[] | run sections=[four] | run sections=[four] | run sections=[] | run sections=[four]") ("a refused mutant never runs (" + ($badRuns -join " | ") + ")")
 Check ($nosuiteCode -eq 1 -and @($nosuite | Where-Object { $_ -match '\[BAD\] mapped-nowhere: invalid: .*suite\.ps1 declares no sections' }).Count -eq 1) "a map on a suite that declares no sections is refused"
 Check ($senvCode -eq 1 -and @($senv | Where-Object { $_ -match "\[BAD\] outside: invalid: section 'four' is outside the spec's own HORDE_SECTIONS" }).Count -eq 1) "a mutant mapped outside the spec's own section filter is refused"
 Check (@($senv | Where-Object { $_ -match '\[OK\] inside: caught' }).Count -eq 1) "CONTROL: one mapped inside it runs"
-Check (($senvRuns -join " | ") -ceq "run sections=[two,three] | run sections=[two] | run sections=[two,three]") ("the spec's own filter is the whole run for its baselines (" + ($senvRuns -join " | ") + ")")
+Check (($senvRuns -join " | ") -ceq "run sections=[two,three] | run sections=[two] | run sections=[two] | run sections=[two,three] | run sections=[two]") ("the spec's own filter is the whole run for its baselines (" + ($senvRuns -join " | ") + ")")
+
+# EVERY MAP HAS A BASELINE OF ITS OWN. A section that fails when run without the ones before it would
+# "catch" every mutant mapped to it - here a mutant its section never even checks.
+$dep = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-dependent.psd1" | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -eq 2 -and @($dep | Where-Object { $_ -match 'UNMUTATED suite does not pass when only its sections use run' }).Count -eq 1) "a map whose sections fail unmutated is refused before any mutant runs"
+Check (@($dep | Where-Object { $_ -match '\[OK\]|\[BAD\]' }).Count -eq 0) "and no mutant is reported against it, so none can read as caught"
+$noisy = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-noisy.psd1" | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -eq 2 -and @($noisy | Where-Object { $_ -match 'sections quiet run \(exited 3 but printed a failed check or an error\)' }).Count -eq 1) "a map's baseline that exits 3 yet prints an [ERROR] is not a pass"
+$silent = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-silent.psd1" | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -eq 2 -and @($silent | Where-Object { $_ -match 'sections silent run \(exited 1\)' }).Count -eq 1) "a map's baseline that exits 1 with nothing printed is not a pass either"
+# THE WHOLE-SUITE RERUN NEVER ACCEPTS 3. Exit 3 is a pass only for a run of a map's sections; a whole
+# rerun that exits 3 skipped part of the suite, and is no survival (review of #115).
+$e3 = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-sections-exit3.psd1" | ForEach-Object { "$_" })
+Check (@($e3 | Where-Object { $_ -match '\[BAD\] rerun-exits-3: the suite broke \(exit 3\) with no failed check' }).Count -eq 1) "a whole rerun that exits 3 is a broken run, never a survivor"
+# A TIMEOUT IS NEVER A SURVIVAL: a mutant declared to survive that hangs the suite is bad (review of #115).
+$hs = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $tool -RunTag $runTag -Spec "test\fixtures\mutate\spec-hangs-survives.psd1" -TimeoutSeconds 20 | ForEach-Object { "$_" })
+Check ($LASTEXITCODE -eq 1 -and @($hs | Where-Object { $_ -match '\[BAD\] hangs: timed out after 20s - not a catch \(expected survives\)' }).Count -eq 1) "a hanging mutant declared to survive is reported bad, timed out"
 
 Check ([System.IO.File]::ReadAllText($target) -eq $before) "the working tree's copy of the target is never modified"
 $left = @(Get-OwnLeftovers)

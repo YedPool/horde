@@ -41,6 +41,24 @@
         @{ Name = "spec-filter-not-whole"
            Find = 'if ($specEnv.ContainsKey("HORDE_SECTIONS")) { $wholeSelection = "$($specEnv.HORDE_SECTIONS)" }'
            Replace = '' }
+        @{ Name = "map-baseline-skipped"
+           Find = '$selBase = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel'
+           Replace = '$selBase = [pscustomobject]@{ code = 3; out = ""; timedOut = $false }' }
+        @{ Name = "map-baseline-accepts-a-failure"
+           Find = 'if ((@($PassCodes) + 3) -notcontains $Run.code) { return ("exited " + $Run.code) }'
+           Replace = '' }
+        @{ Name = "after-map-baseline-skipped"
+           Find = '$selAfter = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel'
+           Replace = '$selAfter = $selBase' }
+        @{ Name = "map-baseline-ignores-errors"
+           Find = 'if (@(($Run.out -split "`r?`n") | Where-Object { $_ -match ''^\s*\[(FAIL|ERROR)\]'' }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "rerun-accepts-exit-3"
+           Find = '$row.outcome = Get-HordeRunOutcome -Run $rerun -PassCodes $passCodes -Seconds $TimeoutSeconds'
+           Replace = '$row.outcome = Get-HordeRunOutcome -Run $rerun -PassCodes (@($passCodes) + 3) -Seconds $TimeoutSeconds' }
+        @{ Name = "timeout-reads-survived"
+           Find = 'if ($Run.timedOut) { return ("timed out after " + $Seconds + "s - not a catch") }'
+           Replace = 'if ($Run.timedOut) { return "survived" }' }
         @{ Name = "crash-reads-as-catch"
            Find = 'if (@(Get-HordeFailLines -Out $Run.out).Count -gt 0) { return "caught" }'
            Replace = 'return "caught"' }

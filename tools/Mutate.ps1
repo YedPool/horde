@@ -207,6 +207,16 @@ function Get-HordeRunOutcome {
     return ("the suite broke (exit " + $Run.code + ") with no failed check - not a catch")
 }
 
+function Get-HordeSelectionBaselineProblem {
+    # Why an UNMUTATED run of a map's sections does not pass, or "" when it does: it must exit with a
+    # pass code or 3 (sections skipped), and print no [FAIL] and no [ERROR] (review of #115, B1).
+    param($Run, [int[]]$PassCodes, [int]$Seconds)
+    if ($Run.timedOut) { return ("ran past " + $Seconds + "s") }
+    if ((@($PassCodes) + 3) -notcontains $Run.code) { return ("exited " + $Run.code) }
+    if (@(($Run.out -split "`r?`n") | Where-Object { $_ -match '^\s*\[(FAIL|ERROR)\]' }).Count -gt 0) { return ("exited " + $Run.code + " but printed a failed check or an error") }
+    return ""
+}
+
 function Get-HordeOccurrences {
     param([string]$Text, [string]$Find)
     $n = 0; $i = 0
@@ -282,6 +292,24 @@ try {
     # The suite's declared sections, read once from the copy, when any mutant is mapped.
     $declared = $null
     if (@($script:toRun | Where-Object { $_.ContainsKey("Sections") }).Count -gt 0) { $declared = Get-HordeSuiteSectionIds -Path $suite }
+    # EVERY MAP HAS A BASELINE OF ITS OWN, BEFORE AND AFTER. A section that fails when run without the
+    # ones before it - one that reads a variable an earlier section set - fails every mutant mapped to
+    # it, and reads as a catch the whole-suite rerun never questions (it reruns only a pass). Reproduced
+    # by the review of #115 (B1) and on test-node-serve's refused-peer section, 2026-10-07. So each
+    # distinct selection is run unmutated first and again at the end, and must pass both times.
+    $selections = @($script:toRun | Where-Object { $_.ContainsKey("Sections") -and -not (Get-HordeMutantSectionProblem -Mutant $_ -Suite "$($s.Suite)" -Declared $declared -SpecEnvironment $specEnv) } | ForEach-Object { (@(@($_.Sections) | ForEach-Object { "$_".Trim() }) -join ",") } | Select-Object -Unique)
+    foreach ($sel in $selections) {
+        $selBase = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel
+        $selWhy = Get-HordeSelectionBaselineProblem -Run $selBase -PassCodes $passCodes -Seconds $TimeoutSeconds
+        if ($selWhy) {
+            Write-Host ("  the UNMUTATED suite does not pass when only its sections " + $sel + " run (" + $selWhy + "), so a mutant mapped to them would read as caught for nothing:") -ForegroundColor Red
+            foreach ($f in (Get-HordeFailLines -Out $selBase.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+            Write-Host "mutations: not run - baseline failed"
+            $script:baselineFailed = $true
+            $script:toRun = @()
+            break
+        }
+    }
     foreach ($m in $script:toRun) {
         $expect = "caught"
         if ($m.ContainsKey("Expect")) { $expect = "$($m.Expect)" }
@@ -346,6 +374,15 @@ try {
             Write-Host "  the UNMUTATED suite no longer passes after the run, so its catches are not evidence:" -ForegroundColor Red
             foreach ($f in (Get-HordeFailLines -Out $after.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
             $script:baselineFailed = $true
+        }
+        foreach ($sel in $selections) {
+            $selAfter = Invoke-HordeSuite -Path $suite -Seconds $TimeoutSeconds -Selection $sel
+            $selAfterWhy = Get-HordeSelectionBaselineProblem -Run $selAfter -PassCodes $passCodes -Seconds $TimeoutSeconds
+            if ($selAfterWhy) {
+                Write-Host ("  the UNMUTATED suite no longer passes its sections " + $sel + " after the run (" + $selAfterWhy + "), so their catches are not evidence:") -ForegroundColor Red
+                foreach ($f in (Get-HordeFailLines -Out $selAfter.out)) { Write-Host ("        " + $f) -ForegroundColor Red }
+                $script:baselineFailed = $true
+            }
         }
     }
 }
