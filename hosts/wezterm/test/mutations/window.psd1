@@ -41,25 +41,51 @@
         @{ Name = "is-zoomed-of-any-kind-is-converted"
            Find = 'if ($p.is_zoomed -isnot [bool]) {'
            Replace = 'if ($false) {' }
-        # --- the title a window can have
+        # --- the size of a pane, a tab and a window, as the listing gives them
+        @{ Name = "a-width-that-is-not-whole-cells-is-a-size"
+           Find = 'if (($n["pixel_width"] % $n["cols"]) -ne 0 -or ($n["pixel_height"] % $n["rows"]) -ne 0) { return $null }'
+           Replace = 'if (($n["pixel_height"] % $n["rows"]) -ne 0) { return $null }' }
+        @{ Name = "a-height-that-is-not-whole-cells-is-a-size"
+           Find = 'if (($n["pixel_width"] % $n["cols"]) -ne 0 -or ($n["pixel_height"] % $n["rows"]) -ne 0) { return $null }'
+           Replace = 'if (($n["pixel_width"] % $n["cols"]) -ne 0) { return $null }' }
+        @{ Name = "a-pane-need-not-say-where-it-starts"
+           Find = 'foreach ($f in @("left_col", "top_row")) {'
+           Replace = 'foreach ($f in @("top_row")) {' }
+        @{ Name = "a-split-tab-is-as-wide-as-one-pane"
+           Find = '$row.shape.left + $row.shape.cols'
+           Replace = '$row.shape.cols' }
+        @{ Name = "a-split-tab-is-as-tall-as-one-pane"
+           Find = '$row.shape.top + $row.shape.rows'
+           Replace = '$row.shape.rows' }
+        @{ Name = "tabs-of-two-sizes-are-one-window-size"
+           Find = 'Sort-Object -Unique).Count -ne 1) { return [pscustomobject]@{ shapes = $null; why = ("the tabs of window "'
+           Replace = 'Sort-Object -Unique).Count -lt 1) { return [pscustomobject]@{ shapes = $null; why = ("the tabs of window "' }
+        @{ Name = "cells-of-two-sizes-are-one-window-size"
+           Find = 'if ($row.shape.cellWidth -ne $cell.cellWidth -or $row.shape.cellHeight -ne $cell.cellHeight) {'
+           Replace = 'if ($false) {' }
+        # --- the padding: worked out from the windows, never below zero, never a whole cell left over
+        @{ Name = "a-padding-below-zero-is-tried"
+           Find = 'if ($padding -lt 0 -or $tried.ContainsKey($padding)) { continue }'
+           Replace = 'if ($tried.ContainsKey($padding)) { continue }' }
+        @{ Name = "a-whole-cell-left-over-fits"
+           Find = '($left -ge 0 -and $left -lt [long]($_ -split "\|")[1])'
+           Replace = '($left -ge 0 -and $left -le [long]($_ -split "\|")[1])' }
+        @{ Name = "a-span-wider-than-the-window-fits"
+           Find = '($left -ge 0 -and $left -lt [long]($_ -split "\|")[1])'
+           Replace = '($left -lt [long]($_ -split "\|")[1])' }
+        @{ Name = "two-windows-share-one-listed-window"
+           Find = 'if ($groups[$group] -gt $ids.Count) { $whole = $false; break }'
+           Replace = '' }
+        # --- the title a window can carry
         @{ Name = "titles-compared-without-case"
-           Find = 'if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }'
-           Replace = 'if ($tabs -le 1) { if ($Title -eq ($zoom + $row.title)) { return $true }; continue }' }
-        @{ Name = "a-bare-title-fits-a-window-of-several-tabs"
-           Find = 'if ($tabs -le 1) { if ($Title -ceq ($zoom + $row.title)) { return $true }; continue }'
-           Replace = 'if ($Title -ceq ($zoom + $row.title)) { return $true }; if ($tabs -le 1) { continue }' }
-        @{ Name = "any-tab-count-fits"
-           Find = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }'
-           Replace = 'for ($i = 1; $i -le 9; $i++) { for ($n = 1; $n -le 9; $n++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $n + "] " + $row.title)) { return $true } } }' }
-        @{ Name = "zoomed-written-after-the-tab-count"
-           Find = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ($zoom + "[" + $i + "/" + $tabs + "] " + $row.title)) { return $true } }'
-           Replace = 'for ($i = 1; $i -le $tabs; $i++) { if ($Title -ceq ("[" + $i + "/" + $tabs + "] " + $zoom + $row.title)) { return $true } }' }
+           Find = '[System.StringComparison]::Ordinal) -ge 0) { return $true }'
+           Replace = '[System.StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }' }
+        @{ Name = "a-pane-with-no-title-is-carried-by-every-window"
+           Find = 'if ($row.title -cne "" -and $Title.IndexOf('
+           Replace = 'if ($Title.IndexOf(' }
         @{ Name = "a-pane-that-is-not-active-titles-the-window"
            Find = 'foreach ($row in @($Rows | Where-Object { $_.active })) {'
            Replace = 'foreach ($row in @($Rows)) {' }
-        @{ Name = "zoomed-not-in-the-title"
-           Find = 'if ($row.zoomed) { $zoom = "[Z] " }'
-           Replace = '' }
         # --- the decision
         @{ Name = "a-pane-that-is-gone-still-has-a-window"
            Find = 'if ($mine.Count -eq 0) { return (New-HordeUnknown -Reason ("the terminal lists no pane "'
@@ -67,6 +93,27 @@
         @{ Name = "a-pane-listed-twice-has-a-window"
            Find = 'if ($mine.Count -gt 1) {'
            Replace = 'if ($false) {' }
+        @{ Name = "sizes-are-not-used"
+           Find = '$could = Get-HordeWeztermSizeCandidates -Shapes $listed.shapes -Sized $sized; if'
+           Replace = '$could = $null; if' }
+        @{ Name = "a-size-that-changed-while-read-is-kept"
+           Find = 'if ([long]$n.width -ne $seen[$key].width -or [long]$n.height -ne $seen[$key].height) { $seen[$key].width = [long]0; $seen[$key].height = [long]0 }'
+           Replace = '' }
+        @{ Name = "the-one-window-of-its-size-is-not-taken"
+           Find = 'if ($pool.Count -eq 1) { return (New-HordeKnown -Value ([pscustomobject]@{ handle = $pool[0].handle; window = $windowId; detail = ("the one of the terminal''s " + $all.Count + " windows with the size'
+           Replace = 'if ($false) { return (New-HordeKnown -Value ([pscustomobject]@{ handle = $pool[0].handle; window = $windowId; detail = ("the one of the terminal''s " + $all.Count + " windows with the size' }
+        @{ Name = "size-proves-with-fewer-windows-than-they-could-be"
+           Find = 'if ($bySize.Count -gt 0 -and $theirs.Count -le $bySize.Count) {'
+           Replace = 'if ($bySize.Count -gt 0) {' }
+        @{ Name = "the-one-left-over-needs-no-count"
+           Find = ' -and $all.Count -eq $windowIds.Count) { return'
+           Replace = ') { return' }
+        @{ Name = "no-window-of-the-size-is-not-said"
+           Find = 'if ($pool.Count -eq 0) { return (New-HordeWeztermUnsettled'
+           Replace = 'if ($false) { return (New-HordeWeztermUnsettled' }
+        @{ Name = "the-title-is-asked-of-windows-of-every-size"
+           Find = '$matched = @($pool | Where-Object { & $fits $_ $windowId })'
+           Replace = '$matched = @($all | Where-Object { & $fits $_ $windowId })' }
         @{ Name = "the-first-of-two-windows-is-chosen"
            Find = 'if ($matched.Count -gt 1) {'
            Replace = 'if ($false) {' }
@@ -74,13 +121,13 @@
            Find = 'if ($others.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "the-only-window-on-screen-is-chosen-among-several-ids"
-           Find = 'if ($windowIds.Count -eq 1 -and $titles.Count -eq 1) {'
-           Replace = 'if ($titles.Count -eq 1) {' }
+           Find = 'if ($windowIds.Count -eq 1 -and $all.Count -eq 1) {'
+           Replace = 'if ($all.Count -eq 1) {' }
         @{ Name = "the-second-reading-of-the-windows-ignored"
            Find = 'foreach ($n in (@($Native) + @($NativeAfter))) {'
            Replace = 'foreach ($n in @($Native)) {' }
         @{ Name = "no-window-on-screen-not-said"
-           Find = 'if ($titles.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal''s process has no terminal window on screen, so there is none to stand beside") }'
+           Find = 'if ($all.Count -eq 0) { return (New-HordeUnknown -Reason "the terminal''s process has no terminal window on screen, so there is none to stand beside") }'
            Replace = '' }
         # --- a window is believed only when a second whole reading names it again (review finding C2)
         @{ Name = "a-window-found-once-is-believed"

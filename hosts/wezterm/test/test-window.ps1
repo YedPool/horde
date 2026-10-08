@@ -1,9 +1,12 @@
 # WHICH NATIVE WINDOW SHOWS A PANE - AND DOES THE FINDER SAY "UNKNOWN" RATHER THAN GUESS?
 #
-# hosts/wezterm/Window.ps1's decision is a pure function of the terminal's own listing and the titles
-# of its process's windows, so every case here is a fixture: one window, several, none, a session whose
-# pane is gone, two windows that cannot be told apart, a title that changed while it was read. No
-# terminal is touched: the listing comes from a recording runner and the windows from a block.
+# hosts/wezterm/Window.ps1's decision is a pure function of the terminal's own listing and the sizes
+# and titles of its process's windows, so every case here is a fixture: one window, several, none, a
+# session whose pane is gone, two windows that cannot be told apart, a title that changed while it was
+# read. No terminal is touched: the listing comes from a recording runner and the windows from a block.
+# THE SIZES AND TITLE SHAPES ARE THE FLEET'S OWN TERMINAL'S, read on 2026-10-07 (the section "by size"):
+# the first finder, which asked a title to equal the listing's, answered unknown there for the one
+# window it was built for, and no fixture written from that finder's own rule could have said so.
 #
 # FAIL CLOSED, as hosts/wezterm/test/test-act.ps1 does: this suite's own pin names a socket that does
 # not exist, set as its first act, so a call that escaped the runner would fail to connect instead of
@@ -24,10 +27,15 @@ trap { Register-HordeSuiteError $_; continue }
 
 $star = [string][char]0x2733
 $half = [string][char]0x25D0
-function Pane { param([int]$Window, [int]$Tab, [int]$Id, [string]$Title, [bool]$Active = $true, [bool]$Zoomed = $false)
-    return [ordered]@{ window_id = $Window; tab_id = $Tab; pane_id = $Id; workspace = "default"; title = $Title; cwd = "file:///C:/work/"; is_active = $Active; is_zoomed = $Zoomed; tty_name = $null } }
+$turn = [string][char]0x25D1
+# A pane as the listing gives it. With -Cols it has a size, as the terminal of 2026-10-07 gave one: cells
+# of 14 x 32 pixels, the pane's own columns and lines, and where it starts in its tab.
+function Pane { param([int]$Window, [int]$Tab, [int]$Id, [string]$Title, [bool]$Active = $true, [bool]$Zoomed = $false, [int]$Cols = 0, [int]$Lines = 0, [int]$Left = 0, [int]$Top = 0)
+    $p = [ordered]@{ window_id = $Window; tab_id = $Tab; pane_id = $Id; workspace = "default"; title = $Title; cwd = "file:///C:/work/"; is_active = $Active; is_zoomed = $Zoomed; tty_name = $null }
+    if ($Cols -gt 0) { $p["size"] = [ordered]@{ rows = $Lines; cols = $Cols; pixel_width = (14 * $Cols); pixel_height = (32 * $Lines); dpi = 144 }; $p["left_col"] = $Left; $p["top_row"] = $Top }
+    return $p }
 function Listing { param([object[]]$Panes) return (ConvertTo-Json -InputObject @($Panes) -Depth 4 -Compress) }
-function Win { param([long]$Handle, [string]$Title) return [pscustomobject]@{ handle = $Handle; title = $Title } }
+function Win { param([long]$Handle, [string]$Title, [long]$Width = 0, [long]$Height = 0) return [pscustomobject]@{ handle = $Handle; title = $Title; width = $Width; height = $Height } }
 function Rows { param([object[]]$Panes) return @((Read-HordeWeztermWindowList -Raw (Listing $Panes)).value) }
 function Pick { param([object[]]$Panes, [string]$Pane, [object[]]$Native, [object[]]$After = @()) return (Select-HordeWeztermSessionWindow -Rows (Rows $Panes) -Pane $Pane -Native $Native -NativeAfter $After) }
 
@@ -88,11 +96,11 @@ $oneTwoTabs = Pick @((Pane 0 0 0 "first"), (Pane 0 1 1 "second")) "1" @((Win 410
 Check ($oneTwoTabs.state -ceq "known" -and $oneTwoTabs.value.handle -eq 4100) "a pane in a tab that is not in front is still in that one window"
 
 Write-Host ""
-Write-Host "--- several windows: told apart by the session's own window's details ---" -ForegroundColor Cyan
+Write-Host "--- several windows, and nothing known of their sizes: told apart by the title each carries ---" -ForegroundColor Cyan
 $keeper = Pick $fleet "18" $fleetWindows
-Check ($keeper.state -ceq "known" -and $keeper.value.handle -eq 7002 -and $keeper.value.window -ceq "10") "the keeper's pane is in window 10, and the one terminal window titled after that window's pane is it"
+Check ($keeper.state -ceq "known" -and $keeper.value.handle -eq 7002 -and $keeper.value.window -ceq "10") "the keeper's pane is in window 10, and the one terminal window that carries that window's pane's title is it"
 $worker = Pick $fleet "21" $fleetWindows
-Check ($worker.state -ceq "known" -and $worker.value.handle -eq 7001 -and $worker.value.window -ceq "11") "a pane in a three-tab window is found by the window's title, [2/3] and the title of whichever tab is in front"
+Check ($worker.state -ceq "known" -and $worker.value.handle -eq 7001 -and $worker.value.window -ceq "11") "a pane in a three-tab window is found by the window's title, which carries the title of whichever tab is in front"
 $split = Pick $fleet "23" $fleetWindows
 Check ($split.state -ceq "known" -and $split.value.handle -eq 7003) "a pane that is not its tab's active pane is in the window titled after the pane that is"
 $leftTitled = Pick $fleet "23" @((Win 7001 ("[2/3] " + $star + " worker one")), (Win 7002 ($star + " keeper")), (Win 7003 ($star + " left half")), (Win 7004 ($star + " another")))
@@ -101,23 +109,23 @@ $lone = Pick $fleet "18" @((Win 7001 ("[2/3] " + $star + " worker one")))
 Check ($lone.state -ceq "unknown" -and $lone.reason -like "none of the terminal's 1 windows*") "with several window ids listed and only one terminal window on screen, that window is not taken for the session's unless its title says so"
 $zoomRows = @((Pane 1 1 1 "editor" $true $true), (Pane 2 2 2 "other"))
 $zoomed = Pick $zoomRows "1" @((Win 501 "[Z] editor"), (Win 502 "other"))
-Check ($zoomed.state -ceq "known" -and $zoomed.value.handle -eq 501) "a zoomed pane's window carries [Z] before its title, and is found by it"
-Check ((Pick $zoomRows "1" @((Win 501 "editor"), (Win 502 "other"))).state -ceq "unknown") "CONTROL: without the [Z] the title is not that window's, and nothing is guessed"
+Check ($zoomed.state -ceq "known" -and $zoomed.value.handle -eq 501) "a zoomed pane's window carries [Z] before its title, and is found: what the terminal writes around a pane's title is not asked for"
 # A ZOOMED PANE IN A WINDOW OF SEVERAL TABS: [Z] comes FIRST, then the tab count. Measured 2026-10-07
 # against an isolated instance (20240203-110809-5046fc22): a two-tab window whose front tab's active pane
-# was zoomed was titled "[Z] [1/2] PING.EXE". The finder had expected the other order, unmeasured
-# (review of 2026-10-06, finding C4), and so answered unknown for such a window.
+# was zoomed was titled "[Z] [1/2] PING.EXE". The first finder expected the other order, unmeasured
+# (review of 2026-10-06, finding C4), and so answered unknown for such a window: a rule about what
+# stands around a pane's title is a rule about a format this finder does not control, and it has none.
 $zoomTabs = @((Pane 1 1 1 "editor" $true $true), (Pane 1 2 3 "logs"), (Pane 2 4 2 "other"))
 $zoomedTab = Pick $zoomTabs "1" @((Win 501 "[Z] [1/2] editor"), (Win 502 "other"))
 Check ($zoomedTab.state -ceq "known" -and $zoomedTab.value.handle -eq 501) ("in a window of two tabs the zoomed pane's window is titled [Z] and then the tab count, as the terminal was measured to write it (" + $zoomedTab.state + ")")
-Check ((Pick $zoomTabs "1" @((Win 501 "[1/2] [Z] editor"), (Win 502 "other"))).state -ceq "unknown") "and the other order, which the terminal does not write, is no window's title"
+Check ((Pick $zoomTabs "1" @((Win 501 "[1/2] [Z] editor"), (Win 502 "other"))).value.handle -eq 501) "and written in the other order, or in a format of the person's own, it is found the same"
 Check ((Pick $zoomTabs "3" @((Win 501 "[2/2] logs"), (Win 502 "other"))).value.handle -eq 501) "CONTROL: with the tab that is not zoomed in front, the same window is titled by the count alone"
 
 Write-Host ""
 Write-Host "--- a title that changed while it was read ---" -ForegroundColor Cyan
 $spinning = @((Win 7001 ("[2/3] " + $star + " worker one")), (Win 7002 ($half + " keeper")), (Win 7003 ($star + " right half")), (Win 7004 ($star + " another")))
 $stale = Pick $fleet "18" $spinning
-Check ($stale.state -ceq "unknown" -and $stale.reason -like "none of the terminal's 4 windows is titled as the window of pane 18 would be*") "read once, with the title a moment out of step with the listing: unknown, and says a title fits nothing"
+Check ($stale.state -ceq "unknown" -and $stale.reason -like "none of the terminal's 4 windows carries the title of the window of pane 18, and sizes do not tell them apart (the listing gives no size for pane 18)*") "read once, with the title a moment out of step with the listing and no sizes to go by: unknown, and says so"
 $both = Pick $fleet "18" $spinning $fleetWindows
 Check ($both.state -ceq "known" -and $both.value.handle -eq 7002) "read before and after the listing, a match in either reading counts"
 
@@ -126,17 +134,137 @@ Write-Host "--- never the likeliest ---" -ForegroundColor Cyan
 $twins = @((Pane 1 1 1 "PowerShell"), (Pane 2 2 2 "PowerShell"), (Pane 3 3 3 "notes"))
 $twinWindows = @((Win 601 "PowerShell"), (Win 602 "PowerShell"), (Win 603 "notes"))
 $twin = Pick $twins "1" $twinWindows
-Check ($twin.state -ceq "unknown" -and $twin.reason -like "2 of the terminal's windows are titled as the window of pane 1 would be*") "two windows with the session's window's title: unknown, and neither is chosen"
+Check ($twin.state -ceq "unknown" -and $twin.reason -like "2 of the terminal's windows carry the title of the window of pane 1, and one is never chosen over another") "two windows with the session's window's title: unknown, and neither is chosen"
 Check ((Pick $twins "3" $twinWindows).value.handle -eq 603) "CONTROL: the window beside the twins, titled alone, is still found"
 $shadow = @((Pane 1 1 1 "build"), (Pane 2 2 2 "build"), (Pane 3 3 3 "notes"))
 $shadowed = Pick $shadow "1" @((Win 601 "build"), (Win 603 "notes"))
-Check ($shadowed.state -ceq "unknown" -and $shadowed.reason -like "*is titled as another of the terminal's windows would be too*") "one window fits, but it fits another window id as well (whose own window was not seen): unknown"
+Check ($shadowed.state -ceq "unknown" -and $shadowed.reason -like "*carries the title of another of the terminal's windows too*") "one window fits, but it fits another window id as well (whose own window was not seen): unknown"
+# NO RULE ABOUT THE TAB COUNT. The first finder refused a title whose count was not the listing's; the
+# count is the terminal's own decoration, and a person's format may leave it out or write it otherwise.
 $wrongTabs = Pick $fleet "21" @((Win 7001 ("[2/4] " + $star + " worker one")), (Win 7002 ($star + " keeper")))
-Check ($wrongTabs.state -ceq "unknown") "a title that counts four tabs is not the window of a pane the listing puts in a three-tab window"
+Check ($wrongTabs.state -ceq "known" -and $wrongTabs.value.handle -eq 7001) "a title with another tab count around the pane's title still carries it"
 $bare = Pick $fleet "21" @((Win 7001 ($star + " worker one")), (Win 7002 ($star + " keeper")))
-Check ($bare.state -ceq "unknown") "nor is a bare pane title, on a window that has more than one tab"
+Check ($bare.state -ceq "known" -and $bare.value.handle -eq 7001) "and so does the bare pane title, on a window that has more than one tab"
+$untitled = Pick @((Pane 1 1 1 ""), (Pane 2 2 2 "notes")) "1" @((Win 601 "anything at all"), (Win 602 "notes"))
+Check ($untitled.state -ceq "unknown" -and $untitled.reason -like "none of the terminal's 2 windows carries the title*") "a pane with no title is carried by no window: the empty text is inside every title"
 $caseOnly = Pick $twins "3" @((Win 601 "PowerShell"), (Win 602 "PowerShell"), (Win 603 "Notes"))
 Check ($caseOnly.state -ceq "unknown") "titles are compared exactly: Notes is not notes"
+
+Write-Host ""
+Write-Host "--- by size: the shapes of the fleet's own terminal, where the first finder answered unknown ---" -ForegroundColor Cyan
+# READ 2026-10-07, read-only, from the terminal the fleet runs in (16 windows; nine are kept here, with
+# their sizes as they were and their titles renamed). Its cells were 14 x 32 pixels. The window of pane
+# 18 - the session the companion window is for - was 180 x 39 cells in a client area of 2560 x 1334;
+# the next size down 178 x 36 in 2520 x 1248; three windows 179 x 38 in 2536 x 1310; windows of 80 x 24
+# in 1148 x 842 and of 89 x 17 in 1274 x 618. The session was working, and its title's first character
+# was a different one in each of three readings 300 ms apart: U+25D0 on its window, U+25D1 in the
+# listing, U+2733 on its window again. Window 14 is given a tab split left and right, and window 6 one
+# split top and bottom, as the terminal lists such tabs.
+$real = @(
+    (Pane 10 16 18 ($turn + " keeper") $true $false 180 39), (Pane 10 40 42 ($star + " device check") $true $false 180 39),
+    (Pane 0 0 0 ($star + " telemetry") $true $false 178 36),
+    (Pane 1 1 3 ($star + " lanes script") $true $false 179 38), (Pane 1 2 4 ($star + " gates") $true $false 179 38),
+    (Pane 6 9 11 ($star + " voice") $true $false 179 19), (Pane 6 9 47 ($star + " voice log") $false $false 179 18 0 20),
+    (Pane 14 24 26 ($star + " forms") $true $false 89 38), (Pane 14 24 46 ($star + " forms log") $false $false 89 38 90 0),
+    (Pane 11 17 19 ($star + " capture") $true $false 80 24), (Pane 11 29 31 ($star + " step two") $true $false 80 24),
+    (Pane 13 23 25 ($half + " prompts") $true $false 80 24),
+    (Pane 7 10 12 ($star + " shell") $true $false 89 17), (Pane 15 25 27 ($star + " shell") $true $false 89 17)
+)
+function RealWindows { param([string]$KeeperGlyph = $half, [hashtable]$Sizes = @{}, [hashtable]$Titles = @{}, [long[]]$Without = @())
+    $w = @(
+        @(460684, ("[1/2] " + $KeeperGlyph + " keeper"), 2560, 1334), @(394602, ($star + " telemetry"), 2520, 1248),
+        @(395012, ("[1/2] " + $star + " lanes script"), 2536, 1310), @(1443386, ($star + " voice"), 2536, 1310), @(460556, ($star + " forms"), 2536, 1310),
+        @(722212, ("[2/2] " + $star + " step two"), 1148, 842), @(134586, ($turn + " prompts"), 1148, 842),
+        @(4588442, ($star + " shell"), 1274, 618), @(199664, ($star + " shell"), 1274, 618))
+    return @($w | Where-Object { $Without -notcontains [long]$_[0] } | ForEach-Object {
+        $size = @($_[2], $_[3]); if ($Sizes.ContainsKey([long]$_[0])) { $size = $Sizes[[long]$_[0]] }
+        $title = $_[1]; if ($Titles.ContainsKey([long]$_[0])) { $title = $Titles[[long]$_[0]] }
+        Win ([long]$_[0]) $title ([long]$size[0]) ([long]$size[1]) }) }
+$before = RealWindows
+$after = RealWindows -KeeperGlyph $star
+$listedTitle = @(Rows $real | Where-Object { $_.pane -ceq "18" })[0].title
+Check (@(@($before) + @($after) | Where-Object { $_.handle -eq 460684 -and $_.title.Contains($listedTitle) }).Count -eq 0) "CONTROL: the working session's window carries, in neither reading, the title the listing gives its pane - the three were read at three moments"
+$live = Pick $real "18" $before $after
+Check ($live.state -ceq "known" -and $live.value.handle -eq 460684 -and $live.value.window -ceq "10") ("THE LIVE CASE: a title that changes between the readings while everything else agrees - the window is found, by its size (" + $live.state + $(if ($live.state -cne "known") { ": " + $live.reason } else { "" }) + ")")
+Check ($live.state -ceq "known" -and $live.value.detail -ceq "the one of the terminal's 9 windows with the size of the pane's window (180 x 39 cells)") "and the answer says what proved it: the one window of that size, in cells"
+Check ((Pick $real "42" $before $after).value.handle -eq 460684) "the pane of that window's other tab is in the same window"
+Check ((Pick $real "0" $before $after).value.handle -eq 394602) "the window two columns narrower and three lines shorter is another window, and is not taken for it"
+$third = Pick $real "11" $before $after
+Check ($third.state -ceq "known" -and $third.value.handle -eq 1443386 -and $third.value.detail -ceq "the one of 3 windows that could be the pane's window by size (179 x 38 cells) that carries its title") "three windows of one size: the size leaves three, and the title each carries says which"
+Check ((Pick $real "47" $before $after).value.handle -eq 1443386) "a tab split top and bottom is as tall as its panes reach: 19 lines, a divider, 18 - the window of 38"
+$splitWide = Pick $real "46" $before $after
+Check ($splitWide.state -ceq "known" -and $splitWide.value.handle -eq 460556) ("a tab split left and right is as wide as its panes reach: 89 columns, a divider, 89 - the window of 179, not one of 89 (" + $splitWide.state + ")")
+$outOfStep = Pick $real "25" $before $after
+Check ($outOfStep.state -ceq "unknown" -and $outOfStep.reason -ceq "2 of the terminal's 9 windows could be the window of pane 25 by size (80 x 24 cells), and none of them carries its title, so which it is cannot be told" -and $null -ne $outOfStep.PSObject.Properties["readAgain"]) "two windows of one size and the session's title out of step: unknown, said in sizes, and marked to be read again"
+$equal = Pick $real "12" $before $after
+Check ($equal.state -ceq "unknown" -and $equal.reason -ceq "2 of the terminal's windows carry the title of the window of pane 12 and could be it by size (89 x 17 cells), and one is never chosen over another" -and $null -eq $equal.PSObject.Properties["readAgain"]) "TWO WINDOWS OF EQUAL SIZE AND NOTHING ELSE TO TELL THEM APART: unknown, and neither is chosen"
+$elsewhere = RealWindows -Titles @{ [long]394602 = ($half + " prompts"); [long]134586 = ($half + " prompts") }
+$inStep = Pick $real "25" $elsewhere $elsewhere
+Check ($inStep.state -ceq "known" -and $inStep.value.handle -eq 134586) "a window of another size that carries the same title is not counted: the title is asked only of windows of the right size"
+# THE PADDING IS NOT ASSUMED. The same windows under another padding - ten pixels wider, six taller, as
+# another font or border would give - are found the same.
+$padded = RealWindows -Sizes @{ [long]460684 = @(2570, 1340); [long]394602 = @(2530, 1254); [long]395012 = @(2546, 1316); [long]1443386 = @(2546, 1316); [long]460556 = @(2546, 1316); [long]722212 = @(1158, 848); [long]134586 = @(1158, 848); [long]4588442 = @(1284, 624); [long]199664 = @(1284, 624) }
+Check ((Pick $real "18" $padded $padded).value.handle -eq 460684 -and (Pick $real "0" $padded $padded).value.handle -eq 394602) "under another padding the windows are found the same: the padding is worked out from the windows, never written down"
+
+Write-Host ""
+Write-Host "--- by size: a window with no size, and sizes that say nothing ---" -ForegroundColor Cyan
+# A MINIMISED WINDOW HAS NO CLIENT SIZE (0 x 0). It is still the session's window.
+$otherMin = RealWindows -Sizes @{ [long]394602 = @(0, 0) }
+Check ((Pick $real "18" $otherMin $otherMin).value.detail -ceq "the one of the terminal's 9 windows with the size of the pane's window (180 x 39 cells)") "another window minimised: the session's window is still the one of its size"
+$wantedMin = RealWindows -Sizes @{ [long]460684 = @(0, 0) }
+$leftOver = Pick $real "18" $wantedMin $wantedMin
+Check ($leftOver.state -ceq "known" -and $leftOver.value.handle -eq 460684 -and $leftOver.value.detail -ceq "the one of the terminal's 9 windows that is not another's by size: the pane's window has no one size on screen (minimised, or its size was changing)") ("THE WANTED WINDOW MINIMISED, every other window another's by size, as many windows as listed: it is the one left, and the answer says it has no size (" + $leftOver.state + ")")
+$zero = Pick $real "18" (RealWindows -Sizes @{ [long]460684 = @(2560, 0) }) (RealWindows -Sizes @{ [long]460684 = @(2560, 0) })
+Check ($zero.state -ceq "known" -and $zero.value.detail -like "*has no one size on screen*") "a client area of no height is no size, the same"
+$twoMin = RealWindows -Sizes @{ [long]460684 = @(0, 0); [long]394602 = @(0, 0) }
+$either = Pick $real "18" $twoMin $twoMin
+Check ($either.state -ceq "unknown" -and $either.reason -ceq "2 of the terminal's 9 windows could be the window of pane 18 by size (180 x 39 cells), and none of them carries its title, so which it is cannot be told") "the wanted window and one other minimised, its title out of step: either could be it - unknown"
+$twoMinInStep = RealWindows -KeeperGlyph $turn -Sizes @{ [long]460684 = @(0, 0); [long]394602 = @(0, 0) }
+$byTitle = Pick $real "18" $twoMinInStep $twoMinInStep
+Check ($byTitle.state -ceq "known" -and $byTitle.value.handle -eq 460684 -and $byTitle.value.detail -ceq "the one of 2 windows that could be the pane's window by size (180 x 39 cells) that carries its title") "and when its title is in step, the title says which of the two it is"
+$fewer = RealWindows -Sizes @{ [long]460684 = @(0, 0) } -Without @([long]199664)
+$notLeft = Pick $real "18" $fewer $fewer
+Check ($notLeft.state -ceq "unknown" -and $notLeft.reason -like "1 of the terminal's 8 windows could be the window of pane 18 by size*") "the one left over is believed only when the process has as many windows as the listing has window ids: with one fewer, the session's window may be the one not seen"
+$resizing = Pick $real "18" (RealWindows) (RealWindows -Sizes @{ [long]460684 = @(2400, 1200) })
+Check ($resizing.state -ceq "known" -and $resizing.value.detail -like "*has no one size on screen*") "a size that is not the same before and after the listing is no size: it is never matched as either"
+$gone = RealWindows -Without @([long]394602)
+Check ((Pick $real "18" $gone $gone).value.handle -eq 460684) "a window missing from the process does not undo the others: the one window of the session's size is still it"
+$noneOfSize = Pick $real "0" $gone $gone
+Check ($noneOfSize.state -ceq "unknown" -and $noneOfSize.reason -ceq "none of the terminal's 8 windows has the size of the window of pane 0 (178 x 36 cells), so it is not on screen as the terminal lists it" -and $null -ne $noneOfSize.PSObject.Properties["readAgain"]) "and the pane whose window is the missing one has no window: none is of its size"
+# SIZES THAT SAY NOTHING: then only titles are left, and the answer says why sizes were not used.
+$stranger = @(RealWindows) + @((Win 999 "a window the listing does not have" 800 600))
+$noPadding = Pick $real "18" $stranger $stranger
+Check ($noPadding.state -ceq "unknown" -and $noPadding.reason -like "none of the terminal's 10 windows carries the title of the window of pane 18, and sizes do not tell them apart (no one padding explains the sizes of the terminal's windows)*") "a window whose size is no listed window's under any padding: sizes are not used at all, and the answer says so"
+Check ((Pick $real "11" $stranger $stranger).value.detail -ceq "the one of the terminal's 10 windows that carries the title of its pane") "and a window whose title is in step is then found by title alone"
+$sizeless = @($real | ForEach-Object { if ($_.pane_id -eq 42) { Pane 10 40 42 ($star + " device check") } else { $_ } })
+$noSize = Pick $sizeless "18" $before $after
+Check ($noSize.state -ceq "unknown" -and $noSize.reason -like "*sizes do not tell them apart (the listing gives no size for pane 42)*") "a listing that gives one pane no size gives no window a size: never half used"
+$uneven = @($real | ForEach-Object { if ($_.pane_id -eq 42) { Pane 10 40 42 ($star + " device check") $true $false 180 38 } else { $_ } })
+Check ((Pick $uneven "18" $before $after).reason -like "*sizes do not tell them apart (the tabs of window 10 are not of one size)*") "a window whose tabs are not of one size has no size"
+$mixed = Rows @((Pane 1 1 1 "a" $true $false 80 24), (Pane 1 1 2 "b" $false $false 80 24 81 0))
+$mixed[1].shape.cellWidth = 7
+Check ((Get-HordeWeztermWindowShapes -Rows $mixed).why -ceq "the panes of window 1 do not have cells of one size") "nor has a window whose panes have cells of two sizes"
+function Shape { param([string]$Size, [string]$Rest = '"left_col":0,"top_row":0') return @((Read-HordeWeztermWindowList -Raw ('[{"window_id":0,"tab_id":0,"pane_id":1,"title":"t","is_active":true,"size":' + $Size + ',' + $Rest + '}]')).value)[0].shape }
+$whole = Shape '{"rows":24,"cols":80,"pixel_width":1120,"pixel_height":768,"dpi":144}'
+Check ($null -ne $whole -and $whole.cols -eq 80 -and $whole.rows -eq 24 -and $whole.cellWidth -eq 14 -and $whole.cellHeight -eq 32 -and $whole.left -eq 0 -and $whole.top -eq 0) "CONTROL: a pane's size is read as the terminal gives it: columns, lines, and cells of 14 x 32"
+Check ($null -eq (Shape '{"rows":24,"cols":80,"pixel_width":1121,"pixel_height":768}')) "a width that is not a whole number of cells is no size"
+Check ($null -eq (Shape '{"rows":24,"cols":80,"pixel_width":1120,"pixel_height":770}')) "nor a height that is not"
+Check ($null -eq (Shape '{"rows":24,"cols":80,"pixel_width":1120,"pixel_height":768}' '"top_row":0')) "a pane that does not say where it starts in its tab has no size: a split tab would look as narrow as one pane"
+Check ($null -eq (Shape '{"rows":24,"cols":"80","pixel_width":1120,"pixel_height":768}') -and $null -eq (Shape '{"rows":0,"cols":80,"pixel_width":1120,"pixel_height":768}') -and $null -eq (Shape '"80x24"')) "a size written as text, or of no lines, is no size - and the listing is still read"
+# ONE DIRECTION OF THE PADDING, on its own: a client 1148 wide, and listed windows 80 and 81 columns wide.
+$ways = @(Get-HordeWeztermAxisFits -Lengths @([long]1148) -Spans @("1120|14", "1134|14"))
+Check ($ways.Count -eq 2 -and @($ways | Where-Object { @($_["1148"]).Count -ne 1 }).Count -eq 0 -and ((@($ways | ForEach-Object { $_["1148"] }) | Sort-Object) -join " ") -ceq "1120|14 1134|14") "a width fits a span when less than one cell is left over: 1148 is 80 columns under a padding of 28 and 81 under one of 14, never both at once"
+# A DOUBT WIDENS. One window with a size, one minimised, and listed windows of 80 and 81 columns: the
+# sized window is the first under one padding and the second under another, so size proves nothing.
+$near = @((Pane 1 1 1 "first" $true $false 80 24), (Pane 2 2 2 "second" $true $false 81 24))
+$doubt = Pick $near "1" @((Win 71 "busy" 1162 842), (Win 72 "busy too" 0 0))
+Check ($doubt.state -ceq "unknown" -and $doubt.reason -like "2 of the terminal's 2 windows could be the window of pane 1 by size*") "one sized window that two paddings would give to either listed window is not taken by size"
+$narrow = @((Pane 1 1 1 "first" $true $false 80 24), (Pane 2 2 2 "second" $true $false 83 24))
+$fitsOne = Pick $narrow "1" @((Win 71 "busy" 1148 842), (Win 72 "busy too" 0 0))
+Check ($fitsOne.state -ceq "known" -and $fitsOne.value.handle -eq 71 -and $fitsOne.value.detail -like "*with the size of the pane's window (80 x 24 cells)") "a window narrower than a listed window's cells cannot be that window: a padding below zero is not a padding"
+# Two windows of one size on screen, and listed windows of two sizes: no padding gives each its own.
+$crowd = Pick $near "1" @((Win 71 "busy" 1162 842), (Win 72 "busy too" 1162 842))
+Check ($crowd.state -ceq "unknown" -and $crowd.reason -like "*sizes do not tell them apart (no one padding explains the sizes of the terminal's windows)*") "two windows of one size cannot both be the one listed window of that size: such a padding explains nothing, and is not used"
 
 Write-Host ""
 Write-Host "--- no window, or no pane ---" -ForegroundColor Cyan
@@ -170,7 +298,7 @@ function Find { param([string]$Pane, [string]$Instance, [scriptblock]$W = $windo
 $found = Find "18" "gui-sock-4242"
 Check ($found.state -ceq "known" -and $found.value.handle -eq 7002) "pane 18 of instance gui-sock-4242: the keeper's window"
 Check ($script:calls.Count -eq 2 -and @($script:calls | Where-Object { $_ -cne "list --format json" }).Count -eq 0) "the terminal is asked one thing, its list of panes, once for each of two readings - nothing that types, moves or closes"
-Check ($found.value.detail -ceq "the one of the terminal's 4 windows titled after its panes, and again on a second reading 300 ms later" -and ($script:waits -join ",") -ceq "300") "the second reading is taken after the wait its settings give, 300 ms unless a person says otherwise, and the answer says it held twice"
+Check ($found.value.detail -ceq "the one of the terminal's 4 windows that carries the title of its pane, and again on a second reading 300 ms later" -and ($script:waits -join ",") -ceq "300") "the second reading is taken after the wait its settings give, 300 ms unless a person says otherwise, and the answer says it held twice"
 Check ($script:targets[0].socket -ceq (Join-Path $sockDir "gui-sock-4242") -and "" + $script:targets[0].guiPid -ceq "4242" -and $script:targets[0].guiStart -ceq "133000000000000000") "and it is asked as a named terminal: the instance's socket, its gui and that gui's start time"
 Check ($script:windowReads -eq 4 -and $script:pidAsked -eq 4242) "the windows read are that gui process's own, before each listing and after it"
 
@@ -227,7 +355,7 @@ function Twice { param($First, $Second)
 $held = Twice $wrong $right
 Check ($held.state -ceq "unknown" -and $held.reason -ceq "two readings 300 ms apart named different windows for the pane (200, then 100), so neither is believed") ("the two readings disagree: unknown, with both windows named and neither chosen (" + $held.state + ")")
 $same = Twice $right (Pick $staleRows "0" $trueWindows $trueWindows)
-Check ($same.state -ceq "known" -and $same.value.handle -eq 100 -and $same.value.window -ceq "1" -and $same.value.detail -ceq "the one of the terminal's 2 windows titled after its panes, and again on a second reading 300 ms later") "the two readings name the same window for the same pane: known, and it says it held twice"
+Check ($same.state -ceq "known" -and $same.value.handle -eq 100 -and $same.value.window -ceq "1" -and $same.value.detail -ceq "the one of the terminal's 2 windows that carries the title of its pane, and again on a second reading 300 ms later") "the two readings name the same window for the same pane: known, and it says it held twice"
 $gone = Twice $right (Pick $staleRows "0" @((Win 100 "mid redraw"), (Win 200 "logs")))
 Check ($gone.state -ceq "unknown" -and $gone.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later (none of the terminal's 2 windows*") "found once and not found again: unknown, with what the second reading said"
 $renumbered = Twice $right (Pick @((Pane 7 1 0 "deploy"), (Pane 2 2 1 "logs")) "0" $trueWindows $trueWindows)
@@ -254,6 +382,14 @@ Check ($r.state -ceq "known" -and $r.value.handle -eq 4100 -and $r.value.detail 
 $script:windowReads = 0
 $r = Find "0" "gui-sock-4242" -W { param($processId) $script:windowReads++; if ($script:windowReads -le 2) { return @((Win 4100 "a title that fits nothing")) }; return @((Win 4100 "a title that fits nothing"), (Win 4200 "one that has just opened")) } -Attempts 1
 Check ($r.state -ceq "unknown" -and $r.reason -like "a window was found for the pane and was not found again on a second reading 300 ms later*") "one window on the first reading and two on the second: the count did not hold, and no title says which it is - unknown"
+# THE LIVE CASE, THROUGH THE FINDER: the session's title is another one every time its window is read,
+# and never the listing's. Two listings, one wait, and the window is known.
+$script:listing = Listing $real
+$script:windowReads = 0; $script:waits.Clear(); $script:calls.Clear()
+$glyphs = @($half, $star, $turn + "x", $half)
+$r = Find "18" "gui-sock-4242" -W { param($processId) $script:windowReads++; return (RealWindows -KeeperGlyph $glyphs[($script:windowReads - 1) % 4]) } -Attempts 1
+Check ($r.state -ceq "known" -and $r.value.handle -eq 460684 -and $script:calls.Count -eq 2 -and $script:windowReads -eq 4 -and ($script:waits -join ",") -ceq "300") ("THE LIVE CASE, through the finder: a title that never holds still does not matter - " + $r.state + ", " + $script:calls.Count + " listings, " + $script:windowReads + " readings of the windows")
+Check ($r.state -ceq "known" -and $r.value.detail -ceq "the one of the terminal's 9 windows with the size of the pane's window (180 x 39 cells), and again on a second reading 300 ms later") "and it held on the second reading, by size both times"
 $script:listing = Listing $fleet
 
 Write-Host ""
@@ -386,5 +522,7 @@ Check ($viaPort.state -ceq "unknown" -and $viaPort.reason -like "wezterm: *does 
 $src = [System.IO.File]::ReadAllText((Join-Path $root "hosts\wezterm\Window.ps1"))
 Check (([regex]::Matches($src, 'Invoke-HordeWeztermCall -Rest')).Count -eq 1 -and $src.Contains('Invoke-HordeWeztermCall -Rest @("list", "--format", "json")')) "the finder's one call to the terminal is the listing, and there is no other"
 Check (-not ($src -match 'SetWindowPos|ShowWindow|SetForegroundWindow|SendMessage|PostMessage|SetWindowLong|keybd_event|SendInput|DestroyWindow|CloseWindow')) "and of Windows it asks only what windows there are: nothing that moves, shows, types into or closes one"
+
+Check ($src.Contains('SetThreadDpiAwarenessContext((IntPtr)(-4))') -and $src.Contains('finally { if (real) SetThreadDpiAwarenessContext(was); }')) "sizes are asked for in real pixels, on the reading's own thread, and the thread is put back as it was"
 
 Complete-HordeSuite -Success "a session's window is the one its own terminal's listing proves, or it is unknown"
