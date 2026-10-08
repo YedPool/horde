@@ -13,7 +13,7 @@
     Mutations = @(
         @{ Name = "refused-is-written"
            Find = '    if ($read.state -cne "read") { return'
-           Replace = '    if ($false) { return' }
+           Replace = '    if ($read.state -cne "read") { $read = [pscustomobject]@{ state = "read"; event = ($line | ConvertFrom-Json); findings = @() } }; if ($false) { return' }
         @{ Name = "consent-ignored"
            Find = '    if (-not $consent.write) { return'
            Replace = '    if ($false) { return' }
