@@ -63,7 +63,9 @@
         "speaker": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Whose words they are, as one lowercase label. The closed list is the speakers of decisions/Rules.ps1, asked of a request before it is written; it is not an enum here, so that a record written under a speaker an older version does not list is still read by it."},
         "route": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "By what route the words arrived. The closed list is the routes of decisions/Rules.ps1. Words a person typed himself and words another hand wrote down for him are different routes, and are never stored as one."},
         "text": {"type": "string", "description": "The words, VERBATIM: never trimmed, normalised or re-wrapped, in any alphabet, with their own line breaks."},
-        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at (the view's wordingVersion), WHEN THE SPEAKER STATED IT. Absent means not stated: the session writing down what was said in chat does not know what was on the speaker's screen, and nothing is guessed in its place. Words are an answer to a stated wording and to no other."}
+        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at (the view's wordingVersion), WHEN THE SPEAKER STATED IT. Absent means not stated: the session writing down what was said in chat does not know what was on the speaker's screen, and nothing is guessed in its place. Words are an answer to a stated wording and to no other."},
+        "asks": {"type": "boolean", "description": "False when the keeper's words ask the founder nothing (a note): the turn does not pass to him. Absent means true."},
+        "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "The founder's words record an act of his: park or unpark. The turn does not pass."}
       }
     },
     "messages-read": {

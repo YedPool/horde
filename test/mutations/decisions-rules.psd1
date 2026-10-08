@@ -421,11 +421,11 @@
            Replace = '    $thread["messages"] = $views' }
         # --- whose turn it is ---
         @{ Name = "turn-does-not-pass-when-someone-speaks"
-           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
+           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
            Replace = '' }
         @{ Name = "turn-passes-under-a-closed-question"
-           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
-           Replace = 'if ($script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }' }
+           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
+           Replace = 'if ($script:HordeDecisionSpeakers.Contains($speaker) -and $last.asks -and $last.act -eq "") { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }' }
         @{ Name = "turn-stays-with-the-speaker"
            Find = '    founder  = @{ shown = "the founder";  then = "warchief"; reads = $false }'
            Replace = '    founder  = @{ shown = "the founder";  then = "founder"; reads = $false }' }

@@ -74,7 +74,7 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # founder said in chat, in his words - stored as recorded from chat, never as typed by him.
     # reply: that session speaks. inbox: what the founder has said that it has not read.
     answer = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "answer <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "founder"; route = "chat-recorded" } }
-    reply  = @{ number = $true;  flags = @("Text", "File", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
+    reply  = @{ number = $true;  flags = @("Text", "File", "Note", "Wording", "Id", "Json"); usage = "reply <number> (-Text <one line> or -File <path>) [-Note] [-Wording <number>] [-Id <32 hex>] [-Json]"; operation = "say"; says = @{ speaker = "warchief"; route = "command" } }
     # then: the operation a verb asks for once its lines are out. Every operation is a verb's own, or a verb's "then".
     inbox  = @{ number = $false; flags = @("Peek", "Id", "Json");                   usage = "inbox [-Peek] [-Id <32 hex>] [-Json]"; then = "mark-read" }
     # mark-read: record that everything said up to a record has been read. What `inbox` does by itself
@@ -190,6 +190,12 @@ function Format-HordeDecisionMessage {
     if ($Message.wordingStated) { $wording = "said to wording " + $Message.wordingVersion }
     [void]$lines.Add($Indent + $Message.speakerShown + ", " + $Message.routeShown + ", " + (Format-HordeDecisionTime -At $Message.at) + " (record " + $Message.sequence + ", " + $wording + ")")
     if ($Message.arrivedAfterClosing) { [void]$lines.Add($Indent + "  NOTE: this arrived after the question was closed. It is kept, and it reopened nothing.") }
+    # The marks (decisions/Rules.ps1): an edit, a note, an act. Read with care: a record written
+    # before they existed has none of them.
+    $has = { param([string]$Name) return ($null -ne $Message.PSObject.Properties[$Name]) }
+    if ((& $has "replaces") -and $Message.replaces -and "$($Message.speaker)" -ceq "founder") { [void]$lines.Add($Indent + "  (replaces his earlier answer)") }
+    if ((& $has "asks") -and $Message.asks -eq $false) { [void]$lines.Add($Indent + "  (a note: it asks him nothing, and the turn stayed the keeper's)") }
+    if ((& $has "act") -and "$($Message.act)" -ne "") { [void]$lines.Add($Indent + "  (" + $(if ("$($Message.act)" -ceq "park") { "he set the question aside: parked" } else { "he brought the question back: unparked" }) + ")") }
     if ($Message.saidToEarlierWording) {
         $now = ""
         if ($NowWording -gt 0) { $now = "; the question is now at wording " + $NowWording }
@@ -529,6 +535,8 @@ function Invoke-HordeDecisionCommand {
         $request["speaker"] = "$($spec.says.speaker)"
         $request["route"] = "$($spec.says.route)"
         $request["text"] = $words
+        # -Note: the words tell him something and ask him nothing (decisions/Rules.ps1).
+        if ($have.ContainsKey("Note") -and [bool]$have["Note"]) { $request["asks"] = $false }
         if ($have.ContainsKey("Wording")) {
             $wording = "$($have['Wording'])"
             if ($wording -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("-Wording is the number of the wording the speaker was looking at, as in: -Wording 2" + $usageNote) }
