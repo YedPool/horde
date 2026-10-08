@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "claim": "A master that takes one turn per incoming message spends more time and far more output on relay than on the person's own requests.",
+  "metric": {
+    "what": "Master turns classified by what started them (person's prompt, mail, background job); characters of visible text produced per class.",
+    "numbers": [
+      {
+        "name": "turnsFromMail",
+        "values": [
+          353
+        ]
+      },
+      {
+        "name": "turnsFromHuman",
+        "values": [
+          91
+        ]
+      },
+      {
+        "name": "hoursFromMail",
+        "values": [
+          2.7
+        ]
+      },
+      {
+        "name": "hoursFromHuman",
+        "values": [
+          2.5
+        ]
+      },
+      {
+        "name": "charsInMailTurns",
+        "values": [
+          846000
+        ]
+      },
+      {
+        "name": "charsInHumanTurns",
+        "values": [
+          266000
+        ]
+      },
+      {
+        "name": "medianCharsPerMailTurn",
+        "values": [
+          2618
+        ]
+      },
+      {
+        "name": "medianAfterHumanSaidStop",
+        "values": [
+          1765
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "master transcript"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "The master reads mail in batches and writes the person one digest per batch: what changed, what needs the person. Reports that change nothing for the person are filed, not shown.",
+  "confidence": "medium",
+  "whyItGeneralises": "Any coordinator that takes one turn per message pays for each turn's context and output; batching is the general remedy for per-message overhead."
+}

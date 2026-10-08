@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "claim": "A send command that waits for delivery confirmation costs orchestrators about a quarter of their working time.",
+  "metric": {
+    "what": "Wall time of each foreground send tool call (call to result) in orchestrator transcripts, against total orchestrator in-turn time.",
+    "numbers": [
+      {
+        "name": "foregroundSends",
+        "values": [
+          579
+        ]
+      },
+      {
+        "name": "hoursInSends",
+        "values": [
+          6.1
+        ]
+      },
+      {
+        "name": "orchestratorInTurnHours",
+        "values": [
+          24.6
+        ]
+      },
+      {
+        "name": "share",
+        "values": [
+          0.25
+        ]
+      },
+      {
+        "name": "medianSeconds",
+        "values": [
+          26
+        ]
+      },
+      {
+        "name": "worstSeconds",
+        "values": [
+          360
+        ]
+      },
+      {
+        "name": "shareByOrchestrator",
+        "values": [
+          0.47,
+          0.42,
+          0.32,
+          0.24,
+          0.13,
+          0.13,
+          0.1,
+          0.04
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "orchestrator transcripts"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "The send command returns once the message is durably queued; delivery failure is reported to the sender as a message. Until then, the protocol tells every orchestrator to run sends in the background.",
+  "confidence": "medium",
+  "whyItGeneralises": "Any fleet whose coordinators send by a command that blocks until delivery pays the same tax; the share scales with how many messages a coordinator sends per turn, not with this machine.",
+  "limits": "One orchestrator's sends were not recognised by the command pattern and are excluded. The lowest share belongs to the one orchestrator that already backgrounds its sends."
+}
