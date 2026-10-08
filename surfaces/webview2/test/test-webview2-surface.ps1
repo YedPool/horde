@@ -385,6 +385,75 @@ $quiet = [pscustomobject]@{ Uri = "https://example.com/"; Cancel = $false }
 Check ($quiet.Cancel -eq $false) "with no window, a handler does nothing at all rather than fail"
 
 Write-Host ""
+Write-Host "--- real keys for a check: only when the spec asks, only three kinds of call to the engine ---" -ForegroundColor Cyan
+# What a step comes to, read back from the JSON the engine would be handed.
+function Get-InputCalls { param($Steps) $made = Get-HordeWebView2InputCalls -Steps $Steps; return [pscustomobject]@{ problem = $made.problem; calls = @($made.calls | ForEach-Object { [pscustomobject]@{ method = $_.method; body = ($_.json | ConvertFrom-Json) } }) } }
+$enter = Get-InputCalls @([pscustomobject]@{ key = "Enter" })
+Check ($enter.problem -ceq "" -and $enter.calls.Count -eq 2 -and $enter.calls[0].body.type -ceq "keyDown" -and $enter.calls[0].body.text -ceq "`r" -and $enter.calls[0].body.windowsVirtualKeyCode -eq 13 -and $enter.calls[1].body.type -ceq "keyUp" -and $enter.calls[1].body.code -ceq "Enter") "one key is pressed and let go: Enter goes down with the character it types, and comes up"
+$ctrlEnter = Get-InputCalls @([pscustomobject]@{ key = "Enter"; ctrl = $true })
+Check ((@($ctrlEnter.calls | ForEach-Object { $_.body.type + ":" + $_.body.key + ":" + $_.body.modifiers }) -join ",") -ceq "rawKeyDown:Control:2,rawKeyDown:Enter:2,keyUp:Enter:2,keyUp:Control:0" -and $null -eq $ctrlEnter.calls[1].body.PSObject.Properties["text"]) ("Ctrl is pressed around the key and held while it is, and a key held with Ctrl types nothing (" + (@($ctrlEnter.calls | ForEach-Object { $_.body.type + ":" + $_.body.key + ":" + $_.body.modifiers }) -join ",") + ")")
+$shiftA = Get-InputCalls @([pscustomobject]@{ key = "a"; shift = $true })
+Check ((@($shiftA.calls | ForEach-Object { $_.body.type + ":" + $_.body.key + ":" + $_.body.modifiers }) -join ",") -ceq "rawKeyDown:Shift:8,keyDown:A:8,keyUp:A:8,keyUp:Shift:0" -and $shiftA.calls[1].body.text -ceq "A" -and $shiftA.calls[1].body.code -ceq "KeyA") "Shift is held around a letter, which then types its capital"
+$arrows = Get-InputCalls @([pscustomobject]@{ key = "ArrowUp" }, [pscustomobject]@{ key = "ArrowDown" })
+Check ((@($arrows.calls | ForEach-Object { $_.body.type + ":" + $_.body.code + ":" + $_.body.windowsVirtualKeyCode }) -join ",") -ceq "rawKeyDown:ArrowUp:38,keyUp:ArrowUp:38,rawKeyDown:ArrowDown:40,keyUp:ArrowDown:40") "the arrows up and down are keys a check can press, and type nothing"
+$typed = Get-InputCalls @([pscustomobject]@{ text = "a1 !?" })
+Check ((@($typed.calls | ForEach-Object { $_.method + ":" + $(if ($_.method -ceq "Input.insertText") { $_.body.text } else { $_.body.type + "/" + $_.body.code }) }) -join ",") -ceq "Input.dispatchKeyEvent:keyDown/KeyA,Input.dispatchKeyEvent:keyUp/KeyA,Input.dispatchKeyEvent:keyDown/Digit1,Input.dispatchKeyEvent:keyUp/Digit1,Input.dispatchKeyEvent:keyDown/Space,Input.dispatchKeyEvent:keyUp/Space,Input.insertText:!?") "typed text is a key for each small letter, digit and space, and the rest is put in at the caret as text"
+$focus = Get-InputCalls @([pscustomobject]@{ focus = $true }, [pscustomobject]@{ focus = $false })
+Check ($focus.calls.Count -eq 2 -and $focus.calls[0].method -ceq "Emulation.setFocusEmulationEnabled" -and $focus.calls[0].body.enabled -eq $true -and $focus.calls[1].body.enabled -eq $false) "the page is told it has the keyboard, or has not, by the engine: no window is activated"
+foreach ($bad in @(
+    @{ steps = @([pscustomobject]@{ key = "Enter" }, [pscustomobject]@{ key = "Delete" }); says = "*names a key this surface has no way to press*"; what = "a key that is not on the list, after one that is" }
+    @{ steps = @([pscustomobject]@{ key = "enter" }); says = "*names a key this surface has no way to press*"; what = "a name of the list in another letter case" }
+    @{ steps = @([pscustomobject]@{ key = "A" }); says = "*names a key this surface has no way to press*"; what = "a capital letter (Shift is said, not implied)" }
+    @{ steps = @("Enter"); says = "*was not an object*"; what = "a step that is not an object" }
+    @{ steps = @([pscustomobject]@{ focus = "yes" }); says = "*neither a key, nor text, nor the keyboard*"; what = "a step whose focus is not true or false" }
+    @{ steps = @([pscustomobject]@{ text = ("a" * 1001) }); says = "*more than 2000 calls of the engine*"; what = "text that comes to more calls than one ask may" }
+)) {
+    $no = Get-InputCalls $bad.steps
+    Check ($no.problem -like $bad.says -and $no.calls.Count -eq 0) ("" + $bad.what + ": refused in one sentence, and NOTHING is sent, not even the steps before it (" + $no.problem + ")")
+}
+Check ((Get-InputCalls @([pscustomobject]@{ text = ("a" * 1000) })).calls.Count -eq 2000) "CONTROL: text of exactly as many calls as one ask may come to is acted out"
+$methods = @(@($enter, $ctrlEnter, $shiftA, $arrows, $typed, $focus) | ForEach-Object { $_.calls } | ForEach-Object { $_.method } | Sort-Object -Unique)
+Check (($methods -join ",") -ceq "Emulation.setFocusEmulationEnabled,Input.dispatchKeyEvent,Input.insertText") ("the engine is asked for three kinds of thing and nothing else: a key, text at the caret, the keyboard given or taken (" + ($methods -join ",") + ")")
+$hookTokens = $null; $hookErrors = $null
+$hookAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $adapter "Surface.ps1"), [ref]$hookTokens, [ref]$hookErrors)
+$engineCalls = @($hookAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member.Extent.Text -ceq "CallDevToolsProtocolMethodAsync" }, $true) | ForEach-Object { @($_.Arguments | ForEach-Object { $_.Extent.Text }) -join " | " })
+Check ($engineCalls.Count -eq 1 -and $engineCalls[0] -ceq '$call.method | $call.json') ("the engine's own input is called in one place, with what Get-HordeWebView2InputCalls built and nothing else (" + ($engineCalls -join "; ") + ")")
+
+# THE WINDOW'S MEMBERS: off unless the spec asks.
+$plainWindow = Get-HordeWebView2Window -Form ([pscustomobject]@{ Handle = 1 }) -Errors (New-Object System.Collections.ArrayList)
+$probeWindow = Get-HordeWebView2Window -Form ([pscustomobject]@{ Handle = 1 }) -Errors (New-Object System.Collections.ArrayList) -ProbeInput
+Check ($null -eq $plainWindow.PSObject.Properties["input"] -and $null -eq $plainWindow.PSObject.Properties["inputIdle"]) "a window opened without probeInput has no input and no inputIdle"
+Check ($probeWindow.input -is [scriptblock] -and $probeWindow.inputIdle -is [scriptblock] -and $null -ne $probeWindow.PSObject.Properties["post"]) "CONTROL: one opened with it has both, beside the members every window has"
+
+# HANDED OVER: an engine stood in for by an object that records what it is asked.
+$script:engineAsked = New-Object System.Collections.ArrayList
+$standIn = [pscustomobject]@{}
+Add-Member -InputObject $standIn -MemberType ScriptMethod -Name CallDevToolsProtocolMethodAsync -Value { param($Method, $Json) [void]$script:engineAsked.Add($Method); return [System.Threading.Tasks.Task]::FromResult("{}") }
+$probeSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data") -ProbeInput
+$quietSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ shell = $pageDir }) -Start "shell/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data")
+Check ($probeSpec.probeInput -eq $true -and $quietSpec.probeInput -eq $false) "CONTROL: the spec carries whether its caller asked"
+$script:HordeWebView2 = [pscustomobject]@{ spec = $quietSpec; opened = $true; view = [pscustomobject]@{ CoreWebView2 = $standIn }; errors = (New-Object System.Collections.ArrayList); inputTasks = (New-Object System.Collections.ArrayList) }
+$refusedInput = Send-HordeWebView2Input -Steps @([pscustomobject]@{ key = "Enter" })
+Check ($refusedInput -eq $false -and $script:engineAsked.Count -eq 0 -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*not opened to be given any*") "input handed to a window whose spec did not ask for it is refused and recorded, and the engine is asked nothing"
+$script:HordeWebView2.spec = $probeSpec; $script:HordeWebView2.errors.Clear()
+$handedOver = Send-HordeWebView2Input -Steps @([pscustomobject]@{ focus = $true }, [pscustomobject]@{ text = "hi" }, [pscustomobject]@{ key = "Enter" })
+Check ($handedOver -eq $true -and $script:engineAsked.Count -eq 7 -and $script:engineAsked[0] -ceq "Emulation.setFocusEmulationEnabled" -and $script:HordeWebView2.inputTasks.Count -eq 7 -and $script:HordeWebView2.errors.Count -eq 0) ("with probeInput the steps are handed to the engine in order, one call each (" + ($script:engineAsked -join ",") + ")")
+Check ((Test-HordeWebView2InputIdle) -eq $true -and $script:HordeWebView2.inputTasks.Count -eq 0) "and once the engine has taken them all the surface says so, and waits for none of them"
+$script:engineAsked.Clear()
+$halfBad = Send-HordeWebView2Input -Steps @([pscustomobject]@{ key = "Enter" }, [pscustomobject]@{ key = "Delete" })
+Check ($halfBad -eq $false -and $script:engineAsked.Count -eq 0 -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -like "*no way to press*") "an ask with one step that cannot be acted out is refused whole and recorded: the engine is asked nothing"
+$script:HordeWebView2.errors.Clear()
+$pending = New-Object System.Threading.Tasks.TaskCompletionSource[string]
+$broken = New-Object System.Threading.Tasks.TaskCompletionSource[string]
+[void]$broken.TrySetException((New-Object System.InvalidOperationException("the engine said no")))
+[void]$script:HordeWebView2.inputTasks.Add($broken.Task); [void]$script:HordeWebView2.inputTasks.Add($pending.Task)
+Check ((Test-HordeWebView2InputIdle) -eq $false -and $script:HordeWebView2.errors.Count -eq 1 -and $script:HordeWebView2.errors[0] -ceq "the engine did not take an input: the engine said no") "a call the engine refused is recorded in its words, and one it has not finished is still waited for"
+[void]$pending.TrySetResult("{}")
+Check ((Test-HordeWebView2InputIdle) -eq $true -and $script:HordeWebView2.errors.Count -eq 1) "and when it has finished, the surface is idle and the refusal is not recorded twice"
+$script:HordeWebView2 = $null
+Check ((Send-HordeWebView2Input -Steps @([pscustomobject]@{ key = "Enter" })) -eq $false -and (Test-HordeWebView2InputIdle) -eq $true) "with no window there is nothing to hand keys to, and nothing to wait for"
+
+Write-Host ""
 Write-Host "--- no object of Horde's is ever handed to the page ---" -ForegroundColor Cyan
 $tokens = $null; $errs = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $adapter "Surface.ps1"), [ref]$tokens, [ref]$errs)

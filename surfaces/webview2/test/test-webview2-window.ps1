@@ -11,7 +11,7 @@
 # MACHINE-BOUND (test/lib/SuiteFiles.ps1): it needs the web engine installed and an interactive
 # logon, so it runs through the local gate and never on the remote test box.
 #
-# WHAT IT TOUCHES: three windows of this process, one after another - two hidden at -32000,-32000 and
+# WHAT IT TOUCHES: four windows of this process, one after another - three hidden at -32000,-32000 and
 # one that stands free, put at -32000,-32000 by its caller, which has a place in the taskbar for the
 # second or so it lives; none takes the keyboard. A profile folder for each, a picture and a home of
 # its own under %TEMP%; one listening socket on 127.0.0.1 at a port Windows picks, closed at the end.
@@ -461,6 +461,58 @@ $freeShown = Open-HordeSurface -Surface $surface -Spec $freeSpec
 Check ($freeShown.state -ceq "closed" -and $free.timedOut -ceq "" -and $free.visible -eq $true -and $free.left -eq -32000) ("it opened, was shown where its caller put it, and closed (" + $freeShown.state + " " + $freeShown.reason + ")")
 Check ($free.inTaskbar -eq $true) "it stands free, so it has its place in the taskbar"
 Check ($free.atOpen -eq $false -and $free.later -eq $false) "and it did not take the keyboard, when its engine came up or eight ticks later"
+
+Write-Host ""
+Write-Host "--- real keys for a check: made by the engine, for this page alone ---" -ForegroundColor Cyan
+# A FOURTH WINDOW, HIDDEN, OPENED WITH probeInput (surfaces/webview2/Surface.ps1, REAL KEYS FOR A
+# CHECK). The page (pages/probe/keys.html) focuses its one field, makes one key press of its own by
+# script, and counts every key press it sees by whether the engine vouches for it. The suite tells
+# the page it has the keyboard, types and presses keys, waits until the engine has taken them all,
+# and asks the page what it saw. Nothing here asks Windows for the keyboard: the desktop's
+# foreground window is read before and after, and must not change.
+$keys = [pscustomobject]@{ clock = [System.Diagnostics.Stopwatch]::StartNew(); limitMs = 30000; timedOut = ""; phase = "wait"; ready = $false; seen = $null
+    hasInput = $null; handed = $null; refusedStep = $null; errorsSeen = @(); foregroundBefore = [long][HordeSurfaceProbe.Native]::GetForegroundWindow(); foregroundAfter = 0; handle = 0 }
+$keysBridge = New-HordeSurfaceBridge -Events @("report") -Requests ([ordered]@{
+    "ready" = @{ run = { param($Arguments, $State, $Window) $State.ready = $true; return $true } }
+    "seen"  = @{ args = @{ trusted = @{ type = "integer" }; untrusted = @{ type = "integer" }; pressed = @{ type = "string"; most = 400 }; value = @{ type = "string"; most = 200 }; focused = @{ type = "boolean" } }
+                 run = { param($Arguments, $State, $Window) $State.seen = [pscustomobject]@{ trusted = [int]$Arguments["trusted"]; untrusted = [int]$Arguments["untrusted"]; keys = $Arguments["pressed"]; value = $Arguments["value"]; focused = [bool]$Arguments["focused"] }; return $true } }
+})
+function Step-Keys {
+    param($Window, $State)
+    if ($State.clock.ElapsedMilliseconds -gt $State.limitMs) { $State.timedOut = $State.phase; & $Window.close; return }
+    if ($State.phase -ceq "wait" -and $State.ready) {
+        $State.handle = [long]$Window.handle
+        $State.hasInput = ($null -ne $Window.PSObject.Properties["input"] -and $null -ne $Window.PSObject.Properties["inputIdle"])
+        # One ask that cannot be acted out first: refused whole, so none of its keys reach the page.
+        $State.refusedStep = (& $Window.input @([pscustomobject]@{ key = "a" }, [pscustomobject]@{ key = "NoSuchKey" }))
+        $State.handed = (& $Window.input @([pscustomobject]@{ focus = $true }, [pscustomobject]@{ text = "hi" }, [pscustomobject]@{ key = "Enter" }, [pscustomobject]@{ key = "ArrowUp" }, [pscustomobject]@{ key = "x" }, [pscustomobject]@{ key = "ArrowDown" }, [pscustomobject]@{ key = "b"; shift = $true }))
+        $State.phase = "typing"
+    }
+    elseif ($State.phase -ceq "typing" -and (& $Window.inputIdle)) {
+        & $Window.post (ConvertTo-HordeSurfaceEvent -Bridge $State.bridge -Name "report" -Value $true)
+        $State.phase = "asked"
+    }
+    elseif ($State.phase -ceq "asked" -and $null -ne $State.seen) {
+        $State.foregroundAfter = [long][HordeSurfaceProbe.Native]::GetForegroundWindow()
+        $State.errorsSeen = @($Window.errors)
+        & $Window.close
+    }
+}
+Add-Member -InputObject $keys -NotePropertyName bridge -NotePropertyValue $keysBridge
+$keysSpec = New-HordeSurfaceSpec -Title "surface keys" -Mounts ([ordered]@{ probe = (Join-Path $pages "probe") }) -Start "probe/keys.html" -Bridge $keysBridge -DataFolder (Join-Path $work "data-keys") `
+    -Hidden -ProbeInput -Width 320 -Height 200 -TickMs 50 -State $keys -OnTick { param($Window, $State) Step-Keys -Window $Window -State $State }
+Check ($keysSpec.probeInput -eq $true -and $freeSpec.probeInput -eq $false) "CONTROL: this spec asks for input for a check; the free window's did not"
+$keys.clock.Restart()
+$keysShown = Open-HordeSurface -Surface $surface -Spec $keysSpec
+$seen = $keys.seen
+Check ($keysShown.state -ceq "closed" -and $keys.timedOut -ceq "" -and $null -ne $seen) ("it opened, the page was typed into and reported, and it closed (" + $keysShown.state + " " + $keysShown.reason + "; stopped in '" + $keys.timedOut + "')")
+Check ($keys.hasInput -eq $true -and $keys.handed -eq $true) "the window opened for a check has input and inputIdle, and the keys were handed over"
+Check ($null -ne $seen -and $seen.untrusted -eq 1) ("CONTROL: the one key press the page made by script is counted as not trusted (" + $(if ($null -ne $seen) { $seen.untrusted } else { "?" }) + ")")
+Check ($null -ne $seen -and $seen.trusted -eq 8 -and $seen.keys -ceq "h,i,Enter,ArrowUp,x,ArrowDown,Shift,B") ("every key handed over reached the page as a key press the engine vouches for, in order - Shift held for the capital is a key press of its own, as on a keyboard - and the ask that was refused sent none (" + $(if ($null -ne $seen) { "" + $seen.trusted + ": " + $seen.keys } else { "nothing seen" }) + ")")
+Check ($null -ne $seen -and $seen.value -ceq "xhi`nB") ("and they did what a real key does: the letters typed, Enter added a line, the caret went up a line and down again (the field holds '" + $(if ($null -ne $seen) { $seen.value -replace "`n", "\n" } else { "?" }) + "')")
+Check ($null -ne $seen -and $seen.focused -eq $true) "the page was told it has the keyboard, and its field has it"
+Check ($keys.refusedStep -eq $false -and @($keys.errorsSeen).Count -eq 1 -and @($keys.errorsSeen)[0] -like "*no way to press*") ("an ask with a key the surface cannot press was refused whole and recorded, and nothing else went wrong (" + (@($keys.errorsSeen) -join " | ") + ")")
+Check ($keys.foregroundAfter -eq $keys.foregroundBefore -and $keys.foregroundAfter -ne $keys.handle) "and the desktop's foreground window is the one it was before: no window was activated and nobody's keyboard was taken"
 
 } finally {
     if ($null -ne (Get-Variable -Name listener -ErrorAction SilentlyContinue) -and $null -ne $listener) { try { $listener.Stop() } catch { } }

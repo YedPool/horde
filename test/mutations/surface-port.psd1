@@ -335,6 +335,9 @@
         @{ Name = "a-spec-asks-for-the-keyboard-unasked"
            Find = 'takeKeyboard = [bool]$TakeKeyboard;'
            Replace = 'takeKeyboard = $true;' }
+        @{ Name = "a-spec-gives-input-for-a-check-unasked"
+           Find = 'probeInput = [bool]$ProbeInput;'
+           Replace = 'probeInput = $true;' }
         @{ Name = "a-left-with-no-top"
            Find = 'if (($null -eq $Left) -ne ($null -eq $Top)) {'
            Replace = 'if ($false) {' }

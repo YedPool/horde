@@ -70,6 +70,30 @@
 # function that has already returned by the time any of them runs.
 # surfaces/webview2/test/test-webview2-surface.ps1 pins it both ways.
 #
+# REAL KEYS FOR A CHECK, AND ONLY FOR A CHECK. A spec made with probeInput gives its caller two more
+# members of the window, input and inputIdle (surfaces/Port.ps1). input hands key presses and typed
+# text to THE ENGINE'S OWN INPUT, addressed to this window's view and to nothing else: the engine
+# makes of them the events it makes of a key pressed by hand (trusted ones, with their default
+# actions: a real Enter adds a line, a real Tab moves the caret), and nothing is sent to the desktop,
+# so whatever window has the keyboard keeps it. Without probeInput neither member exists, and the
+# function behind them refuses. What it does NOT go through is Windows itself delivering a key to the
+# engine's window. WHY THIS WAY: an event a script makes is not trusted and has no default action, so
+# a check written with one cannot see what a real key press does; and a real key press made through
+# the desktop needs the keyboard, which a check must never take from whoever is typing. Measured
+# 2026-10-07 by the decisions window's key scenario: 105 key presses handed over, 105 counted by the
+# page as trusted, and the desktop's foreground window unchanged; and 2026-10-08 by this adapter's
+# real-window suite: 8 of 8 trusted, in order, with their default actions (an Enter added a line, the
+# caret went up a line and down again), the foreground window unchanged.
+# A step { focus } has the engine tell the page it has the keyboard, and Windows is told nothing:
+# no window is activated. WHY NOT THE REAL THING: measured 2026-10-07, once - the message Windows
+# sends a window it activates (WM_ACTIVATE), posted to this surface's own hidden window standing
+# where no screen is, had the form hand its focus to the view and the view to the engine, the page
+# was told and said so - AND THE HIDDEN WINDOW BECAME THE DESKTOP'S FOREGROUND WINDOW, taking the
+# keyboard from whoever was typing. A check must never do that.
+# THE ENGINE IS ASKED FOR THREE THINGS ONLY, built here from the steps and never from text a caller
+# wrote: a key event, text put in at the caret, and the page told it has (or has not) the keyboard
+# (Get-HordeWebView2InputCalls; the suite holds the list).
+#
 # ONE WINDOW AT A TIME IN ONE PROCESS: the state object is one. A second Open while one is open is
 # refused.
 #
@@ -569,6 +593,113 @@ function Complete-HordeWebView2Capture {
     }
 }
 
+# THE KEYS A CHECK MAY PRESS (header, REAL KEYS FOR A CHECK): name -> the engine's code for the key,
+# Windows' number for it, and the character it types ("" for none). A letter, a digit or a space is
+# worked out and is not listed.
+$script:HordeWebView2InputKeys = @{
+    "Enter" = @("Enter", 13, "`r"); "Tab" = @("Tab", 9, ""); "Escape" = @("Escape", 27, ""); "Backspace" = @("Backspace", 8, "")
+    "ArrowRight" = @("ArrowRight", 39, ""); "ArrowLeft" = @("ArrowLeft", 37, ""); "ArrowUp" = @("ArrowUp", 38, ""); "ArrowDown" = @("ArrowDown", 40, "")
+    "F2" = @("F2", 113, "")
+}
+# The most engine calls one ask may come to: a check types a sentence, not a book.
+$script:HordeWebView2InputMostCalls = 2000
+
+function Add-HordeWebView2InputKey {
+    # PURE. Add to -Calls the engine calls of one key pressed and let go, with Shift and Ctrl held as
+    # said and pressed and let go as keys of their own around it. Answers whether -Name is a key this
+    # surface can press: a name of the table above (matched exactly), or one small letter, digit or
+    # space. A key held with Ctrl types nothing, as on a keyboard.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Calls, [AllowEmptyString()][string]$Name, [bool]$Shift = $false, [bool]$Ctrl = $false)
+    $code = ""; $vk = 0; $text = ""; $key = $Name
+    if (@($script:HordeWebView2InputKeys.Keys) -ccontains $Name) { $entry = $script:HordeWebView2InputKeys[$Name]; $code = "" + $entry[0]; $vk = [int]$entry[1]; $text = "" + $entry[2] }
+    elseif ($Name -cmatch '\A[a-z]\z') { $code = "Key" + $Name.ToUpperInvariant(); $vk = [int][char]$Name.ToUpperInvariant(); $text = $Name; if ($Shift) { $text = $Name.ToUpperInvariant(); $key = $text } }
+    elseif ($Name -cmatch '\A[0-9]\z') { $code = "Digit" + $Name; $vk = [int][char]$Name; $text = $Name }
+    elseif ($Name -ceq " ") { $code = "Space"; $vk = 32; $text = " " }
+    else { return $false }
+    $method = "Input.dispatchKeyEvent"
+    $held = 0
+    if ($Ctrl) { $held = $held -bor 2; [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ type = "rawKeyDown"; modifiers = $held; key = "Control"; code = "ControlLeft"; windowsVirtualKeyCode = 17 })) }) }
+    if ($Shift) { $held = $held -bor 8; [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ type = "rawKeyDown"; modifiers = $held; key = "Shift"; code = "ShiftLeft"; windowsVirtualKeyCode = 16 })) }) }
+    $down = [ordered]@{ type = "rawKeyDown"; modifiers = $held; key = $key; code = $code; windowsVirtualKeyCode = $vk }
+    if ($text -ne "" -and -not $Ctrl) { $down["type"] = "keyDown"; $down["text"] = $text; $down["unmodifiedText"] = $text }
+    [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value $down) })
+    [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ type = "keyUp"; modifiers = $held; key = $key; code = $code; windowsVirtualKeyCode = $vk })) })
+    if ($Shift) { $held = $held -band 2; [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ type = "keyUp"; modifiers = $held; key = "Shift"; code = "ShiftLeft"; windowsVirtualKeyCode = 16 })) }) }
+    if ($Ctrl) { [void]$Calls.Add([pscustomobject]@{ method = $method; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ type = "keyUp"; modifiers = 0; key = "Control"; code = "ControlLeft"; windowsVirtualKeyCode = 17 })) }) }
+    return $true
+}
+
+function Get-HordeWebView2InputCalls {
+    # PURE. What -Steps come to, as { calls; problem }: calls is the engine calls in order, each
+    # { method; json }; problem is "" or the one sentence why a step cannot be acted out, and then
+    # calls is empty and NOTHING is sent. A step is
+    #   { key; shift; ctrl }   one key (Add-HordeWebView2InputKey)
+    #   { text }               typed: a small letter, a digit or a space as its own key; any other run
+    #                          of characters handed to the engine as text put in at the caret
+    #   { focus }              true: the engine tells the page it has the keyboard; false: that it
+    #                          has not. No window is activated (header)
+    param($Steps)
+    $calls = New-Object System.Collections.ArrayList
+    $no = { param([string]$Why) return [pscustomobject]@{ calls = @(); problem = $Why } }
+    foreach ($step in @($Steps)) {
+        if ($null -eq $step -or $step -isnot [System.Management.Automation.PSCustomObject]) { return (& $no "a step of the input was not an object, and nothing was sent") }
+        $keyProp = $step.PSObject.Properties["key"]; $textProp = $step.PSObject.Properties["text"]; $focusProp = $step.PSObject.Properties["focus"]
+        if ($null -ne $focusProp -and $focusProp.Value -is [bool]) { [void]$calls.Add([pscustomobject]@{ method = "Emulation.setFocusEmulationEnabled"; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ enabled = [bool]$focusProp.Value })) }) }
+        elseif ($null -ne $keyProp -and $keyProp.Value -is [string]) {
+            $shift = [bool]($null -ne $step.PSObject.Properties["shift"] -and $step.shift -eq $true)
+            $ctrl = [bool]($null -ne $step.PSObject.Properties["ctrl"] -and $step.ctrl -eq $true)
+            if (-not (Add-HordeWebView2InputKey -Calls $calls -Name $keyProp.Value -Shift $shift -Ctrl $ctrl)) { return (& $no "a step of the input names a key this surface has no way to press, and nothing was sent") }
+        }
+        elseif ($null -ne $textProp -and $textProp.Value -is [string]) {
+            $run = ""
+            foreach ($c in $textProp.Value.ToCharArray()) {
+                if (("" + $c) -cmatch '\A[a-z0-9 ]\z') {
+                    if ($run -ne "") { [void]$calls.Add([pscustomobject]@{ method = "Input.insertText"; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ text = $run })) }); $run = "" }
+                    [void](Add-HordeWebView2InputKey -Calls $calls -Name ("" + $c))
+                }
+                else { $run += $c }
+            }
+            if ($run -ne "") { [void]$calls.Add([pscustomobject]@{ method = "Input.insertText"; json = (ConvertTo-HordeSurfaceJson -Value ([ordered]@{ text = $run })) }) }
+        }
+        else { return (& $no "a step of the input is neither a key, nor text, nor the keyboard given or taken, and nothing was sent") }
+        if ($calls.Count -gt $script:HordeWebView2InputMostCalls) { return (& $no ("the input comes to more than " + $script:HordeWebView2InputMostCalls + " calls of the engine, and nothing was sent")) }
+    }
+    return [pscustomobject]@{ calls = @($calls); problem = "" }
+}
+
+function Send-HordeWebView2Input {
+    # Hand -Steps to the engine's own input (header, REAL KEYS FOR A CHECK). Answers whether they were
+    # handed over. The engine takes them in the order given and in its own time;
+    # Test-HordeWebView2InputIdle says when it has taken them all. REFUSED, and recorded, for a
+    # window whose spec did not ask for it.
+    param($Steps)
+    $s = $script:HordeWebView2
+    if ($null -eq $s -or -not $s.opened -or $null -eq $s.view -or $null -eq $s.view.CoreWebView2) { return $false }
+    if (-not $s.spec.probeInput) { Add-HordeWebView2Error -Text "input was handed to a window that was not opened to be given any, and none was sent"; return $false }
+    $made = Get-HordeWebView2InputCalls -Steps $Steps
+    if ($made.problem -ne "") { Add-HordeWebView2Error -Text $made.problem; return $false }
+    try { foreach ($call in @($made.calls)) { [void]$s.inputTasks.Add($s.view.CoreWebView2.CallDevToolsProtocolMethodAsync($call.method, $call.json)) } }
+    catch { Add-HordeWebView2Error -Text ("input could not be handed to the engine: " + $_.Exception.Message); return $false }
+    return $true
+}
+
+function Test-HordeWebView2InputIdle {
+    # Has the engine taken everything Send-HordeWebView2Input handed it? One it did not take is
+    # recorded, once, and waited for no longer.
+    $s = $script:HordeWebView2
+    if ($null -eq $s) { return $true }
+    foreach ($task in @($s.inputTasks)) {
+        if (-not $task.IsCompleted) { return $false }
+        if ($task.IsFaulted -or $task.IsCanceled) {
+            $why = "it was cancelled"
+            if ($null -ne $task.Exception) { $why = $task.Exception.GetBaseException().Message }
+            Add-HordeWebView2Error -Text ("the engine did not take an input: " + $why)
+        }
+        $s.inputTasks.Remove($task)
+    }
+    return $true
+}
+
 function Invoke-HordeWebView2Tick {
     $s = $script:HordeWebView2
     if ($null -eq $s) { return }
@@ -608,8 +739,8 @@ function Get-HordeWebView2Handlers {
 function Get-HordeWebView2Window {
     # What a caller's callbacks are handed (surfaces/Port.ps1, THE SURFACE CONTRACT). Its script blocks
     # read the state object like every handler.
-    param([Parameter(Mandatory = $true)]$Form, [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Errors)
-    return [pscustomobject]@{
+    param([Parameter(Mandatory = $true)]$Form, [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.ArrayList]$Errors, [switch]$ProbeInput)
+    $window = [pscustomobject]@{
         handle = [long]$Form.Handle
         sync = $Form
         errors = $Errors
@@ -619,6 +750,12 @@ function Get-HordeWebView2Window {
         show = { if ($null -ne $script:HordeWebView2 -and -not $script:HordeWebView2.spec.hidden) { [HordeSurfaceNative]::BringForward($script:HordeWebView2.form.Handle) } }
         close = { if ($null -ne $script:HordeWebView2) { $script:HordeWebView2.form.Close() } }
     }
+    # Only a window opened for a check has these two (header, REAL KEYS FOR A CHECK).
+    if ($ProbeInput) {
+        Add-Member -InputObject $window -NotePropertyName input -NotePropertyValue { param($Steps) return (Send-HordeWebView2Input -Steps $Steps) }
+        Add-Member -InputObject $window -NotePropertyName inputIdle -NotePropertyValue { return (Test-HordeWebView2InputIdle) }
+    }
+    return $window
 }
 
 function Open-HordeWebView2Surface {
@@ -677,11 +814,11 @@ function Open-HordeWebView2Surface {
     $errors = New-Object System.Collections.ArrayList
     $script:HordeWebView2 = [pscustomobject]@{
         spec = $Spec; form = $form; view = $view; timer = $timer; mounts = $mounts; handlers = $handlers
-        window = (Get-HordeWebView2Window -Form $form -Errors $errors)
+        window = (Get-HordeWebView2Window -Form $form -Errors $errors -ProbeInput:([bool]$Spec.probeInput))
         opened = $false; failure = ""; scale = $scale; capture = $null; pictures = 0
         meter = (New-HordeSurfaceMessageMeter); clock = [System.Diagnostics.Stopwatch]::StartNew()
         messageHandler = $null; deaf = $false; listenTimer = $listenTimer
-        errors = $errors
+        errors = $errors; inputTasks = (New-Object System.Collections.ArrayList)
     }
     foreach ($note in @(Get-HordeWebView2OpeningNotes -Scale $scale)) { Add-HordeSurfaceError -Errors $errors -Text $note -Kept $Spec.errorsKept }
     $state = $script:HordeWebView2

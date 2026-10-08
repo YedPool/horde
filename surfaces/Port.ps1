@@ -68,6 +68,8 @@
 #              companion and takeKeyboard are words about a WINDOW: a surface that is not one - a
 #              file, a view across a link - has nothing to place and ignores them
 #   tickMs     how often onTick runs; with none, the module's setting (250 ms)
+#   probeInput     FOR A CHECK, NEVER FOR A CALLER'S OWN WORK: the window also gives input and
+#              inputIdle (below). Off unless asked
 #   errorsKept how many of its own errors the surface keeps (the module's setting, 50)
 #   messagesPerSecond   the most messages the surface reads from the page in one second (the module's
 #              setting, 100): a page that sends more has the rest of that second dropped unread and
@@ -120,6 +122,18 @@
 #              it is drawn now, and answers whether it was asked; the file appears, whole, a moment
 #              later. ONLY HORDE CAN ASK: capture is not a request, and no message from the page
 #              reaches it.
+# AND TWO MORE ONLY ON A SURFACE WHOSE SPEC WAS MADE WITH probeInput - FOR A CHECK, never for a
+# caller's own work. A check of a page must see what a REAL key press does - a Tab moving the caret,
+# an Enter adding a line - and an event a script makes is not trusted and does none of it; a real key
+# press made through the desktop would take the keyboard from whoever is typing. So a surface that
+# can hands keys to its own engine, for its own page alone (the window surface's Surface.ps1 says how,
+# and what was measured). A surface that cannot leaves both out, as one does without probeInput:
+#   input      & $Window.input <steps> hands key presses and typed text to the surface's own input,
+#              for the page alone - never to the desktop, and whatever has the keyboard keeps it.
+#              A step is { key; shift; ctrl }, { text }, or { focus }: the page told it has the
+#              keyboard (true) or has not, with no window activated. Answers whether they were
+#              handed over; none is when one step cannot be acted out.
+#   inputIdle  & $Window.inputIdle: has the surface taken everything it was handed?
 # A CALLBACK TAKES WHAT IT NEEDS FROM $State, never from the variables of the function that wrote it:
 # Windows PowerShell 5.1 does not keep them (the window surface's own Surface.ps1 says what was
 # measured, and its suite measures it on every run).
@@ -669,7 +683,7 @@ function New-HordeSurfaceSpec {
         [Parameter(Mandatory = $true)][string]$Start,
         [Parameter(Mandatory = $true)]$Bridge,
         [Parameter(Mandatory = $true)][string]$DataFolder,
-        [switch]$Hidden, [switch]$Companion, [switch]$TakeKeyboard, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
+        [switch]$Hidden, [switch]$Companion, [switch]$TakeKeyboard, [switch]$ProbeInput, $Left = $null, $Top = $null, $Width = $null, $Height = $null, [string]$Theme = "system",
         $State = $null, [scriptblock]$OnOpened = $null, [scriptblock]$OnTick = $null, $TickMs = $null, [scriptblock]$OnClosed = $null,
         $Settings = $null
     )
@@ -701,7 +715,7 @@ function New-HordeSurfaceSpec {
     return [pscustomobject]@{
         PSTypeName = "Horde.SurfaceSpec"
         title = $Title; mounts = $mountTable; startMount = $startMount; startFile = $startFile; bridge = $Bridge; dataFolder = $DataFolder
-        hidden = [bool]$Hidden; companion = [bool]$Companion; takeKeyboard = [bool]$TakeKeyboard; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
+        hidden = [bool]$Hidden; companion = [bool]$Companion; takeKeyboard = [bool]$TakeKeyboard; probeInput = [bool]$ProbeInput; left = $Left; top = $Top; width = $Width; height = $Height; theme = $Theme
         state = $State; onOpened = $OnOpened; onTick = $OnTick; tickMs = $TickMs; onClosed = $OnClosed
         errorsKept = [int]$Settings.values.errorsKept; messagesPerSecond = [int]$Settings.values.messagesPerSecond
     }

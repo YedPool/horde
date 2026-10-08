@@ -272,6 +272,49 @@
         @{ Name = "the-scale-is-not-said-as-the-window-opens"
            Find = 'if ($scaleNote -ne "") { $notes += $scaleNote }'
            Replace = '' }
+        # --- real keys for a check: only when the spec asks, only three kinds of call
+        @{ Name = "every-window-is-given-input"
+           Find = 'if ($ProbeInput) {'
+           Replace = 'if ($true) {' }
+        @{ Name = "a-window-not-opened-for-input-takes-it"
+           Find = 'if (-not $s.spec.probeInput) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "an-ask-that-cannot-be-acted-out-is-said-to-be-handed-over"
+           Find = 'if ($made.problem -ne "") { Add-HordeWebView2Error -Text $made.problem; return $false }'
+           Replace = '' }
+        @{ Name = "what-is-handed-over-is-not-waited-for"
+           Find = '[void]$s.inputTasks.Add($s.view.CoreWebView2.CallDevToolsProtocolMethodAsync($call.method, $call.json))'
+           Replace = '[void]($s.view.CoreWebView2.CallDevToolsProtocolMethodAsync($call.method, $call.json))' }
+        @{ Name = "a-key-name-in-another-letter-case-is-pressed"
+           Find = 'if (@($script:HordeWebView2InputKeys.Keys) -ccontains $Name) {'
+           Replace = 'if (@($script:HordeWebView2InputKeys.Keys) -contains $Name) {' }
+        @{ Name = "a-key-held-with-ctrl-types"
+           Find = 'if ($text -ne "" -and -not $Ctrl) {'
+           Replace = 'if ($text -ne "") {' }
+        @{ Name = "shift-is-not-held-while-the-key-is"
+           Find = '$held = $held -bor 8;'
+           Replace = '$held = $held -bor 0;' }
+        @{ Name = "the-arrows-up-and-down-cannot-be-pressed"
+           Find = '"ArrowUp" = @("ArrowUp", 38, ""); "ArrowDown" = @("ArrowDown", 40, "")'
+           Replace = '' }
+        @{ Name = "a-step-that-is-not-an-object-is-looked-into"
+           Find = 'if ($null -eq $step -or $step -isnot [System.Management.Automation.PSCustomObject]) {'
+           Replace = 'if ($null -eq $step) {' }
+        @{ Name = "the-page-is-never-told-it-has-the-keyboard"
+           Find = 'if ($null -ne $focusProp -and $focusProp.Value -is [bool]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "any-amount-of-input-is-sent"
+           Find = 'if ($calls.Count -gt $script:HordeWebView2InputMostCalls) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "input-of-exactly-the-most-calls-is-refused"
+           Find = 'if ($calls.Count -gt $script:HordeWebView2InputMostCalls) {'
+           Replace = 'if ($calls.Count -ge $script:HordeWebView2InputMostCalls) {' }
+        @{ Name = "a-call-the-engine-refused-is-not-said"
+           Find = 'Add-HordeWebView2Error -Text ("the engine did not take an input: " + $why)'
+           Replace = '' }
+        @{ Name = "an-unfinished-call-is-not-waited-for"
+           Find = 'if (-not $task.IsCompleted) { return $false }'
+           Replace = '' }
         # --- a machine without the engine
         @{ Name = "no-engine-reads-as-an-engine"
            Find = 'if ("$Version".Trim() -ne "") { return "" }'
