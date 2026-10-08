@@ -1,0 +1,9 @@
+/* The probe page's look: four blocks of plain colour a picture can be checked for. */
+html, body { margin: 0; padding: 0; background: #ffffff; color: #111111; font-family: sans-serif; }
+.blocks { display: flex; height: 120px; }
+.b { flex: 1; }
+.red { background: #d02020; }
+.green { background: #20a040; }
+.blue { background: #2040d0; }
+.ink { background: #101010; }
+#status { margin: 8px; }
