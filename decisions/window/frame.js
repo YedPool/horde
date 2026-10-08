@@ -8,8 +8,9 @@
 //
 // EVERYTHING DRAWN COMES THROUGH window.HordeBridge, by the closed list of requests the window's
 // composer keeps (decisions/Window.ps1): setup, kinds, list, fleet, attachment, say - the reader's
-// words under a question, handed to Horde to be stored, answered with whether they were - and act,
-// his park or unpark of a question. Another, report,
+// words under a question, handed to Horde to be stored, answered with whether they were - act, his
+// park or unpark of a question, and hand-back: Escape, the keyboard asked back to the terminal
+// window this one stands beside (Horde does nothing when it stands beside none). Another, report,
 // tells Horde WHAT THE PAGE DREW after each change - every question line's number and text as they
 // stand in the page, the headings, what is unfolded, the fleet line, and the computed size of the
 // letters - so that a script can hold the page to the list without looking at it. Horde pushes
@@ -157,7 +158,8 @@
   }
 
   function showAttachment(a) {
-    foot.textContent = footWords;
+    // The last line names Escape only while there is a terminal window for it to go back to.
+    foot.textContent = footWords + ((a && a.attached) ? " Esc: back to the terminal." : "");
     notices.attachment = (a && a.attached) ? "" : ("Standing free: " + ((a && a.reason) ? a.reason : "no terminal window was found to stand beside"));
     showNotices();
     report();
@@ -220,7 +222,16 @@
   }
   menuBtn.addEventListener("click", function (e) { e.stopPropagation(); setMenu(menu.hidden); });
   document.addEventListener("click", function (e) { if (!menu.hidden && !menu.contains(e.target)) { setMenu(false); } });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { setMenu(false); } });
+  // ESCAPE: the small menu is closed if it is open; otherwise the reader is done here, and Horde is
+  // asked to hand the keyboard back to the terminal. A key held down asks once. What is typed and
+  // not entered stays where it is, as a draft.
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.isComposing) { return; }
+    e.preventDefault();
+    if (!menu.hidden) { setMenu(false); return; }
+    if (e.repeat || !bridge) { return; }
+    bridge.request("hand-back").catch(function () { /* Horde keeps its own record of a refusal */ });
+  });
   document.getElementById("unfoldAll").addEventListener("click", function () { doc.unfoldAll(); setMenu(false); });
   document.getElementById("foldAll").addEventListener("click", function () { doc.foldAll(); setMenu(false); });
   // A window moved to a screen of another scale is resized by the system: the sizes are worked out again.

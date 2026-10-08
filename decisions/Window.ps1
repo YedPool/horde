@@ -15,9 +15,9 @@
 # None of the four knows another. A later way of showing the list - a file for a phone, a view across
 # a link - is another surface under the same bridge, and nothing here but the choice of surface moves.
 #
-# WHAT THE PAGE MAY ASK is the closed list below, eight requests, and nothing else (surfaces/Port.ps1
+# WHAT THE PAGE MAY ASK is the closed list below, nine requests, and nothing else (surfaces/Port.ps1
 # checks every message before a handler sees it): setup, kinds, list, fleet, attachment, report, say,
-# act.
+# act, hand-back.
 # kinds and list are the decisions operations of those names, called through decisions/Operations.ps1's
 # one entry point: THIS FILE READS NO RECORD OF THE STORE.
 #
@@ -34,6 +34,12 @@
 # { schemaVersion: 1, rung: [ { question, message, at } ] }, message being the record's number. That
 # file is somebody else's and is only ever read; missing or not what it should be, nothing is marked
 # told, the report says why, and answering goes on.
+# ESCAPE HANDS THE KEYBOARD BACK. The request hand-back is what the page asks when the person
+# presses Escape: he is done here and wants to type in the terminal again. While the window stands
+# beside a terminal window the follow port is asked to hand that window the keyboard
+# (core/WindowFollowPort.ps1, Switch-HordeWindowFollowKeyboard), and what it answered is counted and
+# said in -Report. STANDING FREE THERE IS NO WINDOW TO HAND IT TO, AND NOTHING IS DONE: the port is
+# not asked. It takes no argument: the page cannot name a window.
 # -Probe names a file of steps for a check of the page that cannot press keys: { n; steps }, pushed
 # to the page once per n, which acts them out on its own fields and nowhere else. The file may also
 # hold keys: REAL key presses and typed text, { key; shift; ctrl } or { text }, which the surface
@@ -342,6 +348,27 @@ function Invoke-HordeDecisionWindowSay {
         arrivedAfterClosing = [bool]($null -ne $message -and $message.arrivedAfterClosing); saidToEarlierWording = [bool]($null -ne $message -and $message.saidToEarlierWording) }
 }
 
+function Invoke-HordeDecisionWindowHandBack {
+    # The request hand-back (header, ESCAPE HANDS THE KEYBOARD BACK): { handed; state; reason }.
+    # -Hand answers the follow port's verb, for a test that hands one in. The port is asked ONLY
+    # while this window is followed; it never throws for anything the world does.
+    param([Parameter(Mandatory = $true)]$State, [scriptblock]$Hand = $null)
+    $State.handBacks = [int]$State.handBacks + 1
+    $State.reportDue = $true
+    if (-not $State.followed) {
+        $State.handBackLast = "none"
+        return [pscustomobject]@{ handed = $false; state = "none"; reason = "it stands free, so there is no terminal window to hand the keyboard to" }
+    }
+    if ($null -eq $Hand) { $Hand = { return (Switch-HordeWindowFollowKeyboard) } }
+    $got = $null
+    try { $got = @(& $Hand) | Select-Object -Last 1 } catch { $got = [pscustomobject]@{ state = "unavailable"; reason = ("the keyboard could not be handed back: " + $_.Exception.Message) } }
+    if ($null -eq $got) { $got = [pscustomobject]@{ state = "unavailable"; reason = "the keyboard could not be handed back: no answer" } }
+    $State.handBackLast = "" + $got.state
+    $State.handBackReason = "" + $got.reason
+    if ("$($got.state)" -ceq "handed") { $State.handBacksDone = [int]$State.handBacksDone + 1 }
+    return [pscustomobject]@{ handed = [bool]("$($got.state)" -ceq "handed"); state = "" + $got.state; reason = "" + $got.reason }
+}
+
 function Read-HordeDecisionWindowProbe {
     # A check's steps from the file -Path names (header, -Probe): { n; steps } or $null when the file
     # is not there, too large, or not that shape. Never throws.
@@ -530,6 +557,8 @@ function New-HordeDecisionWindowBridge {
                 $State.reportDue = $true
                 return $said }
         }
+        # ESCAPE (header): the keyboard goes back to the terminal window this one stands beside.
+        "hand-back" = @{ run = { param($Arguments, $State, $Window) return (Invoke-HordeDecisionWindowHandBack -State $State) } }
     }))
 }
 
@@ -552,6 +581,7 @@ function New-HordeDecisionWindowState {
         picturePath = $PicturePath; pictureAsked = $false; pictureSeen = $false; lastReportAt = $null
         threadCache = @{}; told = @{}; toldPath = $ToldPath; toldStamp = ""; toldProblem = ""; says = 0; saysRefused = 0
         probePath = $ProbePath; probeStamp = ""; probeSent = [long]0; probeHeld = $null
+        handBacks = 0; handBacksDone = 0; handBackLast = ""; handBackReason = ""
         busyLongestMs = 0; busyLongestWhat = ""; busyOver250 = 0
         helper = $null; helperErrors = (New-Object System.Collections.ArrayList); listRecord = $null; pageAsked = $false
     }
@@ -622,6 +652,7 @@ function Write-HordeDecisionWindowReport {
         refused = [int]$State.bridge.refused; watching = ($null -ne $State.watcher); watchFailures = [int]$State.watchFailures; changes = [int]$State.changes
         askedForward = [int]$State.shows
         says = [int]$State.says; saysRefused = [int]$State.saysRefused; toldMarks = [ordered]@{ path = "$($State.toldPath)"; told = @($State.told.Keys).Count; problem = "$($State.toldProblem)" }
+        handBack = [ordered]@{ asked = [int]$State.handBacks; handed = [int]$State.handBacksDone; last = "$($State.handBackLast)"; reason = "$($State.handBackReason)" }
         busy = [ordered]@{ longestMs = [long]$State.busyLongestMs; longestWhat = "$($State.busyLongestWhat)"; over250 = [int]$State.busyOver250 }
         helper = [ordered]@{ running = ($null -ne $State.helper); done = $(if ($null -ne $State.helper) { [int]$State.helper.done } else { 0 }); failures = @($State.helperErrors | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ }) }
         findings = @($State.findings)

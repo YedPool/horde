@@ -83,7 +83,23 @@ Write-Host "--- the closed list: six requests, three events ---" -ForegroundColo
 for ($n = 1; $n -le 3; $n++) { Add-Question $n }
 $state = New-HordeDecisionWindowState -ReportPath (Join-Path $work "report.json") -Settings $defaults -Findings @("a finding of the suite's") -View (ConvertTo-HordeDecisionWindowView -Unfold "2,3" -Orc "B")
 $script:HordeDecisionWindow = $state
-Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act") ("the page may ask for eight things: say and act write (test/test-decisions-window-say.ps1 holds say; act is his park or unpark) (" + (@($state.bridge.requests.Keys) -join ",") + ")")
+Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act,hand-back") ("the page may ask for nine things: say and act write (test/test-decisions-window-say.ps1 holds say; act is his park or unpark), the last hands the keyboard back (" + (@($state.bridge.requests.Keys) -join ",") + ")")
+# ESCAPE: hand-back. Standing free, the follow port is NOT asked; followed, it is, and what it said is handed on and counted.
+$script:handAsked = 0
+$handState = New-HordeDecisionWindowState -Settings $defaults
+$freeAnswer = Invoke-HordeDecisionWindowHandBack -State $handState -Hand { $script:handAsked++; [pscustomobject]@{ state = "handed"; reason = "" } }
+Check ($freeAnswer.handed -eq $false -and $freeAnswer.state -ceq "none" -and $freeAnswer.reason -clike "it stands free*" -and $script:handAsked -eq 0 -and $handState.handBacks -eq 1 -and $handState.handBacksDone -eq 0 -and $handState.handBackLast -ceq "none") "hand-back from a window that stands free does nothing: the follow port is not asked, and the answer says why"
+$viaBridge = (Ask $handState "hand-back").reply | ConvertFrom-Json
+Check ($viaBridge.ok -eq $true -and $viaBridge.value.handed -eq $false -and $viaBridge.value.state -ceq "none" -and $handState.handBacks -eq 2 -and @($script:followAsked | Where-Object { $_ -ceq "hand" }).Count -eq 0) "asked through the bridge it is the same answer, and the stand-in follower was asked nothing"
+$handState.followed = $true
+$done = Invoke-HordeDecisionWindowHandBack -State $handState -Hand { $script:handAsked++; [pscustomobject]@{ state = "handed"; reason = "" } }
+Check ($done.handed -eq $true -and $done.state -ceq "handed" -and $script:handAsked -eq 1 -and $handState.handBacks -eq 3 -and $handState.handBacksDone -eq 1 -and $handState.handBackLast -ceq "handed") "from a window that is followed the port is asked once, and handed is handed on and counted"
+$no = Invoke-HordeDecisionWindowHandBack -State $handState -Hand { [pscustomobject]@{ state = "refused"; reason = "the system said no" } }
+Check ($no.handed -eq $false -and $no.state -ceq "refused" -and $no.reason -ceq "the system said no" -and $handState.handBacksDone -eq 1 -and $handState.handBackLast -ceq "refused" -and $handState.handBackReason -ceq "the system said no") "a refusal is handed on in the port's own words, and is not counted as handed"
+$broke = Invoke-HordeDecisionWindowHandBack -State $handState -Hand { throw "it broke" }
+Check ($broke.handed -eq $false -and $broke.state -ceq "unavailable" -and $broke.reason -clike "*it broke" -and $handState.handBacks -eq 5) "a port that throws is answered as unavailable, with what it said: the handler never throws"
+$viaPort = Invoke-HordeDecisionWindowHandBack -State $handState
+Check ($viaPort.handed -eq $false -and $viaPort.state -ceq "unavailable" -and $viaPort.reason -clike "zorb:*no way to hand the keyboard*") ("with no stand-in it asks the follow port itself, and a follower that cannot hand the keyboard over is said by name (" + $viaPort.reason + ")")
 Check ((@($state.bridge.events) -join ",") -ceq "list-changed,fleet-changed,attachment-changed,probe,said") "and may be pushed five: the three changes, a check's steps, and the outcome of a save the helper made"
 $setup = (Ask $state "setup").reply | ConvertFrom-Json
 Check ($setup.ok -eq $true -and $setup.value.look.fontFamily -ceq $defaults.fontFamily -and $setup.value.look.textPx -eq 14 -and $setup.value.look.linePx -eq 22 -and $setup.value.look.smallTextPx -eq 12 -and $setup.value.look.smallLinePx -eq 18) "setup hands the page its letters: the family and the four sizes, from the settings"

@@ -169,6 +169,7 @@ Check (-not (Test-Whole 13.3 1.5) -and -not (Test-Whole 14 1.25) -and (Test-Whol
 Check ([Math]::Abs([double]$text.fontPx - 14) -lt 0.5 -and [Math]::Abs([double]$text.linePx - 22) -lt 0.5 -and [Math]::Abs([double]$text.smallFontPx - 12) -lt 0.5) "they are the settings' 14 on 22 and 12, moved by less than half a pixel"
 Check ("$($text.weight)" -ceq "400" -and "$($text.family)" -clike '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif*') ("a question line is weight 400, in the family list the module's setting gives (" + $text.family + ")")
 Check ($drawn.foot -clike "Enter: save and next.*") "the last line says what the keys do"
+Check ($drawn.foot -cnotlike "*Esc*") ("and, standing free, it does not offer Escape: there is no terminal window to go back to (" + $drawn.foot + ")")
 Check ($drawn.notice -ceq "Standing free: it was opened hidden, and a hidden window stands beside nothing" -and $first.attachment.attached -eq $false) "a hidden window stands beside nothing, and its page says so"
 Check ($first.refused -eq 0 -and $first.reportsRefused -eq 0 -and @($first.errors).Count -eq 0 -and @($first.findings).Count -eq 0 -and $drawn.left.lines -eq 0 -and $drawn.left.sub -eq 0) "the page asked for nothing off the list, nothing failed inside the window, and the report left nothing out"
 $seen = Get-HordeProbeWindow -Handle ([long]$first.handle)
