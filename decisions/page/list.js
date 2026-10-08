@@ -82,7 +82,7 @@
   // Each mark has a short form, drawn where there is no room beside the field (list.css).
   var WORDS = {
     you: "You", keeper: KEEPER, saving: "saving", saved: "saved", told: "told " + KEEPER, read: "read by " + KEEPER, draft: "draft",
-    toldShort: "told", readShort: "read",
+    toldShort: "told", readShort: "read", edited: "edited", earlier: "You, earlier", isNew: "new",
     afterClosing: "the question is closed; kept, and it reopens nothing", earlierWording: "said to an earlier wording",
     marks: "this message holds direction or invisible characters"
   };
@@ -224,6 +224,8 @@
     var onDraw = (typeof options.onDraw === "function") ? options.onDraw : function () {};
     var onChange = (typeof options.onChange === "function") ? options.onChange : function () {};
     var say = (typeof options.say === "function") ? options.say : function () { return Promise.resolve({ ok: false, reason: "Not saved: this page has nobody to hand the words to." }); };
+    // act(number, "park" or "unpark", wording, id): his act, recorded; answered as say is.
+    var act = (typeof options.act === "function") ? options.act : function () { return Promise.resolve({ ok: false, reason: "this page has nobody to record it with." }); };
     var storage = options.storage || null;
     if (!storage) { try { storage = window.localStorage; } catch (e) { storage = null; } }
     var kinds = Object.create(null);
@@ -261,31 +263,53 @@
       if (!sent[number]) { sent[number] = { sentText: null, sentId: null, pending: 0, refusal: "", saved: null }; }
       return sent[number];
     }
-    function messagesOf(q) { return (q.thread && Array.isArray(q.thread.messages)) ? q.thread.messages : []; }
+    function allMessagesOf(q) { return (q.thread && Array.isArray(q.thread.messages)) ? q.thread.messages : []; }
+    // WHAT WAS SAID, his acts left out (park and unpark are records of what he did, not words; the
+    // operation say keeps them so that the keeper sees them - decisions/Rules.ps1, TRIAL).
+    function messagesOf(q) { return allMessagesOf(q).filter(function (m) { return !textOf(m.act); }); }
+    // His last act under the question: "park", "unpark" or "" - and what he did here since, not yet in
+    // a list (acted, below).
+    var acted = Object.create(null);
+    function lastActOf(q) {
+      var all = allMessagesOf(q);
+      var mine = acted[q.number];
+      // What he did here and the list does not hold yet (its record is not in it, or not yet known).
+      if (mine && !all.some(function (m) { return Number(m.sequence) >= mine.sequence; })) { return mine.act; }
+      for (var i = all.length - 1; i >= 0; i -= 1) { if (textOf(all[i].act)) { return textOf(all[i].act); } }
+      return "";
+    }
     // THE ANSWER THAT STANDS: the reader's own message when it is the last thing said under the
     // question; or what the host has just answered is saved, until a list arrives that holds it.
     function standingOf(q) {
       var msgs = messagesOf(q);
       var s = sent[q.number];
       if (s && s.saved) {
-        var caught = msgs.some(function (m) { return Number(m.sequence) >= s.saved.sequence; });
+        var caught = allMessagesOf(q).some(function (m) { return Number(m.sequence) >= s.saved.sequence; });
         if (caught) { s.saved = null; } else { return s.saved; }
       }
       var last = msgs.length ? msgs[msgs.length - 1] : null;
       return (last && last.speaker === MINE) ? last : null;
     }
-    // What stands above the field: everything said before the standing answer, a message of the
-    // reader's that they replaced at once with another left out.
+    // What stands above the field: everything said before the standing answer. AN ANSWER HE REPLACED
+    // (an edit: his words straight after his own) stays, as one line marked "earlier", folded with the
+    // question's context (the owner, 2026-10-07: the earlier one kept under a fold).
     function earlierOf(q) {
       var msgs = messagesOf(q);
       var standing = standingOf(q);
       var out = [];
       for (var i = 0; i < msgs.length; i += 1) {
         if (standing && msgs[i] === standing) { continue; }
-        if (msgs[i].speaker === MINE && i + 1 < msgs.length && msgs[i + 1].speaker === MINE) { continue; }
         out.push(msgs[i]);
       }
       return out;
+    }
+    function replacedLater(q, m) {
+      var msgs = messagesOf(q);
+      var at = msgs.indexOf(m);
+      if (m.speaker !== MINE) { return false; }
+      if (at >= 0 && at + 1 < msgs.length) { return msgs[at + 1].speaker === MINE; }
+      var standing = standingOf(q);
+      return at === msgs.length - 1 && !!standing && standing !== m;
     }
     function valueOf(q) {
       if (drafts[q.number] !== undefined) { return drafts[q.number]; }
@@ -311,6 +335,8 @@
           if (standing.unreadBy.length === 0) { mark.full = WORDS.read; mark.short = WORDS.readShort; }
           else if (standing.told === true) { mark.full = WORDS.told; mark.short = WORDS.toldShort; }
         }
+        // AN EDIT says so beside the mark (the owner, 2026-10-07); the answer it replaced is kept above.
+        if (standing.replaces === true) { mark.full += ", " + WORDS.edited; mark.short += "*"; }
         var notes = [];
         if (standing.arrivedAfterClosing === true) { notes.push(WORDS.afterClosing); }
         if (standing.saidToEarlierWording === true) { notes.push(WORDS.earlierWording); }
@@ -344,29 +370,87 @@
       return out;
     }
 
-    function headingsOf() {
-      // The headings in the order their first question comes, the listed state's groups first.
+    // WHERE A QUESTION STANDS (the owner, 2026-10-07: "answers that have been picked up should be
+    // moved out of the list"; "new questions should appear at the top"). THE LIST IS HIS TURN:
+    //   main     open, not set aside, and either never answered, or the keeper has said something to
+    //            him that asks since his last answer. And his answer, saved, stays where it is - marked
+    //            saved, still his to change - until the keeper has READ it; the next list after the
+    //            keeper's read mark passes it moves it out.
+    //   thrall   answered and read, or told something that asks nothing (a note), not closed: the
+    //            keeper's turn. Back up by itself when the keeper asks him something.
+    //   parked   set aside: by his own Ctrl+B (an act he recorded), or by the keeper, who puts it in a
+    //            group the host names (foldedGroups). His unpark brings it back whatever the group.
+    //   history  closed.
+    // Below the list the last three are each one folded line; Enter and Tab never go into one.
+    var FOLDS = ["thrall", "parked", "history"];
+    function sectionOf(q) {
+      if (textOf(q.state) !== LISTED_STATE) { return "history"; }
+      var did = lastActOf(q);
+      if (did === "park") { return "parked"; }
+      if (did !== "unpark" && parked[textOf(q.group)] === true) { return "parked"; }
+      var standing = standingOf(q);
+      if (standing) { return (Array.isArray(standing.unreadBy) && standing.unreadBy.length === 0) ? "thrall" : "main"; }
+      var msgs = messagesOf(q);
+      var last = msgs.length ? msgs[msgs.length - 1] : null;
+      if (last && last.asks === false && msgs.some(function (m) { return m.speaker === MINE; })) { return "thrall"; }
+      return "main";
+    }
+    // A QUESTION HE IS IN, OR HAS WORDS IN, STAYS WHERE IT WAS DRAWN until he leaves it: a list that
+    // arrives meanwhile never moves the field he is typing in (placedAt: number -> heading key).
+    var placedAt = Object.create(null);
+    // A question he himself moved (Ctrl+B) is not held where it was, for the one draw that moves it.
+    var release = Object.create(null);
+    function held(q) {
+      if (release[q.number]) { return false; }
+      var line = lineOf(q.number);
+      return !!line && (line === focusedLine() || drafts[q.number] !== undefined);
+    }
+    // NEW: asked since this page first ran here, and neither answered nor passed by him. The first
+    // time the page runs, every question it is handed counts as seen, so that "new" means new.
+    var SEEN_KEY = "horde-decisions-seen-v1";
+    var seen = null;
+    function loadSeen() {
+      try { var s = storage ? JSON.parse(storage.getItem(SEEN_KEY) || "null") : null; if (s && Array.isArray(s.numbers)) { seen = Object.create(null); s.numbers.forEach(function (n) { seen[n] = true; }); } } catch (e) { seen = null; }
+    }
+    function keepSeen() { try { if (storage && seen) { storage.setItem(SEEN_KEY, JSON.stringify({ numbers: Object.keys(seen).map(Number) })); } } catch (e) { /* only "new" is lost */ } }
+    function markSeen(number) { if (seen && !seen[number]) { seen[number] = true; keepSeen(); } }
+    function isNew(q) { return !!seen && !seen[q.number] && !standingOf(q); }
+
+    function sectionsOf() {
+      var heads = [];
       var byKey = Object.create(null);
-      var order = [];
-      var i, q, listed, key, head;
-      for (i = 0; i < questions.length; i += 1) {
-        q = questions[i];
-        listed = textOf(q.state) === LISTED_STATE;
-        key = (listed ? "group:" : "state:") + (listed ? textOf(q.group) : textOf(q.state));
-        head = byKey[key];
-        if (!head) {
-          head = { key: key, listed: listed, parked: listed && parked[textOf(q.group)] === true, name: listed ? (textOf(q.group) || "No group") : capital(textOf(q.state)), note: "", qs: [] };
-          byKey[key] = head;
-          order.push(head);
-        }
-        if (listed && !head.note && textOf(q.groupNote)) { head.note = textOf(q.groupNote); }
-        head.qs.push(q);
+      var folds = { thrall: [], parked: [], history: [] };
+      var groupsInOrder = [];
+      function head(key, kind, name) {
+        if (!byKey[key]) { byKey[key] = { key: key, kind: kind, name: name, note: "", qs: [] }; if (kind === "group") { groupsInOrder.push(byKey[key]); } }
+        return byKey[key];
       }
-      return order.filter(function (h) { return h.listed && !h.parked; }).concat(order.filter(function (h) { return !h.listed; }), order.filter(function (h) { return h.parked; }));
+      var fresh = [];
+      questions.forEach(function (q) {
+        var section = sectionOf(q);
+        var keyWas = placedAt[q.number];
+        if (keyWas && held(q)) {
+          var wasFold = keyWas.indexOf("fold:") === 0 ? keyWas.slice(5) : "main";
+          if (wasFold !== section) { section = wasFold; }
+        }
+        if (section !== "main") { folds[section].push(q); return; }
+        var stays = !!keyWas && held(q) && keyWas.indexOf("fold:") !== 0;
+        if ((stays && keyWas === "new") || (!stays && isNew(q))) { fresh.push(q); return; }
+        var h = head("group:" + textOf(q.group), "group", textOf(q.group) || "No group");
+        if (!h.note && textOf(q.groupNote)) { h.note = textOf(q.groupNote); }
+        h.qs.push(q);
+      });
+      if (fresh.length) { heads.push({ key: "new", kind: "new", name: "New", note: "", qs: fresh.sort(function (a, b) { return b.number - a.number; }) }); }
+      heads = heads.concat(groupsInOrder);
+      var foldNames = { thrall: "With " + KEEPER, parked: "Parked", history: "History" };
+      folds.history.sort(function (a, b) { return textOf(b.closedAt).localeCompare(textOf(a.closedAt)) || (b.number - a.number); });
+      FOLDS.forEach(function (f) { if (folds[f].length) { heads.push({ key: "fold:" + f, kind: f, name: foldNames[f], note: "", qs: folds[f] }); } });
+      return heads;
     }
 
+    function isFold(head) { return FOLDS.indexOf(head.kind) >= 0; }
     function isFolded(head) {
-      return headFolded[head.key] === undefined ? (!head.listed || head.parked) : headFolded[head.key];
+      return headFolded[head.key] === undefined ? isFold(head) : headFolded[head.key];
     }
 
     function place() {
@@ -441,40 +525,58 @@
       line.refusal.hidden = !(s && s.refusal);
     }
 
+    // THE VIEW FOLLOWS HIM (the owner, 2026-10-07: "when tabbing to a new question the question should
+    // be moved to the top or almost the top of the page so it could be seen completely. When typing
+    // goes off the page, the viewport must follow. Similar for when background info is expanded").
+    // A question he moves to is brought up to just under the top of the view unless it already stands
+    // in the top third of it, whole; the field he types in is kept in view as it grows; a question
+    // whose context he unfolds is brought to the top, so that the most of the context shows.
+    var NEAR_TOP_PX = 6;
+    function toTop(line) {
+      var box = line.wrap.getBoundingClientRect();
+      var inset = topInset();
+      window.scrollBy(0, box.top - inset - NEAR_TOP_PX);
+    }
     function intoView(line) {
       var box = line.wrap.getBoundingClientRect();
       var inset = topInset();
-      if (box.top < inset) { window.scrollBy(0, box.top - inset); }
-      else if (box.bottom > window.innerHeight) { window.scrollBy(0, Math.min(box.top - inset, box.bottom - window.innerHeight + 8)); }
+      var third = inset + (window.innerHeight - inset) / 3;
+      if (box.top < inset || box.top > third || box.bottom > window.innerHeight) { toTop(line); }
+    }
+    function keepInView(field) {
+      if (!field || field.offsetParent === null) { return; }
+      var box = field.getBoundingClientRect();
+      timing.follows += 1;
+      if (box.bottom > window.innerHeight) { window.scrollBy(0, box.bottom - window.innerHeight + 8); timing.followed += 1; }
+      else if (box.top < topInset()) { window.scrollBy(0, box.top - topInset() - NEAR_TOP_PX); }
     }
     function enter(line, part) {
       var field = line.fields[Math.max(0, Math.min(line.fields.length - 1, part === undefined ? 0 : (part < 0 ? line.fields.length + part : part)))];
+      var sameQuestion = focusedLine() === line;
       field.focus({ preventScroll: true });
       var end = field.value.length;
       try { field.setSelectionRange(end, end); } catch (e) { /* a field not drawn has no caret */ }
       arrived = { number: line.q.number, at: Date.now(), bySave: false };
-      intoView(line);
+      // From part to part of one question only the field is kept in view; a new question comes up.
+      if (sameQuestion) { keepInView(field); } else { intoView(line); keepInView(field); }
       onChange();
     }
+    // ENTER AND TAB NEVER GO INTO A FOLD (header, WHERE A QUESTION STANDS): they move among the
+    // fields of the list, or - once he has opened the Parked fold and is in it - among its fields.
     function move(line, step) {
-      var shown = shownLines();
+      var shown = shownLines().filter(function (l) { return l.zone === line.zone; });
       var at = shown.indexOf(line);
       var next = shown[at + step];
       // Back into a question of parts: its last part, the one just above.
       if (at >= 0 && next) { enter(next, step < 0 ? -1 : 0); return true; }
-      // Past the last field in view: on to the folded line of what is parked, where a key unfolds it.
-      if (at >= 0 && step > 0) {
-        for (var i = 0; i < drawnHeads.length; i += 1) {
-          if (drawnHeads[i].head.parked && drawnHeads[i].folded) { drawnHeads[i].tri.focus(); onChange(); return true; }
-        }
-      }
       return false;
     }
+    function mainLines() { return shownLines().filter(function (l) { return l.zone === "main"; }); }
     function takeKeyboard() {
-      var shown = shownLines();
+      var shown = mainLines();
       var first = null;
       for (var i = 0; i < shown.length; i += 1) {
-        if (textOf(shown[i].q.state) === LISTED_STATE && !standingOf(shown[i].q)) { first = shown[i]; break; }
+        if (!standingOf(shown[i].q)) { first = shown[i]; break; }
       }
       if (!first && shown.length) { first = shown[0]; }
       if (first) { enter(first); }
@@ -492,6 +594,7 @@
       if (s && s.refusal && value !== s.sentText) { s.refusal = ""; }
       fit(line);
       refresh(line);
+      if (focusedLine() === line) { keepInView(document.activeElement); }
       onChange();
     }
     function setValue(line, value, field) {
@@ -513,7 +616,7 @@
       s.pending -= 1;
       var line = lineOf(number);
       if (result && result.ok === true) {
-        s.saved = { text: text, sequence: Number(result.sequence), speaker: MINE, arrivedAfterClosing: result.arrivedAfterClosing === true, saidToEarlierWording: result.saidToEarlierWording === true };
+        s.saved = { text: text, sequence: Number(result.sequence), speaker: MINE, arrivedAfterClosing: result.arrivedAfterClosing === true, saidToEarlierWording: result.saidToEarlierWording === true, replaces: s.replacing === true };
         if (s.sentId === id) { s.refusal = ""; }
         // The draft is dropped only if it is still these very words.
         if (drafts[number] === text) { delete drafts[number]; keepDrafts(); }
@@ -523,6 +626,9 @@
         var now = focusedLine();
         if (line && now !== line && (!now || lineValue(now) === "" || drafts[now.q.number] === undefined)) { enter(line); }
       }
+      // What was said above the field may have changed with it: an answer he replaced is now kept
+      // there, marked earlier (an edit).
+      if (line && result && result.ok === true) { line.said = drawTalk(line.q, line.talk, line.ans); }
       if (line) { refresh(line); fit(line); }
       onChange();
     }
@@ -537,6 +643,7 @@
       if (s.pending > 0 && s.sentText === text) { return true; }
       var id = (s.sentText === text && s.sentId) ? s.sentId : newId();
       s.sentText = text; s.sentId = id; s.pending += 1; s.refusal = "";
+      s.replacing = !!standing;
       refresh(line);
       var number = q.number;
       Promise.resolve().then(function () { return say(number, text, Number(q.wordingVersion), id); }).then(
@@ -545,9 +652,71 @@
       return true;
     }
 
-    function toggleContext(q) {
-      if (unfolded[q.number] === true) { delete unfolded[q.number]; } else { unfolded[q.number] = true; }
+    // THE BACK BURNER BY HIS OWN KEY (the owner, 2026-10-07: "there should be an ability to put a
+    // question on the back burner"). Ctrl+B on a question of the list parks it: it goes to the Parked
+    // fold, the caret goes on, and a short line offers Ctrl+Z to undo for UNDO_MS. Ctrl+B on a question
+    // in the Parked fold brings it back. Each is HIS OWN ACT, recorded through the operation say with
+    // act park or unpark (decisions/Rules.ps1, TRIAL), so that the keeper sees it; the question's group
+    // is never changed, so unparking needs nothing remembered to put it back where it was.
+    var UNDO_MS = 6000;
+    var toast = null;
+    function showToast(text, undo) {
+      if (!toast) { toast = make("div", "hd-toast"); toast.setAttribute("role", "status"); document.body.appendChild(toast); }
+      toast.textContent = text;
+      toast.hidden = false;
+      var shownAt = Date.now();
+      toast.undo = undo ? { run: undo, until: shownAt + UNDO_MS } : null;
+      window.setTimeout(function () { if (toast.undo === null || Date.now() >= shownAt + UNDO_MS) { if (toast.lastAt === shownAt) { toast.hidden = true; toast.undo = null; } } }, UNDO_MS + 20);
+      toast.lastAt = shownAt;
+      onChange();
+    }
+    function setParked(line, park) {
+      var q = line.q;
+      var number = q.number;
+      var id = newId();
+      var was = acted[number] || null;
+      acted[number] = { act: park ? "park" : "unpark", sequence: Infinity };
+      var next = null;
+      if (park) {
+        var zone = shownLines().filter(function (l) { return l.zone === line.zone; });
+        var at = zone.indexOf(line);
+        next = zone[at + 1] || zone[at - 1] || null;
+      }
+      markSeen(number);
+      release[number] = true;
       draw();
+      delete release[number];
+      if (park) { if (next && lineOf(next.q.number)) { enter(lineOf(next.q.number)); } }
+      else { var back = lineOf(number); if (back) { enter(back); } }
+      showToast((park ? "Question " + number + " parked." : "Question " + number + " is back in the list.") + " Ctrl+Z to undo.", function () { var l = lineOf(number); if (l) { setParked(l, !park); } });
+      Promise.resolve().then(function () { return act(number, park ? "park" : "unpark", Number(q.wordingVersion), id); }).then(function (result) {
+        if (result && result.ok === true) { acted[number] = { act: park ? "park" : "unpark", sequence: Number(result.sequence) }; return; }
+        acted[number] = was;
+        draw();
+        showToast("Not " + (park ? "parked" : "brought back") + ": " + textOf(result && result.reason), null);
+      }, function (error) { acted[number] = was; draw(); showToast("Not " + (park ? "parked" : "brought back") + ": " + textOf(error && error.message ? error.message : error), null); });
+    }
+    // Ctrl+Z while the short line offers it: undo the park or the unpark.
+    document.addEventListener("keydown", function (e) {
+      if (!toast || !toast.undo || !(e.key === "z" || e.key === "Z") || !e.ctrlKey || e.altKey || e.shiftKey) { return; }
+      if (Date.now() > toast.undo.until) { return; }
+      e.preventDefault(); e.stopPropagation();
+      var run = toast.undo.run;
+      toast.undo = null;
+      run();
+    }, true);
+    // Ctrl+Down: to the folded lines, where Enter or Space opens one and Up and Down go between them.
+    function toFolds() {
+      for (var i = 0; i < drawnHeads.length; i += 1) { if (isFold(drawnHeads[i].head)) { drawnHeads[i].tri.focus(); onChange(); return; } }
+    }
+
+    function toggleContext(q) {
+      var opening = unfolded[q.number] !== true;
+      if (opening) { unfolded[q.number] = true; } else { delete unfolded[q.number]; }
+      draw();
+      // Unfolded, the question goes to the top of the view, so that the most of its context shows.
+      var line = lineOf(q.number) || rowOf(q.number);
+      if (opening && line) { toTop(line); }
     }
 
     // THE KEYS IN A PART'S FIELD (header, A QUESTION OF SEVERAL PARTS): Enter and Tab go to the next
@@ -592,6 +761,8 @@
     function onKey(e, line, field) {
       if (e.isComposing) { return; }
       field = field || line.field;
+      if ((e.key === "b" || e.key === "B") && e.ctrlKey && !e.altKey && !e.shiftKey) { e.preventDefault(); setParked(line, line.zone !== "parked"); return; }
+      if (e.key === "ArrowDown" && e.ctrlKey && !e.altKey && !e.shiftKey) { e.preventDefault(); toFolds(); return; }
       if ((e.key === "Enter" && e.shiftKey) || ((e.key === "j" || e.key === "J") && e.ctrlKey && !e.altKey)) { e.preventDefault(); insert(line, "\n", field); return; }
       if (line.parts && onPartKey(e, line, field)) { return; }
       var q = line.q;
@@ -631,14 +802,82 @@
       if (key === "F2" || ((key === " " || e.code === "Space") && e.ctrlKey)) { e.preventDefault(); toggleContext(q); }
     }
 
-    function drawMessage(m) {
+    function drawMessage(m, who) {
+      who = who || (m.speaker === MINE ? WORDS.you : WORDS.keeper);
       var row = make("div", "hd-msg");
-      row.appendChild(make("span", "hd-who", (m.speaker === MINE ? WORDS.you : WORDS.keeper) + ":"));
+      row.appendChild(make("span", "hd-who", who + ":"));
       var said = make("span", "hd-said", textOf(m.text));
       said.setAttribute("dir", "auto");
       row.appendChild(said);
       if (m.holdsDirectionOrInvisibleCharacters === true) { row.appendChild(make("span", "hd-flag", " (" + WORDS.marks + ")")); }
-      return { row: row, said: said, who: m.speaker === MINE ? WORDS.you : WORDS.keeper };
+      return { row: row, said: said, who: who };
+    }
+    // WHAT WAS SAID UNDER A QUESTION, above its field, into -box (emptied first): each message one line
+    // except the one he has to answer; an answer of his that he replaced, one line marked as earlier.
+    // Returns the drawn messages. Used to draw a question and to bring one he is in up to date in place.
+    function drawTalk(q, box, ans) {
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      ans.classList.remove("wide");
+      var said = [];
+      var earlier = earlierOf(q);
+      var answered = !!standingOf(q);
+      earlier.forEach(function (m, i) {
+        var drawn = drawMessage(m, replacedLater(q, m) ? WORDS.earlier : null);
+        // Whole only when it is what the reader has to answer (header, ROOM IS KEPT); else one line,
+        // and a press on it unfolds the question, which shows it whole.
+        if (answered || i !== earlier.length - 1 || m.speaker === MINE) {
+          drawn.row.classList.add("brief");
+          drawn.row.addEventListener("click", function () {
+            if (String(window.getSelection ? window.getSelection() : "") !== "") { return; }
+            toggleContext(q);
+          });
+        } else {
+          // What he has to answer is read like the question: in the page's own ink, and across the
+          // whole row, never squeezed into the column beside a short question (seen 2026-10-07 in a
+          // picture of the wide window: a reply of fifteen lines in a third of the width, the rest bare).
+          drawn.row.classList.add("asks");
+          ans.classList.add("wide");
+        }
+        box.appendChild(drawn.row);
+        said.push(drawn);
+      });
+      if (q.thread && textOf(q.thread.problem)) { box.appendChild(make("div", "hd-refusal", q.thread.problem)); }
+      var info = partsOf(q);
+      if (info) {
+        ans.classList.add("wide");
+        var standingNow = standingOf(q);
+        if (standingNow && !readParts(textOf(standingNow.text), info.parts)) {
+          // His answer from before the parts had fields: shown as what he said, one line, never pulled apart.
+          var earlierAnswer = drawMessage(standingNow);
+          earlierAnswer.row.classList.add("brief");
+          box.appendChild(earlierAnswer.row);
+          said.push(earlierAnswer);
+        }
+        if (info.recOnce) { box.appendChild(make("div", "hd-partsrec", "Recommended: " + info.recOnce)); }
+      }
+      return said;
+    }
+    // The context of an unfolded question, its sub-numbered lines, into -box (emptied first).
+    function drawSubs(q, box) {
+      while (box.firstChild) { box.removeChild(box.firstChild); }
+      var subs = [];
+      box.hidden = unfolded[q.number] !== true;
+      if (box.hidden) { return subs; }
+      var lines = subLinesOf(q);
+      for (var i = 0; i < lines.length; i += 1) {
+        var line = make("div", "hd-row hd-line");
+        var subNum = make("span", "hd-num", q.number + "." + (i + 1));
+        line.appendChild(subNum);
+        // The label and the words are one run of text, so a long line wraps under its label.
+        var body = make("span", "hd-body");
+        if (lines[i].label) { body.appendChild(make("span", "hd-lab", lines[i].label + ":")); }
+        var subTxt = make("span", "hd-txt", lines[i].text);
+        body.appendChild(subTxt);
+        line.appendChild(body);
+        box.appendChild(line);
+        subs.push({ num: subNum, label: lines[i].label, txt: subTxt });
+      }
+      return subs;
     }
 
     function drawQuestion(q) {
@@ -663,30 +902,9 @@
         toggleContext(q);
       });
       var ans = make("div", "hd-ans");
-      var said = [];
-      var earlier = earlierOf(q);
-      var answered = !!standingOf(q);
-      earlier.forEach(function (m, i) {
-        var drawn = drawMessage(m);
-        // Whole only when it is what the reader has to answer (header, ROOM IS KEPT); else one line,
-        // and a press on it unfolds the question, which shows it whole.
-        if (answered || i !== earlier.length - 1 || m.speaker === MINE) {
-          drawn.row.classList.add("brief");
-          drawn.row.addEventListener("click", function () {
-            if (String(window.getSelection ? window.getSelection() : "") !== "") { return; }
-            toggleContext(q);
-          });
-        } else {
-          // What he has to answer is read like the question: in the page's own ink, and across the
-          // whole row, never squeezed into the column beside a short question (seen 2026-10-07 in a
-          // picture of the wide window: a reply of fifteen lines in a third of the width, the rest bare).
-          drawn.row.classList.add("asks");
-          ans.classList.add("wide");
-        }
-        ans.appendChild(drawn.row);
-        said.push(drawn);
-      });
-      if (q.thread && textOf(q.thread.problem)) { ans.appendChild(make("div", "hd-refusal", q.thread.problem)); }
+      var talk = make("div", "hd-talk");
+      ans.appendChild(talk);
+      var said = drawTalk(q, talk, ans);
       var info = partsOf(q);
       var fl = make("div", "hd-fl");
       var mark = make("span", "hd-mark");
@@ -698,18 +916,8 @@
       var field;
       if (info) {
         // A field per part (header, A QUESTION OF SEVERAL PARTS), across the whole row.
-        ans.classList.add("wide");
-        var standingNow = standingOf(q);
         var values = readParts(valueOf(q), info.parts);
-        if (standingNow && !readParts(textOf(standingNow.text), info.parts)) {
-          // His answer from before the parts had fields: shown as what he said, one line, never pulled apart.
-          var earlierAnswer = drawMessage(standingNow);
-          earlierAnswer.row.classList.add("brief");
-          ans.appendChild(earlierAnswer.row);
-          said.push(earlierAnswer);
-        }
         if (!values) { values = info.parts.map(function () { return ""; }); }
-        if (info.recOnce) { ans.appendChild(make("div", "hd-partsrec", "Recommended: " + info.recOnce)); }
         var box = make("div", "hd-parts");
         info.parts.forEach(function (part, i) {
           var prow = make("div", "hd-part");
@@ -748,78 +956,152 @@
       ans.appendChild(fl); ans.appendChild(markNote); ans.appendChild(refusal);
       row.appendChild(qt); row.appendChild(ans);
       wrap.appendChild(row);
-      var subs = [];
-      if (open) {
-        var kids = make("div", "hd-sub");
-        var lines = subLinesOf(q);
-        var i, line, subNum, subTxt, body;
-        for (i = 0; i < lines.length; i += 1) {
-          line = make("div", "hd-row hd-line");
-          subNum = make("span", "hd-num", q.number + "." + (i + 1));
-          line.appendChild(subNum);
-          // The label and the words are one run of text, so a long line wraps under its label.
-          body = make("span", "hd-body");
-          if (lines[i].label) { body.appendChild(make("span", "hd-lab", lines[i].label + ":")); }
-          subTxt = make("span", "hd-txt", lines[i].text);
-          body.appendChild(subTxt);
-          line.appendChild(body);
-          kids.appendChild(line);
-          subs.push({ num: subNum, label: lines[i].label, txt: subTxt });
-        }
-        wrap.appendChild(kids);
-      }
-      var drawn = { q: q, wrap: wrap, row: row, num: no, letter: letter, txt: txt, field: field, fields: fields, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
+      var subBox = make("div", "hd-sub");
+      wrap.appendChild(subBox);
+      var subs = drawSubs(q, subBox);
+      var drawn = { q: q, wrap: wrap, row: row, tri: tri, num: no, letter: letter, txt: txt, ans: ans, talk: talk, subBox: subBox, field: field, fields: fields, parts: info ? info.parts : null, mark: mark, markFull: markFull, markShort: markShort, more: more, markNote: markNote, refusal: refusal, said: said, subs: subs };
       fields.forEach(function (f) {
         f.addEventListener("input", function () { typed(drawn); });
         f.addEventListener("keydown", function (e) { onKey(e, drawn, f); });
-        // The caret in it, an answer is whole; the caret gone, a saved one rests again.
+        // The caret in it, an answer is whole; the caret gone, a saved one rests again. A question
+        // the caret has been in and left has been passed: it is no longer new.
         f.addEventListener("focus", function () { fit(drawn); onChange(); });
-        f.addEventListener("blur", function () { fit(drawn); onChange(); });
+        f.addEventListener("blur", function () { fit(drawn); if (focusedLine() !== drawn) { markSeen(drawn.q.number); } onChange(); });
       });
       refresh(drawn);
-      drawnLines.push(drawn);
-      return wrap;
+      return drawn;
     }
 
+    // A QUESTION HE IS IN, OR HAS WORDS IN, IS BROUGHT UP TO DATE IN PLACE (the owner, 2026-10-07: "it
+    // lags on text input"; the coordinator's rule: a refresh never replaces a field that has the caret
+    // or holds a draft). Its words, what was said under it, its context and its mark are drawn again;
+    // its fields and the caret in them are not touched.
+    function update(line, q) {
+      line.q = q;
+      line.txt.textContent = textOf(q.title);
+      line.letter.textContent = letterOf(q.askedBy);
+      var open = unfolded[q.number] === true;
+      line.wrap.classList.toggle("open", open);
+      line.wrap.classList.toggle("dim", !!(dim && dim(q)));
+      line.tri.setAttribute("aria-expanded", open ? "true" : "false");
+      line.said = drawTalk(q, line.talk, line.ans);
+      line.subs = drawSubs(q, line.subBox);
+      refresh(line);
+    }
+
+    // A ROW THAT IS ONLY READ (header, WHERE A QUESTION STANDS): a question with the keeper, or closed.
+    // Its words, then his last answer (two lines at most) and the keeper's last words after it, or the
+    // outcome it was closed with. A press on it unfolds its context.
+    var drawnRows = [];
+    function rowOf(number) { for (var i = 0; i < drawnRows.length; i += 1) { if (drawnRows[i].q.number === number) { return drawnRows[i]; } } return null; }
+    function drawDone(q, kind) {
+      var open = unfolded[q.number] === true;
+      var wrap = make("div", "hd-q hd-done" + (open ? " open" : ""));
+      var row = make("div", "hd-qrow");
+      var qt = make("div", "hd-qt");
+      var tri = make("button", "hd-tri");
+      tri.type = "button";
+      tri.tabIndex = -1;
+      tri.setAttribute("aria-expanded", open ? "true" : "false");
+      var num = make("span", "hd-num");
+      var letter = make("span", "hd-let", letterOf(q.askedBy));
+      var no = make("span", "hd-no", q.number);
+      num.appendChild(letter); num.appendChild(no);
+      var txt = make("span", "hd-txt", textOf(q.title));
+      qt.appendChild(tri); qt.appendChild(num); qt.appendChild(txt);
+      qt.addEventListener("click", function () { if (String(window.getSelection ? window.getSelection() : "") !== "") { return; } toggleContext(q); });
+      var ans = make("div", "hd-ans wide");
+      var msgs = messagesOf(q);
+      var mine = null, theirs = null;
+      for (var i = msgs.length - 1; i >= 0; i -= 1) {
+        if (!mine && msgs[i].speaker === MINE) { mine = msgs[i]; }
+        if (!mine && !theirs && msgs[i].speaker !== MINE) { theirs = msgs[i]; }
+      }
+      var said = { mine: "", theirs: "", outcome: "" };
+      if (mine) { var a = drawMessage(mine); a.row.classList.add("rest"); ans.appendChild(a.row); said.mine = textOf(mine.text); }
+      else { ans.appendChild(make("div", "hd-msg", "No answer of yours.")); }
+      if (theirs) { var t = drawMessage(theirs); t.row.classList.add("brief"); ans.appendChild(t.row); said.theirs = textOf(theirs.text); }
+      if (kind === "history") {
+        said.outcome = textOf(q.outcome);
+        var o = make("div", "hd-msg brief");
+        o.appendChild(make("span", "hd-who", "Outcome:"));
+        o.appendChild(make("span", "hd-said", said.outcome || "(none recorded)"));
+        ans.appendChild(o);
+      }
+      row.appendChild(qt); row.appendChild(ans);
+      wrap.appendChild(row);
+      var subBox = make("div", "hd-sub");
+      wrap.appendChild(subBox);
+      drawSubs(q, subBox);
+      var drawn = { q: q, kind: kind, wrap: wrap, row: row, num: no, txt: txt, said: said };
+      drawnRows.push(drawn);
+      return drawn;
+    }
+
+    // THE PAGE, DRAWN AGAIN: headings and their questions, put in place without taking out what stays
+    // (update, above). Each heading keeps its element between draws, by its key; its question rows are
+    // put in order by moving the others around them, so a field that stays is never taken out of the
+    // page - taken out, it would lose the caret and whatever the engine was doing with his keys.
+    var headEls = Object.create(null);
+    function order(box, want) {
+      var wanted = new Set(want);
+      Array.prototype.slice.call(box.childNodes).forEach(function (n) { if (!wanted.has(n)) { box.removeChild(n); } });
+      for (var i = 0; i < want.length; i += 1) { if (box.childNodes[i] !== want[i]) { box.insertBefore(want[i], box.childNodes[i] || null); } }
+    }
     function draw() {
       var startedAt = window.performance.now();
       var before = place();
-      // The caret, to be put back where it was: a redraw makes every field anew.
       var had = focusedLine();
       var hadField = had ? document.activeElement : null;
       var caret = had ? { number: had.q.number, part: had.fields.indexOf(hadField), from: hadField.selectionStart, to: hadField.selectionEnd } : null;
-      while (root.firstChild) { root.removeChild(root.firstChild); }
+      var keep = Object.create(null);
+      drawnLines.forEach(function (l) { if (l === had || drafts[l.q.number] !== undefined) { keep[l.q.number] = l; } });
+      var heads = sectionsOf();
       drawnHeads = [];
       drawnLines = [];
-      var heads = headingsOf();
+      drawnRows = [];
+      var groups = [];
+      var used = Object.create(null);
       heads.forEach(function (head, index) {
         var folded = isFolded(head);
-        var group = make("div", "hd-group" + (folded ? " folded" : "") + (head.note && noteShown[head.key] === true ? " note-open" : ""));
+        var fold = isFold(head);
+        var el = headEls[head.key];
+        if (!el) { el = { group: make("div"), kids: make("div", "hd-kids"), row: null, note: null, tri: null }; el.group.appendChild(el.kids); headEls[head.key] = el; }
+        used[head.key] = true;
+        el.group.className = "hd-group" + (fold ? " hd-fold" : "") + (folded ? " folded" : "") + (head.note && noteShown[head.key] === true ? " note-open" : "");
         var row = make("div", "hd-row hd-head");
         var tri = make("button", "hd-tri");
         tri.type = "button";
-        tri.tabIndex = -1;
+        tri.tabIndex = fold ? 0 : -1;
         tri.setAttribute("aria-expanded", folded ? "false" : "true");
         tri.setAttribute("aria-label", (folded ? "Unfold " : "Fold ") + head.name);
         var howMany = head.qs.length + (head.qs.length === 1 ? " question" : " questions");
-        var txt = make("span", "hd-txt", head.parked ? (head.name + ": " + howMany) : head.name);
+        var txt = make("span", "hd-txt", fold ? (head.name + " (" + head.qs.length + ")") : head.name);
         var suf = make("span", "hd-suf");
-        if (!head.parked) { suf.appendChild(make("span", "hd-count", " - " + howMany)); }
-        if (head.parked) {
-          // The one heading a key reaches (move, above): Enter, Space or F2 unfolds it and puts the
-          // caret in its first field; Shift+Tab goes back to the last field in view.
-          tri.tabIndex = 0;
+        if (!fold) { suf.appendChild(make("span", "hd-count", " - " + howMany)); }
+        if (fold) {
+          // A FOLD IS REACHED BY A KEY OR A CLICK, never by Enter or Tab from a field: Ctrl+Down from
+          // a field comes here; Enter, Space or F2 opens or closes it; Up and Down go between folds;
+          // Shift+Tab or Ctrl+Up goes back to the list. In an open Parked fold the caret goes into its
+          // first field, where Ctrl+B brings a question back.
           tri.addEventListener("keydown", function (e) {
-            var shown, mine;
+            var folds = drawnHeads.filter(function (h) { return isFold(h.head); });
+            var at = -1;
+            folds.forEach(function (h, i) { if (h.tri === tri) { at = i; } });
             if (e.key === "Enter" || e.key === " " || e.key === "F2") {
               e.preventDefault(); e.stopPropagation();
               headFolded[head.key] = !isFolded(head);
               draw();
-              mine = drawnLines.filter(function (l) { return l.q.group === head.qs[0].group && l.field.offsetParent !== null; });
+              var mine = drawnLines.filter(function (l) { return l.zone === head.kind && l.field.offsetParent !== null; });
               if (mine.length) { enter(mine[0]); }
-            } else if (e.key === "Tab" && e.shiftKey) {
+              else if (headEls[head.key] && headEls[head.key].tri) { headEls[head.key].tri.focus(); onChange(); }
+            } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !e.ctrlKey) {
               e.preventDefault(); e.stopPropagation();
-              shown = shownLines();
+              var to = folds[at + (e.key === "ArrowDown" ? 1 : -1)];
+              if (to) { to.tri.focus(); onChange(); }
+            } else if ((e.key === "Tab" && e.shiftKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
+              e.preventDefault(); e.stopPropagation();
+              var shown = mainLines();
               if (shown.length) { enter(shown[shown.length - 1]); }
             }
           });
@@ -833,37 +1115,56 @@
           word.setAttribute("aria-expanded", noteShown[head.key] === true ? "true" : "false");
           word.setAttribute("aria-label", (noteShown[head.key] === true ? "Fold the background of " : "Unfold the background of ") + head.name);
           // The word is in the heading's row, and a click on the row folds the whole group.
-          word.addEventListener("click", function (e) { e.stopPropagation(); noteShown[head.key] = noteShown[head.key] !== true; draw(); });
+          word.addEventListener("click", function (e) {
+            e.stopPropagation();
+            noteShown[head.key] = noteShown[head.key] !== true;
+            draw();
+            // Unfolded, the background is brought to the top of the view (THE VIEW FOLLOWS HIM).
+            if (noteShown[head.key] === true && headEls[head.key]) { window.scrollBy(0, headEls[head.key].group.getBoundingClientRect().top - topInset() - NEAR_TOP_PX); }
+          });
           more.appendChild(word);
           suf.appendChild(more);
           note = make("div", "hd-note", head.note);
         }
         row.appendChild(tri); row.appendChild(txt); row.appendChild(suf);
         row.addEventListener("click", function () { headFolded[head.key] = !isFolded(head); draw(); });
-        group.appendChild(row);
-        if (note) { group.appendChild(note); }
-        var kids = make("div", "hd-kids");
-        var first = drawnLines.length;
-        head.qs.forEach(function (q) { kids.appendChild(drawQuestion(q)); });
-        for (var i = first; i < drawnLines.length; i += 1) { drawnLines[i].head = index; }
-        group.appendChild(kids);
-        root.appendChild(group);
-        drawnHeads.push({ head: head, txt: txt, tri: tri, folded: folded, group: group, note: note });
+        // The heading's row and note are made again; its rows' box is the one it had.
+        if (el.row) { el.group.removeChild(el.row); }
+        if (el.note) { el.group.removeChild(el.note); }
+        el.group.insertBefore(row, el.kids);
+        if (note) { el.group.insertBefore(note, el.kids); }
+        el.row = row; el.note = note; el.tri = tri;
+        var want = [];
+        var zone = (head.kind === "new" || head.kind === "group") ? "main" : head.kind;
+        head.qs.forEach(function (q) {
+          placedAt[q.number] = head.key;
+          if (zone === "thrall" || zone === "history") { want.push(drawDone(q, zone).wrap); return; }
+          var line = keep[q.number];
+          if (line) { update(line, q); } else { line = drawQuestion(q); }
+          line.zone = zone;
+          line.head = index;
+          line.wrap.classList.toggle("new", head.kind === "new");
+          drawnLines.push(line);
+          want.push(line.wrap);
+        });
+        order(el.kids, want);
+        groups.push(el.group);
+        drawnHeads.push({ head: head, txt: txt, tri: tri, folded: folded, group: el.group, note: note });
       });
+      Object.keys(headEls).forEach(function (k) { if (!used[k]) { delete headEls[k]; } });
+      order(root, groups);
       drawnLines.forEach(function (line) { fit(line); });
       if (before) {
-        for (var j = 0; j < drawnLines.length; j += 1) {
-          if (drawnLines[j].q.number === before.number) {
-            var moved = drawnLines[j].row.getBoundingClientRect().top - before.top;
-            if (moved !== 0) { window.scrollBy(0, moved); }
-            break;
-          }
+        var stood = lineOf(before.number) || rowOf(before.number);
+        if (stood) {
+          var moved = stood.row.getBoundingClientRect().top - before.top;
+          if (moved !== 0) { window.scrollBy(0, moved); }
         }
       }
       if (caret) {
         var again = lineOf(caret.number);
         var back = again ? (again.fields[caret.part] || again.field) : null;
-        if (back && back.offsetParent !== null) {
+        if (back && back.offsetParent !== null && document.activeElement !== back) {
           back.focus({ preventScroll: true });
           fit(again);
           try { back.setSelectionRange(Math.min(caret.from, back.value.length), Math.min(caret.to, back.value.length)); } catch (e) { /* not drawn */ }
@@ -960,7 +1261,7 @@
     // engine vouches for: how long it waited before the page saw it (its own time stamp to now), and
     // how long from then until the next frame was drawn. And how long each redraw of the list took.
     // Read back by a check through the snapshot (answer.timing); nothing else uses them.
-    var timing = { keys: 0, waitMax: 0, frames: [], draws: 0, drawMax: 0, drawLast: 0 };
+    var timing = { keys: 0, waitMax: 0, frames: [], draws: 0, drawMax: 0, drawLast: 0, follows: 0, followed: 0 };
     document.addEventListener("keydown", function (e) {
       if (!e.isTrusted) { return; }
       realKeys += 1;
@@ -984,6 +1285,9 @@
         if (json === lastJson) { return "same"; }
         lastJson = json;
         questions = record.value.questions;
+        // The first list this page is ever handed: every question in it counts as seen (NEW, above).
+        if (seen === null) { loadSeen(); }
+        if (seen === null) { seen = Object.create(null); questions.forEach(function (q) { seen[q.number] = true; }); keepSeen(); }
         draw();
         return "drawn";
       },
@@ -1012,7 +1316,7 @@
       },
       unfoldAll: function () {
         questions.forEach(function (q) { unfolded[q.number] = true; });
-        headingsOf().forEach(function (head) { headFolded[head.key] = false; if (head.note) { noteShown[head.key] = true; } });
+        sectionsOf().forEach(function (head) { headFolded[head.key] = false; if (head.note) { noteShown[head.key] = true; } });
         draw();
       },
       foldAll: function () {
@@ -1026,17 +1330,24 @@
       // open, waiting (an Orc waits for it) and other are the list's own. run is how many open
       // questions are in the run of answering (not parked), toAnswer how many of those have no
       // answer of the reader's standing, parked how many open ones are set aside.
+      // thrall how many wait on the keeper, history how many are closed, fresh how many are new;
+      // toAnswer counts the list as drawn: questions of his turn that hold no answer of his yet.
       counts: function () {
-        var open = 0, waiting = 0, other = 0, run = 0, toAnswer = 0, aside = 0;
+        var open = 0, waiting = 0, other = 0, run = 0, toAnswer = 0, aside = 0, thrall = 0, fresh = 0;
         questions.forEach(function (q) {
           if (textOf(q.state) !== LISTED_STATE) { other += 1; return; }
           open += 1;
           if (listOf(q.waiting).length) { waiting += 1; }
-          if (parked[textOf(q.group)] === true) { aside += 1; return; }
-          run += 1;
-          if (!standingOf(q)) { toAnswer += 1; }
         });
-        return { open: open, waiting: waiting, other: other, run: run, toAnswer: toAnswer, parked: aside };
+        drawnLines.forEach(function (l) {
+          if (l.zone === "parked") { aside += 1; return; }
+          if (l.zone !== "main") { return; }
+          run += 1;
+          if (!standingOf(l.q)) { toAnswer += 1; }
+          if (l.wrap.classList.contains("new")) { fresh += 1; }
+        });
+        drawnRows.forEach(function (r) { if (r.kind === "thrall") { thrall += 1; } });
+        return { open: open, waiting: waiting, other: other, run: run, toAnswer: toAnswer, parked: aside, thrall: thrall, history: other, fresh: fresh };
       },
       // WHAT IS DRAWN, from the elements themselves and not from the data they were made of:
       //   headings  [{ t, count, folded, note }]  note is "" for a group with no note of background,
@@ -1064,11 +1375,12 @@
       snapshot: function (limits) {
         var out = { headings: [], lines: [], sub: [], left: { lines: 0, sub: 0 } };
         var linePx = drawnLines.length ? (parseFloat(window.getComputedStyle(drawnLines[0].txt).lineHeight) || 22) : 22;
-        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.parked === true, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
+        drawnHeads.forEach(function (h) { out.headings.push({ t: cut(h.txt.textContent, limits.lineChars), count: h.head.qs.length, folded: h.folded, parked: h.head.kind === "parked", kind: h.head.kind, note: !h.note ? "" : (h.group.classList.contains("note-open") ? "shown" : "folded") }); });
         drawnLines.forEach(function (line) {
           if (out.lines.length >= limits.lines) { out.left.lines += 1; return; }
           out.lines.push({
             n: line.num.textContent, l: line.letter.textContent, t: cut(line.txt.textContent, limits.lineChars), s: "", g: line.head,
+            z: textOf(line.zone), nw: line.wrap.classList.contains("new"),
             open: line.wrap.classList.contains("open"), dim: line.wrap.classList.contains("dim"),
             rows: Math.round(line.txt.getBoundingClientRect().height / linePx), clip: clipped(line.txt),
             a: cut(lineValue(line), limits.lineChars), p: cut(line.field.placeholder, limits.lineChars),
@@ -1083,13 +1395,27 @@
             out.sub.push({ n: sub.num.textContent, t: cut((sub.label ? sub.label + ": " : "") + sub.txt.textContent, limits.lineChars) });
           });
         });
+        // The rows that are only read (With the keeper, History): number, text, which fold, and what
+        // they show of his answer, the keeper's last words and the outcome.
+        out.done = drawnRows.slice(0, limits.lines).map(function (r) {
+          return { n: r.num.textContent, t: cut(r.txt.textContent, limits.lineChars), k: r.kind, a: cut(r.said.mine, limits.lineChars), r: cut(r.said.theirs, limits.lineChars), o: cut(r.said.outcome, limits.lineChars) };
+        });
+        out.toast = (toast && !toast.hidden) ? cut(toast.textContent, limits.lineChars) : "";
         var has = focusedLine();
         var onHead = "";
         drawnHeads.forEach(function (h) { if (h.tri === document.activeElement) { onHead = h.txt.textContent; } });
         var frames = timing.frames.slice().sort(function (a, b) { return a - b; });
         var at = function (share) { return frames.length ? Math.round(frames[Math.min(frames.length - 1, Math.floor(share * frames.length))]) : 0; };
-        out.answer = { fields: shownLines().length, focus: has ? String(has.q.number) : "", focusPart: has && has.parts ? has.fields.indexOf(document.activeElement) : -1, focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus(),
-          timing: { keys: timing.keys, waitMaxMs: Math.round(timing.waitMax), frameP50Ms: at(0.5), frameP95Ms: at(0.95), frameMaxMs: frames.length ? Math.round(frames[frames.length - 1]) : 0, draws: timing.draws, drawMaxMs: Math.round(timing.drawMax), drawLastMs: Math.round(timing.drawLast) } };
+        // Where the question with the caret stands in the view, in CSS pixels below the top of the view
+        // (under what the host keeps fixed), and how far the caret's field reaches: THE VIEW FOLLOWS HIM.
+        var view = null;
+        if (has) {
+          var wbox = has.wrap.getBoundingClientRect();
+          var fbox = document.activeElement.getBoundingClientRect();
+          view = { top: Math.round(wbox.top - topInset()), fieldBottom: Math.round(fbox.bottom), height: Math.round(window.innerHeight), scrolled: Math.round(window.scrollY), page: Math.round(document.documentElement.scrollHeight) };
+        }
+        out.answer = { view: view, fields: shownLines().length, focus: has ? String(has.q.number) : "", focusPart: has && has.parts ? has.fields.indexOf(document.activeElement) : -1, focusHead: cut(onHead, limits.lineChars), pending: pending(), drafts: Object.keys(drafts).length, storage: storageProblem, realKeys: realKeys, hasFocus: document.hasFocus(),
+          timing: { keys: timing.keys, waitMaxMs: Math.round(timing.waitMax), frameP50Ms: at(0.5), frameP95Ms: at(0.95), frameMaxMs: frames.length ? Math.round(frames[frames.length - 1]) : 0, draws: timing.draws, drawMaxMs: Math.round(timing.drawMax), drawLastMs: Math.round(timing.drawLast), follows: timing.follows, followed: timing.followed } };
         return out;
       },
       measure: function () {

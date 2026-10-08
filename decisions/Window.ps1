@@ -305,6 +305,9 @@ function Invoke-HordeDecisionWindowSay {
     if ($id -isnot [string] -or $id -cnotmatch '\A[0-9a-f]{32}\z') { return (& $no "Not saved: the request carried no id of 32 lowercase hex digits.") }
     if ($null -eq $Invoke) { $Invoke = { param($Request) return (Invoke-HordeDecision -Operation "say" -Request $Request) } }
     $request = [ordered]@{ id = $id; actor = $script:HordeDecisionWindowSpeaker; number = [long]$number; speaker = $script:HordeDecisionWindowSpeaker; route = $script:HordeDecisionWindowRoute; text = $text; wordingVersion = [long]$wording }
+    # His act (the request act, TRIAL): handed on as it came; the operation's rules say what may be.
+    $actWord = & $get "act"
+    if ($actWord -is [string] -and $actWord -ne "") { $request["act"] = $actWord }
     $answer = $null
     try { $answer = & $Invoke $request } catch { return (& $no ("Not saved: the list could not be asked: " + $_.Exception.Message)) }
     if ($null -eq $answer) { return (& $no "Not saved: the list gave no answer.") }
@@ -514,6 +517,19 @@ function New-HordeDecisionWindowBridge {
                 $said = Invoke-HordeDecisionWindowSay -Arguments $Arguments
                 Add-HordeDecisionWindowBusy -State $State -What "say" -Ms $clock.Elapsed.TotalMilliseconds
                 if ($said.ok) { $State.says = [int]$State.says + 1; $State.dirtyAt = [datetime]::UtcNow } else { $State.saysRefused = [int]$State.saysRefused + 1 }
+                $State.reportDue = $true
+                return $said }
+        }
+        # HIS ACT (TRIAL): Ctrl+B parks a question, and in the Parked fold brings it back. It is the
+        # operation say with act park or unpark and a few words saying so (decisions/Rules.ps1), so
+        # the keeper sees it; done as a save is, and answered the same way.
+        "act" = @{
+            args = @{ number = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; act = @{ type = "string"; most = 8 }; wording = @{ type = "integer"; most = (Get-HordeDecisionMaxNumber) }; id = @{ type = "string"; most = 32 } }
+            run = { param($Arguments, $State, $Window)
+                $words = [ordered]@{ number = $Arguments["number"]; text = $(if ("" + $Arguments["act"] -ceq "park") { "(parked)" } else { "(back in the list)" }); wording = $Arguments["wording"]; id = $Arguments["id"]; act = "" + $Arguments["act"] }
+                if ($null -ne $State.helper) { Add-HordeDecisionWindowJob -State $State -Kind "say" -Value $words; return [pscustomobject]@{ taken = $true; id = "" + $Arguments["id"] } }
+                $said = Invoke-HordeDecisionWindowSay -Arguments $words
+                if ($said.ok) { $State.dirtyAt = [datetime]::UtcNow }
                 $State.reportDue = $true
                 return $said }
         }

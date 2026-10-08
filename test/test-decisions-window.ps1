@@ -72,7 +72,7 @@ Write-Host "--- the closed list: six requests, three events ---" -ForegroundColo
 for ($n = 1; $n -le 3; $n++) { Add-Question $n }
 $state = New-HordeDecisionWindowState -ReportPath (Join-Path $work "report.json") -Settings $defaults -Findings @("a finding of the suite's") -View (ConvertTo-HordeDecisionWindowView -Unfold "2,3" -Orc "B")
 $script:HordeDecisionWindow = $state
-Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,hand-back") ("the page may ask for eight things: the seventh is the one that writes (test/test-decisions-window-say.ps1 holds it), the eighth hands the keyboard back (" + (@($state.bridge.requests.Keys) -join ",") + ")")
+Check ((@($state.bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act,hand-back") ("the page may ask for nine things: say and act write (test/test-decisions-window-say.ps1 holds say; act is his park or unpark), the last hands the keyboard back (" + (@($state.bridge.requests.Keys) -join ",") + ")")
 # ESCAPE: hand-back. Standing free, the follow port is NOT asked; followed, it is, and what it said is handed on and counted.
 $script:handAsked = 0
 $handState = New-HordeDecisionWindowState -Settings $defaults
@@ -347,6 +347,12 @@ Wait-Helper $slow
 $refusedEvent = @($script:posted | Where-Object { $_ -like '*"event":"said"*' } | ForEach-Object { ($_ | ConvertFrom-Json).value })
 Check ($refusedEvent.Count -eq 1 -and $refusedEvent[0].id -ceq $refusedId -and $refusedEvent[0].result.ok -eq $false -and $refusedEvent[0].result.reason -clike "Not saved:*" -and $slow.saysRefused -eq 1) "a refusal comes back the same way, in the rule's own words"
 Check ($script:stepLongest -lt 250) ("the window's thread was never held a quarter of a second by any of it: the longest step took " + $script:stepLongest + " ms")
+$actState = New-HordeDecisionWindowState
+$actAsked = (Ask $actState "act" @{ number = 2; act = "park"; wording = 1; id = [guid]::NewGuid().ToString("N") }).reply | ConvertFrom-Json
+$actThread = @((Invoke-HordeDecision -Operation "show" -Request @{ number = 2 }).value.question.thread.messages)
+Check ($actAsked.value.ok -eq $true -and $actThread.Count -eq 1 -and $actThread[0].act -ceq "park" -and $actThread[0].speaker -ceq "founder" -and $actThread[0].route -ceq "window") "TRIAL: the request act records his park as his own words in the window, act park, so the keeper sees it"
+$actWrong = (Ask $actState "act" @{ number = 2; act = "archive"; wording = 1; id = [guid]::NewGuid().ToString("N") }).reply | ConvertFrom-Json
+Check ($actWrong.value.ok -eq $false -and $actWrong.value.reason -clike "Not saved:*act*" -and @((Invoke-HordeDecision -Operation "show" -Request @{ number = 2 }).value.question.thread.messages).Count -eq 1) "an act that is not park or unpark is refused by the operation's rules, and nothing is written"
 Stop-HordeDecisionWindowHelper -State $slow
 Check ($null -eq $slow.helper) "the helper is ended with the window"
 

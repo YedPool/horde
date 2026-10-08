@@ -86,6 +86,18 @@
 .hd-partwords { flex: 1 1 auto; min-width: 0; unicode-bidi: plaintext; }
 .hd-partfield { margin-left: 20px; width: calc(100% - 20px); box-sizing: border-box; }
 .hd-partsrec { color: var(--muted); overflow-wrap: anywhere; }
+/* THE FOLDS BELOW THE LIST (list.js, WHERE A QUESTION STANDS): each one line folded; a row in them is
+   only read - his answer at two lines at most, the keeper's last words and the outcome at one. */
+.hd-fold { margin-top: 6px; }
+.hd-fold > .hd-head > .hd-txt { font-weight: 400; color: var(--muted); }
+.hd-fold > .hd-head .hd-tri:focus-visible, .hd-fold > .hd-head .hd-tri:focus { outline: 1px solid var(--accent); }
+.hd-msg.rest { max-height: calc(2 * var(--line-px)); overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-q.open .hd-msg.rest { max-height: none; }
+/* A NEW QUESTION says so after its number until he has answered or passed it. */
+.hd-q.new .hd-no::after { content: " new"; color: var(--accent); font-weight: 400; font-size: var(--small-px); }
+/* The short line after Ctrl+B: what was done, and Ctrl+Z to undo it. Fixed at the foot of the view. */
+.hd-toast { position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; bottom: 10px; max-width: calc(100% - 32px); padding: 2px 10px; background: var(--ink); color: var(--bg, #fff); font-size: var(--small-px); line-height: var(--small-line-px); z-index: 10; }
+.hd-toast[hidden] { display: none; }
 .hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
 @media (max-width: 520px) {
   .hd-count { display: none; }

@@ -47,7 +47,8 @@
     topInset: function () { return topBar.getBoundingClientRect().bottom; },
     onDraw: function () { draws += 1; report(); },
     onChange: function () { showCounts(); report(); },
-    say: say
+    say: say,
+    act: function (number, what, wording, id) { return asked("act", { number: number, act: what, wording: wording, id: id }); }
   });
 
   // A SAVE IS TAKEN AT ONCE AND ANSWERED LATER (decisions/Window.ps1, THE SLOW WORK GOES TO A HELPER):
@@ -57,8 +58,10 @@
   // id, so a save that did happen is not made twice.
   var SAID_WAIT_MS = 60000;
   var awaiting = Object.create(null);
-  function say(number, text, wording, id) {
-    return bridge.request("say", { number: number, text: text, wording: wording, id: id }).then(function (answer) {
+  function say(number, text, wording, id) { return asked("say", { number: number, text: text, wording: wording, id: id }); }
+  function asked(name, args) {
+    var id = args.id;
+    return bridge.request(name, args).then(function (answer) {
       if (!answer || answer.taken !== true) { return answer; }
       return new Promise(function (resolve) {
         var timer = window.setTimeout(function () { delete awaiting[id]; resolve({ ok: false, reason: "Not saved, as far as this window knows: no answer came back in " + (SAID_WAIT_MS / 1000) + " seconds. Press Enter to try again; the same words are never saved twice." }); }, SAID_WAIT_MS);
@@ -74,8 +77,8 @@
   function showCounts() {
     if (!doc) { return; }
     var c = doc.counts();
-    var words = c.toAnswer + " of " + c.run + " to answer";
-    if (c.parked) { words += ", " + c.parked + " parked"; }
+    // THE LIST IS HIS TURN (decisions/page/list.js, WHERE A QUESTION STANDS): the top line counts it.
+    var words = c.toAnswer + " to answer";
     var box = document.getElementById("counts");
     if (box.textContent !== words) { box.textContent = words; }
   }
@@ -190,7 +193,7 @@
     snap.answer.probe = probed;
     if (notices.drafts !== snap.answer.storage) { notices.drafts = snap.answer.storage; showNotices(); }
     var value = {
-      v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer,
+      v: 1, draws: draws, counts: doc.counts(), headings: snap.headings, lines: snap.lines, sub: snap.sub, answer: snap.answer, done: snap.done, toast: snap.toast,
       fleet: { open: line.open, picked: line.picked, head: line.head.slice(0, bounds.textChars), rows: line.rows.map(function (r) { return r.slice(0, bounds.lineChars); }), entries: line.entries, written: line.written, notRead: line.notRead, headLines: line.headLines, headClipped: line.headClipped, rowsLines: line.rowsLines },
       top: document.getElementById("counts").textContent.slice(0, bounds.lineChars),
       notice: noticeBox.textContent.slice(0, bounds.textChars), foot: foot.textContent.slice(0, bounds.lineChars),
@@ -203,8 +206,9 @@
     };
     var text = JSON.stringify(value);
     // As the text of a message every quote in it is two characters: measured as it will be sent.
-    while (JSON.stringify(text).length > bounds.chars && (value.sub.length || value.lines.length || value.fleet.rows.length)) {
+    while (JSON.stringify(text).length > bounds.chars && (value.sub.length || value.lines.length || value.fleet.rows.length || value.done.length)) {
       if (value.sub.length) { value.sub.pop(); value.left.sub += 1; }
+      else if (value.done.length) { value.done.pop(); }
       else if (value.fleet.rows.length) { value.fleet.rows.pop(); value.left.fleetRows += 1; }
       else { value.lines.pop(); value.left.lines += 1; }
       text = JSON.stringify(value);

@@ -127,8 +127,8 @@ Check (@($drawn.lines | Where-Object { $_.clip -ne $false }).Count -eq 0 -and @(
 $got = @($drawn.lines | Sort-Object { [int]$_.n } | ForEach-Object { $_.n + "|" + $_.t }) -join "`n"
 Check ($got -ceq (@($list | Sort-Object number | ForEach-Object { "" + $_.number + "|" + $_.title }) -join "`n")) "the number and the text of every line drawn are the list's"
 Check ((Get-Line $first 1).l -ceq "B" -and (Get-Line $first 3).l -ceq "D" -and (Get-Line $first 4).l -ceq "A" -and (Get-Line $first 11).l -ceq "M" -and (Get-Line $first 22).l -ceq "M") "before each number stands the letter of the Orc that asked, and M for a question the keeper of the list asked"
-Check ($drawn.foot -ceq "Enter: save and next. Tab: take the grey suggestion, else next. Ctrl+Enter: accept the suggestion. Shift+Enter or Ctrl+J: new line. F2: context.") "the last line of the page says what the keys do, in the owner's words"
-Check ("$($drawn.top)" -ceq "22 of 22 to answer") ("the top line says how far he is: all 22 still to answer (" + $drawn.top + ")")
+Check ($drawn.foot -ceq "Enter: save and next. Tab: take the grey suggestion, else next. Ctrl+Enter: accept the suggestion. Shift+Enter or Ctrl+J: new line. F2: context. Ctrl+B: park or bring back. Ctrl+Down: the folds below.") "the last line of the page says what the keys do, in the owner's words, Ctrl+B and the folds among them"
+Check ("$($drawn.top)" -ceq "22 to answer") ("the top line counts the list, which is his turn: all 22 to answer (" + $drawn.top + ")")
 Check ($drawn.answer.focus -ceq "" -and $drawn.answer.drafts -eq 0 -and "$($drawn.answer.storage)" -ceq "") "a hidden window has not been given the keyboard, so no field has the caret; no draft is kept yet, and drafts can be kept"
 Check ("$($first.toldMarks.problem)" -clike "*is not there yet*" -and $first.toldMarks.told -eq 0) "the file of announced messages is not there yet: said, and nothing is marked"
 Check ($first.refused -eq 0 -and $first.reportsRefused -eq 0 -and @($first.errors).Count -eq 0) "nothing was refused and nothing failed"
@@ -151,7 +151,7 @@ Check ($said1.Count -eq 1 -and $said1[0].text -ceq "Yes - commit it as it stands
 Check ($said1[0].speaker -ceq "founder" -and $said1[0].route -ceq "window" -and $said1[0].wordingStated -eq $true -and $said1[0].wordingVersion -eq 1) "said by the founder, typed in the window, to the wording the page showed"
 Check ($r.drawn.answer.focus -ceq "2") "THE CARET MOVED to question 2's field"
 Check ((Get-Line $r 1).a -ceq "Yes - commit it as it stands." -and (Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).r -ceq "" -and $r.drawn.answer.drafts -eq 0) "question 1's field shows his words, marked saved, and they are no longer a draft"
-Check ("$($r.drawn.top)" -ceq "21 of 22 to answer") ("and the top line counts down: " + $r.drawn.top)
+Check ("$($r.drawn.top)" -ceq "21 to answer" -and (Get-Line $r 1).m -ceq "saved" -and (Get-Line $r 1).z -ceq "main") ("and the top line counts down, while the answered question stays where it is, marked saved, until the keeper has read it: " + $r.drawn.top)
 Check ($r.says -eq 1 -and $r.saysRefused -eq 0) "the window counts one answer stored"
 
 Write-Host ""
@@ -247,29 +247,35 @@ Check ($r.drawn.answer.focus -ceq "1") "given the keyboard again later, the care
 $r = Send-Steps @((Step "focus" -Q 9))
 $inbox = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "inbox") -Env $cliEnv
 Check ($inbox.code -eq 0 -and $inbox.out -like "*Second answer*" -and $inbox.out -like "*line one*line two*line three*" -and $inbox.out -like "*Marked as read*") "the keeper of the list reads its inbox with the real command: his words are printed exactly, and marked read"
-$read = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) (@($x.drawn.lines | Where-Object { $_.n -ceq "2" })[0]).m -ceq "read by Thrall" }
-Check ((Get-Line $read 2).m -ceq "read by Thrall" -and (Get-Line $read 3).m -ceq "read by Thrall" -and (Get-Line $read 7).m -ceq "read by Thrall") "and every answer it printed now reads read by Thrall in the window"
+$read = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 60 -Until { param($x) @($x.drawn.done | Where-Object { $_.n -ceq "2" }).Count -eq 1 }
+function Get-Done { param($Report, [int]$Number) return @($Report.drawn.done | Where-Object { $_.n -ceq ("" + $Number) })[0] }
+Check ($null -eq (Get-Line $read 2) -and (Get-Done $read 2).k -ceq "thrall" -and (Get-Done $read 2).a -ceq "Second answer" -and (Get-Done $read 3).k -ceq "thrall" -and (Get-Done $read 7).k -ceq "thrall") "ONCE THE KEEPER HAS READ THEM, the answered questions leave the list for the folded With Thrall, each showing his answer, to be read only"
+Check (@($read.drawn.headings | Where-Object { $_.t -ceq ("With Thrall (" + @($read.drawn.done | Where-Object { $_.k -ceq "thrall" }).Count + ")") -and $_.folded }).Count -eq 1 -and "$($read.drawn.top)" -ceq ("" + $read.drawn.counts.toAnswer + " to answer")) "the fold says how many are with the keeper, folded; the top line counts only the list"
 
 Write-Host ""
 Write-Host "=== the keeper of the list adds a question and parks one: the page shows both, with no reload ===" -ForegroundColor Cyan
 $q23 = Join-Path $script:work "q23.json"
 [System.IO.File]::WriteAllText($q23, '{"title":"Is a question asked while the window is open shown in it?","kind":"yes-no","whatItIs":"Asked at the command line.","recommendation":"yes","group":"The study","askedBy":"Orc B"}', $utf8)
 $add = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "add", "-File", $q23) -Env $cliEnv
-$grown = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @($x.drawn.lines).Count -eq 23 -and $x.drawn.answer.fields -eq 23 }
-Check ($add.code -eq 0 -and (Get-Line $grown 23).t -ceq "Is a question asked while the window is open shown in it?" -and (Get-Line $grown 23).p -ceq "yes" -and $grown.drawn.answer.fields -eq 23) "a 23rd question asked at the command line appears with its own field and suggestion"
+$grown = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) $null -ne (@($x.drawn.lines | Where-Object { $_.n -ceq "23" })[0]) }
+Check ($add.code -eq 0 -and (Get-Line $grown 23).t -ceq "Is a question asked while the window is open shown in it?" -and (Get-Line $grown 23).p -ceq "yes" -and $grown.drawn.answer.fields -eq (23 - @($grown.drawn.done | Where-Object { $_.k -ceq "thrall" }).Count)) "a 23rd question asked at the command line appears with its own field and suggestion (a field for each question not with the keeper)"
+Check ((Get-Line $grown 23).nw -eq $true -and (Get-Line $grown 23).g -eq 0 -and $grown.drawn.headings[0].t -ceq "New") "NEW QUESTIONS AT THE TOP: question 23 stands first, under New, marked new"
 $park = Join-Path $script:work "park.json"
 [System.IO.File]::WriteAllText($park, '{"group":"Parked"}', $utf8)
 $parkedCli = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "update", "22", "-File", $park) -Env $cliEnv
-$aside = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @($x.drawn.headings | Where-Object { $_.parked }).Count -eq 1 }
+$aside = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 90 -Until { param($x) @($x.drawn.headings | Where-Object { $_.kind -ceq "parked" }).Count -eq 1 }
 $heads = @($aside.drawn.headings)
 Check ($parkedCli.code -eq 0 -and (Get-Shown -Number 22).wordingVersion -eq 1 -and "$((Get-Shown -Number 22).group)" -ceq "Parked") "question 22 is parked with an ordinary update that changes only its group; its wording is still wording 1"
-Check ($heads[$heads.Count - 1].t -ceq "Parked: 1 question" -and $heads[$heads.Count - 1].folded -eq $true -and $heads[$heads.Count - 1].parked -eq $true) ("PARKED STANDS AT THE FOOT OF THE PAGE AS ONE FOLDED LINE (" + $heads[$heads.Count - 1].t + ")")
-Check ("$($aside.drawn.top)" -clike "* of 22 to answer, 1 parked") ("the top line says one is parked, and counts the run without it (" + $aside.drawn.top + ")")
-Check (@($aside.drawn.lines).Count -eq 23 -and $aside.drawn.answer.fields -eq 22 -and $aside.handle -eq $first.handle -and $aside.pid -eq $first.pid) "all 23 questions are still drawn, 22 fields are in the run of answering, and it is the same window: nothing was reloaded"
+Check ($heads[$heads.Count - 1].t -ceq "Parked (1)" -and $heads[$heads.Count - 1].folded -eq $true -and $heads[$heads.Count - 2].t -clike "With Thrall (*)") ("PARKED STANDS AT THE FOOT OF THE PAGE AS ONE FOLDED LINE, after With Thrall (" + (@($heads | ForEach-Object { $_.t }) -join " / ") + ")")
+Check ("$($aside.drawn.top)" -ceq ("" + $aside.drawn.counts.toAnswer + " to answer") -and $aside.drawn.counts.parked -eq 1) ("the top line counts the list without what is parked (" + $aside.drawn.top + ")")
+$thrallN = @($aside.drawn.done | Where-Object { $_.k -ceq "thrall" }).Count
+Check (@($aside.drawn.lines).Count -eq (23 - $thrallN) -and $aside.drawn.answer.fields -eq (22 - $thrallN) -and $aside.handle -eq $first.handle -and $aside.pid -eq $first.pid) "every question not with the keeper has a field, all but the parked one in the run of answering, and it is the same window: nothing was reloaded"
 $r = Send-Steps @((Step "focus" -Q 21), (Step "key" -Key "Enter"), (Step "sleep"), (Step "key" -Key "Enter"))
-Check ($r.drawn.answer.focus -ceq "" -and $r.drawn.answer.focusHead -ceq "Parked: 1 question" -and @(Get-Said 22).Count -eq 0) "Enter runs from question 21 to 23 and then to the folded line, never into the parked question's field"
-$r = Send-Steps @((Step "key" -Key "F2"))
-Check ($r.drawn.answer.focus -ceq "22" -and $r.drawn.answer.fields -eq 23 -and @($r.drawn.headings | Where-Object { $_.parked })[0].folded -eq $false) "a key on that line unfolds it into the same row, with the caret in its field"
+Check ($r.drawn.answer.focus -ceq "21" -and $r.drawn.answer.focusHead -ceq "" -and @(Get-Said 22).Count -eq 0) "ENTER NEVER GOES INTO A FOLD: from question 21, the last of the list, Enter stays in the list"
+$r = Send-Steps @((Step "key" -Key "ArrowDown" -Ctrl))
+Check ($r.drawn.answer.focus -ceq "" -and $r.drawn.answer.focusHead -clike "With Thrall (*)") "Ctrl+Down goes to the folded lines: the first, With Thrall"
+$r = Send-Steps @((Step "key" -Key "ArrowDown"), (Step "key" -Key "Enter"))
+Check ($r.drawn.answer.focus -ceq "22" -and @($r.drawn.headings | Where-Object { $_.kind -ceq "parked" })[0].folded -eq $false) "Down to Parked (1) and Enter: it opens into the same rows, with the caret in the parked question's field"
 
 Write-Host ""
 Write-Host "=== a half-typed answer survives the window being closed and opened again ===" -ForegroundColor Cyan
@@ -280,12 +286,12 @@ Check ($closed.asked -and $closed.exited -and -not $closed.killed -and $closed.c
 Check ($script:open.err.Result.Trim() -ceq "") "with nothing on the error stream"
 $report2 = Join-Path $script:work "report2.json"
 $again = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report2, "-ToldMarks", $toldFile) -Env $childEnv
-$back = Wait-HordeProbeReport -Path $report2 -Process $again.process -Seconds 150 -Until { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq 23 -and $null -ne $x.drawn.answer }
+$back = Wait-HordeProbeReport -Path $report2 -Process $again.process -Seconds 150 -Until { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq (23 - $thrallN) -and $null -ne $x.drawn.answer }
 Check ($back.pid -eq $again.process.Id -and $back.pid -ne $first.pid) "opened again: a new window, a new process"
-Check ($back.drawn.answer.fields -eq 22 -and @($back.drawn.headings | Where-Object { $_.parked })[0].folded -eq $true) "what is parked is folded again, out of the way"
+Check ($back.drawn.answer.fields -eq (22 - $thrallN) -and @($back.drawn.headings | Where-Object { $_.kind -ceq "parked" })[0].folded -eq $true) "what is parked is folded again, out of the way"
 Check ((Get-Line $back 10).a -ceq "half typed, not yet ent" -and (Get-Line $back 10).m -ceq "draft") "THE HALF-TYPED ANSWER IS IN ITS FIELD, marked as a draft"
 Check ((Get-Line $back 6).a -ceq $rec6 -and (Get-Line $back 8).a -clike "*ask me in person" -and $back.drawn.answer.drafts -eq 3) "and so are the other two drafts: three kept, by question number, in the page's own storage under the home"
-Check ((Get-Line $back 2).a -ceq "Second answer" -and (Get-Line $back 2).m -ceq "read by Thrall" -and (Get-Line $back 3).a -ceq "line one`nline two`nline three") "the saved answers stand in their fields with their marks, from the store"
+Check ((Get-Done $back 2).a -ceq "Second answer" -and (Get-Done $back 2).k -ceq "thrall" -and (Get-Done $back 3).a -ceq "line one`nline two`nline three") "the saved answers the keeper has read stand with him, from the store"
 Check ((@((Get-Line $back 1).th) -join " | ") -ceq "You: Yes - commit it as it stands. | Thrall: Which branch should it go to?" -and (Get-Line $back 1).a -ceq "") "and question 1 shows the conversation, its field empty for his turn"
 Check (@(Get-Said 10).Count -eq 0 -and @(Get-Said 6).Count -eq 0 -and @(Get-Said 8).Count -eq 0) "a draft is only ever the page's: none of the three is in the store"
 $closed2 = Close-HordeProbeWindow -Process $again.process -Handle ([long]$back.handle) -Seconds 40

@@ -586,6 +586,7 @@ function Complete-HordeWebView2Capture {
 $script:HordeWebView2InputKeys = @{
     "Enter" = @("Enter", 13, "`r"); "Tab" = @("Tab", 9, ""); "Escape" = @("Escape", 27, ""); "Backspace" = @("Backspace", 8, "")
     "ArrowRight" = @("ArrowRight", 39, ""); "ArrowLeft" = @("ArrowLeft", 37, ""); "F2" = @("F2", 113, "")
+    "ArrowUp" = @("ArrowUp", 38, ""); "ArrowDown" = @("ArrowDown", 40, "")
 }
 # The most engine calls one ask may come to: a check types a sentence, not a book.
 $script:HordeWebView2InputMostCalls = 2000

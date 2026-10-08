@@ -74,7 +74,7 @@ $big = Say 2 ("a" * ($most + 1))
 Check ($big.ok -eq $false -and $big.reason -clike ("*'text' is " + ($most + 1) + " characters long; the most is " + $most + "*never cut*") -and @(Get-Thread 2).Count -eq 0) "words one character longer than a text may be are refused with the rule's sentence, and nothing is stored"
 $bridge = New-HordeDecisionWindowBridge
 Check ([long]$bridge.requests["say"].args["text"].most -eq $most -and (@($bridge.requests["say"].args.Keys | Sort-Object) -join ",") -ceq "id,number,text,wording") "the bridge's own bound on the words is that same number, read from the rules and written nowhere else; say takes number, text, wording and id"
-Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,hand-back") "say is the seventh request of the closed list, and the only one that writes"
+Check ((@($bridge.requests.Keys) -join ",") -ceq "setup,kinds,list,fleet,attachment,report,say,act,hand-back") "say is the seventh request of the closed list, and with act (his park or unpark, the same operation) the only ones that write"
 
 Write-Host ""
 Write-Host "--- wrong types, and a question that is not there ---" -ForegroundColor Cyan
