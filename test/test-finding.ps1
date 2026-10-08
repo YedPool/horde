@@ -180,7 +180,7 @@ try {
     Check (@(Get-ChildItem -LiteralPath (Join-Path $blocked "findings") -Filter "*.part").Count -eq 0) "and the writer's temporary file is removed"
     # From inside this suite's own folder, so that a writer which did resolve it would write only there.
     # The process's folder, not only PowerShell's location: .NET resolves a relative path against the
-    # first (a mutant of the writer left relative\homeindings in the checkout it ran from, 2026-10-08).
+    # first (a mutant of the writer left relative\home\findings in the checkout it ran from, 2026-10-08).
     $wasFolder = [System.IO.Directory]::GetCurrentDirectory()
     [System.IO.Directory]::SetCurrentDirectory($work)
     try { Check (Throws { Save-HordeFinding -Text $seedText -HordeHome "relative\home" } "absolute path") "a relative home is refused, never resolved against the current folder" } finally { [System.IO.Directory]::SetCurrentDirectory($wasFolder) }
