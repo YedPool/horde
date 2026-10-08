@@ -34,8 +34,9 @@ $root = Split-Path -Parent $here
 trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "core\WindowFollowPort.ps1")
-# A home of this run's own, which is never made: a follow started with no settings handed in reads the
-# person's file, and the person's real one is not this suite's to read.
+# A home of this run's own: a follow started with no settings handed in reads the person's file, and
+# the person's real one is not this suite's to read. It is made for one section only, the one that
+# puts a settings file there to be refused, and is removed when that section ends.
 $env:HORDE_HOME = Join-Path $env:TEMP ("horde-follow-home-" + [guid]::NewGuid().ToString("N"))
 
 function Field {
@@ -343,6 +344,29 @@ try {
     [void](Stop-HordeWindowFollow)
     [void][FollowTestProbe]::SetOwner($owned.Handle.ToInt64(), 0)
     Look "after the refusals"
+
+    Write-Host ""
+    Write-Host "--- a settings file that is refused: the window is neither owned nor placed ---" -ForegroundColor Cyan
+    # The module settings' rule: a file with anything wrong in it is refused whole and is never read
+    # as the defaults. Here one good value and one share out of range, with two real windows that the
+    # very next section follows by the same call once the file is gone.
+    $settingsFile = Join-Path $env:HORDE_HOME "settings\window-follow.json"
+    $rectBefore = [FollowTestProbe]::Rect($mine)
+    $ownerBefore = [FollowTestProbe]::Owner($mine)
+    try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $settingsFile) -Force | Out-Null
+        [System.IO.File]::WriteAllText($settingsFile, '{ "schemaVersion": 1, "settings": { "floatingMarginTopPx": 100, "floatingWidthShare": 0.95 } }')
+        $r = Start-HordeWindowFollow -Target $other -Companion $mine
+        Pump 300
+        Check ((Field $r "state") -ceq "failed") ("with the person's settings file refused the follow is failed, not following (" + (Field $r "state") + ")")
+        Check ("$(Field $r 'reason')".Contains("'" + $settingsFile + "'") -and "$(Field $r 'reason')" -like "*'floatingWidthShare'*") ("and the reason names the file and the key that is wrong (" + (Field $r "reason") + ")")
+        Check ([FollowTestProbe]::Owner($mine) -eq $ownerBefore -and [FollowTestProbe]::Owner($mine) -ne $other) ("the companion was not given the other window as its owner (" + [FollowTestProbe]::Owner($mine) + ")")
+        Check ([FollowTestProbe]::Rect($mine) -ceq $rectBefore -and (Placed $r) -ceq "none") ("and it stands exactly where it stood: no place was worked out from the defaults in the file's stead (" + [FollowTestProbe]::Rect($mine) + ")")
+        Check ((Field (Get-HordeWindowFollow) "state") -ceq "none") "nothing is being followed"
+    } finally {
+        if (Test-Path -LiteralPath $env:HORDE_HOME) { [System.IO.Directory]::Delete($env:HORDE_HOME, $true) }
+    }
+    Look "after the refused settings"
 
     Write-Host ""
     Write-Host "--- owned, and placed where the pure function says ---" -ForegroundColor Cyan
