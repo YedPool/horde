@@ -18,7 +18,7 @@
            Replace = '$where = "''" + $k + "''"' }
         # --- a number too large to be one is unreadable, never a throw ---
         @{ Name = "huge-question-number-cast"
-           Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'
+           Find = 'if ($entry.about -ceq "question" -and -not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'
            Replace = 'if ($false) {' }
         @{ Name = "huge-sequence-number-cast"
            Find = 'if (-not (Test-HordeDecisionCount -Value $Ev.sequence -Most (Get-HordeDecisionMaxSequence))) {'
@@ -191,24 +191,54 @@
         @{ Name = "character-that-is-not-text-stored-in-a-note"
            Find = 'if ($unfit -ne "") {'
            Replace = 'if ($false) {' }
-        @{ Name = "tab-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]''' }
-        @{ Name = "format-character-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "separator-allowed-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "direction-mark-refused-in-a-one-line-field"
-           Find = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInOneLine = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n]]''' }
-        @{ Name = "tab-refused-in-a-text-of-several-lines"
-           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\r\n\u200C-\u200F]]''' }
-        @{ Name = "format-and-separators-allowed-in-a-text-of-several-lines"
-           Find = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}\p{Cf}\p{Zl}\p{Zp}-[\t\r\n\u200C-\u200F]]'''
-           Replace = '$script:HordeDecisionNotTextInLines = ''[\p{Cc}-[\t\r\n\u200C-\u200F]]''' }
+        @{ Name = "format-characters-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Zl}\p{Zp}''' }
+        @{ Name = "line-and-paragraph-separators-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}''' }
+        @{ Name = "control-characters-allowed"
+           Find = '$script:HordeDecisionNotTextClasses = ''\p{Cc}\p{Cf}\p{Zl}\p{Zp}'''
+           Replace = '$script:HordeDecisionNotTextClasses = ''\p{Cf}\p{Zl}\p{Zp}''' }
+        @{ Name = "direction-marks-and-joiners-refused-in-a-question-field"
+           Find = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200C-\u200F'''
+           Replace = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n''' }
+        @{ Name = "question-field-takes-what-a-message-takes"
+           Find = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200C-\u200F'''
+           Replace = '$script:HordeDecisionQuestionFieldKeeps = ''\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "embeddings-and-overrides-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "isolates-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u061C''' }
+        @{ Name = "zero-width-space-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200C-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "word-joiner-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2066-\u2069\u061C''' }
+        @{ Name = "byte-order-mark-taken-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C\uFEFF''' }
+        @{ Name = "line-separator-taken-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C\u2028''' }
+        @{ Name = "tab-refused-in-a-message"
+           Find = '$script:HordeDecisionSpokenMessageKeeps = ''\t\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C'''
+           Replace = '$script:HordeDecisionSpokenMessageKeeps = ''\r\n\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\u061C''' }
+        @{ Name = "tab-allowed-in-one-line"
+           Find = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionQuestionFieldKeeps + '']]'''
+           Replace = '$script:HordeDecisionNotTextInOneLine = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionQuestionFieldKeeps + '']]''' }
+        @{ Name = "tab-refused-in-several-lines"
+           Find = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-[\t'' + $script:HordeDecisionQuestionFieldKeeps + '']]'''
+           Replace = '$script:HordeDecisionNotTextInLines = ''['' + $script:HordeDecisionNotTextClasses + ''-['' + $script:HordeDecisionQuestionFieldKeeps + '']]''' }
+        @{ Name = "message-never-says-it-holds-direction-characters"
+           Find = '        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))'
+           Replace = '        holdsDirectionOrInvisibleCharacters = $false' }
+        @{ Name = "every-message-says-it-holds-direction-characters"
+           Find = '        holdsDirectionOrInvisibleCharacters = [bool]([regex]::IsMatch([string]$Message.text, $script:HordeDecisionDirectionOrInvisible))'
+           Replace = '        holdsDirectionOrInvisibleCharacters = $true' }
         @{ Name = "one-line-field-held-to-the-rule-for-several-lines"
            Find = '$notText = Get-HordeDecisionCharProblem -Text "$text" -OneLine:([bool]$spec.oneLine)'
            Replace = '$notText = Get-HordeDecisionCharProblem -Text "$text"' }
@@ -337,5 +367,179 @@
         @{ Name = "unreadable-count-kept-past-a-raised-floor"
            Find = '; $State.pending = 0'
            Replace = '' }
+        # --- the conversation under a question: kept, in order, and changing nothing ---
+        @{ Name = "words-under-a-closed-question-dropped"
+           Find = '    if ($stated) { $seen = [int]$Ev.data.wordingVersion }'
+           Replace = '    if ($question.state -cne "open") { return "the question is closed" }; if ($stated) { $seen = [int]$Ev.data.wordingVersion }' }
+        @{ Name = "words-under-a-closed-question-reopen-it"
+           Find = '        arrivedAfterClosing = [bool]($question.state -cne "open")'
+           Replace = '        arrivedAfterClosing = [bool]($question.state -cne "open"); reopened = [bool]($question.state = "open")' }
+        @{ Name = "arrival-after-closing-not-flagged"
+           Find = '        arrivedAfterClosing = [bool]($question.state -cne "open")'
+           Replace = '        arrivedAfterClosing = $false' }
+        @{ Name = "words-to-an-earlier-wording-dropped"
+           Find = 'if ($stated -and $seen -gt [int]$question.wordingVersion) {'
+           Replace = 'if ($stated -and $seen -ne [int]$question.wordingVersion) {' }
+        @{ Name = "wording-not-yet-written-believed"
+           Find = 'if ($stated -and $seen -gt [int]$question.wordingVersion) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "earlier-wording-not-flagged"
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = $false' }
+        @{ Name = "wording-of-the-moment-flagged-as-earlier"
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = [bool]($stated -and $seen -le [int]$question.wordingVersion)' }
+        @{ Name = "unstated-wording-flagged-as-earlier"
+           Find = '        saidToEarlierWording = [bool]($stated -and $seen -lt [int]$question.wordingVersion)'
+           Replace = '        saidToEarlierWording = [bool]($seen -lt [int]$question.wordingVersion)' }
+        @{ Name = "unstated-wording-said-to-be-stated"
+           Find = '        wordingStated = [bool]$stated'
+           Replace = '        wordingStated = $true' }
+        @{ Name = "record-without-a-wording-unreadable"
+           Find = 'if (-not (Test-HordeDecisionMember -Object $Ev.data -Name $member)) { continue }'
+           Replace = '' }
+        @{ Name = "window-need-not-state-its-wording"
+           Find = 'if ([bool]$routeEntry.statesWording -and -not $WordingStated) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "chat-must-state-a-wording-nobody-knows"
+           Find = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }'
+           Replace = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $true }' }
+        @{ Name = "earlier-wording-judged-against-todays-wording"
+           Find = 'saidToEarlierWording = [bool]$Message.saidToEarlierWording'
+           Replace = 'saidToEarlierWording = [bool]([int]$Message.wordingVersion -lt [int](@($State.questions.Values | Where-Object { $_.thread -contains $Message })[0].wordingVersion))' }
+        @{ Name = "words-trimmed"
+           Find = '        text = [string]$Ev.data.text'
+           Replace = '        text = ([string]$Ev.data.text).Trim()' }
+        @{ Name = "speaking-counts-as-a-change-to-the-question"
+           Find = '    $speaker = "$($Ev.data.speaker)"'
+           Replace = '    $speaker = "$($Ev.data.speaker)"; Add-HordeDecisionHistory -Question $question -Ev $Ev -Note "said"' }
+        @{ Name = "thread-in-reverse-order"
+           Find = '    $views = @($Question.thread | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })'
+           Replace = '    $views = @($Question.thread | Sort-Object { -[long]$_.sequence } | ForEach-Object { ConvertTo-HordeDecisionMessageView -Message $_ -State $State })' }
+        @{ Name = "list-form-carries-the-messages"
+           Find = '    if ($Messages) { $thread["messages"] = $views }'
+           Replace = '    $thread["messages"] = $views' }
+        # --- whose turn it is ---
+        @{ Name = "turn-does-not-pass-when-someone-speaks"
+           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
+           Replace = '' }
+        @{ Name = "turn-passes-under-a-closed-question"
+           Find = 'if ($question.state -ceq "open" -and $script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }'
+           Replace = 'if ($script:HordeDecisionSpeakers.Contains($speaker)) { $question.turn = "$($script:HordeDecisionSpeakers[$speaker].then)" }' }
+        @{ Name = "turn-stays-with-the-speaker"
+           Find = '    founder  = @{ shown = "the founder";  then = "warchief"; reads = $false }'
+           Replace = '    founder  = @{ shown = "the founder";  then = "founder"; reads = $false }' }
+        @{ Name = "closing-leaves-the-turn"
+           Find = '    $question.turn = $script:HordeDecisionNoTurn'
+           Replace = '' }
+        @{ Name = "reopening-leaves-nobodys-turn"
+           Find = '    $question.turn = $script:HordeDecisionFirstTurn'
+           Replace = '' }
+        @{ Name = "first-turn-is-the-warchiefs"
+           Find = '$script:HordeDecisionFirstTurn = "founder"'
+           Replace = '$script:HordeDecisionFirstTurn = "warchief"' }
+        @{ Name = "nobodys-turn-shown-as-a-speaker"
+           Find = '    if ($turn -cne $script:HordeDecisionNoTurn) { $turnShown = Get-HordeDecisionSpeakerShown -Speaker $turn }'
+           Replace = '    $turnShown = "the " + $turn' }
+        # --- what is unread, from the read mark ---
+        @{ Name = "own-words-unread-by-their-speaker"
+           Find = 'if ($reader -cne $Message.speaker -and [long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }'
+           Replace = 'if ([long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }' }
+        @{ Name = "message-at-the-mark-unread"
+           Find = 'if ($reader -cne $Message.speaker -and [long]$Message.sequence -gt (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }'
+           Replace = 'if ($reader -cne $Message.speaker -and [long]$Message.sequence -ge (Get-HordeDecisionReadMark -State $State -Reader $reader)) { $unreadBy.Add($reader) }' }
+        @{ Name = "read-mark-goes-back"
+           Find = 'if ($upTo -le $had) { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "same-mark-again-is-a-new-marking"
+           Find = 'if ($upTo -le $had) { return ('
+           Replace = 'if ($upTo -lt $had) { return (' }
+        @{ Name = "mark-of-the-future-believed"
+           Find = 'if ($upTo -ge [long]$Ev.sequence) { return ('
+           Replace = 'if ($false) { return (' }
+        @{ Name = "mark-up-to-the-record-before-refused"
+           Find = 'if ($upTo -ge [long]$Ev.sequence) { return ('
+           Replace = 'if ($upTo -ge ([long]$Ev.sequence - 1)) { return (' }
+        @{ Name = "one-readers-mark-is-everyones"
+           Find = '    $State.readMarks[$reader] = $upTo'
+           Replace = '    foreach ($everyone in @($script:HordeDecisionSpeakers.Keys)) { $State.readMarks[$everyone] = $upTo }' }
+        @{ Name = "marking-not-remembered-for-a-repost"
+           Find = '    $State.readEvents[[long]$Ev.sequence] = [pscustomobject]@{ reader = $reader; from = $had; upTo = $upTo }'
+           Replace = '' }
+        @{ Name = "founder-given-an-inbox-unasked"
+           Find = '    founder  = @{ shown = "the founder";  then = "warchief"; reads = $false }'
+           Replace = '    founder  = @{ shown = "the founder";  then = "warchief"; reads = $true }' }
+        # --- what a reader is to read ---
+        @{ Name = "inbox-holds-the-readers-own-words"
+           Find = '            if ($message.speaker -ceq $Reader) { continue }'
+           Replace = '' }
+        @{ Name = "inbox-bound-left-out"
+           Find = 'if ([long]$message.sequence -le $After -or [long]$message.sequence -gt $UpTo) { continue }'
+           Replace = 'if ([long]$message.sequence -le $After) { continue }' }
+        @{ Name = "inbox-bound-one-short"
+           Find = 'if ([long]$message.sequence -le $After -or [long]$message.sequence -gt $UpTo) { continue }'
+           Replace = 'if ([long]$message.sequence -le $After -or [long]$message.sequence -ge $UpTo) { continue }' }
+        @{ Name = "inbox-holds-what-was-read"
+           Find = 'if ([long]$message.sequence -le $After -or [long]$message.sequence -gt $UpTo) { continue }'
+           Replace = 'if ([long]$message.sequence -gt $UpTo) { continue }' }
+        @{ Name = "inbox-does-not-start-from-the-mark"
+           Find = '    if ($After -lt 0) { $After = Get-HordeDecisionReadMark -State $State -Reader $Reader }'
+           Replace = '    if ($After -lt 0) { $After = 0 }' }
+        @{ Name = "inbox-question-by-question"
+           Find = '    return @($found | Sort-Object { [long]$_.message.sequence })'
+           Replace = '    return @($found)' }
+        # --- who may speak, by what route, and who may record whose words ---
+        @{ Name = "any-speaker"
+           Find = 'if (-not $speakerKnown) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "any-route"
+           Find = 'if ($null -eq $routeEntry) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "any-speaker-by-any-route"
+           Find = 'if (@($routeEntry.speakers) -cnotcontains $Speaker) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "anyone-records-by-any-route"
+           Find = 'if (@($routeEntry.actors) -cnotcontains $Actor) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "warchief-may-record-chat-as-its-own-typing"
+           Find = '    "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window";                statesWording = $true }'
+           Replace = '    "window"        = @{ speakers = @("founder");  actors = @("founder", "warchief");  shown = "typed in the window";                statesWording = $true }' }
+        @{ Name = "chat-words-shown-as-typed"
+           Find = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }'
+           Replace = '    "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "typed in the window"; statesWording = $false }' }
+        @{ Name = "blank-words-stored"
+           Find = 'if ($Text.Trim().Length -eq 0) { [void]$out.Add("''text'' is blank: nothing was said") }'
+           Replace = '' }
+        @{ Name = "long-words-stored-whatever-their-length"
+           Find = 'if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "'
+           Replace = 'if ($false) { [void]$out.Add("''text'' is "' }
+        @{ Name = "words-at-the-limit-refused"
+           Find = 'if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "'
+           Replace = 'if ($Text.Length -ge $script:HordeDecisionMaxTextChars) { [void]$out.Add("''text'' is "' }
+        @{ Name = "words-held-to-no-characters"
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
+           Replace = '    $notWords = ""' }
+        @{ Name = "words-held-to-a-question-fields-characters"
+           Find = '    $notWords = Get-HordeDecisionCharProblem -Text $Text -Said'
+           Replace = '    $notWords = Get-HordeDecisionCharProblem -Text $Text' }
+        # --- a conversation record of the wrong shape, and what a kind is about ---
+        @{ Name = "huge-wording-or-mark-cast"
+           Find = 'if (-not (Test-HordeDecisionCount -Value (Get-HordeDecisionMember -Object $Ev.data -Name $member) -Most $most)) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "mark-held-to-a-questions-limit"
+           Find = 'if ($entry.counts[$member] -ceq "sequence") { $most = (Get-HordeDecisionMaxSequence) }'
+           Replace = '' }
+        @{ Name = "read-mark-asked-for-a-question-number"
+           Find = 'if ($entry.about -ceq "question" -and -not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {'
+           Replace = 'if (-not (Test-HordeDecisionCount -Value $Ev.data.number -Most $script:HordeDecisionMaxNumber)) {' }
+        @{ Name = "speakers-may-keep-the-list"
+           Find = '    return [pscustomobject]@{ roles = @($script:HordeDecisionActors); may = "change the list" }'
+           Replace = '    return [pscustomobject]@{ roles = @($script:HordeDecisionSpeakers.Keys); may = "change the list" }' }
+        @{ Name = "only-keepers-may-speak"
+           Find = 'if ($null -ne $entry -and "$($entry.actors)" -ceq "speakers") { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "unlisted-speaker-not-shown"
+           Find = '    if ($null -eq $entry) { return $Speaker }'
+           Replace = '    if ($null -eq $entry) { return "" }' }
     )
 }
