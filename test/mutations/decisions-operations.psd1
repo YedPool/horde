@@ -48,7 +48,7 @@
            Find = 'if ($bad.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "role-not-checked-by-name"
-           Find = 'if ($actors -cnotcontains $actor) {'
+           Find = 'if (@($allowed.roles) -cnotcontains $actor) {'
            Replace = 'if ($false) {' }
         @{ Name = "unknown-operation-runs"
            Find = 'if ($Operation -cmatch ''\A[a-z][a-z-]{0,31}\z'') { $entry = $script:HordeDecisionOperations[$Operation] }'
