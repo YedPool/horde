@@ -51,6 +51,14 @@
 #   Stop-HordeWindowFollow
 #       Stop following altogether, for a companion that is closing. State "none". To keep the window,
 #       disconnect it first.
+#   Switch-HordeWindowFollowKeyboard
+#       Hand the keyboard to the other window: the person is done in the companion and goes back to
+#       the window it stands beside. Answers { state; reason }, NOT a follow record: "handed" (the
+#       other window has the keyboard, read back from the system), "refused" (it was asked and the
+#       system did not do it; the reason says what it said), "none" (nothing is followed: a companion
+#       that stands free has no window to hand it to, and nothing is done) or "unavailable" (no
+#       follower here can do it). Only ever asked because the person asked, with a key in the
+#       companion: this file gives no window the keyboard on its own account.
 #
 # THE FOLLOW RECORD is plain data: { state; reason; target; companion; mode; placed; placements; events;
 # findings }.
@@ -91,6 +99,8 @@
 #   Update    ($place)                        a follow record; places again only when $place is $true
 #   Release   ()                              a follow record: the companion stands free
 #   Stop      ()                              a follow record: nothing is followed
+# and one more it MAY give, without which Switch-HordeWindowFollowKeyboard answers "unavailable":
+#   Hand      ()                              { state; reason }: handed, refused or none
 # A follower places by Get-HordeWindowFollowPlacement and by nothing of its own. The first registered
 # follower whose Applies is true is the one asked.
 #
@@ -240,11 +250,12 @@ function Register-HordeWindowFollower {
         [Parameter(Mandatory = $true)][scriptblock]$Start,
         [Parameter(Mandatory = $true)][scriptblock]$Update,
         [Parameter(Mandatory = $true)][scriptblock]$Release,
-        [Parameter(Mandatory = $true)][scriptblock]$Stop
+        [Parameter(Mandatory = $true)][scriptblock]$Stop,
+        [scriptblock]$Hand = $null
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a platform name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($known in @($script:HordeWindowFollowers)) { if ($known.name -ceq $Name) { $script:HordeWindowFollowers.Remove($known) } }
-    [void]$script:HordeWindowFollowers.Add([pscustomobject]@{ name = $Name; applies = $Applies; realScale = $RealScale; rectangle = $Rectangle; start = $Start; update = $Update; release = $Release; stop = $Stop })
+    [void]$script:HordeWindowFollowers.Add([pscustomobject]@{ name = $Name; applies = $Applies; realScale = $RealScale; rectangle = $Rectangle; start = $Start; update = $Update; release = $Release; stop = $Stop; hand = $Hand })
 }
 
 function Get-HordeWindowFollowerFiles {
@@ -360,4 +371,24 @@ function Disconnect-HordeWindowFollow {
 function Stop-HordeWindowFollow {
     # Stop following altogether (header).
     return (ConvertTo-HordeWindowFollowRecord -Asked (Invoke-HordeWindowFollower -Verb "stop"))
+}
+
+function Get-HordeWindowFollowHandStates {
+    # Every state an answer of Switch-HordeWindowFollowKeyboard can carry.
+    return @("handed", "refused", "none", "unavailable")
+}
+
+function Switch-HordeWindowFollowKeyboard {
+    # Hand the keyboard to the other window (header): { state; reason }. Never throws.
+    $follower = Get-HordeWindowFollower
+    if ($follower.state -cne "known") { return [pscustomobject]@{ state = "unavailable"; reason = $follower.reason } }
+    if ($null -eq $follower.value.hand) { return [pscustomobject]@{ state = "unavailable"; reason = ($follower.value.name + ": its follower has no way to hand the keyboard to another window") } }
+    $asked = Invoke-HordeWindowFollower -Verb "hand"
+    $got = $asked.value
+    # A follower answers handed, refused or none; "unavailable" is the port's own word for not asked.
+    $followerStates = @(Get-HordeWindowFollowHandStates | Where-Object { $_ -cne "unavailable" })
+    if (-not $asked.asked -or $null -eq $got -or $null -eq $got.PSObject.Properties["state"] -or $null -eq $got.PSObject.Properties["reason"] -or $got.state -isnot [string] -or $followerStates -cnotcontains $got.state) {
+        return [pscustomobject]@{ state = "unavailable"; reason = $asked.reason }
+    }
+    return [pscustomobject]@{ state = $got.state; reason = ("" + $got.reason) }
 }

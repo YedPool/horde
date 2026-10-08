@@ -203,6 +203,9 @@ foreach ($verb in @("Get-HordeWindowFollow", "Update-HordeWindowFollow", "Discon
     Check ((Field $r "state") -ceq "unavailable" -and (Field $r "reason") -ceq $none) ($verb + ": unavailable, with the reason")
 }
 Check ((@(Get-HordeWindowFollowStates) -join ",") -ceq "none,following,lost,free,failed,unavailable") "the states a follow record can carry are these six, in one list"
+$h = Switch-HordeWindowFollowKeyboard
+Check ((Field $h "state") -ceq "unavailable" -and (Field $h "reason") -ceq $none) "handing the keyboard over: unavailable, with the reason"
+Check ((@(Get-HordeWindowFollowHandStates) -join ",") -ceq "handed,refused,none,unavailable") "the states a hand-over can answer are these four, in one list"
 
 Write-Host ""
 Write-Host "--- what the port refuses before any follower is asked ---" -ForegroundColor Cyan
@@ -210,8 +213,8 @@ $script:asked = New-Object System.Collections.ArrayList
 $script:follow = New-HordeWindowFollowRecord -State "none"
 function New-TestFollower {
     # A follower that records every block it is asked and answers from $script:follow.
-    param([string]$Name, [scriptblock]$Applies = { $true })
-    Register-HordeWindowFollower -Name $Name -Applies $Applies `
+    param([string]$Name, [scriptblock]$Applies = { $true }, [scriptblock]$Hand = $null)
+    Register-HordeWindowFollower -Name $Name -Applies $Applies -Hand $Hand `
         -RealScale { [void]$script:asked.Add("realScale"); [pscustomobject]@{ state = "applied"; awareness = "per-monitor-v2"; realScale = "yes"; reason = "taken" } } `
         -Rectangle { param($Handle) [void]$script:asked.Add("rectangle " + $Handle); if ($Handle -eq 7) { New-HordeAbsent -Note "no such window" } else { New-HordeKnown -Value ([pscustomobject]@{ left = 10; top = 20; right = 610; bottom = 420; scale = 1.5 }) } } `
         -Start { param($Target, $Companion, $Mode, $Settings) [void]$script:asked.Add("start " + $Target + " " + $Companion + " " + $Mode + " top=" + (Field $Settings "floatingMarginTopPx")); $script:follow = New-HordeWindowFollowRecord -State "following" -Target $Target -Companion $Companion -Mode $Mode -Placed ([pscustomobject]@{ left = 1; top = 2; width = 3; height = 4 }) -Placements 1; $script:follow } `
@@ -312,6 +315,46 @@ try {
     if (Test-Path -LiteralPath $startHome) { [System.IO.Directory]::Delete($startHome, $true) }
 }
 [void](Stop-HordeWindowFollow)
+
+Write-Host ""
+Write-Host "--- the keyboard is handed back only by a follower that can, and its answer is checked ---" -ForegroundColor Cyan
+# The person pressed a key in the companion to go back to the window it stands beside. The port asks
+# the follower's Hand once and passes on handed, refused or none; anything else is unavailable.
+$script:asked.Clear()
+$h = Safe { Switch-HordeWindowFollowKeyboard }
+Check ((Field $h "state") -ceq "unavailable" -and (Field $h "reason") -ceq "here: its follower has no way to hand the keyboard to another window" -and $script:asked.Count -eq 0) ("a follower that registered no Hand: unavailable, naming it, and it is asked nothing (" + (Field $h "reason") + ")")
+$script:hand = $null
+New-TestFollower -Name "here" -Hand { [void]$script:asked.Add("hand"); $script:hand }
+foreach ($said in @(
+        [pscustomobject]@{ state = "handed"; reason = "" },
+        [pscustomobject]@{ state = "refused"; reason = "the system said no" },
+        [pscustomobject]@{ state = "none"; reason = "nothing is followed" })) {
+    $script:hand = $said
+    $script:asked.Clear()
+    $h = Safe { Switch-HordeWindowFollowKeyboard }
+    Check ((Field $h "state") -ceq $said.state -and (Field $h "reason") -ceq $said.reason -and ($script:asked -join "; ") -ceq "hand") ("the follower's " + $said.state + " is the answer, with its reason, asked once (" + (Field $h "state") + "; " + ($script:asked -join "; ") + ")")
+    Check ((Field $h "target") -ceq "<none>") "and it is a { state; reason }, not a follow record"
+}
+$script:hand = [pscustomobject]@{ state = "refused"; reason = 42 }
+$h = Switch-HordeWindowFollowKeyboard
+Check ((Field $h "reason") -is [string] -and (Field $h "reason") -ceq "42") "a reason that is not text is passed on as text"
+$hands = [ordered]@{
+    "nothing" = $null
+    "a word" = "handed"
+    "an answer with no reason" = [pscustomobject]@{ state = "handed" }
+    "an answer with no state" = [pscustomobject]@{ reason = "" }
+    "a state that is not one" = [pscustomobject]@{ state = "Handed"; reason = "" }
+    "the port's own unavailable" = [pscustomobject]@{ state = "unavailable"; reason = "" }
+}
+foreach ($name in $hands.Keys) {
+    $script:hand = $hands[$name]
+    $h = Safe { Switch-HordeWindowFollowKeyboard }
+    Check ((Field $h "state") -ceq "unavailable" -and (Field $h "reason") -ceq "here: its follower did not answer") ("a Hand that answers " + $name + " did not answer: unavailable (" + (Field $h "state") + ")")
+}
+New-TestFollower -Name "here" -Hand { throw "hand broke" }
+$h = Safe { Switch-HordeWindowFollowKeyboard }
+Check ((Field $h "state") -ceq "unavailable" -and (Field $h "reason") -ceq "here: its follower failed: hand broke") "a Hand that throws: unavailable, naming it and what it said, never thrown through"
+New-TestFollower -Name "here"
 
 Write-Host ""
 Write-Host "--- a follower that fails is answered for, never thrown through ---" -ForegroundColor Cyan

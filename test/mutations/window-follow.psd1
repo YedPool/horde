@@ -98,8 +98,8 @@
            Find = 'if ($Place -and -not [HordeWindowsFollowV1]::Minimised($s.target)) {'
            Replace = 'if (-not [HordeWindowsFollowV1]::Minimised($s.target)) {' }
         @{ Name = "a-window-that-is-gone-is-still-followed"
-           Find = 'if (-not [HordeWindowsFollowV1]::Exists($s.target)) {'
-           Replace = 'if ($false) {' }
+           Find = 'Set-HordeWindowsFollowFree -State "lost" -Reason "the window it stood beside no longer exists"'
+           Replace = '' }
         @{ Name = "another-programs-window-is-placed"
            Find = 'if ([HordeWindowsFollowV1]::ProcessOf($Companion) -ne [uint32]$PID) { return'
            Replace = 'if ($false) { return' }
@@ -118,5 +118,17 @@
         @{ Name = "a-lost-window-is-called-free"
            Find = 'Set-HordeWindowsFollowFree -State "lost" -Reason'
            Replace = 'Set-HordeWindowsFollowFree -State "free" -Reason' }
+        @{ Name = "handed-on-what-the-call-said"
+           Find = 'if ($Foreground) { return [pscustomobject]@{ state = "handed"; reason = "" } }'
+           Replace = 'if ($Asked) { return [pscustomobject]@{ state = "handed"; reason = "" } }' }
+        @{ Name = "a-refusal-does-not-say-what-windows-said"
+           Find = 'if ($Asked) { $said = "Windows said yes, and the window is not the foreground one" }'
+           Replace = '' }
+        @{ Name = "the-follower-gives-the-port-no-hand"
+           Find = 'Hand      = { Switch-HordeWindowsFollowKeyboard }'
+           Replace = '' }
+        @{ Name = "handing-over-with-nothing-followed-asks-windows"
+           Find = 'if ($null -eq $s -or $s.state -cne "following") { return [pscustomobject]@{ state = "none"'
+           Replace = 'if ($false) { return [pscustomobject]@{ state = "none"' }
     )
 }

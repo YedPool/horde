@@ -209,5 +209,23 @@
         @{ Name = "a-tree-with-no-platform-folder-is-an-error"
            Find = 'if (-not (Test-Path -LiteralPath $platforms -PathType Container)) { return @() }'
            Replace = '' }
+        @{ Name = "a-follower-with-no-hand-is-asked"
+           Find = 'if ($null -eq $follower.value.hand) { return'
+           Replace = 'if ($false) { return' }
+        @{ Name = "a-hand-answer-that-is-not-one-is-passed-on"
+           Find = '-or $followerStates -cnotcontains $got.state) {'
+           Replace = ') {' }
+        @{ Name = "a-hand-answer-with-no-reason-is-passed-on"
+           Find = '-or $null -eq $got.PSObject.Properties["reason"] -or $got.state -isnot [string]'
+           Replace = '-or $got.state -isnot [string]' }
+        @{ Name = "the-ports-own-unavailable-is-taken-from-a-follower"
+           Find = '$followerStates = @(Get-HordeWindowFollowHandStates | Where-Object { $_ -cne "unavailable" })'
+           Replace = '$followerStates = @(Get-HordeWindowFollowHandStates)' }
+        @{ Name = "a-hand-reason-is-passed-on-as-it-came"
+           Find = 'return [pscustomobject]@{ state = $got.state; reason = ("" + $got.reason) }'
+           Replace = 'return [pscustomobject]@{ state = $got.state; reason = $got.reason }' }
+        @{ Name = "the-hand-block-is-not-kept"
+           Find = 'release = $Release; stop = $Stop; hand = $Hand })'
+           Replace = 'release = $Release; stop = $Stop; hand = $null })' }
     )
 }

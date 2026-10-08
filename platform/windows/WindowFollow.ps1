@@ -71,6 +71,21 @@
 # A FREE WINDOW IS NOT A WINDOW THAT REFUSES THE KEYBOARD: the person clicks it and types. It is only
 # never GIVEN the keyboard by being set free. Stop does none of this: it is for a window that is closing.
 #
+# HANDING THE KEYBOARD TO THE OTHER WINDOW (the port's Switch-HordeWindowFollowKeyboard) is one
+# call, SetForegroundWindow on the window followed, AND WHAT WINDOWS THEN DID IS READ BACK: the
+# foreground window is asked for, and only when it is the other window is the answer "handed".
+# Windows makes a window the foreground one only for a program the person is using - as a rule, the
+# one whose window has the keyboard now - and that is exactly when this is asked: the person pressed
+# a key in the companion. Asked by a process that does not have the keyboard, Windows may refuse, and
+# the answer is "refused" with what it said. NOTHING IS DONE TO GET ROUND A REFUSAL: no key is made
+# up for the desktop and no thread is attached to another's input.
+# MEASURED 2026-10-07 against a terminal of a scenario's own, the companion standing where no screen
+# is and the person typing in another window: Windows said no, the foreground window stayed the one
+# it was, and the answer was "refused". NOT MEASURED: the ask made while the companion really has the
+# keyboard, which is the only time a person makes it - that needs the person's own key press. The
+# suites prove the decision on what is read back (ConvertTo-HordeWindowsFollowHanded) and never ask
+# Windows to move the keyboard: a hand-over that worked would take it from the person at the screen.
+#
 # ONE FOLLOW AT A TIME: the native half keeps one hook and one target, so starting a second follow
 # ends the first.
 #
@@ -107,6 +122,8 @@ public static class HordeWindowsFollowV1 {
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
 
     static IntPtr target = IntPtr.Zero, hook = IntPtr.Zero;
     static WinEventDelegate keep;       // held, or the delegate is collected while Windows still calls it
@@ -180,6 +197,12 @@ public static class HordeWindowsFollowV1 {
         SetWindowLongPtr(window, -8, IntPtr.Zero);
         TaskbarStyle(window, true);
         if (seen) { ShowWindow(window, 0); ShowWindow(window, 8); }     // SW_HIDE, then SW_SHOWNA: shown, not activated
+    }
+    // { asked, foreground }: whether Windows said it took the ask, and whether the window is the
+    // foreground window when asked for straight afterwards. The second is the one that counts.
+    public static int[] Foreground(long window) {
+        bool asked = SetForegroundWindow(new IntPtr(window));
+        return new int[] { asked ? 1 : 0, GetForegroundWindow() == new IntPtr(window) ? 1 : 0 };
     }
     public static void Disown(long companion) {
         if (IsWindow(new IntPtr(companion))) { SetWindowLongPtr(new IntPtr(companion), -8, IntPtr.Zero); }
@@ -281,6 +304,26 @@ function Disconnect-HordeWindowsFollow {
     return (Get-HordeWindowsFollowRecord)
 }
 
+function ConvertTo-HordeWindowsFollowHanded {
+    # PURE. What the native half answered an ask to make the other window the foreground one, as the
+    # port's { state; reason }. Decided on what was READ BACK (-Foreground), never on what the call
+    # itself said (-Asked): Windows has been seen to say yes and do nothing but flash a taskbar button.
+    param([Parameter(Mandatory = $true)][bool]$Asked, [Parameter(Mandatory = $true)][bool]$Foreground)
+    if ($Foreground) { return [pscustomobject]@{ state = "handed"; reason = "" } }
+    $said = "Windows said no"
+    if ($Asked) { $said = "Windows said yes, and the window is not the foreground one" }
+    return [pscustomobject]@{ state = "refused"; reason = ("the terminal window was not given the keyboard: " + $said + ". Windows gives it only on behalf of a program the person is using") }
+}
+
+function Switch-HordeWindowsFollowKeyboard {
+    # The port's Hand (header, HANDING THE KEYBOARD TO THE OTHER WINDOW): { state; reason }.
+    $s = $script:HordeWindowsFollow
+    if ($null -eq $s -or $s.state -cne "following") { return [pscustomobject]@{ state = "none"; reason = "no window is followed, so there is none to hand the keyboard to" } }
+    if (-not [HordeWindowsFollowV1]::Exists($s.target)) { return [pscustomobject]@{ state = "none"; reason = "the window it stood beside no longer exists" } }
+    $got = [HordeWindowsFollowV1]::Foreground($s.target)
+    return (ConvertTo-HordeWindowsFollowHanded -Asked ([bool]($got[0] -eq 1)) -Foreground ([bool]($got[1] -eq 1)))
+}
+
 function Stop-HordeWindowsFollow {
     # The port's Stop: Windows is told to stop reporting, and ours is no longer owned by the other
     # window if it still was.
@@ -293,7 +336,7 @@ function Stop-HordeWindowsFollow {
 }
 
 function Register-HordeWindowsFollower {
-    # This file's one line at the port: its name, and the seven blocks the port's header lists.
+    # This file's one line at the port: its name, the seven blocks the port's header lists, and Hand.
     $blocks = @{
         Name      = "windows"
         Applies   = { Test-HordeIsWindows }
@@ -303,6 +346,7 @@ function Register-HordeWindowsFollower {
         Update    = { param($Place) Update-HordeWindowsFollow -Place $Place }
         Release   = { Disconnect-HordeWindowsFollow }
         Stop      = { Stop-HordeWindowsFollow }
+        Hand      = { Switch-HordeWindowsFollowKeyboard }
     }
     Register-HordeWindowFollower @blocks
 }
