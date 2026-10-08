@@ -3,5 +3,14 @@
     "warchief": ["message-inject", "delivery-receipt", "resume", "report-hook"],
     "orc": ["message-inject", "delivery-receipt", "resume", "report-hook"],
     "goblin": ["resume", "report-hook"]
+  },
+  "duties": {
+    "warchief": [
+      {
+        "id": "keeps-analyst",
+        "rule": "every warchief keeps one read-only analyst under it, reporting only to its warchief; speed, accuracy, efficiency and parallelisation first, cost second",
+        "doc": "planning/roles/fleet-analyst.md"
+      }
+    ]
   }
 }
