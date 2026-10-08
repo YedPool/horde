@@ -3,7 +3,9 @@
 #
 # The user of these commands is the session that keeps the list for a person. This scenario is its
 # day, from an empty list: it asks three questions of different kinds from files, reads the list back,
-# rewords one, closes one with what was done, asks a fourth, and reopens the closed one. Each step is
+# rewords one, closes one with what was done, asks a fourth, and reopens the closed one. Then a whole
+# exchange under one question: the person answers in chat and the session writes his words down, reads
+# its inbox, replies, closes the question - and he says one thing more after it is closed. Each step is
 # the shipped horde.ps1 run as its own process (test/lib/Cli.ps1), and each check is on what that
 # session would SEE - the printed lines, the exit code - and, at the end, on the state left behind in
 # the store.
@@ -108,12 +110,55 @@ $one = Invoke-Decisions @("show", "1")
 Check ($one.out -like "*Last reopened because: a second device was registered from one code again on the test server*" -and @($one.lines | Where-Object { $_ -like "*  added (by*" -or $_ -like "*  closed (by*" -or $_ -like "*  reopened (by*" }).Count -eq 3) "show 1 says why it is open again, and its history holds the add, the close and the reopen"
 
 Write-Host ""
+Write-Host "=== a whole exchange under question 2 ===" -ForegroundColor Cyan
+# The person answers question 2 in chat, in two lines. The session writes his words down exactly, from
+# a file: they are his words, recorded by the session, and are stored and shown as that.
+$saidFile = Write-File "said.txt" ("Both, but Hebrew first." + "`r`n" + "Which voice would the Spanish one be?")
+$answer = Invoke-Decisions @("answer", "2", "-File", $saidFile)
+Check ($answer.code -eq 0 -and $answer.out -like "*Kept the founder's words, recorded by the warchief from chat, under question 2 (record 8): Which languages besides English should the test talker speak?*") "answer writes the person's chat words down under question 2, and says they are his words as recorded from chat"
+$waiting = Invoke-Decisions @("list")
+Check ($waiting.code -eq 0 -and @($waiting.lines | Where-Object { $_.Trim() -ceq "conversation: 1 message(s); 1 not yet read by the warchief; turn: the warchief" }).Count -eq 1) "the list shows that question 2 has one message, not yet read, and that it is the session's turn"
+$inbox = Invoke-Decisions @("inbox")
+Check ($inbox.code -eq 0 -and @($inbox.lines | Where-Object { $_ -ceq "1 message(s) not yet read, oldest first:" }).Count -eq 1 -and @($inbox.lines | Where-Object { $_ -ceq "Question 2: Which languages besides English should the test talker speak?" }).Count -eq 1) "inbox prints what he said, under the question's number and its plain-words title"
+Check (@($inbox.lines | Where-Object { $_ -ceq "      Both, but Hebrew first." -or $_ -ceq "      Which voice would the Spanish one be?" }).Count -eq 2 -and @($inbox.lines | Where-Object { $_ -like "  the founder, recorded by the warchief from chat, * UTC (record 8, wording not stated)" }).Count -eq 1) "both of his lines, exactly, with who said them, how they were recorded, and that which wording he saw was not stated"
+Check (@($inbox.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 8." }).Count -eq 1) "and then, having printed them, it marks them read and says so"
+$inboxAgain = Invoke-Decisions @("inbox")
+Check ($inboxAgain.code -eq 0 -and $inboxAgain.out -like "*Nothing unread*" -and $inboxAgain.out -notlike "*Marked as read*") "the inbox read again is empty: nothing is handed over twice, and nothing is marked"
+$reply = Invoke-Decisions @("reply", "2", "-Text", "A second voice, recorded this week; Hebrew goes first.")
+Check ($reply.code -eq 0 -and $reply.out -like "*Replied under question 2 (record 10): Which languages besides English should the test talker speak?*") "reply puts the session's answer under the same question"
+$thread = Invoke-Decisions @("show", "2")
+Check ($thread.code -eq 0 -and @($thread.lines | Where-Object { $_ -ceq "Conversation: 2 message(s); turn: the founder" }).Count -eq 1) "show 2 gives the conversation: two messages, and it is the person's turn again"
+$saidAt = [array]::IndexOf($thread.lines, "      Which voice would the Spanish one be?")
+$repliedAt = [array]::IndexOf($thread.lines, "      A second voice, recorded this week; Hebrew goes first.")
+Check ($saidAt -gt 0 -and $repliedAt -gt $saidAt -and @($thread.lines | Where-Object { $_ -like "  the warchief, by command, * UTC (record 10, wording not stated)" }).Count -eq 1) "his words first and the reply after them, each with who said it and by what route"
+Check (@($thread.lines | Where-Object { $_ -ceq "Question 2 - open (wording 2)" }).Count -eq 1 -and @($thread.lines | Where-Object { $_ -like "*(by warchief, record *" }).Count -eq 2) "and question 2 is still question 2, open, at wording 2, with the same two records in its history: talking changed nothing of it"
+$close2 = Invoke-Decisions @("close", "2", "-Outcome", "Hebrew first, then Spanish with a second voice.")
+$late = Invoke-Decisions @("answer", "2", "-Text", "Keep the English one too.")
+Check ($close2.code -eq 0 -and $late.code -eq 0 -and $late.out -like "*under question 2 (record 12)*" -and $late.out -like "*NOTE: question 2 is closed. The words are kept under it, and it stays closed: saying something reopens nothing.*") "what he says a moment after the question is closed is kept, and the command says the question stays closed"
+# The session reads its inbox as data this time. With -Json nothing is marked: the line says so and
+# names the last record it holds; the session, having received it, marks explicitly.
+$asData = Invoke-Decisions @("inbox", "-Json")
+$line = @($asData.lines | Where-Object { $_.StartsWith('{"state":') }) | Select-Object -First 1
+$data = $null
+try { $data = ($line | ConvertFrom-Json) } catch { }
+Check ($asData.code -eq 0 -and $null -ne $data -and @($data.value.messages).Count -eq 1 -and $data.value.messages[0].number -eq 2 -and $data.value.messages[0].state -ceq "closed" -and $data.value.messages[0].message.text -ceq "Keep the English one too." -and $data.value.messages[0].message.arrivedAfterClosing -eq $true) "inbox -Json hands the late words over as data, under the closed question, flagged as having arrived after closing"
+Check ($null -ne $data -and $data.marked -eq $false -and $data.upTo -eq 12 -and @(Get-ChildItem -LiteralPath $store -File).Count -eq 12) "and marks nothing: the line says so, names record 12 as the last it showed, and the store has no new record"
+$marked = Invoke-Decisions @("mark-read", "-UpTo", "12")
+Check ($marked.code -eq 0 -and @($marked.lines | Where-Object { $_ -ceq "Marked as read: 1 message(s), up to record 12." }).Count -eq 1) "mark-read -UpTo 12 then marks what the session received"
+$drained = Invoke-Decisions @("inbox")
+Check ($drained.code -eq 0 -and $drained.out -like "*Nothing unread*") "and the inbox is empty"
+$end = Invoke-Decisions @("list", "-State", "all")
+Check ($end.out -like "*Decisions: 3 open, 1 closed.*" -and (Get-QuestionLines $end) -ceq "1|Fix the bug where one registration code can register two devices?;3|Can a test account be provided for the signed-in pages?;2|Which languages besides English should the test talker speak?;4|Test the view-on-screen fix on a device, then say merge?") "at the end of the day every question has the number it was given, and question 2 is closed: his late words reopened nothing"
+
+Write-Host ""
 Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $names = @(Get-ChildItem -LiteralPath $store -File | Sort-Object Name | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq ((1..7 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds seven records, one for each command that changed the list, named 1 to 7"
+Check (($names -join ",") -ceq ((1..13 | ForEach-Object { $_.ToString("D10") + ".json" }) -join ",")) "the store holds thirteen records, one for each command that changed the list or marked something read, named 1 to 12"
 $kinds = @($names | ForEach-Object { ([System.IO.File]::ReadAllText((Join-Path $store $_)) | ConvertFrom-Json).kind })
-Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-reopened") "in the order the day went: three asked, one reworded, one closed, one asked, one reopened"
-Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 7) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
+Check (($kinds -join ",") -ceq "question-added,question-added,question-added,question-updated,question-closed,question-added,question-reopened,message-said,messages-read,message-said,question-closed,message-said,messages-read") "in the order the day went: three asked, one reworded, one closed, one asked, one reopened; then said, read, replied, closed, said once more, and read"
+$kept = ([System.IO.File]::ReadAllText((Join-Path $store "0000000008.json"), $utf8) | ConvertFrom-Json)
+Check ($kept.data.text -ceq ("Both, but Hebrew first." + "`r`n" + "Which voice would the Spanish one be?") -and $kept.data.speaker -ceq "founder" -and $kept.data.route -ceq "chat-recorded" -and $kept.actor -ceq "warchief") "his words are in their record exactly as the file held them, line break and all, as his, recorded by the session"
+Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 13) "and nothing else was written anywhere under the home: no index, no copy of the list, no lock"
 
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-e2e-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }
@@ -121,4 +166,4 @@ Check (@(Get-ChildItem -LiteralPath $hordeHome -Recurse -File).Count -eq 7) "and
 Check (-not (Test-Path -LiteralPath $script:work)) "the scenario's temp folder is removed"
 Check ((Get-RealStoreListing) -ceq $realBefore) "the real store under the user profile is exactly as it was before the scenario"
 
-Complete-HordeSuite -Success "a day of the decisions list at the real command line: every question keeps its number, and the store holds exactly what was done"
+Complete-HordeSuite -Success "a day of the decisions list at the real command line: every question keeps its number, what was said under one is handed over whole, and the store holds exactly what was done"

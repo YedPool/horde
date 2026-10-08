@@ -18,6 +18,10 @@
     "question": {"$ref": "#/definitions/view"},
     "questions": {"type": "array", "items": {"$ref": "#/definitions/view"}, "description": "The questions a list asked for, in number order."},
     "counts": {"type": "object", "description": "How many questions are in each state, by state name, whatever the list was filtered to."},
+    "message": {"$ref": "#/definitions/message"},
+    "messages": {"type": "array", "items": {"$ref": "#/definitions/inboxItem"}, "description": "What an inbox hands back: what others said that the reader had not read, under every question, oldest first."},
+    "upTo": {"type": "integer", "minimum": 0, "description": "For an inbox: the sequence number of the last message handed back, or 0 when there is none; a caller that then marks names this. For a marking: the record it marked up to."},
+    "marked": {"type": "integer", "minimum": 0, "description": "For a marking only: how many messages it marked as read. 0 when the reader had already read that far, in which case nothing was written."},
     "kinds": {"type": "object", "description": "The table of question kinds, as the kinds operation gives it: by kind name, each with label (how a list names it), means (one sentence) and list (which list of a question it needs: options, parts, or none). It is decisions/question-kinds.json's table, handed out here so that no caller needs the file."},
     "unreadable": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that could not be read: torn, not this schema, of a known kind with data that is not that kind's, missing from the order (a gap of several records is one entry, under its first number), or open in another process. The list is still worked out from every other record."},
     "ignored": {"type": "array", "items": {"$ref": "#/definitions/problem"}, "description": "Records that were read and did not apply, such as a change to a question whose own record is unreadable."},
@@ -57,6 +61,62 @@
         "reason": {"type": "string", "pattern": "\\S"}
       }
     },
+    "message": {
+      "type": "object",
+      "description": "One thing said under a question. What the record holds: sequence, at, speaker, route, recordedBy, text, wordingVersion. What is worked out from the order of the records each time, and stored nowhere: saidToEarlierWording, arrivedAfterClosing, unreadBy.",
+      "required": ["sequence", "at", "speaker", "speakerShown", "route", "routeShown", "recordedBy", "text", "holdsDirectionOrInvisibleCharacters", "wordingStated", "wordingVersion", "saidToEarlierWording", "arrivedAfterClosing", "unreadBy"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1, "description": "The record the words are in. A thread is in this order."},
+        "at": {"type": "string"},
+        "speaker": {"type": "string", "description": "Whose words they are."},
+        "speakerShown": {"type": "string", "description": "How the speaker is named to a person."},
+        "route": {"type": "string", "description": "By what route they arrived."},
+        "routeShown": {"type": "string", "description": "The route in words, the same words everywhere: 'recorded by the warchief from chat' for words another hand wrote down."},
+        "recordedBy": {"type": "string", "description": "The role that made the request. For words recorded from chat it is not the speaker."},
+        "text": {"type": "string", "description": "The words, verbatim."},
+        "holdsDirectionOrInvisibleCharacters": {"type": "boolean", "description": "True when the words hold a direction mark, an embedding, an override, an isolate, a joiner or another character that is not seen. They are stored exactly as typed; a way of showing them isolates the message so that it cannot reorder what is beside it. Worked out from the text each time, stored nowhere."},
+        "wordingStated": {"type": "boolean", "description": "Whether the speaker said which wording of the question they were looking at. When false, a way of showing says 'wording not stated'."},
+        "wordingVersion": {"type": "integer", "minimum": 0, "description": "The wording the speaker was looking at; 0 when it was not stated, which is never a wording."},
+        "saidToEarlierWording": {"type": "boolean", "description": "True when the question had already left that wording WHEN THE WORDS WERE SAID: they answered something the question no longer said. Judged at the record's place in the order, and only ever for a STATED wording; never against the wording now: a rewording made afterwards does not flag words said before it."},
+        "arrivedAfterClosing": {"type": "boolean", "description": "True when the question was closed when the words were recorded. They are kept, and reopen nothing."},
+        "unreadBy": {"type": "array", "items": {"type": "string"}, "description": "The roles with an inbox, other than the speaker, that have not read up to this record."}
+      }
+    },
+    "inboxItem": {
+      "type": "object",
+      "required": ["number", "title", "state", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1, "description": "The question the words were said under."},
+        "title": {"type": "string", "description": "That question, in its plain words, as it reads now."},
+        "state": {"type": "string", "description": "That question's state now."},
+        "message": {"$ref": "#/definitions/message"}
+      }
+    },
+    "unread": {
+      "type": "object",
+      "required": ["reader", "readerShown", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "reader": {"type": "string"},
+        "readerShown": {"type": "string"},
+        "count": {"type": "integer", "minimum": 0, "description": "How many messages of the thread, said by others, this reader has not read."}
+      }
+    },
+    "thread": {
+      "type": "object",
+      "description": "The small conversation under one question. All of it is derived from the records. A list carries the counts; one question shown carries the messages too.",
+      "required": ["count", "turn", "turnShown", "unread"],
+      "additionalProperties": false,
+      "properties": {
+        "count": {"type": "integer", "minimum": 0, "description": "How many messages the thread has."},
+        "turn": {"type": "string", "description": "Whose turn it is: the person asked until he speaks, then the other speaker until it replies; 'nobody' while the question is closed. Never stored."},
+        "turnShown": {"type": "string", "description": "That, as a person is told it."},
+        "unread": {"type": "array", "items": {"$ref": "#/definitions/unread"}, "description": "For each role that has an inbox: how many of these messages it has not read."},
+        "messages": {"type": "array", "items": {"$ref": "#/definitions/message"}, "description": "The messages, in store order. Present when one question is shown."}
+      }
+    },
     "history": {
       "type": "object",
       "required": ["sequence", "kind", "at", "actor", "note"],
@@ -72,7 +132,7 @@
     "view": {
       "type": "object",
       "description": "One question as it stands now: its words (schema/decision-question.v1, every field present) and what the records say has happened to it.",
-      "required": ["number", "state", "wordingVersion", "title", "kind", "options", "parts", "whatItIs", "yesMeans", "recommendation", "group", "groupNote", "askedBy", "waiting", "files", "references", "needsSecret", "outcome", "reopenReason", "addedAt", "updatedAt", "closedAt", "history"],
+      "required": ["number", "state", "wordingVersion", "title", "kind", "options", "parts", "whatItIs", "yesMeans", "recommendation", "group", "groupNote", "askedBy", "waiting", "files", "references", "needsSecret", "outcome", "reopenReason", "addedAt", "updatedAt", "closedAt", "history", "thread"],
       "additionalProperties": false,
       "properties": {
         "number": {"type": "integer", "minimum": 1, "description": "Permanent: given once, never changed, never given to another question."},
@@ -95,9 +155,10 @@
         "outcome": {"type": "string", "description": "What was done, when the question is closed. Empty while it is open."},
         "reopenReason": {"type": "string", "description": "Why it was last reopened. Empty if it never was."},
         "addedAt": {"type": "string"},
-        "updatedAt": {"type": "string", "description": "When the latest record about this question was written."},
+        "updatedAt": {"type": "string", "description": "When the latest record that changed this question was written. Words said under it do not change it."},
         "closedAt": {"type": "string", "description": "Empty while it is open."},
-        "history": {"type": "array", "items": {"$ref": "#/definitions/history"}, "description": "Every record that applied to this question, in order."}
+        "history": {"type": "array", "items": {"$ref": "#/definitions/history"}, "description": "Every record that applied to this question, in order."},
+        "thread": {"$ref": "#/definitions/thread"}
       }
     }
   }
