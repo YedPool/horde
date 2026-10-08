@@ -84,7 +84,9 @@
         "speaker": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Whose words they are. The closed list is the speakers of decisions/Rules.ps1."},
         "route": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "By what route they arrived. The closed list is the routes of decisions/Rules.ps1, which also says whose words may arrive by each and who may record them: the actor recording a person's chat words is not the speaker."},
         "text": {"type": "string", "description": "The words, verbatim. No pattern is set here, so that a refusal never describes them."},
-        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at. Absent means NOT STATED, and is recorded as that: nothing is guessed. Words typed in the window always state it (the routes of decisions/Rules.ps1 say which routes must)."}
+        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at. Absent means NOT STATED, and is recorded as that: nothing is guessed. Words typed in the window always state it (the routes of decisions/Rules.ps1 say which routes must)."},
+        "asks": {"type": "boolean", "description": "For the keeper's words only: false when they tell the founder something and ask him nothing (a note), so that the turn stays the keeper's. Absent means true: words said to him ask him."},
+        "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "For the founder's words typed in the window only: the words record an act of his - park (set the question aside) or unpark (bring it back). The turn does not pass."}
       }
     },
     "inbox": {

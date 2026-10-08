@@ -384,6 +384,37 @@ $null = Invoke-Op $s "reopen" @{ id = (New-Id); actor = "warchief"; number = 1; 
 Check (($turns -join " ") -ceq "founder/0/0 warchief/1/1 warchief/1/0 founder/2/0 warchief/3/1 nobody/3/1 nobody/4/2 founder/4/2") ("turn, messages and unread after each step of an exchange: " + ($turns -join " "))
 Check ((Show $s 1).value.question.thread.turnShown -ceq "the founder") "and the turn is told to a person in words"
 
+Write-Host ""
+Write-Host "--- a note asks nothing, an act passes no turn, an edit says it replaces ---" -ForegroundColor Cyan
+$s = New-TestStore
+$null = Add-Q $s
+function SayMarked { param([string]$Store, [hashtable]$More, [string]$Speaker = "founder", [string]$Route = "window", [string]$Actor = "founder", [string]$Text = "words") $r = @{ id = (New-Id); actor = $Actor; number = 1; speaker = $Speaker; route = $Route; text = $Text; wordingVersion = 1 }; foreach ($k in $More.Keys) { $r[$k] = $More[$k] }; return (Invoke-Op $Store "say" $r) }
+$turns = New-Object System.Collections.ArrayList
+$null = SayMarked $s @{} -Text "yes";                                                                  [void]$turns.Add((Get-Turn $s))   # he answers
+$null = SayMarked $s @{ asks = $false } -Speaker "warchief" -Route "command" -Actor "warchief" -Text "noted, working on it"; [void]$turns.Add((Get-Turn $s))   # a note
+$null = SayMarked $s @{ asks = $true } -Speaker "warchief" -Route "command" -Actor "warchief" -Text "which build?";     [void]$turns.Add((Get-Turn $s))   # a reply that asks
+$null = SayMarked $s @{ act = "park" } -Text "parked";                                                  [void]$turns.Add((Get-Turn $s))   # he parks it
+$null = SayMarked $s @{ act = "unpark" } -Text "unparked";                                              [void]$turns.Add((Get-Turn $s))   # and brings it back
+Check (($turns -join " ") -ceq "warchief/1/1 warchief/2/1 founder/3/1 founder/4/2 founder/5/3") ("A NOTE KEEPS THE TURN THE KEEPER'S; a reply that asks gives it to him; his park and unpark pass no turn: " + ($turns -join " "))
+$msgs = @((Show $s 1).value.question.thread.messages)
+Check ((@($msgs | ForEach-Object { "" + $_.asks + ":" + $_.act }) -join " ") -ceq "True: False: True: True:park True:unpark") "each message says whether it asks and what act it records, and a record that says neither asks and records none"
+$edit = SayMarked $s @{} -Text "yes, the short build"
+$msgs = @((Show $s 1).value.question.thread.messages)
+Check ((Get-Outcome $edit) -ceq "done" -and $msgs[5].replaces -eq $false -and $msgs[0].replaces -eq $false) "his words after the keeper's question replace nothing"
+$again = SayMarked $s @{} -Text "yes, the long build after all"
+$msgs = @((Show $s 1).value.question.thread.messages)
+Check ($msgs[6].replaces -eq $true -and $msgs[6].speaker -ceq "founder") "HIS WORDS STRAIGHT AFTER HIS OWN replace them, and the message says so"
+$parkThenEdit = SayMarked $s @{ act = "park" } -Text "parked"
+$afterPark = SayMarked $s @{} -Text "yes, final"
+$msgs = @((Show $s 1).value.question.thread.messages)
+Check ($msgs[8].replaces -eq $true) "an act between them is left aside: words after his park still replace his answer before it"
+Check (Test-Refused (SayMarked $s @{ asks = $false } -Text "a founder note") "can be a note") "a note from the founder is refused: only the keeper's words can ask nothing"
+Check (Test-Refused (SayMarked $s @{ act = "park" } -Speaker "warchief" -Route "command" -Actor "warchief") "only for the founder's words typed in the window") "an act by the keeper is refused"
+Check (Test-Refused (SayMarked $s @{ act = "archive" }) "act") "an act that is not park or unpark is refused"
+Check (Test-Refused (SayMarked $s @{ asks = "no" } -Speaker "warchief" -Route "command" -Actor "warchief") "asks") "asks that is not true or false is refused"
+$inbox = Inbox $s
+Check (@($inbox.value.messages | Where-Object { $_.message.act -ceq "park" }).Count -eq 2) "his acts reach the keeper's inbox like his words: the keeper sees that he parked it"
+
 } finally {
     if ((Split-Path -Leaf $script:work) -match '\Ahorde-decisions-threads-test-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $script:work)) { Remove-Item -LiteralPath $script:work -Recurse -Force }
 }

@@ -1,0 +1,109 @@
+/* decisions/page/list.css - the list of questions as a document the reader answers in (list.js):
+   headings, and under each a line per question - letter and number, the question in full, the
+   answer's field - with sub-numbered lines of context under an unfolded one. No boxes, chips or panels.
+
+   SHARP LETTERS (a measured complaint about the earlier page on a screen at one and a half times
+   the ordinary scale): no size is set here at all - the letters and the line height are the host
+   page's, which sets them in whole device pixels (decisions/window/frame.js) - and this file adds
+   weights 400 and 600 only, no letter-spacing, no transform, no opacity (a muted or dimmed line is a
+   colour, never a faded letter) and no clamp on a line's height. A FIELD'S UNDERLINE IS A SHADOW
+   INSIDE IT, never a border: a border of one pixel is one and a half of the screen's own at that
+   scale, and every line under it would then start on half a pixel.
+
+   THE QUESTION IS NEVER CUT: no ellipsis, no clamp, no nowrap anywhere on it. It wraps to as many
+   lines as it needs. Its row wraps too: the answer stands to the right of a question only when the
+   whole question fits on one line with at least 220 pixels left for the field, and otherwise on a
+   line of its own, under the question's words (the row's left padding is where the words begin, and
+   the fold mark and the number hang back into it).
+
+   ROOM IS KEPT FOR THE QUESTIONS STILL TO ANSWER (list.js says what was seen). A message said
+   before is one line, cut with an ellipsis, unless it is the one to answer or the question is
+   unfolded. IN A NARROW WINDOW THE MARK HANGS IN THE MARGIN LEFT OF THE FIELD, under the letter and
+   number, in its short form: beside the field it took a seventh of every line of the answer (seen
+   2026-10-07 in a picture of the real window, 378 pixels wide). In a wide one it stands to the right
+   of the field, in full words.
+
+   THE GREY SUGGESTION IS --hint, not --faint: measured 2026-10-07, --faint on the page was 2.61 to 1
+   in light and 3.73 to 1 in dark, under what small text needs to be read (4.5). --hint is 4.59 and
+   5.19; what he types is --ink, 17.8 and 14.7, so the two are never mistaken for each other.
+
+   A GROUP'S NOTE OF BACKGROUND is not drawn until its heading's word "background" is pressed
+   (list.js says what was seen). In a narrow window a heading's count is left out, and that word stays.
+
+   The colours are the host page's variables: --ink, --muted, --faint, --dim, --line, --accent,
+   --warn. --line-px is the host's line height, which the fold mark is centred in. */
+.hd-row { display: flex; align-items: baseline; min-height: var(--line-px); }
+.hd-head { display: grid; justify-content: start; grid-template-columns: 14px minmax(0, auto) minmax(0, auto); cursor: pointer; }
+.hd-qrow { --hang: 54px; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 14px; padding-left: var(--hang); min-height: var(--line-px); }
+.hd-qt { display: flex; align-items: baseline; flex: 0 1 auto; min-width: 0; max-width: calc(100% + var(--hang)); margin-left: calc(-1 * var(--hang)); cursor: pointer; }
+.hd-tri { flex: 0 0 14px; width: 14px; height: var(--line-px); align-self: flex-start; position: relative; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.hd-tri::before { content: ""; position: absolute; left: 4px; top: calc((var(--line-px) - 8px) / 2); border-left: 6px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+.hd-tri[aria-expanded="true"]::before { left: 2px; top: calc((var(--line-px) - 6px) / 2); border-top: 6px solid var(--faint); border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 0; }
+.hd-tri:focus-visible { outline: 1px solid var(--muted); }
+.hd-num { flex: 0 0 auto; min-width: 30px; color: var(--ink); font-weight: 600; text-align: right; padding-right: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hd-qt > .hd-num { flex: 0 0 40px; width: 40px; }
+.hd-let { color: var(--muted); font-weight: 400; padding-right: 4px; }
+.hd-line > .hd-num { min-width: 0; color: var(--muted); font-weight: 400; }
+.hd-lab { flex: 0 0 auto; color: var(--muted); padding-right: 6px; }
+.hd-txt { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; unicode-bidi: plaintext; }
+.hd-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hd-ans { flex: 1 1 220px; min-width: 0; }
+.hd-fl { display: flex; align-items: flex-start; column-gap: 8px; }
+.hd-field { flex: 1 1 auto; min-width: 0; display: block; height: var(--line-px); font: inherit; line-height: var(--line-px); color: var(--ink); background: transparent; border: 0; border-radius: 0; margin: 0; padding: 0 2px; resize: none; overflow: hidden; outline: 0; box-shadow: inset 0 -1px 0 var(--line); unicode-bidi: plaintext; }
+.hd-field:focus { box-shadow: inset 0 -2px 0 var(--accent); }
+.hd-field::placeholder { color: var(--hint); }
+.hd-mark { flex: 0 0 auto; max-width: 50%; display: flex; flex-direction: column; align-items: flex-end; color: var(--muted); font-size: var(--small-px); line-height: var(--line-px); white-space: nowrap; }
+.hd-mark-short { display: none; }
+.hd-mark-more { line-height: var(--small-line-px); }
+.hd-mark-more:empty { display: none; }
+.hd-marknote { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
+.hd-refusal { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
+.hd-msg { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-msg.brief { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.hd-q.open .hd-msg.brief { white-space: pre-wrap; overflow: visible; }
+.hd-msg.asks { color: var(--ink); }
+.hd-ans.wide { flex-basis: 100%; }
+.hd-who { font-weight: 600; padding-right: 6px; }
+.hd-said { unicode-bidi: isolate; }
+.hd-flag { font-size: var(--small-px); }
+.hd-suf { min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 6px; }
+.hd-group { margin-top: 10px; }
+.hd-group:first-child { margin-top: 0; }
+/* A heading is never cut short: nothing unfolds it, so words lost to an ellipsis could not be read
+   at all. In a narrow window it takes a second line. */
+.hd-head > .hd-txt { font-weight: 600; }
+.hd-note { display: none; color: var(--muted); padding-left: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-group.note-open > .hd-note { display: block; }
+.hd-bg { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-decoration: underline; }
+.hd-bg:focus-visible { outline: 1px solid var(--muted); }
+.hd-group.folded > .hd-kids, .hd-group.folded > .hd-note { display: none; }
+.hd-sub { padding-left: 54px; }
+/* A QUESTION OF PARTS (list.js): a row per part - its letter and words, then its own field under
+   them - one after another, the mark beside the whole. */
+.hd-parts { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; row-gap: 2px; }
+.hd-partlab { display: flex; align-items: baseline; column-gap: 6px; color: var(--muted); overflow-wrap: anywhere; }
+.hd-partlet { flex: 0 0 auto; color: var(--ink); font-weight: 600; }
+.hd-partwords { flex: 1 1 auto; min-width: 0; unicode-bidi: plaintext; }
+.hd-partfield { margin-left: 20px; width: calc(100% - 20px); box-sizing: border-box; }
+.hd-partsrec { color: var(--muted); overflow-wrap: anywhere; }
+/* THE FOLDS BELOW THE LIST (list.js, WHERE A QUESTION STANDS): each one line folded; a row in them is
+   only read - his answer at two lines at most, the keeper's last words and the outcome at one. */
+.hd-fold { margin-top: 6px; }
+.hd-fold > .hd-head > .hd-txt { font-weight: 400; color: var(--muted); }
+.hd-fold > .hd-head .hd-tri:focus-visible, .hd-fold > .hd-head .hd-tri:focus { outline: 1px solid var(--accent); }
+.hd-msg.rest { max-height: calc(2 * var(--line-px)); overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hd-q.open .hd-msg.rest { max-height: none; }
+/* A NEW QUESTION says so after its number until he has answered or passed it. */
+.hd-q.new .hd-no::after { content: " new"; color: var(--accent); font-weight: 400; font-size: var(--small-px); }
+/* The short line after Ctrl+B: what was done, and Ctrl+Z to undo it. Fixed at the foot of the view. */
+.hd-toast { position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; bottom: 10px; max-width: calc(100% - 32px); padding: 2px 10px; background: var(--ink); color: var(--bg, #fff); font-size: var(--small-px); line-height: var(--small-line-px); z-index: 10; }
+.hd-toast[hidden] { display: none; }
+.hd-q.dim .hd-txt, .hd-q.dim .hd-num, .hd-q.dim .hd-let, .hd-q.dim .hd-lab { color: var(--dim); }
+@media (max-width: 520px) {
+  .hd-count { display: none; }
+  .hd-ans { flex-basis: 100%; }
+  .hd-fl { position: relative; }
+  .hd-mark { position: absolute; right: 100%; top: 0; width: 54px; max-width: none; margin-right: 6px; }
+  .hd-mark-full { display: none; }
+  .hd-mark-short { display: inline; }
+}

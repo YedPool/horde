@@ -80,7 +80,10 @@
         "wordingVersion": {"type": "integer", "minimum": 0, "description": "The wording the speaker was looking at; 0 when it was not stated, which is never a wording."},
         "saidToEarlierWording": {"type": "boolean", "description": "True when the question had already left that wording WHEN THE WORDS WERE SAID: they answered something the question no longer said. Judged at the record's place in the order, and only ever for a STATED wording; never against the wording now: a rewording made afterwards does not flag words said before it."},
         "arrivedAfterClosing": {"type": "boolean", "description": "True when the question was closed when the words were recorded. They are kept, and reopen nothing."},
-        "unreadBy": {"type": "array", "items": {"type": "string"}, "description": "The roles with an inbox, other than the speaker, that have not read up to this record."}
+        "unreadBy": {"type": "array", "items": {"type": "string"}, "description": "The roles with an inbox, other than the speaker, that have not read up to this record."},
+        "asks": {"type": "boolean", "description": "False for the keeper's words that ask the founder nothing (a note); true otherwise, and for every record that does not say."},
+        "act": {"type": "string", "description": "park or unpark when the founder's words record that act of his; empty otherwise."},
+        "replaces": {"type": "boolean", "description": "True when the same speaker's own words were the last said under the question before these (acts left aside): these replace them. Worked out at the record's place."}
       }
     },
     "inboxItem": {
