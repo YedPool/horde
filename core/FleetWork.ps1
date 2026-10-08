@@ -81,6 +81,15 @@ function Test-HordeFleetWorkRules {
         elseif ($null -ne $written -and $since -gt $written) { [void]$out.Add("values.since is after the line's time: a wait cannot start after it was written") }
     }
     if ($e["kind"] -ceq "wait-end" -and ("" + $v["ends"]) -ceq ("" + $e["id"])) { [void]$out.Add("values.ends names the line's own id: an end ends another line, not itself") }
+    # send: a step inside the send cannot take longer than the send. mail: a message does not answer
+    # itself. restart: no more sessions repaired than were found.
+    if ($e["kind"] -ceq "send") {
+        foreach ($step in @("queuedMs", "wokenMs", "takenMs")) {
+            if ($v.ContainsKey($step) -and $v[$step] -gt $v["ranMs"]) { [void]$out.Add("values." + $step + " is longer than values.ranMs: a step of a send cannot take longer than the send") }
+        }
+    }
+    if ($e["kind"] -ceq "mail" -and $v.ContainsKey("answers") -and ("" + $v["answers"]) -ceq ("" + $v["mailId"])) { [void]$out.Add("values.answers names the message itself: a message answers another, not itself") }
+    if ($e["kind"] -ceq "restart" -and $v["repaired"] -gt $v["found"]) { [void]$out.Add("values.repaired is more than values.found: only a session that was found can be repaired") }
     return @($out)
 }
 

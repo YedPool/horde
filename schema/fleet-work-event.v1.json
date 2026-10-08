@@ -8,7 +8,7 @@
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "type": "integer", "enum": [1] },
-    "kind": { "type": "string", "enum": ["wait", "wait-end", "status"], "description": "wait: a session starts waiting on someone or something. wait-end: a wait ends, and what ended it. status: a lane's status record as its orchestrator last wrote it." },
+    "kind": { "type": "string", "enum": ["wait", "wait-end", "status", "send", "mail", "restart"], "description": "wait: a session starts waiting on someone or something. wait-end: a wait ends, and what ended it. status: a lane's status record as its orchestrator last wrote it. send: one message sent from one session to another, how it went and how long each step took. mail: one message queued in a session's mailbox, its kind and the message it answers. restart: the roll call after a terminal restart, sessions found, missing and repaired. send, mail and restart are written by the fleet's own terminal-orchestration tool at the moment each happens; none holds any message text." },
     "lane": { "$ref": "#/definitions/label", "description": "The lane the event belongs to, in the plain words its orchestrator always uses for it." },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,63}$", "description": "8 to 64 characters, lower case, set once by the writer of the event and kept on every retry. core/FleetWorkStore.ps1's New-HordeFleetWorkEventId gives 32 lower-case hex digits." },
     "time": { "$ref": "#/definitions/utc", "description": "When the event was written, in UTC." },
@@ -38,6 +38,48 @@
       "properties": {
         "ends": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,63}$", "description": "The id of the wait line this line ends. The end time is this line's time." },
         "unblockedBy": { "$ref": "#/definitions/line200", "description": "What ended the wait, in plain words." }
+      }
+    },
+    "mailId": { "type": "string", "pattern": "^([0-9a-f]{10}|[0-9a-f]{32})$", "description": "A message id as the fleet's mail store writes one: 10 lower-case hex digits for a message sent inside the fleet, 32 for one routed in from outside." },
+    "ms": { "type": "integer", "minimum": 0, "description": "A duration in whole milliseconds." },
+    "count": { "type": "integer", "minimum": 0, "description": "A number of sessions." },
+    "sendValues": {
+      "type": "object",
+      "required": ["session", "to", "route", "outcome", "ranMs"],
+      "additionalProperties": false,
+      "properties": {
+        "session": { "$ref": "#/definitions/label", "description": "The session that sent." },
+        "to": { "$ref": "#/definitions/label", "description": "The session it was sent to." },
+        "route": { "type": "string", "enum": ["mail", "keys"], "description": "mail: queued in the receiver's mailbox and handed over by its own hook. keys: typed into its input box." },
+        "outcome": { "type": "string", "enum": ["taken", "woken", "not-woken", "delivered", "not-delivered"], "description": "taken: the receiver confirmed it while the send waited. woken: queued, the receiver was woken, not yet confirmed. not-woken: queued, nobody could be woken. delivered: typed and confirmed. not-delivered: typed and not confirmed, or nothing typed." },
+        "ranMs": { "$ref": "#/definitions/ms", "description": "How long the send command ran, from start to its answer." },
+        "queuedMs": { "$ref": "#/definitions/ms", "description": "Optional. When the mail was on disk, from the start of the send." },
+        "wokenMs": { "$ref": "#/definitions/ms", "description": "Optional. When the wake notice landed, from the start of the send." },
+        "takenMs": { "$ref": "#/definitions/ms", "description": "Optional. When the receiver confirmed it, from the start of the send." },
+        "mailId": { "$ref": "#/definitions/mailId", "description": "Optional. The mail it queued, so a send line and a mail line join." }
+      }
+    },
+    "mailValues": {
+      "type": "object",
+      "required": ["from", "to", "mailId", "messageKind"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "$ref": "#/definitions/label", "description": "The sender's name." },
+        "to": { "$ref": "#/definitions/label", "description": "The receiver's name." },
+        "mailId": { "$ref": "#/definitions/mailId" },
+        "messageKind": { "type": "string", "enum": ["question", "answer", "report", "order", "copy", "notice", "unmarked"], "description": "What the sender says the message is. unmarked: the sender did not say." },
+        "answers": { "$ref": "#/definitions/mailId", "description": "Optional. The id of the message this one answers." }
+      }
+    },
+    "restartValues": {
+      "type": "object",
+      "required": ["session", "found", "missing", "repaired"],
+      "additionalProperties": false,
+      "properties": {
+        "session": { "$ref": "#/definitions/label", "description": "The session that took the roll call." },
+        "found": { "$ref": "#/definitions/count", "description": "Sessions found alive in a pane." },
+        "missing": { "$ref": "#/definitions/count", "description": "Sessions recorded before the restart and found in no pane." },
+        "repaired": { "$ref": "#/definitions/count", "description": "Of those found, how many had their pane record or tab title put right. Never more than found." }
       }
     },
     "statusValues": {

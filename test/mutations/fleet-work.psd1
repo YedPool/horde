@@ -73,5 +73,14 @@
         @{ Name = "first-status-kept"
            Find = '            $statuses[$ev.lane] = [pscustomobject]@{'
            Replace = '            if (-not $statuses.ContainsKey($ev.lane)) { $statuses[$ev.lane] = $null }; if ($null -ne $statuses[$ev.lane]) { continue }; $statuses[$ev.lane] = [pscustomobject]@{' }
+        @{ Name = "send-step-not-bounded"
+           Find = 'if ($v.ContainsKey($step) -and $v[$step] -gt $v["ranMs"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "mail-may-answer-itself"
+           Find = 'if ($e["kind"] -ceq "mail" -and $v.ContainsKey("answers")'
+           Replace = 'if ($false -and $v.ContainsKey("answers")' }
+        @{ Name = "restart-repaired-not-bounded"
+           Find = 'if ($e["kind"] -ceq "restart" -and $v["repaired"] -gt $v["found"]) {'
+           Replace = 'if ($false) {' }
     )
 }

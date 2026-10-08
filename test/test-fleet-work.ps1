@@ -138,6 +138,44 @@ Check (@($other.findings | Where-Object { $_ -like "*line 2*another lane*" }).Co
 $two = Read-HordeFleetWorkLog -Text ($realLines[1] + "`n" + (Edit-Line $realLines[1] { param($e) $e.id = "0a1f0000000000000000000000000009"; $e.values.waitingOn = "lane" }) + "`n")
 Check (@($two.waits).Count -eq 2 -and @($two.findings).Count -eq 0) "CONTROL: one session may wait on two things at once"
 
+Section "the kinds the fleet's own send command writes: send, mail, restart"
+# Task T-0073: three records the fleet analyst asked to be written at the moment they happen, by the
+# fleet's terminal-orchestration tool rather than by Horde. Each is one line of this same file, so the
+# kinds join the closed list here, each with its values fixed below. They hold no message text: counts,
+# times in milliseconds, closed lists, labels and mail ids only.
+#   send     one per tell: how it went (route, outcome) and how long each step took
+#   mail     one per mail queued: its kind, and the id of the mail it answers
+#   restart  one per roll call after a terminal restart: sessions found, missing and repaired
+$sendLine = '{"schemaVersion":1,"kind":"send","lane":"review tooling","id":"0b2f0000000000000000000000000001","time":"2026-10-08T09:00:05.120Z","values":{"mailId":"a1b2c3d4e5","outcome":"woken","queuedMs":180,"ranMs":20410,"route":"mail","session":"F","to":"M","wokenMs":2350}}'
+$mailLine = '{"schemaVersion":1,"kind":"mail","lane":"review tooling","id":"0b2f0000000000000000000000000002","time":"2026-10-08T09:00:05.300Z","values":{"answers":"f0e1d2c3b4","from":"F","mailId":"a1b2c3d4e5","messageKind":"answer","to":"M"}}'
+$restartLine = '{"schemaVersion":1,"kind":"restart","lane":"master","id":"0b2f0000000000000000000000000003","time":"2026-10-08T07:12:00.000Z","values":{"found":8,"missing":1,"repaired":7,"session":"M"}}'
+foreach ($k in @(@("send", $sendLine), @("mail", $mailLine), @("restart", $restartLine))) {
+    $a = Read-Line $k[1]
+    Check (Test-Reads $a) ("a " + $k[0] + " line reads (" + (Show $a) + ")")
+}
+Check ((Read-Line $sendLine).event.values.ranMs -eq 20410) "the send read is the line's: how long the send ran"
+$minimalSend = Edit-Line $sendLine { param($e) $e.values.PSObject.Properties.Remove("wokenMs"); $e.values.PSObject.Properties.Remove("mailId"); $e.values.PSObject.Properties.Remove("queuedMs"); $e.values.route = "keys"; $e.values.outcome = "delivered" }
+Check (Test-Reads (Read-Line $minimalSend)) "a send by keystrokes, with no mail id and no step times, reads"
+Check (Test-Reads (Read-Line (Edit-Line $mailLine { param($e) $e.values.PSObject.Properties.Remove("answers"); $e.values.messageKind = "unmarked" }))) "a mail that answers nothing, and whose kind was not given, reads"
+Check (Test-Reads (Read-Line (Edit-Line $mailLine { param($e) $e.values.mailId = ("ab" * 16); $e.values.answers = ("cd" * 16) }))) "CONTROL: a 32-hex mail id (a posted one) reads too"
+# attacked: each with a control above that the same field with an ordinary value is kept
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.outcome = "probably" })) "*outcome*") "a send outcome not on its closed list is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.route = "pigeon" })) "*route*") "a send route not on its closed list is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.ranMs = -1 })) "*ranMs*") "a negative duration is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.ranMs = "20s" })) "*ranMs*") "a duration that is not a whole number is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.PSObject.Properties.Remove("ranMs") })) "*ranMs*") "a send without how long it ran is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values.wokenMs = 30000 })) "*wokenMs*longer*") "a step that took longer than the whole send is refused"
+Check (Test-Refused (Read-Line (Edit-Line $sendLine { param($e) $e.values | Add-Member -NotePropertyName body -NotePropertyValue "hello" })) "*body*") "a send carrying a field outside its kind (a body) is refused"
+Check (Test-Refused (Read-Line (Edit-Line $mailLine { param($e) $e.values.messageKind = "gossip" })) "*messageKind*") "a message kind not on its closed list is refused"
+Check (Test-Refused (Read-Line (Edit-Line $mailLine { param($e) $e.values.mailId = "M-17" })) "*mailId*") "a mail id that is not one the store writes is refused"
+Check (Test-Refused (Read-Line (Edit-Line $mailLine { param($e) $e.values.answers = $e.values.mailId })) "*answers*itself*") "a mail that answers itself is refused"
+Check (Test-Refused (Read-Line (Edit-Line $restartLine { param($e) $e.values.missing = -2 })) "*missing*") "a negative count of missing sessions is refused"
+Check (Test-Refused (Read-Line (Edit-Line $restartLine { param($e) $e.values.repaired = 9 })) "*repaired*more*") "more sessions repaired than were found is refused"
+Check (Test-Refused (Read-Line (Edit-Line $restartLine { param($e) $e.values = $null })) "*values*") "a restart with no values is refused"
+# the fold reads these lines and counts them, and they open no wait and replace no status
+$foldNew = Read-HordeFleetWorkLog -Text ($realText + $sendLine + "`n" + $mailLine + "`n" + $restartLine + "`n")
+Check ($foldNew.lines -eq 9 -and $foldNew.skipped -eq 0 -and @($foldNew.waits).Count -eq 1 -and @($foldNew.statuses).Count -eq 2) ("the fold reads the three new lines beside the real shapes, and they change no wait and no status (lines " + $foldNew.lines + ", skipped " + $foldNew.skipped + ")")
+
 Section "the writer: consent"
 $work = Join-Path $env:TEMP ("horde-fleet-work-" + [guid]::NewGuid().ToString("N"))
 $savedHome = $env:HORDE_HOME
