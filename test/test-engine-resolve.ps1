@@ -231,6 +231,27 @@ try {
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "telepathy") "a requirement the capability vocabulary does not have is refused, so a typo cannot require nothing"
     [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": [], "orc": [] } }')
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin has no requirement list") "a role with no requirement list is refused"
+
+    # DUTIES: what a role must DO, beside what it needs from its harness. Each is checked when the
+    # file is read, so a duty cannot name a role that does not exist, say nothing, or point at a
+    # document that is not there.
+    $okRequires = '"requires": { "warchief": [], "orc": [], "goblin": [] }'
+    $okDoc = "planning/ledger/README.md"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "' + $okDoc + '" } ] } }')
+    Check (@((Get-HordeRoleDuties -Path $tmpReq).warchief).Count -eq 1) "CONTROL: a well-formed duty loads"
+    Check ((Get-HordeRoleRequirements -Path $tmpReq).PSObject.Properties["warchief"] -ne $null) "CONTROL: and the requirements beside it still load"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ' }')
+    Check (@((Get-HordeRoleDuties -Path $tmpReq).PSObject.Properties).Count -eq 0) "a file with no duties section has no duties, and is not refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warlord": [ { "id": "keeps-x", "rule": "keep x" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "warlord, which is not a role") "a duty for a role that does not exist is refused, so a typo cannot bind nobody"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": " " } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "keeps-x has no rule") "a duty with no rule text is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "Keeps X", "rule": "keep x" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "id 'Keeps X'") "a duty id that is not lowercase-and-dashes is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "planning/roles/no-such-role.md" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "no-such-role.md, which is not in the repository") "a duty pointing at a document that is not there is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "../outside.md" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "repository-relative") "a duty document outside the repository is refused"
 } finally { Remove-Item -LiteralPath $tmpReq -Force -ErrorAction SilentlyContinue }
 $l0 = @(Get-HordeBuiltinLayer -Root $root)
 $realDesc = (Get-HordeAgentDescriptors -Root $root).value
