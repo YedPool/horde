@@ -253,6 +253,26 @@ try {
     [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "../outside.md" } ] } }')
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "repository-relative") "a duty document outside the repository is refused"
 } finally { Remove-Item -LiteralPath $tmpReq -Force -ErrorAction SilentlyContinue }
+
+# THE WARCHIEF'S ANALYST (protocol change, 2026-10-08). The rule is held as data, worded as
+# given, and the role document it points at quotes it verbatim, so the two cannot drift apart.
+$analystRule = "every warchief keeps one read-only analyst under it, reporting only to its warchief; speed, accuracy, efficiency and parallelisation first, cost second"
+$dutiesReal = Get-HordeRoleDuties
+$keeps = @(@($dutiesReal.warchief) | Where-Object { $_.id -ceq "keeps-analyst" })
+Check ($keeps.Count -eq 1) "the warchief has exactly one keeps-analyst duty"
+Check ($keeps.Count -eq 1 -and $keeps[0].rule -ceq $analystRule) "the duty is worded exactly as the rule was given"
+Check ($keeps.Count -eq 1 -and $keeps[0].doc -ceq "planning/roles/fleet-analyst.md") "the duty points at the analyst's role document"
+$docPath = Join-Path $root "planning\roles\fleet-analyst.md"
+$docText = ""
+if (Test-Path -LiteralPath $docPath) { $docText = [System.IO.File]::ReadAllText($docPath) }
+Check ($docText.Length -gt 0) "CONTROL: the analyst's role document was read"
+Check ($docText.Contains($analystRule)) "the role document quotes the warchief's duty verbatim"
+Check (@([System.Text.Encoding]::UTF8.GetBytes($docText) | Where-Object { $_ -gt 127 }).Count -eq 0) "the role document is ASCII only"
+Check ($docText -notmatch '(?i)[a-z]:\\|\\Users\\|/Users/|/home/|~/') "the role document names no absolute or home path"
+Check ($docText.Contains("schema/finding.v1.json")) "the role document names the finding record by its schema"
+foreach ($heading in @("## Reads", "## Never", "## Reports to", "## Produces")) {
+    Check ($docText.Contains($heading)) ("the role document has the section '" + $heading + "'")
+}
 $l0 = @(Get-HordeBuiltinLayer -Root $root)
 $realDesc = (Get-HordeAgentDescriptors -Root $root).value
 Check ($l0.Count -ge 1 -and @($l0 | Where-Object { $_.layer -cne "L0" }).Count -eq 0) ("the repository's built-in layer is read from the harness folders, every file as L0 (" + $l0.Count + " files)")
