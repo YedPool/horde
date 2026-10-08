@@ -1,0 +1,3 @@
+{"schemaVersion":1,"kind":"status","lane":"review tooling","id":"0a1f0000000000000000000000000001","time":"2026-10-07T09:12:00.000Z","values":{"blocked":"no","doing":"Reviewing the first build step of the review list; testing a real mail wake in a separate terminal","finished":"Two mail fixes merged into the fleet tool","session":"F"}}
+{"schemaVersion":1,"kind":"wait","lane":"review tooling","id":"0a1f0000000000000000000000000002","time":"2026-10-07T13:05:00.000Z","values":{"endsWhen":"his word on installing the remote shell feature","session":"F","since":"2026-10-07T13:00Z","waitingOn":"owner"}}
+{"schemaVersion":1,"kind":"wait-end","lane":"review tool
