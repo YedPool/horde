@@ -33,7 +33,7 @@ if ($Mode -ceq "open") {
     $t = Test-HordeRelayEnvelope -Envelope $r.value -Senders $senders
     if (-not $t.ok) { [System.IO.File]::WriteAllText($out, "REFUSED " + $t.reason, $utf8); exit 0 }
     $fresh = New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header $t.value.header); fresh = $true })
-    $u = Unprotect-HordeRelayEnvelope -Verified $t.value -RecipientKeys @{ (Get-HordeRelayKeyId -Public $agreePub) = $agree } -Replay $fresh
+    $u = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders -RecipientKeys @{ (Get-HordeRelayKeyId -Public $agreePub) = $agree } -Replay $fresh -Channel "decisions" -Kind "snapshot"
     if (-not $u.ok) { [System.IO.File]::WriteAllText($out, "REFUSED " + $u.reason, $utf8); exit 0 }
     [System.IO.File]::WriteAllText($out, "OK " + (ConvertTo-HordeRelayHex -Bytes $u.value) + " " + (Get-HordeRelayAeadBackend), $utf8)
     exit 0

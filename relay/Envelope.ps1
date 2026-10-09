@@ -32,9 +32,12 @@
 #   1. Read-HordeRelayEnvelope, then Test-HordeRelayEnvelope (the signature) - so nothing
 #      unauthenticated ever reaches the journal;
 #   2. the caller asks the journal about Get-HordeRelayReplayKey of the verified header;
-#   3. Unprotect-HordeRelayEnvelope takes the journal's verdict as a core/tristate answer, and opens the
-#      body only when it is known, fresh, and for this very envelope's replay key. Absent, unknown,
-#      not fresh, or a verdict about another envelope: refused, and nothing is decrypted.
+#   3. Unprotect-HordeRelayEnvelope takes the READ envelope and the trusted senders and verifies the
+#      signature again itself - a verified result is never taken as data (review of 3bf4657, finding
+#      1: a hand-made one wrapping an untrusted signer's envelope opened) - then requires the channel
+#      and kind the caller expects, then the journal's verdict as a core/tristate answer: known, fresh
+#      as the boolean $true, and for this very envelope's replay key. Anything else is refused, and
+#      nothing is decrypted.
 #
 # Every function that judges far-end input answers { ok; reason; ... } and never throws for it.
 #
@@ -275,6 +278,13 @@ function Test-HordeRelayEnvelope {
     param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders)
     $env = $Envelope
     $h = $env.header
+    # The parts that are used must be the parts that are signed: the signature covers the texts, while
+    # decryption and the replay key use the decoded header, recipients and ciphertext. Rebuilt and
+    # compared, so an envelope object whose parts were swapped after Read is refused.
+    $rebuiltRecipients = ConvertTo-HordeRelayRecipientsText -Recipients @($env.recipients | ForEach-Object { [pscustomobject]@{ kid = $_.kid; encText = (ConvertTo-HordeRelayBase64Url -Bytes $_.enc); keyText = (ConvertTo-HordeRelayBase64Url -Bytes $_.key) } })
+    if ((ConvertTo-HordeRelayHeaderText -Header $h) -cne $env.headerText -or $rebuiltRecipients -cne $env.recipientsText -or (ConvertTo-HordeRelayBase64Url -Bytes $env.ct) -cne $env.ctText) {
+        return (New-HordeRelayEnvelopeAnswer -Reason "the envelope's parts do not match its signed text")
+    }
     if (-not $Senders.ContainsKey($h.from)) { return (New-HordeRelayEnvelopeAnswer -Reason ("the sender " + $h.from + " is not one this machine trusts")) }
     $sender = $Senders[$h.from]
     if ($sender.keyId -cne $h.from) { return (New-HordeRelayEnvelopeAnswer -Reason "the trusted-sender entry for this key id holds another key") }
@@ -298,15 +308,23 @@ function Get-HordeRelayReplayKey {
 }
 
 function Unprotect-HordeRelayEnvelope {
-    # Open a verified envelope's body with this machine's agree keys (a hashtable of key id to key),
-    # given the journal's verdict on it. { ok; reason; value } where value is the body's bytes.
+    # Open a read envelope's body with this machine's agree keys (a hashtable of key id to key). Its
+    # signature is verified here against Senders, its channel and kind must be the ones the caller
+    # expects, and the journal's verdict must say it is fresh. { ok; reason; value } where value is the
+    # body's bytes.
     #
     # Replay is a core/tristate answer from the journal: known, with value { key; fresh }, where key is
-    # Get-HordeRelayReplayKey of THIS envelope's header and fresh is $true. Anything else refuses, before
-    # a single byte is decrypted.
-    param([Parameter(Mandatory = $true)]$Verified, [Parameter(Mandatory = $true)][hashtable]$RecipientKeys, [Parameter(Mandatory = $true)][AllowNull()]$Replay)
-    $h = $Verified.header
-    $env = $Verified.envelope
+    # Get-HordeRelayReplayKey of THIS envelope's header and fresh is the boolean $true. Anything else
+    # refuses, before a single byte is decrypted.
+    param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders,
+        [Parameter(Mandatory = $true)][hashtable]$RecipientKeys, [Parameter(Mandatory = $true)][AllowNull()]$Replay,
+        [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind)
+    $verified = Test-HordeRelayEnvelope -Envelope $Envelope -Senders $Senders
+    if (-not $verified.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $verified.reason) }
+    $env = $Envelope
+    $h = $env.header
+    if ($h.channel -cne $Channel) { return (New-HordeRelayEnvelopeAnswer -Reason ("the envelope is for the channel " + $h.channel + ", not " + $Channel)) }
+    if ($h.kind -cne $Kind) { return (New-HordeRelayEnvelopeAnswer -Reason ("the envelope is of the kind " + $h.kind + ", not " + $Kind)) }
     $rk = Get-HordeRelayReplayKey -Header $h
     # Members are looked up, not dereferenced: under strict mode a missing one would throw, and a verdict
     # is checked here precisely because it may be malformed.
@@ -326,7 +344,9 @@ function Unprotect-HordeRelayEnvelope {
         $vFresh = $verdict.Value.PSObject.Properties["fresh"]
     }
     if ($null -eq $vKey -or "" + $vKey.Value -cne $rk) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal's verdict is about another envelope, so this one is not opened") }
-    if ($null -eq $vFresh -or $vFresh.Value -ne $true) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal has seen this envelope already: a replay is refused") }
+    # The boolean $true only: -ne $true let 1 and "true" through (review of 3bf4657, finding 2).
+    if ($null -eq $vFresh -or $vFresh.Value -isnot [bool]) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal's answer is not a fresh verdict: fresh must be the boolean true, so this envelope is not opened") }
+    if (-not $vFresh.Value) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal has seen this envelope already: a replay is refused") }
 
     $mine = $null
     foreach ($r in @($env.recipients)) { if ($RecipientKeys.ContainsKey($r.kid)) { $mine = $r; break } }

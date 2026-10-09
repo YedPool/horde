@@ -90,9 +90,10 @@ try {
     $theirBackend = [System.IO.File]::ReadAllText((Join-Path $work "sealed-with.txt"), $utf8)
     $r = Read-HordeRelayEnvelope -Text $theirs
     Check ($r.ok) ("its text reads here as canonical version 1 (" + $r.reason + ")")
-    $t = Test-HordeRelayEnvelope -Envelope $r.value -Senders @{ (Get-HordeRelayKeyId -Public $signPub) = (New-HordeRelaySender -Public $signPub -Proof "es256") }
+    $trusted = @{ (Get-HordeRelayKeyId -Public $signPub) = (New-HordeRelaySender -Public $signPub -Proof "es256") }
+    $t = Test-HordeRelayEnvelope -Envelope $r.value -Senders $trusted
     Check ($t.ok) ("its signature verifies here (" + $t.reason + ")")
-    $u = Unprotect-HordeRelayEnvelope -Verified $t.value -RecipientKeys @{ (Get-HordeRelayKeyId -Public $agreePub) = $agree } -Replay (New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header $t.value.header); fresh = $true }))
+    $u = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $trusted -RecipientKeys @{ (Get-HordeRelayKeyId -Public $agreePub) = $agree } -Replay (New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header $t.value.header); fresh = $true })) -Channel "decisions" -Kind "snapshot"
     Check ($u.ok -and $utf8.GetString($u.value) -ceq $bodyText) ("sealed on " + $theirBackend + " there, opened on " + (Get-HordeRelayAeadBackend) + " here, non-ASCII intact")
     Check ($theirBackend -cne (Get-HordeRelayAeadBackend)) ("the two sides used different AES-GCM backends (" + $theirBackend + " and " + (Get-HordeRelayAeadBackend) + "), so the crossing tested the seam")
 } finally {

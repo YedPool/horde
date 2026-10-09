@@ -37,14 +37,14 @@ function Fresh {
 }
 function Open-All {
     # Read, test and unprotect, as a receiver would; the first refusal's reason, or the body as text.
-    param([string]$Text, [hashtable]$Senders = $senders, [hashtable]$Keys = $keys, $Replay = "fresh")
+    param([string]$Text, [hashtable]$Senders = $senders, [hashtable]$Keys = $keys, $Replay = "fresh", [string]$Kind = "snapshot", [string]$Channel = "decisions")
     $r = Read-HordeRelayEnvelope -Text $Text
     if (-not $r.ok) { return [pscustomobject]@{ stage = "read"; reason = $r.reason; body = $null } }
     $t = Test-HordeRelayEnvelope -Envelope $r.value -Senders $Senders
     if (-not $t.ok) { return [pscustomobject]@{ stage = "test"; reason = $t.reason; body = $null } }
     $verdict = $Replay
     if ("$Replay" -ceq "fresh") { $verdict = Fresh -Header $t.value.header }
-    $u = Unprotect-HordeRelayEnvelope -Verified $t.value -RecipientKeys $Keys -Replay $verdict
+    $u = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $Senders -RecipientKeys $Keys -Replay $verdict -Channel $Channel -Kind $Kind
     if (-not $u.ok) { return [pscustomobject]@{ stage = "unprotect"; reason = $u.reason; body = $null } }
     return [pscustomobject]@{ stage = "opened"; reason = ""; body = $utf8.GetString($u.value) }
 }
@@ -203,7 +203,7 @@ function Answer {
     return [pscustomobject]@{ draft = $draft; text = (Complete-HordeRelayEnvelope -Draft $draft -AuthenticatorData $ad -ClientDataJson $cdj -Signature (ConvertTo-Der -P1363 $p1363)) }
 }
 $a = Answer
-$o = Open-All -Text $a.text -Senders $founder -Keys $machineKeys
+$o = Open-All -Text $a.text -Senders $founder -Keys $machineKeys -Kind "answer"
 Check ($o.stage -ceq "opened" -and $o.body -ceq "yes, ship it") ("a passkey-signed answer opens on the machine (" + $o.stage + " " + $o.reason + ")")
 $t = Test-HordeRelayEnvelope -Envelope (Read-HordeRelayEnvelope -Text $a.text).value -Senders $founder
 Check ($t.value.proof -ceq "webauthn" -and $t.value.userVerified -eq $true -and $t.value.signCount -eq 0) "it reports the passkey proof, user verification and the counter"
@@ -220,7 +220,8 @@ Check ($o.stage -ceq "test" -and $o.reason.Contains("signs ES256")) "a passkey a
 
 Write-Host ""
 Write-Host "--- the replay hook: no fresh verdict for this envelope, no body ---" -ForegroundColor Cyan
-$v = (Test-HordeRelayEnvelope -Envelope (Read-HordeRelayEnvelope -Text $text).value -Senders $senders).value
+$rv = (Read-HordeRelayEnvelope -Text $text).value
+$v = (Test-HordeRelayEnvelope -Envelope $rv -Senders $senders).value
 $rk = Get-HordeRelayReplayKey -Header $v.header
 Check ($rk -ceq ($machineId + "/decisions/41/" + $v.header.nonce)) "the replay key is from/channel/seq/nonce"
 $cases = @(
@@ -229,14 +230,51 @@ $cases = @(
     @{ what = "an unknown verdict (the journal could not be read)"; verdict = (New-HordeUnknown -Reason "journal folder locked"); want = "it is unknown: journal folder locked" },
     @{ what = "a verdict that it was seen"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = $false })); want = "a replay is refused" },
     @{ what = "a fresh verdict about another envelope"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = ($machineId + "/decisions/40/" + $v.header.nonce); fresh = $true })); want = "about another envelope" },
-    @{ what = "a fresh verdict with no key"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ fresh = $true })); want = "about another envelope" }
+    @{ what = "a fresh verdict with no key"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ fresh = $true })); want = "about another envelope" },
+    @{ what = "fresh given as the number 1"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = 1 })); want = "not a fresh verdict" },
+    @{ what = "fresh given as the text true"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = "true" })); want = "not a fresh verdict" },
+    @{ what = "fresh given as the text True"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = "True" })); want = "not a fresh verdict" }
 )
 foreach ($c in $cases) {
-    $u = Unprotect-HordeRelayEnvelope -Verified $v -RecipientKeys $keys -Replay $c.verdict
+    $u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay $c.verdict -Channel "decisions" -Kind "snapshot"
     Check (-not $u.ok -and $null -eq $u.value -and $u.reason.Contains($c.want)) ($c.what + ": not opened (" + $u.reason + ")")
 }
-$u = Unprotect-HordeRelayEnvelope -Verified $v -RecipientKeys $keys -Replay (Fresh -Header $v.header)
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $v.header) -Channel "decisions" -Kind "snapshot"
 Check ($u.ok -and $utf8.GetString($u.value) -ceq "merge PR 1605?") "CONTROL: the fresh verdict for this envelope opens it"
+
+Write-Host ""
+Write-Host "--- Unprotect checks the signature itself: nothing reaches the body unverified ---" -ForegroundColor Cyan
+# Review of 3bf4657, finding 1: Unprotect took a verified result as plain data, so a hand-made one
+# wrapping an untrusted signer's envelope, with a fresh verdict, opened.
+$evil = New-HordeRelayP256Key -Use "ecdsa"
+$forged = (Read-HordeRelayEnvelope -Text (New-HordeRelayEnvelope -Kind "snapshot" -Channel "decisions" -Seq 6 -Body ($utf8.GetBytes("forged")) -Recipients @(, $phonePub) -Signer $evil)).value
+$u = Unprotect-HordeRelayEnvelope -Envelope $forged -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $forged.header) -Channel "decisions" -Kind "snapshot"
+Check (-not $u.ok -and $null -eq $u.value -and $u.reason.Contains("not one this machine trusts")) ("an untrusted signer's envelope with a fresh verdict is not opened (" + $u.reason + ")")
+$swappedSig = (Read-HordeRelayEnvelope -Text (Replace-Once -Text $text -Old $read.sig.valueText -New (Flip-B64 -Text $read.sig.valueText -Index 5))).value
+$u = Unprotect-HordeRelayEnvelope -Envelope $swappedSig -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $swappedSig.header) -Channel "decisions" -Kind "snapshot"
+Check (-not $u.ok -and $u.reason.Contains("does not verify")) "a trusted sender's envelope with a broken signature is not opened"
+Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "snapshot" }) "the trusted senders cannot be left out"
+# The signature covers the texts; decryption and the replay key use the decoded parts. An envelope
+# object whose decoded parts were changed after Read must not pass as the signed one.
+function Copy-Read { param($R) return [pscustomobject]@{ header = $R.header; headerText = $R.headerText; recipients = $R.recipients; recipientsText = $R.recipientsText; ct = $R.ct; ctText = $R.ctText; sig = $R.sig } }
+$h2 = [pscustomobject]@{ v = 1; kind = $rv.header.kind; channel = $rv.header.channel; from = $rv.header.from; to = $rv.header.to; seq = [long]99; nonce = $rv.header.nonce; ts = $rv.header.ts }
+$c1 = Copy-Read $rv; $c1.header = $h2
+$t1 = Test-HordeRelayEnvelope -Envelope $c1 -Senders $senders
+Check (-not $t1.ok -and $t1.reason.Contains("do not match its signed text")) "a header object changed after Read (seq 41 to 99) does not verify as the signed one"
+$c2 = Copy-Read $rv; $c2.ct = (Read-HordeRelayEnvelope -Text (Seal -Body "other")).value.ct
+Check (-not (Test-HordeRelayEnvelope -Envelope $c2 -Senders $senders).ok) "nor does a ciphertext swapped after Read"
+$c3 = Copy-Read $rv; $other = (Read-HordeRelayEnvelope -Text (Seal)).value; $c3.recipients = $other.recipients
+Check (-not (Test-HordeRelayEnvelope -Envelope $c3 -Senders $senders).ok) "nor do recipients swapped after Read"
+Check ((Test-HordeRelayEnvelope -Envelope (Copy-Read $rv) -Senders $senders).ok) "CONTROL: an unchanged copy verifies"
+
+Write-Host ""
+Write-Host "--- Unprotect opens only the channel and kind the caller expects ---" -ForegroundColor Cyan
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "chat" -Kind "snapshot"
+Check (-not $u.ok -and $u.reason.Contains("channel")) ("an envelope of another channel is not opened (" + $u.reason + ")")
+$u = Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" -Kind "answer"
+Check (-not $u.ok -and $u.reason.Contains("kind")) ("an envelope of another kind is not opened (" + $u.reason + ")")
+Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Kind "snapshot" }) "the expected channel cannot be left out"
+Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" }) "the expected kind cannot be left out"
 
 Write-Host ""
 Write-Host "--- strict reading: one spelling, version 1, within the caps ---" -ForegroundColor Cyan
@@ -296,7 +334,7 @@ if ((Get-HordeRelayKeyStore).state -ceq "known") {
         $sk = (Get-HordeRelayKey -Name $sn -Use "sign").value
         $ak = (Get-HordeRelayKey -Name $an -Use "agree").value
         $env1 = New-HordeRelayEnvelope -Kind "ack" -Channel "decisions" -Seq 3 -Body ($utf8.GetBytes("from a key that cannot leave")) -Recipients @(, $ak.publicKey) -Signer $sk.key
-        $o = Open-All -Text $env1 -Senders @{ $sk.keyId = (New-HordeRelaySender -Public $sk.publicKey -Proof "es256") } -Keys @{ $ak.keyId = $ak.key }
+        $o = Open-All -Text $env1 -Senders @{ $sk.keyId = (New-HordeRelaySender -Public $sk.publicKey -Proof "es256") } -Keys @{ $ak.keyId = $ak.key } -Kind "ack"
         Check ($o.stage -ceq "opened" -and $o.body -ceq "from a key that cannot leave") ("signed by a non-exportable " + $sk.provider + " key and opened by a non-exportable " + $ak.provider + " key")
     } finally {
         [void](Remove-HordeRelayKey -Name $sn); [void](Remove-HordeRelayKey -Name $an)
