@@ -35,15 +35,6 @@ $phone = New-HordeRelayP256Key -Use "ecdh"
 $phonePub = ConvertTo-HordeRelayP256Public -Key $phone
 $senders = @{ $machineId = (New-HordeRelaySender -Public $machinePub -Proof "es256"); $otherId = (New-HordeRelaySender -Public $otherPub -Proof "es256") }
 $agreeKeys = @{ (Get-HordeRelayKeyId -Public $phonePub) = $phone }
-# CAN THIS RUNTIME READ A SETTINGS FILE AT ALL? On 2026-10-09 core/ModuleSettings.ps1 refused every whole
-# number under PowerShell 7, whose ConvertFrom-Json reads 5 as an Int64 where 5.1 reads an Int32 (its own
-# suite, test/test-module-settings.ps1, fails there the same way). That is core's to mend, in its own pull
-# request. Until it is, the checks that need a setting other than its default are SKIPPED under that
-# runtime, said so, and the suite exits 3 - a partial run, never 0 (test/lib/Suite.ps1).
-$probe = Read-HordeModuleSettingsText -Declaration $script:HordeRelayJournalSettings -Text '{"schemaVersion":1,"settings":{"seqWindow":5}}'
-$settingsRead = ($probe.state -ceq "read")
-$script:skipped = 0
-function Skip { param([string]$What) $script:skipped++; Write-Host ("  [SKIP] " + $What + ": this runtime's settings reader refuses whole numbers (core/ModuleSettings.ps1)") -ForegroundColor Yellow }
 $work = Join-Path $env:TEMP ("horde-relay-journal-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
 $script:homeCount = 0
@@ -209,14 +200,12 @@ try {
     Check (IsRefused $v "another nonce") ("a new envelope under seq 13, another nonce, is a reuse (" + $v.value.why + ")")
     $v = Receive -Envelope (Seal -Seq 14) -HordeHome $h
     Check ((IsFresh $v) -and $v.value.gapBefore -eq 0) "CONTROL: seq 14 is fresh, with nothing missing"
-    if ($settingsRead) {
-        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"seqWindow":5}}'
-        $v = Receive -Envelope (Seal -Seq 20) -HordeHome $h
-        Check (IsRefused $v "more than the window of 5") ("with a window of 5, seq 20 after 14 is refused (" + $v.value.why + ")")
-        $v = Receive -Envelope (Seal -Seq 19) -HordeHome $h
-        Check ((IsFresh $v) -and $v.value.gapBefore -eq 4) "and seq 19, exactly 5 ahead, is fresh"
-        Check ((Names (StreamDir $h)) -ceq (((@(10, 13, 14, 19) | ForEach-Object { RecName $_ }) -join ",") + ",lock")) ("only the fresh envelopes have records (" + (Names (StreamDir $h)) + ")")
-    } else { Skip "the sequence window, set to 5" }
+    Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"seqWindow":5}}'
+    $v = Receive -Envelope (Seal -Seq 20) -HordeHome $h
+    Check (IsRefused $v "more than the window of 5") ("with a window of 5, seq 20 after 14 is refused (" + $v.value.why + ")")
+    $v = Receive -Envelope (Seal -Seq 19) -HordeHome $h
+    Check ((IsFresh $v) -and $v.value.gapBefore -eq 4) "and seq 19, exactly 5 ahead, is fresh"
+    Check ((Names (StreamDir $h)) -ceq (((@(10, 13, 14, 19) | ForEach-Object { RecName $_ }) -join ",") + ",lock")) ("only the fresh envelopes have records (" + (Names (StreamDir $h)) + ")")
     Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{}}'
     $v = Receive -Envelope (Seal -Seq 200000) -HordeHome $h
     Check (IsRefused $v "more than the window of 100000") ("with the default window, a jump of more than 100000 is refused (" + $v.value.why + ")")
@@ -239,17 +228,15 @@ try {
     Check (IsFresh $v) "sent 9 minutes before it was made, inside the skew: fresh"
     $v = Receive -Envelope (Seal -Seq 4 -At $bornAt.AddDays(3)) -HordeHome $h -Now $bornAt.AddDays(10)
     Check (IsFresh $v) "an envelope that waited a week on the relay is fresh: store and forward has no age limit"
-    if ($settingsRead) {
-        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":0}}'
-        $v = Receive -Envelope (Seal -Seq 5 -At $bornAt.AddDays(10).AddSeconds(5)) -HordeHome $h -Now $bornAt.AddDays(10)
-        Check (IsRefused $v "more than 0 s ahead") "with the skew set to 0, five seconds ahead is refused: the setting is read"
-        # Review of 6f7e8c1, finding 5: the skew is also how far before its creation a remade journal
-        # takes envelopes, so it is capped at an hour.
-        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3601}}'
-        Check (IsUnknown (Receive -Envelope (Seal -Seq 6) -HordeHome $h) "from 0 to 3600") "a skew of more than an hour is refused by the settings"
-        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3600}}'
-        Check (IsFresh (Receive -Envelope (Seal -Seq 6) -HordeHome $h)) "CONTROL: an hour exactly is taken"
-    } else { Skip "the clock skew, set to 0"; Skip "the clock skew's cap of 3600" }
+    Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":0}}'
+    $v = Receive -Envelope (Seal -Seq 5 -At $bornAt.AddDays(10).AddSeconds(5)) -HordeHome $h -Now $bornAt.AddDays(10)
+    Check (IsRefused $v "more than 0 s ahead") "with the skew set to 0, five seconds ahead is refused: the setting is read"
+    # Review of 6f7e8c1, finding 5: the skew is also how far before its creation a remade journal
+    # takes envelopes, so it is capped at an hour.
+    Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3601}}'
+    Check (IsUnknown (Receive -Envelope (Seal -Seq 6) -HordeHome $h) "from 0 to 3600") "a skew of more than an hour is refused by the settings"
+    Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3600}}'
+    Check (IsFresh (Receive -Envelope (Seal -Seq 6) -HordeHome $h)) "CONTROL: an hour exactly is taken"
 
     Write-Host ""
     Write-Host "--- V. damage is refused, never reset ---" -ForegroundColor Cyan
@@ -366,8 +353,8 @@ try {
     Write-Host "--- VIII. one writer per stream; settings ---" -ForegroundColor Cyan
     $h = New-Home
     $null = Receive -Envelope (Seal -Seq 1) -HordeHome $h
-    $waitMs = 2000
-    if ($settingsRead) { Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"lockWaitMs":300}}'; $waitMs = 300 }
+    $waitMs = 300
+    Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"lockWaitMs":300}}'
     $lockPath = Join-Path (StreamDir $h) "lock"
     $holder = New-Object System.IO.FileStream -ArgumentList $lockPath, ([System.IO.FileMode]::Open), ([System.IO.FileAccess]::Read), ([System.IO.FileShare]::None)
     $began = [datetime]::UtcNow
@@ -386,5 +373,4 @@ try {
 }
 Check (-not (Test-Path -LiteralPath $work)) "every journal this suite made is gone"
 
-if ($script:skipped -gt 0) { Complete-HordeSuite -Success ("partial: " + $script:skipped + " setting checks skipped on this runtime; every other check passed") -PassCode 3 }
 Complete-HordeSuite -Success "the journal calls an envelope fresh once, refuses replays, reorders, reuses, skew and damage, and never resets"
