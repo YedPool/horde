@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "relay": "local",
+  "capabilities": {
+    "durable": {
+      "support": "yes",
+      "evidence": "Items are files flushed to disk before they are renamed into place, and the head is read back from their names; test/test-relay-conformance.ps1 reads on from a cursor, and puts the next seq, from a fresh runspace that shares no state with the writer."
+    },
+    "realtime": {
+      "support": "yes",
+      "evidence": "A watch polls the mailbox's names every 50 ms; test/test-relay-conformance.ps1 has another runspace put while a watch waits, and requires the watch to return within a second of that put."
+    },
+    "reach.remote": {
+      "support": "no",
+      "evidence": "Mailboxes are folders on this machine's disk; no other machine reaches them. A channel between machines requires reach.remote, so it never picks this relay."
+    },
+    "trim.on.ack": {
+      "support": "yes",
+      "evidence": "An ack writes a floor marker and deletes the items through it; test/test-relay-conformance.ps1 reads only what is after the ack and sees the next put numbered after the trimmed ones."
+    }
+  },
+  "limits": {
+    "maxTextChars": 1414507,
+    "maxBatch": 256,
+    "maxWatchMs": 60000,
+    "retentionSeconds": 0
+  }
+}

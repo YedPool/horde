@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "relay": "fixture-local-only",
+  "capabilities": {
+    "durable": {
+      "support": "yes",
+      "evidence": "fixture"
+    },
+    "realtime": {
+      "support": "unverified",
+      "evidence": "not run"
+    },
+    "reach.remote": {
+      "support": "no",
+      "evidence": "one disk"
+    },
+    "trim.on.ack": {
+      "support": "yes",
+      "evidence": "fixture"
+    }
+  },
+  "limits": {
+    "maxTextChars": 4096,
+    "maxBatch": 8,
+    "maxWatchMs": 2000,
+    "retentionSeconds": 0
+  }
+}
