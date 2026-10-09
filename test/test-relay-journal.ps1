@@ -74,7 +74,7 @@ function Receive {
 function IsFresh { param($V) return [bool]($V.state -ceq "known" -and $V.value.fresh -is [bool] -and $V.value.fresh) }
 function IsRefused { param($V, [string]$Like) return [bool]($V.state -ceq "known" -and $V.value.fresh -is [bool] -and -not $V.value.fresh -and $V.value.why.Contains($Like)) }
 function IsUnknown { param($V, [string]$Like) return [bool]($V.state -ceq "unknown" -and $V.reason.Contains($Like)) }
-function StreamDir { param([string]$HordeHome, [string]$Dir = "in", [string]$From = $machineId, [string]$Channel = "decisions") return [System.IO.Path]::Combine($HordeHome, "relay", "journal", $Dir, $From, $Channel) }
+function StreamDir { param([string]$HordeHome, [string]$Dir = "in", [string]$From = $machineId, [string]$Channel = "decisions") return [System.IO.Path]::Combine($HordeHome, "relay", "journal", $Dir, ("s-" + $From), ("c-" + $Channel)) }
 function Names { param([string]$Dir) if (-not (Test-Path -LiteralPath $Dir)) { return "" }; return (@(Get-ChildItem -LiteralPath $Dir -Force | Sort-Object Name | ForEach-Object { $_.Name -creplace '\Awriting-[0-9a-f]{32}\.part\z', 'writing-<id>.part' }) -join ",") }
 function RecName { param([long]$Seq) return ($Seq.ToString("D16") + ".rec") }
 function Open-With {
@@ -144,6 +144,25 @@ try {
     Check (IsFresh $o1) "the same seq from another sender is its own stream, and fresh"
     $c1 = Receive -Envelope (Seal -Seq 7 -Channel "chat") -HordeHome $h
     Check (IsFresh $c1) "the same seq on another channel is its own stream, and fresh"
+
+    Write-Host ""
+    Write-Host "--- II b. a channel named like a Windows device is a stream like any other ---" -ForegroundColor Cyan
+    # Review of 6f7e8c1 (finding 1): a channel "con" made the folder in\<from>\con, which Windows
+    # PowerShell 5.1's Get-ChildItem reported as not found, so the stream read as empty every time and
+    # its sequence, window and damage rules were off: a replay was "another writer", never refused as one.
+    $h = New-Home
+    foreach ($dev in @("con", "aux", "nul", "prn", "com1", "lpt1")) {
+        $d1 = Seal -Seq 5 -Channel $dev
+        $v = Receive -Envelope $d1 -HordeHome $h
+        Check (IsFresh $v) ("channel " + $dev + ": the first envelope is fresh (" + $v.reason + ")")
+        Check (IsRefused (Receive -Envelope $d1 -HordeHome $h) "a replay") ("channel " + $dev + ": the same again is refused as a replay")
+        Check (IsRefused (Receive -Envelope (Seal -Seq 3 -Channel $dev) -HordeHome $h) "out of order") ("channel " + $dev + ": a lower seq is out of order")
+        Check ((Names (StreamDir $h -Channel $dev)) -ceq ((RecName 5) + ",lock")) ("channel " + $dev + ": its stream folder is c-" + $dev + ", with its one record")
+    }
+    $missing = Get-HordeRelayJournalStream -Dir (Join-Path $work "no-such-stream") -Direction "in" -From $machineId -Channel "decisions" -MustExist $true
+    Check (-not $missing.ok -and $missing.reason.Contains("not found")) ("a stream folder that was just made and lists as not found is damage, not an empty stream (" + $missing.reason + ")")
+    $absent = Get-HordeRelayJournalStream -Dir (Join-Path $work "no-such-stream") -Direction "in" -From $machineId -Channel "decisions" -MustExist $false
+    Check ($absent.ok -and $absent.last -eq -1) "CONTROL: asked only to read, a stream with no folder is a stream with no record"
 
     Write-Host ""
     Write-Host "--- III. the sequence only goes up ---" -ForegroundColor Cyan

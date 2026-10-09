@@ -165,7 +165,7 @@ try {
     Check ($winners.Count -ge 2) ("CONTENTION: more than one racer won envelopes (" + ($winners -join ",") + "), so they met rather than took turns")
     $busy = @($race.answers | Where-Object { $_.state -ceq "unknown" }).Count
     Write-Host ("  told busy: " + $busy + " of " + $race.answers.Count + " answers") -ForegroundColor DarkGray
-    $onDisk = @(Get-ChildItem -LiteralPath (Join-Path $race.home "relay\journal\in\$signerId") -Recurse -File -Filter "*.rec")
+    $onDisk = @(Get-ChildItem -LiteralPath (Join-Path $race.home ("relay\journal\in\s-" + $signerId)) -Recurse -File -Filter "*.rec")
     Check ($onDisk.Count -eq $streams) ("and the journal holds exactly one record per envelope (" + $onDisk.Count + ")")
 
     Write-Host ""
@@ -191,7 +191,7 @@ try {
     Check (@($countsII.Keys | Where-Object { $countsII[$_] -gt 1 }).Count -eq 0) "no seq was told fresh to two racers"
     $freshII = @($countsII.Keys | Where-Object { $countsII[$_] -eq 1 }).Count
     Check ($freshII -ge [int]($seqs / 2)) ("most seqs were taken by someone (" + $freshII + " of " + $seqs + "); the rest were refused as out of order or busy")
-    $sd = Join-Path $raceII.home ("relay\journal\in\" + $signerId + "\race")
+    $sd = Join-Path $raceII.home ("relay\journal\in\s-" + $signerId + "\c-race")
     $recs = @(Get-ChildItem -LiteralPath $sd -File -Filter "*.rec" | Sort-Object Name | ForEach-Object {
         $first = [System.IO.File]::ReadAllText($_.FullName).Split([char]10)[0]
         [void]($first -cmatch '"seq":([0-9]+),.*"recordedAt":([0-9]+),')
@@ -249,7 +249,7 @@ try {
             $w.p.Dispose()
         }
         Check (-not (Test-Path -LiteralPath (Join-Path $dir "stalled-log.txt"))) ($step + ": the killed writer was told nothing")
-        $sd = Join-Path $h ("relay\journal\in\" + $signerId + "\race")
+        $sd = Join-Path $h ("relay\journal\in\s-" + $signerId + "\c-race")
         $temps = @(Get-ChildItem -LiteralPath $sd -File -Filter "writing-*.part")
         $recs = @(Get-ChildItem -LiteralPath $sd -File -Filter "*.rec")
         if ($step -ceq "stall-before-move") {

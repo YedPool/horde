@@ -44,7 +44,9 @@
 # THE FILES, under <HORDE_HOME>\relay\journal (Get-HordeRelayJournalRoot):
 #   journal.json                     the marker, written once by Initialize-HordeRelayJournal:
 #                                    {"v":1,"kind":"horde-relay-journal","createdAt":<ms>}.
-#   in\<from>\<channel>\             one folder per received stream; out\<from>\<channel>\ per sent one.
+#   in\s-<from>\c-<channel>\         one folder per received stream; out\s-<from>\c-<channel>\ per
+#                                    sent one. The prefixes keep a channel named con or nul from being
+#                                    a Windows device (Get-HordeRelayJournalStreamDir).
 #     lock                           held, with no sharing, by the one writer of the stream (below).
 #     0000000000000041.rec           one record per accepted seq, named by the seq in sixteen digits
 #                                    (2^53-1 has sixteen), so names sort in seq order.
@@ -213,32 +215,55 @@ function Read-HordeRelayJournalRecord {
     return [pscustomobject]@{ ok = $true; meta = [pscustomobject]@{ seq = $mSeq; nonce = $mNonce; key = $g[2]; recordedAt = [long]$g[9] }; reason = "" }
 }
 
+function Get-HordeRelayJournalStreamDir {
+    # A stream's folder: <root>\<in|out>\s-<from>\c-<channel>. THE PREFIXES ARE WHY NO NAME IS A DEVICE:
+    # a channel is any lower-case word, and con, aux, nul, prn, com1 or lpt1 as a folder's whole name is
+    # a device on Windows (review of 6f7e8c1, finding 1). Every folder named from an envelope carries one.
+    param([string]$Root, [string]$Direction, [string]$From, [string]$Channel)
+    return [System.IO.Path]::Combine($Root, $Direction, ("s-" + $From), ("c-" + $Channel))
+}
+
 function Get-HordeRelayJournalStream {
     # What one stream folder holds: { ok; reason; last; seqs; temps }. last is the highest recorded seq,
     # or -1 for a stream with no record (no folder yet). seqs is a hashtable of every recorded seq, as
     # text. The highest record is read and checked, since every verdict is judged against it; anything
     # in the folder the journal never writes is damage.
-    param([string]$Dir, [string]$Direction, [string]$From, [string]$Channel)
+    #
+    # -MustExist: the caller has just made the folder, so "not found" is not "no record yet" but a folder
+    # the system will not show - damage, answered as such. Without it (a read that makes nothing), no
+    # folder is a stream with no record.
+    #
+    # LISTED BY [System.IO.Directory], NOT Get-ChildItem. Review of 6f7e8c1, finding 1: under Windows
+    # PowerShell 5.1, Get-ChildItem -LiteralPath on a folder named like a device (con, aux, nul, prn,
+    # com1, lpt1) answers PathNotFound, so such a stream read as empty on every call and its sequence,
+    # window and damage rules were off. Stream folders are prefixed now (Get-HordeRelayJournalStreamDir),
+    # so no device name can occur; the listing is the framework's own as well, so nothing between this
+    # file and the folder reinterprets a name.
+    param([string]$Dir, [string]$Direction, [string]$From, [string]$Channel, [bool]$MustExist = $false)
     $seqs = @{}
     $temps = New-Object System.Collections.ArrayList
     $last = [long]-1
     $limit = (Get-HordeRelayEnvelopeLimits).maxInteger
     $where = $Direction + "/" + $From + "/" + $Channel
     $entries = @()
-    try { $entries = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction Stop) }
-    catch {
+    try {
+        $entries = @([System.IO.Directory]::EnumerateFileSystemEntries($Dir) | ForEach-Object { [pscustomobject]@{ path = $_; name = [System.IO.Path]::GetFileName($_); attrs = [System.IO.File]::GetAttributes($_) } })
+    } catch {
         $cause = $_.Exception
         while ($null -ne $cause.InnerException) { $cause = $cause.InnerException }
-        # Get-ChildItem says "no such folder" by its error id, PathNotFound, not by an exception type.
-        if ($cause -is [System.IO.DirectoryNotFoundException] -or ("" + $_.FullyQualifiedErrorId).StartsWith("PathNotFound")) { return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @() } }
+        if ($cause -is [System.IO.DirectoryNotFoundException]) {
+            if ($MustExist) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " was just made and is not found: the system will not show this folder, so its records cannot be read"); last = $last; seqs = $seqs; temps = @() } }
+            return [pscustomobject]@{ ok = $true; reason = ""; last = $last; seqs = $seqs; temps = @() }
+        }
         return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " could not be listed: " + $cause.Message); last = $last; seqs = $seqs; temps = @() }
     }
     foreach ($e in $entries) {
-        $nm = "" + $e.Name
-        if (($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a link, " + $nm + "; the journal never writes one and never follows one"); last = $last; seqs = $seqs; temps = @() } }
-        if ($e.PSIsContainer) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a folder, " + $nm + "; the journal never makes one there"); last = $last; seqs = $seqs; temps = @() } }
+        $nm = "" + $e.name
+        # The entry's own attributes: GetAttributes does not follow a link.
+        if (($e.attrs -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a link, " + $nm + "; the journal never writes one and never follows one"); last = $last; seqs = $seqs; temps = @() } }
+        if (($e.attrs -band [System.IO.FileAttributes]::Directory) -ne 0) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds a folder, " + $nm + "; the journal never makes one there"); last = $last; seqs = $seqs; temps = @() } }
         if ($nm -ceq $script:HordeRelayJournalLockName) { continue }
-        if ($nm -cmatch $script:HordeRelayJournalTempPattern) { [void]$temps.Add($e.FullName); continue }
+        if ($nm -cmatch $script:HordeRelayJournalTempPattern) { [void]$temps.Add($e.path); continue }
         if ($nm -cnotmatch $script:HordeRelayJournalRecordPattern) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", a file the journal never writes"); last = $last; seqs = $seqs; temps = @() } }
         $s = [long]$Matches[1]
         if ($s -gt $limit) { return [pscustomobject]@{ ok = $false; reason = ("the stream " + $where + " holds " + $nm + ", past the largest sequence number an envelope can carry"); last = $last; seqs = $seqs; temps = @() } }
@@ -363,12 +388,12 @@ function Add-HordeRelayJournalEntry {
     $seq = [long]$Header.seq
     $nowMs = ConvertTo-HordeRelayJournalMs -Time $Now
     $skewMs = [long]$ctx.settings.clockSkewSeconds * 1000
-    $dir = [System.IO.Path]::Combine($ctx.root, $Direction, $Header.from, $Header.channel)
+    $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction $Direction -From $Header.from -Channel $Header.channel
     try { [void][System.IO.Directory]::CreateDirectory($dir) } catch { return (New-HordeUnknown -Reason ("the stream folder of " + $key + " could not be made") -ErrorRecord $_) }
     $lock = Enter-HordeRelayJournalLock -Dir $dir -WaitMs $ctx.settings.lockWaitMs
     if (-not $lock.ok) { return (New-HordeUnknown -Reason ("the journal is busy for " + $key + ": " + $lock.reason + "; nothing was recorded")) }
     try {
-        $st = Get-HordeRelayJournalStream -Dir $dir -Direction $Direction -From $Header.from -Channel $Header.channel
+        $st = Get-HordeRelayJournalStream -Dir $dir -Direction $Direction -From $Header.from -Channel $Header.channel -MustExist $true
         if (-not $st.ok) { return (New-HordeUnknown -Reason ($st.reason + ". The journal is damaged; it is not reset, because that would accept again what it already accepted, so this stream takes nothing until a person repairs it")) }
         Remove-HordeRelayJournalLeftovers -Temps $st.temps
         $last = $st.last
@@ -434,7 +459,7 @@ function Get-HordeRelayJournalNextSeq {
     if ($From -cnotmatch '\A[0-9a-f]{32}\z' -or $Channel -cnotmatch '\A[a-z][a-z0-9-]{0,31}\z') { return (New-HordeUnknown -Reason "a stream is a 32-hex key id and a lower-case channel word") }
     $ctx = Get-HordeRelayJournalContext -HordeHome $HordeHome
     if (-not $ctx.ok) { return (New-HordeUnknown -Reason $ctx.reason) }
-    $st = Get-HordeRelayJournalStream -Dir ([System.IO.Path]::Combine($ctx.root, "out", $From, $Channel)) -Direction "out" -From $From -Channel $Channel
+    $st = Get-HordeRelayJournalStream -Dir (Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "out" -From $From -Channel $Channel) -Direction "out" -From $From -Channel $Channel
     if (-not $st.ok) { return (New-HordeUnknown -Reason ($st.reason + ". The journal is damaged and is not reset")) }
     if ($st.last -lt 0) { return (New-HordeKnown -Value ([long]1) -ObservedAt ([datetime]::UtcNow)) }
     if ($st.last -ge (Get-HordeRelayEnvelopeLimits).maxInteger) { return (New-HordeUnknown -Reason ("the stream out/" + $From + "/" + $Channel + " has used every sequence number an envelope can carry")) }

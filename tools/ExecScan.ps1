@@ -388,6 +388,9 @@ function Get-HordeExecFindings {
 #     and runs nothing it is given. Start-Sleep waits between tries of a stream's lock. FileShare.Delete
 #     lets a writer's temporary file be renamed while it is held open, and FileOptions.DeleteOnClose
 #     removes a dead writer's leftover only if nobody holds it (decisions/Store.ps1's sweep).
+#     Directory.EnumerateFileSystemEntries, Path.GetFileName and FileAttributes.Directory list a stream
+#     folder without Get-ChildItem, which under 5.1 calls a folder named like a device (con, nul) not
+#     found (review of the journal, finding 1).
 #   - ADD-TYPE, THE ONE COMPILE. relay/ needs AES-GCM on .NET Framework, which has none, so
 #     relay/BackendCng.ps1 compiles relay/Gcm.cs. Add-Type is admitted in exactly one form,
 #       Add-Type -Path (Join-Path $PSScriptRoot "<Name>.cs")
@@ -413,6 +416,9 @@ $script:HordeExecRelayAllow = @{
         "horderelaygcmv1" = @("Seal", "Open")
         "io.fileshare" = @("Delete")
         "io.fileoptions" = @("DeleteOnClose")
+        "io.directory" = @("EnumerateFileSystemEntries")
+        "io.path" = @("GetFileName")
+        "io.fileattributes" = @("Directory")
         "long" = @("MaxValue")
         "array" = @("Clear")
         "math" = @("Ceiling")
