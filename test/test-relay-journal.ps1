@@ -261,6 +261,9 @@ try {
     $chatSeq = 1
     $sd = StreamDir $h
     $top = Join-Path $sd (RecName 21)
+    $linkTarget = Join-Path $work "link-target"
+    New-Item -ItemType Directory -Path $linkTarget | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $linkTarget "0000000000000099.rec"), "a record that is not this stream's")
     $whole = [System.IO.File]::ReadAllBytes($top)
     $cases = @(
         @{ what = "the last record cut short"; make = { [System.IO.File]::WriteAllBytes($top, $whole[0..($whole.Length - 40)]) }; want = "cut short" },
@@ -271,7 +274,10 @@ try {
         @{ what = "the last record not UTF-8"; make = { [System.IO.File]::WriteAllBytes($top, [byte[]]@(0xC3, 0x28) + $whole) }; want = "could not be read" },
         @{ what = "a stray file in the stream"; make = { [System.IO.File]::WriteAllText((Join-Path $sd "notes.txt"), "x") }; want = "never writes" },
         @{ what = "a record name past 2^53"; make = { [System.IO.File]::WriteAllText((Join-Path $sd "9999999999999999.rec"), "x") }; want = "past the largest" },
-        @{ what = "a folder in the stream"; make = { New-Item -ItemType Directory -Path (Join-Path $sd "sub") | Out-Null }; want = "holds a folder" }
+        @{ what = "a folder in the stream"; make = { New-Item -ItemType Directory -Path (Join-Path $sd "sub") | Out-Null }; want = "holds a folder" },
+        # Review of 6f7e8c1, finding 6: the link refusal had no test. A junction (a folder link, which
+        # needs no privilege to make) must be named as a link, never read as a folder or followed.
+        @{ what = "a link in the stream"; make = { New-Item -ItemType Junction -Path (Join-Path $sd "elsewhere") -Target $linkTarget | Out-Null }; want = "holds a link, elsewhere" }
     )
     foreach ($c in $cases) {
         & $c.make
@@ -286,8 +292,11 @@ try {
         [System.IO.File]::WriteAllBytes($top, $whole)
         foreach ($n in @("notes.txt", "9999999999999999.rec")) { if (Test-Path -LiteralPath (Join-Path $sd $n)) { Remove-Item -LiteralPath (Join-Path $sd $n) } }
         if (Test-Path -LiteralPath (Join-Path $sd "sub")) { Remove-Item -LiteralPath (Join-Path $sd "sub") }
+        # The junction itself, never its target: Directory.Delete without recursion removes the link.
+        if (Test-Path -LiteralPath (Join-Path $sd "elsewhere")) { [System.IO.Directory]::Delete((Join-Path $sd "elsewhere")) }
     }
     Check (IsRefused (Receive -Envelope $e21 -HordeHome $h) "a replay") "repaired, seq 21 is a replay again: nothing was forgotten"
+    Check (@(Get-ChildItem -LiteralPath $linkTarget).Count -eq 1) "and the junction's target was neither followed into nor touched"
     # An older record damaged: the replay of exactly that seq cannot be judged.
     $older = Join-Path $sd (RecName 20)
     $olderWhole = [System.IO.File]::ReadAllBytes($older)

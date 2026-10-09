@@ -52,9 +52,12 @@
         @{ Name = "stray-file-ignored"
            Find = 'if ($nm -cnotmatch $script:HordeRelayJournalRecordPattern) { return'
            Replace = 'if ($nm -cnotmatch $script:HordeRelayJournalRecordPattern) { continue; return' }
+        @{ Name = "link-in-stream-read-as-a-folder"
+           Find = 'if (($e.attrs -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {'
+           Replace = 'if ($false) {' }
         @{ Name = "folder-in-stream-ignored"
-           Find = 'if ($e.PSIsContainer) { return'
-           Replace = 'if ($e.PSIsContainer) { continue; return' }
+           Find = 'if (($e.attrs -band [System.IO.FileAttributes]::Directory) -ne 0) { return'
+           Replace = 'if (($e.attrs -band [System.IO.FileAttributes]::Directory) -ne 0) { continue; return' }
         @{ Name = "seq-past-2-53-taken"
            Find = 'if ($s -gt $limit) {'
            Replace = 'if ($false) {' }
