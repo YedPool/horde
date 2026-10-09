@@ -91,6 +91,19 @@ $r = Resolve-HordeMessenger -Name "fixture-good" -Require @()
 Check ($r.state -ceq "known") "requiring nothing resolves any loaded messenger"
 
 Write-Host ""
+Write-Host "--- a caller that names no messenger finds THE one that offers what it needs, or is told why not ---" -ForegroundColor Cyan
+# Loaded now: fixture-good (wake no), fixture-unverified (idempotent.post unverified, wake no), memory
+# (receipt.receiver declined, wake no).
+$r = Find-HordeMessenger -Require @("body.untyped", "idempotent.post", "receipt.receiver")
+Check ($r.state -ceq "known" -and $r.value.name -ceq "fixture-good") ("exactly one loaded messenger offers all three: it is the answer (" + $r.reason + ")")
+Check ([object]::ReferenceEquals($r.value, (Get-HordeMessenger -Name "fixture-good"))) "and it is the registered messenger itself, which the port will post through"
+$r = Find-HordeMessenger -Require @("body.untyped", "wake")
+Check ($r.state -ceq "absent" -and "$($r.reason)".Contains("fixture-good: does not offer wake") -and "$($r.reason)".Contains("memory: does not offer wake")) ("none offers wake: absent, and the note says what each loaded one lacks (" + $r.reason + ")")
+$r = Find-HordeMessenger -Require @("body.untyped")
+Check ($r.state -ceq "unknown" -and "$($r.reason)".Contains("fixture-good") -and "$($r.reason)".Contains("memory") -and "$($r.reason)".Contains("never chosen")) ("several offer it: unknown, one is never chosen over another (" + $r.reason + ")")
+Check (Throws { Find-HordeMessenger -Require @("teleport") } "not a messenger capability") "a requirement outside the capability list is an error, never quietly unmet"
+
+Write-Host ""
 Write-Host "--- the message is checked before any adapter sees it, each refusal for its own reason ---" -ForegroundColor Cyan
 
 $f = @(Test-HordeMessengerMessage -Message (New-Msg))
