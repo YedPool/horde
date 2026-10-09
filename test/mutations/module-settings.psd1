@@ -32,11 +32,20 @@
            Find = 'catch { return $false }'
            Replace = 'catch { throw }' }
         @{ Name = "whole-accepts-any-number"
-           Find = 'if ($Value -isnot [int]) { return $no }'
+           Find = 'if ($Value -isnot [int] -and $Value -isnot [long]) { return $no }'
            Replace = 'if (-not (Test-HordeSchemaIsNumber $Value)) { return $no }' }
         @{ Name = "whole-accepts-text"
-           Find = 'if ($Value -isnot [int]) { return $no }'
+           Find = 'if ($Value -isnot [int] -and $Value -isnot [long]) { return $no }'
            Replace = 'if ($Value -is [bool] -or $null -eq $Value -or $Value -is [System.Collections.IList] -or $Value -is [System.Management.Automation.PSCustomObject]) { return $no }' }
+        # PowerShell 7's ConvertFrom-Json reads every whole number as an Int64: refusing one refuses
+        # every whole number a file gives there, and handing one on gives the module a type it was not
+        # promised (an Int32).
+        @{ Name = "whole-refuses-int64"
+           Find = 'if ($Value -isnot [int] -and $Value -isnot [long]) { return $no }'
+           Replace = 'if ($Value -isnot [int]) { return $no }' }
+        @{ Name = "whole-int64-handed-on-as-it-is"
+           Find = 'return [pscustomobject]@{ ok = $true; value = [int]$Value }'
+           Replace = 'return [pscustomobject]@{ ok = $true; value = $Value }' }
         @{ Name = "whole-below-smallest-allowed"
            Find = 'if ($Value -lt $Entry.min -or $Value -gt $Entry.max) { return $no }'
            Replace = 'if ($Value -gt $Entry.max) { return $no }' }
@@ -50,17 +59,20 @@
            Find = 'if ($Value -lt $Entry.min -or $Value -gt $Entry.max) { return $no }'
            Replace = 'if ($Value -lt $Entry.min -or $Value -ge $Entry.max) { return $no }' }
         @{ Name = "fraction-accepts-text"
-           Find = 'if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
+           Find = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
            Replace = 'if ($Value -is [bool] -or $null -eq $Value -or $Value -is [System.Collections.IList]) { return $no }' }
         @{ Name = "fraction-refuses-whole-numbers"
-           Find = 'if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
-           Replace = 'if (-not ($Value -is [decimal] -or $Value -is [double])) { return $no }' }
+           Find = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
+           Replace = 'if (-not ($Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }' }
+        @{ Name = "fraction-refuses-int64"
+           Find = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
+           Replace = 'if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }' }
         @{ Name = "fraction-refuses-decimals"
-           Find = 'if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
-           Replace = 'if (-not ($Value -is [int] -or $Value -is [double])) { return $no }' }
+           Find = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
+           Replace = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [double])) { return $no }' }
         @{ Name = "fraction-refuses-doubles"
-           Find = 'if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
-           Replace = 'if (-not ($Value -is [int] -or $Value -is [decimal])) { return $no }' }
+           Find = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }'
+           Replace = 'if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal])) { return $no }' }
         @{ Name = "fraction-not-a-number-allowed"
            Find = 'if ([double]::IsNaN($asDouble)) { return $no }'
            Replace = '' }

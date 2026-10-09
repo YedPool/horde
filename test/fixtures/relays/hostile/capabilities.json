@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "relay": "hostile",
+  "capabilities": {
+    "durable": { "support": "declined", "evidence": "A test relay in one process (test/lib/HostileRelay.ps1) that lies on purpose: it is never chosen by a caller that requires anything." },
+    "realtime": { "support": "declined", "evidence": "Its watch never waits; it exists to answer with reordered, repeated, dropped and malformed items (test/lib/HostileRelay.ps1)." },
+    "reach.remote": { "support": "declined", "evidence": "It lives in the test's own process; nothing else can reach it." },
+    "trim.on.ack": { "support": "declined", "evidence": "It keeps everything, so a test can make it serve stale items again." }
+  },
+  "limits": { "maxTextChars": 4096, "maxBatch": 8, "maxWatchMs": 2000, "retentionSeconds": 0 }
+}

@@ -80,7 +80,8 @@
 #     is not a settings file.
 #
 # THE KINDS, and what "allowed range" means for each. min and max are inclusive.
-#   whole      A whole number, an Int32. min and max are required: no number here is unbounded. In the
+#   whole      A whole number, an Int32 (the parser may hand it over as an Int32 or an Int64; the module
+#              always gets an Int32). min and max are required: no number here is unbounded. In the
 #              file it is written in digits only (520, -5): 520.0, 5.2e2 and "520" are a wrong kind, not
 #              a number to round or convert, because a person who wrote 1.5 would get 1 or 2 and never
 #              be told. (Measured 2026-10-07 on 5.1: ConvertFrom-Json reads 520 as Int32, 5000000000 as
@@ -206,14 +207,20 @@ function Test-HordeModuleSettingValue {
     $no = [pscustomobject]@{ ok = $false; value = $null }
     $kind = "" + $Entry.kind
     if ($kind -ceq "whole") {
-        # AN Int32 OR NOTHING. An Int64 is what the parser gives a whole number past Int32, which no
-        # range here can hold (min and max are Int32), so it needs no branch of its own.
-        if ($Value -isnot [int]) { return $no }
+        # AN Int32 OR AN Int64, AND THE MODULE GETS AN Int32. Windows PowerShell 5.1's ConvertFrom-Json
+        # reads a whole number that fits as an Int32 and a larger one as an Int64; PowerShell 7's reads
+        # EVERY whole number as an Int64 (measured 2026-10-09 on 7.6: 640 is Int64). So the width says
+        # nothing about the number: either is compared with the Int32 range (PowerShell widens the Int32
+        # to compare, so an Int64 past it is out of range, not an overflow), and only a value inside it
+        # is turned into an Int32. A Decimal or a Double is still a wrong kind, however whole its value:
+        # that is 520.0 or 5.2e2 in the file.
+        if ($Value -isnot [int] -and $Value -isnot [long]) { return $no }
         if ($Value -lt $Entry.min -or $Value -gt $Entry.max) { return $no }
-        return [pscustomobject]@{ ok = $true; value = $Value }
+        return [pscustomobject]@{ ok = $true; value = [int]$Value }
     }
     if ($kind -ceq "fraction") {
-        if (-not ($Value -is [int] -or $Value -is [decimal] -or $Value -is [double])) { return $no }
+        # An Int64 too: PowerShell 7 reads a file's 0 and 1 as Int64 (measured 2026-10-09 on 7.6).
+        if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $no }
         $asDouble = [double]$Value
         # Not-a-number is below nothing and above nothing, so the range would pass it. (An infinity is
         # outside every range, and a file cannot say either: neither is JSON.)

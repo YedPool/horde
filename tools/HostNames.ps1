@@ -172,7 +172,10 @@ $script:HordeHostNamesProseFolder = "planning"
 # THE FIFTH FAMILY (decisions design 2026-10-06, decision 2): nothing outside surfaces/<name>/ names
 # what shows a page in a window, so a second way of showing one - another platform's window, a file,
 # a remote view - is a new folder too. surfaces/Port.ps1 belongs to no surface.
-$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces")
+# THE SIXTH FAMILY (relay design 2026-10-09, PR plan item 3): nothing outside relays/<name>/ names what
+# identifies a relay, so the hosted relay after the local one is a new folder and not a change to the
+# relay module. relays/Port.ps1 belongs to no relay.
+$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")
 # The file types a fingerprint list may excuse from being read as text (header, AND ONLY A PROGRAM
 # LIBRARY): compiled program libraries. A new type is a line here, agreed in review, never a line in
 # a list.
