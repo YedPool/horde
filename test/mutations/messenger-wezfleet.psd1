@@ -106,15 +106,19 @@
            Find = 'if (@($byExit[[int]$Run.exit]) -cnotcontains $j.stage) {'
            Replace = 'if ($false) {' }
         @{ Name = "exit-4-unread"
-           Find = '; 4 = @("absent", "refused", "queued") }'
+           Find = '; 4 = @("refused", "queued") }'
            Replace = ' }' }
         @{ Name = "exit-4-queued-unread"
-           Find = '4 = @("absent", "refused", "queued")'
-           Replace = '4 = @("absent", "refused")' }
-        # The shape wezfleet's pull request 70 gives exit 4 with nothing written.
+           Find = '4 = @("refused", "queued")'
+           Replace = '4 = @("refused")' }
+        # The shape wezfleet main (its pull request 70) gives exit 4 with nothing written.
         @{ Name = "exit-4-refused-unread"
-           Find = '"absent", "refused", "queued"'
-           Replace = '"absent", "queued"' }
+           Find = '4 = @("refused", "queued")'
+           Replace = '4 = @("queued")' }
+        # A shape no wezfleet shipped: exit 4 with the stage absent (the first revision of #65's review).
+        @{ Name = "exit-4-absent-read"
+           Find = '4 = @("refused", "queued")'
+           Replace = '4 = @("absent", "refused", "queued")' }
         # A sentence where the code is: a wezfleet from before the reason codes, never read as a stage.
         @{ Name = "prose-reason-read"
            Find = 'if ($j.reason -cne "" -and $j.reason -cnotmatch $script:HordeWezfleetMessengerCodePattern) {'

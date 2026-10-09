@@ -7,29 +7,33 @@
 # two commands this messenger runs, so that a program that is not a session can use that path:
 #   mail post -To <session uuid> -Id <32 hex> -MessageFile <path> [-FromLabel l] [-FromSessionId uuid] -Json
 #   mail status -Id <32 hex> -Json
-# THE CONTRACT, #65 as revised after its review (its lib/MailPost.ps1, THE CONTRACT): each prints ONE line
-# of ASCII JSON with id, to, stage, reason (a CODE) and detail (text for a person); post adds woken. Exits:
-# 0 post on disk for a live session (woken or waiting) / status found; 1 post could not write; 2 refused
-# input, stage refused; 3 status no record; 4 post stale-session - stage absent when nothing was written,
-# queued when the mail was written under a session that no longer holds its pane; 5 internal-error.
-# WHICH WEZFLEET THAT IS (measured 2026-10-07 against checkouts in an isolated mail root). The revision
-# above is not on wezfleet's main. Its rebuild is wezfleet's open pull request 70 (head 288fae7), and it
-# differs in two places, both read here: exit 4 with nothing written carries the stage "refused", not
-# "absent"; and an internal error is exit 1 with the stage "error", there being no exit 5. wezfleet's
-# main at c49063b has the first shape of #65: the same fields without detail, a sentence where the code
-# is, and no exit 4. A REASON THAT IS NOT A CODE IS UNKNOWN, post or status: main answered a post to a
-# session no live process is with exit 0, queued, and a sentence, which read as accepted for ever. So
-# against main every post is unknown, and nothing is ever decided on a sentence.
+# THE CONTRACT is wezfleet main's (read at 1122461 on 2026-10-09: its lib/MailPost.ps1, THE CONTRACT, as
+# its pull request 70 made it; 72 to 76 left mail post and status as they were). Each prints ONE line of
+# ASCII JSON with id, to, stage, reason (a CODE from a closed list) and detail (at most 300 characters of
+# text for a person); post adds woken. Exits: 0 post on disk / status found; 1 not this time - write-failed
+# (stage absent) or internal-error (stage error), retry the same id; 2 refused input, stage refused
+# (bad-id, bad-to, bad-from, bad-file, message-too-large over 256 KB, invalid-utf8, empty-message); 3
+# status no record; 4 post stale-session - stage refused when nothing was written because no live process
+# is the session, queued when the mail was written but the session's pane is held by another session.
+# There is no exit 5. Ids are 32 lower-case hex; -To and -FromSessionId are lower-case session UUIDs.
+# -Kind, which main's command line now declares, belongs to tell (its pull request 76): mail post never
+# reads it, and this messenger never passes it.
+# BEFORE MAIN HAD IT (measured 2026-10-07 against checkouts in an isolated mail root): wezfleet main at
+# c49063b had the first shape of #65 - the same fields without detail, a sentence where the code is, and
+# no exit 4 - and answered a post to a session no live process is with exit 0, queued, which read as
+# accepted for ever. A REASON THAT IS NOT A CODE IS UNKNOWN, post or status, so against a wezfleet that
+# old every post is unknown, and nothing is ever decided on a sentence.
 #
 # THE STAGES, mapped onto the port's (messengers/Port.ps1): queued is accepted, handed-over is
 # handed-over, taken is seen, unconfirmed is expired (with a reason), refused (exit 2) is held with the
 # code and detail, absent from status (exit 3) is absent, and EXIT 4 IS HELD IN BOTH ITS SHAPES with
 # reason stale-session (decided 2026-10-06): nothing reached a live target. Held is final under #97's
 # rules; the hub reports it to the sender, and a retry is a new message, never this one re-aimed.
-# Anything else - a stage outside the table, a stage that does not go with its exit code, an exit code
-# outside the table (1 write-failed and 5 internal-error included), output that is not exactly one line of
-# JSON of the expected shape, or an answer about another id - is unknown with the reason, never a stage
-# guessed. That is also how a wezfleet too old to have these commands shows: its usage text is not JSON.
+# Anything else - a stage outside the table, a stage that does not go with its exit code (exit 4 with
+# "absent", a shape no wezfleet shipped, included), exit 1, an exit code outside the table, output that is
+# not exactly one line of JSON of the expected shape, or an answer about another id - is unknown with the
+# reason, never a stage guessed. That is also how a wezfleet too old to have these commands shows: its
+# usage text is not JSON.
 #
 # THE REASON the port gets is wezfleet's code, then its detail. THE DETAIL IS NEVER FATAL (review of
 # #106, G4): it is cut to one line of printable ASCII and capped, or dropped when it is not text; the
@@ -91,7 +95,7 @@ $script:HordeWezfleetMessengerCodePattern = '\A[a-z]+(-[a-z]+)*\z'
 $script:HordeWezfleetMessengerStages = @{ "queued" = "accepted"; "handed-over" = "handed-over"; "taken" = "seen"; "unconfirmed" = "expired"; "refused" = "held" }
 # Which stages each exit code may carry, per command. Anything else is unknown.
 $script:HordeWezfleetMessengerExits = @{
-    post = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 2 = @("refused"); 4 = @("absent", "refused", "queued") }
+    post = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 2 = @("refused"); 4 = @("refused", "queued") }
     status = @{ 0 = @("queued", "handed-over", "taken", "unconfirmed"); 3 = @("absent") }
 }
 

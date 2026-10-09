@@ -1,7 +1,7 @@
 # DOES THE WEZFLEET MESSENGER HAND THE FLEET'S COMMAND EXACTLY WHAT IT SHOULD, AND READ ONLY WHAT IT SAID?
 #
 # Remote plan R21, slice 3b (messengers/wezfleet). The messenger starts the fleet's `mail post` and
-# `mail status` (wezfleet PR #65, as revised after its review) as a child and maps their one line of JSON
+# `mail status` (wezfleet PR #65, in the shape wezfleet main has since its PR #70) as a child and maps their one line of JSON
 # onto the port's stages. Every case here runs against test\FakeWezfleet.ps1 in a fresh temp folder,
 # through test\Fixture.ps1, which also moves HORDE_HOME into the temp folder, and reads what happened from
 # the fake's own records - never a real mail root, never a pane, never a session's folders. The plan's
@@ -11,8 +11,8 @@
 #   (3) missing, wrong version or non-JSON is unknown .... sections A and E
 # and the review of #106: the root is a real local checkout (A), the body files sit in a folder only
 # this user can open and are swept (F), a target or sender wezfleet cannot name is refused before any
-# process starts (B), the revised answer - detail, exits 4 and 5 - is read (C, D, E), and an answer
-# naming another target is not read as this one's (D).
+# process starts (B), main's answer - reason codes, detail, exit 4, exit 1 for an internal error - is
+# read (C, D, E), and an answer naming another target is not read as this one's (D).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
@@ -232,30 +232,31 @@ With-Fake {
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).Trim() -ne "") "refused with no reason from wezfleet is still held with a reason"
 }
-# STALE-SESSION, EXIT 4, IS HELD IN BOTH ITS SHAPES (decided 2026-10-06): nothing was written (absent),
-# or the mail was written under a session that no longer holds its pane (queued). Held is final: the hub
-# reports it to the sender, and a retry is a new message.
+# STALE-SESSION, EXIT 4, IS HELD IN BOTH OF WEZFLEET MAIN'S SHAPES (decided 2026-10-06; main 1122461,
+# its pull request 70): nothing was written, stage refused, because no live process is the session; or
+# the mail was written, stage queued, under a session that no longer holds its pane. Held is final: the
+# hub reports it to the sender, and a retry is a new message.
 With-Fake {
     param($st)
-    & $fx.SetMode $st @{ post = @{ staleAbsent = $true } }
-    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (Why $a).Contains("re-resolve")) ("exit 4 with nothing written is held, stale-session, the detail carried (" + (Show-Answer $a) + ")")
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ staleRefused = $true } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (Why $a).Contains("no live process") -and (& $fx.Observe $st $msg.messageId).records -eq 0) ("exit 4 with nothing written, stage refused, is held, stale-session, the detail carried (" + (Show-Answer $a) + ")")
     & $fx.SetMode $st @{ post = @{ stalePane = $true } }
     $msg = New-Msg
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (& $fx.Observe $st $msg.messageId).records -eq 1) ("exit 4 with the mail written but the pane held by another session is held too, never accepted (" + (Show-Answer $a) + ")")
 }
-# THE SHAPE THE FLEET'S OPEN PULL REQUEST GIVES EXIT 4 WITH NOTHING WRITTEN: the stage "refused", not
-# "absent" (wezfleet pull request 70, head 288fae7, measured against a checkout of it on 2026-10-07: a
-# post to a session no live process is answered exit 4, refused, stale-session). It is the same fact as
-# the first shape above and is held the same way; it read "exit 4 with the stage 'refused', which does
-# not go with that exit code", unknown, so a sender holding a stale id was never told so.
+# EXIT 4 WITH THE STAGE "absent" IS A SHAPE NO WEZFLEET SHIPPED: the revision of #65 this messenger was
+# first written against gave it, and wezfleet main (pull request 70, read at 1122461 on 2026-10-09) gives
+# "refused" instead. A stage the fleet's table does not pair with its exit code is unknown, like any other
+# (section E), so the table holds main's pairs and no more.
 With-Fake {
     param($st)
     $msg = New-Msg
-    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $false -Reason "stale-session" -Detail "no live process on this machine is session 22222222-3333-4444-8555-666666666666; nothing was written"); exit = 4 } }
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "absent" -Woken $false -Reason "stale-session" -Detail "nothing was written"); exit = 4 } }
     $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
-    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("stale-session") -and (Why $a).Contains("no live process")) ("exit 4 with the stage refused is held, stale-session, the detail carried (" + (Show-Answer $a) + ")")
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("'absent'")) ("exit 4 with the stage absent, which wezfleet main never answers, is unknown (" + (Show-Answer $a) + ")")
 }
 With-Fake {
     param($st)
@@ -365,7 +366,8 @@ $cases = @(
     @{ what = "exit 2 with stage queued"; out = { param($id) Line -Id $id -Woken $false }; exit = 2; like = "exit 2" },
     @{ what = "exit 4 with stage taken"; out = { param($id) Line -Id $id -Stage "taken" -Woken $false -Reason "stale-session" }; exit = 4; like = "exit 4" },
     @{ what = "a write failure, exit 1"; out = { param($id) Line -Id $id -Stage "absent" -Woken $false -Reason "write-failed" -Detail "the mail could not be written" }; exit = 1; like = "write-failed" },
-    @{ what = "an internal error, exit 5"; out = { param($id) Line -Id $id -Stage "unknown" -Woken $false -Reason "internal-error" -Detail "wezfleet threw: x" }; exit = 5; like = "internal-error" },
+    @{ what = "an internal error, exit 1 with the stage error (wezfleet main has no exit 5)"; out = { param($id) Line -Id $id -Stage "error" -Woken $false -Reason "internal-error" -Detail "unexpected error: x" }; exit = 1; like = "the fleet could not do it (stage 'error'): internal-error" },
+    @{ what = "an exit 5, which wezfleet main does not have"; out = { param($id) Line -Id $id -Stage "unknown" -Woken $false -Reason "internal-error" -Detail "x" }; exit = 5; like = "not an exit code" },
     @{ what = "an exit code outside the table"; out = { param($id) Line -Id $id }; exit = 7; like = "not an exit code" })
 foreach ($c in $cases) {
     With-Fake {
@@ -380,7 +382,7 @@ With-Fake {
     param($st)
     & $fx.SetMode $st @{ status = @{ internal = $true } }
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001"
-    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("internal-error")) "a status internal error, exit 5, is unknown"
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("internal-error") -and "$($a.reason)".Contains("exit 1")) ("a status internal error, exit 1 with the stage error, is unknown (" + $a.reason + ")")
     $msg = New-Msg
     & $fx.SetMode $st @{ status = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $null -Reason "bad-id"); exit = 2 } }
     $a = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
