@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/relay-envelope.v1",
+  "title": "relay-envelope v1",
+  "description": "One message through the relay (relay design 2026-10-09, section 3; relay/Envelope.ps1). The relay never reads it and cannot forge it: the body is AES-256-GCM under a fresh content key, the content key is HPKE-sealed (RFC 9180 base mode, DHKEM(P-256)/HKDF-SHA256/AES-256-GCM) to each recipient key, the canonical header is the additional data of both, and the sender signs the header, the recipients and the ciphertext - with its machine key (ES256) or, for a founder's answer, with a passkey (a WebAuthn assertion whose challenge is the SHA-256 of the same signed bytes). Version 1 IS that suite: an envelope names no algorithm to negotiate. The wire text must be exactly the canonical form relay/Envelope.ps1 writes - members in this order, no whitespace, every string from a restricted ASCII alphabet - so one envelope has one spelling, and a parser that sees anything else refuses it. SIZES ARE NOT HERE: core/Schema.ps1 has no maxLength or maxItems, so the caps (body 1 MiB, 8 recipients, the text length, clientDataJSON 1024 bytes) are enforced in relay/Envelope.ps1, as remote/Contract.ps1 does for the link.",
+  "type": "object",
+  "required": ["header", "recipients", "ct", "sig"],
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": ["v", "kind", "channel", "from", "to", "seq", "nonce", "ts"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "type": "integer", "enum": [1], "description": "The envelope version. A reader refuses any other, by name, before reading further." },
+        "kind": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "What the body is, within its channel (snapshot, answer, ack...). The channels name their kinds; this file only bounds the spelling." },
+        "channel": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Which relay channel (decisions, chat...) this belongs to; with from, the stream the sequence counts." },
+        "from": { "$ref": "#/definitions/keyId", "description": "The sender's key id: a machine's signing key, or the founder's passkey credential key." },
+        "to": { "type": "array", "items": { "$ref": "#/definitions/keyId" }, "description": "The recipient key ids, in the order of recipients, each once, 1 to 8." },
+        "seq": { "type": "integer", "minimum": 0, "description": "The sender's monotonic sequence number on this channel, 0 to 2^53-1. The journal (a later pull request) refuses a repeat and reports a gap." },
+        "nonce": { "type": "string", "pattern": "^[0-9a-f]{24}$", "description": "12 random bytes as hex: the body's AES-GCM nonce, and with from, channel and seq the replay key." },
+        "ts": { "type": "integer", "minimum": 0, "description": "When the sender made it, in Unix milliseconds. A number, not text: PowerShell 7's ConvertFrom-Json turns date-shaped text into a DateTime (measured 2026-10-09), which would change what the parser sees." }
+      }
+    },
+    "recipients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kid", "enc", "key"],
+        "additionalProperties": false,
+        "properties": {
+          "kid": { "$ref": "#/definitions/keyId" },
+          "enc": { "$ref": "#/definitions/base64url", "description": "HPKE enc: the 65-byte ephemeral public key." },
+          "key": { "$ref": "#/definitions/base64url", "description": "The 32-byte content key, HPKE-sealed to this recipient: 48 bytes." }
+        }
+      }
+    },
+    "ct": { "$ref": "#/definitions/base64url", "description": "The body, AES-256-GCM: ciphertext then the 16-byte tag." },
+    "sig": {
+      "type": "object",
+      "required": ["alg"],
+      "additionalProperties": false,
+      "description": "ES256 carries value; webauthn.get carries authenticatorData, clientDataJSON and signature. Which members go with which alg is checked in code.",
+      "properties": {
+        "alg": { "type": "string", "enum": ["ES256", "webauthn.get"] },
+        "value": { "$ref": "#/definitions/base64url", "description": "ES256: 64 bytes, r || s." },
+        "authenticatorData": { "$ref": "#/definitions/base64url" },
+        "clientDataJSON": { "$ref": "#/definitions/base64url" },
+        "signature": { "$ref": "#/definitions/base64url", "description": "webauthn.get: the authenticator's DER signature." }
+      }
+    }
+  },
+  "definitions": {
+    "keyId": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The first 16 bytes of SHA-256 of a 65-byte P-256 public point, as hex." },
+    "base64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Unpadded, canonical base64url." }
+  }
+}
