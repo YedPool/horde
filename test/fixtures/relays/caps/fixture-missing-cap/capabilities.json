@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "relay": "fixture-missing-cap",
+  "capabilities": {
+    "durable": {
+      "support": "yes",
+      "evidence": "fixture"
+    },
+    "realtime": {
+      "support": "yes",
+      "evidence": "fixture"
+    },
+    "reach.remote": {
+      "support": "yes",
+      "evidence": "fixture"
+    }
+  },
+  "limits": {
+    "maxTextChars": 4096,
+    "maxBatch": 8,
+    "maxWatchMs": 2000,
+    "retentionSeconds": 0
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/relay-capabilities.v1",
+  "title": "relay-capabilities v1",
+  "description": "What one relay says it can do, as data: relays/<name>/capabilities.json (relay design 2026-10-09, section 3; relays/Port.ps1). A relay is an UNTRUSTED mailbox store: it holds opaque envelope texts in named mailboxes, numbers them, and hands them back by cursor; it never reads them and is never believed about them (authenticity is the envelope's, replay the journal's). Each capability is declared in the one vocabulary the host, transport and messenger capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no, and a capability is yes only with evidence that was run (test/test-relay-conformance.ps1 demonstrates every yes). The list is closed: a relay declares every one, and nothing else. The limits are numbers the relay keeps and the port enforces before the relay is asked; their ceilings are in relays/Port.ps1 (Get-HordeRelayCeilings), because core/Schema.ps1 has no maximum.",
+  "type": "object",
+  "required": ["schemaVersion", "relay", "capabilities", "limits"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "relay": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under relays/." },
+    "capabilities": {
+      "type": "object",
+      "required": ["durable", "realtime", "reach.remote", "trim.on.ack"],
+      "additionalProperties": false,
+      "properties": {
+        "durable": { "$ref": "#/definitions/capability", "description": "Items, their numbers and the mailbox's head survive the process that wrote them: a reader that restarts resumes from its cursor and loses nothing, and a later put continues the numbering." },
+        "realtime": { "$ref": "#/definitions/capability", "description": "A watch that is waiting returns within a second of a put made by another process, instead of only when its timeout ends (long-poll, relay design Q8)." },
+        "reach.remote": { "$ref": "#/definitions/capability", "description": "Another machine can put into and read from the same mailboxes. A horde may span machines, so a channel between machines requires it; a relay on one machine's disk declares no." },
+        "trim.on.ack": { "$ref": "#/definitions/capability", "description": "An ack deletes the acked items from the relay (relay design Q16: acknowledged machine-bound envelopes are deleted on ack). Numbers are never reused after a trim." }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["maxTextChars", "maxBatch", "maxWatchMs", "retentionSeconds"],
+      "additionalProperties": false,
+      "properties": {
+        "maxTextChars": { "type": "integer", "minimum": 1, "description": "The longest item text it stores, in characters (the text is printable ASCII, so also bytes). At most the envelope's own text cap." },
+        "maxBatch": { "type": "integer", "minimum": 1, "description": "The most items one read returns." },
+        "maxWatchMs": { "type": "integer", "minimum": 0, "description": "The longest one watch may wait." },
+        "retentionSeconds": { "type": "integer", "minimum": 0, "description": "How long an unacked item is kept before the relay may purge it; 0 means it is kept until acked (relay design Q16 plans 30 days for the hosted relay)." }
+      }
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+        "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, and when. Never blank." }
+      }
+    }
+  }
+}
