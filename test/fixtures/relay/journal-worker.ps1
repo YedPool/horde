@@ -2,7 +2,8 @@
 # PowerShell runtime.
 #
 # It loads relay/Journal.ps1 from -CodeRoot (the repository, or the suite's broken copy of it), trusts the
-# one sender whose 65-byte public key is hex in -SenderFile, and reads -EnvelopesFile: one envelope's
+# one sender whose 65-byte public key is hex in -SenderFile, receives as the machine whose agree key id
+# is -RecipientKeyId, and reads -EnvelopesFile: one envelope's
 # wire text per line. Every envelope is read (Read-HordeRelayEnvelope) before -ReadyFile is written, so
 # process start-up is not part of the race. Then, by -Mode:
 #   race                for each envelope i, it waits for the shared tick (the start time in -GoFile,
@@ -29,7 +30,8 @@ param(
     [int]$TickMs = 0,
     [int]$Index = 0,
     [int]$DelayParity = -1,
-    [int]$DelayMs = 0
+    [int]$DelayMs = 0,
+    [string]$RecipientKeyId = ""
 )
 $ErrorActionPreference = "Stop"
 . (Join-Path $CodeRoot "relay\Journal.ps1")
@@ -67,7 +69,7 @@ if ($Mode -clike "stall-*") {
 }
 
 if ($Mode -cne "race") {
-    $answer = Register-HordeRelayJournalReceived -Envelope $envelopes[$Index] -Senders $senders -HordeHome $HordeHome
+    $answer = Register-HordeRelayJournalReceived -Envelope $envelopes[$Index] -Senders $senders -RecipientKeyIds @($RecipientKeyId) -Channel $envelopes[$Index].header.channel -Kind "answer" -HordeHome $HordeHome
     [System.IO.File]::WriteAllLines($LogFile, [string[]]@((Format-Answer -At $Index -Answer $answer), "END"))
     exit 0
 }
@@ -86,7 +88,7 @@ for ($i = 0; $i -lt $envelopes.Count; $i++) {
     $target = $startTicks + [long]$i * [long]$TickMs * 10000
     if ($DelayParity -ge 0 -and ($i % 2) -eq $DelayParity) { $target += [long]$DelayMs * 10000 }
     while ([datetime]::UtcNow.Ticks -lt $target) { }
-    try { $line = Format-Answer -At $i -Answer (Register-HordeRelayJournalReceived -Envelope $envelopes[$i] -Senders $senders -HordeHome $HordeHome) }
+    try { $line = Format-Answer -At $i -Answer (Register-HordeRelayJournalReceived -Envelope $envelopes[$i] -Senders $senders -RecipientKeyIds @($RecipientKeyId) -Channel $envelopes[$i].header.channel -Kind "answer" -HordeHome $HordeHome) }
     catch { $line = "" + $i + "|threw||" + ("" + $_.Exception.Message -replace "[\r\n|]", " ") }
     [void]$log.Add($line)
 }

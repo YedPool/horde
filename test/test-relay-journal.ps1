@@ -67,9 +67,13 @@ function SealText {
     param([long]$Seq, [string]$Channel = "decisions")
     return (New-HordeRelayEnvelope -Kind "answer" -Channel $Channel -Seq $Seq -Body ($utf8.GetBytes("out")) -Recipients @(, $phonePub) -Signer $machine)
 }
+$phoneId = Get-HordeRelayKeyId -Public $phonePub
 function Receive {
-    param($Envelope, [string]$HordeHome, $Now = $null)
-    return (Register-HordeRelayJournalReceived -Envelope $Envelope -Senders $senders -HordeHome $HordeHome -Now $Now)
+    # As this machine (the phone's agree key) would: expecting the envelope's own channel and the kind
+    # "answer" unless told otherwise.
+    param($Envelope, [string]$HordeHome, $Now = $null, [string[]]$Mine = @($phoneId), [string]$Channel = "", [string]$Kind = "answer")
+    $ch = $(if ($Channel -ceq "") { $Envelope.header.channel } else { $Channel })
+    return (Register-HordeRelayJournalReceived -Envelope $Envelope -Senders $senders -RecipientKeyIds $Mine -Channel $ch -Kind $Kind -HordeHome $HordeHome -Now $Now)
 }
 function IsFresh { param($V) return [bool]($V.state -ceq "known" -and $V.value.fresh -is [bool] -and $V.value.fresh) }
 function IsRefused { param($V, [string]$Like) return [bool]($V.state -ceq "known" -and $V.value.fresh -is [bool] -and -not $V.value.fresh -and $V.value.why.Contains($Like)) }
@@ -139,6 +143,17 @@ try {
     $fe = Seal -Seq 8 -Signer $forger
     $v = Receive -Envelope $fe -HordeHome $h
     Check (IsUnknown $v "not verified") ("an envelope from an untrusted signer is not judged (" + $v.reason + ")")
+    # Review of 6f7e8c1, finding 2: an envelope addressed only to another machine was recorded, and took
+    # the stream's seq, so this machine's own lower seq arriving after it was refused as out of order.
+    $elsewhere = New-HordeRelayEnvelope -Kind "answer" -Channel "decisions" -Seq 60 -Body ($utf8.GetBytes("for B")) -Recipients @(, (ConvertTo-HordeRelayP256Public -Key (New-HordeRelayP256Key -Use "ecdh"))) -Signer $machine
+    $v = Receive -Envelope (Read-HordeRelayEnvelope -Text $elsewhere).value -HordeHome $h
+    Check (IsUnknown $v "not addressed to this machine") ("an envelope addressed only to another machine is not judged (" + $v.reason + ")")
+    Check (-not (Test-Path -LiteralPath (Join-Path (StreamDir $h) (RecName 60)))) "and it is not recorded"
+    $v = Receive -Envelope (Seal -Seq 59) -HordeHome $h -Channel "chat"
+    Check (IsUnknown $v "is for the channel decisions, not chat") ("an envelope on another channel than the caller expects is not judged (" + $v.reason + ")")
+    $v = Receive -Envelope (Seal -Seq 59) -HordeHome $h -Kind "snapshot"
+    Check (IsUnknown $v "is of the kind answer, not snapshot") ("an envelope of another kind than the caller expects is not judged (" + $v.reason + ")")
+    Check (IsFresh (Receive -Envelope (Seal -Seq 59) -HordeHome $h)) "CONTROL: this machine's own seq 59 is still fresh: nothing above took its place"
     Check (-not (Test-Path -LiteralPath (StreamDir $h -From (Get-HordeRelayKeyId -Public (ConvertTo-HordeRelayP256Public -Key $forger))))) "and nothing of it is recorded"
     $o1 = Receive -Envelope (Seal -Seq 7 -Signer $other) -HordeHome $h
     Check (IsFresh $o1) "the same seq from another sender is its own stream, and fresh"

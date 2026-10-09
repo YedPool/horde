@@ -54,6 +54,7 @@ $signer = New-HordeRelayP256Key -Use "ecdsa"
 $signerPub = ConvertTo-HordeRelayP256Public -Key $signer
 $signerId = Get-HordeRelayKeyId -Public $signerPub
 $phonePub = ConvertTo-HordeRelayP256Public -Key (New-HordeRelayP256Key -Use "ecdh")
+$phoneId = Get-HordeRelayKeyId -Public $phonePub
 $senderFile = Join-Path $work "sender.txt"
 [System.IO.File]::WriteAllText($senderFile, (ConvertTo-HordeRelayHex -Bytes $signerPub))
 
@@ -111,7 +112,7 @@ function Invoke-Race {
     $answers = New-Object System.Collections.ArrayList
     try {
         for ($r = 0; $r -lt 4; $r++) {
-            $args1 = ("-Mode race -CodeRoot `"" + $CodeRoot + "`" -HordeHome `"" + $h + "`" -EnvelopesFile `"" + $EnvelopesFile + "`" -SenderFile `"" + $senderFile +
+            $args1 = ("-Mode race -CodeRoot `"" + $CodeRoot + "`" -HordeHome `"" + $h + "`" -EnvelopesFile `"" + $EnvelopesFile + "`" -RecipientKeyId " + $phoneId + " -SenderFile `"" + $senderFile +
                 "`" -LogFile `"" + (Join-Path $dir ("log-" + $r + ".txt")) + "`" -GoFile `"" + $go + "`" -ReadyFile `"" + (Join-Path $dir ("ready-" + $r)) + "`" -TickMs " + $tickMs + " -DelayParity " + ($r % 2) + " -DelayMs " + $headStartMs)
             [void]$procs.Add((Start-Worker -Runtime $runtimes[$r % 2] -Arguments $args1))
         }
@@ -231,7 +232,7 @@ try {
         New-Item -ItemType Directory -Path $h | Out-Null
         $null = Initialize-HordeRelayJournal -HordeHome $h
         $mark = Join-Path $dir "stalled"
-        $common = "-CodeRoot `"" + $root + "`" -HordeHome `"" + $h + "`" -EnvelopesFile `"" + $envK + "`" -SenderFile `"" + $senderFile + "`""
+        $common = "-CodeRoot `"" + $root + "`" -HordeHome `"" + $h + "`" -EnvelopesFile `"" + $envK + "`" -RecipientKeyId " + $phoneId + " -SenderFile `"" + $senderFile + "`""
         $w = Start-Worker -Runtime $runtimes[0] -Arguments ("-Mode " + $step + " -Index 0 -GoFile `"" + $mark + "`" -LogFile `"" + (Join-Path $dir "stalled-log.txt") + "`" " + $common)
         try {
             $deadline = (Get-Date).AddSeconds(120)

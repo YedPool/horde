@@ -429,11 +429,25 @@ function Add-HordeRelayJournalEntry {
 
 function Register-HordeRelayJournalReceived {
     # A received envelope, read by Read-HordeRelayEnvelope: verify its signature against -Senders (so
-    # nothing unauthenticated is ever recorded), then judge and record it. The verdict
-    # Unprotect-HordeRelayEnvelope takes as -Replay, or unknown.
-    param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders, [string]$HordeHome = "", $Now = $null)
+    # nothing unauthenticated is ever recorded), require that it is addressed to one of this machine's
+    # agree keys (-RecipientKeyIds) and is of the -Channel and -Kind the caller expects, then judge and
+    # record it. The verdict Unprotect-HordeRelayEnvelope takes as -Replay, or unknown.
+    #
+    # WHY THE ADDRESS IS CHECKED HERE, BEFORE ANYTHING IS RECORDED (review of 6f7e8c1, finding 2). A
+    # sender's seq is per channel, not per recipient, so an envelope it sent only to another machine
+    # carries a seq too. Recorded here, it took the stream's place: this machine's own envelope with a
+    # lower seq, arriving after it, was refused as out of order. Unprotect refuses such an envelope as
+    # well, but only after the journal had already spent the seq.
+    param([Parameter(Mandatory = $true)]$Envelope, [Parameter(Mandatory = $true)][hashtable]$Senders,
+        [Parameter(Mandatory = $true)][string[]]$RecipientKeyIds, [Parameter(Mandatory = $true)][string]$Channel,
+        [Parameter(Mandatory = $true)][string]$Kind, [string]$HordeHome = "", $Now = $null)
     $verified = Test-HordeRelayEnvelope -Envelope $Envelope -Senders $Senders
     if (-not $verified.ok) { return (New-HordeUnknown -Reason ("the envelope is not verified, so the journal does not judge it: " + $verified.reason)) }
+    $vh = $verified.value.header
+    if ($vh.channel -cne $Channel) { return (New-HordeUnknown -Reason ("the envelope is for the channel " + $vh.channel + ", not " + $Channel + ", so the journal does not judge it and records nothing")) }
+    if ($vh.kind -cne $Kind) { return (New-HordeUnknown -Reason ("the envelope is of the kind " + $vh.kind + ", not " + $Kind + ", so the journal does not judge it and records nothing")) }
+    $forMe = @(@($vh.to) | Where-Object { $RecipientKeyIds -ccontains $_ })
+    if ($forMe.Count -eq 0) { return (New-HordeUnknown -Reason "the envelope is not addressed to this machine, so the journal does not judge it and records nothing") }
     $e = $verified.value.envelope
     # The wire text rebuilt from its parts: exactly what was signed, since Test checked the parts.
     $text = '{"header":' + $e.headerText + ',"recipients":' + $e.recipientsText + ',"ct":"' + $e.ctText + '","sig":' + (ConvertTo-HordeRelaySigText -Sig $e.sig) + '}'
