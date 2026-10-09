@@ -155,6 +155,18 @@ $script:HordeSurfaceMessagesFile = "bridge-messages.json"
 $script:HordeSurfaceMessagesSchema = "surface-bridge-messages.v1"
 $script:HordeSurfaceNamePattern = '\A[a-z][a-z-]{0,31}\z'
 $script:HordeSurfaceArgTypes = @("string", "integer", "boolean")
+# NAMES ARE THE CALLER'S, SO NO NAME MAY STAND FOR A MEMBER OF THE TABLE THAT HOLDS IT. Windows
+# PowerShell reads $table.Keys, .Values, .Count and every other member name of a table as the ENTRY of
+# that name when there is one, in any letter case: a bridge with a request named keys was refused with
+# "'System.Collections.Hashtable' is not a request name" (measured 2026-10-08). So in this file a
+# table of names - requests, arguments, mounts, surfaces, and a value about to be written - is walked
+# with get_Keys() and get_Values() and asked with Contains() and its indexer, never through a member
+# read as a property (test/test-surface-port.ps1 names requests, arguments and mounts after them).
+# AND A FEW NAMES CAN NEVER ARRIVE: Windows PowerShell 5.1's ConvertFrom-Json refuses an object with a
+# member named any of these, in any letter case (measured 2026-10-08), so an argument, or a member of
+# a request in the definition, by one of them is refused when it is declared rather than refused on
+# every message.
+$script:HordeSurfaceJsonReservedNames = @("psobject", "psbase", "psadapted", "psextended", "pstypenames")
 
 # WHAT NO SURFACE IS ASKED TO GO BELOW. Named constants and not settings: they are what a spec may ask
 # of ANY surface, so a person's file must not be able to move them, and they are the settings' own
@@ -258,6 +270,10 @@ function Test-HordeSurfaceMessages {
             [void]$seen.Add($part.Value)
         }
     }
+    # A request is read with ConvertFrom-Json, which refuses some member names outright (above).
+    foreach ($part in $Messages.request.PSObject.Properties) {
+        if ($script:HordeSurfaceJsonReservedNames -contains "$($part.Value)") { $findings += ("the request names a part '" + $part.Value + "', a name the JSON reader keeps for itself") }
+    }
     # The page tells Horde's two kinds of message apart by the one member each has and the other has not.
     $replyNames = @($Messages.reply.PSObject.Properties | ForEach-Object { $_.Value })
     $eventNames = @($Messages.event.PSObject.Properties | ForEach-Object { $_.Value })
@@ -337,17 +353,17 @@ function Resolve-HordeSurfacePageFile {
     $mount = $Matches[1]
     $steps = @($Matches[2].Substring(1) -split "/")
     # Exactly: the table a caller made with [ordered] would take SHELL for shell.
-    if (@($Mounts.Keys) -cnotcontains $mount) { return (& $no "the page asked for a file of a mount that was not given") }
+    if (@($Mounts.get_Keys()) -cnotcontains $mount) { return (& $no "the page asked for a file of a mount that was not given") }
     foreach ($s in $steps) { if ($s -imatch $script:HordeSurfaceDeviceNamePattern) { return (& $no "the page asked for a name Windows keeps for a device") } }
     $extension = [System.IO.Path]::GetExtension($steps[$steps.Count - 1])
     if (@($script:HordeSurfaceFileTypes.Keys) -cnotcontains $extension) { return (& $no "the page asked for something that is not a kind of file a page is made of") }
     $missing = "the page asked for a file that is not there"
     $held = $null
-    foreach ($k in @($Mounts.Keys)) { if ($k -ceq $mount) { $held = $Mounts[$k] } }
+    foreach ($k in @($Mounts.get_Keys())) { if ($k -ceq $mount) { $held = $Mounts[$k] } }
     $file = ""
     if ($held -is [System.Collections.IDictionary]) {
-        if ($steps.Count -ne 1 -or @($held.Keys) -cnotcontains $steps[0]) { return (& $no $missing) }
-        foreach ($k in @($held.Keys)) { if ($k -ceq $steps[0]) { $file = "" + $held[$k] } }
+        if ($steps.Count -ne 1 -or @($held.get_Keys()) -cnotcontains $steps[0]) { return (& $no $missing) }
+        foreach ($k in @($held.get_Keys())) { if ($k -ceq $steps[0]) { $file = "" + $held[$k] } }
         if ($file -eq "" -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { return (& $no $missing) }
     }
     else {
@@ -409,7 +425,7 @@ function Register-HordeSurface {
     return $s
 }
 
-function Get-HordeSurfaceNames { return @($script:HordeSurfaces.Keys | Sort-Object) }
+function Get-HordeSurfaceNames { return @($script:HordeSurfaces.get_Keys() | Sort-Object) }
 
 function Test-HordeSurfaceCapability {
     # Does the surface have the capability? Only "yes" counts: unverified, declined and no are all no.
@@ -438,7 +454,7 @@ function Test-HordeSurfaceDepth {
     param($Value, [Parameter(Mandatory = $true)][int]$Most)
     if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.ValueType]) { return $true }
     $inside = $null
-    if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.Values) }
+    if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.get_Values()) }
     elseif ($Value -is [System.Management.Automation.PSCustomObject]) { $inside = @($Value.PSObject.Properties | ForEach-Object { , $_.Value }) }
     elseif ($Value -is [System.Collections.IEnumerable]) { $inside = @($Value) }
     else { return $true }
@@ -474,14 +490,15 @@ function New-HordeSurfaceBridge {
     $Settings = Resolve-HordeSurfaceSettings -Settings $Settings # no bridge from a refused file
     $limits = [pscustomobject]@{ messageChars = [int]$Settings.values.messageChars; argumentChars = [int]$Settings.values.argumentChars; refusalsKept = [int]$Settings.values.refusalsKept; errorsKept = [int]$Settings.values.errorsKept }
     $table = [ordered]@{}
-    foreach ($name in @($Requests.Keys)) {
+    foreach ($name in @($Requests.get_Keys())) {
         if ("$name" -cnotmatch $script:HordeSurfaceNamePattern) { throw ("'" + $name + "' is not a request name: lowercase letters and hyphens") }
         $entry = $Requests[$name]
         if ($null -eq $entry -or $entry["run"] -isnot [scriptblock]) { throw ("the request '" + $name + "' has no run block") }
         $argTable = [ordered]@{}
         if ($null -ne $entry["args"]) {
-            foreach ($argName in @($entry["args"].Keys)) {
+            foreach ($argName in @($entry["args"].get_Keys())) {
                 if ("$argName" -cnotmatch '\A[a-z][A-Za-z0-9]{0,31}\z') { throw ("'" + $argName + "' of request '" + $name + "' is not an argument name") }
+                if ($script:HordeSurfaceJsonReservedNames -contains "$argName") { throw ("'" + $argName + "' of request '" + $name + "' is a name the JSON reader keeps for itself, so no page could send it") }
                 $spec = $entry["args"][$argName]
                 if ($script:HordeSurfaceArgTypes -cnotcontains "$($spec["type"])") { throw ("argument '" + $argName + "' of request '" + $name + "' has the type '" + $spec["type"] + "', not one of " + ($script:HordeSurfaceArgTypes -join ", ")) }
                 $most = [long]$limits.argumentChars
@@ -577,7 +594,7 @@ function Test-HordeSurfaceArguments {
     if ($Given -isnot [System.Management.Automation.PSCustomObject]) { return "its args is not an object" }
     $names = @($Given.PSObject.Properties | ForEach-Object { $_.Name })
     foreach ($n in $names) { if (-not $Request.args.Contains($n)) { return ("it gives an argument '" + $Request.name + "' does not take") } }
-    foreach ($argName in @($Request.args.Keys)) {
+    foreach ($argName in @($Request.args.get_Keys())) {
         if ($names -cnotcontains $argName) { return ("it does not give '" + $argName + "', which '" + $Request.name + "' needs") }
         $spec = $Request.args[$argName]
         $v = $Given.PSObject.Properties[$argName].Value
@@ -644,7 +661,7 @@ function Invoke-HordeSurfaceRequest {
     if ($null -eq $vProp -or ($vProp.Value -isnot [int] -and $vProp.Value -isnot [long]) -or [long]$vProp.Value -ne $protocol) { return (& $refuse ("the message is not version " + $protocol + " of the page's requests") $id) }
     $nameProp = $message.PSObject.Properties[$ask.name]
     if ($null -eq $nameProp -or $nameProp.Value -isnot [string] -or $nameProp.Value -cnotmatch $script:HordeSurfaceNamePattern -or -not $Bridge.requests.Contains($nameProp.Value)) {
-        return (& $refuse ("the message asked for something that is not on the list; the list is: " + (@($Bridge.requests.Keys) -join ", ")) $id)
+        return (& $refuse ("the message asked for something that is not on the list; the list is: " + (@($Bridge.requests.get_Keys()) -join ", ")) $id)
     }
     $request = $Bridge.requests[$nameProp.Value]
     $given = $null
@@ -696,7 +713,7 @@ function New-HordeSurfaceSpec {
     if ($null -eq $TickMs) { $TickMs = $Settings.values.tickMs }
     $Width = [int]$Width; $Height = [int]$Height; $TickMs = [int]$TickMs
     $mountTable = [ordered]@{}
-    foreach ($name in @($Mounts.Keys)) {
+    foreach ($name in @($Mounts.get_Keys())) {
         # A mount's name is a step of the addresses a page writes, so it is held to a plain one.
         if ("$name" -cnotmatch $script:HordeSurfaceMountPattern) { throw ("'" + $name + "' is not a mount name: lowercase letters, digits and hyphens") }
         if ("$name" -ceq $script:HordeSurfaceOwnMount) { throw ("the mount '" + $name + "' is the surface's own, where it serves the page's side of the bridge; a caller gives its page another name") }
@@ -704,7 +721,7 @@ function New-HordeSurfaceSpec {
         if (-not [System.IO.Path]::IsPathRooted($folder) -or -not (Test-Path -LiteralPath $folder -PathType Container)) { throw ("the mount '" + $name + "' is not a folder that exists: '" + $folder + "'") }
         $mountTable["$name"] = [System.IO.Path]::GetFullPath($folder)
     }
-    if ($mountTable.Count -eq 0) { throw "a surface needs at least one mount: the folder its page is in" }
+    if ($mountTable.get_Count() -eq 0) { throw "a surface needs at least one mount: the folder its page is in" }
     if ($Start -cnotmatch '\A([a-z][a-z0-9-]{0,31})/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\z' -or -not $mountTable.Contains($Matches[1])) { throw ("the start page '" + $Start + "' is not <mount>/<file> of a mount that was given") }
     $startMount = $Matches[1]; $startFile = $Matches[2]
     if (-not (Test-Path -LiteralPath (Join-Path $mountTable[$startMount] $startFile) -PathType Leaf)) { throw ("the start page '" + $Start + "' is not a file that exists") }

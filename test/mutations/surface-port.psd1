@@ -79,7 +79,7 @@
            Find = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most ($script:HordeSurfaceJsonDepth + 1))) { throw'
            Replace = 'if (-not (Test-HordeSurfaceDepth -Value $Value -Most $script:HordeSurfaceJsonDepth)) { throw' }
         @{ Name = "what-a-table-holds-is-not-looked-into"
-           Find = 'if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.Values) }'
+           Find = 'if ($Value -is [System.Collections.IDictionary]) { $inside = @($Value.get_Values()) }'
            Replace = 'if ($Value -is [System.Collections.IDictionary]) { $inside = @() }' }
         @{ Name = "an-object-is-not-a-level"
            Find = 'elseif ($Value -is [System.Management.Automation.PSCustomObject]) { $inside ='
@@ -196,8 +196,8 @@
            Replace = ') {' }
         # --- which file an address names
         @{ Name = "a-mount-matched-without-case"
-           Find = 'if (@($Mounts.Keys) -cnotcontains $mount) {'
-           Replace = 'if (@($Mounts.Keys) -notcontains $mount) {' }
+           Find = 'if (@($Mounts.get_Keys()) -cnotcontains $mount) {'
+           Replace = 'if (@($Mounts.get_Keys()) -notcontains $mount) {' }
         @{ Name = "a-device-name-is-opened"
            Find = 'foreach ($s in $steps) { if ($s -imatch $script:HordeSurfaceDeviceNamePattern) {'
            Replace = 'foreach ($s in $steps) { if ($false) {' }
@@ -346,6 +346,39 @@
            Replace = 'if ($false) {' }
         @{ Name = "relative-data-folder-accepted"
            Find = 'if (-not [System.IO.Path]::IsPathRooted($DataFolder)) {'
+           Replace = 'if ($false) {' }
+        # --- no name stands for a member of the table that holds it (header of the file, NAMES ARE
+        # THE CALLER'S). Each puts back one read of a member as a property. A mount table's count
+        # read as .Count is not here: a mount named count holds a path, never 0, so it is equivalent.
+        @{ Name = "requests-walked-through-a-member"
+           Find = 'foreach ($name in @($Requests.get_Keys())) {'
+           Replace = 'foreach ($name in @($Requests.Keys)) {' }
+        @{ Name = "declared-arguments-walked-through-a-member"
+           Find = 'foreach ($argName in @($entry["args"].get_Keys())) {'
+           Replace = 'foreach ($argName in @($entry["args"].Keys)) {' }
+        @{ Name = "given-arguments-checked-through-a-member"
+           Find = 'foreach ($argName in @($Request.args.get_Keys())) {'
+           Replace = 'foreach ($argName in @($Request.args.Keys)) {' }
+        @{ Name = "the-list-said-through-a-member"
+           Find = '(@($Bridge.requests.get_Keys()) -join ", ")'
+           Replace = '(@($Bridge.requests.Keys) -join ", ")' }
+        @{ Name = "a-table-measured-through-a-member"
+           Find = '$inside = @($Value.get_Values())'
+           Replace = '$inside = @($Value.Values)' }
+        @{ Name = "spec-mounts-walked-through-a-member"
+           Find = 'foreach ($name in @($Mounts.get_Keys())) {'
+           Replace = 'foreach ($name in @($Mounts.Keys)) {' }
+        @{ Name = "an-address-matched-through-a-member"
+           Find = 'foreach ($k in @($Mounts.get_Keys())) { if ($k -ceq $mount)'
+           Replace = 'foreach ($k in @($Mounts.Keys)) { if ($k -ceq $mount)' }
+        @{ Name = "surfaces-listed-through-a-member"
+           Find = '@($script:HordeSurfaces.get_Keys() | Sort-Object)'
+           Replace = '@($script:HordeSurfaces.Keys | Sort-Object)' }
+        @{ Name = "an-argument-the-json-reader-keeps-is-declared"
+           Find = 'if ($script:HordeSurfaceJsonReservedNames -contains "$argName") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "a-request-part-the-json-reader-keeps-is-defined"
+           Find = 'if ($script:HordeSurfaceJsonReservedNames -contains "$($part.Value)") {'
            Replace = 'if ($false) {' }
     )
 }

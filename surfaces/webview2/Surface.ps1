@@ -181,6 +181,18 @@ function Test-HordeWebView2Address {
     return [bool]($null -ne $path -and $path.StartsWith(("/" + $StartMount + "/"), [System.StringComparison]::Ordinal))
 }
 
+function Get-HordeWebView2Mounts {
+    # PURE. What a window of -Spec serves: the caller's mounts, and the surface's own - this adapter's
+    # page side of the bridge, and the port's definition of the messages it reads. Walked with
+    # get_Keys(): a mount may be named keys, and $table.Keys is then that mount (surfaces/Port.ps1,
+    # NAMES ARE THE CALLER'S).
+    param([Parameter(Mandatory = $true)]$Spec)
+    $mounts = [ordered]@{}
+    foreach ($m in @($Spec.mounts.get_Keys())) { $mounts[$m] = $Spec.mounts[$m] }
+    $mounts[(Get-HordeSurfaceOwnMount)] = (Get-HordeSurfaceOwnFiles -BridgeScript (Join-Path $script:HordeWebView2Folder "page\bridge.js"))
+    return $mounts
+}
+
 function Get-HordeWebView2ResourceAnswer {
     # What one load is answered with: { file; type; status; refusal }. file and type are set only for
     # a file of a mount (status 200). Otherwise the status is a refusal's, and refusal is the sentence
@@ -804,11 +816,7 @@ function Open-HordeWebView2Surface {
     $listenTimer = New-Object System.Windows.Forms.Timer
     $listenTimer.Interval = Get-HordeSurfaceMeterWindowMs
 
-    # The caller's mounts, and the surface's own: this adapter's page side of the bridge, and the
-    # port's definition of the messages it reads.
-    $mounts = [ordered]@{}
-    foreach ($m in @($Spec.mounts.Keys)) { $mounts[$m] = $Spec.mounts[$m] }
-    $mounts[(Get-HordeSurfaceOwnMount)] = (Get-HordeSurfaceOwnFiles -BridgeScript (Join-Path $script:HordeWebView2Folder "page\bridge.js"))
+    $mounts = Get-HordeWebView2Mounts -Spec $Spec
 
     $handlers = Get-HordeWebView2Handlers
     $errors = New-Object System.Collections.ArrayList

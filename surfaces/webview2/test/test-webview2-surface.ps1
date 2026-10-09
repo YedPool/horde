@@ -186,6 +186,22 @@ foreach ($inside in @(
 }
 $icon = Answer ($at + "/favicon.ico") "Other"
 Check ($icon.status -eq 404 -and $icon.file -ceq "" -and $icon.refusal -ceq "") "the icon the engine asks for by itself is answered 'not there' and is not held against the page"
+# A MOUNT NAMED keys, values or count IS A MOUNT: Windows PowerShell reads $table.Keys as the entry of
+# that name when there is one (surfaces/Port.ps1 has the same cases), so the mounts a window serves
+# are composed by name and never through the table's own members.
+$keysDir = Join-Path $work "mount-keys"; New-Item -ItemType Directory -Path $keysDir -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $keysDir "index.html"), "<!doctype html><title>k</title>")
+$keysSpec = New-HordeSurfaceSpec -Title "never shown" -Mounts ([ordered]@{ keys = $keysDir; values = $pageDir; count = $otherDir }) -Start "keys/index.html" -Bridge $bridge -DataFolder (Join-Path $work "data")
+$composed = $null
+try { $composed = Get-HordeWebView2Mounts -Spec $keysSpec } catch { $composed = $null }
+Check ($null -ne $composed -and (@($composed.get_Keys()) -join ",") -ceq "keys,values,count,surface") ("the window serves the caller's mounts named keys, values and count, and its own (" + $(if ($null -ne $composed) { @($composed.get_Keys()) -join "," }) + ")")
+if ($null -ne $composed) {
+    $keysPage = Get-HordeWebView2ResourceAnswer -Uri ($at + "/keys/index.html") -Kind "Document" -Mounts $composed
+    $countFile = Get-HordeWebView2ResourceAnswer -Uri ($at + "/count/data.json") -Kind "Fetch" -Mounts $composed
+    $ownOfKeys = Get-HordeWebView2ResourceAnswer -Uri ($at + "/surface/bridge.js") -Kind "Script" -Mounts $composed
+    Check ($keysPage.status -eq 200 -and $keysPage.file -ceq (Join-Path $keysDir "index.html") -and $countFile.status -eq 200 -and $countFile.file -ceq (Join-Path $otherDir "data.json") -and $ownOfKeys.file -ceq (Join-Path $adapter "page\bridge.js")) "and a load of each is answered with its file"
+    Check ((Get-HordeWebView2ResourceAnswer -Uri ($at + "/Keys/index.html") -Kind "Document" -Mounts $composed).status -eq 403) "CONTROL: Keys is not keys"
+}
 
 Write-Host ""
 Write-Host "--- a message is read only when it comes from the page ---" -ForegroundColor Cyan

@@ -439,6 +439,114 @@ $types = Get-HordeSurfaceFileTypes
 Check ((@($types.Keys | Sort-Object) -join " ") -ceq ".css .gif .html .ico .jpg .js .json .png .svg .txt .webp .woff2") "the kinds of file a page is made of are one closed list, the port's"
 Check (@($types.Values | Where-Object { $_ -notmatch '\A[a-z]+/[a-z0-9.+-]+(; charset=utf-8)?\z' }).Count -eq 0) "each with the type it is served as"
 
+Write-Host ""
+Write-Host "--- no name a table has for its own members stands in for a request, an argument or a mount ---" -ForegroundColor Cyan
+# Windows PowerShell reads $table.Keys as the ENTRY named keys when there is one, and the same for
+# values, count and every other member name of a table, in any letter case: a bridge with a request
+# named keys was refused with "'System.Collections.Hashtable' is not a request name" (decisions
+# window, 2026-10-08). These are names a caller may give, so each is registered, called, refused
+# when unknown, and the names a table cannot hold are refused by name.
+$collide = @("keys", "values", "count", "item", "syncroot", "gettype", "contains", "isreadonly")
+$collideArgs = @("keys", "values", "count", "item", "syncRoot", "getType", "contains", "isFixedSize")
+$script:collided = New-Object System.Collections.ArrayList
+$asked = [ordered]@{}
+for ($i = 0; $i -lt $collide.Count; $i++) {
+    $argsOf = [ordered]@{}; $argsOf[$collideArgs[$i]] = @{ type = "string"; most = 20 }; $argsOf["values"] = @{ type = "integer" }
+    $asked[$collide[$i]] = @{ args = $argsOf; run = { param($Arguments, $State, $Window) [void]$script:collided.Add(@($Arguments.get_Keys() | Sort-Object | ForEach-Object { $_ + "=" + $Arguments[$_] }) -join " "); return "done" } }
+}
+$named = $null
+try { $named = New-HordeSurfaceBridge -Requests $asked } catch { $named = $null; Check $false ("a bridge is made with requests named " + ($collide -join ", ") + " (" + $_.Exception.Message + ")") }
+if ($null -ne $named) {
+    Check ((@($named.requests.get_Keys()) -join ",") -ceq ($collide -join ",")) ("CONTROL: every one is registered, in order (" + (@($named.requests.get_Keys()) -join ",") + ")")
+    for ($i = 0; $i -lt $collide.Count; $i++) {
+        $one = $collide[$i]; $an = $collideArgs[$i]
+        $want = @(@(($an + "=a " + $one), "values=3") | Sort-Object) -join " "
+        if ($an -ceq "values") { $want = "values=3" }
+        $wantArgs = @(@($an, "values") | Select-Object -Unique)
+        Check ((@($named.requests[$one].args.get_Keys()) -join ",") -ceq ($wantArgs -join ",")) ("the request '" + $one + "' keeps its arguments by name (" + (@($named.requests[$one].args.get_Keys()) -join ",") + ")")
+        $text = '{"v":1,"id":' + (50 + $i) + ',"request":"' + $one + '","args":{"' + $an + '":"a ' + $one + '","values":3}}'
+        if ($an -ceq "values") { $text = '{"v":1,"id":' + (50 + $i) + ',"request":"' + $one + '","args":{"values":3}}' }
+        $r = Invoke-HordeSurfaceRequest -Bridge $named -Text $text
+        $rv = $null; if ($r.reply -ne "") { $rv = Reply $r }
+        Check ($r.refused -ceq "" -and $r.request -ceq $one -and $null -ne $rv -and $rv.ok -eq $true -and $rv.value -ceq "done") ("the request '" + $one + "' is answered (" + $r.refused + $r.failed + ")")
+        Check ($script:collided.Count -gt 0 -and $script:collided[$script:collided.Count - 1] -ceq $want) ("and its handler is given its arguments under their own names (" + $want + ")")
+        $missing = Invoke-HordeSurfaceRequest -Bridge $named -Text ('{"v":1,"id":70,"request":"' + $one + '","args":{}}')
+        Check ($missing.refused -ceq ("'" + $one + "' was asked wrongly: it does not give '" + $wantArgs[0] + "', which '" + $one + "' needs")) ("a call of '" + $one + "' that leaves its arguments out is refused naming the first (" + $missing.refused + ")")
+    }
+    $before = $script:collided.Count
+    $unknown = Invoke-HordeSurfaceRequest -Bridge $named -Text '{"v":1,"id":71,"request":"nope"}'
+    Check ($unknown.refused -ceq ("the message asked for something that is not on the list; the list is: " + ($collide -join ", "))) ("a request that is not on the list is refused, and the list is said by name (" + $unknown.refused + ")")
+    $extra = Invoke-HordeSurfaceRequest -Bridge $named -Text '{"v":1,"id":72,"request":"keys","args":{"keys":"a","values":3,"count":"b"}}'
+    Check ($extra.refused -like "*it gives an argument 'keys' does not take" -and $script:collided.Count -eq $before) ("an argument the request did not declare is refused, though a table has a member of that name (" + $extra.refused + ")")
+    foreach ($capital in @("Keys", "Count", "Values", "GetType", "SyncRoot")) {
+        $wrongCase = Invoke-HordeSurfaceRequest -Bridge $named -Text ('{"v":1,"id":73,"request":"' + $capital + '"}')
+        Check ($wrongCase.refused -like "*not on the list*" -and $script:collided.Count -eq $before) ("'" + $capital + "' is not on the list either: a name is matched exactly")
+    }
+}
+$plain = $null
+try { $plain = New-HordeSurfaceBridge -Requests @{ keys = @{ run = { return "plain" } }; count = @{ run = { return "plain" } } } } catch { $plain = $null }
+Check ($null -ne $plain -and (@($plain.requests.get_Keys() | Sort-Object) -join ",") -ceq "count,keys" -and ((Reply (Invoke-HordeSurfaceRequest -Bridge $plain -Text '{"v":1,"id":1,"request":"keys"}')).value -ceq "plain")) "the same from a plain table, which keeps no order"
+foreach ($capital in @("Keys", "Count", "SyncRoot", "GetType", "IsReadOnly")) {
+    $plainTable = @{}; $plainTable[$capital] = @{ run = { return 1 } }
+    Check (Throws { New-HordeSurfaceBridge -Requests $plainTable } ("'" + $capital + "' is not a request name")) ("a request named " + $capital + " is refused by its own name, never by the name of a type")
+    Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "say" = @{ args = @{ $capital = @{ type = "string" } }; run = { return 1 } } }) } ("'" + $capital + "' of request 'say' is not an argument name")) ("and an argument named " + $capital)
+}
+# A NAME THE JSON READER KEEPS FOR ITSELF can never arrive: Windows PowerShell 5.1's ConvertFrom-Json
+# refuses an object with a member named psobject, psbase, psadapted, psextended or pstypenames, in any
+# letter case (measured 2026-10-08), so a request taking one could be made and never called.
+foreach ($kept in @("psobject", "psbase", "psadapted", "psextended", "pstypenames", "psObject")) {
+    $reads = $true; try { $null = ('{"' + $kept + '":"x"}' | ConvertFrom-Json) } catch { $reads = $false }
+    Check (-not $reads) ("CONTROL: the JSON reader refuses a member named " + $kept)
+    Check (Throws { New-HordeSurfaceBridge -Requests ([ordered]@{ "say" = @{ args = @{ $kept = @{ type = "string" } }; run = { return 1 } } }) } ("'" + $kept + "' of request 'say' is a name the JSON reader keeps")) ("so an argument named " + $kept + " is refused when the bridge is made")
+}
+$readsGetType = $true; try { $null = ('{"gettype":"x","keys":"y"}' | ConvertFrom-Json) } catch { $readsGetType = $false }
+Check $readsGetType "CONTROL: a member named gettype or keys is read, so those are not refused"
+# A VALUE IS LOOKED INTO WHOLE: a table holding an entry named values was measured by that entry
+# alone, and a value too deep to write slipped past (the name of a type stood where the data was).
+$script:deep = [ordered]@{ values = "shallow"; other = (New-Nested 17 "table") }
+$beside = AskDeep
+Check ($beside.failed -like "*nests more than 16 levels deep*" -and $beside.reply -notlike "*System.*") ("a table with an entry named values is measured whole: too deep beside it is still too deep (" + $beside.failed + ")")
+$script:deep = [ordered]@{ values = "shallow"; count = 2; keys = @("a") }
+Check ((Reply (AskDeep)).value.values -ceq "shallow") "CONTROL: a shallow one crosses whole"
+# THE DEFINITION'S OWN NAMES may be any of these too.
+$collideShapes = [ordered]@{ schemaVersion = 1; protocol = 3
+    request = [ordered]@{ version = "count"; id = "keys"; name = "values"; arguments = "item" }
+    reply = [ordered]@{ version = "count"; id = "keys"; ok = "item"; value = "values"; reason = "syncRoot" }
+    event = [ordered]@{ version = "count"; name = "getType"; value = "values" } }
+$shipped = $script:HordeSurfaceMessages
+try {
+    $script:HordeSurfaceMessages = Read-HordeSurfaceMessages -Path (Write-Shapes $collideShapes "colliding-shapes.json")
+    $inCollide = Ask '{"count":3,"keys":9,"values":"rendered","item":{"rows":5,"note":"collide","whole":false}}'
+    $cv = $null; if ($inCollide.reply -ne "") { $cv = Reply $inCollide }
+    Check ($inCollide.refused -ceq "" -and $null -ne $cv -and (@($cv.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "count,keys,item,values" -and $cv.keys -eq 9 -and $cv.item -eq $true) ("a definition whose members are named count, keys, values and item is read and written in (" + $inCollide.refused + ")")
+    $script:deep = New-Nested 17 "list"
+    $deepAsk = Invoke-HordeSurfaceRequest -Bridge $deepBridge -Text '{"count":3,"keys":6,"values":"deep"}'
+    Check ($deepAsk.failed -like "*nests more than 16 levels deep*") ("a list 17 deep under a reply whose value is named values is a failure (" + $deepAsk.failed + ")")
+    $script:deep = New-Nested 16 "list"
+    $fitsAsk = Invoke-HordeSurfaceRequest -Bridge $deepBridge -Text '{"count":3,"keys":7,"values":"deep"}'
+    Check ($fitsAsk.failed -ceq "" -and $fitsAsk.reply -like '*"leaf"*' -and $fitsAsk.reply -notlike "*System.*") "CONTROL: and one 16 deep crosses whole"
+    $collideEvent = (ConvertTo-HordeSurfaceEvent -Bridge $bridge -Name "list-changed" -Value 2) | ConvertFrom-Json
+    Check ((@($collideEvent.PSObject.Properties | ForEach-Object { $_.Name }) -join ",") -ceq "count,getType,values" -and $collideEvent.getType -ceq "list-changed") "an event is written in it too"
+} finally { $script:HordeSurfaceMessages = $shipped }
+Check (Throws { Read-HordeSurfaceMessages -Path (Write-Shapes (New-Shapes { param($s) $s.request.arguments = "psobject" }) "reserved-shapes.json") } "a name the JSON reader keeps") "a definition that names a request's member psobject is refused: no request could carry it"
+# MOUNTS are named by the caller as well.
+$mountNames = @("keys", "values", "count", "item")
+$collideMounts = [ordered]@{}
+foreach ($mn in $mountNames) { $d = Join-Path $work ("mount-" + $mn); New-Item -ItemType Directory -Path $d -Force | Out-Null; [System.IO.File]::WriteAllText((Join-Path $d "index.html"), $mn); $collideMounts[$mn] = $d }
+$mSpec = $null
+try { $mSpec = New-HordeSurfaceSpec -Title "t" -Mounts $collideMounts -Start "keys/index.html" -Bridge $bridge -DataFolder $work } catch { Check $false ("a spec is made with mounts named " + ($mountNames -join ", ") + " (" + $_.Exception.Message + ")") }
+if ($null -ne $mSpec) { Check ((@($mSpec.mounts.get_Keys()) -join ",") -ceq ($mountNames -join ",") -and $mSpec.startMount -ceq "keys") "a spec keeps mounts named keys, values, count and item" }
+foreach ($mn in $mountNames) {
+    $got = Resolve-HordeSurfacePageFile -Mounts $collideMounts -Path ("/" + $mn + "/index.html")
+    Check ($got.file -ceq (Join-Path $collideMounts[$mn] "index.html") -and $got.reason -ceq "") ("a file of the mount named " + $mn + " is found (" + $got.reason + ")")
+}
+Check ((Resolve-HordeSurfacePageFile -Mounts $collideMounts -Path "/shell/index.html").reason -like "*a mount that was not given*") "and a mount that was not given is still refused"
+Check ((Resolve-HordeSurfacePageFile -Mounts $collideMounts -Path "/Keys/index.html").reason -like "*a mount that was not given*") "and Keys is not keys"
+# A SURFACE is named by its folder, and the registry is a table too.
+$keysSurface = $null
+try { $keysSurface = Register-HordeSurface -Folder (New-FakeSurface "keys") -Open { param($Spec) return [pscustomobject]@{ state = "closed"; reason = "" } } } catch { $keysSurface = $null }
+Check ($null -ne $keysSurface -and @(Get-HordeSurfaceNames) -ccontains "keys" -and @(Get-HordeSurfaceNames) -ccontains "zorbview" -and (Resolve-HordeSurface -Requires @("page.local")).name -ceq "keys") ("a surface in a folder named keys is registered, listed and picked (" + (@(Get-HordeSurfaceNames) -join ",") + ")")
+
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-surface-port-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
 }

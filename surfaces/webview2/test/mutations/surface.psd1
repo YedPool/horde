@@ -322,5 +322,9 @@
         @{ Name = "blank-version-reads-as-an-engine"
            Find = 'if ("$Version".Trim() -ne "") { return "" }'
            Replace = 'if ($null -ne $Version -and "$Version" -ne "") { return "" }' }
+        # --- what a window serves: a mount named keys is a mount (surfaces/Port.ps1, NAMES ARE THE CALLER'S)
+        @{ Name = "window-mounts-walked-through-a-member"
+           Find = 'foreach ($m in @($Spec.mounts.get_Keys())) {'
+           Replace = 'foreach ($m in @($Spec.mounts.Keys)) {' }
     )
 }
