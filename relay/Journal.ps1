@@ -10,7 +10,8 @@
 #   why        "" when fresh, otherwise the refusal in words (replay, out of order, too far ahead, ...);
 #   gapBefore  how many sequence numbers were skipped just before this one: envelopes the relay
 #              dropped, delayed or is withholding. Shown as "missing", never as silence (relay design,
-#              Q11). 0 when nothing was skipped or the stream is new.
+#              Q11). A new stream counts from 0, so its first seq 10 says 9 are missing; 0 when
+#              nothing was skipped.
 #   direction  in (received) or out (sent).
 # Unknown, with a reason, whenever the journal cannot say: it is not a journal, it is damaged, it is
 # busy past the wait, a setting is refused, or the record could not be made durable. Unknown opens
@@ -24,9 +25,10 @@
 #     arrives after a later one is refused rather than slotted in, because a window of seqs that may
 #     still arrive late is exactly a window a replay can use. The relay is one ordered mailbox per
 #     channel (relay design, architecture), so reordering is the relay misbehaving, not the norm.
-#   - NOT TOO FAR AHEAD: a seq more than the setting seqWindow (100000) above the last is refused. Every
-#     envelope is signed by a trusted sender, so this guards against that sender's own fault, not a
-#     forger's: a seq of 2^53-1 would end the stream for good.
+#   - NOT TOO FAR AHEAD: a seq more than the setting seqWindow (100000) above the last is refused, and a
+#     new stream's first seq is measured from 0 the same way (review of 6f7e8c1, finding 3: the first
+#     envelope was exempt, so a first seq of 2^53-1 ended the stream). Every envelope is signed by a
+#     trusted sender, so this guards against that sender's own fault, not a forger's.
 #   - THE NONCE is part of the identity and is compared on a repeated seq. It is not kept in an index of
 #     its own: with the sequence strictly increasing, no envelope can be accepted twice whatever its
 #     nonce, and a repeated nonce under a NEW seq is a sender's new, signed envelope.
@@ -406,8 +408,10 @@ function Add-HordeRelayJournalEntry {
             }
             return (New-HordeRelayJournalVerdict -Key $key -Fresh $false -Why ("out of order: seq " + $seq + " arrived after seq " + $last + ", so it was skipped and is reported missing; it is not taken late") -GapBefore 0 -Direction $Direction)
         }
-        if ($last -ge 0 -and ($seq - $last) -gt [long]$ctx.settings.seqWindow) {
-            return (New-HordeRelayJournalVerdict -Key $key -Fresh $false -Why ("seq " + $seq + " is " + ($seq - $last) + " past the last recorded, " + $last + "; more than the window of " + $ctx.settings.seqWindow) -GapBefore 0 -Direction $Direction)
+        # A new stream is measured from 0, for the window and for the gap (the header).
+        $base = $(if ($last -ge 0) { $last } else { [long]0 })
+        if (($seq - $base) -gt [long]$ctx.settings.seqWindow) {
+            return (New-HordeRelayJournalVerdict -Key $key -Fresh $false -Why ("seq " + $seq + " is " + ($seq - $base) + " past " + $(if ($last -ge 0) { "the last recorded, " + $last } else { "0, where a new stream starts" }) + "; more than the window of " + $ctx.settings.seqWindow) -GapBefore 0 -Direction $Direction)
         }
         if ($CheckClock) {
             $ts = [long]$Header.ts
@@ -418,8 +422,7 @@ function Add-HordeRelayJournalEntry {
         try { $moved = Write-HordeRelayJournalFile -Dir $dir -Name (Get-HordeRelayJournalRecordName -Seq $seq) -Text ($meta + "`n" + $Text) }
         catch { return (New-HordeUnknown -Reason ("the envelope " + $key + " could not be recorded, so it is not fresh") -ErrorRecord $_) }
         if ($moved -ceq "moved") {
-            $gap = [long]0
-            if ($last -ge 0) { $gap = $seq - $last - 1 }
+            $gap = [long][System.Math]::Max([long]0, $seq - $base - 1)
             return (New-HordeRelayJournalVerdict -Key $key -Fresh $true -Why "" -GapBefore $gap -Direction $Direction)
         }
         if ($moved -ceq "exists") { return (New-HordeRelayJournalVerdict -Key $key -Fresh $false -Why ("another writer recorded seq " + $seq + " at the same moment") -GapBefore 0 -Direction $Direction) }

@@ -183,7 +183,21 @@ try {
     Write-Host "--- III. the sequence only goes up ---" -ForegroundColor Cyan
     $h = New-Home
     $v = Receive -Envelope (Seal -Seq 10) -HordeHome $h
-    Check ((IsFresh $v) -and $v.value.gapBefore -eq 0) "a new stream takes its first seq, whatever it is, with no gap"
+    # Review of 6f7e8c1, findings 3 and 4: a new stream is measured from seq 0, as if its last were 0 -
+    # for the window and for the gap - so a first envelope of 2^53-1 cannot end the stream, and the seqs
+    # below a first seq of 10 are reported missing, not silently refused when they come.
+    Check ((IsFresh $v) -and $v.value.gapBefore -eq 9) ("a new stream's first seq 10 is fresh, and says 9 are missing (" + $v.value.gapBefore + ")")
+    $hNew = New-Home
+    $v = Receive -Envelope (Seal -Seq 9007199254740991) -HordeHome $hNew
+    Check (IsRefused $v "more than the window of 100000") ("a new stream's first seq of 2^53-1 is past the window, measured from 0 (" + $v.value.why + ")")
+    $v = Receive -Envelope (Seal -Seq 100001) -HordeHome $hNew
+    Check (IsRefused $v "more than the window of 100000") "and so is its first seq of 100001"
+    $v = Receive -Envelope (Seal -Seq 100000) -HordeHome $hNew
+    Check ((IsFresh $v) -and $v.value.gapBefore -eq 99999) ("while 100000, exactly the window, is fresh, with 99999 missing (" + $v.value.gapBefore + ")")
+    $v = Receive -Envelope (Seal -Seq 1 -Channel "chat") -HordeHome $hNew
+    Check ((IsFresh $v) -and $v.value.gapBefore -eq 0) "CONTROL: a first seq of 1 has nothing missing"
+    $v = Receive -Envelope (Seal -Seq 0 -Channel "zero") -HordeHome $hNew
+    Check ((IsFresh $v) -and $v.value.gapBefore -eq 0) "and a first seq of 0 none either"
     $late = Seal -Seq 8
     $v = Receive -Envelope $late -HordeHome $h
     Check (IsRefused $v "out of order") ("seq 8 after seq 10 is refused as out of order (" + $v.value.why + ")")

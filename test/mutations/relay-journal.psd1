@@ -23,8 +23,11 @@
            Find = 'if (-not $same.ok) {'
            Replace = 'if (-not $same.ok) { return (New-HordeRelayJournalVerdict -Key $key -Fresh $false -Why "a replay" -GapBefore 0 -Direction $Direction) }; if ($false) {' }
         @{ Name = "seq-window-off"
-           Find = 'if ($last -ge 0 -and ($seq - $last) -gt [long]$ctx.settings.seqWindow) {'
+           Find = 'if (($seq - $base) -gt [long]$ctx.settings.seqWindow) {'
            Replace = 'if ($false) {' }
+        @{ Name = "new-stream-exempt-from-window"
+           Find = '$base = $(if ($last -ge 0) { $last } else { [long]0 })'
+           Replace = '$base = $(if ($last -ge 0) { $last } else { $seq })' }
         @{ Name = "future-ts-taken"
            Find = 'if ($ts -gt ($nowMs + $skewMs)) {'
            Replace = 'if ($false) {' }
@@ -83,8 +86,8 @@
            Find = '$key = Get-HordeRelayReplayKey -Header $Header'
            Replace = '$key = (Get-HordeRelayReplayKey -Header $Header) + "x"' }
         @{ Name = "gap-not-reported"
-           Find = 'if ($last -ge 0) { $gap = $seq - $last - 1 }'
-           Replace = 'if ($last -ge 0) { $gap = 0 }' }
+           Find = '$gap = [long][System.Math]::Max([long]0, $seq - $base - 1)'
+           Replace = '$gap = [long]0' }
         @{ Name = "next-seq-reuses-the-last"
            Find = 'return (New-HordeKnown -Value ([long]($st.last + 1))'
            Replace = 'return (New-HordeKnown -Value ([long]($st.last))' }
