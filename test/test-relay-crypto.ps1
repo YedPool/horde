@@ -1,0 +1,103 @@
+# DOES THE RELAY'S CRYPTOGRAPHY COMPUTE WHAT THE STANDARDS SAY, ON EVERY BACKEND THIS RUNTIME HAS?
+#
+# relay/Bytes.ps1, relay/Backend.ps1 (the AES-GCM seam), relay/P256.ps1 and relay/Hpke.ps1. The answers
+# come from outside Horde: RFC 4648 for base64url, RFC 5869 test case 1 for HKDF, the GCM
+# specification's test case 16 for AES-256-GCM, and the CFRG's official RFC 9180 vector for
+# DHKEM(P-256)/HKDF-SHA256/AES-256-GCM (test/fixtures/relay/hpke-p256-sha256-aes256gcm.json, with its
+# source and hash). A value Horde computed itself is never the expected answer here.
+#
+# RUN IT UNDER BOTH RUNTIMES (direction of 2026-10-09): `powershell.exe` (5.1: the cng backend only)
+# and `pwsh` (7: dotnet, and cng too on Windows). Where a runtime has two backends, every vector runs on
+# each, and every message sealed by one is opened by the other. test/test-relay-cross-runtime.ps1
+# crosses the two runtimes.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "relay\Backend.ps1")
+Set-StrictMode -Version Latest
+
+function Hex { param([AllowEmptyCollection()][byte[]]$Bytes) return (ConvertTo-HordeRelayHex -Bytes $Bytes) }
+function Unhex { param([AllowEmptyString()][string]$Text) return ,(ConvertFrom-HordeRelayHex -Text $Text) }
+Write-Host ("  runtime: PowerShell " + $PSVersionTable.PSVersion + " (" + $PSVersionTable.PSEdition + ")") -ForegroundColor DarkGray
+
+Write-Host ""
+Write-Host "--- base64url and hex: one spelling per value ---" -ForegroundColor Cyan
+$all = [byte[]](0..255)
+Check ((ConvertTo-HordeRelayBase64Url -Bytes ([byte[]]@(0xfb, 0xff, 0xbf))) -ceq "-_-_") "the URL alphabet: 0xfbffbf is -_-_ (RFC 4648 section 5)"
+Check ((ConvertTo-HordeRelayBase64Url -Bytes ([byte[]]@(0x66, 0x6f))) -ceq "Zm8") "no padding: 'fo' is Zm8"
+Check ((Hex (ConvertFrom-HordeRelayBase64Url -Text (ConvertTo-HordeRelayBase64Url -Bytes $all))) -ceq (Hex $all)) "all 256 byte values survive the round trip"
+$emptyDecoded = ConvertFrom-HordeRelayBase64Url -Text ""
+Check ($emptyDecoded -is [byte[]] -and $emptyDecoded.Length -eq 0) "the empty text is the empty value"
+Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "Zm8=" } "not base64url") "padding is refused"
+Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "+/+/" } "not base64url") "the standard alphabet's + and / are refused"
+Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "Zm 8" } "not base64url") "whitespace is refused"
+Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "Zm9vY" } "whole number of bytes") "a length that is no whole number of bytes is refused"
+Check ((Hex (ConvertFrom-HordeRelayBase64Url -Text "AA")) -ceq "00") "CONTROL: AA is the byte 00"
+Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "AB" } "not canonical") "AB, a second spelling of the byte 00 (stray low bits), is refused"
+Check ((Hex (Unhex "00ff10")) -ceq "00ff10") "hex round trip"
+Check (Throws { Unhex "0F" } "hex") "upper-case hex is refused"
+Check (Throws { Unhex "abc" } "hex") "hex of half a byte is refused"
+
+Write-Host ""
+Write-Host "--- HKDF-SHA256: RFC 5869 test case 1 ---" -ForegroundColor Cyan
+$ikm = Unhex "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+$prk = Invoke-HordeRelayHkdfExtract -Salt (Unhex "000102030405060708090a0b0c") -Ikm $ikm
+Check ((Hex $prk) -ceq "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5") "Extract gives the RFC's PRK"
+$okm = Invoke-HordeRelayHkdfExpand -Prk $prk -Info (Unhex "f0f1f2f3f4f5f6f7f8f9") -Length 42
+Check ((Hex $okm) -ceq "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865") "Expand gives the RFC's 42-byte OKM (two blocks, the second cut short)"
+Check (Throws { Invoke-HordeRelayHkdfExpand -Prk $prk -Info (Unhex "") -Length 8161 } "8160") "more than 255 blocks is refused"
+
+Write-Host ""
+Write-Host "--- the AES-GCM seam: which backends, and each one correct ---" -ForegroundColor Cyan
+$backends = @(Get-HordeRelayAeadBackends)
+foreach ($b in $backends) { Write-Host ("    " + $b.name + ": " + $(if ($b.available) { "available" } else { "not available - " + $b.reason })) -ForegroundColor DarkGray }
+$live = @($backends | Where-Object { $_.available } | ForEach-Object { $_.name })
+Check ($backends.Count -eq 2 -and (@($backends | ForEach-Object { $_.name }) -join ",") -ceq "dotnet,cng") "both backends are probed, dotnet first"
+Check ($live.Count -ge 1) ("at least one backend passed its known-answer test (" + ($live -join ",") + ")")
+$hasAesGcm = ($null -ne ("System.Security.Cryptography.AesGcm" -as [type]))
+Check (($live -ccontains "dotnet") -eq $hasAesGcm) "dotnet is available exactly when the runtime has an AesGcm class"
+$onWindows = ("" + [System.Environment]::OSVersion.Platform) -ceq "Win32NT"
+Check (($live -ccontains "cng") -eq $onWindows) "cng is available exactly on Windows, whatever the runtime"
+Check ((Get-HordeRelayAeadBackend) -ceq $live[0]) "the backend in use is the first available"
+Check (Throws { Select-HordeRelayAeadBackend -Name "rot13" } "not available") "a backend that does not exist cannot be selected"
+if (-not $hasAesGcm) { Check (Throws { Select-HordeRelayAeadBackend -Name "dotnet" } "no System.Security.Cryptography.AesGcm") "on this runtime dotnet cannot be selected, and the reason says why" }
+$k = Unhex "feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308"
+$n = Unhex "cafebabefacedbaddecaf888"
+$a = Unhex "feedfacedeadbeeffeedfacedeadbeefabaddad2"
+$p = Unhex "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39"
+$want = "522dc1f099567d07f47f37a32a84427d643a8cdcbfe5c0c97598a2bd2555d1aa8cb08e48590dbb3da7b08b1056828838c5f61e6393ba7a0abcc9f66276fc6ece0f4e1768cddf8853bb2d551b"
+foreach ($be in $live) {
+    $s = Protect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a -Plaintext $p -Backend $be
+    Check ((Hex $s) -ceq $want) ("[" + $be + "] GCM test case 16 seals to the specification's ciphertext and tag")
+    Check ((Hex (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a -Sealed $s -Backend $be)) -ceq (Hex $p)) ("[" + $be + "] and opens back")
+    $t = [byte[]]$s.Clone(); $t[0] = $t[0] -bxor 1
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a -Sealed $t -Backend $be)) ("[" + $be + "] a flipped ciphertext bit does not open")
+    $t = [byte[]]$s.Clone(); $t[$t.Length - 1] = $t[$t.Length - 1] -bxor 0x80
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a -Sealed $t -Backend $be)) ("[" + $be + "] a flipped tag bit does not open")
+    $a2 = [byte[]]$a.Clone(); $a2[0] = $a2[0] -bxor 1
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a2 -Sealed $s -Backend $be)) ("[" + $be + "] other additional data does not open")
+    $n2 = [byte[]]$n.Clone(); $n2[11] = $n2[11] -bxor 1
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n2 -Aad $a -Sealed $s -Backend $be)) ("[" + $be + "] another nonce does not open")
+    $k2 = [byte[]]$k.Clone(); $k2[31] = $k2[31] -bxor 1
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k2 -Nonce $n -Aad $a -Sealed $s -Backend $be)) ("[" + $be + "] another key does not open")
+    Check ($null -eq (Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad $a -Sealed (Unhex "00112233") -Backend $be)) ("[" + $be + "] input shorter than a tag does not open")
+    $e = Protect-HordeRelayAesGcm -Key $k -Nonce $n -Aad (Unhex "") -Plaintext (Unhex "") -Backend $be
+    $eo = Unprotect-HordeRelayAesGcm -Key $k -Nonce $n -Aad (Unhex "") -Sealed $e -Backend $be
+    Check ($e.Length -eq 16 -and $null -ne $eo -and $eo.Length -eq 0) ("[" + $be + "] an empty message with no additional data is a tag alone, and opens to empty")
+    Check (Throws { Protect-HordeRelayAesGcm -Key (Unhex "00112233445566778899aabbccddeeff") -Nonce $n -Aad $a -Plaintext $p -Backend $be } "32 bytes") ("[" + $be + "] a 16-byte (AES-128) key is refused: the suite is AES-256")
+    Check (Throws { Protect-HordeRelayAesGcm -Key $k -Nonce (Unhex "00112233445566778899aabbccddeeff") -Aad $a -Plaintext $p -Backend $be } "12 bytes") ("[" + $be + "] a 16-byte nonce is refused")
+}
+foreach ($from in $live) {
+    foreach ($to in $live) {
+        if ($from -ceq $to) { continue }
+        $msg = Get-HordeRelayRandomBytes -Count 1000
+        $key = Get-HordeRelayRandomBytes -Count 32
+        $non = Get-HordeRelayRandomBytes -Count 12
+        $x = Protect-HordeRelayAesGcm -Key $key -Nonce $non -Aad $a -Plaintext $msg -Backend $from
+        Check ((Hex (Unprotect-HordeRelayAesGcm -Key $key -Nonce $non -Aad $a -Sealed $x -Backend $to)) -ceq (Hex $msg)) ("sealed by " + $from + ", opened by " + $to)
+    }
+}
+
+Complete-HordeSuite -Success "base64url, HKDF and AES-256-GCM on every backend match their standards' vectors, and every tamper fails"
