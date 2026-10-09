@@ -271,7 +271,7 @@ function Get-HordeDecisionNotifyStoreMark {
 function Format-HordeDecisionNotifyPending {
     # The line for a set that was not sent: the reason first, then that nothing is lost and when it is tried again.
     param([string]$Problem, [string]$What, [int]$Count, [datetime]$At)
-    return ("pending: " + $Problem + ". " + $What + $(if ($Count -eq 1) { ", stays" } else { ", stay" }) + " untold, and nothing is lost: tried again at " + $At.ToString("HH:mm:ss") + "Z.")
+    return ("pending: " + $Problem + ". " + $What + $(if ($Count -eq 1) { ", stays" } else { ", stay" }) + " untold, and nothing is lost: the next try is from " + $At.ToString("HH:mm:ss") + "Z.")
 }
 
 function Invoke-HordeDecisionNotifyPass {
