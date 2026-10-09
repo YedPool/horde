@@ -123,7 +123,7 @@ try {
     $again = Receive -Envelope $e -HordeHome $h
     Check (IsRefused $again "a replay") ("the second time, a replay (" + $again.value.why + ")")
     $u = Open-With -Envelope $e -Verdict $again
-    Check (-not $u.ok -and $u.reason.Contains("replay is refused")) "and relay/Envelope.ps1 does not open on it"
+    Check (-not $u.ok -and $u.reason.Contains("(a replay: this envelope was recorded at")) ("and relay/Envelope.ps1 does not open on it, and says the journal's why (" + $u.reason + ")")
     $rec = [System.IO.File]::ReadAllText((Join-Path (StreamDir $h) (RecName 7)))
     $cut = $rec.IndexOf("`n")
     $wire = '{"header":' + $e.headerText + ',"recipients":' + $e.recipientsText + ',"ct":"' + $e.ctText + '","sig":' + (ConvertTo-HordeRelaySigText -Sig $e.sig) + '}'
