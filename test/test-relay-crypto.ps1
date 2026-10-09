@@ -16,6 +16,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "relay\Backend.ps1")
+. (Join-Path $root "relay\P256.ps1")
 Set-StrictMode -Version Latest
 
 function Hex { param([AllowEmptyCollection()][byte[]]$Bytes) return (ConvertTo-HordeRelayHex -Bytes $Bytes) }
@@ -100,4 +101,59 @@ foreach ($from in $live) {
     }
 }
 
-Complete-HordeSuite -Success "base64url, HKDF and AES-256-GCM on every backend match their standards' vectors, and every tamper fails"
+Write-Host ""
+Write-Host "--- P-256 keys and ECDH ---" -ForegroundColor Cyan
+$alice = New-HordeRelayP256Key -Use "ecdh"
+$bob = New-HordeRelayP256Key -Use "ecdh"
+$alicePub = ConvertTo-HordeRelayP256Public -Key $alice
+$bobPub = ConvertTo-HordeRelayP256Public -Key $bob
+Check ($alicePub.Length -eq 65 -and $alicePub[0] -eq 4) "a public key is the 65-byte uncompressed point"
+$back = ConvertFrom-HordeRelayP256Public -Bytes $alicePub -Use "ecdh"
+Check ((Hex (ConvertTo-HordeRelayP256Public -Key $back)) -ceq (Hex $alicePub)) "a public key survives import and export"
+$offCurve = [byte[]]$alicePub.Clone(); $offCurve[64] = $offCurve[64] -bxor 1
+Check (Throws { ConvertFrom-HordeRelayP256Public -Bytes $offCurve -Use "ecdh" } "not a point on P-256") "a point off the curve is refused (the invalid-curve attack)"
+$compressed = New-Object byte[] 33; $compressed[0] = 2; [System.Array]::Copy($alicePub, 1, $compressed, 1, 32)
+Check (Throws { ConvertFrom-HordeRelayP256Public -Bytes $compressed -Use "ecdh" } "65 bytes") "a compressed point is refused"
+$wrongPrefix = [byte[]]$alicePub.Clone(); $wrongPrefix[0] = 6
+Check (Throws { ConvertFrom-HordeRelayP256Public -Bytes $wrongPrefix -Use "ecdh" } "65 bytes") "a hybrid-form prefix is refused"
+$salt = Get-HordeRelayRandomBytes -Count 32
+$pre = Get-HordeRelayAsciiBytes -Text "label"
+$ab = Invoke-HordeRelayEcdhExtract -Private $alice -PeerPublic $bobPub -Salt $salt -Prefix $pre
+$ba = Invoke-HordeRelayEcdhExtract -Private $bob -PeerPublic $alicePub -Salt $salt -Prefix $pre
+Check ($ab.Length -eq 32 -and (Hex $ab) -ceq (Hex $ba)) "both sides of an ECDH extract agree"
+$ab2 = Invoke-HordeRelayEcdhExtract -Private $alice -PeerPublic $bobPub -Salt $salt -Prefix (Get-HordeRelayAsciiBytes -Text "lab")
+Check ((Hex $ab2) -cne (Hex $ab)) "the prefix is part of what is extracted"
+$kid = Get-HordeRelayKeyId -Public $alicePub
+Check ($kid -cmatch '\A[0-9a-f]{32}\z' -and $kid -ceq (Hex (Get-HordeRelaySha256 -Bytes $alicePub)).Substring(0, 32)) "a key id is the first 16 bytes of SHA-256 of the point, as hex"
+
+Write-Host ""
+Write-Host "--- ECDSA P-256 and DER ---" -ForegroundColor Cyan
+$signer = New-HordeRelayP256Key -Use "ecdsa"
+$signerPub = ConvertTo-HordeRelayP256Public -Key $signer
+$data = Get-HordeRelayAsciiBytes -Text "the thing that is signed"
+$sig = New-HordeRelayEs256Signature -Key $signer -Bytes $data
+Check ($sig.Length -eq 64) "a signature is 64 bytes, r || s"
+Check (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $sig) "it verifies"
+$d2 = [byte[]]$data.Clone(); $d2[0] = $d2[0] -bxor 1
+Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $d2 -Signature $sig)) "not over other data"
+$s2 = [byte[]]$sig.Clone(); $s2[10] = $s2[10] -bxor 1
+Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $s2)) "not with a changed signature"
+$other = ConvertTo-HordeRelayP256Public -Key (New-HordeRelayP256Key -Use "ecdsa")
+Check (-not (Test-HordeRelayEs256Signature -Public $other -Bytes $data -Signature $sig)) "not under another key"
+Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature (Unhex "00"))) "a signature of the wrong length is false, not an error"
+Check (-not (Test-HordeRelayEs256Signature -Public $offCurve -Bytes $data -Signature $sig)) "a bad public key is false, not an error"
+# DER built by hand from known r and s, so the converter is checked against the encoding, not itself.
+$r = ("00" * 31) + "7f"; $sv = "80" + ("11" * 31)
+$derOk = Unhex ("3026" + "0201" + "7f" + "0221" + "00" + $sv)
+Check ($derOk.Length -eq 40) "CONTROL: the hand-built DER is 40 bytes"
+Check ((Hex (ConvertFrom-HordeRelayDerSignature -Der $derOk)) -ceq ($r + $sv)) "DER with a short r and a 33-byte s (sign byte) is r || s, each left-padded to 32 bytes"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3027" + "0202" + "007f" + "0221" + "00" + $sv)) } "needless leading zero") "a needless leading zero is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3025" + "0201" + "7f" + "0220" + $sv)) } "negative") "a negative INTEGER is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3028" + "0201" + "7f" + "0221" + "00" + $sv + "0000")) } "after its second INTEGER") "bytes after the sequence are refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("308126" + "0201" + "7f" + "0221" + "00" + $sv)) } "length does not match") "a long-form length is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3126" + "0201" + "7f" + "0221" + "00" + $sv)) } "not a DER SEQUENCE") "a SET in place of the SEQUENCE is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3026" + "0201" + "00" + "0221" + "00" + $sv)) } "zero") "r of zero is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3027" + "0222" + "01" + $sv + "11" + "0201" + "7f")) } "33 bytes long") "an INTEGER longer than 33 bytes is refused"
+Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3026" + "0221" + "01" + $sv + "0201" + "7f")) } "larger than 32 bytes") "a 33-byte INTEGER that is not a sign byte and 32 bytes is refused"
+
+Complete-HordeSuite -Success "base64url, HKDF, AES-256-GCM on every backend, P-256 ECDH and ECDSA, and DER match their standards' vectors, and every tamper fails"
