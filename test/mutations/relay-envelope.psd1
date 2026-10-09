@@ -70,6 +70,9 @@
         @{ Name = "unprotect-skips-the-signature"
            Find = 'if (-not $verified.ok) { return (New-HordeRelayEnvelopeAnswer -Reason $verified.reason) }'
            Replace = '' }
+        @{ Name = "journal-why-not-passed-on"
+           Find = 'if ($null -ne $vWhy -and "" + $vWhy.Value -cne "") {'
+           Replace = 'if ($false) {' }
         @{ Name = "any-channel-opened"
            Find = 'if ($h.channel -cne $Channel) {'
            Replace = 'if ($false) {' }

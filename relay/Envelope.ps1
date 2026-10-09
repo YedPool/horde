@@ -359,7 +359,13 @@ function Unprotect-HordeRelayEnvelope {
     if ($null -eq $vKey -or "" + $vKey.Value -cne $rk) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal's verdict is about another envelope, so this one is not opened") }
     # The boolean $true only: -ne $true let 1 and "true" through (review of 3bf4657, finding 2).
     if ($null -eq $vFresh -or $vFresh.Value -isnot [bool]) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal's answer is not a fresh verdict: fresh must be the boolean true, so this envelope is not opened") }
-    if (-not $vFresh.Value) { return (New-HordeRelayEnvelopeAnswer -Reason "the journal has seen this envelope already: a replay is refused") }
+    if (-not $vFresh.Value) {
+        # The journal says why it refused (relay/Journal.ps1's why: a replay, out of order, the clock);
+        # passed on, so a clock or window refusal is not reported as a replay (review of the journal PR).
+        $vWhy = $verdict.Value.PSObject.Properties["why"]
+        if ($null -ne $vWhy -and "" + $vWhy.Value -cne "") { return (New-HordeRelayEnvelopeAnswer -Reason ("the journal refuses this envelope (" + $vWhy.Value + "), so it is not opened")) }
+        return (New-HordeRelayEnvelopeAnswer -Reason "the journal has seen this envelope already: a replay is refused")
+    }
 
     $mine = $null
     foreach ($r in @($env.recipients)) { if ($RecipientKeys.ContainsKey($r.kid)) { $mine = $r; break } }

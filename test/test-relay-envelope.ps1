@@ -229,6 +229,7 @@ $cases = @(
     @{ what = "an absent verdict"; verdict = (New-HordeAbsent -Note "journal empty"); want = "it is absent" },
     @{ what = "an unknown verdict (the journal could not be read)"; verdict = (New-HordeUnknown -Reason "journal folder locked"); want = "it is unknown: journal folder locked" },
     @{ what = "a verdict that it was seen"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = $false })); want = "a replay is refused" },
+    @{ what = "a refusal that says why"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = $false; why = "out of order: seq 41 arrived after seq 44" })); want = "(out of order: seq 41 arrived after seq 44)" },
     @{ what = "a fresh verdict about another envelope"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = ($machineId + "/decisions/40/" + $v.header.nonce); fresh = $true })); want = "about another envelope" },
     @{ what = "a fresh verdict with no key"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ fresh = $true })); want = "about another envelope" },
     @{ what = "fresh given as the number 1"; verdict = (New-HordeKnown -Value ([pscustomobject]@{ key = $rk; fresh = 1 })); want = "not a fresh verdict" },
