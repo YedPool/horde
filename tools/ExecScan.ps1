@@ -358,3 +358,122 @@ function Get-HordeExecFindings {
     }
     return @($out)
 }
+
+# THE RELAY PROFILE (relay design 2026-10-09, PR 1). relay/ reads text from an untrusted relay, so it is
+# held to the same promise as remote/ - it starts no program and no shell, and runs no script block it
+# is given - under a WIDER allowlist of what it may name: the cryptography types it needs, measured from
+# relay/'s syntax trees on 2026-10-09. Nothing above changes for remote/: Get-HordeExecRelayFindings
+# adds these lists for the one call and puts the remote lists back after it, whatever happens.
+#
+# WHY EACH WIDENING IS SAFE, axis by axis:
+#   - TYPES, NEW-OBJECT TYPES AND STATIC MEMBERS: .NET cryptography (ECDsa, ECDiffieHellman, their Cng
+#     forms, CngKey and its enums, ECParameters, ECPoint, ECCurve, HMACSHA256, AesGcm,
+#     RandomNumberGenerator, HashAlgorithmName), Convert's base64 and hex members, and relay's own
+#     compiled HordeRelayGcmV1. None starts a process or reaches the engine. [type] is allowed for one
+#     use - "<name>" -as [type], to ask whether a type is loaded - and has no static member on the list.
+#     [object] is a parameter type.
+#   - INSTANCE METHODS: the key operations (SignData, VerifyData, DeriveKeyFromHmac, ImportParameters,
+#     ExportParameters), AesGcm's Encrypt and Decrypt, and Delete (a CNG key's). On a type the scan
+#     cannot see, Encrypt, Decrypt and Delete could reach a FileInfo - disk, which this scan is not
+#     about (see $HordeExecCmdlets) - and none of them starts anything.
+#   - ATTRIBUTES: AllowEmptyCollection, AllowEmptyString and AllowNull, which relax parameter binding
+#     and run nothing.
+#   - CORE: core/JsonText.ps1's Find-HordeJsonDuplicateKey, which reads text and runs nothing.
+#   - ADD-TYPE, THE ONE COMPILE. relay/ needs AES-GCM on .NET Framework, which has none, so
+#     relay/BackendCng.ps1 compiles relay/Gcm.cs. Add-Type is admitted in exactly one form,
+#       Add-Type -Path (Join-Path $PSScriptRoot "<Name>.cs")
+#     a literal neighbour C# file, reviewed like any other source in the folder. Any other use - source
+#     from a variable or a string (-TypeDefinition, -MemberDefinition), a path built from anything but
+#     $PSScriptRoot and a literal name, a parent folder, an assembly by name, any further parameter - is
+#     a finding (Get-HordeExecAddTypeFindings), checked by test/fixtures/relay/exec-control.ps1.
+#   Nothing here lets relay/ hold a script block, so rule 8 (property reads stay open) still holds.
+$script:HordeExecRelayAllow = @{
+    Cmdlets = @("Add-Type")
+    CoreFunctions = @("Find-HordeJsonDuplicateKey")
+    CoreFiles = @("JsonText.ps1")
+    Attributes = @("AllowEmptyCollection", "AllowEmptyString", "AllowNull")
+    NewTypes = @("System.Security.Cryptography.AesGcm", "System.Security.Cryptography.CngKeyCreationParameters",
+        "System.Security.Cryptography.CngProvider", "System.Security.Cryptography.ECDiffieHellmanCng", "System.Security.Cryptography.ECDsaCng",
+        "System.Security.Cryptography.ECParameters", "System.Security.Cryptography.ECPoint", "System.Security.Cryptography.HMACSHA256")
+    Types = @("object", "type", "convert", "horderelaygcmv1",
+        "security.cryptography.cngalgorithm", "security.cryptography.cngalgorithmgroup", "security.cryptography.cngexportpolicies",
+        "security.cryptography.cngkey", "security.cryptography.cngkeycreationoptions", "security.cryptography.cngkeyopenoptions",
+        "security.cryptography.cryptographicexception", "security.cryptography.eccurve", "security.cryptography.ecdiffiehellman",
+        "security.cryptography.ecdsa", "security.cryptography.hashalgorithmname", "security.cryptography.randomnumbergenerator")
+    Static = @{
+        "horderelaygcmv1" = @("Seal", "Open")
+        "long" = @("MaxValue")
+        "array" = @("Clear")
+        "math" = @("Ceiling")
+        "convert" = @("ToBase64String", "FromBase64String", "ToByte")
+        "text.encoding" = @("UTF8")
+        "security.cryptography.cngalgorithm" = @("ECDsaP256", "ECDiffieHellmanP256")
+        "security.cryptography.cngalgorithmgroup" = @("ECDsa", "ECDiffieHellman")
+        "security.cryptography.cngexportpolicies" = @("None")
+        "security.cryptography.cngkey" = @("Create", "Exists", "Open")
+        "security.cryptography.cngkeycreationoptions" = @("MachineKey")
+        "security.cryptography.cngkeyopenoptions" = @("MachineKey", "None")
+        "security.cryptography.eccurve" = @("CreateFromFriendlyName")
+        "security.cryptography.ecdiffiehellman" = @("Create")
+        "security.cryptography.ecdsa" = @("Create")
+        "security.cryptography.hashalgorithmname" = @("SHA256")
+        "security.cryptography.randomnumbergenerator" = @("Create")
+    }
+    InstanceMethods = @("SignData", "VerifyData", "DeriveKeyFromHmac", "ImportParameters", "ExportParameters", "Encrypt", "Decrypt", "Delete")
+}
+
+function Get-HordeExecAddTypeFindings {
+    # Every Add-Type in Path that is not exactly Add-Type -Path (Join-Path $PSScriptRoot "<Name>.cs").
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($c in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ieq "Add-Type" }, $true))) {
+        $at = "line " + $c.Extent.StartLineNumber + ": "
+        $els = @($c.CommandElements)
+        $ok = ($els.Count -eq 3 -and $els[1] -is [System.Management.Automation.Language.CommandParameterAst] -and $els[1].ParameterName -ceq "Path" -and $null -eq $els[1].Argument -and
+            $els[2] -is [System.Management.Automation.Language.ParenExpressionAst])
+        if ($ok) {
+            $inner = $els[2].Pipeline
+            $ok = ($inner -is [System.Management.Automation.Language.PipelineAst] -and $inner.PipelineElements.Count -eq 1)
+            if ($ok) {
+                $join = $inner.PipelineElements[0]
+                $ok = ($join -is [System.Management.Automation.Language.CommandAst] -and $join.GetCommandName() -ceq "Join-Path" -and $join.CommandElements.Count -eq 3 -and
+                    $join.CommandElements[1].Extent.Text -ceq '$PSScriptRoot' -and $join.CommandElements[2] -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                    [regex]::IsMatch($join.CommandElements[2].Value, '\A[A-Za-z][A-Za-z0-9]*\.cs\z'))
+            }
+        }
+        if (-not $ok) { [void]$out.Add($at + "Add-Type other than -Path (Join-Path `$PSScriptRoot `"<Name>.cs`"): only a literal neighbour C# file may be compiled") }
+    }
+    return @($out)
+}
+
+function Get-HordeExecRelayFindings {
+    # Get-HordeExecFindings under the relay profile, plus the Add-Type form check. The remote lists are
+    # restored before this returns, even when the scan throws.
+    param([Parameter(Mandatory = $true)][string]$Path, $Known = $null)
+    $saved = @{ c = $script:HordeExecCmdlets; f = $script:HordeExecCoreFunctions; cf = $script:HordeExecCoreFiles; a = $script:HordeExecAttributes
+        n = $script:HordeExecNewTypes; t = $script:HordeExecTypes; s = $script:HordeExecStatic; m = $script:HordeExecInstanceMethods }
+    $allow = $script:HordeExecRelayAllow
+    try {
+        $script:HordeExecCmdlets = @($saved.c) + @($allow.Cmdlets)
+        $script:HordeExecCoreFunctions = @($saved.f) + @($allow.CoreFunctions)
+        $script:HordeExecCoreFiles = @($saved.cf) + @($allow.CoreFiles)
+        $script:HordeExecAttributes = @($saved.a) + @($allow.Attributes)
+        $script:HordeExecNewTypes = @($saved.n) + @($allow.NewTypes)
+        $script:HordeExecTypes = @($saved.t) + @($allow.Types)
+        $static = @{}
+        foreach ($k in @($saved.s.Keys)) { $static[$k] = @($saved.s[$k]) }
+        foreach ($k in @($allow.Static.Keys)) {
+            $have = @()
+            if ($static.ContainsKey($k)) { $have = @($static[$k]) }
+            $static[$k] = $have + @($allow.Static[$k])
+        }
+        $script:HordeExecStatic = $static
+        $script:HordeExecInstanceMethods = @($saved.m) + @($allow.InstanceMethods)
+        $found = @(Get-HordeExecFindings -Path $Path -Known $Known)
+    } finally {
+        $script:HordeExecCmdlets = $saved.c; $script:HordeExecCoreFunctions = $saved.f; $script:HordeExecCoreFiles = $saved.cf; $script:HordeExecAttributes = $saved.a
+        $script:HordeExecNewTypes = $saved.n; $script:HordeExecTypes = $saved.t; $script:HordeExecStatic = $saved.s; $script:HordeExecInstanceMethods = $saved.m
+    }
+    return @($found + @(Get-HordeExecAddTypeFindings -Path $Path))
+}

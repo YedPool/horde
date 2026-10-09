@@ -121,7 +121,8 @@ function Get-HordeRelayHpkeNonce {
     # ComputeNonce: base_nonce XOR I2OSP(seq, 12).
     param($Context)
     if ($Context.seq -lt 0 -or $Context.seq -eq [long]::MaxValue) { throw "the HPKE context's message limit is reached" }
-    $n = [byte[]]$Context.baseNonce.Clone()
+    $n = New-Object byte[] 12
+    [System.Array]::Copy([byte[]]$Context.baseNonce, 0, $n, 0, 12)
     $s = [long]$Context.seq
     for ($i = 11; $i -ge 4; $i--) {
         $n[$i] = $n[$i] -bxor [byte]($s -band 0xFF)

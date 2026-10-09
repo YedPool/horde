@@ -131,7 +131,7 @@ function New-HordeRelayEnvelopeDraft {
     if ($Recipients.Count -lt 1 -or $Recipients.Count -gt $limits.recipients) { throw ("an envelope has 1 to " + $limits.recipients + " recipients") }
     $when = $Now
     if ($null -eq $when) { $when = [System.DateTime]::UtcNow }
-    $ts = [long][System.Math]::Floor(($when.ToUniversalTime() - (New-Object System.DateTime -ArgumentList 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc))).TotalMilliseconds)
+    $ts = [long][System.Math]::Floor(($when.ToUniversalTime() - (New-Object datetime -ArgumentList 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc))).TotalMilliseconds)
     $kids = New-Object System.Collections.ArrayList
     foreach ($r in $Recipients) {
         $kid = Get-HordeRelayKeyId -Public ([byte[]]$r)

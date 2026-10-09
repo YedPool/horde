@@ -60,7 +60,7 @@ function Get-HordeRelayKeyStore {
     # Is there a non-exportable key store in this process? known "cng", or absent with the reason.
     $probeName = "horde-relay-probe-" + [guid]::NewGuid().ToString("N")
     try { [void][System.Security.Cryptography.CngKey]::Exists($probeName) }
-    catch { return (New-HordeAbsent -Note ("no non-exportable key store in this runtime and system (" + $_.Exception.GetType().Name + ": " + $_.Exception.Message + "); keys are not faked with files")) }
+    catch { return (New-HordeAbsent -Note ("no non-exportable key store in this runtime and system (" + $_.Exception.Message + "); keys are not faked with files")) }
     return (New-HordeKnown -Value "cng")
 }
 
