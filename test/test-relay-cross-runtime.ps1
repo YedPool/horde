@@ -40,6 +40,10 @@ function Invoke-Child {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    # Each runtime finds its own modules: PowerShell 7 puts its module folders first in PSModulePath, and
+    # Windows PowerShell 5.1 started with them cannot load its own Import-PowerShellDataFile (measured
+    # 2026-10-09). Removed, the variable is rebuilt by the child from its own defaults.
+    [void]$psi.EnvironmentVariables.Remove("PSModulePath")
     $p = [System.Diagnostics.Process]::Start($psi)
     $errTask = $p.StandardError.ReadToEndAsync()
     $out = $p.StandardOutput.ReadToEnd()
