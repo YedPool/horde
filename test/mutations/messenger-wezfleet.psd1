@@ -119,6 +119,10 @@
         @{ Name = "exit-4-absent-read"
            Find = '4 = @("refused", "queued")'
            Replace = '4 = @("absent", "refused", "queued")' }
+        # wezfleet main's closed list has invalid-utf8: a code may hold digits.
+        @{ Name = "code-digits-read-as-prose"
+           Find = '$script:HordeWezfleetMessengerCodePattern = ''\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z'''
+           Replace = '$script:HordeWezfleetMessengerCodePattern = ''\A[a-z]+(-[a-z]+)*\z''' }
         # A sentence where the code is: a wezfleet from before the reason codes, never read as a stage.
         @{ Name = "prose-reason-read"
            Find = 'if ($j.reason -cne "" -and $j.reason -cnotmatch $script:HordeWezfleetMessengerCodePattern) {'

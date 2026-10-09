@@ -283,6 +283,21 @@ With-Fake {
     $s = Get-HordeMessengerStatus -Messenger $m -MessageId $msg.messageId
     Check ($s.state -ceq "unknown" -and "$($s.reason)".Contains("not a code")) ("a status answered with a sentence for a reason is unknown, never absent (" + (Show-Answer $s) + ")")
 }
+# EVERY CODE ON WEZFLEET MAIN'S CLOSED LIST IS A CODE HERE (lib/MailPost.ps1, $script:WfMailReasonCodes, at
+# 1122461). The code pattern allowed letters alone, and main's "invalid-utf8" has a digit: the real
+# command's refusal of a file that is not UTF-8 read as "a wezfleet from before the reason codes",
+# unknown (measured 2026-10-09 by the real-contract probe against a clone of main).
+foreach ($code in @("woken", "already-posted", "no-registry-record", "pane-unverified", "send-refused", "stale-session", "write-failed",
+        "bad-id", "bad-to", "bad-from", "bad-file", "empty-message", "message-too-large", "invalid-utf8", "internal-error", "found", "absent")) {
+    Check ($code -cmatch $script:HordeWezfleetMessengerCodePattern) ("wezfleet main's reason code '" + $code + "' is read as a code")
+}
+With-Fake {
+    param($st)
+    $msg = New-Msg
+    & $fx.SetMode $st @{ post = @{ stdout = (Line -Id (N $msg.messageId) -Stage "refused" -Woken $false -Reason "invalid-utf8" -Detail "the message file is not valid UTF-8; nothing was replaced and nothing was posted"); exit = 2 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message $msg
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "held" -and (Why $a).StartsWith("invalid-utf8: ")) ("a refusal with the code invalid-utf8 is held with it, not read as prose (" + (Show-Answer $a) + ")")
+}
 
 Write-Host ""
 Write-Host "--- D. detail is read, never fatal; an answer about another target is not this one's ---" -ForegroundColor Cyan

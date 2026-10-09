@@ -89,9 +89,11 @@ $script:HordeWezfleetMessengerDetailChars = 600
 # wezfleet's session id (its -To and -FromSessionId), and Horde's hub label (its -FromLabel).
 $script:HordeWezfleetMessengerSessionPattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z'
 $script:HordeWezfleetMessengerLabelPattern = '\A[A-Z]{1,2}([1-9][0-9]{0,3})?\z'
-# A reason code: lower-case words joined by dashes (woken, already-posted, stale-session, ...). A
-# sentence is not one.
-$script:HordeWezfleetMessengerCodePattern = '\A[a-z]+(-[a-z]+)*\z'
+# A reason code: lower-case words of letters and digits, the first starting with a letter, joined by
+# dashes (woken, already-posted, stale-session, invalid-utf8, ...). A sentence is not one. Digits are
+# allowed because wezfleet main's closed list has invalid-utf8, which letters alone read as prose
+# (measured 2026-10-09 against a clone of main at 1122461).
+$script:HordeWezfleetMessengerCodePattern = '\A[a-z][a-z0-9]*(-[a-z0-9]+)*\z'
 $script:HordeWezfleetMessengerStages = @{ "queued" = "accepted"; "handed-over" = "handed-over"; "taken" = "seen"; "unconfirmed" = "expired"; "refused" = "held" }
 # Which stages each exit code may carry, per command. Anything else is unknown.
 $script:HordeWezfleetMessengerExits = @{
