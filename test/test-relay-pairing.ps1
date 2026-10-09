@@ -1,5 +1,5 @@
 # DOES A MACHINE KNOW ITS HORDE AND ITS OWN KEYS, TRUST ONLY WHAT IT ENROLLED AND NOT WHAT IT REVOKED,
-# AND PAIR A PHONE ONLY THROUGH A LIVE, UNUSED OFFER?
+# AND PAIR A PHONE ONLY THROUGH A LIVE, UNUSED OFFER AND A FINGERPRINT CONFIRMED AT THE MACHINE?
 #
 # relay/Identity.ps1, relay/Trust.ps1, relay/Pairing.ps1 and relay/Records.ps1. Every Horde home here is
 # a folder of the suite's own under %TEMP% (CONTRIBUTING 9), never HORDE_HOME, and every key it makes is
@@ -41,9 +41,10 @@ function New-TestHome {
     return $h
 }
 function Set-TestHorde {
-    param([string]$HordeHome, [string]$Horde)
+    param([string]$HordeHome, [string]$Horde, [int]$AgreeDays = -1)
     New-Item -ItemType Directory -Path (Join-Path $HordeHome "settings") -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $HordeHome "settings\relay.json"), ('{"schemaVersion": 1, "settings": {"horde": "' + $Horde + '"}}'), $utf8)
+    $more = $(if ($AgreeDays -ge 0) { ', "retiredAgreeKeyDays": ' + $AgreeDays } else { "" })
+    [System.IO.File]::WriteAllText((Join-Path $HordeHome "settings\relay.json"), ('{"schemaVersion": 1, "settings": {"horde": "' + $Horde + '"' + $more + '}}'), $utf8)
 }
 function Get-TestKeyNames {
     # Every key an identity record in a home names, with its scope.
@@ -79,6 +80,45 @@ function Test-Assertion {
     $v = Test-HordeRelayWebAuthnAssertion -Public $Sender.public -AuthenticatorData (B $a.authenticatorData) -ClientDataJson (B $a.clientDataJSON) -Signature (B $a.signature) `
         -Challenge (B $a.challenge) -RpId $Sender.rpId -Origins @($Sender.origins) -RequireUserVerification $Sender.requireUserVerification
     return [bool]$v.ok
+}
+
+# A PASSKEY OF THE SUITE'S OWN, for flows that need assertions over challenges made at run time (a
+# countersignature) or more credentials than the fixture holds. Its registration is written here byte
+# by byte - attestation "none" signs nothing - and its assertions are signed with an in-memory key.
+function ConvertTo-TestDer {
+    param([byte[]]$Sig)
+    $ints = New-Object System.Collections.ArrayList
+    foreach ($half in @(0, 32)) {
+        $i = $half
+        while ($i -lt $half + 31 -and $Sig[$i] -eq 0) { $i++ }
+        $trim = New-Object byte[] (($half + 32) - $i)
+        [System.Array]::Copy($Sig, $i, $trim, 0, $trim.Length)
+        if (($trim[0] -band 0x80) -ne 0) { $trim = Join-HordeRelayBytes -Parts @([byte[]]@(0), $trim) }
+        [void]$ints.Add((Join-HordeRelayBytes -Parts @([byte[]]@(2, $trim.Length), $trim)))
+    }
+    $body = Join-HordeRelayBytes -Parts @($ints[0], $ints[1])
+    return ,(Join-HordeRelayBytes -Parts @([byte[]]@(0x30, $body.Length), $body))
+}
+function New-TestPasskey {
+    $k = New-HordeRelayP256Key -Use "ecdsa"
+    return [pscustomobject]@{ key = $k; public = (ConvertTo-HordeRelayP256Public -Key $k); credentialId = (Get-HordeRelayRandomBytes -Count 32) }
+}
+function New-PasskeyResponse {
+    param($Offer, $Passkey, [string]$Label = "Founder phone")
+    $x = New-Object byte[] 32; $y = New-Object byte[] 32
+    [System.Array]::Copy($Passkey.public, 1, $x, 0, 32); [System.Array]::Copy($Passkey.public, 33, $y, 0, 32)
+    $cose = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a5010203262001215820"), $x, (ConvertFrom-HordeRelayHex -Text "225820"), $y)
+    $ad = Join-HordeRelayBytes -Parts @((Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $rp)), [byte[]]@(0x45, 0, 0, 0, 0), (New-Object byte[] 16), [byte[]]@(0, 32), $Passkey.credentialId, $cose)
+    $att = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a363666d74646e6f6e656761747453746d74a0686175746844617461"), [byte[]]@(0x58, $ad.Length), $ad)
+    $cdj = $utf8.GetBytes('{"type":"webauthn.create","challenge":"' + $Offer.challenge + '","origin":"' + $fx.origin + '","crossOrigin":false}')
+    return (New-HordeRelayPairingResponseText -Offer $Offer.offer -Code $Offer.code -RawId $Passkey.credentialId -ClientDataJson $cdj -AttestationObject $att -Label $Label -Prf $false)
+}
+function New-TestAssertion {
+    param($Passkey, [byte[]]$Challenge)
+    $ad = Join-HordeRelayBytes -Parts @((Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $rp)), [byte[]]@(0x05, 0, 0, 0, 1))
+    $cdj = $utf8.GetBytes('{"type":"webauthn.get","challenge":"' + (ConvertTo-HordeRelayBase64Url -Bytes $Challenge) + '","origin":"' + $fx.origin + '","crossOrigin":false}')
+    $sig = $Passkey.key.SignData((Join-HordeRelayBytes -Parts @($ad, (Get-HordeRelaySha256 -Bytes $cdj))), [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+    return [pscustomobject]@{ authenticatorData = $ad; clientDataJson = $cdj; signature = (ConvertTo-TestDer -Sig $sig) }
 }
 
 $store = Get-HordeRelayKeyStore
@@ -161,7 +201,7 @@ try {
     Check ((Get-HordeRelayMachineIdentity -HordeHome $hd).state -ceq "known") "a dead writer's temporary file is passed over"
 
     Write-Host ""
-    Write-Host "--- pairing: an offer, a registration, an enrolled device ---" -ForegroundColor Cyan
+    Write-Host "--- pairing: an offer, a registration, a PENDING device, a confirmation ---" -ForegroundColor Cyan
     $o1 = New-Offer -HordeHome $ha
     $ro = Read-HordeRelayPairingOffer -Text $o1.text
     Check ($ro.ok -and $ro.value.horde -ceq "work" -and $ro.value.machine -ceq $A.sign.keyId -and $ro.value.mailbox -ceq $A.mailbox -and $ro.value.agreeKeyId -ceq $A.agree.keyId) "the offer names the horde, this machine's keys and its mailbox"
@@ -181,10 +221,23 @@ try {
     $dev = $done.value.device
     Check ($dev.label -ceq "Founder phone" -and $dev.prf -eq $true -and $dev.backupEligible -eq $true -and $dev.offer -ceq $o1.offer -and $dev.rpId -ceq $rp) "the device record keeps its label, PRF flag, backup eligibility, offer and relying party"
     Check ($dev.publicKey -ceq $valid[0].publicKey -and $dev.credentialId -ceq $valid[0].credentialId) "and the key and credential id the phone made"
-    Check ($done.value.fingerprint -cmatch '\A[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}\z' -and $done.value.fingerprint -ceq (Get-HordeRelayPairingFingerprint -Public (B $valid[0].publicKey))) ("a fingerprint both screens can show (" + $done.value.fingerprint + ")")
+    Check ($dev.state -ceq "pending" -and $done.value.pendingUntil -eq $ro.value.expiresAt) "it is enrolled PENDING, until the offer's own expiry - not trusted"
+    $fp = $done.value.fingerprint
+    Check ($fp -cmatch '\A[0-9]{4}-[0-9]{4}\z' -and $fp -ceq (Get-HordeRelayPairingFingerprint -Challenge (B $o1.challenge) -Public (B $valid[0].publicKey))) ("its fingerprint is 8 digits from the offer and the key, which the phone computes too (" + $fp + ")")
+    Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public (B $valid[0].publicKey))) "CONTROL: the same key under another offer has another fingerprint"
+    Check (-not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($dev.keyId)) "a pending device is not a trusted sender"
+    $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId
+    Check ($one.state -ceq "absent" -and $one.reason.Contains("pending")) ("asked for by key id it is absent, pending (" + $one.reason + ")")
+    $wrongFp = $(if ($fp -ceq "0000-0000") { "1111-1111" } else { "0000-0000" })
+    $wrong = Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint $wrongFp -Now $t0.AddSeconds(70)
+    Check ((-not $wrong.ok) -and $wrong.reason.Contains("fingerprint")) "a confirmation with another fingerprint is refused"
+    Check ((Get-HordeRelayTrust -HordeHome $ha -Now $t0.AddSeconds(70)).value.devices[0].state -ceq "pending") "and the device stays pending"
+    $conf = Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint $fp.Replace("-", " ") -Now $t0.AddSeconds(90)
+    Check ($conf.ok -and -not $conf.value.already -and $conf.value.device.state -ceq "trusted") ("the fingerprint both screens show confirms it, spaces or dash alike (" + $conf.reason + ")")
+    Check ((Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint $fp -Now $t0.AddSeconds(95)).value.already) "confirming again is already done"
     $senders = Find-HordeRelayTrustedSenders -HordeHome $ha
     $s0 = $(if ($senders.state -ceq "known" -and $senders.value.ContainsKey($dev.keyId)) { $senders.value[$dev.keyId] } else { $null })
-    Check ($null -ne $s0 -and $s0.proof -ceq "webauthn" -and $s0.requireUserVerification -and $s0.rpId -ceq $rp) "the device is a trusted passkey sender, user verification required"
+    Check ($null -ne $s0 -and $s0.proof -ceq "webauthn" -and $s0.requireUserVerification -and $s0.rpId -ceq $rp) "confirmed, the device is a trusted passkey sender, user verification required"
     Check ($null -ne $s0 -and (Test-Assertion -Sender $s0 -Reg $valid[0])) "and an assertion the phone's credential signed verifies under it"
     Check ($null -ne $s0 -and -not (Test-Assertion -Sender $s0 -Reg $valid[1])) "CONTROL: another credential's assertion does not"
 
@@ -199,6 +252,42 @@ try {
     Check ((-not $dupe.ok) -and $dupe.reason.Contains("already enrolled")) "an enrolled credential is not enrolled again through a new offer"
     $o2b = Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o2 -Reg $valid[1] -Label "Tablet") -Now $t0.AddSeconds(11)
     Check ($o2b.ok) "CONTROL: that refusal did not use the offer; another passkey enrolls through it"
+    Check ((Confirm-HordeRelayDevice -HordeHome $ha -Id $o2b.value.device.id -Fingerprint $o2b.value.fingerprint -Now $t0.AddSeconds(12)).ok) "CONTROL: and is confirmed"
+
+    Write-Host ""
+    Write-Host "--- a thief who registers first leaves a pending device the founder sees and rejects ---" -ForegroundColor Cyan
+    $ht = New-TestHome
+    [void](New-HordeRelayMachineIdentity -HordeHome $ht -Provider "software")
+    $oT = New-Offer -HordeHome $ht
+    $pkThief = New-TestPasskey
+    $pkFounder = New-TestPasskey
+    $thief = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkThief) -Now $t0.AddSeconds(10)
+    Check ($thief.ok -and $thief.value.device.state -ceq "pending") "a photo of the offer lets a thief register first - as a pending device"
+    $mine = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkFounder) -Now $t0.AddSeconds(20)
+    Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device and its fingerprint (" + $mine.reason + ")")
+    Check ($null -ne $mine.value -and $mine.value.earlier.id -ceq $thief.value.device.id) "and hands it back, so it can be rejected"
+    $founderFp = Get-HordeRelayPairingFingerprint -Challenge (B $oT.challenge) -Public $pkFounder.public
+    Check ($founderFp -cne $thief.value.fingerprint) "the founder's phone shows another fingerprint than the thief's device"
+    Check (-not (Confirm-HordeRelayDevice -HordeHome $ht -Id $thief.value.device.id -Fingerprint $founderFp -Now $t0.AddSeconds(30)).ok) "so the thief's device cannot be confirmed with what the founder's phone shows"
+    $rej = Revoke-HordeRelayTrust -HordeHome $ht -Subject "device" -Id $thief.value.device.id -Reason "not mine" -Now $t0.AddSeconds(31)
+    Check ($rej.state -ceq "known") "the founder rejects the pending device by revoking it"
+    $late = Confirm-HordeRelayDevice -HordeHome $ht -Id $thief.value.device.id -Fingerprint $thief.value.fingerprint -Now $t0.AddSeconds(32)
+    Check ((-not $late.ok) -and $late.reason.Contains("revoked")) "and then not even its own fingerprint confirms it"
+    Check ((Get-HordeRelayTrust -HordeHome $ht -Now $t0.AddSeconds(33)).value.devices[0].state -ceq "revoked") "it is listed as revoked"
+    # Pending expires with the offer.
+    $oE = New-Offer -HordeHome $ht
+    $pkE = New-TestPasskey
+    $pe = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE -Passkey $pkE) -Now $t0.AddSeconds(10)
+    $exp = Confirm-HordeRelayDevice -HordeHome $ht -Id $pe.value.device.id -Fingerprint $pe.value.fingerprint -Now $t0.AddSeconds(301)
+    Check ((-not $exp.ok) -and $exp.reason.Contains("expired")) "a confirmation after the offer's life is refused"
+    $expDev = @((Get-HordeRelayTrust -HordeHome $ht -Now $t0.AddSeconds(301)).value.devices | Where-Object { $_.id -ceq $pe.value.device.id })[0]
+    Check ($expDev.state -ceq "expired") "and the device is listed as expired"
+    Check ((Find-HordeRelayTrustedSender -HordeHome $ht -KeyId $expDev.keyId -Now $t0.AddSeconds(301)).reason.Contains("never confirmed")) "asked for, it was never confirmed"
+    $oE2 = New-Offer -HordeHome $ht
+    $pkE2 = New-TestPasskey
+    $pe2 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE2 -Passkey $pkE2) -Now $t0.AddSeconds(10)
+    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id $pe2.value.device.id -Fingerprint $pe2.value.fingerprint -Now $t0.AddSeconds(300)).ok) "CONTROL: at the offer's last millisecond it still confirms"
+    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id ("e" * 32) -Fingerprint "0000-0000").reason.Contains("no device")) "confirming a device the store does not hold is refused"
 
     Write-Host ""
     Write-Host "--- refused responses enroll nothing and leave the offer usable ---" -ForegroundColor Cyan
@@ -224,18 +313,19 @@ try {
     Check (-not (Test-Path -LiteralPath (Join-Path $ha ("relay\pairing\used\" + $o3.offer + ".json")))) "none of them marked the offer used"
     $after = Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o3 -Reg $valid[2]) -Now $t0.AddSeconds(31)
     Check ($after.ok) "CONTROL: the right response still enrolls through it"
+    [void](Confirm-HordeRelayDevice -HordeHome $ha -Id $after.value.device.id -Fingerprint $after.value.fingerprint -Now $t0.AddSeconds(32))
     Check ((Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o4 -Reg $valid[3]) -Now $t0.AddSeconds(301)).reason.Contains("expired")) "a response after the offer expired is refused"
     Check ((Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o4 -Reg $valid[3]) -Now $t0.AddSeconds(300)).ok) "CONTROL: at its last millisecond it is not expired"
 
     Write-Host ""
     Write-Host "--- revocation: written beside the entry, honoured by every find ---" -ForegroundColor Cyan
     $before = (Find-HordeRelayTrustedSenders -HordeHome $ha).value
-    Check ($before.Count -eq 4) ("CONTROL: four devices are trusted before (" + $before.Count + ")")
+    Check ($before.Count -eq 3) ("CONTROL: three devices are trusted before; the fourth was never confirmed (" + $before.Count + ")")
     $rv = Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id $dev.id -Reason "lost phone" -Now $t0.AddMinutes(5)
     Check ($rv.state -ceq "known" -and -not $rv.value.already -and $rv.value.revocation.keyId -ceq $dev.keyId) "the device is revoked, by its id, naming its key"
     Check (Test-Path -LiteralPath (Join-Path $ha ("relay\trust\devices\" + $dev.id + ".json"))) "its record is kept: revocation is a record beside it, not a deletion"
     $afterRev = (Find-HordeRelayTrustedSenders -HordeHome $ha).value
-    Check ($afterRev.Count -eq 3 -and -not $afterRev.ContainsKey($dev.keyId)) "the revoked device is not among the trusted senders"
+    Check ($afterRev.Count -eq 2 -and -not $afterRev.ContainsKey($dev.keyId)) "the revoked device is not among the trusted senders"
     $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId
     Check ($one.state -ceq "absent" -and $one.reason.Contains("revoked") -and $one.reason.Contains("lost phone")) ("asked for by key id it is refused, saying when and why (" + $one.reason + ")")
     Check ((Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $o2b.value.device.keyId).state -ceq "known") "CONTROL: another device is still found"
@@ -244,55 +334,110 @@ try {
     $o5 = New-Offer -HordeHome $ha
     $back = Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o5 -Reg $valid[0]) -Now $t0.AddSeconds(5)
     Check ((-not $back.ok) -and $back.reason.Contains("revoked")) "a revoked credential is never enrolled again"
-    $list = Get-HordeRelayTrust -HordeHome $ha
-    Check ($list.state -ceq "known" -and @($list.value.devices).Count -eq 4 -and @($list.value.devices | Where-Object { $null -ne $_.revoked }).Count -eq 1) "the list shows every device, the revoked one marked"
+    $list = Get-HordeRelayTrust -HordeHome $ha -Now $t0.AddMinutes(7)
+    Check ($list.state -ceq "known" -and @($list.value.devices).Count -eq 4 -and @($list.value.devices | Where-Object { $_.state -ceq "revoked" }).Count -eq 1 -and @($list.value.devices | Where-Object { $_.state -ceq "expired" }).Count -eq 1) "the list shows every device with its state: revoked, expired and trusted"
     Check ((Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id ("f" * 32) -Reason "x").state -ceq "absent") "revoking what the store does not hold is absent"
     Check ((Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id $o2b.value.device.id -Reason "").state -ceq "unknown") "a revocation needs a reason"
 
     Write-Host ""
-    Write-Host "--- peer machines of the same horde, by card ---" -ForegroundColor Cyan
+    Write-Host "--- peer machines of the same horde: a card, then a founder passkey's countersignature ---" -ForegroundColor Cyan
     $cardB = Export-HordeRelayMachineCard -HordeHome $hb -Label "Desk box" -Now $t0
     Check ($cardB.state -ceq "known" -and (Read-HordeRelayMachineCard -Text $cardB.value).ok) "a machine exports a card that reads back, proof verified"
-    $addB = Add-HordeRelayTrustedMachine -HordeHome $ha -Card $cardB.value -Now $t0
-    Check ($addB.state -ceq "known" -and -not $addB.value.duplicate -and $addB.value.record.keyId -ceq $B.sign.keyId) "the peer is added by its signing key id"
+    $addB = Add-HordeRelayPeerMachine -HordeHome $ha -Card $cardB.value -Now $t0
+    Check ($addB.state -ceq "known" -and -not $addB.value.duplicate -and $addB.value.record.keyId -ceq $B.sign.keyId -and $addB.value.record.state -ceq "pending") "the peer is added by its signing key id - pending, a self-signed card alone"
+    Check (-not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($B.sign.keyId)) "a pending peer is not a trusted sender"
+    Check ((Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $B.sign.keyId).reason.Contains("countersign")) "asked for, it waits for a countersignature"
+    $chB = Get-HordeRelayCardChallenge -Card $cardB.value
+    Check ((ConvertTo-HordeRelayHex -Bytes $chB) -ceq (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ("horde-relay/machine-card/v1 countersign`n" + $cardB.value))))) "the challenge a passkey signs is SHA-256 of the domain and the card's exact text"
+    $oF = New-Offer -HordeHome $ha
+    $pkF = New-TestPasskey
+    $pf = Complete-HordeRelayPairing -HordeHome $ha -Response (New-PasskeyResponse -Offer $oF -Passkey $pkF -Label "Countersigner") -Now $t0.AddSeconds(5)
+    $pkP = New-TestPasskey
+    $oP = New-Offer -HordeHome $ha
+    [void](Complete-HordeRelayPairing -HordeHome $ha -Response (New-PasskeyResponse -Offer $oP -Passkey $pkP -Label "Pending phone") -Now $t0.AddSeconds(5))
+    $fKey = Get-HordeRelayKeyId -Public $pkF.public
+    $pKey = Get-HordeRelayKeyId -Public $pkP.public
+    $asB = New-TestAssertion -Passkey $pkF -Challenge $chB
+    $byPending = Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By $pKey -AuthenticatorData $asB.authenticatorData -ClientDataJson $asB.clientDataJson -Signature $asB.signature -Now $t0.AddSeconds(6)
+    Check ($byPending.state -ceq "unknown" -and $byPending.reason.Contains("not a trusted device")) "a countersignature by a device that is only pending is refused"
+    Check ((Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By ("d" * 32) -AuthenticatorData $asB.authenticatorData -ClientDataJson $asB.clientDataJson -Signature $asB.signature).reason.Contains("not a trusted device")) "and by a key the store does not hold"
+    [void](Confirm-HordeRelayDevice -HordeHome $ha -Id $pf.value.device.id -Fingerprint $pf.value.fingerprint -Now $t0.AddSeconds(6))
+    $asOther = New-TestAssertion -Passkey $pkF -Challenge (Get-HordeRelayRandomBytes -Count 32)
+    $wrongCh = Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By $fKey -AuthenticatorData $asOther.authenticatorData -ClientDataJson $asOther.clientDataJson -Signature $asOther.signature -Now $t0.AddSeconds(7)
+    Check ($wrongCh.state -ceq "unknown" -and $wrongCh.reason.Contains("challenge")) "an assertion over anything but this card is refused"
+    $asP = New-TestAssertion -Passkey $pkP -Challenge $chB
+    Check ((Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By $fKey -AuthenticatorData $asP.authenticatorData -ClientDataJson $asP.clientDataJson -Signature $asP.signature).reason.Contains("does not verify")) "an assertion by another passkey, named as the trusted one, is refused"
+    $cs = Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By $fKey -AuthenticatorData $asB.authenticatorData -ClientDataJson $asB.clientDataJson -Signature $asB.signature -Now $t0.AddSeconds(8)
+    Check ($cs.state -ceq "known" -and -not $cs.value.already -and $cs.value.record.state -ceq "trusted") ("a trusted founder passkey's assertion over the card makes the peer trusted (" + $cs.reason + ")")
     $sB = (Find-HordeRelayTrustedSenders -HordeHome $ha).value
-    Check ($sB.ContainsKey($B.sign.keyId) -and $sB[$B.sign.keyId].proof -ceq "es256") "and is a trusted ES256 sender"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card $cardB.value).value.duplicate) "adding the same card again is a duplicate, not an error"
+    Check ($sB.ContainsKey($B.sign.keyId) -and $sB[$B.sign.keyId].proof -ceq "es256") "and a trusted ES256 sender"
+    Check ((Confirm-HordeRelayPeerMachine -HordeHome $ha -KeyId $B.sign.keyId -By $fKey -AuthenticatorData $asB.authenticatorData -ClientDataJson $asB.clientDataJson -Signature $asB.signature).value.already) "countersigning again is already done"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card $cardB.value).value.duplicate) "adding the same card again is a duplicate, not an error"
     $own = Export-HordeRelayMachineCard -HordeHome $ha -Label "Me"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card $own.value).reason.Contains("own")) "a machine does not add its own card"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card $own.value).reason.Contains("own")) "a machine does not add its own card"
     $hp = New-TestHome -Horde "personal"
     [void](New-HordeRelayMachineIdentity -HordeHome $hp -Provider "software")
     $cardP = Export-HordeRelayMachineCard -HordeHome $hp -Label "Home box"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card $cardP.value).reason.Contains("horde 'personal'")) "a card from another horde is refused"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card $cardB.value.Replace('"label":"Desk box"', '"label":"Desk boX"')).reason.Contains("proof")) "a card whose label was changed after signing is refused"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card $cardP.value).reason.Contains("horde 'personal'")) "a card from another horde is refused"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card $cardB.value.Replace('"label":"Desk box"', '"label":"Desk boX"')).reason.Contains("proof")) "a card whose label was changed after signing is refused"
     $forgedKey = $cardB.value.Replace($B.agree.keyId, $A.agree.keyId)
     Check (-not (Read-HordeRelayMachineCard -Text $forgedKey).ok) "a card naming another agreement key id is refused"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card "{}").reason.Contains("canonical")) "a card that is not one is refused"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card "{}").reason.Contains("canonical")) "a card that is not one is refused"
+    [void](Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id $pf.value.device.id -Reason "countersigner lost")
+    $peerNow = @((Get-HordeRelayTrust -HordeHome $ha).value.machines | Where-Object { $_.keyId -ceq $B.sign.keyId })[0]
+    Check ($peerNow.state -ceq "pending" -and -not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($B.sign.keyId)) "when the countersigning passkey is revoked, the peer it vouched for is pending again"
     $rm = Revoke-HordeRelayTrust -HordeHome $ha -Subject "machine" -Id $B.sign.keyId -Reason "decommissioned"
     Check ($rm.state -ceq "known" -and -not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($B.sign.keyId)) "a revoked peer is not a trusted sender"
-    Check ((Add-HordeRelayTrustedMachine -HordeHome $ha -Card $cardB.value).reason.Contains("revoked")) "and its card is never added again"
+    Check ((Add-HordeRelayPeerMachine -HordeHome $ha -Card $cardB.value).reason.Contains("revoked")) "and its card is never added again"
 
     Write-Host ""
     Write-Host "--- rotation: a new generation, a new stream, the old one retired on record ---" -ForegroundColor Cyan
     $oStale = New-Offer -HordeHome $ha
-    $rot = Update-HordeRelayMachineIdentity -HordeHome $ha -Reason "scheduled rotation" -Provider "software" -Now $t0.AddDays(1)
+    $tRot = $t0.AddDays(1)
+    $rot = Update-HordeRelayMachineIdentity -HordeHome $ha -Reason "scheduled rotation" -Provider "software" -Now $tRot
     Check ($rot.state -ceq "known" -and $rot.value.previous -eq 1 -and $rot.value.identity.generation -eq 2) ("rotated from generation 1 to 2 (" + $(if ($rot.state -ceq "known") { "cleanup: '" + $rot.value.cleanup + "'" } else { $rot.reason }) + ")")
     $A2 = $rot.value.identity
     Check ($A2.sign.keyId -cne $A.sign.keyId -and $A2.agree.keyId -cne $A.agree.keyId -and $A2.mailbox -cne $A.mailbox) "the new keys have new ids, so new streams and a new mailbox"
     Check (@($A2.retired) -contains 1 -and @($A2.unretired).Count -eq 0 -and @($rot.value.vouched) -contains 1) "generation 1 is retired, vouched for by its own key"
-    Check ((Get-HordeRelayKey -Name $A.sign.name -Use "sign").state -ceq "absent" -and (Get-HordeRelayKey -Name $A.agree.name -Use "agree").state -ceq "absent") "and its keys are gone from the store"
+    Check ((Get-HordeRelayKey -Name $A.sign.name -Use "sign").state -ceq "absent") "its signing key is gone at once"
+    $keptAgree = Get-HordeRelayKey -Name $A.agree.name -Use "agree"
+    Check ($keptAgree.state -ceq "known") "its agreement key is kept, for opening only"
+    if ($keptAgree.state -ceq "known") { $keptAgree.value.key.Dispose() }
+    $graceEnd = (ConvertTo-HordeRelayRecordMs -Time $tRot) + 7 * 86400000
+    Check (@($A2.opening).Count -eq 1 -and $A2.opening[0].generation -eq 1 -and $A2.opening[0].agreeKeyId -ceq $A.agree.keyId -and $A2.opening[0].until -eq $graceEnd) "for the default grace of 7 days"
     $ret = Get-HordeRelayRetirementText -HordeHome $ha -Generation 1
-    Check ($ret.state -ceq "known" -and $ret.value.Contains($A2.sign.keyId) -and $ret.value.Contains('"reason":"scheduled rotation"')) "the retirement record names the successor and the reason"
+    Check ($ret.state -ceq "known" -and $ret.value.Contains($A2.sign.keyId) -and $ret.value.Contains('"reason":"scheduled rotation"') -and $ret.value.Contains('"agreeKeptUntil":' + $graceEnd)) "the retirement record names the successor, the reason and the grace's end"
     Check (Test-HordeRelayRetirementVouch -Text $ret.value -PublicOld $A.sign.public) "its vouch verifies under the retired signing key"
     Check (-not (Test-HordeRelayRetirementVouch -Text $ret.value -PublicOld $B.sign.public)) "CONTROL: and under no other key"
     Check (-not (Test-HordeRelayRetirementVouch -Text $ret.value.Replace("scheduled rotation", "scheduled rotatiom") -PublicOld $A.sign.public)) "a retirement record changed after it was vouched for does not verify"
+    $ok = Get-HordeRelayOpeningKeys -HordeHome $ha -Now $tRot.AddDays(2)
+    Check ($ok.state -ceq "known" -and $ok.value.keys.ContainsKey($A.agree.keyId) -and $ok.value.keys.ContainsKey($A2.agree.keyId)) "the keys that open are the current agreement key and the one in its grace"
+    if ($ok.state -ceq "known") {
+        $box = Protect-HordeRelayHpke -RecipientPublic $A.agree.public -Info (Get-HordeRelayAsciiBytes -Text "i") -Aad (Get-HordeRelayAsciiBytes -Text "a") -Plaintext (Get-HordeRelayAsciiBytes -Text "in flight")
+        $opened = Unprotect-HordeRelayHpke -RecipientKey $ok.value.keys[$A.agree.keyId] -Enc $box.enc -Info (Get-HordeRelayAsciiBytes -Text "i") -Aad (Get-HordeRelayAsciiBytes -Text "a") -Sealed $box.sealed
+        Check ($null -ne $opened -and [System.Text.Encoding]::ASCII.GetString($opened) -ceq "in flight") "a message sealed to the old key before the rotation still opens"
+        foreach ($k in @($ok.value.keys.Values)) { $k.Dispose() }
+    }
+    Check ((Read-HordeRelayPairingOffer -Text (New-Offer -HordeHome $ha -Now $tRot).text).value.agreeKeyId -ceq $A2.agree.keyId) "what the machine hands out names only the current agreement key: the old one is never sealed to again"
+    $early = Remove-HordeRelayRetiredAgreeKeys -HordeHome $ha -Now (New-Object datetime -ArgumentList (($tRot.AddDays(7)).Ticks - 10000), ([System.DateTimeKind]::Utc))
+    Check ($early.state -ceq "known" -and @($early.value.released).Count -eq 0 -and (Get-HordeRelayKey -Name $A.agree.name -Use "agree").state -ceq "known") "a millisecond before the grace ends the key is kept"
+    $swept = Remove-HordeRelayRetiredAgreeKeys -HordeHome $ha -Now $tRot.AddDays(7)
+    Check ($swept.state -ceq "known" -and @($swept.value.released) -contains 1 -and (Get-HordeRelayKey -Name $A.agree.name -Use "agree").state -ceq "absent") "when the grace ends the old agreement key is deleted"
+    Check (Test-Path -LiteralPath (Join-Path $ha "relay\identity\released-000001.json")) "and its release is recorded"
+    Check ((-not (Get-HordeRelayOpeningKeys -HordeHome $ha -Now $tRot.AddDays(8)).value.keys.ContainsKey($A.agree.keyId)) -and @((Get-HordeRelayMachineIdentity -HordeHome $ha -Now $tRot.AddDays(8)).value.opening).Count -eq 0) "and it opens nothing any more"
+    Check (@((Remove-HordeRelayRetiredAgreeKeys -HordeHome $ha -Now $tRot.AddDays(9)).value.released).Count -eq 0) "sweeping again releases nothing"
     $stale = Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $oStale -Reg $valid[4]) -Now $t0.AddSeconds(20)
     Check ((-not $stale.ok) -and $stale.reason.Contains("changed since the offer")) "an offer made before the rotation is void"
     Check ((Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($o2b.value.device.keyId)) "the trust store is the machine's, not the generation's: enrolled devices stay"
-    # A rotation forced by a lost key carries no vouch.
+    # A rotation forced by a lost key carries no vouch; a grace of 0 releases at once.
+    Set-TestHorde -HordeHome $hb -Horde "work" -AgreeDays 0
     [void](Remove-HordeRelayKey -Name $B.sign.name)
     $lost = Update-HordeRelayMachineIdentity -HordeHome $hb -Reason "signing key lost" -Provider "software"
     Check ($lost.state -ceq "known" -and @($lost.value.vouched).Count -eq 0 -and (Get-HordeRelayRetirementText -HordeHome $hb -Generation 1).value.Contains('"vouch":""')) "a rotation after the signing key was lost retires it with no vouch"
+    Check (@($lost.value.released) -contains 1 -and (Get-HordeRelayKey -Name $B.agree.name -Use "agree").state -ceq "absent") "with a grace of 0 days the old agreement key is released at once, on record"
+    Set-TestHorde -HordeHome $hb -Horde "work" -AgreeDays 31
+    Check ((Update-HordeRelayMachineIdentity -HordeHome $hb -Reason "too long a grace" -Provider "software").state -ceq "unknown") "a grace over 30 days is refused, and nothing rotates"
+    Set-TestHorde -HordeHome $hb -Horde "work"
     Check ((Update-HordeRelayMachineIdentity -HordeHome $hb -Reason "bad `"quote`"").state -ceq "unknown") "a reason with a quote in it is refused"
 
     Write-Host ""
@@ -300,7 +445,8 @@ try {
     $hx = New-TestHome
     [void](New-HordeRelayMachineIdentity -HordeHome $hx -Provider "software")
     $ox = New-Offer -HordeHome $hx
-    [void](Complete-HordeRelayPairing -HordeHome $hx -Response (New-Response -Offer $ox -Reg $valid[5]) -Now $t0)
+    $px = Complete-HordeRelayPairing -HordeHome $hx -Response (New-Response -Offer $ox -Reg $valid[5]) -Now $t0
+    [void](Confirm-HordeRelayDevice -HordeHome $hx -Id $px.value.device.id -Fingerprint $px.value.fingerprint -Now $t0)
     Check ((Find-HordeRelayTrustedSenders -HordeHome $hx).value.Count -eq 1) "CONTROL: one device is trusted"
     $devFile = @(Get-ChildItem -LiteralPath (Join-Path $hx "relay\trust\devices"))[0].FullName
     $dtext = [System.IO.File]::ReadAllText($devFile)
@@ -320,6 +466,11 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $revDir ("device-" + ("a" * 32) + ".json")), $orphan, $utf8)
     Check ((Find-HordeRelayTrustedSenders -HordeHome $hx).reason.Contains("does not hold")) "a revocation of an entry the store does not hold makes it unknown"
     Remove-Item -LiteralPath (Join-Path $revDir ("device-" + ("a" * 32) + ".json"))
+    $confDir = Join-Path $hx "relay\trust\confirmed"
+    $orphanC = '{"v":1,"kind":"horde-relay-device-confirmed","id":"' + ("a" * 32) + '","keyId":"' + ("b" * 32) + '","fingerprint":"0000-0000","confirmedAt":1}'
+    [System.IO.File]::WriteAllText((Join-Path $confDir ("device-" + ("a" * 32) + ".json")), $orphanC, $utf8)
+    Check ((Find-HordeRelayTrustedSenders -HordeHome $hx).reason.Contains("does not hold")) "a confirmation of a device the store does not hold makes it unknown"
+    Remove-Item -LiteralPath (Join-Path $confDir ("device-" + ("a" * 32) + ".json"))
     [System.IO.File]::WriteAllText((Join-Path $revDir ("device-" + ("c" * 32) + ".json")), "{", $utf8)
     Check ((Find-HordeRelayTrustedSender -HordeHome $hx -KeyId (Get-HordeRelayKeyId -Public (B $valid[5].publicKey))).state -ceq "unknown") "a revocation that cannot be read stops even a find by key id"
 
@@ -366,4 +517,4 @@ try {
 }
 
 if ($partial) { Complete-HordeSuite -Success "identity, trust and pairing hold; the other runtime was not here to cross" -PassCode 3 }
-Complete-HordeSuite -Success "a machine knows its horde and keys, trusts only what it enrolled and did not revoke, and pairs only through a live, unused offer - under both runtimes"
+Complete-HordeSuite -Success "a machine knows its horde and keys, trusts only what it confirmed and did not revoke, and pairs only through a live, unused offer - under both runtimes"
