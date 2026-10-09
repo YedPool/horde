@@ -30,10 +30,14 @@
 # and whose turn it is, and for a question somebody has spoken under the operation show is asked for
 # its messages, once per change of that thread (Add-HordeDecisionWindowThreads keeps what it was
 # given by what the list said of the thread). Each message says who has not read it (the store's
-# own), and "told": whether a notifier has announced it, read from the file -ToldMarks names -
-# { schemaVersion: 1, rung: [ { question, message, at } ] }, message being the record's number. That
-# file is somebody else's and is only ever read; missing or not what it should be, nothing is marked
-# told, the report says why, and answering goes on.
+# own), and "told": whether notify has announced it, read from notify's told record under the home
+# through notify's own reader (decisions/Notify.ps1: one place writes it, one reads it). That record is
+# notify's and is only ever read here; missing or not what it should be, nothing is marked told, the
+# report says why, and answering goes on.
+# NOTIFY STANDS BESIDE THE WINDOW. When notify's setting startWithWindow says so (it does by default),
+# open starts it in a PowerShell of its own in this process before the window is shown, and asks it to
+# stop once the window has closed - waiting while it rings for an answer still in its quiet period.
+# What it last said is in -Report (notify) and printed when the window has closed.
 # ESCAPE HANDS THE KEYBOARD BACK. The request hand-back is what the page asks when the person
 # presses Escape: he is done here and wants to type in the terminal again. While the window stands
 # beside a terminal window the follow port is asked to hand that window the keyboard
@@ -125,6 +129,7 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path $PSScriptRoot "Operations.ps1")
+. (Join-Path $PSScriptRoot "Notify.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "surfaces\Port.ps1")
 foreach ($surfaceFile in @(Get-HordeSurfaceFiles)) { . $surfaceFile }
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\WindowFollowPort.ps1")
@@ -244,28 +249,14 @@ function Get-HordeDecisionWindowRecord {
 }
 
 function Read-HordeDecisionWindowToldMarks {
-    # The messages a notifier has announced, from the file -Path names (header): { told; problem }.
-    # told is a table keyed by a message's record number as text. A file that is not there, too
-    # large, or not the agreed shape marks NOTHING, and problem says why in words; it never throws.
+    # The messages notify has announced, from its told record at -Path (header): { told; problem }. told
+    # is a table keyed by a message's record number as text. Read by notify's own reader, so the window
+    # and notify can never read the record two ways; a record that is not there or cannot be read marks
+    # NOTHING, and problem says why in words. It never throws. No path: nothing told, nothing wrong.
     param([string]$Path)
-    $none = { param([string]$Why) return [pscustomobject]@{ told = @{}; problem = $Why } }
-    if ("$Path" -eq "") { return (& $none "") }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return (& $none "the file of announced messages is not there yet, so no message is marked as told") }
-    $parsed = $null
-    try {
-        if ((Get-Item -LiteralPath $Path).Length -gt $script:HordeDecisionWindowSideFileBytes) { return (& $none "the file of announced messages is larger than it may be, so no message is marked as told") }
-        $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    } catch { return (& $none "the file of announced messages could not be read as JSON, so no message is marked as told") }
-    if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $parsed.PSObject.Properties["schemaVersion"] -or "$($parsed.schemaVersion)" -cne "1" -or $null -eq $parsed.PSObject.Properties["rung"]) {
-        return (& $none "the file of announced messages is not version 1 with a list named rung, so no message is marked as told")
-    }
-    $told = @{}
-    foreach ($entry in @($parsed.rung)) {
-        if ($null -eq $entry -or $entry -isnot [System.Management.Automation.PSCustomObject] -or $null -eq $entry.PSObject.Properties["message"]) { continue }
-        $id = "$($entry.message)"
-        if ($id -cmatch '\A[1-9][0-9]{0,17}\z') { $told[$id] = $true }
-    }
-    return [pscustomobject]@{ told = $told; problem = "" }
+    if ("$Path" -eq "") { return [pscustomobject]@{ told = @{}; problem = "" } }
+    $record = Read-HordeDecisionNotifyRecord -Path $Path
+    return [pscustomobject]@{ told = $record.told; problem = "$($record.problem)" }
 }
 
 function Add-HordeDecisionWindowThreads {
@@ -587,6 +578,7 @@ function New-HordeDecisionWindowState {
         handBacks = 0; handBacksDone = 0; handBackLast = ""; handBackReason = ""
         busyLongestMs = 0; busyLongestWhat = ""; busyOver250 = 0
         helper = $null; helperErrors = (New-Object System.Collections.ArrayList); listRecord = $null; pageAsked = $false
+        notify = $null; notifySaid = ""
     }
 }
 
@@ -658,6 +650,7 @@ function Write-HordeDecisionWindowReport {
         handBack = [ordered]@{ asked = [int]$State.handBacks; handed = [int]$State.handBacksDone; last = "$($State.handBackLast)"; reason = "$($State.handBackReason)" }
         busy = [ordered]@{ longestMs = [long]$State.busyLongestMs; longestWhat = "$($State.busyLongestWhat)"; over250 = [int]$State.busyOver250 }
         helper = [ordered]@{ running = ($null -ne $State.helper); done = $(if ($null -ne $State.helper) { [int]$State.helper.done } else { 0 }); failures = @($State.helperErrors | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ }) }
+        notify = [ordered]@{ started = ($null -ne $State.notify); running = $(if ($null -ne $State.notify) { [bool]$State.notify.status["running"] } else { $false }); said = $(if ($null -ne $State.notify) { "" + $State.notify.status["said"] } else { "" }) }
         findings = @($State.findings)
         errors = @($State.errors | Where-Object { $null -ne $_ } | Select-Object -Last $script:HordeDecisionWindowReportErrors | ForEach-Object { "" + $_ })
         secondsToFirstReport = $seconds
@@ -850,6 +843,8 @@ function Invoke-HordeDecisionWindowTickWork {
             if ($null -eq $State.dirtyAt) { $State.dirtyAt = $Now.AddMilliseconds(-1 * [int]$State.settings.changeQuietMs) }
         }
     }
+    # What notify beside the window last said goes into the report when it changes.
+    if ($null -ne $State.notify -and ("" + $State.notify.status["said"]) -cne $State.notifySaid) { $State.notifySaid = "" + $State.notify.status["said"]; $State.reportDue = $true }
     if ($State.probePath -ne "" -and [int]$State.reports -ge 1) {
         $stamp = "none"
         try { $file = Get-Item -LiteralPath $State.probePath -ErrorAction Stop; $stamp = "" + $file.LastWriteTimeUtc.Ticks + "|" + $file.Length } catch { $stamp = "none" }
@@ -925,7 +920,7 @@ function Open-HordeDecisionWindow {
     # what the window shows in; -Picture a .png to save a picture of the page in; -Hidden opens it
     # where nobody sees it and out of the taskbar; -OffScreen as an ordinary window where no screen
     # is; -Unfold and -Orc say what the reader is shown first (header).
-    param([switch]$Hidden, [switch]$OffScreen, [string]$Report = "", [string]$Picture = "", [string]$Unfold = "", [string]$Orc = "", [string]$ToldMarks = "", [string]$Probe = "")
+    param([switch]$Hidden, [switch]$OffScreen, [string]$Report = "", [string]$Picture = "", [string]$Unfold = "", [string]$Orc = "", [string]$Probe = "")
     $hordeHome = Get-HordeHome
     if ($Hidden -and $OffScreen) { throw "-Hidden and -OffScreen are two ways of standing where nobody sees it; give one of them" }
     $view = ConvertTo-HordeDecisionWindowView -Unfold $Unfold -Orc $Orc
@@ -934,11 +929,8 @@ function Open-HordeDecisionWindow {
         $picturePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Picture)
         if ([System.IO.Path]::GetExtension($picturePath) -ine ".png") { throw "-Picture names the file a picture of the window is saved in, and it must end .png" }
     }
-    $toldPath = ""
-    if ($ToldMarks -ne "") {
-        if (-not [System.IO.Path]::IsPathRooted($ToldMarks)) { throw "-ToldMarks names the file of messages a notifier has announced, by its full path" }
-        $toldPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ToldMarks)
-    }
+    # The told record is notify's, under the home (header); no caller names another.
+    $toldPath = Get-HordeDecisionNotifyRecordPath -HordeHome $hordeHome
     $probePath = ""
     if ($Probe -ne "") { $probePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Probe) }
     $reportPath = ""
@@ -954,6 +946,7 @@ function Open-HordeDecisionWindow {
         Write-Output "The decisions window is already open; it was asked to come forward."
         return
     }
+    $state = $null
     try {
         $surface = Resolve-HordeSurface -Requires $script:HordeDecisionWindowNeeds
         if ($null -eq $surface) { throw "no way of showing a window is part of this Horde on this machine, so the decisions window cannot be opened; horde decisions list prints the same list" }
@@ -967,7 +960,9 @@ function Open-HordeDecisionWindow {
         $fleetSettings = Get-HordeFleetSettings -HordeHome $hordeHome
         # Through their port: the finders' file names are a terminal's, which this file may not hold.
         $finderSettings = Get-HordeSessionWindowSettingsState -HordeHome $hordeHome
-        $refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings)
+        # Notify's, because open starts it (header, NOTIFY STANDS BESIDE THE WINDOW).
+        $notifySettings = Get-HordeDecisionNotifySettings -HordeHome $hordeHome
+        $refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings, $notifySettings)
         if ($refusal -ne "") { throw ("the decisions window was not opened, because a settings file is refused:" + [Environment]::NewLine + $refusal) }
         $findings = @()
         # Real pixels before any window is read or made, or a rectangle read is a scaled one.
@@ -988,6 +983,7 @@ function Open-HordeDecisionWindow {
         $state = New-HordeDecisionWindowState -ReportPath $reportPath -Attachment $attachment -PicturePath $picturePath -Settings $own.values -SurfaceSettings $surfaceSettings -FollowSettings $followSettings.values -Findings $findings -View $view -ToldPath $toldPath -ProbePath $probePath
         $state.showEvent = $show
         $script:HordeDecisionWindow = $state
+        if ($notifySettings.values.startWithWindow) { $state.notify = Start-HordeDecisionNotifyBeside }
         # The helper starts loading now, and the first list is asked of it at once: both go on while the
         # engine starts, and neither holds the window's thread.
         if ($null -ne (Start-HordeDecisionWindowHelper -State $state)) { Add-HordeDecisionWindowJob -State $state -Kind "list" }
@@ -1015,10 +1011,16 @@ function Open-HordeDecisionWindow {
         $spec = New-HordeSurfaceSpec @specArgs
         $result = Open-HordeSurface -Surface $surface -Spec $spec
         if ($result.state -cne "closed") { throw ("the decisions window could not be shown: " + $result.reason) }
-        if ($state.reportPath -ne "") { try { Write-HordeDecisionWindowReport -State $state } catch { } }
         Write-Output "The decisions window was closed."
+        if ($null -ne $state.notify) {
+            [void](Stop-HordeDecisionNotifyBeside -Helper $state.notify)
+            Write-Output ("Notify, which stood beside it: " + $state.notify.status["said"])
+        }
+        if ($state.reportPath -ne "") { try { Write-HordeDecisionWindowReport -State $state } catch { } }
     }
     finally {
+        # A window that could not be shown, or a command stopped, still stops the notify it started.
+        if ($null -ne $state -and $null -ne $state.notify -and [bool]$state.notify.status["running"]) { [void](Stop-HordeDecisionNotifyBeside -Helper $state.notify -Seconds 10) }
         $script:HordeDecisionWindow = $null
         try { $mutex.ReleaseMutex() } catch { }
         $mutex.Dispose(); $show.Dispose()

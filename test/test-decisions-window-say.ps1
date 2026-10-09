@@ -141,9 +141,15 @@ $told = Join-Path $work "told.json"
 $none = Read-HordeDecisionWindowToldMarks -Path $told
 Check (@($none.told.Keys).Count -eq 0 -and $none.problem -clike "*is not there yet*") "no file: nothing is marked, and the reason is said"
 Check ((Read-HordeDecisionWindowToldMarks -Path "").problem -ceq "") "no file named: nothing is marked and nothing is wrong"
-[System.IO.File]::WriteAllText($told, '{"schemaVersion":1,"rung":[{"question":2,"message":"23","at":"2026-10-07T12:00:00Z"},{"question":3,"message":24,"at":"x"},{"question":4,"message":"../x"},{"question":5},7,null]}', $utf8)
+[System.IO.File]::WriteAllText($told, '{"schemaVersion":1,"rung":[{"question":2,"message":"23","at":"2026-10-07T12:00:00Z"},{"question":3,"message":24,"at":"x"},null]}', $utf8)
 $good = Read-HordeDecisionWindowToldMarks -Path $told
-Check ($good.problem -ceq "" -and (@($good.told.Keys | Sort-Object) -join ",") -ceq "23,24") "the agreed shape: a message's record number as text or as a number is marked; an entry that is neither is passed over"
+Check ($good.problem -ceq "" -and (@($good.told.Keys | Sort-Object) -join ",") -ceq "23,24") "the agreed shape: a message's record number as text or as a number is marked"
+# ONE READER for the told record, decisions/Notify.ps1's: an entry it cannot read refuses the whole
+# record there, because notify must never ring again for a message whose entry it skipped; the window
+# reads it the same way, marks nothing and says why.
+[System.IO.File]::WriteAllText($told, '{"schemaVersion":1,"rung":[{"question":2,"message":"23","at":"2026-10-07T12:00:00Z"},{"question":4,"message":"../x"}]}', $utf8)
+$junk = Read-HordeDecisionWindowToldMarks -Path $told
+Check (@($junk.told.Keys).Count -eq 0 -and $junk.problem -clike "*not a record number*") ("an entry that is no record number marks nothing at all, and says why (" + $junk.problem + ")")
 [System.IO.File]::WriteAllText($told, '{"schemaVersion":1,"rung":[]}', $utf8)
 Check ((Read-HordeDecisionWindowToldMarks -Path $told).problem -ceq "" -and @((Read-HordeDecisionWindowToldMarks -Path $told).told.Keys).Count -eq 0) "an empty list, as the file is first made, marks nothing and is not a problem"
 foreach ($bad in @(@{ text = "not json {"; says = "*could not be read as JSON*" }, @{ text = '{"schemaVersion":2,"rung":[]}'; says = "*is not version 1*" }, @{ text = '{"schemaVersion":1}'; says = "*is not version 1 with a list named rung*" }, @{ text = '[1,2]'; says = "*is not version 1*" })) {
