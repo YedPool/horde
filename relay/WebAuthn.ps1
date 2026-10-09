@@ -21,7 +21,7 @@
 #
 # WHAT IS REPORTED, NOT JUDGED: the signature counter. Synced passkeys report 0 for ever (design Q11), so
 # a counter cannot be the replay defence; the envelope's sequence and nonce are (the journal's hook,
-# relay/Envelope.ps1). Credential ids and COSE key import belong to pairing, a later pull request.
+# relay/Envelope.ps1). Credential ids and COSE key import belong to pairing: relay/Registration.ps1.
 #
 # Never throws for a bad assertion: the answer is { ok; reason; signCount; userVerified;
 # backupEligible; backupState }, ok $false with the first reason found.
@@ -55,8 +55,9 @@ function New-HordeRelayWebAuthnAnswer {
 }
 
 function Get-HordeRelayClientDataFindings {
-    # The first thing wrong with clientDataJSON, or "" when it is right.
-    param([byte[]]$ClientDataJson, [byte[]]$Challenge, [string[]]$Origins)
+    # The first thing wrong with clientDataJSON, or "" when it is right. Type is webauthn.get for an
+    # assertion and webauthn.create for a registration (relay/Registration.ps1); the rest is the same.
+    param([byte[]]$ClientDataJson, [byte[]]$Challenge, [string[]]$Origins, [string]$Type = "webauthn.get")
     $limits = Get-HordeRelayWebAuthnLimits
     if ($ClientDataJson.Length -gt $limits.clientDataJsonBytes) { return ("clientDataJSON is larger than " + $limits.clientDataJsonBytes + " bytes") }
     $strictUtf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false, $true
@@ -71,7 +72,7 @@ function Get-HordeRelayClientDataFindings {
     try { $cd = ConvertFrom-Json -InputObject $text } catch { return "clientDataJSON is not JSON" }
     if ($cd -isnot [System.Management.Automation.PSCustomObject]) { return "clientDataJSON is not a JSON object" }
     $names = @($cd.PSObject.Properties | ForEach-Object { $_.Name })
-    if ($names -cnotcontains "type" -or $cd.type -isnot [string] -or $cd.type -cne "webauthn.get") { return "clientDataJSON type is not webauthn.get" }
+    if ($names -cnotcontains "type" -or $cd.type -isnot [string] -or $cd.type -cne $Type) { return ("clientDataJSON type is not " + $Type) }
     if ($names -cnotcontains "challenge" -or $cd.challenge -isnot [string] -or $cd.challenge -cne (ConvertTo-HordeRelayBase64Url -Bytes $Challenge)) { return "the challenge in clientDataJSON is not the one expected" }
     if ($names -cnotcontains "origin" -or $cd.origin -isnot [string] -or $Origins -cnotcontains $cd.origin) { return "the origin in clientDataJSON is not one expected" }
     if ($names -ccontains "crossOrigin" -and -not ($cd.crossOrigin -is [bool] -and $cd.crossOrigin -eq $false)) { return "clientDataJSON says crossOrigin: the page was framed by another site" }
