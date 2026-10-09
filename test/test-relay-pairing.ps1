@@ -155,7 +155,7 @@ try {
     Check ((Get-HordeRelayMachineIdentity -HordeHome $hd).reason.Contains("canonical")) "an identity record with a space in it is refused"
     [System.IO.File]::WriteAllText($rec, $orig, $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hd "relay\identity\notes.txt"), "x", $utf8)
-    Check ((Get-HordeRelayMachineIdentity -HordeHome $hd).reason.Contains("notes.txt")) "a file the folder does not keep refuses the identity"
+    Check ((Get-HordeRelayMachineIdentity -HordeHome $hd).reason.Contains("'notes.txt', which is not a record this folder keeps")) "a file the folder does not keep refuses the identity, by its name"
     Remove-Item -LiteralPath (Join-Path $hd "relay\identity\notes.txt")
     [System.IO.File]::WriteAllText((Join-Path $hd "relay\identity\writing-0123456789abcdef0123456789abcdef.part"), "half", $utf8)
     Check ((Get-HordeRelayMachineIdentity -HordeHome $hd).state -ceq "known") "a dead writer's temporary file is passed over"
