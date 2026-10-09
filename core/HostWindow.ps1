@@ -15,6 +15,13 @@
 #         the reason, in every other case - a seat that is not this host's, a terminal that is not
 #         running, a pane it does not list, two windows that cannot be told apart.
 #
+#   Settings  param($HordeHome) -> a core/ModuleSettings.ps1 answer { state; values; findings; path }
+#         OPTIONAL, for a finder that reads a settings file of its own. A caller that must refuse to
+#         start on a refused file (decisions/Window.ps1, before it opens anything) cannot name that
+#         file, since its name names the terminal; it asks Get-HordeSessionWindowSettingsState, and is
+#         told the finders' refusals in their own words. Without it a refused finder file only made the
+#         companion window stand free with the finder's reason, on settings nobody chose.
+#
 # A FINDER NEVER GUESSES, AND NEITHER DOES THIS FILE. Each finder is asked; a known answer whose handle
 # is not a whole number above zero is not an answer; the first proven window is the one; and when none
 # is, the caller is told every finder's reason. A finder only READS: nothing here, and nothing a
@@ -27,10 +34,10 @@ if ($null -eq (Get-Variable -Name HordeHostWindowFinders -Scope Script -ErrorAct
 
 function Register-HordeHostWindowFinder {
     # Called by hosts/<name>/Window.ps1 when it is dot-sourced. Re-registering a name replaces it.
-    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][scriptblock]$Find)
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][scriptblock]$Find, [scriptblock]$Settings = $null)
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a host name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($f in @($script:HordeHostWindowFinders)) { if ($f.name -ceq $Name) { $script:HordeHostWindowFinders.Remove($f) } }
-    [void]$script:HordeHostWindowFinders.Add([pscustomobject]@{ name = $Name; find = $Find })
+    [void]$script:HordeHostWindowFinders.Add([pscustomobject]@{ name = $Name; find = $Find; settings = $Settings })
 }
 
 function Get-HordeHostWindowFinderFiles {
@@ -60,4 +67,37 @@ function Find-HordeSessionWindow {
         return (New-HordeKnown -Value ([pscustomobject]@{ handle = [long]$handle; host = $finder.name; detail = "$($answer.value.detail)" }))
     }
     return (New-HordeUnknown -Reason ($said -join "; "))
+}
+
+function Get-HordeSessionWindowSettingsState {
+    # The loaded finders' own settings under -HordeHome, as one answer { state; findings; files }:
+    # refused when any finder's are, with every finding of each in the order the finders stand (the
+    # settings module's sentences, which name the file and the key; a reader that fails or does not
+    # answer is said under its host's name); otherwise read when any finder read a file, defaults when
+    # none did, and none when no loaded finder declares settings. files is every path a finder said it
+    # reads. Only READS: nothing is made, and no terminal is asked.
+    param([string]$HordeHome = "")
+    $found = New-Object System.Collections.ArrayList
+    $files = New-Object System.Collections.ArrayList
+    $states = New-Object System.Collections.ArrayList
+    foreach ($finder in @($script:HordeHostWindowFinders)) {
+        if ($null -eq $finder.settings) { continue }
+        $given = $null
+        try { $given = & $finder.settings $HordeHome } catch { [void]$states.Add("refused"); [void]$found.Add($finder.name + ": reading its finder's settings failed: " + $_.Exception.Message); continue }
+        $given = @($given) | Select-Object -Last 1
+        $state = ""
+        if ($given -is [System.Management.Automation.PSCustomObject] -and $null -ne $given.PSObject.Properties["state"]) { $state = "" + $given.state }
+        if (@("defaults", "read", "refused") -cnotcontains $state) { [void]$states.Add("refused"); [void]$found.Add($finder.name + ": its finder's settings did not answer"); continue }
+        [void]$states.Add($state)
+        if ($null -ne $given.PSObject.Properties["path"] -and "$($given.path)" -ne "") { [void]$files.Add("" + $given.path) }
+        if ($state -ceq "refused") {
+            $said = @()
+            if ($null -ne $given.PSObject.Properties["findings"]) { $said = @($given.findings | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" }) }
+            if ($said.Count -eq 0) { $said = @($finder.name + ": its finder's settings are refused, and say no reason") }
+            foreach ($f in $said) { [void]$found.Add($f) }
+        }
+    }
+    $overall = "none"
+    if ($states -ccontains "refused") { $overall = "refused" } elseif ($states -ccontains "read") { $overall = "read" } elseif ($states.Count -gt 0) { $overall = "defaults" }
+    return [pscustomobject]@{ state = $overall; findings = [string[]]@($found); files = [string[]]@($files) }
 }

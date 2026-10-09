@@ -167,6 +167,12 @@
         @{ Name = "the-retry-wait-is-not-waited"
            Find = 'if ($try -gt 1) { Wait-HordeWeztermWindowMoment -Milliseconds $Values.retryWaitMs -Wait $Wait }'
            Replace = '' }
+        @{ Name = "the-finders-settings-are-not-told-to-the-port"
+           Find = ' -Settings { param($HordeHome) Get-HordeWeztermWindowSettings -HordeHome $HordeHome }'
+           Replace = '' }
+        @{ Name = "the-port-is-told-the-settings-of-the-wrong-home"
+           Find = '{ param($HordeHome) Get-HordeWeztermWindowSettings -HordeHome $HordeHome }'
+           Replace = '{ param($HordeHome) Get-HordeWeztermWindowSettings }' }
         @{ Name = "a-refused-settings-file-is-read-past"
            Find = 'if ("" + $Settings.state -cne "defaults" -and "" + $Settings.state -cne "read") {'
            Replace = 'if ($false) {' }

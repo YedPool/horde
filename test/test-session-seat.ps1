@@ -189,6 +189,44 @@ foreach ($empty in @($null, [pscustomobject]@{ pane = ""; instance = "zorb-insta
 Check ($script:asked.Count -eq 0) "and no finder is asked about it"
 Check (Throws { Register-HordeHostWindowFinder -Name "Not A Host" -Find { } } "a host name is lowercase") "a finder registers under a host's folder name"
 
+Write-Host ""
+Write-Host "--- the finders' own settings: asked through the port, so a caller can refuse before it starts ---" -ForegroundColor Cyan
+# A settings answer as core/ModuleSettings.ps1 gives one: { state; values; findings; path }.
+function SettingsAnswer { param([string]$State, [string[]]$Findings = @(), [string]$Path = "")
+    return [pscustomobject]@{ state = $State; values = $null; findings = [string[]]@($Findings); path = $Path } }
+$script:HordeHostWindowFinders.Clear()
+Register-HordeHostWindowFinder -Name "alpha" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") }
+$noSettings = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($noSettings.state -ceq "none" -and @($noSettings.findings).Count -eq 0 -and @($noSettings.files).Count -eq 0) ("a finder that declares no settings: none, nothing found, no file (" + $noSettings.state + ")")
+$script:homesAsked = New-Object System.Collections.ArrayList
+Register-HordeHostWindowFinder -Name "beta" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) [void]$script:homesAsked.Add($HordeHome); return (SettingsAnswer "defaults" @() ($HordeHome + "\settings\beta-window.json")) }
+$defaultsOnly = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($defaultsOnly.state -ceq "defaults" -and @($defaultsOnly.findings).Count -eq 0 -and (@($defaultsOnly.files) -join ",") -ceq "C:\h\settings\beta-window.json") ("a finder whose settings are the defaults: defaults, with the file it would read (" + $defaultsOnly.state + ")")
+Check (($script:homesAsked -join ",") -ceq "C:\h") "the finder is handed the home the caller named"
+Register-HordeHostWindowFinder -Name "gamma" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) "noise on the way"; return (SettingsAnswer "read" @() ($HordeHome + "\settings\gamma-window.json")) }
+$oneRead = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($oneRead.state -ceq "read" -and @($oneRead.findings).Count -eq 0 -and (@($oneRead.files) -join ",") -ceq "C:\h\settings\beta-window.json,C:\h\settings\gamma-window.json") ("one finder read a file and the other has the defaults: read, with both files in the order the finders stand (" + $oneRead.state + ")")
+Register-HordeHostWindowFinder -Name "gamma" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) return (SettingsAnswer "refused" @("the settings file 'C:\h\settings\gamma-window.json' of gamma-window is refused: its key 'attempts' must be 1 to 10", "the settings file 'C:\h\settings\gamma-window.json' of gamma-window is refused: it has the key 'retries'") ($HordeHome + "\settings\gamma-window.json")) }
+$refusedOne = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($refusedOne.state -ceq "refused" -and @($refusedOne.findings).Count -eq 2 -and $refusedOne.findings[0] -clike "the settings file 'C:\h\settings\gamma-window.json' of gamma-window is refused: its key 'attempts'*" -and $refusedOne.findings[1] -clike "*'retries'") ("a finder whose file is refused refuses, with every finding as its settings said it (" + ($refusedOne.findings -join " / ") + ")")
+Check ((@($refusedOne.files) -join ",") -ceq "C:\h\settings\beta-window.json,C:\h\settings\gamma-window.json") "and the files are still every finder's"
+foreach ($bad in @(
+    @{ settings = { param($HordeHome) throw "the declaration is broken" }; says = "gamma: reading its finder's settings failed: the declaration is broken"; what = "a settings reader that throws" }
+    @{ settings = { param($HordeHome) return "defaults" }; says = "gamma: its finder's settings did not answer"; what = "a settings reader that answers with text" }
+    @{ settings = { param($HordeHome) return (SettingsAnswer "maybe") }; says = "gamma: its finder's settings did not answer"; what = "an answer whose state is none of defaults, read or refused" }
+    @{ settings = { param($HordeHome) return (SettingsAnswer "refused") }; says = "gamma: its finder's settings are refused, and say no reason"; what = "a refusal with no finding" }
+)) {
+    Register-HordeHostWindowFinder -Name "gamma" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings $bad.settings
+    $r = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+    Check ($r.state -ceq "refused" -and (@($r.findings) -join "|") -ceq $bad.says) ($bad.what + " refuses, under its host's name (" + (@($r.findings) -join "|") + ")")
+}
+Register-HordeHostWindowFinder -Name "beta" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) return (SettingsAnswer "refused" @("the settings file 'C:\h\settings\beta-window.json' of beta-window is refused: it is not UTF-8 text")) }
+$both = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($both.state -ceq "refused" -and @($both.findings).Count -eq 2 -and $both.findings[0] -ceq "gamma: its finder's settings are refused, and say no reason" -and $both.findings[1] -clike "*beta-window*") "two refused finders: every finding of each, in the order the finders stand (beta, registered again, stands last)"
+$script:HordeHostWindowFinders.Clear()
+$empty = Get-HordeSessionWindowSettingsState -HordeHome "C:\h"
+Check ($empty.state -ceq "none" -and @($empty.findings).Count -eq 0) "with no finder loaded there are no settings to refuse"
+
 } finally {
     if ((Split-Path -Leaf $work) -match '\Ahorde-seat-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
 }
