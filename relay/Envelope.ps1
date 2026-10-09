@@ -13,13 +13,26 @@
 # HPKE base mode authenticates nobody, so the signature is what says who sent it; the AEAD's
 # additional data is what ties the header to the body and to every wrapped key.
 #
-# ONE SPELLING PER ENVELOPE. The wire text is the canonical form written here - members in schema order,
-# no whitespace, strings from restricted ASCII alphabets, numbers as plain integers - and
+# ONE SPELLING PER SIGNED CONTENT. The wire text is the canonical form written here - members in schema
+# order, no whitespace, strings from restricted ASCII alphabets, numbers as plain integers - and
 # Read-HordeRelayEnvelope rebuilds that text from what it parsed and refuses the envelope unless the two
 # are identical. That one rule refuses repeated members (ConvertFrom-Json keeps the last silently),
 # members in another order, unknown members, escapes, whitespace and number spellings like 1.0 or 1e0,
-# so two parties can never read one envelope two ways. The PWA (a later pull request) writes the same
-# text; the strings below that build it are the whole specification.
+# so two parties can never read the header, recipients and ciphertext two ways. The PWA (a later pull
+# request) writes the same text; the strings below that build it are the whole specification.
+#
+# THE SIGNATURE IS NOT PART OF AN ENVELOPE'S IDENTITY (review of 3bf4657, finding 3). An ES256
+# signature has one spelling (low-S, relay/P256.ps1), but a passkey's does not: an authenticator emits
+# either half of s, and could sign the same challenge again with other clientDataJSON. So two texts
+# can carry the same signed content under different signatures. What identifies an envelope - to the
+# journal, to a channel, to anything that dedupes - is Get-HordeRelayReplayKey (from, channel, seq,
+# nonce) and nothing else: never a hash of the wire text.
+#
+# NOT KEY-COMMITTING (review of 3bf4657, finding 5). AES-GCM does not bind a ciphertext to one key: a
+# sender can build a ciphertext that opens under two content keys to two different bodies, and wrap a
+# different content key for each recipient. The signature covers the ciphertext and every wrapped key,
+# so only a TRUSTED sender can do this - but it can. Nothing may rely on "every recipient of one
+# envelope saw the same body"; a channel that needs that must compare what its recipients opened.
 #
 # STRICT BEFORE ANYTHING ELSE. A reader refuses, in this order: text over the size cap, text that is not
 # ASCII, text that is not JSON, an unknown version (by name: "unknown envelope version 2"), anything the

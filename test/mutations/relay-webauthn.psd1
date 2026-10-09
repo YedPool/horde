@@ -56,8 +56,11 @@
            Find = 'if ($ad.Length -lt 37) {'
            Replace = 'if ($false) {' }
         @{ Name = "signature-not-verified"
-           Find = 'if (-not (Test-HordeRelayEs256Signature -Public $Public -Bytes $signed -Signature $p1363)) {'
+           Find = 'if (-not (Test-HordeRelayEs256Signature -Public $Public -Bytes $signed -Signature $p1363 -AllowHighS)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "high-s-refused-for-passkeys"
+           Find = '-Signature $p1363 -AllowHighS)) {'
+           Replace = '-Signature $p1363)) {' }
         @{ Name = "client-data-not-hashed"
            Find = '$signed = Join-HordeRelayBytes -Parts @($ad, (Get-HordeRelaySha256 -Bytes $ClientDataJson))'
            Replace = '$signed = Join-HordeRelayBytes -Parts @($ad, $ClientDataJson)' }

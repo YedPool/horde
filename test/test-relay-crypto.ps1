@@ -140,8 +140,28 @@ $s2 = [byte[]]$sig.Clone(); $s2[10] = $s2[10] -bxor 1
 Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $s2)) "not with a changed signature"
 $other = ConvertTo-HordeRelayP256Public -Key (New-HordeRelayP256Key -Use "ecdsa")
 Check (-not (Test-HordeRelayEs256Signature -Public $other -Bytes $data -Signature $sig)) "not under another key"
-Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature (Unhex "00"))) "a signature of the wrong length is false, not an error"
+Check (-not (Throws { Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature (Unhex "00") }) -and -not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature (Unhex "00"))) "a signature of the wrong length is false, not an error"
 Check (-not (Test-HordeRelayEs256Signature -Public $offCurve -Bytes $data -Signature $sig)) "a bad public key is false, not an error"
+# LOW-S (review of 3bf4657, finding 3): (r, s) and (r, n - s) both verify under plain ECDSA, so one
+# signed envelope had two spellings. Signing gives s <= n/2 and verifying refuses s > n/2, except for
+# WebAuthn, whose authenticators emit either half.
+Add-Type -AssemblyName System.Numerics
+$nOrder = [System.Numerics.BigInteger]::Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", "AllowHexSpecifier")
+$halfN = [System.Numerics.BigInteger]::Divide($nOrder, 2)
+function Get-S { param([byte[]]$Sig) return [System.Numerics.BigInteger]::Parse("0" + (Hex ([byte[]]$Sig[32..63])), "AllowHexSpecifier") }
+function Get-Twin { param([byte[]]$Sig) $h = ($nOrder - (Get-S $Sig)).ToString("x64"); return ,(Join-HordeRelayBytes -Parts @(([byte[]]$Sig[0..31]), (Unhex $h.Substring($h.Length - 64)))) }
+$highSeen = 0; $badSeen = 0
+foreach ($i in 1..40) {
+    $sg = New-HordeRelayEs256Signature -Key $signer -Bytes $data
+    if ((Get-S $sg) -gt $halfN) { $highSeen++ }
+    if (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $sg)) { $badSeen++ }
+}
+Check ($highSeen -eq 0) ("40 signatures, every s at most n/2 (" + $highSeen + " were not)")
+Check ($badSeen -eq 0) ("and every one of the 40 still verifies: the normalised half is the right n - s (" + $badSeen + " did not)")
+$twin = Get-Twin $sig
+Check ((Get-S $twin) -gt $halfN -and (Hex $twin) -cne (Hex $sig)) "CONTROL: the twin is the same signature with s replaced by n - s"
+Check (-not (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $twin)) "the high-S twin is refused"
+Check (Test-HordeRelayEs256Signature -Public $signerPub -Bytes $data -Signature $twin -AllowHighS) "CONTROL: with -AllowHighS (for WebAuthn) the twin verifies, so the refusal is the low-S rule"
 # DER built by hand from known r and s, so the converter is checked against the encoding, not itself.
 $r = ("00" * 31) + "7f"; $sv = "80" + ("11" * 31)
 $derOk = Unhex ("3026" + "0201" + "7f" + "0221" + "00" + $sv)

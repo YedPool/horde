@@ -116,6 +116,8 @@ function Test-HordeRelayWebAuthnAssertion {
     try { $p1363 = ConvertFrom-HordeRelayDerSignature -Der $Signature }
     catch { return (New-HordeRelayWebAuthnAnswer -Reason ("the signature is not minimal DER: " + $_.Exception.Message) -Flags $flags) }
     $signed = Join-HordeRelayBytes -Parts @($ad, (Get-HordeRelaySha256 -Bytes $ClientDataJson))
-    if (-not (Test-HordeRelayEs256Signature -Public $Public -Bytes $signed -Signature $p1363)) { return (New-HordeRelayWebAuthnAnswer -Reason "the ES256 signature does not verify under the pinned credential" -Flags $flags) }
+    # -AllowHighS: an authenticator emits either half of s (relay/P256.ps1, LOW-S), so a passkey
+    # signature can have two spellings; it is not part of an envelope's identity (relay/Envelope.ps1).
+    if (-not (Test-HordeRelayEs256Signature -Public $Public -Bytes $signed -Signature $p1363 -AllowHighS)) { return (New-HordeRelayWebAuthnAnswer -Reason "the ES256 signature does not verify under the pinned credential" -Flags $flags) }
     return (New-HordeRelayWebAuthnAnswer -Reason "" -SignCount $count -Flags $flags)
 }

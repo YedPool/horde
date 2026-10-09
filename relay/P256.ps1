@@ -24,6 +24,12 @@
 # authenticators return DER instead; ConvertFrom-HordeRelayDerSignature converts, and refuses every
 # encoding that is not the one minimal DER form.
 #
+# LOW-S. Plain ECDSA accepts (r, s) and (r, n - s) alike, so one signed message has two signatures
+# (review of 3bf4657: a high-S twin of a machine's envelope verified). An ES256 signature made here is
+# normalised to s <= n/2, and one checked here is refused when s > n/2 - except with -AllowHighS, which
+# relay/WebAuthn.ps1 passes: an authenticator emits either half and nobody can make it choose. Measured
+# 2026-10-09: 21 of 40 .NET signatures came out high-S before normalising.
+#
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path $PSScriptRoot "Bytes.ps1")
@@ -122,19 +128,64 @@ function Invoke-HordeRelayEcdhExtract {
     return ,$prk
 }
 
+function Get-HordeRelayP256Order {
+    # n, the order of P-256's base point, and floor(n / 2), big-endian (FIPS 186-4, D.1.2.3).
+    return [pscustomobject]@{
+        n = (ConvertFrom-HordeRelayHex -Text "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+        half = (ConvertFrom-HordeRelayHex -Text "7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8")
+    }
+}
+
+function Compare-HordeRelayUInt256 {
+    # -1, 0 or 1: two 32-byte big-endian numbers compared.
+    param([byte[]]$Left, [byte[]]$Right)
+    for ($i = 0; $i -lt 32; $i++) {
+        if ($Left[$i] -ne $Right[$i]) { return $(if ($Left[$i] -gt $Right[$i]) { 1 } else { -1 }) }
+    }
+    return 0
+}
+
+function Get-HordeRelaySignatureS {
+    param([byte[]]$Signature)
+    $s = New-Object byte[] 32
+    [System.Array]::Copy($Signature, 32, $s, 0, 32)
+    return ,$s
+}
+
+function ConvertTo-HordeRelayLowS {
+    # The same signature with s <= n/2: (r, n - s) when s is in the upper half, else unchanged.
+    param([Parameter(Mandatory = $true)][byte[]]$Signature)
+    $order = Get-HordeRelayP256Order
+    $s = Get-HordeRelaySignatureS -Signature $Signature
+    if ((Compare-HordeRelayUInt256 -Left $s -Right $order.half) -le 0) { return ,$Signature }
+    $low = New-Object byte[] 32
+    $borrow = 0
+    for ($i = 31; $i -ge 0; $i--) {
+        $d = [int]$order.n[$i] - [int]$s[$i] - $borrow
+        if ($d -lt 0) { $d += 256; $borrow = 1 } else { $borrow = 0 }
+        $low[$i] = [byte]$d
+    }
+    $out = New-Object byte[] 64
+    [System.Array]::Copy($Signature, 0, $out, 0, 32)
+    [System.Array]::Copy($low, 0, $out, 32, 32)
+    return ,$out
+}
+
 function New-HordeRelayEs256Signature {
-    # ECDSA P-256 with SHA-256 over Bytes: 64 bytes, r || s.
+    # ECDSA P-256 with SHA-256 over Bytes: 64 bytes, r || s, with s <= n/2 (see LOW-S above).
     param([Parameter(Mandatory = $true)]$Key, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
     $sig = $Key.SignData($Bytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256)
     if ($sig.Length -ne 64) { throw "the signature is not 64 bytes: the key is not a P-256 key" }
-    return ,$sig
+    return ,(ConvertTo-HordeRelayLowS -Signature $sig)
 }
 
 function Test-HordeRelayEs256Signature {
     # Does Signature (64 bytes, r || s) verify over Bytes under the 65-byte public point? Never throws
-    # for a bad signature or a bad key: either is $false.
-    param([AllowEmptyCollection()][byte[]]$Public, [AllowEmptyCollection()][byte[]]$Bytes, [AllowEmptyCollection()][byte[]]$Signature)
+    # for a bad signature or a bad key: either is $false. A high-S signature is $false unless
+    # -AllowHighS (WebAuthn only; see LOW-S above).
+    param([AllowEmptyCollection()][byte[]]$Public, [AllowEmptyCollection()][byte[]]$Bytes, [AllowEmptyCollection()][byte[]]$Signature, [switch]$AllowHighS)
     if ($null -eq $Public -or $null -eq $Bytes -or $null -eq $Signature -or $Signature.Length -ne 64) { return $false }
+    if (-not $AllowHighS -and (Compare-HordeRelayUInt256 -Left (Get-HordeRelaySignatureS -Signature $Signature) -Right (Get-HordeRelayP256Order).half) -gt 0) { return $false }
     try { $pub = ConvertFrom-HordeRelayP256Public -Bytes $Public -Use "ecdsa" } catch { return $false }
     try { return [bool]$pub.VerifyData($Bytes, $Signature, [System.Security.Cryptography.HashAlgorithmName]::SHA256) }
     catch { return $false }

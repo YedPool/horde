@@ -277,6 +277,17 @@ Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -Re
 Check (Throws { Unprotect-HordeRelayEnvelope -Envelope $rv -Senders $senders -RecipientKeys $keys -Replay (Fresh -Header $rv.header) -Channel "decisions" }) "the expected kind cannot be left out"
 
 Write-Host ""
+Write-Host "--- a high-S twin of a machine's signature is refused (one ES256 spelling) ---" -ForegroundColor Cyan
+Add-Type -AssemblyName System.Numerics
+$nOrder = [System.Numerics.BigInteger]::Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", "AllowHexSpecifier")
+$sBig = [System.Numerics.BigInteger]::Parse("0" + (ConvertTo-HordeRelayHex -Bytes ([byte[]]$read.sig.value[32..63])), "AllowHexSpecifier")
+$twinHex = ($nOrder - $sBig).ToString("x64")
+$twinHex = $twinHex.Substring($twinHex.Length - 64)
+$twin = Join-HordeRelayBytes -Parts @(([byte[]]$read.sig.value[0..31]), (ConvertFrom-HordeRelayHex -Text $twinHex))
+$o = Open-All -Text (Replace-Once -Text $text -Old $read.sig.valueText -New (ConvertTo-HordeRelayBase64Url -Bytes $twin))
+Check ($o.stage -ceq "test" -and $o.reason.Contains("does not verify")) ("the same envelope with s replaced by n - s is refused (" + $o.stage + " " + $o.reason + ")")
+
+Write-Host ""
 Write-Host "--- strict reading: one spelling, version 1, within the caps ---" -ForegroundColor Cyan
 function Refused {
     param([string]$Text, [string]$Want, [string]$What)

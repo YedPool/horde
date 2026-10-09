@@ -6,6 +6,15 @@
     Suite  = "test\test-relay-crypto.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
+        @{ Name = "low-s-not-normalised"
+           Find = 'return ,(ConvertTo-HordeRelayLowS -Signature $sig)'
+           Replace = 'return ,$sig' }
+        @{ Name = "high-s-accepted"
+           Find = 'if (-not $AllowHighS -and (Compare-HordeRelayUInt256'
+           Replace = 'if ($false -and (Compare-HordeRelayUInt256' }
+        @{ Name = "low-s-without-borrow"
+           Find = '$d = [int]$order.n[$i] - [int]$s[$i] - $borrow'
+           Replace = '$d = [int]$order.n[$i] - [int]$s[$i]' }
         @{ Name = "compressed-point-read"
            Find = 'if ($Bytes.Length -ne 65 -or $Bytes[0] -ne 4)'
            Replace = 'if ($Bytes.Length -ne 65)' }
@@ -32,9 +41,7 @@
            Replace = '' }
         @{ Name = "verify-ignores-length"
            Find = '-or $Signature.Length -ne 64) { return $false }'
-           Replace = ') { return $false }'
-           Expect = "survives"
-           Reason = "an equivalent mutant: VerifyData answers false for a signature of any other length on both runtimes (measured 2026-10-09 by this mutant), so the length check only says early what the verify says anyway" }
+           Replace = ') { return $false }' }
         @{ Name = "key-id-from-whole-hash"
            Find = '[System.Array]::Copy($h, 0, $first, 0, 16)'
            Replace = '[System.Array]::Copy($h, 16, $first, 0, 16)' }

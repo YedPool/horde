@@ -80,4 +80,19 @@ Check (-not $r.ok -and $r.reason.Contains("larger than")) ("clientDataJSON over 
 $r = Test-HordeRelayWebAuthnAssertion -Public $pub -AuthenticatorData $ad -ClientDataJson $cdj -Signature (Get-HordeRelayRandomBytes -Count 64) -Challenge $ch -RpId $fx.rpId -Origins @($fx.origin) -RequireUserVerification $true
 Check (-not $r.ok -and $r.reason.Contains("DER")) "a raw 64-byte signature where DER belongs is refused"
 
+Write-Host ""
+Write-Host "--- high-S is accepted for WebAuthn, by design ---" -ForegroundColor Cyan
+# Authenticators emit either half of s and the founder cannot choose, so a passkey signature is not
+# part of an envelope's identity (relay/Envelope.ps1): its high-S twin must verify too.
+Add-Type -AssemblyName System.Numerics
+$nOrder = [System.Numerics.BigInteger]::Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", "AllowHexSpecifier")
+function DerInt { param([byte[]]$V) $i = 0; while ($i -lt 31 -and $V[$i] -eq 0) { $i++ }; $b = New-Object byte[] (32 - $i); [System.Array]::Copy($V, $i, $b, 0, $b.Length); if ($b[0] -band 0x80) { $b = Join-HordeRelayBytes -Parts @([byte[]]@(0), $b) }; return ,(Join-HordeRelayBytes -Parts @([byte[]]@(2, $b.Length), $b)) }
+$p = ConvertFrom-HordeRelayDerSignature -Der $sig
+$sHex = ($nOrder - [System.Numerics.BigInteger]::Parse("0" + (ConvertTo-HordeRelayHex -Bytes ([byte[]]$p[32..63])), "AllowHexSpecifier")).ToString("x64")
+$rPart = DerInt ([byte[]]$p[0..31]); $sPart = DerInt (ConvertFrom-HordeRelayHex -Text $sHex.Substring($sHex.Length - 64))
+$twinDer = Join-HordeRelayBytes -Parts @([byte[]]@(0x30, ($rPart.Length + $sPart.Length)), $rPart, $sPart)
+Check ((ConvertTo-HordeRelayHex -Bytes $twinDer) -cne (ConvertTo-HordeRelayHex -Bytes $sig)) "CONTROL: the twin DER differs from the fixture's"
+$r = Test-HordeRelayWebAuthnAssertion -Public $pub -AuthenticatorData $ad -ClientDataJson $cdj -Signature $twinDer -Challenge $ch -RpId $fx.rpId -Origins @($fx.origin) -RequireUserVerification $true
+Check ($r.ok) ("the high-S twin of a valid assertion is accepted (" + $r.reason + ")")
+
 Complete-HordeSuite -Success "a WebAuthn assertion is accepted exactly when its type, challenge, origin, relying party, flags and ES256 signature are all right"
