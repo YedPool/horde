@@ -430,19 +430,19 @@ function Get-HordeExecAddTypeFindings {
     foreach ($c in @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ieq "Add-Type" }, $true))) {
         $at = "line " + $c.Extent.StartLineNumber + ": "
         $els = @($c.CommandElements)
-        $ok = ($els.Count -eq 3 -and $els[1] -is [System.Management.Automation.Language.CommandParameterAst] -and $els[1].ParameterName -ceq "Path" -and $null -eq $els[1].Argument -and
+        $formOk = ($els.Count -eq 3 -and $els[1] -is [System.Management.Automation.Language.CommandParameterAst] -and $els[1].ParameterName -ceq "Path" -and $null -eq $els[1].Argument -and
             $els[2] -is [System.Management.Automation.Language.ParenExpressionAst])
-        if ($ok) {
+        if ($formOk) {
             $inner = $els[2].Pipeline
-            $ok = ($inner -is [System.Management.Automation.Language.PipelineAst] -and $inner.PipelineElements.Count -eq 1)
-            if ($ok) {
+            $formOk = ($inner -is [System.Management.Automation.Language.PipelineAst] -and $inner.PipelineElements.Count -eq 1)
+            if ($formOk) {
                 $join = $inner.PipelineElements[0]
-                $ok = ($join -is [System.Management.Automation.Language.CommandAst] -and $join.GetCommandName() -ceq "Join-Path" -and $join.CommandElements.Count -eq 3 -and
+                $formOk = ($join -is [System.Management.Automation.Language.CommandAst] -and $join.GetCommandName() -ceq "Join-Path" -and $join.CommandElements.Count -eq 3 -and
                     $join.CommandElements[1].Extent.Text -ceq '$PSScriptRoot' -and $join.CommandElements[2] -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
                     [regex]::IsMatch($join.CommandElements[2].Value, '\A[A-Za-z][A-Za-z0-9]*\.cs\z'))
             }
         }
-        if (-not $ok) { [void]$out.Add($at + "Add-Type other than -Path (Join-Path `$PSScriptRoot `"<Name>.cs`"): only a literal neighbour C# file may be compiled") }
+        if (-not $formOk) { [void]$out.Add($at + "Add-Type other than -Path (Join-Path `$PSScriptRoot `"<Name>.cs`"): only a literal neighbour C# file may be compiled") }
     }
     return @($out)
 }
