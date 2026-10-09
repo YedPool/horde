@@ -96,22 +96,29 @@ $cases = [ordered]@{
         $c = Connect-Fixture $R $State.options
         $mb = "conf/realtime"
         $timeout = [Math]::Min(15000, $R.limits.maxWatchMs)
-        $ps = New-Fresh -Name $R.name -Options $State.options -Arguments @($mb) -Body {
-            param($Conn, $Mailbox)
-            Start-Sleep -Milliseconds 400
-            $p = Send-HordeRelayItem -Connection $Conn -Mailbox $Mailbox -Text "realtime-1"
-            return @($p.state, [datetime]::UtcNow.Ticks)
+        # THREE ROUNDS, EVERY ONE WITHIN A SECOND: where the put lands in a slow relay's poll depends on how
+        # long the other runspace took to start, so one round is luck. A relay polling every 1.5 s passed
+        # a single round and failed the next run (mutation runs, 2026-10-09); every round must hold.
+        $ok = $true
+        for ($round = 1; $round -le 3; $round++) {
+            $ps = New-Fresh -Name $R.name -Options $State.options -Arguments @($mb, $round) -Body {
+                param($Conn, $Mailbox, $Round)
+                Start-Sleep -Milliseconds 400
+                $p = Send-HordeRelayItem -Connection $Conn -Mailbox $Mailbox -Text ("realtime-" + $Round)
+                return @($p.state, [datetime]::UtcNow.Ticks)
+            }
+            try {
+                $h = $ps.BeginInvoke()
+                $w = Wait-HordeRelayItems -Connection $c -Mailbox $mb -Since ($round - 1) -TimeoutMs $timeout
+                $back = [datetime]::UtcNow.Ticks
+                $out = @($ps.EndInvoke($h) | ForEach-Object { "$_" })
+            } finally { $ps.Dispose() }
+            if ($out.Count -ne 2 -or $out[0] -cne "known") { Write-Host ("    the other runspace's put: " + ($out -join " | ")); return $false }
+            $lagMs = ($back - [long]$out[1]) / 10000
+            Write-Host ("    round " + $round + ": the watch returned " + [Math]::Round($lagMs) + " ms after the other runspace's put, having waited " + $w.value.waitedMs + " ms")
+            $ok = $ok -and ($w.state -ceq "known" -and (Texts $w) -ceq ("realtime-" + $round) -and $w.value.waitedMs -lt $timeout -and $lagMs -lt 1000)
         }
-        try {
-            $h = $ps.BeginInvoke()
-            $w = Wait-HordeRelayItems -Connection $c -Mailbox $mb -Since 0 -TimeoutMs $timeout
-            $back = [datetime]::UtcNow.Ticks
-            $out = @($ps.EndInvoke($h) | ForEach-Object { "$_" })
-        } finally { $ps.Dispose() }
-        if ($out.Count -ne 2 -or $out[0] -cne "known") { Write-Host ("    the other runspace's put: " + ($out -join " | ")); return $false }
-        $lagMs = ($back - [long]$out[1]) / 10000
-        Write-Host ("    the watch returned " + [Math]::Round($lagMs) + " ms after the other runspace's put, having waited " + $w.value.waitedMs + " ms")
-        return ($w.state -ceq "known" -and (Texts $w) -ceq "realtime-1" -and $w.value.waitedMs -lt $timeout -and $lagMs -lt 1000)
+        return $ok
     }
     "reach.remote" = {
         param($R, $Fx, $State)

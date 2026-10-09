@@ -43,7 +43,7 @@
            Replace = 'if ($true) {' }
         @{ Name = "watch-polls-too-slowly-for-realtime"
            Find = '$script:HordeLocalRelayPollMs = 50'
-           Replace = '$script:HordeLocalRelayPollMs = 1500' }
+           Replace = '$script:HordeLocalRelayPollMs = 5000' }
         @{ Name = "watch-misses-items-already-there"
            Find = 'if ($items.Count -gt 0) { return (New-HordeLocalRelayItems -Items $items) }'
            Replace = 'if ($items.Count -gt 0 -and $clock.ElapsedMilliseconds -ge $TimeoutMs) { return (New-HordeLocalRelayItems -Items $items) }' }
