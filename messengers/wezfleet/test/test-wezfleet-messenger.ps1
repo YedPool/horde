@@ -12,7 +12,8 @@
 # and the review of #106: the root is a real local checkout (A), the body files sit in a folder only
 # this user can open and are swept (F), a target or sender wezfleet cannot name is refused before any
 # process starts (B), main's answer - reason codes, detail, exit 4, exit 1 for an internal error - is
-# read (C, D, E), and an answer naming another target is not read as this one's (D).
+# read (C, D, E), an answer naming another target is not read as this one's (D), and the answer is read
+# when the command exits although a grandchild still holds its output (E; review finding F6).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
@@ -429,6 +430,28 @@ With-Fake {
     Check ($left.Count -eq 0) ("and the child it started was stopped: no PowerShell is left running the fake in this state's folder (" + $left.Count + ")")
     # A leftover would outlive the suite for the rest of its sleep; it is this test's to stop.
     foreach ($l in $left) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+function Get-Grandchildren {
+    # The fake's grandchildren still running, found by their command line (it names the state's folder).
+    param($St)
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { "$($_.CommandLine)".Contains("fake grandchild of " + $St.dir) })
+}
+# THE ANSWER IS READ WHEN THE COMMAND EXITS, NOT WHEN ITS OUTPUT CLOSES (review of #106, F6). wezfleet
+# starts its terminal's command-line client without redirecting it, so a client that outlives the command
+# holds the command's output open. The read loop waited for that pipe to close: the answer had arrived,
+# the command had exited, and the messenger still waited out its whole deadline and said "did not
+# answer". Here the fake answers and exits at once while a grandchild holding its output sleeps 40 s.
+With-Fake {
+    param($st)
+    Set-HordeWezfleetMessengerRoot -Path $st.dir -TimeoutSeconds 25
+    & $fx.SetMode $st @{ post = @{ grandchildSeconds = 40 } }
+    $t0 = Get-Date
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    $took = ((Get-Date) - $t0).TotalSeconds
+    $held = @(Get-Grandchildren $st)
+    Check ($held.Count -eq 1) ("CONTROL: the grandchild holding the command's output was still running when the answer came back (" + $held.Count + ")")
+    Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and $took -lt 20) ("a command that has exited is read at once, though a grandchild still holds its output (" + [int]$took + " s; " + (Show-Answer $a) + ")")
+    foreach ($l in $held) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 # EXIT 1 IS THE FLEET'S OWN "COULD NOT", and the reason must say so, with its code and its detail: it read
 # "exit 1, which is not an exit code of the fleet's post" for an answer the fleet documents (measured

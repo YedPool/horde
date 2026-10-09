@@ -181,6 +181,10 @@
         @{ Name = "hung-child-not-killed"
            Find = 'try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }'
            Replace = '' }
+        # Review of #106, F6: the output is taken as complete once the command has exited.
+        @{ Name = "exited-command-output-awaited"
+           Find = 'elseif (((Get-Date) - $exitedAt).TotalMilliseconds -ge $script:HordeWezfleetMessengerDrainMs) { $drained = $true; break }'
+           Replace = 'elseif ($false) { }' }
         @{ Name = "output-cap-dropped"
            Find = 'if ($got.Length -gt $script:HordeWezfleetMessengerMaxBytes) {'
            Replace = 'if ($false) {' }

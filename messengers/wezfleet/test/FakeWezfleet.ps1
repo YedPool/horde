@@ -12,10 +12,14 @@
 #   store\<id>.json   one record per message id: { id; to; stage; body; fromLabel; fromSessionId }
 #   typed.log   one JSON line per text "typed" into a session: { id; text } - the fake target. Only a wake
 #               notice is ever written here, built the way wezfleet's Get-WfWakeNotice builds it
+#   grandchild.pid  the pid of the grandchild it started, when mode asks for one (grandchildSeconds)
 #   mode.json   optional, per command (post|status): { exit; stdout; stderr; stage; reason; detail;
-#               hangSeconds; noWake; staleRefused; stalePane; writeFailed; internal }.
+#               hangSeconds; grandchildSeconds; noWake; staleRefused; stalePane; writeFailed; internal }.
 #               stderr goes with a scripted stdout: a parameter the host itself rejects prints nothing on
-#               stdout, the host's words on stderr, and exits 1 (measured against wezfleet main, 2026-10-06)
+#               stdout, the host's words on stderr, and exits 1 (measured against wezfleet main, 2026-10-06).
+#               grandchildSeconds starts, before anything else, a PowerShell that sleeps that long and
+#               inherits this script's standard output and error - what the terminal client started by the real
+#               command without redirection does (review of #106, F6 and F7)
 #
 # THE CONTRACT IT PLAYS is wezfleet main's (1122461, read 2026-10-09; its lib/MailPost.ps1, THE
 # CONTRACT, as pull request 70 made it; 72 to 76 left mail post and status as they were):
@@ -72,6 +76,16 @@ if ($argvList.Count -lt 2 -or $argvList[0] -cne "mail") { [Console]::Out.WriteLi
 $act = $argvList[1]
 $m = $null
 if (Test-Mode $mode $act) { $m = $mode.$act }
+if (Test-Mode $m "grandchildSeconds") {
+    # A grandchild that holds this script's standard output and error open: started directly, nothing
+    # redirected, so it inherits both handles. Its command line names this folder, so a test finds it.
+    $gpsi = New-Object System.Diagnostics.ProcessStartInfo
+    $gpsi.FileName = (Get-Process -Id $PID).Path
+    $gpsi.Arguments = "-NoProfile -NonInteractive -Command ""Start-Sleep -Seconds " + [int]$m.grandchildSeconds + " # fake grandchild of " + $root + """"
+    $gpsi.UseShellExecute = $false
+    $g = [System.Diagnostics.Process]::Start($gpsi)
+    [System.IO.File]::WriteAllText((Join-Path $root "grandchild.pid"), "$($g.Id)", [System.Text.Encoding]::ASCII)
+}
 if (Test-Mode $m "hangSeconds") { Start-Sleep -Seconds ([int]$m.hangSeconds) }
 if (Test-Mode $m "stdout") {
     # A scripted answer, written as it is: an old wezfleet's usage text, garbage, two lines, anything.

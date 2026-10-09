@@ -70,7 +70,8 @@
 # no reparse point on it or above it - a junction could be re-aimed after it was configured - and a
 # wezfleet checkout with #65's mail commands: wezfleet.ps1, lib\Mail.ps1, lib\MailPost.ps1 and
 # commands\mail.ps1 (review of #106, G1). Otherwise every call is unknown and nothing starts. Every call
-# has a deadline; past it the child is stopped and the answer is unknown.
+# has a deadline; past it the child is stopped and the answer is unknown. The answer is read once the
+# command has exited, even while a process it started still holds its output open (review of #106, F6).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after messengers/Port.ps1.
 
@@ -82,6 +83,9 @@ $script:HordeWezfleetMessengerTimeoutSeconds = 30
 $script:HordeWezfleetMessengerScript = "wezfleet.ps1"
 # What makes a folder a wezfleet checkout with #65's commands, beside the script itself.
 $script:HordeWezfleetMessengerMarkers = @("wezfleet.ps1", "lib\Mail.ps1", "lib\MailPost.ps1", "commands\mail.ps1")
+# How long a read may wait once the command has exited before the output is taken as complete: what an
+# exited command wrote is already in the pipe, so only someone else's handle makes a read wait.
+$script:HordeWezfleetMessengerDrainMs = 500
 # The most a command may print before it is stopped: one line of JSON is far below this.
 $script:HordeWezfleetMessengerMaxBytes = 65536
 # The most of wezfleet's detail kept in a reason; the port caps a reason at 1024 bytes.
@@ -230,10 +234,25 @@ function Start-HordeWezfleetMessengerProcess {
     $stream = $p.StandardOutput.BaseStream
     $buf = New-Object byte[] 4096
     $got = New-Object System.IO.MemoryStream
-    while ($true) {
-        $left = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)
+    # READ UNTIL THE OUTPUT CLOSES OR THE COMMAND HAS EXITED, whichever is first (review of #106, F6). A
+    # grandchild that inherited the command's output - the terminal client wezfleet starts without
+    # redirecting it - keeps the pipe open after the command exits, and waiting for the pipe alone waited
+    # out the whole deadline with the answer already read (measured 2026-10-09: 25 s, "did not answer",
+    # for a command that answered and exited at once). Once the command has exited, what it wrote is in
+    # the pipe and a read returns it at once; a read still waiting a moment later is waiting on someone
+    # else's handle, and the reading stops there.
+    $exitedAt = $null
+    $drained = $false
+    while (-not $drained) {
         $read = $stream.ReadAsync($buf, 0, $buf.Length)
-        if (-not $read.Wait($left)) { return [pscustomobject]@{ ok = $false; exit = -1; stdout = ""; stderr = ""; reason = ("the fleet's command did not answer within " + $timeout + " s; " + (Stop-HordeWezfleetMessengerProcess -Process $p)) } }
+        while (-not $read.Wait(100)) {
+            if ((Get-Date) -ge $deadline) { return [pscustomobject]@{ ok = $false; exit = -1; stdout = ""; stderr = ""; reason = ("the fleet's command did not answer within " + $timeout + " s; " + (Stop-HordeWezfleetMessengerProcess -Process $p)) } }
+            if ($p.HasExited) {
+                if ($null -eq $exitedAt) { $exitedAt = Get-Date }
+                elseif (((Get-Date) - $exitedAt).TotalMilliseconds -ge $script:HordeWezfleetMessengerDrainMs) { $drained = $true; break }
+            }
+        }
+        if ($drained) { break }
         $n = $read.Result
         if ($n -eq 0) { break }
         $got.Write($buf, 0, $n)
