@@ -91,8 +91,6 @@ function New-HordeRelayHpkeSender {
     # RFC 9180 vectors only, which fix the ephemeral key; every other caller leaves it out and gets a
     # fresh one, used once and disposed.
     param([Parameter(Mandatory = $true)][byte[]]$RecipientPublic, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Info, $Ephemeral = $null)
-    # Refuses a bad recipient key here, before anything is derived from it.
-    (ConvertFrom-HordeRelayP256Public -Bytes $RecipientPublic -Use "ecdh").Dispose()
     $eph = $Ephemeral
     if ($null -eq $eph) { $eph = New-HordeRelayP256Key -Use "ecdh" }
     try {

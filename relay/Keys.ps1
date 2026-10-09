@@ -190,8 +190,10 @@ function Get-HordeRelayKey {
         $cng.Dispose()
         return (New-HordeUnknown -Reason ("the key " + $Name + " can be exported (" + $cng.ExportPolicy + "), so it is not used"))
     }
-    $obj = ConvertTo-HordeRelayKeyObject -CngKey $cng -Use $Use
-    $pub = ConvertTo-HordeRelayP256Public -Key $obj
+    try {
+        $obj = ConvertTo-HordeRelayKeyObject -CngKey $cng -Use $Use
+        $pub = ConvertTo-HordeRelayP256Public -Key $obj
+    } catch { $cng.Dispose(); return (New-HordeUnknown -Reason ("the key " + $Name + " could not be used for " + $Use) -ErrorRecord $_) }
     return (New-HordeKnown -Value ([pscustomobject]@{ name = $Name; use = $Use; scope = $Scope; provider = $word; keyId = (Get-HordeRelayKeyId -Public $pub); publicKey = $pub; key = $obj }))
 }
 

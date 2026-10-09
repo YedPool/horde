@@ -37,6 +37,7 @@ Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "Zm9vY" } "whole number of
 Check ((Hex (ConvertFrom-HordeRelayBase64Url -Text "AA")) -ceq "00") "CONTROL: AA is the byte 00"
 Check (Throws { ConvertFrom-HordeRelayBase64Url -Text "AB" } "not canonical") "AB, a second spelling of the byte 00 (stray low bits), is refused"
 Check ((Hex (Unhex "00ff10")) -ceq "00ff10") "hex round trip"
+Check ((Test-HordeRelayBytesEqual -Left (Unhex "0102") -Right (Unhex "0102")) -and -not (Test-HordeRelayBytesEqual -Left (Unhex "0102") -Right (Unhex "010203")) -and -not (Test-HordeRelayBytesEqual -Left (Unhex "0102") -Right (Unhex "0103"))) "bytes are equal only with the same length and every byte the same"
 Check (Throws { Unhex "0F" } "hex") "upper-case hex is refused"
 Check (Throws { Unhex "abc" } "hex") "hex of half a byte is refused"
 
