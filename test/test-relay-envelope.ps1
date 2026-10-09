@@ -107,6 +107,18 @@ Check (Throws { New-HordeRelayEnvelope -Kind "Snapshot" -Channel "decisions" -Se
 Check (Throws { Seal -Seq -1 } "sequence") "a negative sequence is refused at the sender"
 
 Write-Host ""
+Write-Host "--- the construction, pinned: what a second implementation (the PWA) must compute ---" -ForegroundColor Cyan
+# Opened here by hand from the published construction, not through Unprotect-HordeRelayEnvelope, so a
+# change to the domain strings or to what the AAD covers fails even when both ends change together.
+$aadByHand = Get-HordeRelayAsciiBytes -Text ("horde-relay/envelope/v1 aad" + [string][char]10 + $read.headerText)
+$cekByHand = Unprotect-HordeRelayHpke -RecipientKey $phone -Enc $read.recipients[0].enc -Info (Get-HordeRelayAsciiBytes -Text "horde-relay/envelope/v1 content-key") -Aad $aadByHand -Sealed $read.recipients[0].key
+Check ($null -ne $cekByHand -and $cekByHand.Length -eq 32) "the content key is HPKE-sealed with info 'horde-relay/envelope/v1 content-key' and AAD 'horde-relay/envelope/v1 aad' LF header"
+$bodyByHand = $(if ($null -ne $cekByHand) { Unprotect-HordeRelayAesGcm -Key $cekByHand -Nonce (ConvertFrom-HordeRelayHex -Text $read.header.nonce) -Aad $aadByHand -Sealed $read.ct } else { $null })
+Check ($null -ne $bodyByHand -and $utf8.GetString($bodyByHand) -ceq "merge PR 1605?") "the body is AES-256-GCM under that key, with the header's nonce and the same AAD"
+$signedByHand = Get-HordeRelayAsciiBytes -Text ("horde-relay/envelope/v1 signed" + [string][char]10 + $read.headerText + [string][char]10 + $read.recipientsText + [string][char]10 + $read.ctText)
+Check (Test-HordeRelayEs256Signature -Public $machineSignPub -Bytes $signedByHand -Signature $read.sig.value) "the signature is ES256 over 'horde-relay/envelope/v1 signed' LF header LF recipients LF ct"
+
+Write-Host ""
 Write-Host "--- tamper: the signature catches every changed byte ---" -ForegroundColor Cyan
 $hdrOther = Replace-Once -Text $text -Old '"kind":"snapshot"' -New '"kind":"answers"'
 Check ((Open-All -Text $hdrOther).reason -ceq "the ES256 signature does not verify under the sender's key") "a changed header field"
