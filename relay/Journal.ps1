@@ -36,8 +36,9 @@
 #     the setting clockSkewSeconds (600) ahead of this machine's clock is refused, and so is one sent
 #     more than that before this journal was created: a journal made at T has never seen anything
 #     older, so it cannot tell such an envelope from a replay of one it saw before it was wiped. That
-#     second rule is what keeps a journal that was deleted and made again from reopening every old
-#     replay. THERE IS NO "TOO OLD" WINDOW BEYOND IT, on purpose: the relay stores and forwards, and a
+#     second rule is what keeps a journal that was deleted and made again from reopening EVERY old
+#     replay - though not the ones sent within the skew before it was remade (THE HONEST LIMIT, below).
+#     THERE IS NO "TOO OLD" WINDOW BEYOND IT, on purpose: the relay stores and forwards, and a
 #     machine asleep for a day must still take the answers sent to it meanwhile; an old envelope that
 #     was never recorded here is a late delivery, not a replay, and the sequence still refuses any
 #     envelope at or below the last one.
@@ -90,8 +91,17 @@
 # not tear in a crash (above), so a torn record is damage, not an interrupted write. And
 # Initialize-HordeRelayJournal refuses a folder that holds streams but no marker: that is a journal that
 # lost its marker, and a new marker would give it a later birth and say nothing about what it saw.
-# THE HONEST LIMIT: a stream folder deleted whole reads as a stream never seen, and nothing here can
-# tell. The clock rule above still refuses every envelope sent before the journal was made.
+# THE HONEST LIMIT (review of 6f7e8c1, finding 5): THE JOURNAL DEFENDS AGAINST CRASHES AND DAMAGE,
+# NOT AGAINST WHOEVER CAN WRITE TO ITS FOLDER. Anyone with local write access to <HORDE_HOME> can make it
+# accept a replay, and nothing here can tell:
+#   - deleting a stream's highest record lowers its last seq, and that envelope is fresh again;
+#   - deleting a stream folder, or in\ whole, makes its streams read as never seen;
+#   - deleting the whole journal and calling Initialize again makes a new journal, which takes every
+#     envelope sent within clockSkewSeconds (600 by default, an hour at most) before it was remade.
+# The clock rule bounds the last case and nothing bounds the first two. Such access is already the
+# machine owner's and outside what a journal on that machine can defend. What the
+# journal does promise is that it never resets ITSELF - a crash, a torn file or a lost marker is refused,
+# not repaired.
 #
 # THE PLATFORM IS NOT HERE. The durable move is core/FileAtomic.ps1's, which today has Windows' only
 # and refuses elsewhere in words ("never falls back to a move that is not durable"). On any other system
@@ -113,7 +123,10 @@
 . (Join-Path $PSScriptRoot "Envelope.ps1")
 
 $script:HordeRelayJournalSettings = New-HordeModuleSettings -Module "relay-journal" -Settings @(
-    @{ name = "clockSkewSeconds"; kind = "whole"; default = 600; min = 0; max = 86400
+    # At most an hour (review of 6f7e8c1, finding 5): the skew is also how far before its creation a
+    # remade journal takes envelopes (THE HONEST LIMIT, above), so a larger one would widen what a wipe
+    # reopens, and a sender's clock an hour wrong is broken, not skewed.
+    @{ name = "clockSkewSeconds"; kind = "whole"; default = 600; min = 0; max = 3600
        what = "How far, in seconds, a sender's clock may run ahead of this machine's, or behind its journal's creation." },
     @{ name = "seqWindow"; kind = "whole"; default = 100000; min = 1; max = 2147483647
        what = "How far past the last recorded sequence number one envelope may jump." },

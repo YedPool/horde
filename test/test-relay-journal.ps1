@@ -243,7 +243,13 @@ try {
         Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":0}}'
         $v = Receive -Envelope (Seal -Seq 5 -At $bornAt.AddDays(10).AddSeconds(5)) -HordeHome $h -Now $bornAt.AddDays(10)
         Check (IsRefused $v "more than 0 s ahead") "with the skew set to 0, five seconds ahead is refused: the setting is read"
-    } else { Skip "the clock skew, set to 0" }
+        # Review of 6f7e8c1, finding 5: the skew is also how far before its creation a remade journal
+        # takes envelopes, so it is capped at an hour.
+        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3601}}'
+        Check (IsUnknown (Receive -Envelope (Seal -Seq 6) -HordeHome $h) "from 0 to 3600") "a skew of more than an hour is refused by the settings"
+        Write-Settings -HordeHome $h -Json '{"schemaVersion":1,"settings":{"clockSkewSeconds":3600}}'
+        Check (IsFresh (Receive -Envelope (Seal -Seq 6) -HordeHome $h)) "CONTROL: an hour exactly is taken"
+    } else { Skip "the clock skew, set to 0"; Skip "the clock skew's cap of 3600" }
 
     Write-Host ""
     Write-Host "--- V. damage is refused, never reset ---" -ForegroundColor Cyan
