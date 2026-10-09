@@ -379,6 +379,15 @@ function Get-HordeExecFindings {
 #   - ATTRIBUTES: AllowEmptyCollection, AllowEmptyString and AllowNull, which relax parameter binding
 #     and run nothing.
 #   - CORE: core/JsonText.ps1's Find-HordeJsonDuplicateKey, which reads text and runs nothing.
+#   - THE JOURNAL (relay/Journal.ps1, relay PR 2), measured from its syntax tree on 2026-10-09. It keeps
+#     its records as files under Horde's home, as remote/Journal.ps1 does, so the same reasoning holds:
+#     this scan is about starting a process or reaching the engine, not about disk. Get-HordeHome
+#     (core/Home.ps1) reads where the home is; New-HordeModuleSettings and Get-HordeModuleSettings
+#     (core/ModuleSettings.ps1) declare and read its settings file, data checked against a table;
+#     Move-HordeFileNewDurable (core/FileAtomic.ps1) gives a record its name. Each takes plain values
+#     and runs nothing it is given. Start-Sleep waits between tries of a stream's lock. FileShare.Delete
+#     lets a writer's temporary file be renamed while it is held open, and FileOptions.DeleteOnClose
+#     removes a dead writer's leftover only if nobody holds it (decisions/Store.ps1's sweep).
 #   - ADD-TYPE, THE ONE COMPILE. relay/ needs AES-GCM on .NET Framework, which has none, so
 #     relay/BackendCng.ps1 compiles relay/Gcm.cs. Add-Type is admitted in exactly one form,
 #       Add-Type -Path (Join-Path $PSScriptRoot "<Name>.cs")
@@ -388,9 +397,9 @@ function Get-HordeExecFindings {
 #     a finding (Get-HordeExecAddTypeFindings), checked by test/fixtures/relay/exec-control.ps1.
 #   Nothing here lets relay/ hold a script block, so rule 8 (property reads stay open) still holds.
 $script:HordeExecRelayAllow = @{
-    Cmdlets = @("Add-Type")
-    CoreFunctions = @("Find-HordeJsonDuplicateKey")
-    CoreFiles = @("JsonText.ps1")
+    Cmdlets = @("Add-Type", "Start-Sleep")
+    CoreFunctions = @("Find-HordeJsonDuplicateKey", "Get-HordeHome", "New-HordeModuleSettings", "Get-HordeModuleSettings", "Move-HordeFileNewDurable")
+    CoreFiles = @("JsonText.ps1", "Home.ps1", "ModuleSettings.ps1", "FileAtomic.ps1")
     Attributes = @("AllowEmptyCollection", "AllowEmptyString", "AllowNull")
     NewTypes = @("System.Security.Cryptography.AesGcm", "System.Security.Cryptography.CngKeyCreationParameters",
         "System.Security.Cryptography.CngProvider", "System.Security.Cryptography.ECDiffieHellmanCng", "System.Security.Cryptography.ECDsaCng",
@@ -402,6 +411,8 @@ $script:HordeExecRelayAllow = @{
         "security.cryptography.ecdsa", "security.cryptography.hashalgorithmname", "security.cryptography.randomnumbergenerator")
     Static = @{
         "horderelaygcmv1" = @("Seal", "Open")
+        "io.fileshare" = @("Delete")
+        "io.fileoptions" = @("DeleteOnClose")
         "long" = @("MaxValue")
         "array" = @("Clear")
         "math" = @("Ceiling")
