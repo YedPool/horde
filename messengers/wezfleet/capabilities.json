@@ -4,19 +4,19 @@
   "capabilities": {
     "body.untyped": {
       "support": "yes",
-      "evidence": "The body goes only through -MessageFile into the fleet's mailbox; test-messenger-conformance.ps1 reads the stored body back from the fake fleet command intact (two lines, a non-ASCII letter) and finds no typed text holding any line of it, and test-wezfleet-messenger.ps1 finds no argument holding it (2026-10-06)."
+      "evidence": "Run against the fake: the body goes only through -MessageFile, no argument holds any line of it (test-wezfleet-messenger.ps1), and no typed text holds any line of it (test-messenger-conformance.ps1, 2026-10-06). Run against wezfleet main 1122461 in an isolated root with no terminal reachable (2026-10-09): the stored record's body equalled the sent two-line, non-ASCII body, and main's own Stop hook handed it over as its block text. Read, not run: the only text main types into a pane is its one-line wake notice (lib/MailPost.ps1, Invoke-WfMailWake)."
     },
     "idempotent.post": {
       "support": "yes",
-      "evidence": "wezfleet #65's mail post writes nothing and wakes nothing for an id it holds; test-messenger-conformance.ps1 measures one record, no new wake and the later stage kept across reposts, read from the fake's store and typed log (2026-10-06)."
+      "evidence": "Run against wezfleet main 1122461 in an isolated root (2026-10-09): a repost of an id answered already-posted with the first copy's stage, before and after the receiver took it, and one record of the id was on disk. Run against the fake: one record, no new wake and the later stage kept across reposts (test-messenger-conformance.ps1, 2026-10-06)."
     },
     "receipt.receiver": {
       "support": "yes",
-      "evidence": "taken, mapped to seen, is set only by the receiving session's own Stop hook once the id is in its transcript (wezfleet hooks/wf-mail-deliver.mjs, proved in wezfleet #65's suite); test-messenger-conformance.ps1 shows seen appears only after the receiving side acts (2026-10-06)."
+      "evidence": "Run against wezfleet main 1122461 in an isolated root, driven by main's own Stop hook (hooks/wf-mail-deliver.mjs) and no real session (2026-10-09): status read handed-over after the hook's block, seen only once the block's id was in the session's transcript, and expired when the hook gave up after its attempt cap without finding it. Read, not run: the receiving session's own mail read of its own mailbox also sets taken. Open upstream, wezfleet issue 67 S8: a transcript can hold the id from a wake notice alone, so seen proves the id reached the receiver's transcript, not that the body did."
     },
     "wake": {
       "support": "yes",
-      "evidence": "wezfleet #65 types one wake notice carrying only the id into a registry-verified pane; test-messenger-conformance.ps1 reads exactly one wake from the fake's typed log, one line, no control characters, none of the body (2026-10-06)."
+      "evidence": "Run against the fake only: exactly one wake per message, one line, no control characters, none of the body (test-messenger-conformance.ps1, 2026-10-06). Read, not run: wezfleet main 1122461 types its one-line notice carrying only the id, and only into a registry-verified pane whose current occupant is the target (lib/MailPost.ps1, Invoke-WfMailWake). No real wake into a real pane has been measured: the isolated probe of 2026-10-09 had no registry record, so main answered no-registry-record and typed nothing."
     }
   }
 }
