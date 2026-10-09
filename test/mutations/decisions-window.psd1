@@ -270,8 +270,14 @@
            Replace = '$temp = $State.reportPath + ".part"; [System.IO.File]::WriteAllText($State.reportPath + ".half", "x")' }
         # --- a refused settings file refuses the window, every finding said ---
         @{ Name = "a-refused-settings-file-opens-the-window"
-           Find = 'if (@("defaults", "read") -ccontains $state) { continue }'
+           Find = 'if (@("defaults", "read", "none") -ccontains $state) { continue }'
            Replace = 'continue' }
+        @{ Name = "the-finders-settings-are-not-asked"
+           Find = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings)'
+           Replace = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings)' }
+        @{ Name = "finders-with-no-settings-refuse-the-window"
+           Find = '"read", "none") -ccontains $state'
+           Replace = '"read") -ccontains $state' }
         @{ Name = "only-the-first-finding-is-said"
            Find = 'foreach ($f in $found) { [void]$lines.Add($f) }'
            Replace = '[void]$lines.Add($found[0])' }

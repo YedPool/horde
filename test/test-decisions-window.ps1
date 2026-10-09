@@ -75,6 +75,29 @@ $said = Get-HordeDecisionWindowSettingsRefusal -Answers @($ok, $two, $ok, $notRo
 $saidLines = @($said -split [regex]::Escape([Environment]::NewLine))
 Check ($saidLines.Count -eq 3 -and $saidLines[0] -like "the settings file 'C:\h\settings\decisions-window.json' of decisions-window is refused: *listRereadMs*" -and $saidLines[1] -like "*'colour'*" -and $saidLines[2] -like "*'role'*") ("every finding of every refused answer, in order, one to a line, each naming its file and key (" + ($saidLines -join " / ") + ")")
 Check ((Get-HordeDecisionWindowSettingsRefusal -Answers @($ok, [pscustomobject]@{ values = $ok.values })) -like "*neither read nor the defaults*") "an answer with no state is no answer, and refuses"
+Check ((Get-HordeDecisionWindowSettingsRefusal -Answers @($ok, [pscustomobject]@{ state = "none"; findings = @() })) -ceq "") "the finders' answer that they have no settings at all refuses nothing"
+
+Write-Host ""
+Write-Host "--- a refused file of the session-window finder refuses open before anything starts ---" -ForegroundColor Cyan
+# The finder is a stand-in that declares settings and finds them refused; the finding is the settings
+# module's own sentence. Anything open does past its settings check is replaced by a marker that
+# throws, so a check that did not refuse cannot start a helper, an engine or a window.
+$script:finderSettingsAsked = New-Object System.Collections.ArrayList
+Register-HordeHostWindowFinder -Name "zorb" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) [void]$script:finderSettingsAsked.Add($HordeHome); return [pscustomobject]@{ state = "refused"; values = $null; findings = [string[]]@("the settings file 'C:\h\settings\zorb-window.json' of zorb-window is refused: its key 'attempts' must be 1 to 10"); path = "C:\h\settings\zorb-window.json" } }
+$openRefused = & {
+    function Enable-HordeWindowFollowRealScale { throw "PAST THE SETTINGS CHECK" }
+    try { Open-HordeDecisionWindow -Hidden | Out-Null; "returned" } catch { "" + $_.Exception.Message }
+}
+Check ($openRefused -clike "the decisions window was not opened, because a settings file is refused:*" -and $openRefused -clike "*the settings file 'C:\h\settings\zorb-window.json' of zorb-window is refused: its key 'attempts'*") ("open throws the finder's finding as it throws the window's own (" + $openRefused + ")")
+Check (($script:finderSettingsAsked -join ",") -ceq $hordeHome) "the finder was asked about the home open reads every other settings file from"
+Check (-not (Test-Path -LiteralPath (Join-Path $hordeHome "cache"))) "and nothing was made under the home: no engine profile, no window"
+Register-HordeHostWindowFinder -Name "zorb" -Find { param($Seat) return (New-HordeUnknown -Reason "not asked here") } -Settings { param($HordeHome) return [pscustomobject]@{ state = "defaults"; values = $null; findings = [string[]]@(); path = "" } }
+$openPast = & {
+    function Enable-HordeWindowFollowRealScale { throw "PAST THE SETTINGS CHECK" }
+    try { Open-HordeDecisionWindow -Hidden | Out-Null; "returned" } catch { "" + $_.Exception.Message }
+}
+Check ($openPast -ceq "PAST THE SETTINGS CHECK") ("CONTROL: a finder whose settings are the defaults lets open go on past the check (" + $openPast + ")")
+$script:HordeHostWindowFinders.Clear()
 Check ((Get-HordeDecisionWindowName -HordeHome "C:\H\") -ceq (Get-HordeDecisionWindowName -HordeHome "c:\h") -and (Get-HordeDecisionWindowName -HordeHome "C:\h") -cmatch '\Ahorde-decisions-window-[0-9a-f]{16}\z' -and (Get-HordeDecisionWindowName -HordeHome "C:\h2") -cne (Get-HordeDecisionWindowName -HordeHome "C:\h")) "the one window of a home is known by a name ending in 16 hex of the home's fingerprint, the same however the path is written and another for another home"
 Check ((Get-HordeDecisionWindowDataFolder -HordeHome "C:\h") -ceq "C:\h\cache\decisions-window") "the surface's own files are kept under the home's cache, by the module's name"
 

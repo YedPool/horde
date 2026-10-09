@@ -111,10 +111,12 @@
 # settings are theirs; each is read ONCE here and handed to its owner.
 # A SETTINGS FILE THAT FAILS A CHECK REFUSES THE WINDOW (the settings module's rule: an override file
 # that fails its checks refuses with a reason and never silently falls back to the defaults). Before
-# anything is shown, the four files are read; when any is refused, `open` throws every finding, one
-# to a line, each naming the file and the key, and horde exits 1. No window ever opens on defaults a
-# person's file tried and failed to change. A fleet file broken WHILE the window is open is said on
-# the fleet line (fleet/StatusPanel.ps1 answers "refused"), and the list goes on being answered.
+# anything is shown, the four files are read, and the session-window finders are asked through
+# their port (core/HostWindow.ps1) for theirs, whose names this file may not hold; when any is
+# refused, `open` throws every finding, one to a line, each naming the file and the key, and horde
+# exits 1. No window ever opens on defaults a person's file tried and failed to change. A fleet file
+# broken WHILE the window is open is said on the fleet line (fleet/StatusPanel.ps1 answers
+# "refused"), and the list goes on being answered.
 #
 # A CALLBACK TAKES WHAT IT NEEDS FROM ITS $State, never from a local of the function that wrote it
 # (surfaces/Port.ps1): the file watcher's handlers, which no surface calls, read the same object from
@@ -186,16 +188,17 @@ function Get-HordeDecisionWindowSettings {
 }
 
 function Get-HordeDecisionWindowSettingsRefusal {
-    # PURE. What refuses the window among -Answers, settings answers of the four modules it reads
+    # PURE. What refuses the window among -Answers, settings answers of the four modules it reads and
+    # the finders' answer (core/HostWindow.ps1, whose state none means no finder has settings)
     # (header, A SETTINGS FILE THAT FAILS A CHECK REFUSES THE WINDOW): every finding of every answer
-    # whose state is not defaults or read, in the order handed, as one text, one finding to a line;
+    # whose state is not defaults, read or none, in the order handed, as one text, one finding to a line;
     # "" when none is refused. An answer with no state at all is not an answer and refuses too.
     param([object[]]$Answers)
     $lines = New-Object System.Collections.ArrayList
     foreach ($a in @($Answers)) {
         $state = ""
         if ($null -ne $a -and $null -ne $a.PSObject.Properties["state"]) { $state = "$($a.state)" }
-        if (@("defaults", "read") -ccontains $state) { continue }
+        if (@("defaults", "read", "none") -ccontains $state) { continue }
         $found = @()
         if ($null -ne $a -and $null -ne $a.PSObject.Properties["findings"]) { $found = @($a.findings | ForEach-Object { "" + $_ } | Where-Object { $_ -ne "" }) }
         if ($found.Count -eq 0) { $found = @("a settings answer the window was handed is neither read nor the defaults, and says no reason") }
@@ -955,13 +958,16 @@ function Open-HordeDecisionWindow {
         $surface = Resolve-HordeSurface -Requires $script:HordeDecisionWindowNeeds
         if ($null -eq $surface) { throw "no way of showing a window is part of this Horde on this machine, so the decisions window cannot be opened; horde decisions list prints the same list" }
         if ($picturePath -ne "" -and -not (Test-HordeSurfaceCapability -Surface $surface -Capability "picture")) { throw "the way this Horde shows a window here cannot save a picture of it, so -Picture cannot be honoured" }
-        # THE FOUR SETTINGS FILES, each read once and handed to its owner; one refused refuses the
+        # THE FOUR SETTINGS FILES, each read once and handed to its owner, and the finders' (asked here
+        # only to refuse; a finder reads its own when it is asked to find); one refused refuses the
         # window before anything is shown (header).
         $own = Get-HordeDecisionWindowSettings -HordeHome $hordeHome
         $surfaceSettings = Get-HordeSurfaceSettings -HordeHome $hordeHome
         $followSettings = Get-HordeWindowFollowSettings -HordeHome $hordeHome
         $fleetSettings = Get-HordeFleetSettings -HordeHome $hordeHome
-        $refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings)
+        # Through their port: the finders' file names are a terminal's, which this file may not hold.
+        $finderSettings = Get-HordeSessionWindowSettingsState -HordeHome $hordeHome
+        $refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings)
         if ($refusal -ne "") { throw ("the decisions window was not opened, because a settings file is refused:" + [Environment]::NewLine + $refusal) }
         $findings = @()
         # Real pixels before any window is read or made, or a rectangle read is a scaled one.

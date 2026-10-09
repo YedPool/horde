@@ -42,5 +42,39 @@
         @{ Name = "the-answer-does-not-say-which-host"
            Find = 'host = $finder.name; detail'
            Replace = 'host = ""; detail' }
+        # --- the finders' own settings, asked through the port (Get-HordeSessionWindowSettingsState) ---
+        @{ Name = "the-settings-are-not-registered"
+           Find = 'find = $Find; settings = $Settings })'
+           Replace = 'find = $Find; settings = $null })' }
+        @{ Name = "the-home-is-not-handed-to-the-finder"
+           Find = 'try { $given = & $finder.settings $HordeHome }'
+           Replace = 'try { $given = & $finder.settings "" }' }
+        @{ Name = "a-settings-reader-that-fails-is-silent"
+           Find = 'catch { [void]$states.Add("refused"); [void]$found.Add($finder.name + ": reading its finder''s settings failed: " + $_.Exception.Message); continue }'
+           Replace = 'catch { continue }' }
+        @{ Name = "anything-a-settings-reader-prints-is-its-answer"
+           Find = '$given = @($given) | Select-Object -Last 1'
+           Replace = '$given = @($given) | Select-Object -First 1' }
+        @{ Name = "a-settings-non-answer-is-taken"
+           Find = 'if (@("defaults", "read", "refused") -cnotcontains $state) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "the-finders-files-are-not-said"
+           Find = 'if ($null -ne $given.PSObject.Properties["path"] -and "$($given.path)" -ne "") { [void]$files.Add("" + $given.path) }'
+           Replace = '' }
+        @{ Name = "a-refusal-with-no-finding-is-silent"
+           Find = 'if ($said.Count -eq 0) { $said = @($finder.name + ": its finder''s settings are refused, and say no reason") }'
+           Replace = '' }
+        @{ Name = "only-the-first-settings-finding-is-said"
+           Find = 'foreach ($f in $said) { [void]$found.Add($f) }'
+           Replace = '[void]$found.Add($said[0])' }
+        @{ Name = "a-refused-finder-file-is-not-refused"
+           Find = 'if ($states -ccontains "refused") { $overall = "refused" }'
+           Replace = 'if ($false) { $overall = "refused" }' }
+        @{ Name = "a-read-file-is-the-defaults"
+           Find = 'elseif ($states -ccontains "read") { $overall = "read" }'
+           Replace = 'elseif ($false) { $overall = "read" }' }
+        @{ Name = "no-settings-at-all-is-the-defaults"
+           Find = 'elseif ($states.Count -gt 0) { $overall = "defaults" }'
+           Replace = 'else { $overall = "defaults" }' }
     )
 }

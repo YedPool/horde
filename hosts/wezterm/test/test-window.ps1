@@ -449,6 +449,16 @@ try {
     Check (("" + $r.reason).Contains("its key 'attempts' must be ") -and ("" + $r.reason).Contains("it has the key 'retries', which is no setting of wezterm-window")) "and each key that is wrong, with why: the one out of its range and the one nobody declared"
     $handed = Find-HordeWeztermSessionWindow -Pane "18" -Instance "gui-sock-4242" -Settings (Settings @{ attempts = 99; socketFolder = $sockDir }) -Runner $runner -Windows $windows -ProcessStart $alive -Wait $wait
     Check ($handed.state -ceq "unknown" -and ("" + $handed.reason).Contains("its key 'attempts' must be ") -and $script:calls.Count -eq 0) "a caller that hands in settings it read already is answered the same when they are refused"
+    # THROUGH THE PORT (core/HostWindow.ps1): a caller that may not name this terminal asks the loaded
+    # finders for their settings before it starts anything, and is handed this file's refusal whole.
+    $viaPortRefused = Get-HordeSessionWindowSettingsState -HordeHome $env:HORDE_HOME
+    Check ($viaPortRefused.state -ceq "refused" -and @($viaPortRefused.findings).Count -eq 2 -and @($viaPortRefused.findings | Where-Object { $_ -clike ("the settings file '" + $settingsFile + "' of wezterm-window is refused: *") }).Count -eq 2) ("through the port the bad file is refused, every finding naming the file (" + (@($viaPortRefused.findings) -join " / ") + ")")
+    Check ((@($viaPortRefused.files) -join ",") -ceq $settingsFile -and $script:calls.Count -eq 0 -and $script:windowReads -eq 0) "and the port names the file it read, and asking it asked no terminal and read no window"
+    $otherHome = Join-Path $env:HORDE_HOME "another-home"
+    $viaPortOther = Get-HordeSessionWindowSettingsState -HordeHome $otherHome
+    Check ($viaPortOther.state -ceq "defaults" -and (@($viaPortOther.files) -join ",") -ceq (Join-Path $otherHome "settings\wezterm-window.json")) "CONTROL: a home with no file under it is the defaults: the finder reads the home it is handed, not its own"
+    [System.IO.File]::WriteAllText($settingsFile, (ConvertTo-Json -InputObject @{ schemaVersion = 1; settings = @{ attempts = 2 } } -Compress))
+    Check ((Get-HordeSessionWindowSettingsState -HordeHome $env:HORDE_HOME).state -ceq "read") "CONTROL: the same file mended is read, through the port"
 } finally { if ((Split-Path -Leaf $env:HORDE_HOME) -match '\Ahorde-test-window-home-[0-9a-f]{32}\z' -and (Test-Path -LiteralPath $env:HORDE_HOME)) { Remove-Item -LiteralPath $env:HORDE_HOME -Recurse -Force } }
 
 Write-Host ""

@@ -283,6 +283,25 @@ $settingsWords = "" + $settingsOpen.out
 Check ($settingsOpen.code -ne 0 -and $settingsWords -like "*the decisions window was not opened, because a settings file is refused*") ("it exits non-zero and says the window was not opened, and why (" + $settingsOpen.code + ", " + $settingsSeconds + " s)")
 Check ($settingsWords -like ("*the settings file '" + (Join-Path $settingsHome "settings\decisions-window.json") + "' of decisions-window is refused: *'listRereadMs'*") -and $settingsWords -like ("*the settings file '" + (Join-Path $settingsHome "settings\fleet.json") + "' of fleet is refused: *'colour'*")) "each refused file is named whole, with the key that is wrong: the window's own and the fleet's"
 Check (@(Get-EngineProcesses).Count -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $settingsHome "cache"))) "no engine process was started and nothing was made under that home: nothing opened on the defaults"
+# THE SESSION-WINDOW FINDER'S FILE refuses the window the same way. This scenario may not name the
+# terminal whose finder it is (CONTRIBUTING 14), so it asks the finders' port which files they read
+# under that home and writes a key no module declares into each.
+$finderHome = Join-Path $script:work "refused-finder-home"
+$finderFiles = @(& {
+    . (Join-Path $root "core\HostWindow.ps1")
+    foreach ($finderFile in @(Get-HordeHostWindowFinderFiles -Root $root)) { . $finderFile }
+    @((Get-HordeSessionWindowSettingsState -HordeHome $finderHome).files)
+})
+Check ($finderFiles.Count -ge 1 -and @($finderFiles | Where-Object { $_ -notlike ($finderHome + "\settings\*.json") }).Count -eq 0) ("CONTROL: the finders of this Horde read a settings file under the home they are handed (" + ($finderFiles -join ", ") + ")")
+New-Item -ItemType Directory -Path (Join-Path $finderHome "settings") -Force | Out-Null
+foreach ($finderFile in $finderFiles) { [System.IO.File]::WriteAllText($finderFile, '{"schemaVersion":1,"settings":{"colour":"red"}}', $utf8) }
+$clock.Restart()
+$finderOpen = Invoke-HordeCliProcess -Root $root -HordeArgs @("decisions", "open", "-Hidden") -Env @{ HORDE_HOME = $finderHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
+$finderSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
+$finderWords = "" + $finderOpen.out
+Check ($finderOpen.code -eq 1 -and $finderWords -like "*the decisions window was not opened, because a settings file is refused*") ("a refused finder file: open exits 1 and says the window was not opened (" + $finderOpen.code + ", " + $finderSeconds + " s)")
+Check (@($finderFiles | Where-Object { $finderWords -notlike ("*the settings file '" + $_ + "' of * is refused: *'colour'*") }).Count -eq 0) "and names each finder file whole, with the key that is wrong"
+Check (@(Get-EngineProcesses).Count -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $finderHome "cache"))) "no engine process was started and nothing was made under that home: the window did not stand free on the finder's refusal"
 
 Write-Host ""
 Write-Host "=== the state left behind ===" -ForegroundColor Cyan

@@ -536,4 +536,6 @@ function Read-HordeWeztermWindowReading {
 
 # THE PORT (core/HostWindow.ps1). A caller reaches this file only through it, so nothing outside
 # hosts/wezterm/ names the terminal (CONTRIBUTING 14).
-Register-HordeHostWindowFinder -Name "wezterm" -Find { param($Seat) Find-HordeWeztermSessionWindow -Pane ("" + $Seat.pane) -Instance ("" + $Seat.instance) }
+# Its settings are told through the port too (core/HostWindow.ps1, Settings), so a caller that may not
+# name this file can refuse to start on it.
+Register-HordeHostWindowFinder -Name "wezterm" -Find { param($Seat) Find-HordeWeztermSessionWindow -Pane ("" + $Seat.pane) -Instance ("" + $Seat.instance) } -Settings { param($HordeHome) Get-HordeWeztermWindowSettings -HordeHome $HordeHome }
