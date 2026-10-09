@@ -15,8 +15,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-. (Join-Path $root "relay\Backend.ps1")
-. (Join-Path $root "relay\P256.ps1")
+. (Join-Path $root "relay\Hpke.ps1")
 Set-StrictMode -Version Latest
 
 function Hex { param([AllowEmptyCollection()][byte[]]$Bytes) return (ConvertTo-HordeRelayHex -Bytes $Bytes) }
@@ -156,4 +155,59 @@ Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3026" + "0201" 
 Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3027" + "0222" + "01" + $sv + "11" + "0201" + "7f")) } "33 bytes long") "an INTEGER longer than 33 bytes is refused"
 Check (Throws { ConvertFrom-HordeRelayDerSignature -Der (Unhex ("3026" + "0221" + "01" + $sv + "0201" + "7f")) } "larger than 32 bytes") "a 33-byte INTEGER that is not a sign byte and 32 bytes is refused"
 
-Complete-HordeSuite -Success "base64url, HKDF, AES-256-GCM on every backend, P-256 ECDH and ECDSA, and DER match their standards' vectors, and every tamper fails"
+Write-Host ""
+Write-Host "--- HPKE: the official RFC 9180 vector, on every backend ---" -ForegroundColor Cyan
+$vec = [System.IO.File]::ReadAllText((Join-Path $here "fixtures\relay\hpke-p256-sha256-aes256gcm.json")) | ConvertFrom-Json
+Check ($vec.mode -eq 0 -and $vec.kem_id -eq 16 -and $vec.kdf_id -eq 1 -and $vec.aead_id -eq 2 -and @($vec.encryptions).Count -eq 4) "CONTROL: the fixture is the base-mode P-256 / HKDF-SHA256 / AES-256-GCM vector with four encryptions"
+$info = Unhex $vec.info
+foreach ($be in $live) {
+    Select-HordeRelayAeadBackend -Name $be
+    $eph = ConvertFrom-HordeRelayP256Private -D (Unhex $vec.skEm) -Public (Unhex $vec.pkEm) -Use "ecdh"
+    $sender = New-HordeRelayHpkeSender -RecipientPublic (Unhex $vec.pkRm) -Info $info -Ephemeral $eph
+    Check ((Hex $sender.enc) -ceq $vec.enc) ("[" + $be + "] enc is the vector's")
+    Check ((Hex $sender.sharedSecret) -ceq $vec.shared_secret) ("[" + $be + "] shared_secret is the vector's")
+    Check ((Hex $sender.keyScheduleContext) -ceq $vec.key_schedule_context) ("[" + $be + "] key_schedule_context is the vector's")
+    Check ((Hex $sender.secret) -ceq $vec.secret) ("[" + $be + "] secret is the vector's")
+    Check ((Hex $sender.key) -ceq $vec.key -and (Hex $sender.baseNonce) -ceq $vec.base_nonce) ("[" + $be + "] key and base_nonce are the vector's")
+    $skR = ConvertFrom-HordeRelayP256Private -D (Unhex $vec.skRm) -Public (Unhex $vec.pkRm) -Use "ecdh"
+    $receiver = New-HordeRelayHpkeReceiver -RecipientKey $skR -Enc (Unhex $vec.enc) -Info $info
+    Check ((Hex $receiver.sharedSecret) -ceq $vec.shared_secret -and (Hex $receiver.key) -ceq $vec.key) ("[" + $be + "] the receiver derives the same secret and key")
+    foreach ($e in @($vec.encryptions)) {
+        $sender.seq = [long]$e.seq
+        Check ((Hex (Get-HordeRelayHpkeNonce -Context $sender)) -ceq $e.nonce) ("[" + $be + "] seq " + $e.seq + ": the nonce is the vector's")
+        $ct = Protect-HordeRelayHpkeMessage -Context $sender -Aad (Unhex $e.aad) -Plaintext (Unhex $e.pt)
+        Check ((Hex $ct) -ceq $e.ct -and $sender.seq -eq ([long]$e.seq + 1)) ("[" + $be + "] seq " + $e.seq + ": seals to the vector's ciphertext, and the sequence moves on")
+        $receiver.seq = [long]$e.seq
+        $bad = Unhex $e.aad; $bad[0] = $bad[0] -bxor 1
+        Check ($null -eq (Unprotect-HordeRelayHpkeMessage -Context $receiver -Aad $bad -Sealed (Unhex $e.ct)) -and $receiver.seq -eq [long]$e.seq) ("[" + $be + "] seq " + $e.seq + ": other AAD does not open, and the sequence does not move")
+        Check ((Hex (Unprotect-HordeRelayHpkeMessage -Context $receiver -Aad (Unhex $e.aad) -Sealed (Unhex $e.ct))) -ceq $e.pt) ("[" + $be + "] seq " + $e.seq + ": opens to the vector's plaintext")
+    }
+}
+
+Write-Host ""
+Write-Host "--- HPKE single-shot: what must not open ---" -ForegroundColor Cyan
+$rk = New-HordeRelayP256Key -Use "ecdh"
+$rkPub = ConvertTo-HordeRelayP256Public -Key $rk
+$aad = Get-HordeRelayAsciiBytes -Text "header"
+$msg = [System.Text.Encoding]::UTF8.GetBytes("answer: yes, ship it " + [string][char]0x05e9)
+foreach ($from in $live) {
+    foreach ($to in $live) {
+        Select-HordeRelayAeadBackend -Name $from
+        $box = Protect-HordeRelayHpke -RecipientPublic $rkPub -Info $info -Aad $aad -Plaintext $msg
+        Select-HordeRelayAeadBackend -Name $to
+        Check ((Hex (Unprotect-HordeRelayHpke -RecipientKey $rk -Enc $box.enc -Info $info -Aad $aad -Sealed $box.sealed)) -ceq (Hex $msg)) ("sealed on " + $from + ", opened on " + $to + ", non-ASCII intact")
+    }
+}
+$box = Protect-HordeRelayHpke -RecipientPublic $rkPub -Info $info -Aad $aad -Plaintext $msg
+$box2 = Protect-HordeRelayHpke -RecipientPublic $rkPub -Info $info -Aad $aad -Plaintext $msg
+Check ((Hex $box.enc) -cne (Hex $box2.enc) -and (Hex $box.sealed) -cne (Hex $box2.sealed)) "two seals of one message differ: a fresh ephemeral key each time"
+Check ($null -eq (Unprotect-HordeRelayHpke -RecipientKey (New-HordeRelayP256Key -Use "ecdh") -Enc $box.enc -Info $info -Aad $aad -Sealed $box.sealed)) "the wrong recipient's key does not open"
+Check ($null -eq (Unprotect-HordeRelayHpke -RecipientKey $rk -Enc $box.enc -Info (Get-HordeRelayAsciiBytes -Text "other info") -Aad $aad -Sealed $box.sealed)) "other info does not open"
+Check ($null -eq (Unprotect-HordeRelayHpke -RecipientKey $rk -Enc $box.enc -Info $info -Aad (Get-HordeRelayAsciiBytes -Text "headex") -Sealed $box.sealed)) "other AAD does not open"
+$encOther = ConvertTo-HordeRelayP256Public -Key (New-HordeRelayP256Key -Use "ecdh")
+Check ($null -eq (Unprotect-HordeRelayHpke -RecipientKey $rk -Enc $encOther -Info $info -Aad $aad -Sealed $box.sealed)) "another enc (a valid point) does not open"
+$encBad = [byte[]]$box.enc.Clone(); $encBad[64] = $encBad[64] -bxor 1
+Check ($null -eq (Unprotect-HordeRelayHpke -RecipientKey $rk -Enc $encBad -Info $info -Aad $aad -Sealed $box.sealed)) "an enc off the curve does not open, and does not throw"
+Check (Throws { Protect-HordeRelayHpke -RecipientPublic $offCurve -Info $info -Aad $aad -Plaintext $msg } "not a point on P-256") "sealing to a recipient key off the curve is refused"
+
+Complete-HordeSuite -Success "base64url, HKDF, AES-256-GCM on every backend, P-256 ECDH and ECDSA, DER, and HPKE match their standards' vectors, and every tamper fails"
