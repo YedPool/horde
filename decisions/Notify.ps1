@@ -389,8 +389,9 @@ function Invoke-HordeDecisionNotifyLoop {
                 $force = $false
                 $last = Invoke-HordeDecisionNotifyPass -Tracker $tracker -Clock $Clock -Inbox $Inbox -Seat $Seat -HordeHome $hordeHome
                 $lastMark = $mark; $lastPassAt = & $Clock
-                # The quiet period ended while the store was being read: read again before ringing.
-                if ($last.outcome -ceq "reread") { $force = $true; continue }
+                # The quiet period ended while the store was being read: read again before ringing, after
+                # a moment, so that a clock that has not moved (a test's) cannot spin here.
+                if ($last.outcome -ceq "reread") { $force = $true; & $Sleep 0.2; continue }
                 $wakeAt = [datetime]::MaxValue
                 if ($null -ne $last.wakeAt) { $wakeAt = [datetime]$last.wakeAt }
                 if ($last.said -cne $lastSaid) {

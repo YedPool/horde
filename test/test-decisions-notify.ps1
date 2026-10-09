@@ -218,6 +218,13 @@ Check (((Told) -join ",") -ceq "1,2,3,2") "and the record holds every message to
 
 Write-Host ""
 Write-Host "--- what does not ring: the warchief's own words, and answers he has read ---" -ForegroundColor Cyan
+# The inbox hands the warchief only others' words; today those are the founder's alone. Should a third
+# speaker ever have words there, they are not the founder's answer and are not rung for.
+$mixed = New-HordeKnown -Value ([pscustomobject]@{ outcome = "done"; messages = @(
+    [pscustomobject]@{ number = 2; message = [pscustomobject]@{ speaker = "orc"; sequence = 40; at = "2026-10-09T12:00:00Z" } },
+    [pscustomobject]@{ number = 3; message = [pscustomobject]@{ speaker = "founder"; sequence = 41; at = "2026-10-09T12:00:01Z" } }) })
+$u = Get-HordeDecisionNotifyUnread -Answer $mixed
+Check ($u.ok -and @($u.items).Count -eq 1 -and $u.items[0].message -ceq "41" -and $u.items[0].question -eq 3) "only the founder's words in an inbox are rung for"
 Say-Warchief -Number 4 -Text "a note from the warchief"
 $script:now = [datetime]::UtcNow.AddMinutes(30)
 $p = Pass $tracker
