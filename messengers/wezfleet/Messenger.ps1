@@ -70,8 +70,9 @@
 # no reparse point on it or above it - a junction could be re-aimed after it was configured - and a
 # wezfleet checkout with #65's mail commands: wezfleet.ps1, lib\Mail.ps1, lib\MailPost.ps1 and
 # commands\mail.ps1 (review of #106, G1). Otherwise every call is unknown and nothing starts. Every call
-# has a deadline; past it the child is stopped and the answer is unknown. The answer is read once the
-# command has exited, even while a process it started still holds its output open (review of #106, F6).
+# has a deadline; past it the child and every process it started are stopped and the answer is unknown
+# (review of #106, F7). The answer is read once the command has exited, even while a process it started
+# still holds its output open (F6).
 #
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after messengers/Port.ps1.
 
@@ -201,13 +202,63 @@ function ConvertTo-HordeWezfleetMessengerCommandLine {
     return ($parts -join " ")
 }
 
+function Get-HordeWezfleetMessengerDescendants {
+    # The processes the started one started, and theirs, from one snapshot of the process table, as
+    # { id; start } with start in UTC. A process counts only if it was created at or after its parent
+    # started: a parent pid alone can name a process Windows has since given that pid. Empty when the
+    # table cannot be read; the caller still stops the child it holds.
+    param([Parameter(Mandatory = $true)][int]$RootId, [Parameter(Mandatory = $true)][datetime]$RootStart)
+    $all = @()
+    try { $all = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop) } catch { return @() }
+    $byParent = @{}
+    foreach ($q in $all) {
+        $k = [int]$q.ParentProcessId
+        if (-not $byParent.ContainsKey($k)) { $byParent[$k] = New-Object System.Collections.ArrayList }
+        [void]$byParent[$k].Add($q)
+    }
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{ $RootId = $true }
+    $todo = New-Object System.Collections.Queue
+    $todo.Enqueue([pscustomobject]@{ id = $RootId; start = $RootStart.ToUniversalTime() })
+    while ($todo.Count -gt 0) {
+        $parent = $todo.Dequeue()
+        if (-not $byParent.ContainsKey($parent.id)) { continue }
+        foreach ($c in $byParent[$parent.id]) {
+            $cid = [int]$c.ProcessId
+            if ($seen.ContainsKey($cid) -or $null -eq $c.CreationDate) { continue }
+            $cstart = ([datetime]$c.CreationDate).ToUniversalTime()
+            if ($cstart -lt $parent.start) { continue }
+            $seen[$cid] = $true
+            $d = [pscustomobject]@{ id = $cid; start = $cstart }
+            [void]$out.Add($d)
+            $todo.Enqueue($d)
+        }
+    }
+    return @($out)
+}
+
 function Stop-HordeWezfleetMessengerProcess {
-    # Stop the process this call started, by its handle; say whether it stopped.
+    # Stop the process this call started, by its handle, AND EVERY PROCESS IT STARTED (review of #106,
+    # F7): Process.Kill stops the child alone, and a grandchild - the terminal client wezfleet starts
+    # without redirecting it - outlived the deadline (measured 2026-10-09: a fake that started one and
+    # hung left it running after "the process it started was stopped"). The tree is read before the child
+    # is stopped; each descendant is stopped only if the process now holding its pid started when the
+    # snapshot said, so a reused pid is never stopped. Says what it stopped.
     param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
+    $tree = @()
+    try { $tree = @(Get-HordeWezfleetMessengerDescendants -RootId $Process.Id -RootStart $Process.StartTime) } catch { $tree = @() }
     try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }
+    $stopped = 0
+    foreach ($d in $tree) {
+        try {
+            $q = Get-Process -Id $d.id -ErrorAction Stop
+            if ([Math]::Abs(($q.StartTime.ToUniversalTime() - $d.start).TotalSeconds) -lt 1) { $q.Kill(); $stopped++ }
+        } catch { }
+    }
     $null = $Process.WaitForExit(5000)
-    if ($Process.HasExited) { return "the process it started was stopped" }
-    return "the process it started did not stop within 5 s"
+    $also = $(if ($stopped -gt 0) { ", with " + $stopped + " process(es) it had started" } else { "" })
+    if ($Process.HasExited) { return ("the process it started was stopped" + $also) }
+    return ("the process it started did not stop within 5 s" + $also)
 }
 
 function Start-HordeWezfleetMessengerProcess {

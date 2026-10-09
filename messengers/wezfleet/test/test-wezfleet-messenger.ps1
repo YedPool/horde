@@ -13,7 +13,8 @@
 # this user can open and are swept (F), a target or sender wezfleet cannot name is refused before any
 # process starts (B), main's answer - reason codes, detail, exit 4, exit 1 for an internal error - is
 # read (C, D, E), an answer naming another target is not read as this one's (D), and the answer is read
-# when the command exits although a grandchild still holds its output (E; review finding F6).
+# when the command exits although a grandchild still holds its output, and a stopped command's
+# grandchildren are stopped with it (E; review findings F6 and F7).
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
@@ -452,6 +453,38 @@ With-Fake {
     Check ($held.Count -eq 1) ("CONTROL: the grandchild holding the command's output was still running when the answer came back (" + $held.Count + ")")
     Check ($a.state -ceq "known" -and $a.value.stage -ceq "accepted" -and $took -lt 20) ("a command that has exited is read at once, though a grandchild still holds its output (" + [int]$took + " s; " + (Show-Answer $a) + ")")
     foreach ($l in $held) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# THE DEADLINE STOPS THE COMMAND'S WHOLE TREE (review of #106, F7). Process.Kill stops the child alone,
+# and a grandchild it started - a hung terminal client - outlived it. Here the fake starts a grandchild
+# and then hangs past the deadline.
+With-Fake {
+    param($st)
+    Set-HordeWezfleetMessengerRoot -Path $st.dir -TimeoutSeconds 8
+    & $fx.SetMode $st @{ post = @{ grandchildSeconds = 60; hangSeconds = 60 } }
+    $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
+    Check (Test-Path -LiteralPath (Join-Path $st.dir "grandchild.pid")) "CONTROL: the fake started its grandchild before the deadline, so the check below is about a real one"
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("8 s")) ("the hung command is unknown after its deadline (" + $a.reason + ")")
+    Start-Sleep -Milliseconds 500
+    $left = @(Get-Grandchildren $st)
+    Check ($left.Count -eq 0) ("and the grandchild the command started was stopped with it (" + $left.Count + " left)")
+    foreach ($l in $left) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
+    foreach ($l in @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { "$($_.CommandLine)".Contains($st.dir) })) { Stop-Process -Id $l.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# A PARENT PID IS NOT A PARENT. Windows reuses pids, so a process whose parent pid is the started
+# command's but that was created before the command started is a stranger, and so is everything below
+# it. The process table is played here: Get-CimInstance is shadowed inside this block only.
+& {
+    $t = [datetime]::UtcNow.AddMinutes(-5)
+    function Get-CimInstance {
+        return @(
+            [pscustomobject]@{ ProcessId = 200; ParentProcessId = 100; CreationDate = $t.AddSeconds(1).ToLocalTime() },
+            [pscustomobject]@{ ProcessId = 300; ParentProcessId = 100; CreationDate = $t.AddSeconds(-10).ToLocalTime() },
+            [pscustomobject]@{ ProcessId = 400; ParentProcessId = 200; CreationDate = $t.AddSeconds(2).ToLocalTime() },
+            [pscustomobject]@{ ProcessId = 500; ParentProcessId = 300; CreationDate = $t.AddSeconds(3).ToLocalTime() },
+            [pscustomobject]@{ ProcessId = 600; ParentProcessId = 400; CreationDate = $t.AddSeconds(1.5).ToLocalTime() })
+    }
+    $ids = @(Get-HordeWezfleetMessengerDescendants -RootId 100 -RootStart $t | ForEach-Object { $_.id } | Sort-Object)
+    Check (($ids -join ",") -ceq "200,400") ("the tree is the command's children and theirs, each created after its parent; an older process under a reused pid, its children and a process older than its own parent are left out (" + ($ids -join ",") + ")")
 }
 # EXIT 1 IS THE FLEET'S OWN "COULD NOT", and the reason must say so, with its code and its detail: it read
 # "exit 1, which is not an exit code of the fleet's post" for an answer the fleet documents (measured

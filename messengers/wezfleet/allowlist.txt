@@ -10,7 +10,7 @@
 # on 2026-10-06 when this messenger came in, and test/test-host-names.ps1 checks it.
 #
 # path | mentions | why this file may name the messenger
-messengers/start-sites.txt | 14 | the family's list of start sites names this messenger's start function, its callers and what it sets, which is the point of the list
+messengers/start-sites.txt | 15 | the family's list of start sites names this messenger's start function, its callers, what it sets and its read of the process table, which is the point of the list
 test/test-start-sites.ps1 | 4 | the start-site suite plants a moved, a doubled and a second-caller start in this messenger's start function to prove each is refused
 test/mutations/messenger-wezfleet.psd1 | 13 | a mutation spec quotes the code it changes
 test/mutations/messenger-wezfleet-sites.psd1 | 2 | a mutation spec quotes the code it changes

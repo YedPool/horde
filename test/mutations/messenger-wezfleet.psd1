@@ -185,6 +185,13 @@
         @{ Name = "exited-command-output-awaited"
            Find = 'elseif (((Get-Date) - $exitedAt).TotalMilliseconds -ge $script:HordeWezfleetMessengerDrainMs) { $drained = $true; break }'
            Replace = 'elseif ($false) { }' }
+        # Review of #106, F7: the deadline stops what the command started, too.
+        @{ Name = "grandchild-not-stopped"
+           Find = 'if ([Math]::Abs(($q.StartTime.ToUniversalTime() - $d.start).TotalSeconds) -lt 1) { $q.Kill(); $stopped++ }'
+           Replace = 'if ($false) { }' }
+        @{ Name = "reused-parent-pid-followed"
+           Find = 'if ($cstart -lt $parent.start) { continue }'
+           Replace = '' }
         @{ Name = "output-cap-dropped"
            Find = 'if ($got.Length -gt $script:HordeWezfleetMessengerMaxBytes) {'
            Replace = 'if ($false) {' }
