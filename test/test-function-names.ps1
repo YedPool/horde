@@ -34,6 +34,7 @@ Check ($files -ccontains "platform/windows/Scale.ps1") "CONTROL: the platform co
 Check (($files -ccontains "surfaces/Port.ps1") -and (@($files | Where-Object { $_ -clike "surfaces/*/Surface.ps1" }).Count -ge 1) -and -not ($files -clike "surfaces/*/test/*")) "CONTROL: the surfaces ship and are scanned, their suites not"
 Check ($files -ccontains "fleet/StatusPanel.ps1") "CONTROL: the fleet code ships and is scanned"
 Check (($files -ccontains "relay/Envelope.ps1") -and ($files -ccontains "relay/BackendCng.ps1") -and -not ($files -clike "relay/*/test/*")) "CONTROL: the relay module ships and is scanned"
+Check (($files -ccontains "relays/Port.ps1") -and (@($files | Where-Object { $_ -clike "relays/*/Relay.ps1" }).Count -ge 1) -and -not ($files -clike "relays/*/test/*")) "CONTROL: the relays ship and are scanned, their test fixtures not"
 Check (@($files | Where-Object { @($_ -split '/') -contains "test" }).Count -eq 0) "no file in a test folder is scanned: a suite may override a function in its own process"
 $defs = @(Get-HordeTopFunctionDefinitions -Root $root -Files $files)
 Check (@($defs | Where-Object { $_.name -ceq "<parse error>" }).Count -eq 0) ("every shipped file parses (" + (@($defs | Where-Object { $_.name -ceq "<parse error>" } | ForEach-Object { $_.file }) -join ", ") + ")")
