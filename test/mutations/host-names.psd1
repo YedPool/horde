@@ -245,8 +245,8 @@
            Replace = '-Skip @($script:HordeProcessImageExempt)' }
         # --- transports/ is the third family (remote plan step R5)
         @{ Name = "transports-not-a-family"
-           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")'
-           Replace = '$script:HordePortFamilies = @("hosts", "agents", "messengers")' }
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents", "messengers", "surfaces")' }
         @{ Name = "image-rule-skips-whole-families"
            Find = '-Skip (@(Get-HordePortFolders -RepoRoot $RepoRoot) + @($script:HordeProcessImageExempt))'
            Replace = '-Skip (@($script:HordePortFamilies) + @($script:HordeProcessImageExempt))' }
@@ -336,6 +336,26 @@
         @{ Name = "list-files-not-exempt"
            Find = 'return ($script:HordePortListFiles -contains $rest)'
            Replace = 'return $false' }
+        # --- a pinned file is the one exception to the ASCII rule (decisions design 2026-10-06, 3.11)
+        @{ Name = "pinned-file-read-as-text"
+           Find = 'if ($pinned.ContainsKey($f.FullName.ToLowerInvariant())) { continue }'
+           Replace = '' }
+        @{ Name = "pinned-file-not-held-to-its-fingerprint"
+           Find = 'foreach ($x in @(Test-HordePinnedFiles -RepoRoot $RepoRoot)) { Add-Finding $x.host $x.path $x.problem }'
+           Replace = '' }
+        @{ Name = "a-list-outside-a-port-excuses-its-files"
+           Find = 'if (-not (Get-HordePortFolderOf -Rel $listRel)) { continue }'
+           Replace = '' }
+        @{ Name = "a-list-outside-a-port-is-not-a-finding"
+           Find = 'if (-not (Get-HordePortFolderOf -Rel $rel)) {'
+           Replace = 'if ($false) {' }
+        # --- only a program library is left unread (review of the surfaces pull request, 2026-10-06)
+        @{ Name = "a-list-excuses-a-script"
+           Find = 'if (-not (Test-HordePinnedFileType -Name $e.name)) { continue }'
+           Replace = '' }
+        @{ Name = "a-listed-script-is-not-a-finding"
+           Find = 'if (Test-HordePinnedFileType -Name $listed.name) { continue }'
+           Replace = 'continue' }
         @{ Name = "shrink-import-invisible"
            Find = 'if ($r.cells[1] -ceq $script:HordeImportCount) { $c = 1 }'
            Replace = 'if ($false) { $c = 1 }' }

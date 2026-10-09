@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "claim": "Decisions put to the person in the sessions' own jargon, as long numbered tails on chat replies, cost a round trip each time; a plain-recap rule removes most of it.",
+  "metric": {
+    "what": "Prompts from the person containing explain / what is this / which? items, by day, before and after a recap rule; highest item number in their numbered replies.",
+    "numbers": [
+      {
+        "name": "humanPrompts",
+        "values": [
+          94
+        ]
+      },
+      {
+        "name": "promptsWithAskBack",
+        "values": [
+          17
+        ]
+      },
+      {
+        "name": "askBackItems",
+        "values": [
+          33
+        ]
+      },
+      {
+        "name": "askBackPromptsByDay",
+        "values": [
+          7,
+          9,
+          1
+        ]
+      },
+      {
+        "name": "recapRuleAdoptedOnDay",
+        "values": [
+          2
+        ]
+      },
+      {
+        "name": "numberedReplies",
+        "values": [
+          28
+        ]
+      },
+      {
+        "name": "highestItemNumber",
+        "values": [
+          23
+        ]
+      },
+      {
+        "name": "statusPullPrompts",
+        "values": [
+          13
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "master transcript, typed prompts only"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Decisions go only to a decisions list, each with a plain-words recap; orchestrators file to it directly. The recap rule belongs in the protocol, not in one master's memory.",
+  "confidence": "low",
+  "whyItGeneralises": "Questions put to a person in a team's own jargon cost a round trip anywhere; a recap rule is a protocol change any fleet can adopt.",
+  "limits": "Keyword patterns over three days; day 3 had fewer decision lists."
+}

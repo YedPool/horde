@@ -29,6 +29,10 @@ Check ($files.Count -ge 30) ("CONTROL: the shipped files were found (" + $files.
 Check (($files -ccontains "core/Ownership.ps1") -and ($files -ccontains "core/PermissionLevels.ps1") -and ($files -ccontains "tools/FunctionNames.ps1")) "CONTROL: the two files of the 2026-10-02 collision, and this tool, are scanned"
 Check (($files -ccontains "transports/local/Transport.ps1") -and ($files -ccontains "cli/commands/help.ps1") -and ($files -ccontains "horde.ps1")) "CONTROL: files in subfolders, and horde.ps1, are scanned"
 Check (($files -ccontains "messengers/Port.ps1") -and ($files -ccontains "messengers/memory/Messenger.ps1") -and -not ($files -ccontains "messengers/memory/test/Fixture.ps1")) "CONTROL: the messengers ship and are scanned, their test fixtures not"
+Check (($files -ccontains "decisions/Store.ps1") -and ($files -ccontains "decisions/Rules.ps1") -and ($files -ccontains "decisions/Operations.ps1")) "CONTROL: the decisions module ships and is scanned"
+Check ($files -ccontains "platform/windows/Scale.ps1") "CONTROL: the platform code ships and is scanned"
+Check (($files -ccontains "surfaces/Port.ps1") -and (@($files | Where-Object { $_ -clike "surfaces/*/Surface.ps1" }).Count -ge 1) -and -not ($files -clike "surfaces/*/test/*")) "CONTROL: the surfaces ship and are scanned, their suites not"
+Check ($files -ccontains "fleet/StatusPanel.ps1") "CONTROL: the fleet code ships and is scanned"
 Check (@($files | Where-Object { @($_ -split '/') -contains "test" }).Count -eq 0) "no file in a test folder is scanned: a suite may override a function in its own process"
 $defs = @(Get-HordeTopFunctionDefinitions -Root $root -Files $files)
 Check (@($defs | Where-Object { $_.name -ceq "<parse error>" }).Count -eq 0) ("every shipped file parses (" + (@($defs | Where-Object { $_.name -ceq "<parse error>" } | ForEach-Object { $_.file }) -join ", ") + ")")
