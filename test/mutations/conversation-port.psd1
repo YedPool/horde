@@ -84,6 +84,9 @@
         @{ Name = "second-registration-swaps"
            Find = 'if ($script:HordeConversationAdapters.ContainsKey("$($caps.vendor)")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "delivered-not-a-role"
+           Find = '$script:HordeConversationRoles = @("user", "assistant", "system", "delivered")'
+           Replace = '$script:HordeConversationRoles = @("user", "assistant", "system")' }
         @{ Name = "asked-session-not-checked"
            Find = 'if ($Session -ne "" -and $located.value -cne $Session) {'
            Replace = 'if ($false) {' }

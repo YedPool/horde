@@ -131,6 +131,11 @@ try {
     Add-ClaudeCodeLines -Path $T.path -Lines @($metaHuman, $summaryHuman)
     $r = Read-Turns $T $cursor
     Check (@($r.value.turns).Count -eq 0) "a meta line and a compaction summary are no turn even when marked human"
+    $handed = New-ClaudeCodeLine -Kind "stop-hook-feedback" -Session $T.sid -Text ("MESSAGE FROM M (mail 0123)`n`nmerge it" + [char]0x05D0)
+    Add-ClaudeCodeLines -Path $T.path -Lines @($handed, (New-ClaudeCodeLine -Kind "meta" -Session $T.sid))
+    $r2 = Read-Turns $T -Cursor $r.value.next
+    Check (@($r2.value.turns).Count -eq 1 -and $r2.value.turns[0].role -ceq "delivered" -and $r2.value.turns[0].text -ceq ("MESSAGE FROM M (mail 0123)`n`nmerge it" + [char]0x05D0)) "a Stop hook's block reason is one DELIVERED turn, its text what follows the harness's prefix; another meta line beside it is still nothing"
+    $r = $r2
     $cursor = $r.value.next
     # A TOOL'S STRUCTURED OUTPUT may hold any member, "kind":"human" among them: only the line's own origin counts.
     # An interruption marker carries text blocks and no origin: with a member that happens to say kind

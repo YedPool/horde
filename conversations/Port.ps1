@@ -35,6 +35,11 @@
 #
 # TEXT ONLY (design decision 8, founder 2026-10-09: the phone shows user and assistant text). Tool calls
 # and their output are not turns; showing them is a later option with its own redaction and paging.
+# THE ROLES: user (a person typed it), assistant (the model wrote it), system (the harness reported
+# something), and delivered - text a messenger HANDED to the Thrall, not typed into it (the fleet's mail,
+# the founder's chat lines). Who sent a delivered turn is not the port's to say: it is the delivering
+# side's, which knows what it delivered (channels/chat binds a founder's line to the hash of the line he
+# signed). A reader that cannot tell drops delivered turns rather than show them as anyone's.
 #
 # THE CURSOR is the caller's to keep and hand back: { schemaVersion = 1; vendor; session; position },
 # plain data that survives being written as JSON. position is the adapter's own, opaque here: printable
@@ -92,7 +97,7 @@ if ($null -eq (Get-Variable -Name HordeConversationAdapters -Scope Script -Error
 if ($null -eq (Get-Variable -Name HordeConversationSources -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeConversationSources = @{} }
 $script:HordeConversationCapabilityNames = @("incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory")
 $script:HordeConversationHazardNames = @("partialTurns", "mutableHistory")
-$script:HordeConversationRoles = @("user", "assistant", "system")
+$script:HordeConversationRoles = @("user", "assistant", "system", "delivered")
 # THE CEILINGS. maxTurns: a phone shows tens of turns at a time; 1000 is a whole working day of a busy
 # Thrall's (measured: 485 human prompts and 739 assistant text blocks in a 27 MB transcript, 2026-10-10).
 # maxBytes: 32 MiB is more than the largest live Thrall transcript (27.3 MB, S4) in one read, so a first

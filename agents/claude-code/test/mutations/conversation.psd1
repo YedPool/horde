@@ -66,6 +66,12 @@
         @{ Name = "past-session-any-role"
            Find = '$named = (Read-HordeRecordRole -Record $record -Table $table).role'
            Replace = '$named = $(if ($Session -ne "") { [pscustomobject]@{ state = "known"; value = $Role } } else { (Read-HordeRecordRole -Record $record -Table $table).role })' }
+        @{ Name = "any-meta-line-delivered"
+           Find = 'if ($said -is [string] -and $said.StartsWith($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal)) {'
+           Replace = 'if ($said -is [string]) {' }
+        @{ Name = "delivered-line-prefiltered-out"
+           Find = ' -or ($text.IndexOf($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal) -ge 0)) {'
+           Replace = ') {' }
         @{ Name = "thrall-without-a-file-unknown"
            Find = 'if ($offset -eq 0) { return (New-HordeKnown'
            Replace = 'if ($false) { return (New-HordeKnown' }

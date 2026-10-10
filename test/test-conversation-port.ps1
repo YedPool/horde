@@ -236,6 +236,13 @@ $y = Read-HordeConversationTurns -Source $src2 -Cursor $x.value.next
 Check ($y.state -ceq "known" -and $y.value.reset -ceq "rotated" -and (Texts $y) -ceq "rewritten") "a history the adapter says was rewritten: reset rotated, read from its start"
 
 Write-Host ""
+Write-Host "--- a delivered turn is a role of its own ---" -ForegroundColor Cyan
+$store = New-HordeMemoryConversationStore
+Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "delivered" -Text "handed over by a messenger"
+$r = Read-HordeConversationTurns -Source (Find-Mem $store).value -Cursor $null
+Check ($r.state -ceq "known" -and @($r.value.turns).Count -eq 1 -and $r.value.turns[0].role -ceq "delivered" -and @(Test-HordeSchema -Value $r.value.turns[0] -Schema (Get-HordeSchema -Name "conversation-turn.v1")).Count -eq 0) "a turn a messenger handed over keeps the role delivered, and the turn schema takes it"
+
+Write-Host ""
 Write-Host "--- a past session by its id: the tail a clear left behind ---" -ForegroundColor Cyan
 $store = New-HordeMemoryConversationStore
 Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "user" -Text "before the cursor"
