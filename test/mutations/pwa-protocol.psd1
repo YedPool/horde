@@ -42,5 +42,23 @@
         @{ Name = "expired-offer-taken"
            Find = 'if (now >= o.expiresAt) return no('
            Replace = 'if (false) return no(' }
+        @{ Name = "chat-receipt-any-code-shown"
+           Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
+           Replace = 'if (false) return' }
+        @{ Name = "chat-echo-shown-twice"
+           Find = 'if (echo) continue;'
+           Replace = 'if (false) continue;' }
+        @{ Name = "chat-turn-shown-before-its-parts"
+           Find = 'if (g.parts.size !== n) continue;'
+           Replace = 'if (g.parts.size === 0) continue;' }
+        @{ Name = "chat-other-machine-read"
+           Find = 'if (b.horde !== horde || b.machine !== machine) return { error: "the chat body names another horde or machine" };'
+           Replace = 'if (b.horde !== horde) return { error: "the chat body names another horde or machine" };' }
+        @{ Name = "chat-role-off-the-list-kept"
+           Find = 'CHAT_ROLES.indexOf(t.role) >= 0 &&'
+           Replace = 'true &&' }
+        @{ Name = "chat-line-unbound-to-session"
+           Find = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session, text }));'
+           Replace = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session: "any", text }));' }
     )
 }

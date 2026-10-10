@@ -4,7 +4,7 @@
 //
 // THE SPECIFICATION IS THE POWERSHELL. Each section names the machine-side file whose strings it
 // copies: relay/Envelope.ps1, relay/Hpke.ps1, relay/Pairing.ps1, relay/Trust.ps1 and
-// channels/decisions/Channel.ps1. A string here that differs from its twin there is a bug here; the
+// channels/decisions/Channel.ps1 and channels/chat/Channel.ps1. A string here that differs from its twin there is a bug here; the
 // end-to-end suites (test/test-relay-phone-e2e.ps1, surfaces/pwa/test/test-pwa-phone-e2e.ps1) put
 // what this file makes through the real machine code.
 //
@@ -398,4 +398,134 @@ export function newestSnapshot(pages) {
     best = { snapshot: hash, seq: g.seq, firstSeq: Math.min(...ordered.map((p) => p.relaySeq || 0)), questions, withheld: first.withheld, counts: first.counts, unreadable: first.unreadable, notUnderstood: first.notUnderstood };
   }
   return best;
+}
+
+// --- the chat channel (channels/chat/Channel.ps1) ---
+
+// The receipt's codes, by status, and the ONE sentence the phone shows for each: what a receipt says is
+// a code from this list, never words of the machine's, the relay's or a messenger's.
+export const CHAT_WORDS = {
+  accepted: { queued: "Sent: the Thrall's mailbox has it.", delivered: "Delivered to the Thrall." },
+  held: {
+    "thrall-unknown": "Held: the machine cannot find the Thrall just now; it will try again.",
+    "no-messenger": "Held: the machine has no way to deliver it yet; it will try again.",
+    "not-now": "Held: delivery failed for now; it will try again.",
+    "not-delivered": "Not delivered: the Thrall's mailbox holds it back.",
+    expired: "Not delivered: it waited too long."
+  },
+  refused: {
+    "wrong-machine": "Refused: it was sent to the wrong machine.",
+    "wrong-horde": "Refused: it was sent to the wrong horde.",
+    empty: "Refused: it has no words.",
+    "too-long": "Refused: it is too long for one line.",
+    "no-thrall": "Refused: no Thrall is running on that machine.",
+    "session-ended": "Refused: the Thrall started a new session; send it again."
+  }
+};
+export const CHAT_SENDING = "Sending...";
+export const CHAT_ROLES = ["user", "assistant", "system"];
+const SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
+const TURN_ID = /^[\x21-\x7e]{1,200}$/;
+
+// The line body: JSON.stringify escapes what JSON must; the machine reads it strictly, exactly these members.
+export function lineBody({ messageId, horde, machine, session, text }) {
+  if (!/^[0-9a-f]{32}$/.test(messageId)) throw new Error("a messageId is 32 lower-case hex");
+  if (typeof horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(horde)) throw new Error("the horde is a horde name");
+  if (!KEY_ID.test(machine)) throw new Error("the machine is a key id");
+  if (typeof session !== "string" || !SESSION.test(session)) throw new Error("the session is the Thrall's session id");
+  if (typeof text !== "string") throw new Error("the line is text");
+  return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session, text }));
+}
+
+// What the Thrall reads begins with this, naming the line (channels/chat, THE BODY THE THRALL GETS): a
+// user turn holding it is the phone's own line coming back.
+export function lineMarker(messageId) { return "(line " + messageId + ")"; }
+
+function chatHead(bodyBytes, kind, horde, machine) {
+  let b;
+  try { b = JSON.parse(fromUtf8(bodyBytes)); } catch (x) { return { error: "the chat body is not JSON" }; }
+  if (!b || b.v !== 1 || b.kind !== kind) return { error: "not a version 1 " + kind };
+  if (b.horde !== horde || b.machine !== machine) return { error: "the chat body names another horde or machine" };
+  if (typeof b.session !== "string" || !SESSION.test(b.session)) return { error: "the chat body names no session" };
+  return { body: b };
+}
+
+// A turns body, read: { ok, reason, value } with value { session, backfill, turns }. Each turn is
+// { id, role, session, text, time?, group?, part?, parts?, truncated?, redactions? }; a turn that does
+// not hold together is dropped, and counted in value.dropped.
+export function readChatTurns(bodyBytes, horde, machine) {
+  const h = chatHead(bodyBytes, "chat-turns", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (typeof b.backfill !== "boolean" || !Array.isArray(b.turns)) return { ok: false, reason: "the turns body has no turns list", value: null };
+  const turns = [];
+  let dropped = 0;
+  for (const t of b.turns) {
+    const ok = t && typeof t.id === "string" && TURN_ID.test(t.id) && CHAT_ROLES.indexOf(t.role) >= 0 && typeof t.text === "string" &&
+      typeof t.session === "string" && SESSION.test(t.session) &&
+      (t.part === undefined || (Number.isSafeInteger(t.part) && Number.isSafeInteger(t.parts) && t.part >= 1 && t.part <= t.parts && t.parts <= 100000));
+    if (!ok) { dropped++; continue; }
+    turns.push({ id: t.id, role: t.role, session: t.session, text: t.text, time: typeof t.time === "string" ? t.time : "", group: typeof t.group === "string" ? t.group : "",
+      part: t.part || 0, parts: t.parts || 0, truncated: t.truncated === true, redactions: Number.isSafeInteger(t.redactions) ? t.redactions : 0 });
+  }
+  return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped } };
+}
+
+// A receipt body, read: { ok, reason, value } with value { session, messageId, status, code, text }.
+// A status or code off the list is refused: the phone never shows a word it did not choose.
+export function readChatReceipt(bodyBytes, horde, machine) {
+  const h = chatHead(bodyBytes, "chat-receipt", horde, machine);
+  if (h.error) return { ok: false, reason: h.error, value: null };
+  const b = h.body;
+  if (typeof b.messageId !== "string" || !/^[0-9a-f]{32}$/.test(b.messageId)) return { ok: false, reason: "the receipt names no line", value: null };
+  if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return { ok: false, reason: "the receipt's status or code is not one this phone knows", value: null };
+  if (typeof b.text !== "string") return { ok: false, reason: "the receipt has no words", value: null };
+  return { ok: true, reason: "", value: { session: b.session, messageId: b.messageId, status: b.status, code: b.code, text: b.text } };
+}
+
+// The chat as the phone shows it, from what it holds in memory:
+//   turns     every turn entry read (parts and repeats included), each with seq (the envelope's)
+//   receipts  every receipt read, each with seq and ts (the envelope's)
+//   sent      the lines this phone sent this session: { messageId, text, at, session }
+// -> { session, items } where items are, in order of time, { kind: "turn", id, role, text, time, session,
+// truncated, redactions } and { kind: "line", messageId, text, at, status, code, words }. A turn is shown
+// once, by id, and only once all its parts are here; a user turn that is the phone's own line coming
+// back (it holds a line's marker) is shown as that line, not twice; a line is shown once, its newest
+// receipt's status on it, or "sending" when there is none yet.
+export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
+  const byId = new Map();
+  for (const t of turns) {
+    let g = byId.get(t.id);
+    if (!g) { g = { first: t, parts: new Map(), seq: t.seq }; byId.set(t.id, g); }
+    if (t.part) { if (!g.parts.has(t.part)) g.parts.set(t.part, t); }
+    else g.whole = t;
+  }
+  const lines = new Map();
+  for (const s of sent) lines.set(s.messageId, { kind: "line", messageId: s.messageId, text: s.text, at: s.at, session: s.session, status: "sending", code: "", words: CHAT_SENDING, seq: -1 });
+  for (const r of receipts) {
+    const had = lines.get(r.messageId);
+    if (had && had.seq > r.seq) continue;
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts, session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+  }
+  const items = [];
+  for (const [id, g] of byId) {
+    let text;
+    if (g.whole) text = g.whole.text;
+    else {
+      const n = g.first.parts;
+      if (g.parts.size !== n) continue;
+      text = "";
+      for (let i = 1; i <= n; i++) text += g.parts.get(i).text;
+    }
+    const t = g.whole || g.first;
+    if (t.role === "user") {
+      let echo = false;
+      for (const m of lines.keys()) if (text.indexOf(lineMarker(m)) >= 0) { echo = true; break; }
+      if (echo) continue;
+    }
+    items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, order: g.seq });
+  }
+  for (const l of lines.values()) items.push({ ...l, order: Number.MAX_SAFE_INTEGER });
+  items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
+  return items;
 }
