@@ -16,9 +16,12 @@
 #             "retry" (not now: the same record is handed over again later, from the journal).
 #             AN ACCEPT MUST BE IDEMPOTENT BY THE RECORD: after a crash between its act and the done
 #             mark the same item comes again (relay/Journal.ps1, FINISHED AND UNFINISHED);
-#   Tick      param($Context) -> lines: whatever the channel sends OUT, on every turn of the runner.
-#             It sends through Send-HordeRelayChannelEnvelope, and says what it did in lines a person
-#             can read.
+#   Tick      param($Context) -> { lines; failed }: whatever the channel sends OUT, on every turn of
+#             the runner, and whether it could not (the relay would not take a put, the journal would not
+#             record): failed counts toward the runner's backoff (review of 48bc492, finding 1). Plain
+#             lines are taken as { lines; failed = $false }. It records with
+#             Save-HordeRelayChannelEnvelope and puts with Send-HordeRelayChannelSaved, and keeps what it
+#             recorded and could not put in $Context.state, to put that same envelope again.
 # This file names no channel, so chat is a new folder and not an edit here (the design's PR plan,
 # item 10).
 #
@@ -136,6 +139,21 @@ function New-HordeRelayRunContext {
     }))
 }
 
+function Update-HordeRelayRunContext {
+    # The context opened again - its keys, after a rotation the new mailbox - KEEPING what the run has
+    # learnt: the channels' memory (the last snapshot sent, an envelope recorded and not yet put) always,
+    # and the cursor and the ack while the mailbox is the same one (review of 48bc492, finding 3: the
+    # hourly reopen reset them and sent an identical snapshot again). Known, the new context, and the old
+    # one's keys let go; the new context's answer when it cannot be opened, and the old one left as it is.
+    param([Parameter(Mandatory = $true)]$Context, $Now = $null)
+    $made = New-HordeRelayRunContext -HordeHome $Context.hordeHome -Connection $Context.connection -DecisionsRoot $Context.decisionsRoot -Now $Now
+    if ($made.state -cne "known") { return $made }
+    $made.value.state = $Context.state
+    if ($made.value.mailbox -ceq $Context.mailbox) { $made.value.cursor = $Context.cursor; $made.value.acked = $Context.acked }
+    Close-HordeRelayRunContext -Context $Context
+    return $made
+}
+
 function Close-HordeRelayRunContext {
     # Let go of the context's keys. Safe to call twice.
     param($Context)
@@ -146,9 +164,15 @@ function Close-HordeRelayRunContext {
 
 function Get-HordeRelayChannelSenders {
     # The senders a channel takes, from those trusted now: known hashtable (key id -> sender), or the
-    # trust store's unknown.
-    param($Context, $Channel)
-    $all = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome
+    # trust store's unknown. -Cache, a hashtable a caller keeps for one batch, holds the store's answer
+    # after the first read: reading it re-verifies every record (about 63 ms, measured in the review of
+    # 48bc492), and a batch of answers read it two or three times an item (finding 5).
+    param($Context, $Channel, [hashtable]$Cache = $null)
+    if ($null -ne $Cache -and $Cache.ContainsKey("all")) { $all = $Cache["all"] }
+    else {
+        $all = Find-HordeRelayTrustedSenders -HordeHome $Context.hordeHome
+        if ($null -ne $Cache) { $Cache["all"] = $all }
+    }
     if ($all.state -cne "known") { return $all }
     if ($Channel.senders -ceq "horde") { return $all }
     $out = @{}
@@ -156,40 +180,76 @@ function Get-HordeRelayChannelSenders {
     return (New-HordeKnown -Value $out)
 }
 
-function Send-HordeRelayChannelEnvelope {
-    # Seal -Body to -Recipients (65-byte agreement keys), sign it as this machine, record it in the
-    # journal, and put it into -Mailbox. Known { seq; key; relaySeq; duplicate }; unknown with the reason,
-    # saying whether the envelope was recorded (its seq spent) before it failed.
+function Get-HordeRelayChannelBodyBudget {
+    # The largest body one envelope to -Recipients recipients can carry over this context's relay: the
+    # envelope's own cap (1 MiB), and what the relay's maxTextChars leaves once the text is base64url
+    # (4 characters for 3 bytes, plus the 16-byte tag) and the header, the recipients and a signature
+    # are written. The overhead is counted high: 1024 characters, and 300 for each recipient (a recipient
+    # entry is about 190, measured 2026-10-09). A channel that pages its body sizes pages by this.
+    param([Parameter(Mandatory = $true)]$Context, [int]$Recipients = 1)
+    $text = [double]$Context.connection.relay.limits.maxTextChars - 1024 - 300 * [double]$Recipients
+    $fits = [long][System.Math]::Floor($text * 3 / 4) - 16
+    return [long][System.Math]::Max(0, [System.Math]::Min([double](Get-HordeRelayEnvelopeLimits).bodyBytes, [double]$fits))
+}
+
+function Save-HordeRelayChannelEnvelope {
+    # Seal -Body to -Recipients (65-byte agreement keys), sign it as this machine and record it in the
+    # journal - the first half of a send. Known { seq; key; text }: recorded, its seq spent, to be put
+    # with Send-HordeRelayChannelSaved, again and again if need be. Unknown, with nothing recorded, when
+    # it cannot be made, the journal will not record it, or its text is longer than the relay holds:
+    # checked BEFORE the journal, so no seq is ever spent on an envelope no put could deliver (review of
+    # 48bc492, finding 1).
     param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Body, [Parameter(Mandatory = $true)][object[]]$Recipients, [Parameter(Mandatory = $true)][string]$Mailbox, $Now = $null)
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Body, [Parameter(Mandatory = $true)][object[]]$Recipients, $Now = $null)
+    $most = [long]$Context.connection.relay.limits.maxTextChars
     # Two tries: a second sender of this stream in another process may take the seq between the ask and
     # the record (Get-HordeRelayJournalNextSeq says so); the loser asks again once.
     for ($try = 1; $try -le 2; $try++) {
         $next = Get-HordeRelayJournalNextSeq -From $Context.signKeyId -Channel $Channel -HordeHome $Context.hordeHome
-        if ($next.state -cne "known") { return (New-HordeUnknown -Reason ("nothing was sent: no sequence number - " + $next.reason)) }
+        if ($next.state -cne "known") { return (New-HordeUnknown -Reason ("nothing was recorded: no sequence number - " + $next.reason)) }
         try { $text = New-HordeRelayEnvelope -Kind $Kind -Channel $Channel -Seq $next.value -Body $Body -Recipients $Recipients -Signer $Context.signKey -Now $Now }
-        catch { return (New-HordeUnknown -Reason "nothing was sent: the envelope could not be made" -ErrorRecord $_) }
+        catch { return (New-HordeUnknown -Reason "nothing was recorded: the envelope could not be made" -ErrorRecord $_) }
+        if ($text.Length -gt $most) { return (New-HordeUnknown -Reason ("nothing was recorded: the envelope is " + $text.Length + " characters, more than the relay holds (" + $most + ")")) }
         $rec = Register-HordeRelayJournalSent -Text $text -HordeHome $Context.hordeHome -Now $Now
-        if ($rec.state -cne "known") { return (New-HordeUnknown -Reason ("nothing was sent: the journal did not record it - " + $rec.reason)) }
+        if ($rec.state -cne "known") { return (New-HordeUnknown -Reason ("nothing was recorded: the journal did not record it - " + $rec.reason)) }
         if (-not $rec.value.fresh) { continue }
-        $key = $rec.value.key
-        $put = Send-HordeRelayItem -Connection $Context.connection -Mailbox $Mailbox -Text $text -Key $key
-        if ($put.state -cne "known") { return (New-HordeUnknown -Reason ("the envelope " + $key + " is recorded (its seq is spent) but the relay did not take it: " + $put.reason)) }
-        return (New-HordeKnown -Value ([pscustomobject]@{ seq = [long]$next.value; key = $key; relaySeq = $put.value.seq; duplicate = $put.value.duplicate }))
+        return (New-HordeKnown -Value ([pscustomobject]@{ seq = [long]$next.value; key = $rec.value.key; text = $text }))
     }
-    return (New-HordeUnknown -Reason "nothing was sent: another sender of this stream took the next sequence number twice")
+    return (New-HordeUnknown -Reason "nothing was recorded: another sender of this stream took the next sequence number twice")
+}
+
+function Send-HordeRelayChannelSaved {
+    # Put an envelope Save-HordeRelayChannelEnvelope recorded into -Mailbox, under its replay key, so a
+    # put made again is the same item. Known { key; relaySeq; duplicate }; unknown with the relay's reason.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Saved, [Parameter(Mandatory = $true)][string]$Mailbox)
+    $put = Send-HordeRelayItem -Connection $Context.connection -Mailbox $Mailbox -Text $Saved.text -Key $Saved.key
+    if ($put.state -cne "known") { return (New-HordeUnknown -Reason ("the envelope " + $Saved.key + " is recorded, and the relay did not take it: " + $put.reason)) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ key = $Saved.key; relaySeq = $put.value.seq; duplicate = $put.value.duplicate }))
+}
+
+function Send-HordeRelayChannelEnvelope {
+    # Record and put in one call (Save-HordeRelayChannelEnvelope, then Send-HordeRelayChannelSaved), for
+    # a channel that keeps nothing to put again. Known { seq; key; relaySeq; duplicate }; unknown with the
+    # reason, saying whether the envelope was recorded (its seq spent) before it failed.
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)][string]$Channel, [Parameter(Mandatory = $true)][string]$Kind,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Body, [Parameter(Mandatory = $true)][object[]]$Recipients, [Parameter(Mandatory = $true)][string]$Mailbox, $Now = $null)
+    $saved = Save-HordeRelayChannelEnvelope -Context $Context -Channel $Channel -Kind $Kind -Body $Body -Recipients $Recipients -Now $Now
+    if ($saved.state -cne "known") { return $saved }
+    $put = Send-HordeRelayChannelSaved -Context $Context -Saved $saved.value -Mailbox $Mailbox
+    if ($put.state -cne "known") { return $put }
+    return (New-HordeKnown -Value ([pscustomobject]@{ seq = $saved.value.seq; key = $saved.value.key; relaySeq = $put.value.relaySeq; duplicate = $put.value.duplicate }))
 }
 
 function Test-HordeRelayInboundGate {
     # Step 3 of THE PATH IN: why a read envelope must be refused before the journal sees it, or "".
     # { why; channel; senders } - the channel and its senders when it may go on; unknown senders (the
     # trust store unreadable) is not a refusal of this envelope: why is "" and transient is $true.
-    param($Context, $Envelope)
+    param($Context, $Envelope, [hashtable]$Cache = $null)
     $h = $Envelope.header
     $ch = Get-HordeRelayChannel -Name $h.channel
     if ($null -eq $ch) { return [pscustomobject]@{ why = ("no channel '" + $h.channel + "' is registered here"); transient = $false; channel = $null; senders = $null } }
     if (@($ch.kinds) -cnotcontains $h.kind) { return [pscustomobject]@{ why = ("the channel " + $ch.name + " takes " + $(if (@($ch.kinds).Count) { @($ch.kinds) -join ", " } else { "nothing in" }) + ", not " + $h.kind); transient = $false; channel = $ch; senders = $null } }
-    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $ch
+    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $ch -Cache $Cache
     if ($senders.state -cne "known") { return [pscustomobject]@{ why = ("the trust store cannot be read: " + $senders.reason); transient = $true; channel = $ch; senders = $null } }
     if (-not $senders.value.ContainsKey($h.from)) {
         $who = Find-HordeRelayTrustedSender -HordeHome $Context.hordeHome -KeyId $h.from
@@ -219,6 +279,8 @@ function Receive-HordeRelayInbox {
     $missing = New-Object System.Collections.ArrayList
     $parsed = New-Object System.Collections.ArrayList
     $settled = @{}
+    # The trusted senders, read once for the whole batch (Get-HordeRelayChannelSenders).
+    $senderCache = @{}
     foreach ($it in @($w.value.items)) {
         $r = Read-HordeRelayEnvelope -Text $it.text
         if (-not $r.ok) { [void]$refused.Add("item " + $it.seq + ": not an envelope (" + $r.reason + ")"); $settled[[long]$it.seq] = $true; continue }
@@ -229,7 +291,7 @@ function Receive-HordeRelayInbox {
     foreach ($p in $ordered) {
         $h = $p.envelope.header
         $rk = Get-HordeRelayReplayKey -Header $h
-        $gate = Test-HordeRelayInboundGate -Context $Context -Envelope $p.envelope
+        $gate = Test-HordeRelayInboundGate -Context $Context -Envelope $p.envelope -Cache $senderCache
         if ($gate.transient) { [void]$held.Add($rk + ": " + $gate.why); continue }
         if ($gate.why -cne "") { [void]$refused.Add($rk + ": " + $gate.why); $settled[[long]$p.item.seq] = $true; continue }
         $verdict = Register-HordeRelayJournalReceived -Envelope $p.envelope -Senders $gate.senders -RecipientKeyIds @($Context.openingKeys.Keys) -Channel $h.channel -Kind $h.kind -HordeHome $Context.hordeHome -Now $Now
@@ -267,12 +329,14 @@ function Invoke-HordeRelayUnfinished {
     $done = New-Object System.Collections.ArrayList
     $refused = New-Object System.Collections.ArrayList
     $retry = New-Object System.Collections.ArrayList
+    # The trusted senders, read once for every record of this call, and only if there is one to open.
+    $senderCache = @{}
     foreach ($name in @(Get-HordeRelayChannelNames)) {
         $ch = Get-HordeRelayChannel -Name $name
         $list = Get-HordeRelayJournalUnfinished -Channel $name -HordeHome $Context.hordeHome
         if ($list.state -cne "known") { [void]$retry.Add("channel " + $name + ": " + $list.reason); continue }
         foreach ($u in @($list.value)) {
-            $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u
+            $outcome = Invoke-HordeRelayChannelRecord -Context $Context -Channel $ch -Record $u -Cache $senderCache
             $line = $u.key + ": " + $outcome.reason
             if ($outcome.outcome -ceq "retry") { [void]$retry.Add($line); continue }
             $mark = Complete-HordeRelayJournalReceived -From $u.from -Channel $name -Seq $u.seq -HordeHome $Context.hordeHome -Now $Now
@@ -285,11 +349,11 @@ function Invoke-HordeRelayUnfinished {
 
 function Invoke-HordeRelayChannelRecord {
     # One unfinished record: open it and hand it to its channel. { outcome; reason }.
-    param($Context, $Channel, $Record)
+    param($Context, $Channel, $Record, [hashtable]$Cache = $null)
     if (@($Channel.kinds) -cnotcontains $Record.kind) { return [pscustomobject]@{ outcome = "refused"; reason = ("the channel " + $Channel.name + " no longer takes the kind " + $Record.kind) } }
     $r = Read-HordeRelayEnvelope -Text $Record.text
     if (-not $r.ok) { return [pscustomobject]@{ outcome = "refused"; reason = ("the journaled text is not an envelope: " + $r.reason) } }
-    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel
+    $senders = Get-HordeRelayChannelSenders -Context $Context -Channel $Channel -Cache $Cache
     if ($senders.state -cne "known") { return [pscustomobject]@{ outcome = "retry"; reason = ("the trust store cannot be read: " + $senders.reason) } }
     # The senders trusted NOW: a device revoked since the record was made opens nothing.
     $opened = Unprotect-HordeRelayEnvelope -Envelope $r.value -Senders $senders.value -RecipientKeys $Context.openingKeys -Replay $Record.verdict -Channel $Channel.name -Kind $Record.kind
@@ -307,15 +371,25 @@ function Invoke-HordeRelayChannelRecord {
 }
 
 function Invoke-HordeRelayChannelTicks {
-    # The path out: every channel's Tick, in name order. Lines, each starting with its channel's name. A
-    # channel that throws is a line, and the others still run.
+    # The path out: every channel's Tick, in name order. { lines; failed } - lines each starting with its
+    # channel's name; failed when any channel said it failed, or threw. A channel that throws is a line,
+    # and the others still run.
     param([Parameter(Mandatory = $true)]$Context, $Now = $null)
     $out = New-Object System.Collections.ArrayList
+    $failed = $false
     foreach ($name in @(Get-HordeRelayChannelNames)) {
         $ch = Get-HordeRelayChannel -Name $name
         if ($null -eq $ch.tick) { continue }
-        try { foreach ($l in @(& $ch.tick $Context)) { if ("$l" -ne "") { [void]$out.Add($name + ": " + $l) } } }
-        catch { [void]$out.Add($name + ": failed: " + $_.Exception.Message) }
+        try {
+            $got = @(& $ch.tick $Context)
+            $lines = $got
+            if ($got.Count -eq 1 -and $null -ne $got[0] -and $got[0] -isnot [string] -and $null -ne $got[0].PSObject.Properties["lines"]) {
+                $lines = @($got[0].lines)
+                if ($null -ne $got[0].PSObject.Properties["failed"] -and $got[0].failed -eq $true) { $failed = $true }
+            }
+            foreach ($l in $lines) { if ("$l" -ne "") { [void]$out.Add($name + ": " + $l) } }
+        }
+        catch { [void]$out.Add($name + ": failed: " + $_.Exception.Message); $failed = $true }
     }
-    return @($out.ToArray())
+    return [pscustomobject]@{ lines = @($out.ToArray()); failed = $failed }
 }
