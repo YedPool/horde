@@ -631,13 +631,16 @@ function Get-HordeRelayJournalUnfinished {
 
 function Test-HordeRelayJournalSent {
     # Did this journal record, as SENT, the envelope with replay key -Key (from/channel/seq/nonce)? Known
-    # { sent; kind } - sent $true only for a whole record of that very envelope, with its kind; $false for
-    # a key that is not one, or that names a record this journal does not hold. Unknown when the journal
-    # cannot say or the record is damaged. A channel that takes an answer only to something it sent asks
-    # this (channels/decisions: an answer names the snapshot it was made from).
+    # { sent; kind; text } - sent $true only for a whole record of that very envelope, with its kind and
+    # its wire text exactly as recorded; $false (text "") for a key that is not one, or that names a record
+    # this journal does not hold. Unknown when the journal cannot say or the record is damaged. A channel
+    # that takes an answer only to something it sent asks this (channels/decisions: an answer names the
+    # snapshot it was made from); a channel that must put again, after a restart, what it recorded and
+    # never put reads the text back here (channels/chat: the record IS the copy to put, so nothing of it
+    # is kept anywhere else).
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Key, [string]$HordeHome = "")
     $m = [regex]::Match($Key, '\A([0-9a-f]{32})/([a-z][a-z0-9-]{0,31})/(0|[1-9][0-9]{0,15})/([0-9a-f]{24})\z')
-    if (-not $m.Success) { return (New-HordeKnown -Value ([pscustomobject]@{ sent = $false; kind = "" }) -ObservedAt ([datetime]::UtcNow)) }
+    if (-not $m.Success) { return (New-HordeKnown -Value ([pscustomobject]@{ sent = $false; kind = ""; text = "" }) -ObservedAt ([datetime]::UtcNow)) }
     $ctx = Get-HordeRelayJournalContext -HordeHome $HordeHome
     if (-not $ctx.ok) { return (New-HordeUnknown -Reason $ctx.reason) }
     $from = $m.Groups[1].Value
@@ -645,8 +648,9 @@ function Test-HordeRelayJournalSent {
     $dir = Get-HordeRelayJournalStreamDir -Root $ctx.root -Direction "out" -From $from -Channel $channel
     $r = Read-HordeRelayJournalRecord -Dir $dir -Direction "out" -From $from -Channel $channel -Seq ([long]$m.Groups[3].Value)
     if (-not $r.ok) {
-        if ($r.reason -clike "*it is not there") { return (New-HordeKnown -Value ([pscustomobject]@{ sent = $false; kind = "" }) -ObservedAt ([datetime]::UtcNow)) }
+        if ($r.reason -clike "*it is not there") { return (New-HordeKnown -Value ([pscustomobject]@{ sent = $false; kind = ""; text = "" }) -ObservedAt ([datetime]::UtcNow)) }
         return (New-HordeUnknown -Reason $r.reason)
     }
-    return (New-HordeKnown -Value ([pscustomobject]@{ sent = ($r.meta.key -ceq $Key); kind = $r.meta.kind }) -ObservedAt ([datetime]::UtcNow))
+    $same = ($r.meta.key -ceq $Key)
+    return (New-HordeKnown -Value ([pscustomobject]@{ sent = $same; kind = $r.meta.kind; text = $(if ($same) { $r.envelope } else { "" }) }) -ObservedAt ([datetime]::UtcNow))
 }
