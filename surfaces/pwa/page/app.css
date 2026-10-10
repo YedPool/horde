@@ -1,0 +1,67 @@
+/* surfaces/pwa/page/app.css - the phone app's frame: its colours, its letters, the bar of hordes at
+   the top, the pairing and unlock screens, and the row of answering keys over the soft keyboard. The
+   decisions document brings its own file (../list/list.css) and reads its colours and sizes from the
+   variables set here, as it reads them from the window's frame.css.
+
+   THE COLOURS ARE THE WINDOW'S (decisions/window/frame.css), with the same measured contrast: every
+   colour text is drawn in meets 4.5 to 1 against the page in both themes. Light or dark follows the
+   phone's own setting.
+   THE SIZES ARE LARGER THAN THE WINDOW'S: 16 pixel letters on 24 pixel lines (the window's 14 on 22),
+   the size a phone's own apps use for body text, and every key at least 44 pixels high (the touch
+   target both platforms' guidelines name). The bridge's setup answers these same numbers, and the
+   frame (app.js) sets them as the variables below, as frame.js does in the window.
+   THE KEYS STAND OVER THE KEYBOARD: fixed to the bottom of the visual viewport, which app.js keeps in
+   --kb (how much of the layout the soft keyboard covers), so the row is not hidden under it. */
+:root { --bg: #ffffff; --ink: #16181c; --muted: #68707c; --faint: #6e7682; --hint: #6e7682; --line: #e3e6ea; --accent: #1f5fae; --dim: #6e7682; --bar: #b4bac2; --warn: #a4331f; --font: system-ui, sans-serif; --text-px: 16px; --line-px: 24px; --small-px: 14px; --small-line-px: 20px; --kb: 0px; --keys-h: 52px; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17191d; --ink: #e9ebee; --muted: #9aa2ad; --faint: #7c838e; --hint: #858c97; --line: #2c3037; --accent: #8ab8f5; --dim: #7c838e; --bar: #555c66; --warn: #f0907c; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font-family: var(--font); font-size: var(--text-px); line-height: var(--line-px); font-weight: 400; -webkit-text-size-adjust: 100%; padding-bottom: env(safe-area-inset-bottom); }
+button, input, textarea { font: inherit; color: inherit; }
+button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+button:disabled { color: var(--faint); background: var(--bg); border-color: var(--line); cursor: default; }
+button.link { border: 0; min-height: 44px; padding: 0 4px; color: var(--accent); background: none; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+#top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); background: var(--bg); border-bottom: 1px solid var(--line); }
+#tabs { display: flex; gap: 6px; overflow-x: auto; min-width: 0; }
+#tabs button { white-space: nowrap; }
+#tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+#top .grow { flex: 1 1 auto; }
+#top .counts { color: var(--muted); white-space: nowrap; font-size: var(--small-px); }
+#addBtn { min-width: 44px; padding: 0; font-weight: 600; }
+#notice { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 8px 16px; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+
+section { padding: 12px 16px 24px; max-width: 640px; margin: 0 auto; }
+section h1 { font-size: 20px; line-height: 28px; font-weight: 600; margin: 8px 0; }
+section h2 { font-size: var(--text-px); line-height: var(--line-px); font-weight: 600; margin: 20px 0 4px; }
+section label { display: block; margin: 14px 0 4px; color: var(--muted); }
+section label.check { color: var(--ink); display: flex; gap: 10px; align-items: center; min-height: 44px; }
+section input[type="text"], section textarea { display: block; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+section textarea { font-family: ui-monospace, monospace; font-size: var(--small-px); line-height: var(--small-line-px); }
+section .row { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+section details { margin: 18px 0; }
+section summary { min-height: 44px; line-height: 44px; color: var(--accent); cursor: pointer; }
+.hint { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.fingerprint { font-family: ui-monospace, monospace; font-size: 32px; line-height: 44px; font-weight: 600; letter-spacing: 0; padding: 12px 0; text-align: center; }
+.code { font-family: ui-monospace, monospace; font-size: 20px; line-height: 30px; padding: 8px 0; text-align: center; overflow-wrap: anywhere; }
+#scanVideo { width: 100%; max-height: 50vh; background: #000; border-radius: 6px; }
+
+#doc { padding: 4px 8px calc(var(--keys-h) + 24px + var(--kb)) 0; }
+#mode { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 8px 16px; }
+/* The document's question row hangs its number in a 54 pixel margin made for a desk window; on a
+   phone the margin is kept (the number must not move) and the field always goes under the question,
+   which list.js does by itself when the line is narrow. */
+
+#keys { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; display: flex; gap: 6px; padding: 4px 6px; padding-bottom: calc(4px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
+#keys button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 0 2px; font-size: var(--small-px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The document gives a question's letter and number a 40 pixel cell sized for the window's 14 pixel
+   letters; at 16, with the "new" mark after the number, they ran into the question's first word (seen
+   2026-10-09 in a picture of the app at 412 pixels wide, surfaces/pwa/test/test-pwa-browser.ps1). Here
+   the cell takes what it needs, at least the window's 40, and the margin it hangs in grows to match. */
+#lists .hd-qrow { --hang: 70px; }
+#lists .hd-qt > .hd-num { flex: 0 0 auto; width: auto; min-width: 40px; }

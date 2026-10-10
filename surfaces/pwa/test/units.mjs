@@ -1,0 +1,364 @@
+// The phone app's modules, one behaviour at a time, under Node, for surfaces/pwa/test/test-pwa-site.ps1:
+// the modules of a BUILT site (imported from the folder New-HordePwaSite wrote, so what is checked is
+// what ships), against machines made here in JavaScript - each a signing key and an agreement key, the
+// envelopes they send written from relay/Envelope.ps1's strings - so each refusal can be provoked on
+// purpose. The real machine is test-pwa-phone-e2e.ps1's.
+//
+//   node units.mjs <site folder> <repository root>
+//
+// Prints one line per check, "[PASS] name" or "[FAIL] name: detail", and nothing else; the suite turns
+// each into a check of its own.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [, , siteDir, repoRoot] = process.argv;
+const load = (p) => import(pathToFileURL(join(siteDir, p)).href);
+const P = await load("relay/protocol.js");
+const K = await load("app/keywrap.js");
+const R = await load("app/relay-client.js");
+const { createPhone } = await load("app/phone-core.js");
+const { memoryStore } = await load("app/store.js");
+const { createBridge } = await load("surface/bridge.js");
+const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
+const subtle = globalThis.crypto.subtle;
+
+let failures = 0;
+function check(ok, name, detail = "") {
+  if (ok) process.stdout.write("[PASS] " + name + "\n");
+  else { failures++; process.stdout.write("[FAIL] " + name + (detail ? ": " + detail : "") + "\n"); }
+}
+async function throwsAsync(fn) { try { await fn(); return ""; } catch (e) { return e && e.message ? e.message : String(e); } }
+
+// --- a machine, in JavaScript ---
+
+async function newMachine(horde) {
+  const sign = await subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+  const agree = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const signPublic = new Uint8Array(await subtle.exportKey("raw", sign.publicKey));
+  const agreePublic = new Uint8Array(await subtle.exportKey("raw", agree.publicKey));
+  const m = { horde, sign, agree, signPublic, agreePublic, keyId: await P.keyId(signPublic), agreeKeyId: await P.keyId(agreePublic), seq: 0 };
+  m.mailbox = horde + "/" + m.keyId;
+  return m;
+}
+// relay/Pairing.ps1's offer, its members in their order.
+function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId } = {}) {
+  return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + P.hex(P.randomBytes(16)) + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
+    '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox + '","rpId":"' + rpId +
+    '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + "}";
+}
+// A machine's envelope: sealed to each phone key, signed ES256 (P1363), relay/Envelope.ps1's canonical text.
+async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }) {
+  const h = { kind, channel, from: m.keyId, to: [], seq, nonce: P.hex(P.randomBytes(12)), ts: Date.now() };
+  for (const p of phones) h.to.push(await P.keyId(p));
+  const ht = P.headerText(h);
+  const aad = P.utf8("horde-relay/envelope/v1 aad\n" + ht);
+  const cek = P.randomBytes(32);
+  const ct = await P.gcmSeal(cek, P.unhex(h.nonce), aad, body);
+  const recips = [];
+  for (let i = 0; i < phones.length; i++) { const box = await P.hpkeSeal(phones[i], P.utf8("horde-relay/envelope/v1 content-key"), aad, cek); recips.push({ kid: h.to[i], enc: P.b64u(box.enc), key: P.b64u(box.sealed) }); }
+  const rt = P.recipientsText(recips);
+  const ctText = P.b64u(ct);
+  const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, P.signedBytes(ht, rt, ctText)));
+  return { text: '{"header":' + ht + ',"recipients":' + rt + ',"ct":"' + ctText + '","sig":{"alg":"ES256","value":"' + P.b64u(sig) + '"}}', key: P.replayKey(h), header: h };
+}
+function snapshotPages(m, questions, { pages = 1, hash = P.hex(P.randomBytes(32)) } = {}) {
+  const out = [];
+  const per = Math.ceil(questions.length / pages) || 1;
+  for (let i = 0; i < pages; i++) {
+    const qs = questions.slice(i * per, (i + 1) * per);
+    out.push(P.utf8(JSON.stringify({ v: 1, kind: "decisions-snapshot", horde: m.horde, machine: m.keyId, snapshot: hash, page: i + 1, pages, questions: qs, withheld: [], counts: { open: questions.length }, unreadable: 0, notUnderstood: 0 })));
+  }
+  return out;
+}
+const question = (number, title, extra = {}) => ({ number, title, kind: "yes-no", state: "open", group: "g", askedBy: "orc-a", wordingVersion: 1, thread: { count: 0, turn: "founder", messages: [] }, ...extra });
+async function sendSnapshot(transport, m, phones, questions, opts = {}) {
+  const keys = [];
+  for (const body of snapshotPages(m, questions, opts)) {
+    const e = await machineEnvelope(m, { kind: "snapshot", channel: "decisions", body, phones });
+    await transport.put(m.horde + "/phone", e.key, e.text);
+    keys.push(e);
+  }
+  return keys;
+}
+// What the machine would open of the phone's answer: the body, by its agreement key.
+async function machineOpens(m, text) {
+  const e = JSON.parse(text);
+  const ht = P.headerText(e.header);
+  const aad = P.utf8("horde-relay/envelope/v1 aad\n" + ht);
+  const r = e.recipients.find((x) => x.kid === m.agreeKeyId);
+  const cek = await P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(r.enc), P.utf8("horde-relay/envelope/v1 content-key"), aad, P.unb64u(r.key));
+  return { header: e.header, sig: e.sig, body: JSON.parse(P.fromUtf8(await P.gcmOpen(cek, P.unhex(e.header.nonce), aad, P.unb64u(e.ct)))) };
+}
+async function phoneKeyOf(transport, m) {
+  // The phone's announcement, as the trust channel reads it: the agreement key it vouched for.
+  const r = await transport.get(m.mailbox, 0, 256);
+  for (const it of r.value.items) { const o = await machineOpens(m, it.text); if (o.header.channel === "trust") return P.unb64u(o.body.agreePublic); }
+  return null;
+}
+
+const origin = "https://relay.example.test";
+function newApp(transport, { prf = true, store = memoryStore(), authenticator = null } = {}) {
+  const auth = authenticator || softAuthenticator({ origin, prf });
+  return { store, auth, phone: createPhone({ store, authenticator: auth, relay: R.createRelayClient(transport), origin }) };
+}
+async function pairedApp(transport, m, opts = {}) {
+  const app = newApp(transport, opts);
+  const paired = await app.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  await app.phone.announce(paired.id);
+  const phoneKey = await phoneKeyOf(transport, m);
+  return { ...app, paired, phoneKey };
+}
+
+// --- 1. HPKE against RFC 9180 (test/fixtures/relay/hpke-p256-sha256-aes256gcm.json) ---
+{
+  const v = JSON.parse(readFileSync(join(repoRoot, "test/fixtures/relay/hpke-p256-sha256-aes256gcm.json"), "utf8"));
+  const jwk = (sk, pk) => { const p = P.unhex(pk); return { kty: "EC", crv: "P-256", d: P.b64u(P.unhex(sk)), x: P.b64u(p.slice(1, 33)), y: P.b64u(p.slice(33, 65)), ext: true }; };
+  const eph = { privateKey: await subtle.importKey("jwk", jwk(v.skEm, v.pkEm), { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]), publicPoint: P.unhex(v.pkEm) };
+  const e0 = v.encryptions.find((e) => e.seq === 0);
+  const sealed = await P.hpkeSeal(P.unhex(v.pkRm), P.unhex(v.info), P.unhex(e0.aad), P.unhex(e0.pt), eph);
+  check(P.hex(sealed.enc) === v.enc && P.hex(sealed.sealed) === e0.ct, "HPKE Seal gives RFC 9180's enc and ciphertext for the suite's own vector (sequence 0)");
+  const skR = await subtle.importKey("jwk", jwk(v.skRm, v.pkRm), { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+  const opened = await P.hpkeOpen(skR, P.unhex(v.pkRm), P.unhex(v.enc), P.unhex(v.info), P.unhex(e0.aad), P.unhex(e0.ct));
+  check(P.hex(opened) === e0.pt, "HPKE Open gives back RFC 9180's plaintext");
+  const bad = P.unhex(e0.aad); bad[0] ^= 1;
+  check((await throwsAsync(() => P.hpkeOpen(skR, P.unhex(v.pkRm), P.unhex(v.enc), P.unhex(v.info), bad, P.unhex(e0.ct)))) !== "", "and refuses other additional data");
+}
+
+// --- 2. base64url has one spelling ---
+{
+  const all = new Uint8Array(256).map((_, i) => i);
+  check(P.hex(P.unb64u(P.b64u(all))) === P.hex(all), "base64url round-trips every byte value");
+  check((await throwsAsync(async () => P.unb64u("AB=="))) !== "" && (await throwsAsync(async () => P.unb64u("A+B/"))) !== "" && (await throwsAsync(async () => P.unb64u("AA"))) === "" && (await throwsAsync(async () => P.unb64u("AB"))) !== "", "base64url refuses padding, the other alphabet and stray bits in the last character");
+}
+
+// --- 3. the offer is read as far as a phone can ---
+{
+  const m = await newMachine("work");
+  check((await P.readOffer(offerText(m))).ok, "a machine's offer reads");
+  check(!(await P.readOffer(offerText(m, { expiresAt: Date.now() - 1 }))).ok, "an expired offer is refused");
+  check(!(await P.readOffer(offerText(m, { mailbox: "work/other" }))).ok, "an offer whose mailbox is not its horde and machine is refused");
+  check(!(await P.readOffer(offerText(m, { agreeKeyId: "0".repeat(32) }))).ok, "an offer whose agreement key is not the one it names is refused");
+  check(!(await P.readOffer(offerText(m).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
+  const app = newApp(R.memoryTransport());
+  check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
+  check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
+}
+
+// --- 4. the phone opens only what its machine signed, sealed to it ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  check(a.phoneKey !== null, "CONTROL: the app announced its phone key to the machine");
+  const env = await machineEnvelope(m, { kind: "snapshot", channel: "decisions", body: snapshotPages(m, [question(1, "One?")])[0], phones: [a.phoneKey] });
+  const view0 = await a.phone.refresh(a.paired.id);
+  check(view0.questions.length === 0 && view0.snapshot === "", "CONTROL: before any snapshot the app shows none");
+  // Tampered, re-signed by another key, sealed to another phone, not canonical: each refused, none drawn.
+  const other = await newMachine("work");
+  const forged = await machineEnvelope(other, { kind: "snapshot", channel: "decisions", body: snapshotPages(m, [question(9, "Forged?")])[0], phones: [a.phoneKey] });
+  const forgedAsM = JSON.parse(forged.text); forgedAsM.header.from = m.keyId;
+  const reText = '{"header":' + P.headerText(forgedAsM.header) + ',"recipients":' + P.recipientsText(forgedAsM.recipients) + ',"ct":"' + forgedAsM.ct + '","sig":{"alg":"ES256","value":"' + forgedAsM.sig.value + '"}}';
+  await t.put("work/phone", "forged-1", reText);
+  const tampered = JSON.parse(env.text); const ctb = P.unb64u(tampered.ct); ctb[3] ^= 1; tampered.ct = P.b64u(ctb);
+  await t.put("work/phone", "tampered-1", '{"header":' + P.headerText(tampered.header) + ',"recipients":' + P.recipientsText(tampered.recipients) + ',"ct":"' + tampered.ct + '","sig":{"alg":"ES256","value":"' + tampered.sig.value + '"}}');
+  await t.put("work/phone", "spaced-1", env.text.replace('{"header":', '{ "header":'));
+  const v1 = await a.phone.refresh(a.paired.id);
+  check(v1.questions.length === 0, "a snapshot signed by another key in this machine's name, a tampered one and a non-canonical one are not drawn");
+  check(v1.anomalies.some((x) => x.indexOf("signature does not verify") >= 0) && v1.anomalies.some((x) => x.indexOf("not canonical") >= 0), "and each is reported as an anomaly with its reason", JSON.stringify(v1.anomalies));
+  await t.put("work/phone", env.key, env.text);
+  const v2 = await a.phone.refresh(a.paired.id);
+  check(v2.questions.length === 1 && v2.questions[0].title === "One?", "the machine's own snapshot, sealed to the phone, is drawn");
+}
+
+// --- 5. pages, freshness, two hordes ---
+{
+  const t = R.memoryTransport();
+  const work = await newMachine("work");
+  const personal = await newMachine("personal");
+  const a = newApp(t);
+  const pw = await a.phone.pair({ offerText: offerText(work), label: "Founder phone" });
+  await a.phone.announce(pw.id);
+  const pp = await a.phone.pair({ offerText: offerText(personal), label: "Founder phone" });
+  await a.phone.announce(pp.id);
+  const hs = await a.phone.hordes();
+  check(hs.length === 2 && hs.map((h) => h.horde).sort().join(",") === "personal,work", "one app holds two hordes, each its own pairing");
+  const kw = await phoneKeyOf(t, work), kp = await phoneKeyOf(t, personal);
+  check(kw && kp && P.hex(kw) !== P.hex(kp), "each horde has its own phone identity key");
+  // A two-page snapshot with its second page missing is not drawn; with it, it is, in page order.
+  const qs = [question(1, "W1?"), question(2, "W2?"), question(3, "W3?")];
+  const bodies = snapshotPages(work, qs, { pages: 2 });
+  const p1 = await machineEnvelope(work, { kind: "snapshot", channel: "decisions", body: bodies[0], phones: [kw] });
+  const p2 = await machineEnvelope(work, { kind: "snapshot", channel: "decisions", body: bodies[1], phones: [kw] });
+  await t.put("work/phone", p1.key, p1.text);
+  check((await a.phone.refresh(pw.id)).questions.length === 0, "a snapshot with a page missing is not drawn");
+  await t.put("work/phone", p2.key, p2.text);
+  const v = await a.phone.refresh(pw.id);
+  check(v.questions.map((q) => q.number).join(",") === "1,2,3" && v.pageKeyByNumber[1] === p1.key && v.pageKeyByNumber[3] === p2.key, "once whole it is drawn in page order, each question bound to the page that carried it");
+  await sendSnapshot(t, personal, [kp], [question(1, "P1?")]);
+  const vp = await a.phone.refresh(pp.id);
+  check(vp.questions.length === 1 && vp.questions[0].title === "P1?", "the other horde shows its own question 1, not this one's");
+  check((await a.phone.refresh(pw.id)).questions.length === 3, "and this one still shows its own three");
+  // Freshness: a newer snapshot replaces; an older one served later is not drawn over it.
+  const newer = await sendSnapshot(t, work, [kw], [question(1, "W1, reworded?")]);
+  check((await a.phone.refresh(pw.id)).questions[0].title === "W1, reworded?", "a newer snapshot replaces the one on screen");
+  const old = await machineEnvelope(work, { kind: "snapshot", channel: "decisions", body: snapshotPages(work, [question(1, "Stale?")])[0], phones: [kw], seq: 1 });
+  await t.put("work/phone", "stale-1", old.text);
+  const after = await a.phone.refresh(pw.id);
+  check(after.questions[0].title === "W1, reworded?" && after.seq === newer[0].header.seq, "an older snapshot the relay serves later is not drawn over it");
+  // A reload re-reads from where the last snapshot began, and still never goes back.
+  const b = { phone: createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin }) };
+  await b.phone.unlock(pw.id);
+  const re = await b.phone.refresh(pw.id);
+  check(re.questions.length === 1 && re.questions[0].title === "W1, reworded?", "after a reload the newest snapshot is found again and the stale one is not shown", JSON.stringify(re.questions.map((q) => q.title)));
+  // A relay that hides the newest snapshot from a reloaded app and serves only the stale one: the app
+  // remembers the seq of what it showed, and draws nothing older.
+  const hidden = new Set(newer.map((e) => e.key));
+  const hiding = { ...t, get: async (mb, since, max) => { const r = await t.get(mb, since, max); return { ...r, value: { items: r.value.items.filter((i) => !hidden.has(i.key)) } }; } };
+  const c = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(hiding), origin });
+  await c.unlock(pw.id);
+  const hid = await c.refresh(pw.id);
+  check(hid.questions.length === 0 && hid.stale === true && hid.anomalies.some((x) => x.indexOf("older than one already shown") >= 0), "a relay that hides the newest snapshot cannot make a reloaded app show an older one", JSON.stringify({ q: hid.questions.map((q) => q.title), stale: hid.stale }));
+}
+
+// --- 6. answers: bound to machine and page, and only from a passkey session ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const sent = await sendSnapshot(t, m, [a.phoneKey], [question(4, "Four?", { wordingVersion: 2 })]);
+  await a.phone.refresh(a.paired.id);
+  const id = P.hex(P.randomBytes(16));
+  await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "Yes.", answerId: id });
+  const items = (await t.get(m.mailbox, 0, 256)).value.items;
+  const ans = await machineOpens(m, items[items.length - 1].text);
+  check(ans.header.channel === "decisions" && ans.header.kind === "answer" && ans.sig.alg === "webauthn.get", "the answer is an envelope on channel decisions, kind answer, signed by the passkey");
+  check(ans.body.machine === m.keyId && ans.body.snapshot === sent[0].key && ans.body.number === 4 && ans.body.wordingVersion === 2 && ans.body.answerId === id && ans.body.text === "Yes.", "bound to this machine and to the replay key of the page that carried the question");
+  check(Object.keys(ans.body).join(",") === "v,answerId,machine,snapshot,number,wordingVersion,text", "with exactly the members channels/decisions reads, in order");
+  await a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "Yes.", answerId: id });
+  const seqs = [];
+  for (const it of (await t.get(m.mailbox, 0, 256)).value.items) seqs.push((await machineOpens(m, it.text)).header);
+  check(seqs.filter((h) => h.channel === "decisions").map((h) => h.seq).join(",") === "1,2" && seqs.filter((h) => h.channel === "trust").map((h) => h.seq).join(",") === "1", "each channel counts its own sequence, from 1 and up by one", JSON.stringify(seqs.map((h) => h.channel + h.seq)));
+  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 5, wordingVersion: 1, text: "x", answerId: id }))).indexOf("not in the snapshot") >= 0, "a question not in the snapshot on screen is not answered");
+  // The recovery code: read, never answer.
+  const code = a.paired.recoveryCode;
+  a.phone.lock(a.paired.id);
+  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("locked") >= 0, "a locked horde answers nothing");
+  await a.phone.recover(a.paired.id, code);
+  check((await a.phone.refresh(a.paired.id)).questions.length === 1, "the recovery code unlocks to read");
+  const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  check((await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 2, text: "x", answerId: id }))).indexOf("Read only") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "and refuses to answer, sending nothing");
+  // A passkey unlock after the recovery code makes the session a signing one again.
+  await a.phone.unlock(a.paired.id);
+  check((await a.phone.hordes())[0].mode === "passkey", "the passkey unlocks it to answer again");
+}
+
+// --- 7. the key wraps ---
+{
+  const pk = await K.newPhoneKey();
+  const kid = await P.keyId(pk.publicPoint);
+  const prfA = P.randomBytes(32), prfB = P.randomBytes(32);
+  const w = await K.wrapWithPrf(pk.pkcs8, prfA, "work", kid);
+  check((await K.unwrap(w, prfA, "work", kid, pk.publicPoint)).ok, "a PRF wrap opens with its PRF output");
+  check(!(await K.unwrap(w, prfB, "work", kid, pk.publicPoint)).ok, "and not with another credential's");
+  check(!(await K.unwrap(w, prfA, "personal", kid, pk.publicPoint)).ok, "nor moved to another horde's record");
+  check(!(await K.unwrap({ ...w, kind: "device" }, prfA, "work", kid, pk.publicPoint)).ok, "nor relabelled as another kind");
+  const code = K.newRecoveryCode();
+  check(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){5}$/.test(code), "a recovery code is six groups of four Crockford characters", code);
+  const rw = await K.wrapWithRecovery(pk.pkcs8, code, "work", kid);
+  check(rw.iterations === 600000, "a recovery wrap records its PBKDF2 work factor, 600000");
+  const typed = code.toLowerCase().replace(/-/g, " ").replace(/0/g, "o").replace(/1/g, "l");
+  check((await K.unwrap(rw, typed, "work", kid, pk.publicPoint)).ok, "the code typed in lower case, with spaces, O for 0 and L for 1, still opens it");
+  check((await K.unwrap({ ...rw, iterations: 1000 }, code, "work", kid, pk.publicPoint)).reason.indexOf("work factor") >= 0, "a wrap claiming a feeble work factor is refused before it is tried");
+  const d = await K.wrapWithDeviceKey(pk.pkcs8, "work", kid);
+  check((await K.unwrap(d.record, d.deviceKey, "work", kid, pk.publicPoint)).ok && d.deviceKey.extractable === false, "a device wrap opens with its key, which cannot be exported");
+  const other = await K.newPhoneKey();
+  check(!(await K.unwrap(w, prfA, "work", kid, other.publicPoint)).ok, "a record unwrapped against another public key is refused");
+  // A wrap whose additional data names this key but whose bytes are ANOTHER key: it opens, the ids
+  // agree, and only agreeing with the unwrapped key shows it is not the one the record says.
+  const swapped = await K.wrapWithPrf(other.pkcs8, prfA, "work", kid);
+  const sw = await K.unwrap(swapped, prfA, "work", kid, pk.publicPoint);
+  check(!sw.ok && sw.reason.indexOf("not this horde's phone key") >= 0, "a wrap that holds another key under this key's name is refused once unwrapped", sw.reason);
+  // Crockford reads O as 0 and I and L as 1: a code with those digits, typed with those letters.
+  const fixed = "0123-4567-89AB-CDEF-GHJK-MNP1";
+  const fw = await K.wrapWithRecovery(pk.pkcs8, fixed, "work", kid, 100000);
+  check((await K.unwrap(fw, "o123-4567-89ab-cdef-ghjk-mnpl", "work", kid, pk.publicPoint)).ok && (await K.unwrap(fw, "OI23 4567 89AB CDEF GHJK MNPI", "work", kid, pk.publicPoint)).ok, "a code typed with O for 0 and I or L for 1 opens what the code wrapped");
+}
+
+// --- 8. a passkey without PRF ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m, { prf: false });
+  const h = (await a.phone.hordes())[0];
+  check(h.prf === false && h.wraps.join(",") === "device,recovery", "with no PRF the key is kept under the browser's device key and the recovery code", h.wraps.join(","));
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
+  check((await b.unlock(a.paired.id)).mode === "passkey", "and a reload unlocks it behind a passkey assertion");
+}
+
+// --- 9. the relay client distrusts the relay ---
+{
+  const liar = { get: async () => ({ state: "known", value: { items: [{ seq: 3, key: "c", text: "three" }, { seq: 1, key: "a", text: "one" }, { seq: 3, key: "x", text: "again" }, { seq: 0, key: "z", text: "zero" }, { seq: 5, key: "bad key!", text: "five" }, { seq: 6, key: "f", text: "caf" + String.fromCharCode(0xe9) }] } }) };
+  const c = R.createRelayClient(liar);
+  const r = await c.get("work/phone", 0, 256);
+  check(r.state === "known" && r.value.items.map((i) => i.seq).join(",") === "1,3" && r.value.next === 3, "a batch is rebuilt in seq order, with repeats, malformed items and non-ASCII texts dropped", JSON.stringify(r.value));
+  check(r.value.items[1].text === "three" && r.value.anomalies.some((x) => x.indexOf("a second item under seq 3") >= 0), "of two items under one seq the first is kept and the second is reported");
+  check(r.value.anomalies.some((x) => x.indexOf("gap") >= 0) && r.value.anomalies.length >= 4, "each drop and the gap are reported");
+  const later = await c.get("work/phone", 1, 256);
+  check(later.value.items.map((i) => i.seq).join(",") === "3" && later.value.anomalies.some((x) => x.indexOf("at or before the cursor") >= 0), "an item at or before the cursor is dropped, and said so");
+  const one = await c.get("work/phone", 0, 1);
+  check(one.value.items.length === 1 && one.value.next === 1, "a batch is cut to the size asked, and the cursor is the last item delivered");
+  check((await c.put("Work/phone", "k", "t")).state === "unknown" && (await c.put("work/con", "k", "t")).state === "unknown", "a mailbox the port would refuse is refused here too");
+  const thrower = R.createRelayClient({ put: async () => { throw new Error("down"); } });
+  check((await thrower.put("work/phone", "k", "t")).reason.indexOf("down") >= 0, "a transport that throws answers unknown with its reason");
+  check(R.transportFromConfig({ transport: "nope" }, {}) === null && R.transportFromConfig({ transport: "memory" }, {}) !== null, "a config's transport is one of the known names, or none");
+  const unbound = R.createRelayClient(R.bindingTransport({}, "hordeRelayBinding"));
+  check((await unbound.get("work/phone", 0, 1)).reason.indexOf("not bound") >= 0, "the test transport with no host behind it answers unknown");
+}
+
+// --- 10. the bridge ---
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?", { thread: { count: 1, turn: "founder", messages: [{ sequence: 7, speaker: "warchief", text: "hi" }] } })]);
+  const bridge = createBridge(a.phone, { loadKinds: async () => ({ "yes-no": { label: "yes or no" } }) });
+  check(typeof bridge.request === "function" && typeof bridge.on === "function" && bridge.live === true && Object.keys(bridge).sort().join(",") === "live,on,request", "the bridge has the window bridge's three members and no more");
+  const events = [];
+  bridge.on("list-changed", (r) => events.push(r));
+  const rec = await bridge.request("pick", { id: a.paired.id });
+  check(rec.state === "known" && rec.value.outcome === "done" && rec.value.questions.length === 1 && events.length === 1, "pick answers the list record and pushes list-changed");
+  const said = await bridge.request("say", { number: 1, text: "Yes.", wording: 1, id: P.hex(P.randomBytes(16)) });
+  check(said.ok === true && said.sequence === 8, "say answers saved with a sequence one past the highest message in the snapshot", JSON.stringify(said));
+  const bad = await bridge.request("say", { number: 1, text: "Yes.", wording: 1, id: "not-hex" });
+  check(bad.ok === false && bad.reason.indexOf("answerId") >= 0, "say with an id that is not an answerId is refused in words");
+  const act = await bridge.request("act", { number: 1, act: "park", wording: 1, id: P.hex(P.randomBytes(16)) });
+  check(act.ok === true && act.local === true, "park is kept on the phone, said to be local");
+  check((await throwsAsync(() => bridge.request("report", {}))).indexOf("not a request") >= 0 && (await throwsAsync(() => bridge.request("__proto__", {}))).indexOf("not a request") >= 0, "a request off the list, a prototype's name included, is refused");
+  await bridge.request("lock", { id: a.paired.id });
+  const locked = await bridge.request("list");
+  check(locked.state === "unknown" && locked.reason.indexOf("locked") >= 0, "a locked horde's list is unknown, with the reason");
+}
+
+// --- 11. the icons the build draws are whole PNGs ---
+{
+  const { inflateSync, crc32 } = await import("node:zlib");
+  for (const n of [192, 512]) {
+    const d = new Uint8Array(readFileSync(join(siteDir, "app/icon-" + n + ".png")));
+    const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    let ok = P.hex(d.slice(0, 8)) === "89504e470d0a1a0a", i = 8, w = 0, raw = null;
+    while (ok && i < d.length) {
+      const len = view.getUint32(i), type = P.fromUtf8(d.slice(i + 4, i + 8)), body = d.slice(i + 8, i + 8 + len);
+      if ((crc32(d.slice(i + 4, i + 8 + len)) >>> 0) !== view.getUint32(i + 8 + len)) ok = false;
+      if (type === "IHDR") w = new DataView(body.buffer, body.byteOffset).getUint32(0);
+      if (type === "IDAT") raw = inflateSync(body);
+      i += 12 + len;
+    }
+    const rowLen = 1 + 3 * n;
+    const centreOfBar = raw ? P.hex(raw.slice(Math.floor(n / 2) * rowLen + 1 + 3 * Math.floor(n / 2), Math.floor(n / 2) * rowLen + 4 + 3 * Math.floor(n / 2))) : "";
+    check(ok && w === n && raw && raw.length === rowLen * n && P.hex(raw.slice(1, 4)) === "1f5fae" && centreOfBar === "ffffff", "app/icon-" + n + ".png is a whole PNG, every chunk's CRC right, " + n + " wide, blue with the white bar of the H at its centre");
+  }
+}
+
+process.stdout.write("[DONE] " + failures + "\n");
+process.exit(0);
