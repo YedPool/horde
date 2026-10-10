@@ -18,7 +18,12 @@
 #   6. a reload is controlled by the worker and locked; the passkey's PRF unlocks it; with the site's
 #      server down the shell still starts from the worker's cache, which holds the shell and nothing else;
 #   7. the recovery code unlocks to read, and the answer typed then is refused and nothing is sent;
-#   8. a second answer sent from the row's Send key by touch lands too.
+#   8. a second answer sent from the row's Send key by touch lands too;
+#   9. hidden, it locks itself;
+#  10. the chat tab: the Thrall's turns (a synthetic fleet, test/lib/ChatFleet.ps1) are drawn; Shift+Enter
+#      and the New line key add lines and send nothing; a real Enter sends a line signed by Chrome's
+#      WebAuthn, which a run posts to the Thrall once, and its receipt shows; at phone width nothing
+#      scrolls sideways and the composer stands at the foot; a lock takes the chat off the page.
 #
 # NEEDS Chrome installed and Node. Without either the suite says so and exits 3, a partial run, never 0.
 
@@ -26,12 +31,16 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
+. (Join-Path $root "test\lib\FleetPin.ps1")
+$fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "core\ModuleSettings.ps1")
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
 . (Join-Path $root "test\lib\Cli.ps1")
 . (Join-Path $root "surfaces\pwa\Site.ps1")
+. (Join-Path $root "test\lib\ChatFleet.ps1")
 Set-StrictMode -Version Latest
 
 $node = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -61,6 +70,8 @@ New-Item -ItemType Directory -Path (Join-Path $hh "settings"), $mailboxes, $prof
 $keysMade = @()
 $drv = $null
 $canDecide = $false
+$thrall = $null
+$fake = Join-Path $work "fleet-messenger"
 
 function ConvertTo-AsciiJson {
     param($Value)
@@ -99,6 +110,11 @@ try {
     Check ($built.state -ceq "known") "CONTROL: the site is built as it ships, with the local test transport"
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-chat.json"), '{"schemaVersion": 1, "settings": {"sendIntervalMs": 0, "startTurns": 3}}', $utf8)
+    $chatFixtures = @(Get-HordeTestChatFixtureFiles | ForEach-Object { . $_ -Root $root })
+    $thrall = New-HordeTestChatThrall -Fixtures $chatFixtures
+    Check ($null -ne $thrall -and (New-HordeTestFleetMessenger -HordeHome $hh -Folder $fake) -cne "") "CONTROL: a synthetic Thrall and a messenger stand-in are ready for the chat"
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "how is the chime going?" }, @{ role = "assistant"; text = ("three chimes recorded, " + [char]0x05E9 + [char]0x05DC + [char]0x05D5 + [char]0x05DD) })
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
     Check ($id.state -ceq "known") "CONTROL: the machine has its relay identity"
     $keysMade = @(@{ n = $id.value.sign.name; s = $id.value.scope }, @{ n = $id.value.agree.name; s = $id.value.scope })
@@ -223,10 +239,37 @@ try {
     $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
     $sh = Invoke-Browser @{ cmd = "show" }
     Check ($sh.ok -and $sh.value.docHiddenAtOnce) "shown again, the list is hidden in the same moment, before the lock check runs"
+
+    Write-Host ""
+    Write-Host "--- 10. the chat tab: the Thrall's turns, and a line sent by Enter that reaches it once ---" -ForegroundColor Cyan
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $tab = Invoke-Browser @{ cmd = "chatTab"; which = "chat" }
+    Check ($tab.ok -and $tab.value.chat -and -not $tab.value.doc -and -not $tab.value.keys) "the chat tab shows the chat, and the answering row of the questions goes"
+    $w1 = Invoke-Browser @{ cmd = "chatWait"; text = "three chimes recorded" }
+    Check ($w1.ok -and $w1.value.found -and $w1.value.log.Contains("how is the chime going?")) ("the Thrall's turns are drawn (" + $(if ($w1.ok) { ($w1.value.log -replace '\s+', ' ') } else { $w1.reason }) + ")")
+    $cn = Invoke-Browser @{ cmd = "chatNewline"; mailbox = $mailbox }
+    Check ($cn.ok -and $cn.value.value -ceq "one`ntwo`nthree" -and -not $cn.value.sent) ("Shift+Enter and the New line key each add a line and send nothing (" + $(if ($cn.ok) { ($cn.value.value -replace "`n", "|") } else { $cn.reason }) + ")")
+    $cs = Invoke-Browser @{ cmd = "chatSend"; text = "Use the second chime."; via = "enter"; mailbox = $mailbox }
+    Check ($cs.ok -and $cs.value.put -and $cs.value.left -ceq "") ("a real Enter sends the line, signed by Chrome's passkey, and empties the composer (" + $(if ($cs.ok) { $cs.value.notice } else { $cs.reason }) + ")")
+    $run = Invoke-Run -Turns 1
+    $posts = @(Get-HordeTestFleetPosts -Folder $fake)
+    Check ($posts.Count -eq 1 -and $posts[0].to -ceq $thrall.state.session -and $posts[0].body.EndsWith("Use the second chime.")) ("a run posts it to the Thrall once (" + $posts.Count + ")")
+    $w2 = Invoke-Browser @{ cmd = "chatWait"; text = "Sent: the Thrall's mailbox has it." }
+    Check ($w2.ok -and $w2.value.found) "its receipt shows under it, in the app's own words"
+    $shot = Invoke-Browser @{ cmd = "chatShot"; path = (Join-Path $work "phone-chat.png") }
+    Check ($shot.ok -and $shot.value.scrollWidth -le $shot.value.innerWidth -and [math]::Abs($shot.value.composeBottom - $shot.value.innerHeight) -le 1) "at phone width nothing scrolls sideways, and the composer stands at the foot of the screen"
+    if ($env:HORDE_PWA_SHOTS -and (Test-Path -LiteralPath $env:HORDE_PWA_SHOTS -PathType Container)) { Copy-Item -LiteralPath (Join-Path $work "phone-chat.png") -Destination (Join-Path $env:HORDE_PWA_SHOTS "phone-chat.png") -Force }
+    $lk = Invoke-Browser @{ cmd = "lock" }
+    $st = Invoke-Browser @{ cmd = "chatState" }
+    Check ($lk.ok -and $lk.value.locked -and $st.ok -and $st.value.items -eq 0 -and -not $st.value.log.Contains("Use the second chime")) "a lock takes the chat off the page, not only out of sight"
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "chatTab"; which = "decisions" }
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
     }
 } finally {
+    Remove-HordeTestChatThrall -Thrall $thrall
+    Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ($null -ne $drv) { try { $drv.p.StandardInput.WriteLine('{"cmd":"exit"}'); if (-not $drv.p.WaitForExit(20000)) { $drv.p.Kill() } } catch { } ; $drv.p.Dispose() }
     $env:HORDE_HOME = $realHome
     foreach ($k in @($keysMade)) { try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { } }

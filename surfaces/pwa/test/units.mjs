@@ -451,6 +451,117 @@ async function pairedApp(transport, m, opts = {}) {
   check(why.indexOf("wording") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer to another wording than the one on screen is refused before anything is signed", why);
 }
 
+// --- 10b. the chat: turns from the end, joined, once; lines signed, bound, never from a read-only session ---
+const chatBody = (m, session, turns, { backfill = false } = {}) => P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: m.horde, machine: m.keyId, session, backfill, turns }));
+const receiptBody = (m, session, messageId, status, code, text) => P.utf8(JSON.stringify({ v: 1, kind: "chat-receipt", horde: m.horde, machine: m.keyId, session, messageId, status, code, text }));
+async function sendChat(t, m, phone, body, kind = "turns") { const e = await machineEnvelope(m, { kind, channel: "chat", body, phones: [phone] }); await t.put(m.horde + "/phone", e.key, e.text); return e; }
+const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", text, time: "2026-10-10T10:00:0" + (id.length % 10) + ".000Z", ...extra });
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const none = await a.phone.chat(a.paired.id);
+  check(none.items.length === 0 && none.session === "", "CONTROL: before any turn the chat is empty and names no session");
+  check((await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "hello", messageId: P.hex(P.randomBytes(16)) }))).indexOf("no session") >= 0, "with no session heard of, a line is refused before anything is signed");
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t1", "user", "first"), turn("t2", "assistant", "second")], { backfill: true }));
+  // A long turn in two parts, the second arriving later; and the first envelope served again.
+  const p1 = await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t3", "assistant", "long ", { part: 1, parts: 2 })]));
+  await a.phone.refresh(a.paired.id);
+  let c = await a.phone.chat(a.paired.id);
+  check(c.items.map((x) => x.text).join("|") === "first|second" && c.session === "sess-1", "the turns are shown in order, and the session is learnt; a turn with a part missing is not shown yet", JSON.stringify(c.items.map((x) => x.text)));
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t3", "assistant", "reply", { part: 2, parts: 2 }), turn("t2", "assistant", "second")]));
+  await t.put("work/phone", p1.key + "-again", p1.text);
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.chat(a.paired.id);
+  check(c.items.map((x) => x.text).join("|") === "first|second|long reply", "once whole, the long turn is its parts joined; a turn sent twice and an envelope served twice show once", JSON.stringify(c.items.map((x) => x.text)));
+  // A line: signed, bound to the horde, the machine and the session, opened by the machine.
+  const mid = P.hex(P.randomBytes(16));
+  await a.phone.sendLine(a.paired.id, { text: "carry on", messageId: mid });
+  const sentItems = (await t.get(m.mailbox, 0, 256)).value.items;
+  const opened = await machineOpens(m, sentItems[sentItems.length - 1].text);
+  check(opened.header.channel === "chat" && opened.header.kind === "line" && opened.sig.alg === "webauthn.get", "a line is an envelope on chat, kind line, signed by the passkey");
+  check(JSON.stringify(opened.body) === JSON.stringify({ v: 1, messageId: mid, horde: "work", machine: m.keyId, session: "sess-1", text: "carry on" }), "its body names the line, the horde, the machine and the Thrall's session, and his words", JSON.stringify(opened.body));
+  c = await a.phone.chat(a.paired.id);
+  const mine = c.items.find((x) => x.kind === "line");
+  check(mine && mine.words === P.CHAT_SENDING && mine.text === "carry on", "until a receipt comes it is shown as sending");
+  // The receipt, a forged code, a turn that merely quotes the line's header, and the machine's founder turn.
+  await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "held", "your-account-expired", "carry on"), "receipt");
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.chat(a.paired.id);
+  check(c.items.find((x) => x.kind === "line").words === P.CHAT_SENDING, "a receipt with a code the phone does not know is not shown: no word of the machine's reaches the screen");
+  await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "accepted", "delivered", "carry on"), "receipt");
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t4", "user", "FOUNDER LINE from the phone " + P.lineMarker(mid) + "\n\ncarry on"), turn("t5", "assistant", "on it"), turn("t6", "founder", "carry on", { line: mid }), turn("t7", "founder", "carry on", { line: mid })]));
+  await a.phone.refresh(a.paired.id);
+  c = await a.phone.chat(a.paired.id);
+  const lines = c.items.filter((x) => x.kind === "line");
+  check(lines.length === 1 && lines[0].words === P.CHAT_WORDS.accepted.delivered, "the receipt's code is shown in the phone's own fixed words", JSON.stringify(lines));
+  check(c.items.some((x) => x.kind === "turn" && x.role === "user" && x.text.indexOf(P.lineMarker(mid)) >= 0), "a turn that quotes his line's header is shown as what it is - a user turn - never as his line");
+  check(c.items.filter((x) => x.kind === "line" && x.messageId === mid).length === 1 && c.items.some((x) => x.text === "on it"), "the machine's founder turn for his line, handed over twice, is that one line, not three; the Thrall's reply is shown");
+  check((await throwsAsync(async () => { const r = P.readChatTurns(chatBody(m, "s", [{ id: "x", role: "founder", session: "s", text: "t" }]), "work", m.keyId); if (r.value.turns.length) throw new Error("kept"); })) === "", "a founder turn that names no line is dropped");
+  // Other words under an id already sent are refused on the phone (review of 3d837f0, finding 1), and
+  // a receipt's words - the words posted - are what the line shows.
+  const headNow = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const edited = await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "carry on, but slower", messageId: mid }));
+  check(edited.indexOf("other words") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headNow, "other words under a line id already sent are refused before anything is signed", edited);
+  const tl = P.chatTimeline({ sent: [{ messageId: "f".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "f".repeat(32), status: "accepted", code: "delivered", text: "posted words", session: "s", seq: 3, ts: 2 }] });
+  check(tl.length === 1 && tl[0].text === "posted words", "a line shows the words its receipt says were posted, not what the phone kept", JSON.stringify(tl));
+  // Through the bridge: the page's id for the words is the line's id, so a resend is the same line.
+  const brp = createBridge(a.phone, { loadKinds: async () => ({}) });
+  await brp.request("pick", { id: a.paired.id });
+  const pageId = P.hex(P.randomBytes(16));
+  const viaBridge = await brp.request("chat-send", { text: "via the bridge", id: pageId });
+  const lastItems = (await t.get(m.mailbox, 0, 256)).value.items;
+  const viaBody = (await machineOpens(m, lastItems[lastItems.length - 1].text)).body;
+  check(viaBridge.ok === true && viaBridge.id === pageId && viaBody.messageId === pageId, "chat-send signs the line under the page's own id for the words", JSON.stringify(viaBridge));
+  // Another phone of his (a reload) holds no sent lines: the receipt still shows his words.
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
+  await b.unlock(a.paired.id);
+  await b.refresh(a.paired.id);
+  const cb = await b.chat(a.paired.id);
+  check(cb.items.filter((x) => x.kind === "line" && x.text === "carry on").length === 1, "after a reload the line is shown from its receipt, with his words");
+  // Once the relay has dropped the receipts, the founder turn alone still shows his line, delivered.
+  const t2 = R.memoryTransport();
+  const a2 = await pairedApp(t2, m);
+  await sendChat(t2, m, a2.phoneKey, chatBody(m, "sess-1", [turn("u1", "assistant", "earlier"), turn("u2", "founder", "kept in history", { line: "e".repeat(32) })], { backfill: true }));
+  await a2.phone.refresh(a2.paired.id);
+  const only = (await a2.phone.chat(a2.paired.id)).items.filter((x) => x.kind === "line");
+  check(only.length === 1 && only[0].text === "kept in history" && only[0].words === P.CHAT_WORDS.accepted.delivered, "with no receipt left, the machine's founder turn shows his line as delivered", JSON.stringify(only));
+  // Read only: the recovery code reads the chat and never writes to it.
+  b.lock(a.paired.id);
+  await b.recover(a.paired.id, a.paired.recoveryCode);
+  await b.refresh(a.paired.id);
+  const headBefore = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const viaCode = await throwsAsync(() => b.sendLine(a.paired.id, { text: "from the recovery code", messageId: P.hex(P.randomBytes(16)) }));
+  check(viaCode.indexOf("recovery code") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headBefore && (await b.chat(a.paired.id)).items.length > 0, "unlocked by the recovery code, the chat is read and a line is refused in words, nothing put", viaCode);
+  b.lock(a.paired.id);
+  check((await throwsAsync(() => b.chat(a.paired.id))).indexOf("locked") >= 0, "a locked horde shows no chat");
+  const dump = JSON.stringify(await a.store.list(""));
+  check(dump.indexOf("carry on") < 0 && dump.indexOf("long reply") < 0 && dump.indexOf("on it") < 0, "nothing of the chat is in the store");
+}
+{
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m, { prf: false });
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t1", "assistant", "readable")], { backfill: true }));
+  await a.phone.refresh(a.paired.id);
+  check((await a.phone.chat(a.paired.id)).items.length === 1, "CONTROL: a passkey without PRF reads the chat");
+  const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const why = await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "from a read-only phone", messageId: P.hex(P.randomBytes(16)) }));
+  check(why.indexOf("gives no PRF") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "and never writes to it: refused in words, nothing put", why);
+  const br = createBridge(a.phone, { loadKinds: async () => ({}) });
+  await br.request("pick", { id: a.paired.id });
+  const rec = await br.request("chat");
+  check(rec.state === "known" && rec.value.mode === "read-only" && rec.value.items.length === 1, "the bridge answers chat with the items and the mode the page shuts its composer by");
+  const sent = await br.request("chat-send", { text: "no", id: "1".repeat(32) });
+  check(sent.ok === false && sent.reason.indexOf("Read only") === 0, "and chat-send is refused in words");
+}
+{
+  check(!P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [] })), "work", "b".repeat(32)).ok, "a turns body of another machine is refused");
+  const r = P.readChatTurns(P.utf8(JSON.stringify({ v: 1, kind: "chat-turns", horde: "work", machine: "a".repeat(32), session: "s", backfill: false, turns: [{ id: "x", role: "tool", session: "s", text: "t" }, { id: "y", role: "user", session: "s", text: "ok" }] })), "work", "a".repeat(32));
+  check(r.ok && r.value.turns.length === 1 && r.value.dropped === 1, "a turn with a role off the list is dropped and counted");
+  check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
+}
+
 // --- 11. the icons the build draws are whole PNGs ---
 {
   const { inflateSync, crc32 } = await import("node:zlib");

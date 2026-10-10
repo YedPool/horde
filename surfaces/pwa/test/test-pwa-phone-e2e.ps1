@@ -21,7 +21,10 @@
 #      ever in the store;
 #   6. the recovery code unlocks to READ: the app refuses to answer, nothing is sent; a wrong code
 #      unlocks nothing;
-#   7. an old snapshot the relay puts again is not shown over the newer one.
+#   7. an old snapshot the relay puts again is not shown over the newer one;
+#   8. the chat: the Thrall's last turns (a synthetic fleet, test/lib/ChatFleet.ps1) reach the app; a
+#      recovery session cannot write; the founder's line, sent through the bridge and signed by the
+#      passkey, is posted to the Thrall once, and the receipt shows in the app's own words.
 #
 # NODE IS NEEDED. Without it the suite says so and exits 3, a partial run, never 0. HORDE_HOME is the
 # suite's own for every child and for this process, and is put back.
@@ -30,12 +33,16 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
+. (Join-Path $root "test\lib\FleetPin.ps1")
+$fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "core\ModuleSettings.ps1")
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
 foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
 . (Join-Path $root "test\lib\Cli.ps1")
 . (Join-Path $root "surfaces\pwa\Site.ps1")
+. (Join-Path $root "test\lib\ChatFleet.ps1")
 Set-StrictMode -Version Latest
 
 $node = Get-Command -Name "node" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -60,6 +67,8 @@ $origin = "https://relay.example.test"
 $keysMade = @()
 $app = $null
 $canDecide = $false
+$thrall = $null
+$fake = Join-Path $work "fleet-messenger"
 
 function ConvertTo-AsciiJson {
     # One line of JSON with everything past ASCII as a \u escape: the app's stdin is read as UTF-8,
@@ -98,6 +107,11 @@ try {
     Check ($built.state -ceq "known") ("CONTROL: the site is built as it ships (" + $(if ($built.state -ceq "known") { $built.value.version } else { $built.reason }) + ")")
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-chat.json"), '{"schemaVersion": 1, "settings": {"sendIntervalMs": 0, "startTurns": 2}}', $utf8)
+    $chatFixtures = @(Get-HordeTestChatFixtureFiles | ForEach-Object { . $_ -Root $root })
+    $thrall = New-HordeTestChatThrall -Fixtures $chatFixtures
+    Check ($null -ne $thrall -and (New-HordeTestFleetMessenger -HordeHome $hh -Folder $fake) -cne "") "CONTROL: a synthetic Thrall and a messenger stand-in are ready for the chat"
+    Add-HordeTestChatTurns -Thrall $thrall -Turns @(@{ role = "user"; text = "start the voice work" }, @{ role = "assistant"; text = "the old reply" }, @{ role = "user"; text = "status?" }, @{ role = "assistant"; text = "two of three done" })
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
     Check ($id.state -ceq "known") "CONTROL: the machine has its relay identity"
     $keysMade = @(@{ n = $id.value.sign.name; s = $id.value.scope }, @{ n = $id.value.agree.name; s = $id.value.scope })
@@ -216,9 +230,36 @@ try {
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox "work/phone" -Text $oldText -Key ("replayed-" + [guid]::NewGuid().ToString("N")))
     $again = Invoke-App @{ cmd = "refresh"; id = $hid }
     Check ($again.ok -and @($again.value.questions).Count -eq 1 -and [int]$again.value.questions[0].thread.count -eq $count -and $again.value.seq -eq $newer.value.seq) "the relay's replay of the first snapshot changes nothing on screen"
+
+    Write-Host ""
+    Write-Host "--- 8. the chat: the Thrall's turns in, the founder's line out, once ---" -ForegroundColor Cyan
+    $chat = Invoke-App @{ cmd = "bridge"; name = "chat" }
+    $texts = $(if ($chat.ok -and $chat.value.state -ceq "known") { (@($chat.value.value.items | ForEach-Object { $_.text }) -join "|") } else { "" })
+    Check ($texts -ceq "status?|two of three done") ("the app shows the Thrall's last two turns, from the end, through the bridge (" + $texts + ")")
+    Check ($chat.ok -and $chat.value.value.mode -ceq "recovery") "CONTROL: the app is still unlocked by its recovery code"
+    $ro = Invoke-App @{ cmd = "bridge"; name = "chat-send"; args = @{ text = "not from a recovery code"; id = ("a" * 32) } }
+    Check ($ro.ok -and $ro.value.ok -eq $false -and $ro.value.reason.Contains("Read only")) "a recovery session cannot write to the Thrall: refused in words"
+    $null = Invoke-App @{ cmd = "lock"; id = $hid }
+    $null = Invoke-App @{ cmd = "unlock"; id = $hid }
+    $null = Invoke-App @{ cmd = "bridge"; name = "pick"; args = @{ id = $hid } }
+    $mid = [guid]::NewGuid().ToString("N")
+    $sent = Invoke-App @{ cmd = "bridge"; name = "chat-send"; args = @{ text = "Ship the third one."; id = $mid } }
+    Check ($sent.ok -and $sent.value.ok -eq $true -and $sent.value.id -ceq $mid) ("unlocked by the passkey, the line is signed and put (" + $(if ($sent.ok) { ConvertTo-Json $sent.value -Compress } else { $sent.reason }) + ")")
+    $run = Invoke-Run -Turns 1
+    $posts = @(Get-HordeTestFleetPosts -Folder $fake)
+    Check ($posts.Count -eq 1 -and $posts[0].to -ceq $thrall.state.session -and $posts[0].body.EndsWith("Ship the third one.")) ("a run posts it to the Thrall's session, once (" + $posts.Count + ")")
+    $null = Invoke-App @{ cmd = "bridge"; name = "chat-send"; args = @{ text = "Ship the third one."; id = $mid } }
+    $run = Invoke-Run -Turns 1
+    Check (@(Get-HordeTestFleetPosts -Folder $fake).Count -eq 1) "the same line sent again, with its id, is still one post"
+    $null = Invoke-App @{ cmd = "refresh"; id = $hid }
+    $chat = Invoke-App @{ cmd = "chat"; id = $hid }
+    $lines = @(); if ($chat.ok) { $lines = @($chat.value.items | Where-Object { $_.kind -ceq "line" }) }
+    Check ($lines.Count -eq 1 -and $lines[0].text -ceq "Ship the third one." -and $lines[0].status -ceq "accepted" -and $lines[0].words.StartsWith("Sent")) ("the app shows his line once, with the receipt in its own words (" + $(if ($lines.Count) { $lines[0].words } else { "none" }) + ")")
     }
 } finally {
     if ($null -ne (Get-Variable -Name pairRun -ErrorAction SilentlyContinue)) { Stop-HordeCliRun $pairRun }
+    Remove-HordeTestChatThrall -Thrall $thrall
+    Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ($null -ne $app) { try { $app.p.StandardInput.WriteLine('{"cmd":"exit"}'); if (-not $app.p.WaitForExit(10000)) { $app.p.Kill() } } catch { } ; $app.p.Dispose() }
     $env:HORDE_HOME = $realHome
     foreach ($k in @($keysMade)) { try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { } }

@@ -26,7 +26,13 @@
 //                         { id, fingerprint, response, recoveryCode, prf, pairMailbox, relayed }
 //   sendPairing {id}      send that response through the relay again: { relayed }
 //   announce {id}  unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
-// EVENTS: list-changed (the list record), hordes-changed (the summaries), notice (a sentence).
+//   chat                  the picked horde's chat with its Thrall: { state, value: { session, items,
+//                         mode } } as phone-core's chat answers it; a locked or empty horde answers
+//                         unknown with the reason
+//   chat-send {text, id}  one line to the Thrall, signed and sent: { ok } or { ok: false, reason }; id is
+//                         the page's id for the words (32 hex), so the same words sent again are one line
+// EVENTS: list-changed (the list record), chat-changed (the chat record), hordes-changed (the
+// summaries), notice (a sentence).
 //
 // "SAVED" MEANS SENT AND SIGNED. say answers ok once the relay has taken the signed envelope; the
 // machine stores it when its runner next turns, and the next snapshot shows it under the question. The
@@ -34,7 +40,9 @@
 // document keeps the words as the standing answer until a snapshot that holds them arrives (list.js,
 // standingOf). The same words sent again carry the same id, which is the answerId: the machine stores
 // them once (channels/decisions, Get-HordeDecisionsChannelAnswerId).
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh", "chat", "chat-send"];
+// A line's id when the page gave none: 16 random bytes as hex.
+function newLineId() { return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
 const LOCAL_ACT_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
@@ -56,6 +64,11 @@ export function createBridge(phone, options = {}) {
     if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };
     return { state: "known", reason: "", value: { outcome: "done", questions: view.questions, counts: view.counts || {}, unreadable: new Array(view.unreadable || 0).fill(""), notUnderstood: new Array(view.notUnderstood || 0).fill("") } };
   }
+  async function chatRecord() {
+    if (!picked) return { state: "unknown", value: null, reason: "No horde is picked: pair this phone with a machine first." };
+    try { return { state: "known", reason: "", value: await phone.chat(picked) }; }
+    catch (e) { return { state: "unknown", value: null, reason: e && e.message ? e.message : String(e) }; }
+  }
   async function hordes() { const h = await phone.hordes(); emit("hordes-changed", h); return h; }
   let locked = true;
   let relayDown = false;
@@ -71,6 +84,7 @@ export function createBridge(phone, options = {}) {
     } catch (e) { view = null; locked = e && e.code === "locked"; relayDown = !locked; viewError = e && e.message ? e.message : String(e); }
     const rec = listRecord();
     emit("list-changed", rec);
+    emit("chat-changed", await chatRecord());
     return rec;
   }
   // The live refresh: one long-poll at a time, for whichever horde is picked, while it is unlocked and
@@ -119,7 +133,16 @@ export function createBridge(phone, options = {}) {
     // is locked, and draws the locked screen, not an empty list.
     lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
     forget: async (a) => { await phone.forget(String(a.id)); if (String(a.id) === picked) { picked = ""; view = null; emit("list-changed", listRecord()); } return hordes(); },
-    refresh: async () => refresh()
+    refresh: async () => refresh(),
+    chat: async () => chatRecord(),
+    "chat-send": async (a) => {
+      try {
+        const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();
+        await phone.sendLine(picked, { text: String(a.text || ""), messageId: id });
+        emit("chat-changed", await chatRecord());
+        return { ok: true, id };
+      } catch (e) { return { ok: false, reason: e && e.message ? e.message : String(e) }; }
+    }
   };
 
   return {

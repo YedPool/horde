@@ -14,5 +14,8 @@
         @{ Name = "locked-list-drawn-as-empty"
            Find = 'if (!view) return { state: "unknown", value: null, reason: viewError || "This horde is locked." };'
            Replace = 'if (!view) return { state: "known", reason: "", value: { outcome: "done", questions: [], counts: {}, unreadable: [], notUnderstood: [] } };' }
+        @{ Name = "chat-send-ignores-the-page-id"
+           Find = 'const id = /^[0-9a-f]{32}$/.test(String(a.id || "")) ? String(a.id) : newLineId();'
+           Replace = 'const id = newLineId();' }
     )
 }

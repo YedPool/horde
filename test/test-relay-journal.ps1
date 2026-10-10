@@ -345,6 +345,11 @@ try {
     $s = Register-HordeRelayJournalSent -Text $t1 -HordeHome $h
     Check (IsRefused $s "a replay") "the same envelope recorded twice is refused the second time"
     Check ((Names (StreamDir $h -Dir "out")) -ceq ((RecName 1) + ",lock")) "outbound records sit under out\, apart from what was received"
+    $k1 = Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $t1).value.header
+    $back = Test-HordeRelayJournalSent -Key $k1 -HordeHome $h
+    Check ($back.state -ceq "known" -and $back.value.sent -and $back.value.text -ceq $t1) "a sent record gives back its envelope's wire text exactly, to be put again after a restart"
+    $other = Test-HordeRelayJournalSent -Key ($k1.Substring(0, $k1.Length - 24) + ("0" * 24)) -HordeHome $h
+    Check ($other.state -ceq "known" -and -not $other.value.sent -and $other.value.text -ceq "") "a key with another nonce under that seq is not that record, and gives no text"
     Check (IsUnknown (Register-HordeRelayJournalSent -Text "not an envelope" -HordeHome $h) "not an envelope") "text that is not an envelope is not recorded"
     Check (IsUnknown (Get-HordeRelayJournalNextSeq -From "nope" -Channel "decisions" -HordeHome $h) "32-hex") "a stream name that is not one is refused"
     Check (IsUnknown (Get-HordeRelayJournalNextSeq -From $machineId -Channel "decisions" -HordeHome (New-Home -Bare)) "not a relay journal") "the next seq of no journal is unknown"

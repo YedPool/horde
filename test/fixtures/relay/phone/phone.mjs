@@ -33,6 +33,10 @@
 //              machine's agreement key and signed with a passkey assertion over SHA-256 of its signed
 //              bytes. machine and snapshot name the snapshot it was made from: the key id of the
 //              machine that sent it, and that envelope's replay key (open's key).
+//   line       in { machine, session, text, messageId? }  -> out { envelope, key, messageId }
+//              A founder's chat line to the Thrall: an envelope on channel chat, kind line, sealed to
+//              the machine's agreement key and signed with a passkey assertion, its body bound to the
+//              horde, the machine and the Thrall's session (channels/chat/Channel.ps1).
 //   resign     in { envelope }            -> out { envelope }
 //              The same signed content signed again (a new assertion): what a passkey may do, and what
 //              the journal must still see as one envelope.
@@ -108,13 +112,20 @@ async function answer(st, input) {
   return { envelope: await P.signEnvelope(parts, passkey(st)), key: P.replayKey(parts.header), answerId };
 }
 
+async function line(st, input) {
+  const messageId = input.messageId || P.hex(P.randomBytes(16));
+  const body = P.lineBody({ messageId, horde: st.offer.horde, machine: input.machine, session: input.session, text: input.text });
+  const parts = await seal(st, "line", "chat", body);
+  return { envelope: await P.signEnvelope(parts, passkey(st)), key: P.replayKey(parts.header), messageId };
+}
+
 async function resign(st, input) {
   return { envelope: await P.signEnvelope(P.envelopeParts(input.envelope), passkey(st)) };
 }
 
 const st = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
 const input = existsSync(inPath) ? JSON.parse(readFileSync(inPath, "utf8")) : {};
-const commands = { register, "send-pairing": sendPairing, "phone-key": phoneKey, open, answer, resign };
+const commands = { register, "send-pairing": sendPairing, "phone-key": phoneKey, open, answer, line, resign };
 if (!commands[cmd]) { console.error("no such command: " + cmd); process.exit(2); }
 const out = await commands[cmd](st, input);
 writeFileSync(statePath, JSON.stringify(st));

@@ -235,4 +235,36 @@ Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "user" -Text 
 $y = Read-HordeConversationTurns -Source $src2 -Cursor $x.value.next
 Check ($y.state -ceq "known" -and $y.value.reset -ceq "rotated" -and (Texts $y) -ceq "rewritten") "a history the adapter says was rewritten: reset rotated, read from its start"
 
+Write-Host ""
+Write-Host "--- a delivered turn is a role of its own ---" -ForegroundColor Cyan
+$store = New-HordeMemoryConversationStore
+Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "delivered" -Text "handed over by a messenger"
+$r = Read-HordeConversationTurns -Source (Find-Mem $store).value -Cursor $null
+Check ($r.state -ceq "known" -and @($r.value.turns).Count -eq 1 -and $r.value.turns[0].role -ceq "delivered" -and @(Test-HordeSchema -Value $r.value.turns[0] -Schema (Get-HordeSchema -Name "conversation-turn.v1")).Count -eq 0) "a turn a messenger handed over keeps the role delivered, and the turn schema takes it"
+
+Write-Host ""
+Write-Host "--- a past session by its id: the tail a clear left behind ---" -ForegroundColor Cyan
+$store = New-HordeMemoryConversationStore
+Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "user" -Text "before the cursor"
+$src = (Find-Mem $store).value
+$r = Read-HordeConversationTurns -Source $src -Cursor $null
+Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "assistant" -Text ("last words, token=" + "q8Wv3Lm9Zr4Xy7")
+Clear-HordeMemoryConversation -Store $store -Fleet "alpha"
+Add-HordeMemoryConversationTurn -Store $store -Fleet "alpha" -Role "user" -Text "in the new session"
+$old = Find-HordeConversationSource -Fleet "alpha" -Session $src.session -Require @() -Refuse @() -Options @{ memory = $store }
+Check ($old.state -ceq "known" -and $old.value.session -ceq $src.session) ("the old session is located by its id after the clear (" + $old.state + ")")
+$tail = Read-HordeConversationTurns -Source $old.value -Cursor $r.value.next
+Check ($tail.state -ceq "known" -and $tail.value.reset -ceq "none" -and @($tail.value.turns).Count -eq 1 -and $tail.value.turns[0].text.StartsWith("last words") -and -not $tail.value.more) "read from the old cursor, it gives the tail written after it, and not the new session's words"
+Check (-not $tail.value.turns[0].text.Contains("q8Wv3Lm9Zr4Xy7") -and $tail.value.turns[0].source.session -ceq $src.session) "the tail is redacted by the port like any read, and carries the old session's id"
+$now = Find-HordeConversationSource -Fleet "alpha" -Session (Find-Mem $store).value.session -Require @() -Refuse @() -Options @{ memory = $store }
+Check ($now.state -ceq "known" -and $now.value.session -cne $src.session) "asked by the id of the session now, it is that session"
+$none = Find-HordeConversationSource -Fleet "alpha" -Session "mem-never-was" -Require @() -Refuse @() -Options @{ memory = $store }
+Check ($none.state -ceq "absent" -and $none.reason.Contains("that session")) ("an id the Thrall never had is absent, said so (" + $none.reason + ")")
+$bad = Find-HordeConversationSource -Fleet "alpha" -Session "has spaces" -Require @() -Refuse @() -Options @{ memory = $store }
+Check ($bad.state -ceq "unknown" -and $bad.reason.Contains("session asked for")) "an id that is not a session id is refused before any adapter is asked"
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie "locate-other-session"
+$liar = Find-HordeConversationSource -Fleet "alpha" -Session $src.session -Require @() -Refuse @() -Options @{ memory = $store }
+Check ($liar.state -ceq "unknown" -and $liar.reason.Contains("located another one")) ("an adapter that answers with another session than the one asked for is not believed (" + $liar.reason + ")")
+Set-HordeMemoryConversationLie -Store $store -Fleet "alpha" -Lie ""
+
 Complete-HordeSuite -Success "the port finds one Thrall, reads it bounded and redacted, and survives every lie"

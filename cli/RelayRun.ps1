@@ -40,6 +40,12 @@
 # turn - is slept in slices of at most 500 ms with the stop asked between them (finding 6: a 15 s
 # backoff hid a stop for 15 s).
 #
+# ONE RUN PER HOME (review of 3d837f0). A run holds <HORDE_HOME>\relay\run.lock open with no sharing
+# from before its first turn to after its last; a second run on the same home cannot open it, says so
+# plainly and does nothing. Two runs on one home would each keep a channel's memory and its state file
+# (channels/chat) and race on them. The operating system closes a killed run's handle, so a crash never
+# leaves the home locked. The stop file above still obeys every run started before it.
+#
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
 #
@@ -93,6 +99,11 @@ function Get-HordeRelayRunBackoffMs {
 function Get-HordeRelayRunStopPath {
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     return [System.IO.Path]::Combine($HordeHome, "relay", "run.stop")
+}
+
+function Get-HordeRelayRunLockPath {
+    param([Parameter(Mandatory = $true)][string]$HordeHome)
+    return [System.IO.Path]::Combine($HordeHome, "relay", "run.lock")
 }
 
 function Request-HordeRelayRunStop {
@@ -152,6 +163,15 @@ function Invoke-HordeRelayRun {
     if ($settings.state -cne "known") { $null = & $Say ("the run does not start: " + $settings.reason); return [pscustomobject]@{ turns = 0; failures = 0; stoppedBy = "settings" } }
     $set = $settings.value
     $watchMs = [int][System.Math]::Min([double]$set.watchMs, [double]$Connection.relay.limits.maxWatchMs)
+    $lockPath = Get-HordeRelayRunLockPath -HordeHome $HordeHome
+    $lock = $null
+    try {
+        [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($lockPath))
+        $lock = New-Object System.IO.FileStream -ArgumentList $lockPath, ([System.IO.FileMode]::OpenOrCreate), ([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::None)
+    } catch {
+        $null = & $Say ("another relay run is already running on this home (it holds " + $lockPath + "); this one does not start")
+        return [pscustomobject]@{ turns = 0; failures = 0; stoppedBy = "locked" }
+    }
     $stopPath = Get-HordeRelayRunStopPath -HordeHome $HordeHome
     $startedMs = ConvertTo-HordeRelayRecordMs
     # A stop asked before this run started was asked of the runs before it.
@@ -222,6 +242,7 @@ function Invoke-HordeRelayRun {
         }
     } finally {
         Close-HordeRelayRunContext -Context $ctx
+        $lock.Dispose()
     }
     $null = & $Say ("stopped after " + $turns + " turn(s): " + $stoppedBy)
     return [pscustomobject]@{ turns = $turns; failures = $failures; stoppedBy = $stoppedBy }

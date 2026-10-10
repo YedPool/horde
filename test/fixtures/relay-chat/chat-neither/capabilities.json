@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "chat-neither",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture for test/test-relay-channel-chat.ps1." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture for test/test-relay-channel-chat.ps1." },
+    "receipt.receiver": { "support": "declined", "evidence": "A fixture for test/test-relay-channel-chat.ps1." },
+    "wake": { "support": "no", "evidence": "A fixture for test/test-relay-channel-chat.ps1." }
+  }
+}

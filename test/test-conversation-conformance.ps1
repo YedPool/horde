@@ -13,7 +13,8 @@
 #    the cursor; a bounded read gives at most its batch and, read on to the end, exactly the whole; a
 #    secret in a user turn and in an assistant turn is hidden by the port; multi-line and non-ASCII words
 #    come back exactly; a turn half written is not read until it is whole, and then once; the harness's
-#    clear is a reset to the new session; a rewritten history is a reset too.
+#    clear is a reset to the new session, and the session it ended is still found by its id, its last
+#    words after the cursor read to its end (the chat channel's drain); a rewritten history is a reset too.
 # II. EACH CAPABILITY OF THE CLOSED LIST: a "yes" is DEMONSTRATED by its case below or the suite fails;
 #    any other word must make a caller that requires it refuse the adapter, by name; a hazard that is not
 #    "no" must make a caller that refuses it refuse the adapter. A capability added to the list with no
@@ -199,10 +200,20 @@ foreach ($S in $subjects) {
             $cur = $after.value.next
         } else { Write-Host ("  [NOTE] " + $S.name + ": its fixture cannot half write a turn; the torn-record case does not apply") -ForegroundColor DarkGray }
 
+        # The Thrall's last words before the clear, written after the cursor: the drain must find them.
+        $S.fixture.Add.Invoke($State, @([pscustomobject]@{ role = "assistant"; text = "the last words before the clear" }))
         $S.fixture.Clear.Invoke($State)
         $S.fixture.Add.Invoke($State, @([pscustomobject]@{ role = "user"; text = "after the clear" }))
         $src2 = Find-Subject $S $State
         Check ($src2.session -cne $src.session) ($S.name + ": CONTROL: after the clear, the Thrall's session is a new one")
+        $old = Find-HordeConversationSource -Fleet $State.fleet -Vendor $S.name -Session $src.session -Require @() -Refuse @() -Options $State.options
+        Check ($old.state -ceq "known" -and $old.value.session -ceq $src.session) ($S.name + ": the session the clear ended is still found by its id (" + $old.state + ")")
+        if ($old.state -ceq "known") {
+            $tail = Read-HordeConversationTurns -Source $old.value -Cursor $cur
+            Check ($tail.state -ceq "known" -and $tail.value.reset -ceq "none" -and (Sig $tail.value.turns) -ceq "assistant:the last words before the clear" -and -not $tail.value.more) ($S.name + ": and its tail after the cursor is read to its end, the new session's words not among it")
+        }
+        $none = Find-HordeConversationSource -Fleet $State.fleet -Vendor $S.name -Session "no-such-session-1" -Require @() -Refuse @() -Options $State.options
+        Check ($none.state -ceq "absent") ($S.name + ": a session id the Thrall never had is absent (" + $none.state + ")")
         $x = Read-HordeConversationTurns -Source $src2 -Cursor $cur
         Check ($x.state -ceq "known" -and $x.value.reset -ceq "session" -and (Sig $x.value.turns) -ceq "user:after the clear") ($S.name + ": the old cursor reads the new session from its start, as a reset")
         $S.fixture.Rotate.Invoke($State, @([pscustomobject]@{ role = "user"; text = "a rewritten history" }, [pscustomobject]@{ role = "assistant"; text = "with a reply in it, longer than what stood before it" }))

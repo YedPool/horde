@@ -28,6 +28,9 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
+. (Join-Path $root "test\lib\FleetPin.ps1")
+$fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "core\ModuleSettings.ps1")
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
@@ -489,10 +492,10 @@ try {
     [void](Send-ToMachine $W $es)
     $t = Invoke-Turn $W
     Check ((Has $t "refused") -and @(Get-Said $W.store).Count -eq 0) "an answer signed by a machine key is refused"
-    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "chat" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
+    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "notes" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "snapshot" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     $t = Invoke-Turn $W
-    Check ((Has $t "no channel 'chat' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
+    Check ((Has $t "no channel 'notes' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
     $elsewhere = New-HordeRelayP256Key -Use "ecdh"
     [void](Send-ToMachine $W (Get-Answer $W -To @(, ([byte[]](ConvertTo-HordeRelayP256Public -Key $elsewhere)))).text)
     $t = Invoke-Turn $W
@@ -677,6 +680,16 @@ try {
     $stopNow = { param($Line) [void]$said.Add($Line); if ("$Line".StartsWith("watching")) { [void](Request-HordeRelayRunStop -HordeHome $W.home) } }
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say $stopNow
     Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file stays for every other run that started before it (" + $r.stoppedBy + ", " + $r.turns + ")")
+    # ONE RUN PER HOME (review of 3d837f0): a run while another holds the home refuses, plainly, and does nothing.
+    # The holder here even shares the file: only a run that shares nothing can tell it is there.
+    $lockPath = Get-HordeRelayRunLockPath -HordeHome $W.home
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($lockPath))
+    $held = New-Object System.IO.FileStream -ArgumentList $lockPath, ([System.IO.FileMode]::OpenOrCreate), ([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::ReadWrite)
+    $said.Clear()
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) } } finally { $held.Dispose() }
+    Check ($r.stoppedBy -ceq "locked" -and $r.turns -eq 0 -and (@($said) -join " ").Contains("another relay run is already running on this home")) ("while another run holds the home, a run refuses before its first turn, plainly (" + (@($said) -join " | ") + ")")
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) }
+    Check ($r.stoppedBy -ceq "turns" -and $r.turns -eq 1) "and once the other has let go, a run starts"
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 999999}}', $utf8)
     $said.Clear()
     $r = $null
@@ -739,6 +752,7 @@ try {
     }
     Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
 } finally {
+    Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
     foreach ($w in @($script:worlds)) { Close-HordeRelayRunContext -Context $w.ctx }
     $made = New-Object System.Collections.ArrayList

@@ -124,6 +124,15 @@ function New-HordeTestPhoneAnswerBody {
     return ,($script:HordeTestPhoneUtf8.GetBytes($t))
 }
 
+function New-HordeTestPhoneLineBody {
+    # The chat channel's line body (channels/chat/Channel.ps1): -Machine is the key id of the machine
+    # whose Thrall it is for, -Session the Thrall's session the line was written to.
+    param([string]$MessageId = "", [string]$Horde = "work", [string]$Machine = ("0" * 32), [string]$Session = "none", [string]$Text = "Carry on.")
+    if ($MessageId -ceq "") { $MessageId = [guid]::NewGuid().ToString("N") }
+    $t = ConvertTo-Json -InputObject ([ordered]@{ v = 1; messageId = $MessageId; horde = $Horde; machine = $Machine; session = $Session; text = $Text }) -Compress
+    return ,($script:HordeTestPhoneUtf8.GetBytes($t))
+}
+
 function Open-HordeTestPhoneEnvelope {
     # What the phone does with an envelope from the machine: verify it against the machine's signing key
     # and open it with the phone identity key. { ok; reason; body (parsed JSON) }. The phone keeps no

@@ -42,6 +42,30 @@
         @{ Name = "expired-offer-taken"
            Find = 'if (now >= o.expiresAt) return no('
            Replace = 'if (false) return no(' }
+        @{ Name = "chat-receipt-any-code-shown"
+           Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
+           Replace = 'if (false) return' }
+        @{ Name = "chat-receipt-words-not-shown"
+           Find = 'text: r.text, at: had && had.at ? had.at : r.ts'
+           Replace = 'text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts' }
+        @{ Name = "chat-founder-turn-shown-twice"
+           Find = 'if (t.role === "founder") {'
+           Replace = 'if (false) {' }
+        @{ Name = "chat-founder-turn-without-line-kept"
+           Find = '(t.role !== "founder" || (typeof t.line === "string" && /^[0-9a-f]{32}$/.test(t.line))) &&'
+           Replace = 'true &&' }
+        @{ Name = "chat-turn-shown-before-its-parts"
+           Find = 'if (g.parts.size !== n) continue;'
+           Replace = 'if (g.parts.size === 0) continue;' }
+        @{ Name = "chat-other-machine-read"
+           Find = 'if (b.horde !== horde || b.machine !== machine) return { error: "the chat body names another horde or machine" };'
+           Replace = 'if (b.horde !== horde) return { error: "the chat body names another horde or machine" };' }
+        @{ Name = "chat-role-off-the-list-kept"
+           Find = 'CHAT_ROLES.indexOf(t.role) >= 0 &&'
+           Replace = 'true &&' }
+        @{ Name = "chat-line-unbound-to-session"
+           Find = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session, text }));'
+           Replace = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session: "any", text }));' }
         @{ Name = "pairing-mailbox-not-checked"
            Find = 'if (typeof o.pairMailbox !== "string" || o.pairMailbox !== o.horde + "/pair-" + o.offer) return no('
            Replace = 'if (typeof o.pairMailbox !== "string") return no(' }

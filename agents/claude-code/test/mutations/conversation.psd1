@@ -60,6 +60,18 @@
         @{ Name = "unparsed-lines-not-counted"
            Find = 'if ($unreadable -gt 0) {'
            Replace = 'if ($false) {' }
+        @{ Name = "past-session-must-be-live"
+           Find = 'if ($Session -ne "") { if ("$id" -cne $Session) { continue } }'
+           Replace = 'if ($Session -ne "" -and "$id" -cne $Session) { continue }' }
+        @{ Name = "past-session-any-role"
+           Find = '$named = (Read-HordeRecordRole -Record $record -Table $table).role'
+           Replace = '$named = $(if ($Session -ne "") { [pscustomobject]@{ state = "known"; value = $Role } } else { (Read-HordeRecordRole -Record $record -Table $table).role })' }
+        @{ Name = "any-meta-line-delivered"
+           Find = 'if ($said -is [string] -and $said.StartsWith($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal)) {'
+           Replace = 'if ($said -is [string]) {' }
+        @{ Name = "delivered-line-prefiltered-out"
+           Find = ' -or ($text.IndexOf($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal) -ge 0)) {'
+           Replace = ') {' }
         @{ Name = "thrall-without-a-file-unknown"
            Find = 'if ($offset -eq 0) { return (New-HordeKnown'
            Replace = 'if ($false) { return (New-HordeKnown' }

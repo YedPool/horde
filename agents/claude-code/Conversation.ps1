@@ -25,6 +25,14 @@
 # transcript says what was said whether its writer still runs or not, and reading a stopped Thrall's
 # last words is what a phone should do. The registry root is -Options.registryRoot, else the fleet's own
 # (Get-HordeWezfleetRoot).
+# WHICH HORDE (review of 3d837f0; PR 9's open question 4). The registry names no horde, so this adapter
+# cannot confirm the -Fleet it is asked about, and it does not pretend to: it answers for the one fleet
+# root it reads. That is safe by deployment, not by check - one fleet root per horde, and the process
+# asking is a `horde relay run` whose own environment names both: its HORDE_HOME says the horde (the
+# relay setting horde) and its WEZFLEET_ROOT, or the user's default, says the fleet (relay design Q10:
+# one fleet = one HORDE_HOME plus its WEZFLEET_ROOT). Refusing every -Fleet the registry cannot confirm
+# would refuse them all; a fleet root that names its horde is the change that would let this check, and
+# it is listed as an open question. Two hordes on one machine therefore need two homes and two roots.
 #
 # THE TAIL (S4). The file is opened sharing read, write and delete (core/ReadShared.ps1: the harness
 # keeps appending, and a reader must never block it), read from the saved byte offset, at most MaxBytes,
@@ -41,7 +49,9 @@
 #     a line end. A file rewritten to the same first 4 KiB and longer than the offset, with a line end
 #     exactly at the offset, is not seen; the harness has never been seen rewriting a transcript at all.
 #   - A NEW SESSION (/clear) is a new session id, a new registry record and a new file (S4); the port
-#     sees the session change and starts it from the beginning. This adapter does nothing for it.
+#     sees the session change and starts it from the beginning. The OLD session is still found by its id
+#     (the port's A PAST SESSION BY ITS ID): its registry record, retired or not, still names the role and
+#     its transcript, so a caller can read its tail to the end before moving on.
 #
 # WHAT IS A TURN (S4, and the 2026-10-10 probe):
 #   - USER: a user line whose origin.kind is "human" (485 in the live file), its content a string or text
@@ -54,6 +64,11 @@
 #     text block is ONE turn, with the line's uuid as its id and message.id as its groupId: grouping in
 #     the reader would give a turn whose text depends on where a read happened to stop. Thinking and
 #     tool_use blocks are not turns.
+#   - DELIVERED: a user line marked isMeta whose content is a string starting "Stop hook feedback:" - the
+#     harness's record of a Stop hook's block reason, which is how the fleet's mail hands a message to a
+#     session (measured 2026-10-10: 227 of 227 mail deliveries in 193 local transcripts had exactly this
+#     shape, counted by shape only, and an isolated session with a blocking Stop hook wrote the same).
+#     Its text is what follows the prefix. Every OTHER meta line stays skipped.
 #   - SYSTEM: an assistant line the harness wrote itself to report an API error (model "<synthetic>" or
 #     isApiErrorMessage; 4 in the live file): the founder should see that the Thrall stopped on an error.
 #   - SKIPPED ALWAYS: every line of a side conversation (isSidechain), and every other line type
@@ -76,24 +91,31 @@ $script:ClaudeCodeConversationHeadBytes = 4096
 # that was nothing but a date exactly as typed.
 $script:ClaudeCodeJsonDateKind = (Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")
 $script:ClaudeCodeConversationSkipStep = 65536
+# The harness's own words in front of a Stop hook's block reason (DELIVERED, in the header).
+$script:ClaudeCodeDeliveredPrefix = "Stop hook feedback:"
 # The position this adapter writes: v1.<offset>.<turns of the line at the offset already given>.<head length>.<head hash>
 $script:ClaudeCodeConversationPositionPattern = '\Av1\.(\d{1,15})\.(\d{1,6})\.(\d{1,5})\.([0-9a-f]{16}|-)\z'
 
 function Find-ClaudeCodeThrall {
-    # The registry record holding -Role: known { session; locator }, absent or unknown (header).
-    param([string]$Root, [string]$Role)
+    # The registry record holding -Role: known { session; locator }, absent or unknown (header). -Session
+    # asks for that one session's record instead, retired or not, and it must name -Role too: a session
+    # that never held the role is not the Thrall's, so it is absent.
+    param([string]$Root, [string]$Role, [string]$Session = "")
     $registry = Read-HordeRegistry -Root $Root
     if ($registry.complete.state -cne "known") { return (New-HordeUnknown -Reason ("the session records could not all be read, so which session is the " + $Role + " cannot be told: " + $registry.complete.reason)) }
     $table = Get-HordeRoleTable
     $holders = New-Object System.Collections.ArrayList
     foreach ($id in @($registry.records.Keys | Sort-Object)) {
         $record = $registry.records[$id].record
-        $retired = Get-HordeField -Record $record -Name "retired"
-        if ($retired.state -ceq "known" -and [bool]$retired.value) { continue }
+        if ($Session -ne "") { if ("$id" -cne $Session) { continue } }
+        else {
+            $retired = Get-HordeField -Record $record -Name "retired"
+            if ($retired.state -ceq "known" -and [bool]$retired.value) { continue }
+        }
         $named = (Read-HordeRecordRole -Record $record -Table $table).role
         if ($named.state -ceq "known" -and "$($named.value)" -ceq $Role) { [void]$holders.Add([pscustomobject]@{ id = "$id"; record = $record }) }
     }
-    if ($holders.Count -eq 0) { return (New-HordeAbsent -Note ("no live session's record names the role " + $Role)) }
+    if ($holders.Count -eq 0) { return (New-HordeAbsent -Note $(if ($Session -ne "") { "no session record of that id names the role " + $Role } else { "no live session's record names the role " + $Role })) }
     if ($holders.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $holders.Count + " live sessions each say they are the " + $Role + " (" + (@($holders | ForEach-Object { $_.id }) -join ", ") + "); one is never chosen over another")) }
     $one = $holders[0]
     $tp = Get-HordeField -Record $one.record -Name "transcriptPath"
@@ -137,7 +159,8 @@ function ConvertFrom-ClaudeCodeLine {
     param([string]$Line)
     $isUser = $Line.IndexOf('"kind":"human"', [System.StringComparison]::Ordinal) -ge 0 -and $Line.IndexOf('"type":"user"', [System.StringComparison]::Ordinal) -ge 0
     $isAssistant = $Line.IndexOf('"type":"assistant"', [System.StringComparison]::Ordinal) -ge 0 -and $Line.IndexOf('"type":"text"', [System.StringComparison]::Ordinal) -ge 0
-    if (-not $isUser -and -not $isAssistant) { return @() }
+    $isDelivered = $Line.IndexOf('"isMeta":true', [System.StringComparison]::Ordinal) -ge 0 -and $Line.IndexOf($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal) -ge 0
+    if (-not $isUser -and -not $isAssistant -and -not $isDelivered) { return @() }
     if ($script:ClaudeCodeJsonDateKind) { $j = $Line | ConvertFrom-Json -DateKind String } else { $j = $Line | ConvertFrom-Json }
     if ($j -isnot [System.Management.Automation.PSCustomObject]) { return @() }
     if ((Get-ClaudeCodeMember $j "isSidechain") -eq $true) { return @() }
@@ -149,6 +172,14 @@ function ConvertFrom-ClaudeCodeLine {
     if ($uuid -isnot [string]) { return @() }
     $out = New-Object System.Collections.ArrayList
     if ($type -ceq "user") {
+        if ((Get-ClaudeCodeMember $j "isMeta") -eq $true -and (Get-ClaudeCodeMember $j "isCompactSummary") -ne $true) {
+            $said = ConvertTo-ClaudeCodeText $content
+            if ($said -is [string] -and $said.StartsWith($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal)) {
+                $handed = $said.Substring($script:ClaudeCodeDeliveredPrefix.Length).TrimStart([char]13, [char]10)
+                if ($handed -match '\S') { [void]$out.Add([pscustomobject]@{ role = "delivered"; text = $handed; time = $time; turnId = $uuid }) }
+            }
+            return @($out)
+        }
         if ((Get-ClaudeCodeMember $j "isMeta") -eq $true -or (Get-ClaudeCodeMember $j "isCompactSummary") -eq $true) { return @() }
         if ((Get-ClaudeCodeMember (Get-ClaudeCodeMember $j "origin") "kind") -cne "human") { return @() }
         $text = ""
@@ -254,7 +285,7 @@ function Read-ClaudeCodeConversation {
                     # THE PREFILTER IS ALSO HERE, before the call: a function call per line cost more than
                     # the whole parse of the lines that matter (2026-10-10, 27.9 MB synthetic file: 6.5 s
                     # with the call on every line).
-                    if (($text.IndexOf('"kind":"human"', [System.StringComparison]::Ordinal) -ge 0) -or ($text.IndexOf('"type":"text"', [System.StringComparison]::Ordinal) -ge 0)) {
+                    if (($text.IndexOf('"kind":"human"', [System.StringComparison]::Ordinal) -ge 0) -or ($text.IndexOf('"type":"text"', [System.StringComparison]::Ordinal) -ge 0) -or ($text.IndexOf($script:ClaudeCodeDeliveredPrefix, [System.StringComparison]::Ordinal) -ge 0)) {
                         try { $lineTurns = @(ConvertFrom-ClaudeCodeLine -Line $text.TrimEnd([char]13)) } catch { $unreadable++ }
                     }
                 }
@@ -298,7 +329,9 @@ $null = Register-HordeConversationAdapter -Folder $PSScriptRoot -Locate {
     $root = ""
     if ($null -ne $Request.options -and $Request.options.Contains("registryRoot")) { $root = "" + $Request.options["registryRoot"] }
     if ($root -eq "") { $root = Get-HordeWezfleetRoot }
-    return (Find-ClaudeCodeThrall -Root $root -Role $Request.role)
+    $asked = ""
+    if ($null -ne $Request.PSObject.Properties["session"]) { $asked = "" + $Request.session }
+    return (Find-ClaudeCodeThrall -Root $root -Role $Request.role -Session $asked)
 } -Read {
     param($Source, [string]$Position, [int]$MaxTurns, [long]$MaxBytes)
     return (Read-ClaudeCodeConversation -Source $Source -Position $Position -MaxTurns $MaxTurns -MaxBytes $MaxBytes)

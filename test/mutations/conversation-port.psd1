@@ -61,7 +61,7 @@
            Find = 'if ($found.Count -gt 1) {'
            Replace = 'if ($false) {' }
         @{ Name = "bad-session-id-believed"
-           Find = ' -or $session.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add'
+           Find = ' -or $located.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add'
            Replace = ') { [void]$unsure.Add' }
         @{ Name = "look-alike-source-read"
            Find = 'if (-not [object]::ReferenceEquals($script:HordeConversationSources[$id.Value], $Source)) { return $false }'
@@ -84,6 +84,15 @@
         @{ Name = "second-registration-swaps"
            Find = 'if ($script:HordeConversationAdapters.ContainsKey("$($caps.vendor)")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "delivered-not-a-role"
+           Find = '$script:HordeConversationRoles = @("user", "assistant", "system", "delivered")'
+           Replace = '$script:HordeConversationRoles = @("user", "assistant", "system")' }
+        @{ Name = "asked-session-not-checked"
+           Find = 'if ($Session -ne "" -and $located.value -cne $Session) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "asked-session-not-passed"
+           Find = '$request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; session = $Session; options = $Options }'
+           Replace = '$request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; session = ""; options = $Options }' }
         @{ Name = "folder-name-not-checked"
            Find = 'if ($findings.Count -eq 0 -and "$($caps.vendor)" -cne $leaf) {'
            Replace = 'if ($false) {' }

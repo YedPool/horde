@@ -32,7 +32,7 @@
            Replace = 'if ($nm -cnotmatch $script:HordeRelayJournalSenderDirPattern) { continue }; if ($false) {' }
         # --- review of 48bc492 ---
         @{ Name = "any-record-at-the-seq-is-the-snapshot"
-           Find = 'sent = ($r.meta.key -ceq $Key); kind = $r.meta.kind'
-           Replace = 'sent = $true; kind = $r.meta.kind' }
+           Find = '$same = ($r.meta.key -ceq $Key)'
+           Replace = '$same = $true' }
     )
 }

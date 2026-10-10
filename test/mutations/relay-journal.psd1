@@ -94,5 +94,11 @@
         @{ Name = "next-seq-reuses-the-last"
            Find = 'return (New-HordeKnown -Value ([long]($st.last + 1))'
            Replace = 'return (New-HordeKnown -Value ([long]($st.last))' }
+        @{ Name = "sent-text-not-given"
+           Find = 'text = $(if ($same) { $r.envelope } else { "" })'
+           Replace = 'text = ""' }
+        @{ Name = "sent-text-of-another-envelope"
+           Find = 'text = $(if ($same) { $r.envelope } else { "" })'
+           Replace = 'text = $r.envelope' }
     )
 }

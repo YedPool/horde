@@ -15,6 +15,8 @@
 #   tool-result                  a tool's output, as a user line: not a turn
 #   notification                 a task notification (origin.kind task-notification): not a turn
 #   meta                         a meta line (isMeta): not a turn
+#   stop-hook-feedback           a Stop hook's block reason as the harness records it (isMeta, a string
+#                                starting "Stop hook feedback:"): a delivered turn
 #   compact-summary              a compaction summary (isCompactSummary): not a turn
 #   interrupt                    an interruption marker (text blocks, no origin): not a turn
 #   synthetic                    the harness reporting an API error (model "<synthetic>"): a system turn
@@ -55,6 +57,7 @@ function New-ClaudeCodeLine {
         "tool-use" { $v = Assistant @([ordered]@{ type = "tool_use"; id = ("toolu_synthetic" + [guid]::NewGuid().ToString("N").Substring(0, 10)); name = "Bash"; input = [ordered]@{ command = "echo synthetic tool input"; description = "a synthetic call" } }) }
         "tool-result" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = @([ordered]@{ tool_use_id = "toolu_synthetic"; type = "tool_result"; content = "synthetic tool output, never a turn" }) }; uuid = $Uuid; timestamp = $Time; toolUseResult = [ordered]@{ stdout = "synthetic tool output" } }) }
         "notification" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = "<task-notification><task-id>synthetic</task-id></task-notification>" }; uuid = $Uuid; timestamp = $Time; origin = [ordered]@{ kind = "task-notification" } }) }
+        "stop-hook-feedback" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = ("Stop hook feedback:`n" + $Text) }; isMeta = $true; uuid = $Uuid; timestamp = $Time }) }
         "meta" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = "<command-name>/synthetic</command-name>" }; isMeta = $true; uuid = $Uuid; timestamp = $Time }) }
         "compact-summary" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = "This session is being continued from a synthetic summary." }; isCompactSummary = $true; isVisibleInTranscriptOnly = $true; uuid = $Uuid; timestamp = $Time }) }
         "interrupt" { $v = Merge $common ([ordered]@{ type = "user"; message = [ordered]@{ role = "user"; content = @([ordered]@{ type = "text"; text = "[Request interrupted by user]" }) }; uuid = $Uuid; timestamp = $Time }) }
