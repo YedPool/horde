@@ -190,7 +190,9 @@ function Get-HordeDecisionSayContent {
     # THE WORDING THE SPEAKER WAS LOOKING AT IS RECORDED ONLY WHEN THE REQUEST STATES IT. Nothing is put
     # in its place: a request without one makes a record without one ("not stated").
     $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"
-    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }
+    $proven = Test-HordeDecisionMember -Object $Request -Name "evidence"
+    $evidence = $(if ($proven) { [string]$Request.evidence } else { "" })
+    foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence)) { [void]$found.Add($f) }
     if ($stated) {
         if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }
         else { [void]$found.Add("'wordingVersion' is not a wording a question can have: it is a whole number from 1, no larger than " + (Get-HordeDecisionMaxNumber)) }
@@ -203,7 +205,14 @@ function Get-HordeDecisionSayContent {
     foreach ($f in @(Test-HordeDecisionSayMarks -Request $Request -Speaker $body["speaker"] -Route $body["route"])) { [void]$found.Add($f) }
     if ((Test-HordeDecisionMember -Object $Request -Name "asks") -and $Request.asks -eq $false) { $body["asks"] = $false }
     if (Test-HordeDecisionMember -Object $Request -Name "act") { $body["act"] = [string]$Request.act }
-    return [pscustomobject]@{ body = $body; findings = @($found) }
+    # THE EVIDENCE IS KEPT AND NOT HASHED (the route phone, decisions/Rules.ps1). It is the proof of one
+    # DELIVERY - the hash of the relay journal record of the envelope that carried the words - and the
+    # same answer can arrive in two envelopes: a phone that heard nothing back sends it again. Hashed,
+    # the second delivery would be "the id used for a different request" and refused; unhashed, it is
+    # the first record answered again, with the first delivery's proof. The first answer wins, and the
+    # record keeps the proof of the one that won.
+    if ($proven) { $body["evidence"] = $evidence }
+    return [pscustomobject]@{ body = $body; findings = @($found); unhashed = @("evidence") }
 }
 
 function Get-HordeDecisionSayParts {
@@ -384,7 +393,13 @@ function Invoke-HordeDecisionWrite {
     if ($hasNumber) { $number = [long]$Request.number }
     $requestHash = ""
     if ($null -ne $content.body) {
-        $hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $content.body }
+        # What makes two requests the same is the body less the members a content function names as
+        # unhashed (the evidence of a say: Get-HordeDecisionSayContent says why).
+        $sameness = [ordered]@{}
+        $unhashed = @()
+        if ($null -ne $content.PSObject.Properties["unhashed"]) { $unhashed = @($content.unhashed) }
+        foreach ($k in @($content.body.Keys)) { if ($unhashed -cnotcontains $k) { $sameness[$k] = $content.body[$k] } }
+        $hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $sameness }
         $requestHash = Get-HordeDecisionHash -Value $hashed
     }
     $id = [string]$Request.id
