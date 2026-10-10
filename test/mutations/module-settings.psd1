@@ -565,5 +565,15 @@
         @{ Name = "text-reading-not-given-the-path"
            Find = '-Text $text -File $path)'
            Replace = '-Text $text)' }
+        # --- the label kind: link-verbs v1's label pattern is its whole range
+        @{ Name = "label-accepts-any-text"
+           Find = 'if ($Value -cnotmatch (Get-HordeModuleSettingLabelPattern)) { return $no }'
+           Replace = '' }
+        @{ Name = "label-pattern-case-blind"
+           Find = 'if ($Value -cnotmatch (Get-HordeModuleSettingLabelPattern)) { return $no }'
+           Replace = 'if ($Value -notmatch (Get-HordeModuleSettingLabelPattern)) { return $no }' }
+        @{ Name = "label-rule-not-said"
+           Find = 'if ($kind -ceq "label") { return "a hub label: '
+           Replace = 'if ($false) { return "a hub label: ' }
     )
 }

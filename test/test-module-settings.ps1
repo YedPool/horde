@@ -209,6 +209,21 @@ Check ((Declared (Table "statusFolder" @{ default = ("C:\" + ("f" * 1021)) }) "s
 Check (Refused -Rows (Table "statusFolder" @{ min = 1 }) -Like "statusFolder", "'min'") "a smallest value on a folder is refused"
 Check (Refused -Rows (Table "statusFolder" @{ values = @("C:\a") }) -Like "statusFolder", "'values'") "a closed list on a folder is refused"
 
+Section "a hub label's table entry"
+# A label is checked by schema/link-verbs.v1's label pattern, the one definition: the same strings
+# that pattern takes and refuses are taken and refused here.
+function LabelRow { param($Default) return @(@{ name = "fromLabel"; kind = "label"; default = $Default; what = "Who a notice is from." }) }
+$labelPattern = "$((Get-HordeSchema -Name 'link-verbs.v1').definitions.label.pattern)"
+foreach ($good in @("F", "AB", "A1", "ZZ9999", "B12")) {
+    Check (($good -cmatch $labelPattern) -and (Declared (LabelRow $good) "fromLabel").default -ceq $good) ("the label default '" + $good + "' is accepted, as the link's label pattern takes it")
+}
+foreach ($bad in @("f", "A0", "A01", "ABC", "A10000", "", "F`n", " F", "1", 5, $true, $null)) {
+    $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + ("" + $bad -replace "\s", "?") })
+    Check (Refused -Rows (LabelRow $bad) -Like "fromLabel", "default", "a hub label") ("a label default may not be " + $shown)
+}
+Check (Refused -Rows @(@{ name = "fromLabel"; kind = "label"; default = "F"; min = 1; what = "Who." }) -Like "fromLabel", "'min'") "a smallest value on a label is refused"
+Check (Refused -Rows @(@{ name = "fromLabel"; kind = "label"; default = "F"; values = @("F") }) -Like "fromLabel", "'values'") "a closed list on a label is refused"
+
 # ---------------------------------------------------------------------------------------------------
 # THE PURE READING. Everything below hands Read-HordeModuleSettingsText a text; no file is involved.
 
@@ -517,6 +532,20 @@ Check (@($r.findings).Count -eq 1 -and $r.findings[0] -ceq ($refusal + "its key 
 $manyDecl = New-HordeModuleSettings -Module "probe" -Settings @(@{ name = "face"; kind = "text"; default = ("a" * 100); values = @("a", "b", "c", "d", "e") | ForEach-Object { $_ * 100 }; what = "A face." })
 $r = Read-HordeModuleSettingsText -Declaration $manyDecl -Text (Doc '{ "face": "bold" }')
 Check (@($r.findings).Count -eq 1 -and $r.findings[0] -clike ($refusal + "its key 'face' must be one of: " + ("a" * 100) + ", *...; it gives text of 4 characters") -and $r.findings[0].Length -lt 460) "a rule longer than 300 characters is cut, and the finding still says what was given"
+$labelDecl = New-HordeModuleSettings -Module "probe" -Settings (LabelRow "F")
+function LabelFrom { param([string]$Json) return (Read-HordeModuleSettingsText -Declaration $labelDecl -Text (Doc ('{ "fromLabel": ' + $Json + ' }'))) }
+Check ((Read-HordeModuleSettingsText -Declaration $labelDecl -Text $null).values.fromLabel -ceq "F") "with no file a label is its default"
+$r = LabelFrom '"B12"'
+Check ($r.state -ceq "read" -and $null -ne $r.values -and $r.values.fromLabel -ceq "B12") "a label a file gives is read"
+$labelRule = Get-HordeModuleSettingRule -Entry $labelDecl.settings[0]
+foreach ($case in @(@('"b"', "text of 1 characters"), @('"A0"', "text of 2 characters"), @('"F\n"', "text holding a control character"), @('"ABC"', "text of 3 characters"), @('7', "the whole number 7"))) {
+    $r = LabelFrom $case[0]
+    $want = $refusal + "its key 'fromLabel' must be " + $labelRule + "; it gives " + $case[1]
+    $good = ((IsRefusal $r) -and @($r.findings).Count -eq 1 -and $r.findings[0] -ceq $want)
+    if (-not $good) { Write-Host ("    want:    " + $want) -ForegroundColor DarkYellow }
+    Check $good ("a label of " + $case[0] + " refuses the file, named with its key, the value never quoted")
+}
+Check ($labelRule -clike "a hub label*") "a label's rule says it is a hub label"
 function InCulture {
     # Run a block with the thread's culture set, and put the culture back.
     param([string]$Name, [scriptblock]$Block)
