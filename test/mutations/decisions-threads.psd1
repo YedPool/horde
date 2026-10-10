@@ -11,7 +11,7 @@
     Mutations = @(
         # --- say ---
         @{ Name = "words-not-held-to-the-rules-of-saying"
-           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }'
+           Find = 'foreach ($f in @(Test-HordeDecisionSaying -Speaker $body["speaker"] -Route $body["route"] -Actor ([string]$Request.actor) -Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated ([bool]$proven) -Evidence $evidence)) { [void]$found.Add($f) }'
            Replace = '' }
         @{ Name = "who-records-is-not-asked"
            Find = '-Actor ([string]$Request.actor) -Text $body["text"]'
@@ -20,8 +20,8 @@
            Find = '    $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"'
            Replace = '    $stated = Test-HordeDecisionMember -Object $Request -Name "wordingVersion"; if (-not $stated) { $body["wordingVersion"] = 1 }' }
         @{ Name = "rules-not-told-the-wording-is-unstated"
-           Find = '-Text $body["text"] -WordingStated ([bool]$stated))) { [void]$found.Add($f) }'
-           Replace = '-Text $body["text"] -WordingStated $true)) { [void]$found.Add($f) }' }
+           Find = '-Text $body["text"] -WordingStated ([bool]$stated) -EvidenceStated'
+           Replace = '-Text $body["text"] -WordingStated $true -EvidenceStated' }
         @{ Name = "impossible-wording-thrown-on"
            Find = 'if (Test-HordeDecisionCount -Value $Request.wordingVersion -Most (Get-HordeDecisionMaxNumber)) { $body["wordingVersion"] = [int]$Request.wordingVersion }'
            Replace = 'if ($true) { $body["wordingVersion"] = [int]$Request.wordingVersion }' }
