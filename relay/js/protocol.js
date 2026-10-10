@@ -279,7 +279,7 @@ export function credentialFromAttestation(attestationObject) {
 
 // --- pairing (relay/Pairing.ps1) ---
 
-const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "rpId", "origins", "issuedAt", "expiresAt"];
+const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "pairMailbox", "rpId", "origins", "issuedAt", "expiresAt"];
 const LABEL = /^[\x21\x23-\x5b\x5d-\x7e](?:[\x20\x21\x23-\x5b\x5d-\x7e]{0,62}[\x21\x23-\x5b\x5d-\x7e])?$/;
 export const PAIRING_CHALLENGE_DOMAIN = "horde-relay/pairing/v1 challenge\n";
 
@@ -305,6 +305,9 @@ export async function readOffer(text, now = Date.now()) {
   if (typeof o.code !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(o.code)) return no("the offer's code is not base64url");
   if (typeof o.machine !== "string" || !KEY_ID.test(o.machine) || typeof o.agreeKeyId !== "string" || !KEY_ID.test(o.agreeKeyId)) return no("the offer's key ids are not key ids");
   if (typeof o.mailbox !== "string" || o.mailbox !== o.horde + "/" + o.machine) return no("the offer's mailbox is not its horde and machine");
+  // relay/Pairing.ps1's Get-HordeRelayPairingMailbox: the offer's own mailbox, so nothing in an offer
+  // can send the response anywhere else.
+  if (typeof o.pairMailbox !== "string" || o.pairMailbox !== o.horde + "/pair-" + o.offer) return no("the offer's pairing mailbox is not its horde and offer");
   if (typeof o.rpId !== "string" || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(o.rpId)) return no("the offer's rpId is not a relying party id");
   if (!Array.isArray(o.origins) || o.origins.length < 1 || o.origins.length > 8 || !o.origins.every((x) => typeof x === "string")) return no("the offer's origins are not a list of origins");
   if (!Number.isSafeInteger(o.issuedAt) || !Number.isSafeInteger(o.expiresAt)) return no("the offer's times are not whole numbers");
@@ -337,6 +340,22 @@ export function pairingResponseText({ offer, code, rawId, clientDataJSON, attest
   if (typeof code !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(code)) throw new Error("the offer code is base64url");
   return JSON.stringify({ v: 1, kind: "horde-relay-pairing-response", offer, code, rawId: b64u(rawId), clientDataJSON: b64u(clientDataJSON), attestationObject: b64u(attestationObject), label, prf: prf === true });
 }
+
+// relay/Pairing.ps1's THE RESPONSE THROUGH THE RELAY: the response sealed (HPKE) to the agreement key the
+// offer names, the AAD binding the horde, the offer and that key, written as Get-HordeRelaySealedSpec
+// spells it. The machine refuses a response over 6000 characters (Get-HordeRelayPairingLimits), so a
+// longer one is refused here first. offer is readOffer's value.
+export const PAIRING_LIMITS = { maxResponseChars: 6000, maxSealedChars: 8600 };
+export async function sealPairingResponse(offer, responseText) {
+  if (typeof responseText !== "string" || !/^[\x20-\x7e]+$/.test(responseText) || responseText.length > PAIRING_LIMITS.maxResponseChars) throw new Error("a pairing response is 1 to 6000 printable ASCII characters");
+  if (!offer || !(offer.agreePoint instanceof Uint8Array) || !/^[0-9a-f]{32}$/.test(offer.offer || "")) throw new Error("seal a response to an offer readOffer has read");
+  const kid = await keyId(offer.agreePoint);
+  const aad = utf8("horde-relay/pairing/v1 response aad\n" + offer.horde + "\n" + offer.offer + "\n" + kid);
+  const box = await hpkeSeal(offer.agreePoint, utf8("horde-relay/pairing/v1 response-key"), aad, utf8(responseText));
+  return '{"v":1,"kind":"horde-relay-pairing-sealed","offer":"' + offer.offer + '","agreeKeyId":"' + kid + '","enc":"' + b64u(box.enc) + '","ct":"' + b64u(box.sealed) + '"}';
+}
+// The relay key a sealed response is put under: one per offer, so a phone that sends again stores once.
+export function pairingKey(offerId) { return "pairing/" + offerId; }
 
 // --- the phone identity key (relay/Trust.ps1, PHONE KEYS; channels/trust/Channel.ps1) ---
 
