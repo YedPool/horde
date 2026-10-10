@@ -68,9 +68,10 @@
   <p class="hint">Write it down and keep it away from this phone. It can unlock this horde's key to READ if the passkey is lost; it can never answer or pair. It is shown only now.</p>
   <div id="recoveryCode" class="code"></div>
   <h2>The answer for the machine</h2>
-  <p class="hint">Hand this text to the machine's pairing step, then confirm the number there.</p>
+  <p id="relayStatus" class="hint" role="status"></p>
+  <p class="hint">If it does not arrive, hand this text to the machine's pairing step yourself, then confirm the number there.</p>
   <textarea id="responseText" rows="4" readonly spellcheck="false"></textarea>
-  <div class="row"><button type="button" id="copyResponse">Copy</button> <button type="button" id="shareResponse" hidden>Share</button></div>
+  <div class="row"><button type="button" id="resendResponse" hidden>Send again</button> <button type="button" id="copyResponse">Copy</button> <button type="button" id="shareResponse" hidden>Share</button></div>
   <label class="check"><input type="checkbox" id="wroteCode"> I have written the recovery code down</label>
   <div class="row"><button type="button" id="announceBtn" class="primary" disabled>I confirmed it at the machine: announce this phone</button></div>
 </section>

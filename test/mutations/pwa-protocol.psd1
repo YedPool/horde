@@ -66,5 +66,14 @@
         @{ Name = "chat-line-unbound-to-session"
            Find = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session, text }));'
            Replace = 'return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session: "any", text }));' }
+        @{ Name = "pairing-mailbox-not-checked"
+           Find = 'if (typeof o.pairMailbox !== "string" || o.pairMailbox !== o.horde + "/pair-" + o.offer) return no('
+           Replace = 'if (typeof o.pairMailbox !== "string") return no(' }
+        @{ Name = "sealed-response-not-bound-to-offer"
+           Find = 'aad\n" + offer.horde + "\n" + offer.offer + "\n" + kid)'
+           Replace = 'aad\n" + offer.horde + "\n" + kid)' }
+        @{ Name = "sealed-response-not-bounded"
+           Find = '|| responseText.length > PAIRING_LIMITS.maxResponseChars) throw'
+           Replace = ') throw' }
     )
 }

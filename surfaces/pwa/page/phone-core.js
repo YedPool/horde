@@ -54,6 +54,12 @@
 // at ..." must not get that sentence onto the founder's screen. What it says is kept in diagnostics,
 // labelled as the relay's and cut to 200 characters; the screen gets a fixed sentence.
 //
+// THE PAIRING RESPONSE GOES THROUGH THE RELAY (relay/Pairing.ps1, THE RESPONSE THROUGH THE RELAY): pair()
+// seals it to the machine's agreement key from the offer and puts it in the offer's own pairing
+// mailbox, where `horde relay pair` waits. The sealed text is kept in this object's memory only, so
+// sendPairing() can send it again until the horde is announced; the plain response is handed back too,
+// for Copy and Share, the fallback when the relay cannot be reached.
+//
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
 //
@@ -77,6 +83,8 @@ function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(o
 
 export function createPhone({ store, authenticator, relay, origin, now = () => Date.now() }) {
   const sessions = new Map();
+  // Sealed pairing responses not yet known to have arrived, by horde id (THE PAIRING RESPONSE...).
+  const pairings = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
   const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat() });
@@ -141,6 +149,16 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
     }
   }
 
+  // Put a sealed pairing response in its offer's mailbox. true when the relay took it; what the relay
+  // said otherwise goes to diagnostics, never the screen.
+  async function sendSealed(id) {
+    const p = pairings.get(id);
+    if (!p) throw fail("there is no pairing response to send for this horde: it was announced, or the app was reloaded since. Pair again, or use Copy");
+    const put = await relay.put(p.mailbox, p.key, p.sealed);
+    if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); return false; }
+    return true;
+  }
+
   function summary(e) {
     const s = sessions.get(e.id);
     return {
@@ -153,8 +171,10 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
     async hordes() { return (await store.list(ENTRY)).map(summary).sort((a, b) => (a.horde + a.machine).localeCompare(b.horde + b.machine)); },
 
     // Answer a pairing offer: make the passkey (the founder's finger), the phone identity key and its
-    // recovery wrap. { id, fingerprint, response, recoveryCode, prf }. The recovery code is shown ONCE,
-    // to be written down; it is not kept anywhere.
+    // recovery wrap, and send the response to the machine through the relay, sealed. { id, fingerprint,
+    // response, recoveryCode, prf, pairMailbox, relayed }: relayed says whether the relay took it, and
+    // response is the plain text for Copy and Share. The recovery code is shown ONCE, to be written
+    // down; it is not kept anywhere.
     async pair({ offerText, label }) {
       const read = await P.readOffer(offerText, now());
       if (!read.ok) throw fail(read.reason);
@@ -175,6 +195,8 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       if (!P.equalBytes(cred.value.credentialId, made.rawId)) { wipe(pk.pkcs8); throw fail("the passkey's id and its attested credential differ"); }
       const fingerprint = await P.pairingFingerprint({ challenge, publicPoint: cred.value.publicPoint, credentialId: cred.value.credentialId, rpId: o.rpId });
       const response = P.pairingResponseText({ offer: o.offer, code: o.code, rawId: made.rawId, clientDataJSON: made.clientDataJSON, attestationObject: made.attestationObject, label, prf: made.prfEnabled === true });
+      let sealed;
+      try { sealed = await P.sealPairingResponse(o, response); } catch (x) { wipe(pk.pkcs8); throw fail("the response could not be sealed for the machine: " + x.message); }
       const phoneKeyId = await P.keyId(pk.publicPoint);
       const recoveryCode = newRecoveryCode();
       const id = P.hex(P.randomBytes(8));
@@ -189,8 +211,14 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       const s = newSession(pk.privateKey, pk.publicPoint, "read-only", pk.pkcs8);
       sessions.set(id, s);
       if (made.prfFirst) e = await keepPasskeyWrap(e, s, made.prfFirst);
-      return { id, fingerprint, response, recoveryCode, prf: e.prfEnabled };
+      pairings.set(id, { mailbox: o.pairMailbox, key: P.pairingKey(o.offer), sealed });
+      const relayed = await sendSealed(id);
+      return { id, fingerprint, response, recoveryCode, prf: e.prfEnabled, pairMailbox: o.pairMailbox, relayed };
     },
+
+    // Send the sealed pairing response again (the relay did not take it, or the machine is waiting
+    // still): the relay keeps one copy under the offer's key. true when the relay took it.
+    async sendPairing(id) { return sendSealed(id); },
 
     // Announce this horde's phone identity key to the machine, vouched for by the passkey (two
     // assertions: the vouch, which also asks for PRF, and the envelope's signature). Done once the
@@ -206,6 +234,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The announcement was not sent; try again."); }
       await store.update(ENTRY + id, (x) => ({ ...x, announced: { key: env.key, at: now() } }));
+      pairings.delete(id);
       return { key: env.key, agreeKeyId: e.phoneKeyId };
     },
 
@@ -237,7 +266,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
 
     lock(id) { const s = sessions.get(id); if (s) { wipe(s.pkcs8); sessions.delete(id); } },
 
-    async forget(id) { this.lock(id); await store.delete(ENTRY + id); },
+    async forget(id) { this.lock(id); pairings.delete(id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
     // { snapshot, seq, questions, pageKeyByNumber, withheld, counts, anomalies, stale, diagnostics }:

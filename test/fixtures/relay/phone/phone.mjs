@@ -12,10 +12,15 @@
 // under its temporary folder and deleted with it; nothing private is ever committed.
 //
 // COMMANDS (in.json and out.json are JSON objects):
-//   register   in { offer, label }        -> out { response, fingerprint, deviceKeyId }
+//   register   in { offer, label }        -> out { response, sealed, pairMailbox, fingerprint, deviceKeyId }
 //              Answers a pairing offer with a passkey registration, attestation "none" (WebAuthn L3
 //              6.5): rpIdHash, flags UP|UV|AT, counter 0, a zero aaguid, the credential id and its COSE
 //              key. The fingerprint is relay/Pairing.ps1's, so the suite can type it at the "machine".
+//              sealed is the response sealed to the machine's agreement key, for the offer's pairing
+//              mailbox (relay/Pairing.ps1, THE RESPONSE THROUGH THE RELAY).
+//   send-pairing  in { relayRoot }        -> out { relayed, reason }
+//              Puts the sealed response in the offer's pairing mailbox, on the local relay's folders
+//              (relays/local), through the PWA's own relay client and folder transport.
 //   phone-key  in { }                     -> out { envelope, key }
 //              Makes the phone identity key (ECDH P-256) and announces it: an envelope on channel
 //              trust, kind phone-key, signed with the passkey, whose body carries the key and a SECOND
@@ -39,6 +44,8 @@ const [, , cmd, statePath, inPath, outPath] = process.argv;
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import * as P from "../../../../relay/js/protocol.js";
 import { softAuthenticator } from "./soft-passkey.mjs";
+import { createRelayClient } from "../../../../surfaces/pwa/page/relay-client.js";
+import { folderTransport } from "../../../../surfaces/pwa/test/folder-relay.mjs";
 
 const s = globalThis.crypto.subtle;
 
@@ -70,7 +77,15 @@ async function register(st, input) {
   st.deviceKeyId = await P.keyId(cred.value.publicPoint);
   st.rpId = offer.rpId; st.origin = origin; st.offerText = offer.text;
   st.offer = { horde: offer.horde, machine: offer.machine, signPublic: offer.signPublic, agreePublic: offer.agreePublic };
-  return { response, fingerprint, deviceKeyId: st.deviceKeyId };
+  st.sealed = await P.sealPairingResponse(offer, response);
+  st.pairMailbox = offer.pairMailbox;
+  st.pairingKey = P.pairingKey(offer.offer);
+  return { response, sealed: st.sealed, pairMailbox: st.pairMailbox, fingerprint, deviceKeyId: st.deviceKeyId };
+}
+
+async function sendPairing(st, input) {
+  const put = await createRelayClient(folderTransport(input.relayRoot)).put(st.pairMailbox, st.pairingKey, st.sealed);
+  return { relayed: put.state === "known", reason: put.reason || "" };
 }
 
 async function phoneKey(st) {
@@ -110,7 +125,7 @@ async function resign(st, input) {
 
 const st = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {};
 const input = existsSync(inPath) ? JSON.parse(readFileSync(inPath, "utf8")) : {};
-const commands = { register, "phone-key": phoneKey, open, answer, line, resign };
+const commands = { register, "send-pairing": sendPairing, "phone-key": phoneKey, open, answer, line, resign };
 if (!commands[cmd]) { console.error("no such command: " + cmd); process.exit(2); }
 const out = await commands[cmd](st, input);
 writeFileSync(statePath, JSON.stringify(st));

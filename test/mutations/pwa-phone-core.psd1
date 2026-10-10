@@ -51,5 +51,11 @@
         @{ Name = "question-not-on-screen-answered"
            Find = 'const q = v && v.questions.find((x) => x.question.number === number);'
            Replace = 'const q = v && (v.questions.find((x) => x.question.number === number) || v.questions[0]);' }
+        @{ Name = "pairing-not-sent-through-the-relay"
+           Find = 'const relayed = await sendSealed(id);'
+           Replace = 'const relayed = false;' }
+        @{ Name = "pairing-kept-after-announce"
+           Find = '      pairings.delete(id);'
+           Replace = '' }
     )
 }

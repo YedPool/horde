@@ -8,8 +8,10 @@
 # browser lends it is stood in for: a software passkey (with PRF) for WebAuthn, a store in memory for
 # IndexedDB, and a transport over the local relay's folders for the hosted relay. The machine is the
 # shipped horde.ps1, `horde relay run`, as its own process, over relays/local in the suite's folder.
-#   1. the app answers a pairing offer with a passkey; the machine enrolls it and computes the
-#      fingerprint the app shows; the founder confirms it;
+#   1. `horde relay pair`, as its own process, makes the offer; the app answers it with a passkey and
+#      sends its response through the relay, sealed; the command takes it from the offer's pairing
+#      mailbox, and the founder types the fingerprint the APP shows (through the command's -InputFile):
+#      the passkey is trusted;
 #   2. the app announces its identity key; a run takes it in and sends the snapshot; the app opens it,
 #      and its bridge hands the document the list operation's answer;
 #   3. the founder's answer goes through the bridge's say, signed with the passkey; a run lands it
@@ -131,17 +133,22 @@ try {
     $app = [pscustomobject]@{ p = $p; err = $p.StandardError.ReadToEndAsync() }
 
     Write-Host ""
-    Write-Host "--- 1. the app pairs with a passkey, and the two screens agree on the fingerprint ---" -ForegroundColor Cyan
-    $offer = New-HordeRelayPairingOffer -HordeHome $hh -RpId "relay.example.test" -Origins @($origin)
-    $paired = Invoke-App @{ cmd = "pair"; offer = $offer.value.text; label = "Founder phone" }
-    Check ($paired.ok) ("the app answers the offer with a passkey registration (" + $(if ($paired.ok) { "fingerprint " + $paired.value.fingerprint } else { $paired.reason }) + ")")
+    Write-Host "--- 1. horde relay pair offers; the app answers through the relay; the founder types the app's number ---" -ForegroundColor Cyan
+    $typed = Join-Path $work "typed.txt"
+    [System.IO.File]::WriteAllText($typed, "", [System.Text.Encoding]::ASCII)
+    $pairRun = Start-HordeCliRun -Root $root -HordeArgs @("relay", "pair", "-Relay", "local", "-RelayRoot", $mailboxes, "-RpId", "relay.example.test", "-Origin", $origin, "-InputFile", $typed, "-NoPicture") -Env @{ HORDE_HOME = $hh }
+    $offerText = Wait-HordeCliLine -Run $pairRun -Like '{"v":1,"kind":"horde-relay-pairing-offer"*'
+    Check ($null -ne $offerText) "horde relay pair prints its offer for the app"
+    $paired = Invoke-App @{ cmd = "pair"; offer = $(if ($null -ne $offerText) { $offerText } else { "" }); label = "Founder phone" }
+    Check ($paired.ok -and $paired.value.relayed -eq $true) ("the app answers the offer with a passkey, and the relay takes its sealed response (" + $(if ($paired.ok) { "fingerprint " + $paired.value.fingerprint } else { $paired.reason }) + ")")
     $hid = $(if ($paired.ok) { $paired.value.id } else { "" })
-    $done = Complete-HordeRelayPairing -HordeHome $hh -Response $(if ($paired.ok) { $paired.value.response } else { "" })
-    Check ($done.ok -and $paired.ok -and $done.value.fingerprint -ceq $paired.value.fingerprint) "the machine enrolls the app's passkey, and computes the fingerprint the app shows"
-    Check ($paired.ok -and $paired.value.prf -eq $true -and $done.ok -and $done.value.device.prf -eq $true) "the app tells the machine its passkey has PRF, and the machine records it"
     Check ($paired.ok -and $paired.value.recoveryCode -cmatch '\A[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){5}\z') "the app shows a recovery code to write down: six groups of four"
-    $confirmed = Confirm-HordeRelayDevice -HordeHome $hh -Id $(if ($done.ok) { $done.value.device.id } else { "none" }) -Fingerprint $(if ($paired.ok) { $paired.value.fingerprint } else { "" })
-    Check ($confirmed.ok -and $confirmed.value.device.state -ceq "trusted") "the founder types the app's fingerprint at the machine, and the passkey is trusted"
+    Check ($null -ne (Wait-HordeCliLine -Run $pairRun -Like "A phone registered: 'Founder phone'*") -and $null -ne (Wait-HordeCliLine -Run $pairRun -Like "*Type that number here*")) "the command takes the response from the relay and asks for the number the app shows"
+    [System.IO.File]::AppendAllText($typed, $(if ($paired.ok) { $paired.value.fingerprint } else { "none" }) + "`n", [System.Text.Encoding]::ASCII)
+    $pairEnd = Complete-HordeCliRun -Run $pairRun
+    $dev = @((Get-HordeRelayTrust -HordeHome $hh).value.devices) | Select-Object -First 1
+    Check ($pairEnd.code -eq 0 -and $null -ne $dev -and $dev.state -ceq "trusted" -and $paired.ok -and $dev.fingerprint -ceq $paired.value.fingerprint) ("the app's number confirms it: the passkey is trusted, under the fingerprint both screens computed (exit " + $pairEnd.code + ")")
+    Check ($null -ne $dev -and $dev.prf -eq $true) "the app told the machine its passkey has PRF, and the machine recorded it"
 
     Write-Host ""
     Write-Host "--- 2. the app announces its key; the snapshot comes back and the bridge draws it ---" -ForegroundColor Cyan
@@ -250,6 +257,7 @@ try {
     Check ($lines.Count -eq 1 -and $lines[0].text -ceq "Ship the third one." -and $lines[0].status -ceq "accepted" -and $lines[0].words.StartsWith("Sent")) ("the app shows his line once, with the receipt in its own words (" + $(if ($lines.Count) { $lines[0].words } else { "none" }) + ")")
     }
 } finally {
+    if ($null -ne (Get-Variable -Name pairRun -ErrorAction SilentlyContinue)) { Stop-HordeCliRun $pairRun }
     Remove-HordeTestChatThrall -Thrall $thrall
     Exit-HordeTestEmptyFleet -Pin $fleetPin
     if ($null -ne $app) { try { $app.p.StandardInput.WriteLine('{"cmd":"exit"}'); if (-not $app.p.WaitForExit(10000)) { $app.p.Kill() } } catch { } ; $app.p.Dispose() }
