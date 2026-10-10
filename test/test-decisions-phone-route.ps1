@@ -192,6 +192,20 @@ try {
     [System.IO.File]::WriteAllText($p2, [regex]::Replace($t2, ',"evidence":"[0-9a-f]{64}"', ''), $utf8)
     $l2 = Invoke-Op $s2 "show" @{ number = 1 }
     Check ((Get-Outcome $l2) -ceq "done" -and @($l2.value.unreadable).Count -eq 0 -and $l2.value.question.thread.count -eq 1 -and (Get-Member (@($l2.value.question.thread.messages) | Select-Object -First 1) "evidence") -ceq "") "a stored phone record without evidence is still read - stored records are facts - and shows no evidence rather than inventing one"
+    Write-Host ""
+    Write-Host "--- list with messages: the window's view, for a reader that is not the window ---" -ForegroundColor Cyan
+    # The relay's snapshot (channels/decisions) reads the open questions with their conversation through
+    # this one option, not a parallel reader (review of relay PR 6, item 9).
+    $s = New-TestStore
+    $null = Add-Q $s
+    $null = Phone $s -Text "With a chime."
+    $plain = Invoke-Op $s "list" @{ state = "open" }
+    $full = Invoke-Op $s "list" @{ state = "open"; messages = $true }
+    Check ((Get-Outcome $plain) -ceq "done" -and $null -eq @($plain.value.questions)[0].thread.PSObject.Properties["messages"]) "CONTROL: a plain list carries each thread's counts, not its messages"
+    $fm = @()
+    if ((Get-Outcome $full) -ceq "done" -and $null -ne @($full.value.questions)[0].thread.PSObject.Properties["messages"]) { $fm = @(@($full.value.questions)[0].thread.messages) }
+    Check ($fm.Count -eq 1 -and $fm[0].text -ceq "With a chime." -and $fm[0].route -ceq "phone") ("list with messages carries each thread's messages, as show does (" + (Get-Outcome $full) + ")")
+    Check (Test-Refused (Invoke-Op $s "list" @{ state = "open"; messages = "yes" }) "messages") "messages is true or false, nothing else"
 } finally {
     if ((Split-Path -Leaf $script:work) -match '^horde-decisions-phone-test-[0-9a-f]{32}$') { Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue }
 }

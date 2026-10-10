@@ -141,7 +141,10 @@ try {
     Write-Host "--- 3. the phone's answer lands once, with its evidence, and the phone sees the turn pass ---" -ForegroundColor Cyan
     # Hebrew for "yes, a short one", as escapes: the source stays ASCII (CONTRIBUTING 13).
     $words = "Yes, " + [char]0x05DB + [char]0x05DF + ", " + [char]0x05E7 + [char]0x05E6 + [char]0x05E8
-    $ans = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = $words }
+    # The answer names the machine and the snapshot it was made from (review of 48bc492, finding 2).
+    $machine = $(if ($o.ok) { "$($o.body.machine)" } else { "" })
+    $snapKey = $(if ($o.ok) { "$($o.key)" } else { "" })
+    $ans = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = $words; machine = $machine; snapshot = $snapKey }
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $ans.envelope -Key $ans.key)
     $run = Invoke-Run -Turns 1
     $said = @(Get-Said)
@@ -150,9 +153,12 @@ try {
     $hash = $(if (Test-Path -LiteralPath $recFile) { ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($recFile))) } else { "(no record)" })
     Check ($run.code -eq 0 -and $said.Count -eq 1 -and $said[0].data.text -ceq $words -and $said[0].data.route -ceq "phone" -and $said[0].data.speaker -ceq "founder" -and $said[0].data.wordingVersion -eq $wording) ("the answer is in the decisions list once, his words exactly, by the route phone, to the wording he saw (" + $said.Count + " record(s))")
     Check ($said.Count -eq 1 -and $said[0].data.evidence -ceq $hash) "its evidence is the hash of the journal record that holds his signed envelope"
+    $null = Invoke-HordeDecision -Operation "say" -Root $store -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A chime it is: which of the three?" }
     $run = Invoke-Run -Turns 1
     $o = Open-Latest $c.value
-    Check ($o.ok -and $o.body.questions[0].thread.count -eq 1 -and $o.body.questions[0].thread.turn -ceq "warchief") "the phone's next snapshot shows his answer under the question, and the turn passed to the warchief"
+    Check ($o.ok -and $o.body.questions[0].thread.count -eq 2 -and $o.body.questions[0].thread.turn -ceq "founder") "the phone's next snapshot shows his answer and the warchief's reply under the question, and the turn back with him"
+    $texts = $(if ($o.ok -and $null -ne $o.body.questions[0].thread.PSObject.Properties["messages"]) { @($o.body.questions[0].thread.messages | ForEach-Object { $_.text }) -join " | " } else { "(no messages)" })
+    Check ($texts -ceq ($words + " | A chime it is: which of the three?")) ("and it carries the messages themselves, his and the warchief's, word for word: what he needs to answer from the phone (" + $texts + ")")
 
     Write-Host ""
     Write-Host "--- 4. delivered again, re-signed, resent: one record; other words: the first answer wins ---" -ForegroundColor Cyan
@@ -160,9 +166,9 @@ try {
     $re = Invoke-Phone "resign" @{ envelope = $ans.envelope }
     Check ($re.envelope -cne $ans.envelope) "CONTROL: the phone's re-signed copy is another text of the same envelope"
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $re.envelope -Key (Get-HordeRelayContentKey -Text $re.envelope))
-    $again = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = $words; answerId = $ans.answerId }
+    $again = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = $words; answerId = $ans.answerId; machine = $machine; snapshot = $snapKey }
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $again.envelope -Key $again.key)
-    $other = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = "No, keep it silent."; answerId = $ans.answerId }
+    $other = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = "No, keep it silent."; answerId = $ans.answerId; machine = $machine; snapshot = $snapKey }
     [void](Send-HordeRelayItem -Connection $c.value -Mailbox $id.value.mailbox -Text $other.envelope -Key $other.key)
     $run = Invoke-Run -Turns 1
     # The relay acked and trimmed the first copy, so it takes the same put again as a new item: from here
@@ -178,7 +184,7 @@ try {
     Write-Host "--- 5. through a relay that lies, a new answer still lands once ---" -ForegroundColor Cyan
     Reset-HordeHostileRelay
     $hc = Connect-HordeRelay -Name "hostile" -Options @{}
-    $late = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = "And make it quiet." }
+    $late = Invoke-Phone "answer" @{ number = 1; wordingVersion = $wording; text = "And make it quiet."; machine = $machine; snapshot = $snapKey }
     foreach ($i in 1..3) { [void](Send-HordeRelayItem -Connection $hc.value -Mailbox $id.value.mailbox -Text $late.envelope -Key ($late.key + "/" + $i)) }
     Set-HordeHostileRelayFaults -Faults @("reorder", "duplicate", "stale", "garbage")
     $lines = New-Object System.Collections.ArrayList
@@ -189,26 +195,32 @@ try {
     Check ((@($lines) -join " ").Contains("a replay")) "the copies after the first are refused by the journal as replays"
 
     Write-Host ""
-    Write-Host "--- 6. a run with no end stops cleanly when asked ---" -ForegroundColor Cyan
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $psi.EnvironmentVariables["HORDE_HOME"] = $hh
-    $long = [System.Diagnostics.Process]::Start($psi)
+    Write-Host "--- 6. two runs with no end on one home both stop when asked ---" -ForegroundColor Cyan
+    # Review of 48bc492, finding 4: the first run to stop deleted the stop file, and the second ran on.
+    $runs = New-Object System.Collections.ArrayList
+    foreach ($i in 1..2) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = "powershell.exe"
+        $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.EnvironmentVariables["HORDE_HOME"] = $hh
+        $p = [System.Diagnostics.Process]::Start($psi)
+        [void]$runs.Add([pscustomobject]@{ p = $p; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() })
+        Start-Sleep -Milliseconds 1500
+    }
     try {
-        $errTask = $long.StandardError.ReadToEndAsync()
-        $outTask = $long.StandardOutput.ReadToEndAsync()
-        Start-Sleep -Milliseconds 4000
-        Check (-not $long.HasExited) "CONTROL: a run started with no end is still running"
+        Start-Sleep -Milliseconds 3000
+        Check (@($runs | Where-Object { $_.p.HasExited }).Count -eq 0) "CONTROL: two runs started with no end are both running"
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
-        $ended = $long.WaitForExit(30000)
-        Check ($stop.code -eq 0 -and $ended -and $long.ExitCode -eq 0) ("horde relay stop ends it within a turn, and it exits 0 (" + $(if ($ended) { "exit " + $long.ExitCode } else { "still running" }) + ")")
-        Check ($ended -and $outTask.Result.Contains("stopped after") -and $outTask.Result.Contains("stop file") -and -not (Test-Path -LiteralPath (Join-Path $hh "relay\run.stop"))) "it says it stopped for the stop file, and takes the file away"
-    } finally { if (-not $long.HasExited) { $long.Kill() }; $long.Dispose() }
+        $ended = @($runs | Where-Object { $_.p.WaitForExit(30000) })
+        Check ($stop.code -eq 0 -and $ended.Count -eq 2 -and @($runs | Where-Object { $_.p.ExitCode -ne 0 }).Count -eq 0) ("horde relay stop ends both within a turn, and both exit 0 (" + $ended.Count + " of 2 ended)")
+        Check ($ended.Count -eq 2 -and @($runs | Where-Object { $_.out.Result.Contains("stopped after") -and $_.out.Result.Contains("stop file") }).Count -eq 2) "each says it stopped for the stop file"
+        $next = Invoke-Run -Turns 1
+        Check ($next.code -eq 0 -and $next.out.Contains("stopped after 1 turn(s): turns") -and $next.out.Contains("stop file from before")) "a run started after the stop does not obey it: it was a request to the runs before it, and it clears it"
+    } finally { foreach ($x in $runs) { if (-not $x.p.HasExited) { $x.p.Kill() }; $x.p.Dispose() } }
     }
 } finally {
     $env:HORDE_HOME = $realHome

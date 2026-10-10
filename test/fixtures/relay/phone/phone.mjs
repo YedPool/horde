@@ -21,10 +21,11 @@
 //   open       in { envelope }            -> out { ok, reason, body, header }
 //              Verifies the machine's ES256 signature against the signing key the offer pinned, and
 //              opens the body with the phone identity key.
-//   answer     in { number, wordingVersion, text, answerId? }  -> out { envelope, key, answerId }
+//   answer     in { number, wordingVersion, text, machine, snapshot, answerId? }  -> out { envelope, key, answerId }
 //              The founder's answer: an envelope on channel decisions, kind answer, sealed to the
 //              machine's agreement key and signed with a passkey assertion over SHA-256 of its signed
-//              bytes.
+//              bytes. machine and snapshot name the snapshot it was made from: the key id of the
+//              machine that sent it, and that envelope's replay key (open's key).
 //   resign     in { envelope }            -> out { envelope }
 //              The same signed content signed again (a new assertion): what a passkey may do, and what
 //              the journal must still see as one envelope.
@@ -186,14 +187,14 @@ async function open(st, input) {
   try {
     const cek = await hpkeOpen(priv, unb64u(st.phonePublic), unb64u(r.enc), enc.encode(INFO), aad, unb64u(r.key));
     const body = await gcmOpen(cek, unhex(h.nonce), aad, unb64u(e.ct));
-    return { ok: true, reason: "", header: h, body: JSON.parse(dec.decode(body)) };
+    return { ok: true, reason: "", header: h, key: replayKey(h), body: JSON.parse(dec.decode(body)) };
   } catch (x) { return { ok: false, reason: "it does not open: " + x.message }; }
 }
 
 async function answer(st, input) {
   const answerId = input.answerId || hex(rnd(16));
   // JSON.stringify escapes what JSON must and nothing else; the machine reads it with a JSON parser.
-  const body = JSON.stringify({ v: 1, answerId, number: input.number, wordingVersion: input.wordingVersion, text: input.text });
+  const body = JSON.stringify({ v: 1, answerId, machine: input.machine, snapshot: input.snapshot, number: input.number, wordingVersion: input.wordingVersion, text: input.text });
   const parts = await sealEnvelope(st, "answer", "decisions", enc.encode(body));
   return { envelope: await signEnvelope(st, parts), key: replayKey(parts.h), answerId };
 }
