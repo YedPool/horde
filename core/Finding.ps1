@@ -32,11 +32,12 @@
 #   6. schema/finding.v1: the shape, the closed confidence list and every text's bound;
 #   7. what the schema cannot say: how many items each list holds, and a window that ends before it starts.
 #
-# REUSED, NOT WRITTEN AGAIN. The credential check is decisions/Rules.ps1's Find-HordeDecisionSecretKind,
-# and the check for what is not text is its Get-HordeDecisionCharProblem: one statement of each rule in
-# the repository. Their header says what they catch and what they let through on purpose; that holds
-# here unchanged. Loading decisions/Rules.ps1 from core is the cost of reusing it; moving those two
-# functions into core is a change of their own.
+# REUSED, NOT WRITTEN AGAIN. The credential check is core/Secrets.ps1's Find-HordeSecretKind (moved there
+# from decisions/Rules.ps1, relay design 2026-10-09, PR plan item 9), and the check for what is not text
+# is decisions/Rules.ps1's Get-HordeDecisionCharProblem: one statement of each rule in the repository.
+# Their headers say what they catch and what they let through on purpose; that holds here unchanged.
+# Loading decisions/Rules.ps1 from core is the cost of reusing the second; moving it into core is a
+# change of its own.
 #
 # CUSTOMER DATA. Nothing in the repository looked for it before this file, so this is a MINIMAL check,
 # and says so: an e-mail address, a phone number written with a leading + and 8 to 15 digits, a
@@ -62,6 +63,7 @@
 
 . (Join-Path $PSScriptRoot "Schema.ps1")
 . (Join-Path $PSScriptRoot "JsonText.ps1")
+. (Join-Path $PSScriptRoot "Secrets.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "decisions\Rules.ps1")
 
 $script:HordeFindingSchemaName = "finding.v1"
@@ -102,7 +104,7 @@ function Find-HordeFindingTextKind {
     # What a text looks like it holds that a finding must not, as words, or "" for none. The first of:
     # a credential (decisions/Rules.ps1), customer data, conversation.
     param([AllowEmptyString()][string]$Text)
-    $secret = Find-HordeDecisionSecretKind -Text $Text
+    $secret = Find-HordeSecretKind -Text $Text
     if ($secret -ne "") { return ("what looks like " + $secret + ", a credential") }
     foreach ($name in $script:HordeFindingCustomerPatterns.Keys) {
         if ([regex]::IsMatch($Text, $script:HordeFindingCustomerPatterns[$name])) { return ("what looks like " + $name + ", customer data") }

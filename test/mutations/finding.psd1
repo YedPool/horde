@@ -3,8 +3,9 @@
 # Each breaks one refusal, or the order that keeps a refusal from repeating what it found;
 # test\test-finding.ps1 must fail a check for every one.
 #
-# NOT HERE: the patterns of the credential check and of what is not text. They are decisions/Rules.ps1's,
-# and test\mutations\decisions-rules.psd1 holds them; here only their use is mutated.
+# NOT HERE: the patterns of the credential check and of what is not text. They are core/Secrets.ps1's and
+# decisions/Rules.ps1's, held by test\mutations\secrets-decisions.psd1 and
+# test\mutations\decisions-rules.psd1; here only their use is mutated.
 @{
     Target = "core\Finding.ps1"
     Suite  = "test\test-finding.ps1"

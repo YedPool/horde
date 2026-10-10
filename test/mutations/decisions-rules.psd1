@@ -248,64 +248,7 @@
         @{ Name = "note-of-several-lines-allowed"
            Find = 'if ($Text -match "[\r\n]") {'
            Replace = 'if ($false) {' }
-        # --- no secrets, and no echo ---
-        @{ Name = "private-key-not-seen"
-           Find = '"a private key" = ''-----BEGIN [A-Z0-9 ]*PRIVATE KEY'''
-           Replace = '"a private key" = ''never-matches-\A\z.''' }
-        @{ Name = "access-token-not-seen"
-           Find = '"an access token" = ''(?<![A-Za-z0-9])('
-           Replace = '"an access token" = ''never-matches-\A\z.(' }
-        @{ Name = "web-token-not-seen"
-           Find = '"a signed web token" = ''eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.'''
-           Replace = '"a signed web token" = ''never-matches-\A\z.''' }
-        @{ Name = "bearer-token-not-seen"
-           Find = '"a bearer token" = ''(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}'''
-           Replace = '"a bearer token" = ''never-matches-\A\z.''' }
-        @{ Name = "name-equals-value-not-seen"
-           Find = '"a password or key written as name=value" = ''(?i)\b('
-           Replace = '"a password or key written as name=value" = ''never-matches-\A\z.(' }
-        @{ Name = "password-after-colon-not-seen"
-           Find = '"a password written after a colon" = ''(?i)\b('
-           Replace = '"a password written after a colon" = ''never-matches-\A\z.(' }
-        @{ Name = "password-in-a-sentence-not-seen"
-           Find = '"a password written in a sentence" = ''(?i)\b('
-           Replace = '"a password written in a sentence" = ''never-matches-\A\z.(' }
-        @{ Name = "quoted-password-not-seen"
-           Find = '\s+(is|was)\s+(?:["''''][^"''''\s][^"'''']*["'''']|'
-           Replace = '\s+(is|was)\s+(?:' }
-        @{ Name = "password-inside-an-address-not-seen"
-           Find = '"a password inside an address" = ''(?i)'
-           Replace = '"a password inside an address" = ''never-matches-\A\z.' }
-        @{ Name = "any-link-with-a-colon-refused"
-           Find = '://[^\s/:@]+:[^\s/@]+@'''
-           Replace = '://[^\s:@]+:[^\s@]+''' }
-        @{ Name = "webhook-address-not-seen"
-           Find = '"a webhook address" = ''(?i)'
-           Replace = '"a webhook address" = ''never-matches-\A\z.' }
-        @{ Name = "authorization-header-not-seen"
-           Find = '"an authorization value" = ''(?i:\bauthorization'
-           Replace = '"an authorization value" = ''(?i:\bnever-matches-\A\z.' }
-        @{ Name = "authorization-word-and-value-not-seen"
-           Find = '|(?i:\b(basic|bearer))\s+'
-           Replace = '|(?i:\b(never-matches-\A\z.))\s+' }
-        @{ Name = "the-word-basic-before-any-word-refused"
-           Find = '(?=[A-Za-z0-9._~+/-]*[0-9])(?=[A-Za-z0-9._~+/-]*[a-z])(?=[A-Za-z0-9._~+/-]*[A-Z])[A-Za-z0-9._~+/-]{12,}'
-           Replace = '[A-Za-z0-9._~+/-]{12,}' }
-        @{ Name = "key-with-slashes-not-seen"
-           Find = '-ge $script:HordeDecisionSecretSlashRunBits) {'
-           Replace = '-ge 99) {' }
-        @{ Name = "mixed-case-path-refused"
-           Find = '$script:HordeDecisionSecretSlashRunBits = 4.35'
-           Replace = '$script:HordeDecisionSecretSlashRunBits = 4.0' }
-        @{ Name = "random-string-not-seen"
-           Find = '-ge $script:HordeDecisionSecretRunBits) {'
-           Replace = '-ge 99) {' }
-        @{ Name = "one-case-string-refused"
-           Find = 'if ($run -cmatch ''[A-Z]'' -and $run -cmatch ''[a-z]'' -and $run -cmatch ''[0-9]'' -and '
-           Replace = 'if (' }
-        @{ Name = "path-read-as-one-string"
-           Find = '$script:HordeDecisionSecretRunPattern = ''[A-Za-z0-9+=_-]{32,}'''
-           Replace = '$script:HordeDecisionSecretRunPattern = ''[A-Za-z0-9+=_\\/.:-]{32,}''' }
+        # --- no secrets, and no echo: the patterns are core/Secrets.ps1's (test\mutations\secrets-decisions.psd1) ---
         @{ Name = "secret-repeated-in-the-finding"
            Find = '[void]$out.Add($Path + " holds what looks like " + $kind + ". A secret'
            Replace = '[void]$out.Add($Path + " holds " + $Value + ", which looks like " + $kind + ". A secret' }
