@@ -118,10 +118,17 @@ Check ((Declared (Table "widthPx" @{ default = 200 }) "widthPx").default -eq 200
 Check ((Declared (Table "widthPx" @{ default = 4000 }) "widthPx").default -eq 4000) "a default equal to the largest allowed is accepted"
 Check ((Declared (Table "widthPx" @{ default = 7; min = 7; max = 7 }) "widthPx").default -eq 7) "a range of one value is a range"
 Check ((Declared (Table "widthPx" @{ default = -5; min = -10; max = -1 }) "widthPx").default -eq -5) "a range below zero is a range"
-foreach ($bad in @(199, 4001, 520.0, "520", $true, $null, 5000000000, [long]520, [decimal]520)) {
+foreach ($bad in @(199, 4001, 520.0, "520", $true, $null, 5000000000, [long]5000000000, [long]4001, [long]-2147483649, [decimal]520)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + $bad })
     Check (Refused -Rows (Table "widthPx" @{ default = $bad }) -Like "widthPx", "default", "a whole number from 200 to 4000") ("a whole number's default may not be " + $shown)
 }
+# AN Int64 IS A WHOLE NUMBER TOO. PowerShell 7's ConvertFrom-Json reads every whole number as an Int64
+# (5.1 reads one that fits as an Int32), so a file's 640 arrives as [long] there; the value and the
+# default go through one check, so this is the file's case without a parser that makes it.
+$wide = Declared (Table "widthPx" @{ default = [long]520 }) "widthPx"
+Check ($wide.default -is [int] -and $wide.default -eq 520) "a whole number's default given as an Int64 within the range is accepted, as an Int32"
+Check ((Declared (Table "widthPx" @{ default = [long]-5; min = -10; max = -1 }) "widthPx").default -is [int]) "and so is a negative one"
+Check (Refused -Rows (Table "widthPx" @{ min = [long]200 }) -Like "widthPx", "smallest") "a smallest value is still an Int32 written in the table: [long] there is a programming choice, not a parser's"
 Check (Refused -Rows (Table "widthPx" -Drop "min") -Like "widthPx", "smallest") "a whole number with no smallest value is refused"
 Check (Refused -Rows (Table "widthPx" -Drop "max") -Like "widthPx", "largest") "a whole number with no largest value is refused"
 Check (Refused -Rows (Table "widthPx" @{ min = 200.0 }) -Like "widthPx", "smallest") "a smallest value written as 200.0 is refused"
@@ -137,6 +144,8 @@ Check ((Declared (Table "share" @{ default = 0.1 }) "share").default -eq 0.1) "a
 Check ((Declared (Table "share" @{ default = 0.9 }) "share").default -eq 0.9) "a default equal to the largest allowed is accepted"
 $span = Declared (Table "share" @{ min = 0; max = 1 }) "share"
 Check ($span.min -is [double] -and $span.min -eq 0.0 -and $span.max -is [double] -and $span.max -eq 1.0) "a fraction may span the whole of 0 to 1, and its smallest and largest are Doubles however they were written"
+$wideShare = Declared (Table "share" @{ default = [long]1; min = 0; max = 1 }) "share"
+Check ($wideShare.default -is [double] -and $wideShare.default -eq 1.0) "a fraction's default given as an Int64 is the Double 1: PowerShell 7 reads a file's 1 as an Int64"
 foreach ($bad in @(0.05, 0.95, "0.25", $true, $null, [long]0, [double]::NaN, [double]::PositiveInfinity)) {
     $shown = $(if ($null -eq $bad) { "null" } else { $bad.GetType().Name + " " + $bad })
     Check (Refused -Rows (Table "share" @{ default = $bad }) -Like "share", "default", "a number from 0.1 to 0.9") ("a fraction's default may not be " + $shown)

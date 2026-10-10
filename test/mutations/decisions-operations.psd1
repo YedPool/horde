@@ -61,12 +61,12 @@
            Find = 'if ($requestHash -ne "" -and $prior.requestHash -ceq $requestHash) {'
            Replace = 'if ($requestHash -ne "") {' }
         @{ Name = "hash-ignores-the-operation"
-           Find = '$hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $content.body }'
-           Replace = '$hashed = [ordered]@{ actor = $actor; number = $number; body = $content.body }'
+           Find = '$hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $sameness }'
+           Replace = '$hashed = [ordered]@{ actor = $actor; number = $number; body = $sameness }'
            Expect = "survives"
            Reason = "the four writes have bodies of four different shapes (question, changes, outcome, reason), so no two operations can hash alike today; the operation is hashed so that a later operation with the same body as an existing one cannot replay it" }
         @{ Name = "hash-ignores-the-question"
-           Find = '$hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $content.body }'
+           Find = '$hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number; body = $sameness }'
            Replace = '$hashed = [ordered]@{ operation = $Operation; actor = $actor; number = $number }' }
         # --- what must not be written ---
         @{ Name = "rules-not-applied"
