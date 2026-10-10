@@ -28,9 +28,18 @@
 # deleted (retired-<generation>.json): which keys, why, when, and its successor's keys. When the old
 # signing key still opens, the record carries its VOUCH: an ES256 signature by the old key over the
 # record, which lets a phone or a peer that trusts the old key accept the new one without pairing
-# again (a later pull request carries it to them). Then the old keys are deleted from the store - the
-# last step of revocation on the machine (relay/Keys.ps1). A rotation forced by a LOST or stolen key
-# has no vouch, and every phone and peer must be told out of band; the record says which it was.
+# again (a later pull request carries it to them). A rotation forced by a LOST or stolen key has no
+# vouch, and every phone and peer must be told out of band; the record says which it was.
+# THE OLD SIGNING KEY IS DELETED AT ONCE: nothing may be signed as the old generation again. THE OLD
+# AGREEMENT KEY IS KEPT FOR OPENING ONLY, for the setting retiredAgreeKeyDays (7 by default, 0 to 30):
+# envelopes a phone or peer sealed to it before it heard of the rotation still open
+# (Get-HordeRelayOpeningKeys). It is never handed out again - offers and cards name the current key
+# only - so nothing new is sealed to it, and an agreement key cannot sign. When the grace ends,
+# Remove-HordeRelayRetiredAgreeKeys deletes it from the store and records that it did
+# (released-<generation>.json), so both events - retired, released - are on record. The retirement
+# record says when the grace ends (agreeKeptUntil), and the vouch covers it. Why capped at 30: a
+# retired key that opens is still a key a thief of this machine could use on old traffic, and a
+# month is longer than any relay keeps a message (design Q16: 30 days of ciphertext).
 # A crash between the new record and the retirement leaves two live generations: the newest is the
 # identity, the older is reported as unretired, and the next rotation retires it first.
 #
@@ -50,10 +59,12 @@
 
 $script:HordeRelaySettings = New-HordeModuleSettings -Module "relay" -Settings @(
     @{ name = "horde"; kind = "text"; default = ""; min = 0; max = 63
-       what = "The name of the horde this machine belongs to (work, personal): a-z, 0-9 and -, starting with a letter or digit. Empty means none is named yet, and nothing is made or paired until it is." }
+       what = "The name of the horde this machine belongs to (work, personal): a-z, 0-9 and -, starting with a letter or digit. Empty means none is named yet, and nothing is made or paired until it is." },
+    @{ name = "retiredAgreeKeyDays"; kind = "whole"; default = 7; min = 0; max = 30
+       what = "How many days a rotated-out agreement key is kept, to open what was sealed to it before the rotation; it never seals or signs. 0 deletes it at once." }
 )
 
-$script:HordeRelayIdentityNamePattern = '\A(machine|retired)-([0-9]{6})\.json\z'
+$script:HordeRelayIdentityNamePattern = '\A(machine|retired|released)-([0-9]{6})\.json\z'
 $script:HordeRelayHordePattern = '\A[a-z0-9][a-z0-9-]{0,62}\z'
 $script:HordeRelayDeviceNamePattern = '\A(con|prn|aux|nul|com[0-9]|lpt[0-9])\z'
 
@@ -66,7 +77,11 @@ function Get-HordeRelayIdentitySpec {
 function Get-HordeRelayRetiredSpec {
     return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "horde", "name", "generation", "int", "signKeyId", "hex32", "agreeKeyId", "hex32",
         "successor", "int", "successorSignKeyId", "hex32", "successorSignPublic", "point", "successorAgreeKeyId", "hex32", "successorAgreePublic", "point",
-        "reason", "text", "retiredAt", "int", "vouch", "b64u"))
+        "reason", "text", "retiredAt", "int", "agreeKeptUntil", "int", "vouch", "b64u"))
+}
+
+function Get-HordeRelayReleasedSpec {
+    return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "horde", "name", "generation", "int", "agreeKeyId", "hex32", "releasedAt", "int", "reason", "text"))
 }
 
 function Get-HordeRelayCardSpec {
@@ -91,13 +106,23 @@ function Test-HordeRelayHordeName {
     return ""
 }
 
-function Get-HordeRelayHorde {
-    # The horde this Horde home belongs to. Known name; absent when none is named yet; unknown when the
-    # settings file is refused or names something that cannot be a horde.
+function Get-HordeRelaySettingValues {
+    # The relay module's settings answer (core/ModuleSettings.ps1): known, or unknown with the findings
+    # of a refused file - never the defaults in its place.
     param([string]$HordeHome = "")
     try { $s = Get-HordeModuleSettings -Declaration $script:HordeRelaySettings -HordeHome $HordeHome }
     catch { return (New-HordeUnknown -Reason "the relay settings could not be read" -ErrorRecord $_) }
     if ($s.state -ceq "refused") { return (New-HordeUnknown -Reason ($s.findings -join " ")) }
+    return (New-HordeKnown -Value $s)
+}
+
+function Get-HordeRelayHorde {
+    # The horde this Horde home belongs to. Known name; absent when none is named yet; unknown when the
+    # settings file is refused or names something that cannot be a horde.
+    param([string]$HordeHome = "")
+    $settings = Get-HordeRelaySettingValues -HordeHome $HordeHome
+    if ($settings.state -cne "known") { return $settings }
+    $s = $settings.value
     $name = "" + $s.values.horde
     if ($name -ceq "") { return (New-HordeAbsent -Note ("no horde is named: set horde in " + $s.path + ", for example {""schemaVersion"": 1, ""settings"": {""horde"": ""work""}}")) }
     $why = Test-HordeRelayHordeName -Name $name
@@ -114,15 +139,16 @@ function Get-HordeRelayKeyNames {
 
 function Read-HordeRelayIdentityRecords {
     # Every generation record and retirement record, checked against each other. { ok; reason;
-    # machines (by generation, ascending); retired (hashtable generation -> record) }. No identity is
-    # ok with no machines.
+    # machines (by generation, ascending); retired and released (hashtables generation -> record) }.
+    # No identity is ok with no machines.
     param([string]$HordeHome)
-    $fail = [pscustomobject]@{ ok = $false; reason = ""; machines = @(); retired = @{} }
+    $fail = [pscustomobject]@{ ok = $false; reason = ""; machines = @(); retired = @{}; released = @{} }
     try { $dir = Get-HordeRelayStateDir -HordeHome $HordeHome -Part "identity" } catch { $fail.reason = $_.Exception.Message; return $fail }
     $list = Get-HordeRelayRecordNames -Dir $dir -Pattern $script:HordeRelayIdentityNamePattern
     if (-not $list.ok) { $fail.reason = $list.reason; return $fail }
     $machines = New-Object System.Collections.ArrayList
     $retired = @{}
+    $released = @{}
     foreach ($n in @($list.names)) {
         $m = [regex]::Match($n, $script:HordeRelayIdentityNamePattern)
         $gen = [long]$m.Groups[2].Value
@@ -137,6 +163,11 @@ function Read-HordeRelayIdentityRecords {
             $names = Get-HordeRelayKeyNames -Install $r.value.install -Generation $gen
             if ($r.value.signName -cne $names.sign -or $r.value.agreeName -cne $names.agree) { $fail.reason = ("the identity record " + $n + " names keys that are not its generation's"); return $fail }
             [void]$machines.Add($r.value)
+        } elseif ($m.Groups[1].Value -ceq "released") {
+            $r = Read-HordeRelayRecordText -Text $file.text -Spec (Get-HordeRelayReleasedSpec) -Kind "horde-relay-machine-agree-released" -What ("the release record " + $n)
+            if (-not $r.ok) { $fail.reason = $r.reason; return $fail }
+            if ($r.value.generation -ne $gen) { $fail.reason = ("the release record " + $n + " says generation " + $r.value.generation); return $fail }
+            $released["" + $gen] = $r.value
         } else {
             $r = Read-HordeRelayRecordText -Text $file.text -Spec (Get-HordeRelayRetiredSpec) -Kind "horde-relay-machine-retired" -What ("the retirement record " + $n)
             if (-not $r.ok) { $fail.reason = $r.reason; return $fail }
@@ -156,8 +187,11 @@ function Read-HordeRelayIdentityRecords {
         if ($mr.Count -ne 1) { $fail.reason = ("generation " + $k + " has a retirement record and no identity record"); return $fail }
         if ($retired[$k].signKeyId -cne $mr[0].signKeyId -or $retired[$k].agreeKeyId -cne $mr[0].agreeKeyId) { $fail.reason = ("the retirement record of generation " + $k + " names other keys than its identity record"); return $fail }
     }
+    foreach ($k in @($released.Keys)) {
+        if (-not $retired.ContainsKey($k) -or $retired[$k].agreeKeyId -cne $released[$k].agreeKeyId) { $fail.reason = ("generation " + $k + " has a release record but no retirement of that agreement key"); return $fail }
+    }
     if ($sorted.Count -gt 0 -and $retired.ContainsKey("" + $sorted[-1].generation)) { $fail.reason = ("the newest generation (" + $sorted[-1].generation + ") is retired and has no successor; the identity is damaged"); return $fail }
-    return [pscustomobject]@{ ok = $true; reason = ""; machines = $sorted; retired = $retired }
+    return [pscustomobject]@{ ok = $true; reason = ""; machines = $sorted; retired = $retired; released = $released }
 }
 
 function New-HordeRelayGenerationKeys {
@@ -247,11 +281,12 @@ function Open-HordeRelayGenerationKey {
 
 function Get-HordeRelayMachineIdentity {
     # This machine's relay identity: known { horde; generation; install; scope; mailbox; createdAt;
-    # sign; agree; retired; unretired }, where sign and agree are { name; provider; keyId; public } and,
-    # with -Open, also key: the open key object (the caller disposes it). Absent when there is none yet
-    # or no key store here; unknown when the records are damaged, the horde setting is not the
-    # identity's, or a key is missing or not the one pinned.
-    param([string]$HordeHome = "", [switch]$Open)
+    # sign; agree; retired; unretired; opening }, where sign and agree are { name; provider; keyId;
+    # public } and, with -Open, also key: the open key object (the caller disposes it); opening is the
+    # retired agreement keys still in their grace at -Now, as { generation; agreeKeyId; until }. Absent
+    # when there is none yet or no key store here; unknown when the records are damaged, the horde
+    # setting is not the identity's, or a key is missing or not the one pinned.
+    param([string]$HordeHome = "", [switch]$Open, $Now = $null)
     $have = Read-HordeRelayIdentityRecords -HordeHome $HordeHome
     if (-not $have.ok) { return (New-HordeUnknown -Reason $have.reason) }
     if (@($have.machines).Count -eq 0) { return (New-HordeAbsent -Note "this machine has no relay identity yet") }
@@ -277,7 +312,69 @@ function Get-HordeRelayMachineIdentity {
         horde = $cur.horde; generation = $cur.generation; install = $cur.install; scope = $cur.scope
         mailbox = ($cur.horde + "/" + $cur.signKeyId); createdAt = $cur.createdAt
         sign = $signOut; agree = $agreeOut; retired = $retiredGens; unretired = $unretired
+        opening = @(Get-HordeRelayGraceKeys -Have $have -NowMs (ConvertTo-HordeRelayRecordMs -Time $Now))
     }))
+}
+
+function Get-HordeRelayGraceKeys {
+    # The retired agreement keys in their grace at NowMs: retired, not released, and NowMs before
+    # agreeKeptUntil. { generation; agreeKeyId; until; record } each, oldest first.
+    param($Have, [long]$NowMs)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($m in @($Have.machines)) {
+        $k = "" + $m.generation
+        if (-not $Have.retired.ContainsKey($k) -or $Have.released.ContainsKey($k)) { continue }
+        if ($NowMs -lt $Have.retired[$k].agreeKeptUntil) { [void]$out.Add([pscustomobject]@{ generation = $m.generation; agreeKeyId = $m.agreeKeyId; until = $Have.retired[$k].agreeKeptUntil; record = $m }) }
+    }
+    return @($out.ToArray())
+}
+
+function Get-HordeRelayOpeningKeys {
+    # The agreement keys that may OPEN at -Now: the current generation's and every retired one still in
+    # its grace. Known { keys (hashtable key id -> open key object; the caller disposes them); missing
+    # (reasons for grace keys that would not open) }; the identity's answer when it has none.
+    param([string]$HordeHome = "", $Now = $null)
+    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Open -Now $Now
+    if ($id.state -cne "known") { return $id }
+    $id.value.sign.key.Dispose()
+    $keys = @{}
+    $keys[$id.value.agree.keyId] = $id.value.agree.key
+    $missing = New-Object System.Collections.ArrayList
+    foreach ($g in @($id.value.opening)) {
+        $k = Open-HordeRelayGenerationKey -Record $g.record -Use "agree"
+        if ($k.state -ceq "known") { $keys[$g.agreeKeyId] = $k.value.key } else { [void]$missing.Add("generation " + $g.generation + ": " + $k.reason) }
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ keys = $keys; missing = @($missing.ToArray()) }))
+}
+
+function Remove-HordeRelayRetiredAgreeKeys {
+    # Release every retired agreement key whose grace has ended at -Now: delete it from the store, then
+    # record the release (released-<generation>.json). Known { released (generations); problems };
+    # unknown when the records are damaged. Safe to call again: a released key is not touched twice.
+    param([string]$HordeHome = "", $Now = $null)
+    $have = Read-HordeRelayIdentityRecords -HordeHome $HordeHome
+    if (-not $have.ok) { return (New-HordeUnknown -Reason $have.reason) }
+    $nowMs = ConvertTo-HordeRelayRecordMs -Time $Now
+    $dir = Get-HordeRelayStateDir -HordeHome $HordeHome -Part "identity"
+    $done = New-Object System.Collections.ArrayList
+    $problems = New-Object System.Collections.ArrayList
+    foreach ($m in @($have.machines)) {
+        $k = "" + $m.generation
+        if (-not $have.retired.ContainsKey($k) -or $have.released.ContainsKey($k)) { continue }
+        if ($nowMs -lt $have.retired[$k].agreeKeptUntil) { continue }
+        $gone = Remove-HordeRelayKey -Name $m.agreeName -Scope $m.scope
+        if ($gone.state -ceq "unknown") { [void]$problems.Add("generation " + $k + ": " + $gone.reason); continue }
+        try {
+            $text = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelayReleasedSpec) -Values @{
+                v = 1; kind = "horde-relay-machine-agree-released"; horde = $m.horde; generation = $m.generation; agreeKeyId = $m.agreeKeyId
+                releasedAt = $nowMs; reason = "its grace after retirement ended"
+            }
+            $moved = Write-HordeRelayRecordFile -Dir $dir -Name ("released-" + $m.generation.ToString("000000") + ".json") -Text $text
+            if ($moved -cne "moved") { [void]$problems.Add("generation " + $k + "'s release: " + $moved); continue }
+        } catch { [void]$problems.Add("generation " + $k + "'s release could not be written: " + $_.Exception.Message); continue }
+        [void]$done.Add($m.generation)
+    }
+    return (New-HordeKnown -Value ([pscustomobject]@{ released = @($done.ToArray()); problems = (@($problems.ToArray()) -join "; ") }))
 }
 
 function Get-HordeRelayRetirementVouch {
@@ -295,14 +392,18 @@ function Get-HordeRelayRetirementVouch {
 
 function Update-HordeRelayMachineIdentity {
     # Rotate: make the next generation, retire every older live one (with its vouch when its key still
-    # opens), and delete the retired keys. Known { previous; vouched; cleanup; identity }; unknown or
-    # absent when it cannot be done, with nothing retired.
+    # opens), delete the retired SIGNING keys at once and keep the agreement keys for their grace (the
+    # header). Known { previous; vouched; released; cleanup; identity }; unknown or absent when it
+    # cannot be done, with nothing retired.
     param([string]$HordeHome = "", [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Reason, [string]$Provider = "auto", $Now = $null)
     if ($Reason -cnotmatch '\A[\x20\x21\x23-\x5B\x5D-\x7E]{1,512}\z') { return (New-HordeUnknown -Reason "a rotation's reason is 1 to 512 printable ASCII characters, with no quote or backslash") }
     $have = Read-HordeRelayIdentityRecords -HordeHome $HordeHome
     if (-not $have.ok) { return (New-HordeUnknown -Reason $have.reason) }
     if (@($have.machines).Count -eq 0) { return (New-HordeAbsent -Note "this machine has no relay identity to rotate") }
     $cur = $have.machines[-1]
+    $settings = Get-HordeRelaySettingValues -HordeHome $HordeHome
+    if ($settings.state -cne "known") { return (New-HordeUnknown -Reason ("the relay settings are refused, so nothing is rotated: " + $settings.reason)) }
+    $graceMs = [long]$settings.value.values.retiredAgreeKeyDays * 86400000
     $horde = Get-HordeRelayHorde -HordeHome $HordeHome
     if ($horde.state -cne "known" -or $horde.value -cne $cur.horde) { return (New-HordeUnknown -Reason ("the identity belongs to the horde '" + $cur.horde + "' and the setting does not name it; nothing is rotated")) }
     $store = Get-HordeRelayKeyStore
@@ -328,7 +429,7 @@ function Update-HordeRelayMachineIdentity {
             v = 1; kind = "horde-relay-machine-retired"; horde = $old.horde; generation = $old.generation; signKeyId = $old.signKeyId; agreeKeyId = $old.agreeKeyId
             successor = $next; successorSignKeyId = $keys.value.sign.keyId; successorSignPublic = (ConvertTo-HordeRelayBase64Url -Bytes $keys.value.sign.publicKey)
             successorAgreeKeyId = $keys.value.agree.keyId; successorAgreePublic = (ConvertTo-HordeRelayBase64Url -Bytes $keys.value.agree.publicKey)
-            reason = $Reason; retiredAt = $nowMs; vouch = ""
+            reason = $Reason; retiredAt = $nowMs; agreeKeptUntil = ($nowMs + $graceMs); vouch = ""
         }
         $spec = Get-HordeRelayRetiredSpec
         $values.vouch = Get-HordeRelayRetirementVouch -Record $old -TextWithoutVouch (ConvertTo-HordeRelayRecordText -Spec $spec -Values $values)
@@ -337,12 +438,19 @@ function Update-HordeRelayMachineIdentity {
             if ($moved -cne "moved") { [void]$problems.Add("generation " + $old.generation + "'s retirement: " + $moved); continue }
         } catch { [void]$problems.Add("generation " + $old.generation + "'s retirement could not be written: " + $_.Exception.Message); continue }
         if ($values.vouch -cne "") { [void]$vouched.Add($old.generation) }
-        $left = Remove-HordeRelayGenerationKeys -Install $old.install -Generation $old.generation -Scope $old.scope
-        if ($left -cne "") { [void]$problems.Add("generation " + $old.generation + "'s keys: " + $left) }
+        $left = Remove-HordeRelayKey -Name $old.signName -Scope $old.scope
+        if ($left.state -ceq "unknown") { [void]$problems.Add("generation " + $old.generation + "'s signing key: " + $left.reason) }
     }
-    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome
+    # A grace of 0 ends now: the agreement keys just retired are released in the same call.
+    $rel = Remove-HordeRelayRetiredAgreeKeys -HordeHome $HordeHome -Now $Now
+    $released = @()
+    if ($rel.state -ceq "known") {
+        $released = @($rel.value.released)
+        if ($rel.value.problems -cne "") { [void]$problems.Add($rel.value.problems) }
+    } else { [void]$problems.Add($rel.reason) }
+    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Now $Now
     if ($id.state -cne "known") { return $id }
-    return (New-HordeKnown -Value ([pscustomobject]@{ previous = $cur.generation; vouched = @($vouched.ToArray()); cleanup = (@($problems.ToArray()) -join "; "); identity = $id.value }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ previous = $cur.generation; vouched = @($vouched.ToArray()); released = $released; cleanup = (@($problems.ToArray()) -join "; "); identity = $id.value }))
 }
 
 function Test-HordeRelayRetirementVouch {
