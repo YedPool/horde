@@ -100,7 +100,7 @@ try {
     Add-ClaudeCodeLines -Path $T.path -Lines @((New-ClaudeCodeLine -Kind "assistant-texts" -Session $T.sid -Texts @("part one", "part two") -Uuid $u -MessageId "msg_syntheticAAAA"))
     $r = Read-Turns $T $cursor
     Check ((Sig $r) -ceq "assistant:part one|assistant:part two" -and $r.value.turns[0].turnId -ceq $u -and $r.value.turns[1].turnId -ceq ($u + "#1")) "a line of two text blocks: two turns, ids uuid and uuid#1"
-    Check ($r.value.turns[0].groupId -ceq "msg_syntheticAAAA" -and $r.value.turns[1].groupId -ceq "msg_syntheticAAAA") "both carry the response's message id as their groupId"
+    Check (@($r.value.turns | Where-Object { $null -ne $_.PSObject.Properties["groupId"] -and $_.groupId -ceq "msg_syntheticAAAA" }).Count -eq 2) "both carry the response's message id as their groupId"
     $cursor = $r.value.next
     Add-ClaudeCodeLines -Path $T.path -Lines @(
         (New-ClaudeCodeLine -Kind "assistant-text" -Session $T.sid -Text "before the tool" -MessageId "msg_syntheticBBBB"),
@@ -108,7 +108,7 @@ try {
         (New-ClaudeCodeLine -Kind "tool-result" -Session $T.sid),
         (New-ClaudeCodeLine -Kind "assistant-text" -Session $T.sid -Text "after the tool" -MessageId "msg_syntheticBBBB"))
     $r = Read-Turns $T $cursor
-    Check ((Sig $r) -ceq "assistant:before the tool|assistant:after the tool" -and @($r.value.turns | Where-Object { $_.groupId -cne "msg_syntheticBBBB" }).Count -eq 0) "a response's text split by a tool call and its result: two turns, one groupId"
+    Check ((Sig $r) -ceq "assistant:before the tool|assistant:after the tool" -and @($r.value.turns | Where-Object { $null -eq $_.PSObject.Properties["groupId"] -or $_.groupId -cne "msg_syntheticBBBB" }).Count -eq 0) "a response's text split by a tool call and its result: two turns, one groupId"
     $cursor = $r.value.next
     Add-ClaudeCodeLines -Path $T.path -Lines @((New-ClaudeCodeLine -Kind "synthetic" -Session $T.sid -Text "API Error: synthetic overload"))
     $r = Read-Turns $T $cursor
@@ -127,10 +127,13 @@ try {
     Check (@($r.value.turns).Count -eq 0) "a meta line and a compaction summary are no turn even when marked human"
     $cursor = $r.value.next
     # A TOOL'S STRUCTURED OUTPUT may hold any member, "kind":"human" among them: only the line's own origin counts.
+    # An interruption marker carries text blocks and no origin: with a member that happens to say kind
+    # human, only the origin check keeps its text out.
     $toolHuman = (New-ClaudeCodeLine -Kind "tool-result" -Session $T.sid).Replace('"toolUseResult":{', '"toolUseResult":{"kind":"human",')
-    Add-ClaudeCodeLines -Path $T.path -Lines @($toolHuman)
+    $interruptHuman = (New-ClaudeCodeLine -Kind "interrupt" -Session $T.sid).Replace('"uuid":', '"extra":{"kind":"human"},"uuid":')
+    Add-ClaudeCodeLines -Path $T.path -Lines @($toolHuman, $interruptHuman)
     $r = Read-Turns $T $cursor
-    Check (@($r.value.turns).Count -eq 0 -and $toolHuman.Contains('"kind":"human"')) "a tool result whose output holds kind human is no turn: the prefilter passes it, the origin check does not"
+    Check (@($r.value.turns).Count -eq 0 -and $toolHuman.Contains('"kind":"human"') -and $interruptHuman.Contains('"kind":"human"')) "a tool result and an interruption marker that hold kind human elsewhere are no turn: the prefilter passes them, the origin check does not"
     $cursor = $r.value.next
     # THE PREFILTER'S STATED LIMIT: it looks for the harness's compact spelling, so a line spaced out
     # by another writer is skipped. Pinned so that it is a decision (the harness writes compact JSON:

@@ -245,6 +245,9 @@ function Read-ClaudeCodeConversation {
             $stop = $false
             while ($start -le $lastLf) {
                 $nl = [Array]::IndexOf($buf, [byte]10, $start, $lastLf - $start + 1)
+                # Never true while lastLf is a line end; a guard, so a wrong lastLf ends the scan instead
+                # of looping on the same bytes (a mutation run of the last-line-end rule spun 12 minutes).
+                if ($nl -lt 0) { break }
                 $lineTurns = @()
                 if ($nl -gt $start) {
                     $text = [System.Text.Encoding]::UTF8.GetString($buf, $start, $nl - $start)
