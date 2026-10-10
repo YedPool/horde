@@ -221,7 +221,10 @@ try {
     $mk2 = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq $e.header.seq -HordeHome $W.home
     Check ($mk.state -ceq "known" -and -not $mk.value.already -and $mk2.state -ceq "known" -and $mk2.value.already) "a done mark is written once, and again is already"
     Check (@((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "a done record is not listed"
-    $none = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq 7 -HordeHome $W.home
+    # A throw is turned into an answer here, so a journal that throws instead of refusing FAILS this
+    # check by name rather than ending the suite (tools/Mutate.ps1 counts only a failed check).
+    $none = $null
+    try { $none = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq 7 -HordeHome $W.home } catch { $none = [pscustomobject]@{ state = "threw"; reason = $_.Exception.Message } }
     Check ($none.state -ceq "unknown" -and $none.reason.Contains("beside its record")) "no done mark is written for a record that is not there"
     $stray = Join-Path (Split-Path -Parent $rec) ("0000000000000009.done")
     [System.IO.File]::WriteAllText($stray, '{"v":1}', [System.Text.Encoding]::ASCII)
@@ -298,6 +301,12 @@ try {
     $raw = $utf8.GetString([byte[]](Unprotect-HordeRelayEnvelope -Envelope (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value -Senders @{ ($W.id.sign.keyId) = (New-HordeRelaySender -Public $W.id.sign.public -Proof "es256") } -RecipientKeys @{ (Get-HordeRelayKeyId -Public $W.phone.agreePublic) = $W.phone.agree } -Replay (New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value.header); fresh = $true })) -Channel "decisions" -Kind "snapshot").value)
     Check (-not $raw.Contains($token) -and -not $raw.Contains("ghp_")) "and nothing of the secret is anywhere in the snapshot's text"
     Remove-Item -LiteralPath (Join-Path $W.store "0000000004.json")
+    $q2 = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Should the opening sound play when the assistant opens?"; kind = "yes-no"; whatItIs = "The app has no opening sound today."; group = "voice"; askedBy = "orc-b" } }
+    $null = Invoke-HordeDecision -Operation "close" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = [int]$q2.value.number; outcome = "Decided at the desk." }
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    $mail = @(Get-PhoneMail $W)
+    $o4 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
+    Check ($o4.ok -and @($o4.body.questions).Count -eq 1 -and @($o4.body.questions | Where-Object { $_.state -cne "open" }).Count -eq 0) "a closed question is not in the snapshot: it holds the open questions only"
 
     Write-Host ""
     Write-Host "--- an answer lands once: the first answer wins ---" -ForegroundColor Cyan
@@ -441,8 +450,10 @@ try {
     Reset-HordeHostileRelay
     $hc = Connect-HordeRelay -Name "hostile" -Options @{}
     $W = New-World -Connection $hc.value
+    # Put in the REVERSE of the phone's order: the relay's seqs then run against the phone's, and only
+    # the sort by sender and seq (channels/Port.ps1, step 2) keeps the journal from refusing 1 and 2.
     $answers = @(1..3 | ForEach-Object { Get-Answer $W -Text ("answer " + $_) })
-    foreach ($a in $answers) { [void](Send-ToMachine $W $a.text) }
+    foreach ($a in @($answers[2], $answers[1], $answers[0])) { [void](Send-ToMachine $W $a.text) }
     Set-HordeHostileRelayFaults -Faults @("reorder", "duplicate", "garbage")
     $t = Invoke-Turn $W
     $said = @(Get-Said $W.store)
@@ -509,11 +520,12 @@ try {
     Check ((@($said) -join " ").Contains("a stop file from before was removed") -and $r.turns -eq 2) "a stop file left from before is removed at the start, not obeyed"
     $said.Clear()
     $stopNow = { param($Line) [void]$said.Add($Line); if ("$Line".StartsWith("watching")) { [void](Request-HordeRelayRunStop -HordeHome $W.home) } }
-    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -Say $stopNow
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say $stopNow
     Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and -not (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file is taken away (" + $r.stoppedBy + ", " + $r.turns + ")")
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 999999}}', $utf8)
     $said.Clear()
-    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) }
+    $r = $null
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) } } catch { $r = [pscustomobject]@{ stoppedBy = ("threw: " + $_.Exception.Message); turns = -1 } }
     Check ($r.stoppedBy -ceq "settings" -and $r.turns -eq 0 -and (@($said) -join " ").Contains("watchMs")) "a refused settings file stops the run before it starts, in the settings' own words"
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "backoffMinMs": 100, "backoffMaxMs": 400, "backoffJitterPercent": 0}}', $utf8)
     Reset-HordeHostileRelay

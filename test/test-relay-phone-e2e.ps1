@@ -192,7 +192,7 @@ try {
     Write-Host "--- 6. a run with no end stops cleanly when asked ---" -ForegroundColor Cyan
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
+    $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"" + (Join-Path $root "horde.ps1") + "`" relay run -Relay local -RelayRoot `"" + $mailboxes + "`""
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
