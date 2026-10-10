@@ -1,0 +1,12 @@
+# What identifies the wezfleet messenger. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of
+# these appears in a file outside messengers/wezfleet/ (and outside the prose under planning/, by rule)
+# that messengers/wezfleet/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule
+# 14; remote plan step R21, slice 3b). Each is matched as a case-insensitive substring, on every line and
+# on the file's path.
+#
+# name | why it identifies this messenger
+WezfleetMessenger | the stem of every function and variable of this messenger (Set-HordeWezfleetMessengerRoot, its one start function and the rest), which nothing else names
+#
+# CONSIDERED AND LEFT OUT, measured 2026-10-06 on the tree outside messengers/ and planning/:
+#   wezfleet - the orchestrator Horde replaces, named across core/ (its stores are read by design); the
+#     terminal host leaves it out of its own names for the same reason.
