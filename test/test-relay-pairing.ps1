@@ -224,12 +224,22 @@ try {
     Check ($dev.publicKey -ceq $valid[0].publicKey -and $dev.credentialId -ceq $valid[0].credentialId) "and the key and credential id the phone made"
     Check ($dev.state -ceq "pending" -and $done.value.pendingUntil -eq ((ConvertTo-HordeRelayRecordMs -Time $t0.AddSeconds(60)) + 600000)) "it is enrolled PENDING - not trusted - for a confirm window of its own: 10 minutes from its registration"
     $fp = $done.value.fingerprint
-    Check ($fp -cmatch '\A[0-9]{4}-[0-9]{4}\z' -and $fp -ceq (Get-HordeRelayPairingFingerprint -Challenge (B $o1.challenge) -Public (B $valid[0].publicKey))) ("its fingerprint is 8 digits from the offer and the key, which the phone computes too (" + $fp + ")")
-    Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public (B $valid[0].publicKey))) "CONTROL: the same key under another offer has another fingerprint"
+    $fpArgs = @{ Challenge = (B $o1.challenge); Public = (B $valid[0].publicKey); CredentialId = (B $valid[0].credentialId); RpId = $rp }
+    Check ($fp -cmatch '\A[0-9]{4}-[0-9]{4}-[0-9]{4}\z' -and $fp -ceq (Get-HordeRelayPairingFingerprint @fpArgs)) ("its fingerprint is 12 digits from the offer, the key, the credential id and the rpId, which the phone computes too (" + $fp + ")")
+    Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public $fpArgs.Public -CredentialId $fpArgs.CredentialId -RpId $rp)) "CONTROL: the same key under another offer has another fingerprint"
+    Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge $fpArgs.Challenge -Public $fpArgs.Public -CredentialId (Get-HordeRelayRandomBytes -Count 32) -RpId $rp)) "the same key under another credential id has another fingerprint"
+    Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge $fpArgs.Challenge -Public $fpArgs.Public -CredentialId $fpArgs.CredentialId -RpId "other.example.test")) "and for another relying party"
     Check (-not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($dev.keyId)) "a pending device is not a trusted sender"
     $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId -Now $t0.AddSeconds(65)
     Check ($one.state -ceq "absent" -and $one.reason.Contains("pending")) ("asked for by key id it is absent, pending (" + $one.reason + ")")
-    $wrongFp = $(if ($fp -ceq "0000-0000") { "1111-1111" } else { "0000-0000" })
+    $wrongFp = $(if ($fp -ceq "0000-0000-0000") { "1111-1111-1111" } else { "0000-0000-0000" })
+    # A key ground until its fingerprint matches the founder's first 8 digits (about 2^26.6 tries, too
+    # slow for a suite; review of 2243720, F1) would still differ in the last 4. What the machine
+    # checks is all 12: the right first 8 with any other last 4 is refused.
+    $last4 = $fp.Substring(10, 4)
+    $other4 = ("" + (([int]$last4 + 1) % 10000)).PadLeft(4, [char]'0')
+    $grind = Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint ($fp.Substring(0, 10) + $other4) -Now $t0.AddSeconds(66)
+    Check ((-not $grind.ok) -and $grind.reason.Contains("fingerprint")) "a fingerprint that matches only the first 8 digits is refused"
     $wrong = Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint $wrongFp -Now $t0.AddSeconds(70)
     Check ((-not $wrong.ok) -and $wrong.reason.Contains("fingerprint")) "a confirmation with another fingerprint is refused"
     Check ((Get-HordeRelayTrust -HordeHome $ha -Now $t0.AddSeconds(70)).value.devices[0].state -ceq "pending") "and the device stays pending"
@@ -267,7 +277,7 @@ try {
     $mine = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkFounder) -Now $t0.AddSeconds(20)
     Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device and its fingerprint (" + $mine.reason + ")")
     Check ($null -ne $mine.value -and $mine.value.earlier.id -ceq $thief.value.device.id) "and hands it back, so it can be rejected"
-    $founderFp = Get-HordeRelayPairingFingerprint -Challenge (B $oT.challenge) -Public $pkFounder.public
+    $founderFp = Get-HordeRelayPairingFingerprint -Challenge (B $oT.challenge) -Public $pkFounder.public -CredentialId $pkFounder.credentialId -RpId $rp
     Check ($founderFp -cne $thief.value.fingerprint) "the founder's phone shows another fingerprint than the thief's device"
     Check (-not (Confirm-HordeRelayDevice -HordeHome $ht -Id $thief.value.device.id -Fingerprint $founderFp -Now $t0.AddSeconds(30)).ok) "so the thief's device cannot be confirmed with what the founder's phone shows"
     $rej = Revoke-HordeRelayTrust -HordeHome $ht -Subject "device" -Id $thief.value.device.id -Reason "not mine" -Now $t0.AddSeconds(31)
@@ -299,7 +309,7 @@ try {
     $pe4 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE4 -Passkey (New-TestPasskey)) -Now $t0.AddSeconds(10)
     Check ((-not $pe4.ok) -and $pe4.reason.Contains("pendingConfirmMinutes") -and -not (Test-Path -LiteralPath (Join-Path $ht ("relay\pairing\used\" + $oE4.offer + ".json")))) "a window over 30 minutes is refused, and the offer is not used"
     Set-TestHorde -HordeHome $ht -Horde "work"
-    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id ("e" * 32) -Fingerprint "0000-0000").reason.Contains("no device")) "confirming a device the store does not hold is refused"
+    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id ("e" * 32) -Fingerprint "0000-0000-0000").reason.Contains("no device")) "confirming a device the store does not hold is refused"
 
     Write-Host ""
     Write-Host "--- refused responses enroll nothing and leave the offer usable ---" -ForegroundColor Cyan
@@ -480,7 +490,7 @@ try {
     Check ((Find-HordeRelayTrustedSenders -HordeHome $hx).reason.Contains("does not hold")) "a revocation of an entry the store does not hold makes it unknown"
     Remove-Item -LiteralPath (Join-Path $revDir ("device-" + ("a" * 32) + ".json"))
     $confDir = Join-Path $hx "relay\trust\confirmed"
-    $orphanC = '{"v":1,"kind":"horde-relay-device-confirmed","id":"' + ("a" * 32) + '","keyId":"' + ("b" * 32) + '","fingerprint":"0000-0000","confirmedAt":1}'
+    $orphanC = '{"v":1,"kind":"horde-relay-device-confirmed","id":"' + ("a" * 32) + '","keyId":"' + ("b" * 32) + '","fingerprint":"0000-0000-0000","confirmedAt":1}'
     [System.IO.File]::WriteAllText((Join-Path $confDir ("device-" + ("a" * 32) + ".json")), $orphanC, $utf8)
     Check ((Find-HordeRelayTrustedSenders -HordeHome $hx).reason.Contains("does not hold")) "a confirmation of a device the store does not hold makes it unknown"
     Remove-Item -LiteralPath (Join-Path $confDir ("device-" + ("a" * 32) + ".json"))
