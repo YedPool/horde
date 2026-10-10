@@ -17,7 +17,7 @@
            Find = 'if ($dups.Count -gt 0) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-type"
-           Find = 'if ($names -cnotcontains "type" -or $cd.type -isnot [string] -or $cd.type -cne "webauthn.get") {'
+           Find = 'if ($names -cnotcontains "type" -or $cd.type -isnot [string] -or $cd.type -cne $Type) {'
            Replace = 'if ($false) {' }
         @{ Name = "any-challenge"
            Find = 'if ($names -cnotcontains "challenge" -or $cd.challenge -isnot [string] -or $cd.challenge -cne (ConvertTo-HordeRelayBase64Url -Bytes $Challenge)) {'
