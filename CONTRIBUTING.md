@@ -226,6 +226,13 @@ And for the transport - what carries the link between a hub and a node. Nothing 
 `transports/<name>/` names a transport program or its options (remote design, founder decision 10;
 remote plan step R5), so that the second transport is a new folder and not an engine change.
 `transports/Port.ps1`, beside the transport folders, belongs to none of them and is scanned like core.
+
+And for the relay - the untrusted mailbox store the relay module meets a phone and other machines
+through. Nothing outside `relays/<name>/` names a relay (relay design 2026-10-09, PR plan item 3), so
+that the hosted relay after the local one is a new folder and not a change to the relay module or its
+channels. `relays/Port.ps1` belongs to no relay, as `transports/Port.ps1` belongs to no transport. The
+messengers (`messengers/<name>/`) and surfaces (`surfaces/<name>/`) are held the same way; the
+families are listed once, in `tools/HostNames.ps1`.
 Core still names the two harnesses the old system ran, because Phases 0 to 2 read their own files;
 those entries were measured when the rule was extended and shrink as the reads move behind the
 AgentPort.
