@@ -105,6 +105,10 @@
 #              DEFAULT may also be empty, meaning "the module's own place", because shipped code holds
 #              no absolute path of anyone's machine (CONTRIBUTING 11); a file may not say empty, it
 #              leaves the key out.
+#   label      A hub label, the name the fleet's sessions wear (F, B12): checked by the label pattern of
+#              schema/link-verbs.v1, read from that schema, so there is one definition of a label and a
+#              setting can never hold one a message's from.label would refuse (messengers/Port.ps1 reads
+#              the same pattern). No min, max or values: the pattern is the whole range.
 # A list of things (font families) is text, as the module's consumer writes it. There is no list kind.
 #
 # NAMES. A module is lower-case letters, digits and hyphens, starting with a letter, at most 40 - it
@@ -148,7 +152,9 @@
 . (Join-Path $PSScriptRoot "JsonText.ps1")
 . (Join-Path $PSScriptRoot "ReadShared.ps1")
 
-$script:HordeModuleSettingKinds = @("text", "whole", "fraction", "truefalse", "folder")
+$script:HordeModuleSettingKinds = @("text", "whole", "fraction", "truefalse", "folder", "label")
+# The label kind's pattern, read from schema/link-verbs.v1 the first time a label is checked.
+$script:HordeModuleSettingLabelPattern = $null
 $script:HordeModuleSettingFields = @("name", "kind", "default", "what", "min", "max", "values")
 $script:HordeModuleNamePattern = '\A[a-z][a-z0-9-]{0,39}\z'
 # con.json opens the console, not a file, on Windows; the names are refused everywhere so a module's
@@ -199,6 +205,12 @@ function Test-HordeModuleSettingFolder {
     return $rooted
 }
 
+function Get-HordeModuleSettingLabelPattern {
+    # schema/link-verbs.v1's label pattern, the one definition of a hub label, read once.
+    if ($null -eq $script:HordeModuleSettingLabelPattern) { $script:HordeModuleSettingLabelPattern = "$((Get-HordeSchema -Name 'link-verbs.v1').definitions.label.pattern)" }
+    return $script:HordeModuleSettingLabelPattern
+}
+
 function Test-HordeModuleSettingValue {
     # Does a value fit an entry's kind and range? { ok; value }: value is what the module gets, in the
     # entry's own .NET type. ONE CHECK FOR BOTH SIDES: a declared default and a value from a file go
@@ -233,6 +245,12 @@ function Test-HordeModuleSettingValue {
         return [pscustomobject]@{ ok = $true; value = $Value }
     }
     if ($Value -isnot [string] -or $Value -cmatch '\p{Cc}') { return $no }
+    if ($kind -ceq "label") {
+        # The control-character check above has refused a line break, which a pattern ending in $ would
+        # let through before a final LF.
+        if ($Value -cnotmatch (Get-HordeModuleSettingLabelPattern)) { return $no }
+        return [pscustomobject]@{ ok = $true; value = $Value }
+    }
     if ($kind -ceq "folder") {
         if ($Value.Length -gt $script:HordeModuleSettingFolderCap -or -not (Test-HordeModuleSettingFolder -Path $Value)) { return $no }
         return [pscustomobject]@{ ok = $true; value = $Value }
@@ -257,6 +275,7 @@ function Get-HordeModuleSettingRule {
     if ($kind -ceq "whole") { return ("a whole number from " + (Get-HordeModuleSettingNumber $Entry.min) + " to " + (Get-HordeModuleSettingNumber $Entry.max) + ", written in digits only") }
     if ($kind -ceq "fraction") { return ("a number from " + (Get-HordeModuleSettingNumber $Entry.min) + " to " + (Get-HordeModuleSettingNumber $Entry.max)) }
     if ($kind -ceq "truefalse") { return "true or false, written without quotes" }
+    if ($kind -ceq "label") { return "a hub label: one or two capital letters, then a number from 1 to 9999 or nothing" }
     if ($kind -ceq "folder") { return ("an absolute folder path of at most " + $script:HordeModuleSettingFolderCap + " characters") }
     if ($null -ne $Entry.values) { return ("one of: " + (@($Entry.values) -join ", ")) }
     return ("text of " + $Entry.min + " to " + $Entry.max + " characters")

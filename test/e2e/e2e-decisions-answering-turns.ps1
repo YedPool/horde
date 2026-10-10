@@ -22,6 +22,7 @@ $root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 . (Join-Path $root "test\lib\WindowProbe.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-answer-turns-" + [guid]::NewGuid().ToString("N"))
@@ -31,7 +32,7 @@ $report = Join-Path $script:work "report.json"
 $script:probeFile = Join-Path $script:work "probe.json"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $childEnv = @{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet"); PSModulePath = $null }
-$cliEnv = @{ HORDE_HOME = $hordeHome }
+$cliEnv = @{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
 $script:probeN = 0
 $script:open = $null
 
@@ -72,6 +73,12 @@ function Get-Head { param($Report, [string]$Like) return @($Report.drawn.heading
 function Horde { param([string[]]$Arguments) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("decisions") + $Arguments) -Env $cliEnv) }
 
 try {
+
+# THE MESSENGERS ARE PINNED in the home every horde child here uses: the window loads every messenger,
+# and one may find a real program to post through by itself (test/lib/MessengerPins.ps1). The fleet's
+# registry is a folder of this scenario's that does not exist (WEZFLEET_ROOT), so no seat is read.
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $hordeHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $hordeHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
 
 Write-Host ""
 Write-Host "=== fourteen questions, each with a few lines of background ===" -ForegroundColor Cyan

@@ -273,8 +273,15 @@
            Find = 'if (@("defaults", "read", "none") -ccontains $state) { continue }'
            Replace = 'continue' }
         @{ Name = "the-finders-settings-are-not-asked"
-           Find = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings)'
-           Replace = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings)' }
+           Find = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $finderSettings, $notifySettings)'
+           Replace = '$refusal = Get-HordeDecisionWindowSettingsRefusal -Answers @($own, $surfaceSettings, $followSettings, $fleetSettings, $notifySettings)' }
+        # Notify's settings: open starts notify, so a refused file of notify refuses the window.
+        @{ Name = "notify-settings-are-not-asked"
+           Find = '$finderSettings, $notifySettings)'
+           Replace = '$finderSettings)' }
+        @{ Name = "the-told-record-is-not-notifys"
+           Find = '$toldPath = Get-HordeDecisionNotifyRecordPath -HordeHome $hordeHome'
+           Replace = '$toldPath = ""' }
         @{ Name = "finders-with-no-settings-refuse-the-window"
            Find = '"read", "none") -ccontains $state'
            Replace = '"read") -ccontains $state' }
