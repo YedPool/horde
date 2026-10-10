@@ -62,5 +62,15 @@
         @{ Name = "stop-drops-an-answer-in-its-quiet-period"
            Find = 'elseif (-not ($last.outcome -ceq "waiting"'
            Replace = 'elseif ($true -or -not ($last.outcome -ceq "waiting"' }
+        # --- who the notice is from
+        @{ Name = "notice-wears-no-label"
+           Find = 'sessionId = $script:HordeDecisionNotifyFrom; label = $Tracker.fromLabel }'
+           Replace = 'sessionId = $script:HordeDecisionNotifyFrom }' }
+        @{ Name = "tracker-ignores-the-label-given"
+           Find = 'if ($FromLabel -eq "") { $FromLabel ='
+           Replace = 'if ($true) { $FromLabel =' }
+        @{ Name = "loop-ignores-the-settings-label"
+           Find = '-QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel'
+           Replace = '-QuietSeconds $v.quietSeconds' }
     )
 }

@@ -85,8 +85,13 @@ try {
 Write-Host ""
 Write-Host "--- every number a person might tune is one setting of the module decisions-notify ---" -ForegroundColor Cyan
 $names = @($defaults.PSObject.Properties | ForEach-Object { $_.Name })
-Check (($names -join ",") -ceq "quietSeconds,pollSeconds,rereadSeconds,startWithWindow") ("the module declares four settings (" + ($names -join ",") + ")")
+Check (($names -join ",") -ceq "quietSeconds,pollSeconds,rereadSeconds,startWithWindow,fromLabel") ("the module declares five settings (" + ($names -join ",") + ")")
 Check ($defaults.quietSeconds -eq 30 -and $defaults.pollSeconds -eq 3 -and $defaults.rereadSeconds -eq 30 -and $defaults.startWithWindow -eq $true) "their defaults: 30 s of quiet, the store looked at every 3 s, the inbox read at least every 30 s, started with the window"
+Check ($defaults.fromLabel -ceq "F") ("the notice is from the founder's hub label, F, by default (" + $defaults.fromLabel + ")")
+$person = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionNotifySettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"fromLabel":"B12"}}'
+Check ($person.state -ceq "read" -and $person.values.fromLabel -ceq "B12") "a person's file may name another hub label"
+$badLabel = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionNotifySettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"fromLabel":"founder"}}'
+Check ($badLabel.state -ceq "refused" -and $null -eq $badLabel.values -and @($badLabel.findings).Count -eq 1 -and $badLabel.findings[0] -clike "the settings file 'settings\decisions-notify.json' of decisions-notify is refused: its key 'fromLabel' must be a hub label*") ("a label that is not a hub label refuses the file, by name (" + (@($badLabel.findings) -join " / ") + ")")
 Check ((Get-HordeDecisionNotifySettings -HordeHome "C:\h").path -ceq "C:\h\settings\decisions-notify.json") "they are read from settings\decisions-notify.json under Horde's home"
 $zero = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionNotifySettingsDeclaration) -Text '{"schemaVersion":1,"settings":{"quietSeconds":0,"startWithWindow":false}}'
 Check ($zero.state -ceq "read" -and $zero.values.quietSeconds -eq 0 -and $zero.values.startWithWindow -eq $false) "a person's file may ring at once (0 s) and keep notify off beside the window"
@@ -200,6 +205,7 @@ $m = $script:posts[0]
 Check ("$($m.sessionId)" -ceq "warchief-session-1") "addressed to the warchief's session, from its seat"
 Check ("$($m.messageId)" -ceq (Get-HordeDecisionNotifyMessageId -HordeHome $hordeHome -Ids @("" + $s1))) "its messageId is the set's"
 Check ("$($m.from.sessionId)" -ceq "horde-decisions-notify" -and "$($m.from.deviceId)" -ceq (Get-HordeDeviceId)) "from this machine, as notify"
+Check ($null -ne $m.from.PSObject.Properties["label"] -and "$($m.from.label)" -ceq "F") ("and wearing the label F, the founder's, the setting's default (" + $(if ($null -ne $m.from.PSObject.Properties["label"]) { "$($m.from.label)" } else { "no label" }) + ")")
 Check (@("$($m.body)" -split "`r?`n")[0] -ceq "FOUNDER ANSWER from the decisions window" -and "$($m.body)".Contains("1 answer, for question 1.")) "the body is the notice"
 Check (-not "$($m.body)".Contains("zebra") -and -not "$($m.body)".Contains($planted)) "CONTROL beside it: the planted answer is in the store, and NOT in the notice"
 Check ((Invoke-HordeDecision -Operation "show" -Request @{ number = 1 }).value.question.thread.messages[0].text.Contains($planted)) "CONTROL: the store does hold the planted words"
@@ -280,8 +286,9 @@ $script:now = [datetime]::UtcNow.AddMinutes(60)
 $p = Pass $tracker
 Check ($p.outcome -ceq "rang") "rung for question 7"
 [System.IO.File]::WriteAllBytes($recordPath, $keep)
-$p = Pass (New-HordeDecisionNotifyTracker -QuietSeconds 30)
+$p = Pass (New-HordeDecisionNotifyTracker -QuietSeconds 30 -FromLabel "B12")
 $sevenId = Get-HordeDecisionNotifyMessageId -HordeHome $hordeHome -Ids @("" + $s7)
+Check ("$($script:posts[-1].from.label)" -ceq "B12") ("a notify started with a person's label posts wearing it (" + "$($script:posts[-1].from.label)" + ")")
 Check ($p.outcome -ceq "rang" -and @($script:posts | Where-Object { "$($_.messageId)" -ceq $sevenId }).Count -eq 2 -and @($script:taken.Keys | Where-Object { $_ -ceq $sevenId }).Count -eq 1) "the record lost it, so it is posted again - with the same id, which the messenger keeps as one message"
 
 Write-Host ""
@@ -317,7 +324,13 @@ $stopAsked = $script:now
 $stop = New-Object System.Threading.ManualResetEvent($true)
 $sleep = { param([double]$Seconds) $script:now = $script:now.AddSeconds([Math]::Max($Seconds, 0.5)) }
 $before = $script:posts.Count
+# The person's settings file names another label: the loop reads it and its notice wears it.
+$settingsFile = (Get-HordeDecisionNotifySettings -HordeHome $hordeHome).path
+New-Item -ItemType Directory -Path (Split-Path -Parent $settingsFile) -Force | Out-Null
+[System.IO.File]::WriteAllText($settingsFile, '{"schemaVersion":1,"settings":{"fromLabel":"C"}}')
 $lines = @(Invoke-HordeDecisionNotifyLoop -Stop $stop -Clock $clock -Sleep $sleep -Seat $seat)
+Remove-Item -LiteralPath $settingsFile
+Check ("$($script:posts[-1].from.label)" -ceq "C") ("the loop's notice wears the label of the person's settings file (" + "$($script:posts[-1].from.label)" + ")")
 Check ($script:posts.Count -eq ($before + 1) -and ((Told) -contains 8) -and ($script:now - $stopAsked).TotalSeconds -ge 25) ("asked to stop with an answer 2 s old: it stayed out the quiet period, rang once, and left (" + ($lines -join " / ") + ")")
 Check (@($lines | Where-Object { $_ -like "rang for 2 answers, on question 8*" }).Count -eq 1 -and $lines[-1] -like "stopped*") "and said so, one line per change, ending with stopped"
 $once = @(Invoke-HordeDecisionNotifyLoop -Once -Clock $clock -Sleep $sleep -Seat $seat)

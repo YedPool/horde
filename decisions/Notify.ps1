@@ -76,12 +76,16 @@ $script:HordeDecisionNotifySettings = New-HordeModuleSettings -Module $script:Ho
     @{ name = "pollSeconds"; kind = "whole"; default = 3; min = 1; max = 600; what = "How often the store's folder is looked at for a change, in seconds." }
     @{ name = "rereadSeconds"; kind = "whole"; default = 30; min = 1; max = 3600; what = "How often the inbox is read even when no change to the store was seen, in seconds." }
     @{ name = "startWithWindow"; kind = "truefalse"; default = $true; what = "Whether horde decisions open starts notify beside the window, and stops it when the window closes." }
+    @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the notice is from: the founder's, F, unless the person who answers wears another." }
 )
 # The reader whose unread messages are rung for, and whose seat the notice goes to: the role that keeps
 # the list, and the one actor the command line reads the inbox as (decisions/Console.ps1).
 $script:HordeDecisionNotifyReader = "warchief"
 $script:HordeDecisionNotifySpeaker = "founder"
-# Who the notice is from: notify is no session, so it names itself, in session.deliver's session-id shape.
+# Who the notice is from: notify is no session, so it names itself, in session.deliver's session-id shape,
+# and wears the label of the person whose answers it rings for (the setting fromLabel, F by default).
+# The label is what a messenger that knows sessions by label reads as the sender; a messenger may hold
+# a message whose sender it cannot place, and an id of notify's own is not a session it can place.
 $script:HordeDecisionNotifyFrom = "horde-decisions-notify"
 # How long a notice may wait in a mailbox: the link's most, 7 days (messengers/Port.ps1). Answers do
 # not expire while they wait unread, so neither does the bell for them.
@@ -242,9 +246,11 @@ function Get-HordeDecisionNotifyUnread {
 }
 
 function New-HordeDecisionNotifyTracker {
-    # What one running notify keeps in memory: when it first saw each message, and the back-off.
-    param([int]$QuietSeconds = 30)
-    return [pscustomobject]@{ quietSeconds = $QuietSeconds; firstSeen = @{}; nextAttemptAt = [datetime]::MinValue; retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; problem = "" }
+    # What one running notify keeps in memory: when it first saw each message, and the back-off; and the
+    # label its notices wear, the setting fromLabel (its declared default when none is given).
+    param([int]$QuietSeconds = 30, [string]$FromLabel = "")
+    if ($FromLabel -eq "") { $FromLabel = @($script:HordeDecisionNotifySettings.settings | Where-Object { $_.name -ceq "fromLabel" })[0].default }
+    return [pscustomobject]@{ quietSeconds = $QuietSeconds; fromLabel = $FromLabel; firstSeen = @{}; nextAttemptAt = [datetime]::MinValue; retryDelay = $script:HordeDecisionNotifyRetryFirstSeconds; problem = "" }
 }
 
 function Get-HordeDecisionNotifyName {
@@ -327,7 +333,7 @@ function Invoke-HordeDecisionNotifyPass {
         $deviceId = ""
         try { $deviceId = Get-HordeDeviceId -HomeRoot $HordeHome } catch { $problem = "this machine's device id could not be had: " + $_.Exception.Message }
         if ($problem -eq "") {
-            $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $sessionId; from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionNotifyFrom }; body = (Format-HordeDecisionNotifyNotice -Items $pending); ttlSeconds = $script:HordeDecisionNotifyTtlSeconds }
+            $message = [pscustomobject]@{ messageId = $noticeId; sessionId = $sessionId; from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeDecisionNotifyFrom; label = $Tracker.fromLabel }; body = (Format-HordeDecisionNotifyNotice -Items $pending); ttlSeconds = $script:HordeDecisionNotifyTtlSeconds }
             $posted = Send-HordeMessengerMessage -Messenger $messenger -Message $message
             if ($posted.state -ceq "known" -and $script:HordeDecisionNotifyStages -ccontains "$($posted.value.stage)") {
                 $stamp = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -379,7 +385,7 @@ function Invoke-HordeDecisionNotifyLoop {
     }
     $refused = ""
     try {
-        $tracker = New-HordeDecisionNotifyTracker -QuietSeconds $v.quietSeconds
+        $tracker = New-HordeDecisionNotifyTracker -QuietSeconds $v.quietSeconds -FromLabel $v.fromLabel
         $stopSince = $null; $lastSaid = ""; $lastMark = $null; $lastPassAt = [datetime]::MinValue; $wakeAt = [datetime]::MinValue; $force = $true; $last = $null
         while ($true) {
             $now = & $Clock
