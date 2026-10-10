@@ -27,7 +27,9 @@
 #
 # A CLEAN END. On a response, a refusal, the offer's expiry or Ctrl+C, the PNG is deleted (the offer
 # is a bearer secret for its short life) and the pairing mailbox is acked through what was read. An
-# offer left behind expires by itself.
+# offer interrupted while it waits (Ctrl+C) is voided (Close-HordeRelayPairingOffer); one that
+# expired needs nothing. A process killed outright runs no finally block, so every
+# pairing that starts first sweeps the pictures older than the longest an offer lives (900 s).
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
@@ -88,6 +90,20 @@ function Read-HordeRelayPairLine {
         }
         if ($clock.ElapsedMilliseconds -ge $TimeoutMs) { return $null }
         Start-Sleep -Milliseconds ([System.Math]::Min(100, [System.Math]::Max(1, $TimeoutMs - $clock.ElapsedMilliseconds)))
+    }
+}
+
+function Remove-HordeRelayPairPictures {
+    # Delete the pictures of offers in -Dir older than the longest an offer may live
+    # (Get-HordeRelayPairingLimits): what a pairing killed outright, past its finally block, left
+    # behind. Only names this command writes (horde-pair-<offer id>.png); a file that will not go is
+    # left for the next sweep.
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    $limit = [datetime]::UtcNow.AddSeconds(-(Get-HordeRelayPairingLimits).maxTtlSeconds)
+    if (-not [System.IO.Directory]::Exists($Dir)) { return }
+    foreach ($f in @([System.IO.Directory]::GetFiles($Dir, "horde-pair-*.png"))) {
+        if ([System.IO.Path]::GetFileName($f) -cnotmatch '\Ahorde-pair-[0-9a-f]{32}\.png\z') { continue }
+        try { if ([System.IO.File]::GetLastWriteTimeUtc($f) -lt $limit) { [System.IO.File]::Delete($f) } } catch { }
     }
 }
 
@@ -152,7 +168,16 @@ function Wait-HordeRelayPairResponse {
                     # Said once per reason: a relay that stays down is not a line a second.
                     if ($w.reason -cne $lastDown) { $null = & $Say ("the relay could not be read (" + $w.reason + "); still waiting, and a pasted response works too") }
                     $lastDown = $w.reason
-                    $null = Read-HordeRelayPairLine -Source $Source -TimeoutMs 0
+                    # A relay that fails at once (refused, unreachable) is tried again after a watch's
+                    # length, not at once: the wait is spent reading the keyboard, so a paste still
+                    # lands (review of a3cce1c: 6,691 watches in 3 s without it).
+                    $line = Read-HordeRelayPairLine -Source $Source -TimeoutMs $left
+                    if ($null -ne $line -and $line.Trim() -cne "") {
+                        $r = Receive-HordeRelayPairText -HordeHome $HordeHome -Offer $Offer -Text $line -Label $Label -Now (& $Clock)
+                        if ($r.ok -or $r.spent) { return $r }
+                        $null = & $Say ("refused: " + $r.reason)
+                    }
+                    continue
                 } else {
                     $lastDown = ""
                     foreach ($a in @($w.value.anomalies)) { $null = & $Say ("relay: " + $a) }
@@ -179,6 +204,14 @@ function Wait-HordeRelayPairResponse {
     }
 }
 
+function Get-HordeRelayPairRevokeFailure {
+    # What to say when a device to reject could not be revoked: not "revoked". It stays pending - so it
+    # trusts nothing - until its window closes, and the command that ends it now.
+    param($Device, [long]$PendingUntil, [string]$Why)
+    return [pscustomobject]@{ ok = $false; value = $null; reason = ("the device " + $Device.id + " could not be revoked (" + $Why + "). It stays pending, trusting nothing, until " +
+        (Get-HordeRelayPairTime -Ms $PendingUntil) + " when its window closes; to end it now: horde relay trust revoke " + $Device.id) }
+}
+
 function Confirm-HordeRelayPairFingerprint {
     # Ask for the fingerprint the phone shows and compare it (the header): up to three tries before the
     # device is rejected; "reject" rejects it at once. { ok; reason; value (the trusted device) }.
@@ -194,7 +227,8 @@ function Confirm-HordeRelayPairFingerprint {
         catch { return [pscustomobject]@{ ok = $false; reason = ("no number was typed (the input ended); the device " + $Device.id + " stays pending until its window closes, and trusts nothing"); value = $null } }
         if ($null -eq $line -or $line.Trim() -ceq "") { continue }
         if ($line.Trim() -ieq "reject") {
-            $null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "rejected at the machine during horde relay pair" -Now (& $Clock)
+            $rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "rejected at the machine during horde relay pair" -Now (& $Clock)
+            if ($rv.state -cne "known") { return (Get-HordeRelayPairRevokeFailure -Device $Device -PendingUntil $PendingUntil -Why $rv.reason) }
             return [pscustomobject]@{ ok = $false; reason = ("the device " + $Device.id + " was rejected; it is revoked and never trusted"); value = $null }
         }
         $c = Confirm-HordeRelayDevice -HordeHome $HordeHome -Id $Device.id -Fingerprint $line.Trim() -Now (& $Clock)
@@ -202,7 +236,8 @@ function Confirm-HordeRelayPairFingerprint {
         if (-not $c.reason.Contains("does not match")) { return [pscustomobject]@{ ok = $false; reason = $c.reason; value = $null } }
         $tries++
         if ($tries -ge $script:HordeRelayPairTries) {
-            $null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone's fingerprint three times" -Now (& $Clock)
+            $rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone's fingerprint three times" -Now (& $Clock)
+            if ($rv.state -cne "known") { return (Get-HordeRelayPairRevokeFailure -Device $Device -PendingUntil $PendingUntil -Why $rv.reason) }
             return [pscustomobject]@{ ok = $false; reason = ("that number does not match either, three times: the device " + $Device.id + " is not the phone in your hand, or the number was misread. It is rejected (revoked); run horde relay pair again"); value = $null }
         }
         $null = & $Say ("That number does not match the device that registered (" + ($script:HordeRelayPairTries - $tries) + " tries left). If your phone shows another number, type reject: the device that registered is not your phone.")
@@ -215,7 +250,7 @@ function Invoke-HordeRelayPair {
     # system's viewer; a suite records the path); -Clock answers the time (a suite moves it).
     # { ok; reason; device; offer }.
     param([string]$HordeHome = "", $Connection = $null, [string]$RpId = "", [string]$Origin = "", [string]$Label = "", [string]$InputFile = "",
-        [Parameter(Mandatory = $true)][scriptblock]$Say, [scriptblock]$OpenPicture = $null, [scriptblock]$Clock = $null, [int]$TtlSeconds = 300, $Source = $null)
+        [Parameter(Mandatory = $true)][scriptblock]$Say, [scriptblock]$OpenPicture = $null, [scriptblock]$Clock = $null, [int]$TtlSeconds = 300, $Source = $null, [string]$PictureDir = "")
     if ($HordeHome -ceq "") { $HordeHome = Get-HordeHome }
     if ($null -eq $Clock) { $Clock = { [datetime]::UtcNow } }
     if ($null -eq $Source) { $Source = New-HordeRelayPairInput -InputFile $InputFile }
@@ -227,7 +262,13 @@ function Invoke-HordeRelayPair {
     if ($o.state -cne "known") { $done.reason = ("no offer was made: " + $o.reason); return $done }
     $offer = $o.value
     $done.offer = $offer
-    $png = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ("horde-pair-" + $offer.offer + ".png"))
+    # -PictureDir is the temporary folder unless a suite names its own.
+    if ($PictureDir -ceq "") { $PictureDir = [System.IO.Path]::GetTempPath() }
+    Remove-HordeRelayPairPictures -Dir $PictureDir
+    $png = [System.IO.Path]::Combine($PictureDir, ("horde-pair-" + $offer.offer + ".png"))
+    # Set once the command ends by itself; an interruption (Ctrl+C) leaves it false, and the offer is
+    # voided on the way out, so a phone that answers it later enrolls nothing nobody is watching.
+    $ended = $false
     try {
         $code = New-HordeQrCode -Text $offer.text -Level "M"
         [System.IO.File]::WriteAllBytes($png, (ConvertTo-HordeQrPng -Code $code -Scale 6 -Border 4))
@@ -239,9 +280,10 @@ function Invoke-HordeRelayPair {
         if ($null -ne $Connection) { $null = & $Say ("Waiting for the phone's response through the relay '" + $Connection.relay.name + "' (" + $offer.pairMailbox + "); a response pasted here works too.") }
         else { $null = & $Say "No relay is named (-Relay), so paste the phone's response here when it shows it." }
         $got = Wait-HordeRelayPairResponse -HordeHome $HordeHome -Offer $offer -Connection $Connection -Source $Source -Label $Label -Say $Say -Clock $Clock
-        if (-not $got.ok) { $done.reason = $got.reason; return $done }
+        if (-not $got.ok) { $ended = $true; $done.reason = $got.reason; return $done }
         # The PNG goes as soon as the offer is used: it opens nothing now, and the window can close.
         try { [System.IO.File]::Delete($png) } catch { }
+        $ended = $true
         $k = Confirm-HordeRelayPairFingerprint -HordeHome $HordeHome -Device $got.value.device -PendingUntil $got.value.pendingUntil -Source $Source -Say $Say -Clock $Clock
         if (-not $k.ok) { $done.reason = $k.reason; return $done }
         $done.ok = $true
@@ -250,6 +292,7 @@ function Invoke-HordeRelayPair {
         return $done
     } finally {
         try { if ([System.IO.File]::Exists($png)) { [System.IO.File]::Delete($png) } } catch { }
+        if (-not $ended) { $null = Close-HordeRelayPairingOffer -HordeHome $HordeHome -Offer $offer.offer }
     }
 }
 
@@ -258,7 +301,9 @@ function Get-HordeRelayTrustLines {
     param($Trust)
     $out = New-Object System.Collections.ArrayList
     foreach ($d in @($Trust.devices)) {
-        $line = "device " + $d.id + "  " + $d.state + "  '" + $d.label + "'  key " + $d.keyId + "  fingerprint " + $d.fingerprint
+        # No fingerprint, in any state: a pending device's is the number `relay pair` waits for, and the
+        # founder must read it from his phone, never copy it from here (review of a3cce1c).
+        $line = "device " + $d.id + "  " + $d.state + "  '" + $d.label + "'  key " + $d.keyId
         if ($null -ne $d.revoked) { $line += "  revoked: " + $d.revoked.reason }
         [void]$out.Add($line)
     }

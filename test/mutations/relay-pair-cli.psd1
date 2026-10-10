@@ -19,8 +19,8 @@
            Find = 'if ($tries -ge $script:HordeRelayPairTries) {'
            Replace = 'if ($false) {' }
         @{ Name = "three-wrong-not-rejected"
-           Find = '$null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone''s fingerprint three times" -Now (& $Clock)'
-           Replace = '$null = 0' }
+           Find = '$rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone''s fingerprint three times" -Now (& $Clock)'
+           Replace = '$rv = [pscustomobject]@{ state = "known"; reason = "" }' }
         @{ Name = "reject-word-ignored"
            Find = 'if ($line.Trim() -ieq "reject") {'
            Replace = 'if ($false) {' }
@@ -42,6 +42,30 @@
         @{ Name = "picture-left-on-interruption"
            Find = 'try { if ([System.IO.File]::Exists($png)) { [System.IO.File]::Delete($png) } } catch { }'
            Replace = '$null = $png' }
+        @{ Name = "old-pictures-not-swept"
+           Find = '    Remove-HordeRelayPairPictures -Dir $PictureDir'
+           Replace = '    $null = $PictureDir' }
+        @{ Name = "young-pictures-swept"
+           Find = '[System.IO.File]::GetLastWriteTimeUtc($f) -lt $limit'
+           Replace = '[System.IO.File]::GetLastWriteTimeUtc($f) -lt [datetime]::UtcNow' }
+        @{ Name = "other-files-swept"
+           Find = 'if ([System.IO.Path]::GetFileName($f) -cnotmatch ''\Ahorde-pair-[0-9a-f]{32}\.png\z'') { continue }'
+           Replace = '$null = $f' }
+        @{ Name = "revoke-failure-on-reject-unchecked"
+           Find = '$rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "rejected at the machine during horde relay pair" -Now (& $Clock)'
+           Replace = '$null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "rejected at the machine during horde relay pair" -Now (& $Clock); $rv = [pscustomobject]@{ state = "known"; reason = "" }' }
+        @{ Name = "revoke-failure-on-three-wrong-unchecked"
+           Find = '$rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone''s fingerprint three times" -Now (& $Clock)'
+           Replace = '$null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "x" -Now (& $Clock); $rv = [pscustomobject]@{ state = "known"; reason = "" }' }
+        @{ Name = "fast-failing-relay-not-paced"
+           Find = '$line = Read-HordeRelayPairLine -Source $Source -TimeoutMs $left'
+           Replace = '$line = Read-HordeRelayPairLine -Source $Source -TimeoutMs 0' }
+        @{ Name = "interrupted-offer-not-voided"
+           Find = 'if (-not $ended) { $null = Close-HordeRelayPairingOffer -HordeHome $HordeHome -Offer $offer.offer }'
+           Replace = '$null = $ended' }
+        @{ Name = "trust-list-shows-fingerprint"
+           Find = '"''  key " + $d.keyId'
+           Replace = '"''  key " + $d.keyId + "  fingerprint " + $d.fingerprint' }
         @{ Name = "machine-label-not-passed"
            Find = '$c = Complete-HordeRelayPairing -HordeHome $HordeHome -Response $response -Label $Label -Now $Now'
            Replace = '$c = Complete-HordeRelayPairing -HordeHome $HordeHome -Response $response -Now $Now' }

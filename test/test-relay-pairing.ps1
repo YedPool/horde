@@ -285,7 +285,7 @@ try {
     $thief = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkThief) -Now $t0.AddSeconds(10)
     Check ($thief.ok -and $thief.value.device.state -ceq "pending") "a photo of the offer lets a thief register first - as a pending device"
     $mine = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkFounder) -Now $t0.AddSeconds(20)
-    Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device and its fingerprint (" + $mine.reason + ")")
+    Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and -not $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device - by id and label, never by its fingerprint, which nothing at the machine shows (" + $mine.reason + ")")
     Check ($null -ne $mine.value -and $mine.value.earlier.id -ceq $thief.value.device.id) "and hands it back, so it can be rejected"
     $founderFp = Get-HordeRelayPairingFingerprint -Challenge (B $oT.challenge) -Public $pkFounder.public -CredentialId $pkFounder.credentialId -RpId $rp
     Check ($founderFp -cne $thief.value.fingerprint) "the founder's phone shows another fingerprint than the thief's device"

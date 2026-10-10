@@ -90,6 +90,9 @@
         @{ Name = "machine-label-not-checked-first"
            Find = 'if ($Label -cne "" -and (Test-HordeRelayRecordValue -Kind "label" -Value $Label) -cne "") {'
            Replace = 'if ($false) {' }
+        @{ Name = "refusal-shows-the-fingerprint"
+           Find = '"'', now " + $Earlier.state'
+           Replace = '"'', fingerprint " + $Earlier.fingerprint + ", now " + $Earlier.state' }
         @{ Name = "window-not-the-setting"
            Find = '[long]$settings.value.values.pendingConfirmMinutes * 60000'
            Replace = '[long]10 * 60000' }

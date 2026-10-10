@@ -98,7 +98,6 @@ function Start-Pair {
     return $r
 }
 function Wait-PairLine { param($Run, [string]$Like, [int]$Seconds = 90) return (Wait-HordeCliLine -Run $Run -Like $Like -Seconds $Seconds) }
-function Complete-Pair { param($Run) return (Complete-HordeCliRun -Run $Run) }
 function Add-Typed { param($Run, [string]$Line) [System.IO.File]::AppendAllText($Run.input, $Line + "`n", $ascii) }
 function Get-OfferOf {
     # The offer a run printed, read back as the machine wrote it.
@@ -115,9 +114,12 @@ function Get-Fingerprint {
     return (Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $Offer.challenge) -Public $Phone.public -CredentialId $Phone.credentialId -RpId $rp)
 }
 function Get-Device { param([string]$HordeHome, [string]$Id) return (@((Get-HordeRelayTrust -HordeHome $HordeHome).value.devices | Where-Object { $_.id -ceq $Id }) | Select-Object -First 1) }
-function Invoke-Horde { param([string[]]$HordeArgs, [string]$HordeHome = $hh) return (Invoke-HordeCliProcess -Root $root -HordeArgs $HordeArgs -Env @{ HORDE_HOME = $HordeHome }) }
 
 $run = $null
+# Everything the machine printed or answered, for the check that no device fingerprint is ever in it.
+$script:machineSaid = New-Object System.Collections.ArrayList
+function Invoke-Horde { param([string[]]$HordeArgs, [string]$HordeHome = $hh) $r = Invoke-HordeCliProcess -Root $root -HordeArgs $HordeArgs -Env @{ HORDE_HOME = $HordeHome }; [void]$script:machineSaid.Add($r.out); return $r }
+function Complete-Pair { param($Run) $r = Complete-HordeCliRun -Run $Run; [void]$script:machineSaid.Add($r.out); return $r }
 try {
     Set-PairSettings -HordeHome $hh
     $id = New-HordeRelayMachineIdentity -HordeHome $hh -Provider "software"
@@ -165,8 +167,11 @@ try {
     $idOut = Invoke-Horde @("relay", "identity")
     Check ($idOut.code -eq 0 -and $idOut.out.Contains("horde: work") -and $idOut.out.Contains("signing key: " + $id.value.sign.keyId) -and $idOut.out.Contains("agreement key: " + $id.value.agree.keyId) -and $idOut.out.Contains("mailbox: " + $id.value.mailbox)) ("relay identity shows the horde, both key ids and the mailbox (exit " + $idOut.code + ")")
     if ($deviceA -eq "") { $deviceA = Add-HordeTestPhonePairing -HordeHome $hh -Phone (New-HordeTestPhone) }
+    $pendingId = Add-HordeTestPhonePairing -HordeHome $hh -Phone (New-HordeTestPhone) -NoConfirm
     $list = Invoke-Horde @("relay", "trust", "list")
     Check ($list.code -eq 0 -and @($list.out -split "`n" | Where-Object { $_ -clike ("device " + $deviceA + "  trusted  *") }).Count -eq 1) ("relay trust list shows the device, trusted (exit " + $list.code + ")")
+    $pendFp = (Get-Device -HordeHome $hh -Id $pendingId).fingerprint
+    Check (@($list.out -split "`n" | Where-Object { $_ -clike ("device " + $pendingId + "  pending  *") }).Count -eq 1 -and -not $list.out.Contains($pendFp) -and -not $list.out.Contains($pendFp.Replace("-", ""))) "a pending device is listed as pending, without its fingerprint: the number pair waits for is never on the machine's screen"
     $rev = Invoke-Horde @("relay", "trust", "revoke", $deviceA, "-Reason", "phone lost")
     Check ($rev.code -eq 0 -and $rev.out.Contains("revoked the device " + $deviceA)) ("relay trust revoke ends it (exit " + $rev.code + ")")
     Check ((Get-Device -HordeHome $hh -Id $deviceA).state -ceq "revoked" -and (Get-Device -HordeHome $hh -Id $deviceA).revoked.reason -ceq "phone lost") "the store holds the revocation, with its reason"
@@ -183,6 +188,19 @@ try {
     $noId = Invoke-Horde @("relay", "identity") $emptyHome
     Check ($noId.code -eq 1 -and $noId.out.Contains("no relay identity")) "relay identity on a machine with none fails, saying so"
     Check ((Invoke-Horde @("relay", "trust", "list") $emptyHome).out.Contains("the trust store is empty")) "an empty trust store says so"
+    $noHorde = Join-Path $work "no-horde-home"
+    [void]$script:homes.Add($noHorde)
+    New-Item -ItemType Directory -Path $noHorde -Force | Out-Null
+    $nh = Invoke-Horde @("relay", "identity", "-New", "-Provider", "software") $noHorde
+    Check ($nh.code -eq 1 -and $nh.out.Contains("no horde is named") -and -not (Test-Path -LiteralPath (Join-Path $noHorde "relay\identity"))) ("relay identity -New with no horde named fails, saying what to set, and makes nothing (exit " + $nh.code + ")")
+    $made = Invoke-Horde @("relay", "identity", "-New", "-Provider", "software") $emptyHome
+    $madeId = Get-HordeRelayMachineIdentity -HordeHome $emptyHome
+    Check ($made.code -eq 0 -and $madeId.state -ceq "known" -and $made.out.Contains("made this machine's relay identity") -and $made.out.Contains("signing key: " + $madeId.value.sign.keyId) -and $made.out.Contains("mailbox: " + $madeId.value.mailbox)) ("relay identity -New makes the identity, in the provider asked, and shows it (exit " + $made.code + ")")
+    Check ($madeId.state -ceq "known" -and $madeId.value.sign.provider -ceq "software") "the keys are in the provider asked for"
+    $twice = Invoke-Horde @("relay", "identity", "-New", "-Provider", "software") $emptyHome
+    Check ($twice.code -eq 1 -and $twice.out.Contains("already has a relay identity") -and (Get-HordeRelayMachineIdentity -HordeHome $emptyHome).value.sign.keyId -ceq $madeId.value.sign.keyId) "relay identity -New again is refused, and the identity stays the one made"
+    Check ((Invoke-Horde @("relay", "identity", "-Provider", "software") $emptyHome).code -eq 1) "-Provider without -New is refused"
+    Check ((Invoke-Horde @("relay", "identity", "-New", "-Provider", "nosuch") $emptyHome).code -eq 2) "an unknown provider is refused as a wrong command line (exit 2)"
 
     Write-Host ""
     Write-Host "--- 3. what a relay can put in the pairing mailbox is refused, and the phone still pairs ---" -ForegroundColor Cyan
@@ -295,6 +313,23 @@ try {
     $fl = Invoke-HordeRelayPair -HordeHome $hh -Connection $hostile.value -InputFile $typed -Say $say -Clock { $script:fake = $script:fake.AddSeconds(5); $script:fake }
     Check ((-not $fl.ok) -and $fl.reason.Contains("32 refused items") -and @($said | Where-Object { $_ -clike "refused what the relay brought*" }).Count -eq 32) ("a mailbox flooded with junk is given up after 32 refusals, not opened until the offer expires (" + $fl.reason + ")")
 
+    # Pictures left by a pairing that was killed outright: swept when the next one starts, once older
+    # than the longest an offer lives (900 s); a younger one, or another file, is left alone.
+    $pics = Join-Path $work "pictures"
+    New-Item -ItemType Directory -Path $pics -Force | Out-Null
+    $stale = Join-Path $pics ("horde-pair-" + ("a" * 32) + ".png")
+    $young = Join-Path $pics ("horde-pair-" + ("b" * 32) + ".png")
+    $other = Join-Path $pics ("horde-pair-notes-" + ("c" * 32) + ".png")
+    foreach ($f in @($stale, $young, $other)) { [System.IO.File]::WriteAllBytes($f, [byte[]](1, 2, 3)) }
+    [System.IO.File]::SetLastWriteTimeUtc($stale, [datetime]::UtcNow.AddSeconds(-901))
+    [System.IO.File]::SetLastWriteTimeUtc($young, [datetime]::UtcNow.AddSeconds(-600))
+    [System.IO.File]::SetLastWriteTimeUtc($other, [datetime]::UtcNow.AddHours(-2))
+    $script:fake = [datetime]::UtcNow
+    $script:onOffer = $null
+    $script:pic = ""
+    $sw = Invoke-HordeRelayPair -HordeHome $hh -InputFile (Join-Path $work "never-typed.txt") -Say $say -Clock $clock -PictureDir $pics -OpenPicture { param($Path) $script:pic = $Path }
+    Check ((-not (Test-Path -LiteralPath $stale)) -and (Test-Path -LiteralPath $young) -and (Test-Path -LiteralPath $other)) "a pairing that starts sweeps the pictures older than the longest offer life, and leaves a younger one and another file"
+    Check ($script:pic.StartsWith($pics) -and -not (Test-Path -LiteralPath $script:pic) -and -not $sw.ok) "and puts its own picture there, deleted when it ends"
     $script:fake = [datetime]::UtcNow
     $script:onOffer = $null
     $script:pic = ""
@@ -309,6 +344,48 @@ try {
     $rj = Invoke-HordeRelayPair -HordeHome $hh -InputFile $typed -Say $say -Clock $clock
     Check ((-not $rj.ok) -and $rj.reason.Contains("rejected") -and (Get-Device -HordeHome $hh -Id (Get-HordeRelayDeviceId -CredentialId $phoneR.credentialId)).state -ceq "revoked") "reject, typed, rejects the device that registered: it is revoked"
 
+    # The offer used behind the command's back (a thief who completed it first): the founder's sealed
+    # response is refused naming the device that took the offer - but not its fingerprint.
+    $said.Clear()
+    $thiefH = New-HordeTestPhone
+    $script:onOffer = {
+        param($Text)
+        $o = Get-PendingOffer $Text
+        $t = Complete-HordeRelayPairing -HordeHome $hh -Response (New-HordeTestPhonePairingResponse -Offer $o -Phone $thiefH)
+        $script:thiefId = $t.value.device.id
+        [void](Send-HordeRelayItem -Connection $hostile.value -Mailbox $o.pairMailbox -Text (New-HordeRelayPairingSealedText -OfferText $o.text -Response (New-HordeTestPhonePairingResponse -Offer $o -Phone (New-HordeTestPhone))))
+    }
+    $script:fake = [datetime]::UtcNow
+    $used = Invoke-HordeRelayPair -HordeHome $hh -Connection $hostile.value -InputFile $typed -Say $say -Clock { $script:fake = $script:fake.AddSeconds(5); $script:fake }
+    [void]$script:machineSaid.Add($used.reason)
+    Check ((-not $used.ok) -and $used.reason.Contains("already used") -and $used.reason.Contains($script:thiefId)) ("an offer used behind its back ends the pairing, naming the device that used it (" + $used.reason + ")")
+
+    # A revocation that cannot be written is not reported as done: the device stays pending, and the
+    # founder is told the command that ends it.
+    foreach ($how in @("reject", "three wrong")) {
+        $phoneF = New-HordeTestPhone
+        [System.IO.File]::WriteAllText($typed, "", $ascii)
+        $script:how = $how
+        $script:onOffer = { param($Text) $o = Get-PendingOffer $Text; $lines = $(if ($script:how -ceq "reject") { "reject" } else { "0000-0000-0001`n0000-0000-0002`n0000-0000-0003" }); [System.IO.File]::AppendAllText($typed, (New-HordeTestPhonePairingResponse -Offer $o -Phone $phoneF) + "`n" + $lines + "`n", $ascii) }
+        $script:fake = [datetime]::UtcNow
+        $rf = & {
+            function Revoke-HordeRelayTrust { return (New-HordeUnknown -Reason "the disk is full (a stand-in)") }
+            Invoke-HordeRelayPair -HordeHome $hh -InputFile $typed -Say $say -Clock { $script:fake = $script:fake.AddSeconds(5); $script:fake }
+        }
+        $devF = Get-Device -HordeHome $hh -Id (Get-HordeRelayDeviceId -CredentialId $phoneF.credentialId)
+        Check ((-not $rf.ok) -and $devF.state -ceq "pending" -and $rf.reason.Contains("stays pending") -and $rf.reason.Contains("horde relay trust revoke " + $devF.id) -and -not $rf.reason.Contains("is revoked")) ("with " + $how + ", a revocation that fails is said to have failed, with the command that ends the device (" + $rf.reason + ")")
+        Check ((Revoke-HordeRelayTrust -HordeHome $hh -Subject "device" -Id $devF.id -Reason "suite cleanup").state -ceq "known") "CONTROL: that device is then revoked by hand"
+    }
+
+    # A relay whose watch fails at once must not be hit in a tight loop: about a second between tries.
+    $script:watches = 0
+    $downOffer = [pscustomobject]@{ offer = ("a" * 32); pairMailbox = "work/pair-" + ("a" * 32); expiresAt = [long]([System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 3000) }
+    $down = & {
+        function Wait-HordeRelayItems { param($Connection, $Mailbox, $Since, $TimeoutMs) $script:watches++; return (New-HordeUnknown -Reason "connection refused (a stand-in)") }
+        Wait-HordeRelayPairResponse -HordeHome (Join-Path $work "no-such-home") -Offer $downOffer -Connection $hostile.value -Source (New-HordeRelayPairInput -InputFile (Join-Path $work "never-typed.txt")) -Label "" -Say { param($l) } -Clock { [datetime]::UtcNow }
+    }
+    Check ((-not $down.ok) -and $down.reason.Contains("expired") -and $script:watches -ge 2 -and $script:watches -le 5) ("a relay that fails at once is tried about once a second, not in a loop (" + $script:watches + " watches in 3 s)")
+
     $script:pic = ""
     # Ctrl+C stops the pipeline, which unwinds through every finally block as a terminating error does;
     # a PipelineStoppedException itself cannot be caught by a suite, so a plain one stands in for it.
@@ -316,7 +393,18 @@ try {
     $stopped = $false
     try { [void](Invoke-HordeRelayPair -HordeHome $hh -InputFile $typed -Say $say -OpenPicture { param($Path) $script:pic = $Path }) } catch { $stopped = ("" + $_.Exception.Message).Contains("interrupted") }
     Check ($stopped -and $script:pic -ne "" -and -not (Test-Path -LiteralPath $script:pic)) "an interruption while it waits (Ctrl+C) still deletes the picture of the offer"
+    $cut = [regex]::Match([System.IO.Path]::GetFileName($script:pic), '[0-9a-f]{32}').Value
+    $after = Get-HordeRelayOpenOffer -HordeHome $hh -Offer $cut
+    Check ((-not $after.ok) -and $after.reason.Contains("already used")) "and voids its offer: a phone that answers it later enrolls nothing"
     $script:onOffer = $null
+
+    foreach ($l in @($said)) { [void]$script:machineSaid.Add($l) }
+    foreach ($x in @($g, $fl, $sw, $ex, $rj)) { [void]$script:machineSaid.Add($x.reason) }
+    $fps = New-Object System.Collections.ArrayList
+    foreach ($h in @($hh, $emptyHome)) { foreach ($d in @((Get-HordeRelayTrust -HordeHome $h).value.devices)) { [void]$fps.Add($d.fingerprint) } }
+    $all = ($script:machineSaid -join "`n")
+    $shown = @($fps | Where-Object { $all.Contains($_) -or $all.Contains($_.Replace("-", "")) -or $all.Contains($_.Replace("-", " ")) })
+    Check ($fps.Count -ge 8 -and $script:machineSaid.Count -ge 20 -and $shown.Count -eq 0) ("no fingerprint of any device, in any state, is in anything the machine printed or answered: pair, trust, identity, refusals (" + $fps.Count + " fingerprints, " + $script:machineSaid.Count + " outputs, " + $shown.Count + " shown)")
 } finally {
     Stop-HordeCliRun $run
     $made = New-Object System.Collections.ArrayList

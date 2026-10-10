@@ -69,7 +69,7 @@
 # fingerprint he did not produce - and grinding a key to match the founder's costs about 2^40 key
 # generations: 12 digits over the challenge, key, credential id and rpId (above). And:
 #   - SINGLE USE. The thief's registration uses the offer, so the founder's own attempt is refused - and
-#     the refusal names the thief's pending device, its label and fingerprint, so the founder rejects it
+#     the refusal names the thief's pending device and its label (never its fingerprint), so the founder rejects it
 #     (Revoke-HordeRelayTrust) and makes a new offer.
 #   - SHORT LIFE: an offer lives 300 seconds by default, at most 900, and an expired offer enrolls
 #     nothing; a pending device not confirmed within its window (30 minutes at most) never can be.
@@ -205,7 +205,10 @@ function Get-HordeRelayUsedRefusal {
     $fail = [pscustomobject]@{ ok = $false; reason = ""; value = $null }
     $fail.reason = "the pairing offer " + $Offer + " was already used" + $Race + "; an offer and its code enroll one device, once (a replay is refused)"
     if ($null -ne $Earlier) {
-        $fail.reason += (". It enrolled the device " + $Earlier.id + " '" + $Earlier.label + "', fingerprint " + $Earlier.fingerprint + ", now " + $Earlier.state +
+        # Its fingerprint is NOT in the sentence: the founder types the number his phone shows, and a
+        # number on the machine's screen is one he could copy instead (cli/RelayPair.ps1). It stays in
+        # value.earlier for a caller that compares it.
+        $fail.reason += (". It enrolled the device " + $Earlier.id + " '" + $Earlier.label + "', now " + $Earlier.state +
             ". If that is not yours, reject it: Revoke-HordeRelayTrust -Subject device -Id " + $Earlier.id)
         $fail.value = [pscustomobject]@{ earlier = $Earlier }
     }
@@ -304,6 +307,23 @@ function Get-HordeRelayOpenOffer {
     $nowMs = ConvertTo-HordeRelayRecordMs -Time $Now
     if ($nowMs -gt $pending.expiresAt) { $fail.reason = ("the pairing offer " + $Offer + " expired " + [long][System.Math]::Floor(($nowMs - $pending.expiresAt) / 1000) + " s ago"); return $fail }
     return [pscustomobject]@{ ok = $true; reason = ""; value = ([pscustomobject]@{ pending = $pending; root = $root; nowMs = $nowMs }) }
+}
+
+function Close-HordeRelayPairingOffer {
+    # Void an open offer: its used mark, naming no device (zeros), so no response enrolls through it
+    # any more. For a pairing interrupted at the machine (Ctrl+C): the offer would otherwise stay
+    # usable, unwatched, for the rest of its life. "closed", "already" (used or voided before) or the
+    # reason it could not be marked. Never throws.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][string]$Offer, $Now = $null)
+    if ($Offer -cnotmatch '\A[0-9a-f]{32}\z') { return ("'" + $Offer + "' is not an offer id") }
+    try {
+        $root = Get-HordeRelayStateDir -HordeHome $HordeHome -Part "pairing"
+        $used = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelayUsedSpec) -Values @{ v = 1; kind = "horde-relay-pairing-used"; offer = $Offer; device = ("0" * 32); usedAt = (ConvertTo-HordeRelayRecordMs -Time $Now) }
+        $moved = Write-HordeRelayRecordFile -Dir ([System.IO.Path]::Combine($root, "used")) -Name ($Offer + ".json") -Text $used
+    } catch { return ("the offer could not be voided: " + $_.Exception.Message) }
+    if ($moved -ceq "moved") { return "closed" }
+    if ($moved -ceq "exists") { return "already" }
+    return ("the offer's void mark has its name, but nothing says it reached the disk")
 }
 
 function New-HordeRelayPairingSealedText {
