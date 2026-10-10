@@ -59,7 +59,7 @@ const rl = createInterface({ input: process.stdin });
 for await (const raw of rl) {
   // Windows PowerShell may open the pipe with a byte order mark (measured 2026-10-10: once the suite has
   // started a horde child, the first line arrived as U+FEFF then the JSON), which is not JSON's.
-  const line = raw.replace(/^﻿/, "");
+  const line = raw.replace(/^\uFEFF/, "");
   if (!line.trim()) continue;
   let c;
   try { c = JSON.parse(line); } catch (x) { process.stdout.write(ascii({ ok: false, reason: "not JSON" }) + "\n"); continue; }

@@ -350,11 +350,11 @@ function Open-HordeRelayPairingSealed {
     if ($null -eq $plain) { $fail.reason = "the sealed response does not open: it was not sealed for this offer and this machine's key, or it was changed on the way"; return $fail }
     if ($plain.Length -gt $limits.maxResponseChars) { $fail.reason = ("the response inside is " + $plain.Length + " bytes, over the " + $limits.maxResponseChars + " a pairing response may be"); return $fail }
     foreach ($b in $plain) { if ($b -lt 0x20 -or $b -gt 0x7E) { $fail.reason = "the response inside is not printable ASCII"; return $fail } }
-    $text = [System.Text.Encoding]::ASCII.GetString($plain)
-    $resp = Read-HordeRelayRecordText -Text $text -Spec (Get-HordeRelayResponseSpec) -Kind "horde-relay-pairing-response" -What "the pairing response inside"
+    $plainText = [System.Text.Encoding]::ASCII.GetString($plain)
+    $resp = Read-HordeRelayRecordText -Text $plainText -Spec (Get-HordeRelayResponseSpec) -Kind "horde-relay-pairing-response" -What "the pairing response inside"
     if (-not $resp.ok) { $fail.reason = $resp.reason; return $fail }
     if ($resp.value.offer -cne $Offer) { $fail.reason = ("the response inside answers another offer (" + $resp.value.offer + ") than the one it was sealed for"); return $fail }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = $text }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = $plainText }
 }
 
 function Complete-HordeRelayPairing {
