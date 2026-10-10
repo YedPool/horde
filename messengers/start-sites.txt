@@ -16,6 +16,7 @@ messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | method
 messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Post parameter: a messenger registers its post as a script block, which only the port's call above runs
 messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Status parameter, likewise
 messengers/wezfleet/Messenger.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1") | the messenger's loader line: Horde's home, where its body files are kept
+messengers/wezfleet/Messenger.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1") | the messenger's loader line: its own settings, where a person names the fleet's folder
 messengers/wezfleet/Messenger.ps1 | Send-HordeWezfleetMessengerPost | starter | Start-HordeWezfleetMessengerProcess -Argv $argv | the post's one call of the start: mail post, its arguments built as separate elements above it
 messengers/wezfleet/Messenger.ps1 | Get-HordeWezfleetMessengerStatus | starter | Start-HordeWezfleetMessengerProcess -Argv @("mail", "status", "-Id", $MessageId.Replace("-", ""), "-Json") | the status's one call of the start, its arguments fixed here
 messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.UseShellExecute = $false | the program is started directly, never through the shell's file associations

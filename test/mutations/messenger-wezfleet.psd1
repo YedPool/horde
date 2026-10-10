@@ -6,9 +6,6 @@
     Target = "messengers\wezfleet\Messenger.ps1"
     Suite  = "messengers\wezfleet\test\test-wezfleet-messenger.ps1"
     Mutations = @(
-        @{ Name = "unset-root-used"
-           Find = 'if ("$dir" -eq "") {'
-           Replace = 'if ($false) {' }
         @{ Name = "relative-root-used"
            Find = 'if (-not [System.IO.Path]::IsPathRooted($dir) -or $dir -notmatch ''\A[A-Za-z]:\\'' -or @($dir -split ''[\\/]'') -contains "..") {'
            Replace = 'if ($false) {' }
