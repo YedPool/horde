@@ -191,13 +191,34 @@ try {
     $f2 = Find-HordeRelayPhoneKeys -HordeHome $h
     $t2 = Get-HordeRelayTrust -HordeHome $h
     Check ($f2.state -ceq "known" -and @($f2.value).Count -eq 0 -and $t2.value.phones[0].state -ceq "untrusted" -and $t2.value.phones[0].why.Contains("revoked")) "revoking the passkey that vouched stops the phone key at once: nothing is sealed to it"
-    $pf = Join-Path $h ("relay\trust\phones\" + $z.value.record.agreeKeyId + ".json")
+    $pf = @(Get-ChildItem -LiteralPath (Join-Path $h "relay\trust\phones") -Filter ($z.value.record.agreeKeyId + "-*.json") | ForEach-Object { $_.FullName })[0]
     $orig = [System.IO.File]::ReadAllText($pf)
     [System.IO.File]::WriteAllText($pf, $orig.Replace('"horde":"work"', '"horde":"evil"'), [System.Text.Encoding]::ASCII)
     $t3 = Get-HordeRelayTrust -HordeHome $h
     Check ($t3.state -ceq "unknown" -and $t3.reason.Contains("does not verify")) ("a phone key record changed on disk no longer verifies, and the whole store is unknown (" + $t3.reason + ")")
     [System.IO.File]::WriteAllText($pf, $orig, [System.Text.Encoding]::ASCII)
     Check ((Get-HordeRelayTrust -HordeHome $h).state -ceq "known") "CONTROL: put back, the store reads"
+    # A NEW VOUCH FOR A KEY WHOSE VOUCHER WAS REVOKED (review of 48bc492, finding 7): the founder replaces
+    # the passkey on his phone and vouches for the same phone key again. It must be trusted again - and
+    # never answered "already in the store" while nothing seals to it.
+    $again = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p2.keyId -AuthenticatorData $v2.authenticatorData -ClientDataJson $v2.clientDataJson -Signature $v2.signature
+    Check ($again.state -ceq "unknown" -and $again.reason.Contains("not a trusted device")) ("the revoked passkey's vouch, sent again, is refused - not answered as already there (" + $again.state + ": " + $again.reason + ")")
+    $p3 = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $h -Phone $p3)
+    $v3 = New-HordeTestPhoneAssertion -Phone $p3 -Challenge (Get-HordeRelayPhoneKeyChallenge -Horde "work" -AgreePublic (ConvertTo-HordeRelayBase64Url -Bytes $p2.agreePublic))
+    $re = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p3.keyId -AuthenticatorData $v3.authenticatorData -ClientDataJson $v3.clientDataJson -Signature $v3.signature
+    $f3 = Find-HordeRelayPhoneKeys -HordeHome $h
+    Check ($re.state -ceq "known" -and -not $re.value.duplicate -and $re.value.record.state -ceq "trusted" -and @($f3.value).Count -eq 1 -and $f3.value[0].by -ceq $p3.keyId) ("a valid vouch by a trusted passkey trusts the key again, vouched for by the new passkey (" + $(if ($re.state -ceq "known") { $re.value.record.state } else { $re.reason }) + ")")
+    $re2 = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p3.keyId -AuthenticatorData $v3.authenticatorData -ClientDataJson $v3.clientDataJson -Signature $v3.signature
+    Check ($re2.state -ceq "known" -and $re2.value.duplicate -and $re2.value.record.state -ceq "trusted") "the same vouch again is a duplicate of a key that IS trusted"
+    # THE HORDE ON READ (finding 8): a key vouched for in one horde is not sealed to once the home belongs
+    # to another.
+    [System.IO.File]::WriteAllText((Join-Path $h "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "personal"}}', $utf8)
+    $f4 = Find-HordeRelayPhoneKeys -HordeHome $h
+    $t4 = Get-HordeRelayTrust -HordeHome $h
+    [System.IO.File]::WriteAllText((Join-Path $h "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
+    Check ($f4.state -ceq "known" -and @($f4.value).Count -eq 0 -and $t4.state -ceq "known" -and @($t4.value.phones | Where-Object { $_.state -ceq "trusted" }).Count -eq 0 -and @($t4.value.phones | Where-Object { "$($_.why)".Contains("horde") }).Count -ge 1) "with the home's horde renamed, a key vouched for in the old horde is untrusted, and says why"
+    Check (@((Find-HordeRelayPhoneKeys -HordeHome $h).value).Count -eq 1) "CONTROL: named back, it is trusted again"
 
     Write-Host ""
     Write-Host "--- the journal: an unfinished record is resumable, a done mark finishes it, evidence is its hash ---" -ForegroundColor Cyan
