@@ -1,0 +1,15 @@
+# What identifies the phone app's surface. tools/HostNames.ps1 fails test/test-host-names.ps1 when any
+# of these appears in a file outside surfaces/pwa/ (and outside the prose under planning/, by rule) that
+# surfaces/pwa/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule 14; relay
+# design 2026-10-09, PR plan item 7). Each is matched as a case-insensitive substring, on every line and
+# on the file's path.
+#
+# name | why it identifies this surface
+HordePwa | the stem of every function and variable of the site's assembler (Site.ps1), the one thing nothing else names
+serviceWorker | the browser's offline worker, which only an installed web app registers: the shell's cache is this folder's (page/sw.js)
+indexedDB | the browser's storage the phone keeps its wrapped key in (page/store.js); relay/js/protocol.js, shared with the test phone, must never touch storage
+#
+# CONSIDERED AND LEFT OUT:
+#   pwa - the design and many headers speak of "the PWA" in prose (relay/Envelope.ps1, the channels).
+#   WebAuthn, passkey - the machine side verifies WebAuthn assertions (relay/WebAuthn.ps1) and names passkeys throughout.
+#   navigator - an ordinary word; and the test phone emulates what navigator's credentials do.

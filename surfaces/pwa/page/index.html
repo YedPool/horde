@@ -1,0 +1,109 @@
+<!doctype html>
+<!--
+  surfaces/pwa/page/index.html - the founder's phone app: every horde's open questions, answered with
+  a passkey. Served as app/index.html of the site New-HordePwaSite assembles (surfaces/pwa/Site.ps1),
+  beside the mounts it names by relative address: ../list/ (the decisions document, unchanged),
+  ../relay/ (the protocol the test phone runs too) and ../surface/bridge-messages.json.
+
+  NOTHING FROM OUTSIDE, AND NO SCRIPT WRITTEN INTO THE PAGE. The policy below allows this site's own
+  files and nothing inline - no inline script, no inline style, no eval - and connects to this site
+  and to the ONE relay origin the deployment names: New-HordePwaSite writes that origin into
+  the policy's connect list and refuses to build unless it finds that list here exactly once. A
+  page script that set a style attribute would be refused by it; list.js sets styles through the
+  style object, which the policy allows.
+
+  THE WHOLE SHELL IS STATIC: the service worker (sw.js) keeps these files for offline start and
+  nothing else. What the phone reads from the relay is opened in memory and never stored.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f5fae">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Horde">
+<meta name="referrer" content="no-referrer">
+<title>Horde decisions</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="../list/list.css">
+</head>
+<body>
+<div id="top">
+  <div id="tabs" role="tablist" aria-label="Hordes"></div>
+  <span class="grow"></span>
+  <span class="counts" id="counts"></span>
+  <button type="button" id="addBtn" aria-label="Pair with a machine">+</button>
+</div>
+<div id="notice" hidden></div>
+
+<section id="pairView" hidden>
+  <h1>Pair with a machine</h1>
+  <p class="hint">On the machine, ask for a pairing offer; it shows a QR code and the offer's text. It lives a few minutes.</p>
+  <div id="scanBox" hidden>
+    <video id="scanVideo" playsinline muted></video>
+    <div class="row"><button type="button" id="scanStop">Stop the camera</button></div>
+  </div>
+  <div class="row"><button type="button" id="scanBtn" hidden>Scan the QR code</button></div>
+  <label for="offerText">Or paste the offer's text</label>
+  <textarea id="offerText" rows="4" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+  <label for="labelText">Name this phone (the machine shows it)</label>
+  <input id="labelText" type="text" maxlength="64" autocomplete="off" value="Founder phone">
+  <div class="row"><button type="button" id="pairBtn" class="primary">Make the passkey</button> <button type="button" id="pairCancel">Cancel</button></div>
+</section>
+
+<section id="pairedView" hidden>
+  <h1>Compare this number with the machine</h1>
+  <p class="hint">Type it at the machine. They must be the same: if they differ, do not confirm, and make a new offer.</p>
+  <div id="fingerprint" class="fingerprint"></div>
+  <h2>Your recovery code</h2>
+  <p class="hint">Write it down and keep it away from this phone. It can unlock this horde's key to READ if the passkey is lost; it can never answer or pair. It is shown only now.</p>
+  <div id="recoveryCode" class="code"></div>
+  <h2>The answer for the machine</h2>
+  <p class="hint">Hand this text to the machine's pairing step, then confirm the number there.</p>
+  <textarea id="responseText" rows="4" readonly spellcheck="false"></textarea>
+  <div class="row"><button type="button" id="copyResponse">Copy</button> <button type="button" id="shareResponse" hidden>Share</button></div>
+  <label class="check"><input type="checkbox" id="wroteCode"> I have written the recovery code down</label>
+  <div class="row"><button type="button" id="announceBtn" class="primary" disabled>I confirmed it at the machine: announce this phone</button></div>
+</section>
+
+<section id="lockedView" hidden>
+  <h1 id="lockedTitle">Locked</h1>
+  <p id="lockedHint" class="hint">Unlock with your passkey to read and answer.</p>
+  <div class="row"><button type="button" id="unlockBtn" class="primary">Unlock with the passkey</button></div>
+  <details>
+    <summary>Use the recovery code (read only)</summary>
+    <input id="recoveryInput" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX">
+    <div class="row"><button type="button" id="recoverBtn">Unlock to read</button></div>
+  </details>
+  <div class="row"><button type="button" id="announceAgain" class="link">Announce this phone again</button> <button type="button" id="forgetBtn" class="link">Forget this horde</button></div>
+</section>
+
+<section id="emptyView" hidden>
+  <h1>No horde yet</h1>
+  <p class="hint">Pair this phone with a machine of your horde to see its open questions here.</p>
+  <div class="row"><button type="button" id="firstPair" class="primary">Pair with a machine</button></div>
+</section>
+
+<div id="doc" hidden>
+  <div id="mode" hidden></div>
+  <div id="lists"></div>
+</div>
+
+<div id="keys" hidden>
+  <button type="button" data-key="back" aria-label="Previous question">Back</button>
+  <button type="button" data-key="newline" aria-label="New line">New line</button>
+  <button type="button" data-key="suggest" aria-label="Take the suggestion">Suggest</button>
+  <button type="button" data-key="park" aria-label="Park or bring back">Park</button>
+  <button type="button" data-key="next" class="primary" aria-label="Send and next">Send</button>
+  <button type="button" id="lockBtn" aria-label="Lock">Lock</button>
+</div>
+
+<script src="../list/list.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
