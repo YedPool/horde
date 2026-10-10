@@ -41,9 +41,10 @@ function New-TestHome {
     return $h
 }
 function Set-TestHorde {
-    param([string]$HordeHome, [string]$Horde, [int]$AgreeDays = -1)
+    param([string]$HordeHome, [string]$Horde, [int]$AgreeDays = -1, [int]$ConfirmMinutes = -1)
     New-Item -ItemType Directory -Path (Join-Path $HordeHome "settings") -Force | Out-Null
     $more = $(if ($AgreeDays -ge 0) { ', "retiredAgreeKeyDays": ' + $AgreeDays } else { "" })
+    if ($ConfirmMinutes -ge 0) { $more += ', "pendingConfirmMinutes": ' + $ConfirmMinutes }
     [System.IO.File]::WriteAllText((Join-Path $HordeHome "settings\relay.json"), ('{"schemaVersion": 1, "settings": {"horde": "' + $Horde + '"' + $more + '}}'), $utf8)
 }
 function Get-TestKeyNames {
@@ -221,7 +222,7 @@ try {
     $dev = $done.value.device
     Check ($dev.label -ceq "Founder phone" -and $dev.prf -eq $true -and $dev.backupEligible -eq $true -and $dev.offer -ceq $o1.offer -and $dev.rpId -ceq $rp) "the device record keeps its label, PRF flag, backup eligibility, offer and relying party"
     Check ($dev.publicKey -ceq $valid[0].publicKey -and $dev.credentialId -ceq $valid[0].credentialId) "and the key and credential id the phone made"
-    Check ($dev.state -ceq "pending" -and $done.value.pendingUntil -eq $ro.value.expiresAt) "it is enrolled PENDING, until the offer's own expiry - not trusted"
+    Check ($dev.state -ceq "pending" -and $done.value.pendingUntil -eq ((ConvertTo-HordeRelayRecordMs -Time $t0.AddSeconds(60)) + 600000)) "it is enrolled PENDING - not trusted - for a confirm window of its own: 10 minutes from its registration"
     $fp = $done.value.fingerprint
     Check ($fp -cmatch '\A[0-9]{4}-[0-9]{4}\z' -and $fp -ceq (Get-HordeRelayPairingFingerprint -Challenge (B $o1.challenge) -Public (B $valid[0].publicKey))) ("its fingerprint is 8 digits from the offer and the key, which the phone computes too (" + $fp + ")")
     Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public (B $valid[0].publicKey))) "CONTROL: the same key under another offer has another fingerprint"
@@ -274,19 +275,30 @@ try {
     $late = Confirm-HordeRelayDevice -HordeHome $ht -Id $thief.value.device.id -Fingerprint $thief.value.fingerprint -Now $t0.AddSeconds(32)
     Check ((-not $late.ok) -and $late.reason.Contains("revoked")) "and then not even its own fingerprint confirms it"
     Check ((Get-HordeRelayTrust -HordeHome $ht -Now $t0.AddSeconds(33)).value.devices[0].state -ceq "revoked") "it is listed as revoked"
-    # Pending expires with the offer.
+    # The confirm window runs from the registration, not from the offer: a phone that registers in the
+    # offer's last seconds still has the whole window.
     $oE = New-Offer -HordeHome $ht
     $pkE = New-TestPasskey
-    $pe = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE -Passkey $pkE) -Now $t0.AddSeconds(10)
-    $exp = Confirm-HordeRelayDevice -HordeHome $ht -Id $pe.value.device.id -Fingerprint $pe.value.fingerprint -Now $t0.AddSeconds(301)
-    Check ((-not $exp.ok) -and $exp.reason.Contains("expired")) "a confirmation after the offer's life is refused"
-    $expDev = @((Get-HordeRelayTrust -HordeHome $ht -Now $t0.AddSeconds(301)).value.devices | Where-Object { $_.id -ceq $pe.value.device.id })[0]
+    $pe = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE -Passkey $pkE) -Now $t0.AddSeconds(290)
+    Check ($pe.ok -and $pe.value.pendingUntil -eq ((ConvertTo-HordeRelayRecordMs -Time $t0.AddSeconds(290)) + 600000)) "registered 10 s before the offer expires, it is pending for the full 10 minutes"
+    $exp = Confirm-HordeRelayDevice -HordeHome $ht -Id $pe.value.device.id -Fingerprint $pe.value.fingerprint -Now $t0.AddSeconds(891)
+    Check ((-not $exp.ok) -and $exp.reason.Contains("expired")) "a confirmation after its window is refused"
+    $expDev = @((Get-HordeRelayTrust -HordeHome $ht -Now $t0.AddSeconds(891)).value.devices | Where-Object { $_.id -ceq $pe.value.device.id })[0]
     Check ($expDev.state -ceq "expired") "and the device is listed as expired"
-    Check ((Find-HordeRelayTrustedSender -HordeHome $ht -KeyId $expDev.keyId -Now $t0.AddSeconds(301)).reason.Contains("never confirmed")) "asked for, it was never confirmed"
+    Check ((Find-HordeRelayTrustedSender -HordeHome $ht -KeyId $expDev.keyId -Now $t0.AddSeconds(891)).reason.Contains("never confirmed")) "asked for, it was never confirmed"
     $oE2 = New-Offer -HordeHome $ht
     $pkE2 = New-TestPasskey
-    $pe2 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE2 -Passkey $pkE2) -Now $t0.AddSeconds(10)
-    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id $pe2.value.device.id -Fingerprint $pe2.value.fingerprint -Now $t0.AddSeconds(300)).ok) "CONTROL: at the offer's last millisecond it still confirms"
+    $pe2 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE2 -Passkey $pkE2) -Now $t0.AddSeconds(290)
+    Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id $pe2.value.device.id -Fingerprint $pe2.value.fingerprint -Now $t0.AddSeconds(890)).ok) "CONTROL: at its window's last millisecond, long after the offer expired, it still confirms"
+    Set-TestHorde -HordeHome $ht -Horde "work" -ConfirmMinutes 1
+    $oE3 = New-Offer -HordeHome $ht
+    $pe3 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE3 -Passkey (New-TestPasskey)) -Now $t0.AddSeconds(10)
+    Check ($pe3.ok -and $pe3.value.pendingUntil -eq ((ConvertTo-HordeRelayRecordMs -Time $t0.AddSeconds(10)) + 60000)) "the window is the setting pendingConfirmMinutes"
+    Set-TestHorde -HordeHome $ht -Horde "work" -ConfirmMinutes 31
+    $oE4 = New-Offer -HordeHome $ht
+    $pe4 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE4 -Passkey (New-TestPasskey)) -Now $t0.AddSeconds(10)
+    Check ((-not $pe4.ok) -and $pe4.reason.Contains("pendingConfirmMinutes") -and -not (Test-Path -LiteralPath (Join-Path $ht ("relay\pairing\used\" + $oE4.offer + ".json")))) "a window over 30 minutes is refused, and the offer is not used"
+    Set-TestHorde -HordeHome $ht -Horde "work"
     Check ((Confirm-HordeRelayDevice -HordeHome $ht -Id ("e" * 32) -Fingerprint "0000-0000").reason.Contains("no device")) "confirming a device the store does not hold is refused"
 
     Write-Host ""
@@ -334,7 +346,7 @@ try {
     $o5 = New-Offer -HordeHome $ha
     $back = Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o5 -Reg $valid[0]) -Now $t0.AddSeconds(5)
     Check ((-not $back.ok) -and $back.reason.Contains("revoked")) "a revoked credential is never enrolled again"
-    $list = Get-HordeRelayTrust -HordeHome $ha -Now $t0.AddMinutes(7)
+    $list = Get-HordeRelayTrust -HordeHome $ha -Now $t0.AddMinutes(16)
     Check ($list.state -ceq "known" -and @($list.value.devices).Count -eq 4 -and @($list.value.devices | Where-Object { $_.state -ceq "revoked" }).Count -eq 1 -and @($list.value.devices | Where-Object { $_.state -ceq "expired" }).Count -eq 1) "the list shows every device with its state: revoked, expired and trusted"
     Check ((Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id ("f" * 32) -Reason "x").state -ceq "absent") "revoking what the store does not hold is absent"
     Check ((Revoke-HordeRelayTrust -HordeHome $ha -Subject "device" -Id $o2b.value.device.id -Reason "").state -ceq "unknown") "a revocation needs a reason"
