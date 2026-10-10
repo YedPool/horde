@@ -341,19 +341,27 @@ try {
     $names = $(if ($null -ne $q1) { @($q1.PSObject.Properties | ForEach-Object { $_.Name }) } else { @() })
     Check ($null -ne $q1 -and (Get-Member2 $q1 "whatItIs") -ceq "The app has no closing sound today." -and @(@("recommendation", "parts", "yesMeans", "groupNote", "options", "references") | Where-Object { $names -cnotcontains $_ }).Count -eq 0) "and every field of the question: its text, its context, the recommendation and its parts"
     Check ($o2.ok -and (Get-Member2 $o2.body "page") -eq 1 -and (Get-Member2 $o2.body "pages") -eq 1 -and "$(Get-Member2 $o2.body "snapshot")" -cmatch '\A[0-9a-f]{64}\z') "a snapshot that fits is one page of one, named by its hash"
-    $null = Invoke-HordeDecision -Operation "mark-read" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; upTo = 1 }
+    # The founder's words, unread by the warchief until he marks them: his mark is his inbox, not the
+    # founder's, and must not send the phone a new snapshot.
+    $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "founder"; route = "chat-recorded"; text = "A short one." }
     $tick = @(Invoke-Tick $W)
-    Check (@(Get-PhoneMail $W).Count -eq 2) "a change that shows nothing new (a read mark) sends nothing: the snapshot is the same"
+    $mailBefore = @(Get-PhoneMail $W).Count
+    $upTo = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count
+    $null = Invoke-HordeDecision -Operation "mark-read" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; upTo = $upTo }
+    $tick = @(Invoke-Tick $W)
+    Check ($mailBefore -eq 3 -and @(Get-PhoneMail $W).Count -eq $mailBefore) ("a change that shows nothing new (the warchief's read mark) sends nothing: the snapshot is the same (" + $mailBefore + ")")
     $token = "ghp_" + ("Ab3" * 10)
-    $planted = '{"schemaVersion":1,"sequence":4,"id":"' + (New-Id) + '","kind":"question-added","at":"2026-10-09T12:00:00.0000000Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":2,"question":{"title":"Rotate the deploy token please now","kind":"yes-no","whatItIs":"The token is ' + $token + '","group":"ops","askedBy":"orc-a"}}}'
-    [System.IO.File]::WriteAllText((Join-Path $W.store "0000000004.json"), $planted, $utf8)
+    $plantSeq = @(Get-ChildItem -LiteralPath $W.store -Filter "*.json").Count + 1
+    $plantFile = Join-Path $W.store ($plantSeq.ToString("D10") + ".json")
+    $planted = '{"schemaVersion":1,"sequence":' + $plantSeq + ',"id":"' + (New-Id) + '","kind":"question-added","at":"2026-10-09T12:00:00.0000000Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":2,"question":{"title":"Rotate the deploy token please now","kind":"yes-no","whatItIs":"The token is ' + $token + '","group":"ops","askedBy":"orc-a"}}}'
+    [System.IO.File]::WriteAllText($plantFile, $planted, $utf8)
     $tick = @(Invoke-Tick $W)
     $mail = @(Get-PhoneMail $W)
     $o3 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
     Check ((@($tick) -join " ").Contains("1 withheld") -and $o3.ok -and @($o3.body.questions).Count -eq 1 -and @($o3.body.withheld).Count -eq 1 -and $o3.body.withheld[0].number -eq 2) ("a question holding what looks like a secret is withheld by number (" + (@($tick) -join " | ") + ")")
     $raw = $utf8.GetString([byte[]](Unprotect-HordeRelayEnvelope -Envelope (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value -Senders @{ ($W.id.sign.keyId) = (New-HordeRelaySender -Public $W.id.sign.public -Proof "es256") } -RecipientKeys @{ (Get-HordeRelayKeyId -Public $W.phone.agreePublic) = $W.phone.agree } -Replay (New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value.header); fresh = $true })) -Channel "decisions" -Kind "snapshot").value)
     Check (-not $raw.Contains($token) -and -not $raw.Contains("ghp_")) "and nothing of the secret is anywhere in the snapshot's text"
-    Remove-Item -LiteralPath (Join-Path $W.store "0000000004.json")
+    Remove-Item -LiteralPath $plantFile
     $q2 = Invoke-HordeDecision -Operation "add" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Should the opening sound play when the assistant opens?"; kind = "yes-no"; whatItIs = "The app has no opening sound today."; group = "voice"; askedBy = "orc-b" } }
     $null = Invoke-HordeDecision -Operation "close" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = [int]$q2.value.number; outcome = "Decided at the desk." }
     $tick = @(Invoke-Tick $W)
@@ -594,6 +602,14 @@ try {
     $recsBefore = @(Get-ChildItem -LiteralPath $outDir -Filter "*.rec" -ErrorAction SilentlyContinue).Count
     $savedPut = $hc2.value.relay.put
     $hc2.value.relay.put = { param($State, $Mailbox, $Key, $Text) return (New-HordeUnknown -Reason "put refused by the relay") }
+    # The very tick that makes a snapshot and cannot put it says it failed.
+    $fresh = (Update-HordeRelayRunContext -Context $W.ctx).value
+    $fresh.state = @{}
+    $W.ctx = $fresh
+    $first = Invoke-HordeRelayChannelTicks -Context $W.ctx
+    Check ($first.failed -eq $true -and (@($first.lines) -join " ").Contains("not delivered")) ("the tick that records a snapshot the relay will not take says it failed (" + (@($first.lines) -join " | ") + ")")
+    # A new run is a new memory: from here, what it records is counted.
+    $recsBefore = @(Get-ChildItem -LiteralPath $outDir -Filter "*.rec" -ErrorAction SilentlyContinue).Count
     # The relay takes puts again after the run's fifth backoff, in the same run: what it then puts must be
     # the envelope recorded before, not a new one.
     $slept = New-Object System.Collections.ArrayList
@@ -699,6 +715,13 @@ try {
     $clock.Stop()
     Set-HordeHostileRelayFaults -Faults @()
     Check ($r.stoppedBy -ceq "stop file" -and $clock.ElapsedMilliseconds -lt 2500) ("a stop asked during a 4 s backoff ends the run within a slice of it (" + $clock.ElapsedMilliseconds + " ms, " + $r.stoppedBy + ")")
+    # And asked IN the middle of the wait: the wait is cut after the slice it came in.
+    Set-HordeHostileRelayFaults -Faults @("throw")
+    $slices = New-Object System.Collections.ArrayList
+    $askInSleep = { param($Ms, $Why) if ("$Why" -ceq "backoff") { [void]$slices.Add($Ms); if ($slices.Count -eq 1) { Start-Sleep -Milliseconds 5; [void](Request-HordeRelayRunStop -HordeHome $W.home) } } }
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 5 -Say { param($Line) } -Sleep $askInSleep
+    Set-HordeHostileRelayFaults -Faults @()
+    Check ($r.stoppedBy -ceq "stop file" -and $slices.Count -eq 1 -and [long]$slices[0] -le 500) ("a 4 s backoff is slept in slices of at most 500 ms, and a stop asked in one ends it after that slice (" + (@($slices) -join ",") + ")")
     # THE TRUST STORE ONCE PER BATCH (finding 5): five answers in one watch read the trusted senders once.
     if ($script:canDecide) {
         $W2 = New-World
