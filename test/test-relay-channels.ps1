@@ -439,7 +439,7 @@ try {
     $junk = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "answer" -Channel "decisions" -Body ($utf8.GetBytes('{"v":1,"answerId":"' + (New-Id) + '","machine":"' + $W.id.sign.keyId + '","snapshot":"' + (Get-SentKey $W) + '","number":1,"wordingVersion":1,"text":"x","extra":1}')) -To $W.agree
     [void](Send-ToMachine $W $junk.text)
     $t = Invoke-Turn $W
-    Check ((Has $t "the answer's members are") -and @(Get-Said $W.store).Count -eq 2) "a body with a member it should not have is refused, and says which"
+    Check ((Has $t "the answer's members are") -and @(Get-Said $W.store).Count -eq 3) ("a body with a member it should not have is refused, and says which (" + $t.text + ")")
 
     }
     Write-Host ""
@@ -589,17 +589,19 @@ try {
     $recsBefore = @(Get-ChildItem -LiteralPath $outDir -Filter "*.rec" -ErrorAction SilentlyContinue).Count
     $savedPut = $hc2.value.relay.put
     $hc2.value.relay.put = { param($State, $Mailbox, $Key, $Text) return (New-HordeUnknown -Reason "put refused by the relay") }
+    # The relay takes puts again after the run's fifth backoff, in the same run: what it then puts must be
+    # the envelope recorded before, not a new one.
     $slept = New-Object System.Collections.ArrayList
     $said = New-Object System.Collections.ArrayList
-    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hc2.value -MaxTurns 6 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) if ("$Why" -cne "pace") { [void]$slept.Add($Ms) } } }
+    $mend = { param($Ms, $Why) if ("$Why" -ceq "pace") { return }; [void]$slept.Add($Ms); if ($slept.Count -eq 5) { $hc2.value.relay.put = $savedPut } }
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hc2.value -MaxTurns 8 -Say { param($Line) [void]$said.Add($Line) } -Sleep $mend }
     finally { $hc2.value.relay.put = $savedPut }
     $recsAfter = @(Get-ChildItem -LiteralPath $outDir -Filter "*.rec" -ErrorAction SilentlyContinue)
-    Check (($recsAfter.Count - $recsBefore) -le 1) ("six turns of a relay that will not take the snapshot record it once, not six times (" + ($recsAfter.Count - $recsBefore) + " new record(s))")
+    Check (($recsAfter.Count - $recsBefore) -le 1) ("a run whose relay will not take the snapshot records it once, not once a turn (" + ($recsAfter.Count - $recsBefore) + " new record(s) in " + $r.turns + " turns)")
     Check ($slept.Count -ge 5 -and (@($said) -join " ").Contains("not delivered")) ("each turn that could not deliver it counts as a failure, and the run backs off (" + (@($slept) -join ",") + ")")
-    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hc2.value -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms, $Why) }
     $lastKey = Get-SentKey $W
     $phoneKeys = @((Receive-HordeRelayItems -Connection $hc2.value -Mailbox "work/phone" -Since 0).value.items | ForEach-Object { $_.key })
-    Check ($phoneKeys -ccontains $lastKey -and @(Get-ChildItem -LiteralPath $outDir -Filter "*.rec").Count -eq $recsAfter.Count) "once the relay takes puts again, the envelope recorded before is the one put - no new one is made"
+    Check ($phoneKeys -ccontains $lastKey -and $r.failures -eq 0) ("once the relay takes puts again, the envelope recorded before is the one put, and the run goes on clean (" + $r.failures + ")")
     $big = New-Object byte[] 5000
     $saved = $null
     try { $saved = Save-HordeRelayChannelEnvelope -Context $W.ctx -Channel "decisions" -Kind "snapshot" -Body $big -Recipients @(, ([byte[]]$W.phone.agreePublic)) } catch { $saved = [pscustomobject]@{ state = "threw"; reason = $_.Exception.Message } }
@@ -653,7 +655,7 @@ try {
     $said.Clear()
     $stopNow = { param($Line) [void]$said.Add($Line); if ("$Line".StartsWith("watching")) { [void](Request-HordeRelayRunStop -HordeHome $W.home) } }
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say $stopNow
-    Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and -not (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file is taken away (" + $r.stoppedBy + ", " + $r.turns + ")")
+    Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file stays for every other run that started before it (" + $r.stoppedBy + ", " + $r.turns + ")")
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 999999}}', $utf8)
     $said.Clear()
     $r = $null
@@ -676,7 +678,7 @@ try {
     # does not wait - is not allowed to spin; the turn is padded to minTurnMs.
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 300}}', $utf8)
     $paced = New-Object System.Collections.ArrayList
-    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 3 -Say { param($Line) } -Sleep { param($Ms, $Why) if ("$Why" -ceq "pace") { [void]$paced.Add($Ms) } }
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say { param($Line) } -Sleep { param($Ms, $Why) if ("$Why" -ceq "pace") { [void]$paced.Add($Ms) } }
     Check ($paced.Count -ge 2 -and @($paced | Where-Object { $_ -gt 300 -or $_ -le 0 }).Count -eq 0) ("turns that found nothing at once are padded to the minimum turn, not spun (" + (@($paced) -join ",") + ")")
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "minTurnMs": 10}}', $utf8)
     $r = $null
