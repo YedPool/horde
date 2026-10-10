@@ -28,6 +28,9 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
+. (Join-Path $root "test\lib\FleetPin.ps1")
+$fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "core\ModuleSettings.ps1")
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
@@ -489,10 +492,10 @@ try {
     [void](Send-ToMachine $W $es)
     $t = Invoke-Turn $W
     Check ((Has $t "refused") -and @(Get-Said $W.store).Count -eq 0) "an answer signed by a machine key is refused"
-    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "chat" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
+    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "notes" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "snapshot" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
     $t = Invoke-Turn $W
-    Check ((Has $t "no channel 'chat' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
+    Check ((Has $t "no channel 'notes' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
     $elsewhere = New-HordeRelayP256Key -Use "ecdh"
     [void](Send-ToMachine $W (Get-Answer $W -To @(, ([byte[]](ConvertTo-HordeRelayP256Public -Key $elsewhere)))).text)
     $t = Invoke-Turn $W
@@ -739,6 +742,7 @@ try {
     }
     Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
 } finally {
+    Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
     foreach ($w in @($script:worlds)) { Close-HordeRelayRunContext -Context $w.ctx }
     $made = New-Object System.Collections.ArrayList

@@ -28,6 +28,9 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
+# No channel may find this machine's real Thrall (test/lib/FleetPin.ps1): first thing, before any loads.
+. (Join-Path $root "test\lib\FleetPin.ps1")
+$fleetPin = Enter-HordeTestEmptyFleet
 . (Join-Path $root "core\ModuleSettings.ps1")
 . (Join-Path $root "channels\Port.ps1")
 foreach ($f in @(Get-HordeRelayFiles)) { . $f }
@@ -223,6 +226,7 @@ try {
     } finally { foreach ($x in $runs) { if (-not $x.p.HasExited) { $x.p.Kill() }; $x.p.Dispose() } }
     }
 } finally {
+    Exit-HordeTestEmptyFleet -Pin $fleetPin
     $env:HORDE_HOME = $realHome
     foreach ($k in @($keysMade)) { try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { } }
     $left = @($keysMade | Where-Object { (Find-HordeRelayCngKey -Name $_.n -Scope $_.s) -cne "" })
