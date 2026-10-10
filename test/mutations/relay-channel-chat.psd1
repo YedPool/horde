@@ -26,7 +26,7 @@
            Find = 'if ($line.text.Length -gt [int]$set.lineChars) {'
            Replace = 'if ($false) {' }
         @{ Name = "message-id-not-derived"
-           Find = 'messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId); sessionId'
+           Find = 'messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId -Text $line.text); sessionId'
            Replace = 'messageId = ([guid]::NewGuid().ToString()); sessionId' }
         @{ Name = "body-without-header"
            Find = 'return ("FOUNDER LINE from the phone (line " + $MessageId + ")`n`n" + $Text)'
@@ -68,8 +68,8 @@
            Find = '[^\x20\x21\x23-\x5B\x5D-\x7E]'
            Replace = '[^\x20-\x5B\x5D-\x7E]' }
         @{ Name = "pending-not-kept"
-           Find = '$d.pending = @(@($d.pending) + @($keys.ToArray()))'
-           Replace = '$null = $keys' }
+           Find = '$State.pending = @(@($State.pending) + @($Keys))'
+           Replace = '$null = $Keys' }
         @{ Name = "pending-put-from-elsewhere"
            Find = 'if ($rec.value.sent) {'
            Replace = 'if ($false) {' }
