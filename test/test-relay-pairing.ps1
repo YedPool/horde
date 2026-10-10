@@ -226,7 +226,7 @@ try {
     Check ($fp -cmatch '\A[0-9]{4}-[0-9]{4}\z' -and $fp -ceq (Get-HordeRelayPairingFingerprint -Challenge (B $o1.challenge) -Public (B $valid[0].publicKey))) ("its fingerprint is 8 digits from the offer and the key, which the phone computes too (" + $fp + ")")
     Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public (B $valid[0].publicKey))) "CONTROL: the same key under another offer has another fingerprint"
     Check (-not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($dev.keyId)) "a pending device is not a trusted sender"
-    $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId
+    $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId -Now $t0.AddSeconds(65)
     Check ($one.state -ceq "absent" -and $one.reason.Contains("pending")) ("asked for by key id it is absent, pending (" + $one.reason + ")")
     $wrongFp = $(if ($fp -ceq "0000-0000") { "1111-1111" } else { "0000-0000" })
     $wrong = Confirm-HordeRelayDevice -HordeHome $ha -Id $dev.id -Fingerprint $wrongFp -Now $t0.AddSeconds(70)
@@ -421,6 +421,7 @@ try {
     Check ((Read-HordeRelayPairingOffer -Text (New-Offer -HordeHome $ha -Now $tRot).text).value.agreeKeyId -ceq $A2.agree.keyId) "what the machine hands out names only the current agreement key: the old one is never sealed to again"
     $early = Remove-HordeRelayRetiredAgreeKeys -HordeHome $ha -Now (New-Object datetime -ArgumentList (($tRot.AddDays(7)).Ticks - 10000), ([System.DateTimeKind]::Utc))
     Check ($early.state -ceq "known" -and @($early.value.released).Count -eq 0 -and (Get-HordeRelayKey -Name $A.agree.name -Use "agree").state -ceq "known") "a millisecond before the grace ends the key is kept"
+    Check (@((Get-HordeRelayMachineIdentity -HordeHome $ha -Now $tRot.AddDays(7)).value.opening).Count -eq 0) "at the grace's end the old key opens nothing, swept or not"
     $swept = Remove-HordeRelayRetiredAgreeKeys -HordeHome $ha -Now $tRot.AddDays(7)
     Check ($swept.state -ceq "known" -and @($swept.value.released) -contains 1 -and (Get-HordeRelayKey -Name $A.agree.name -Use "agree").state -ceq "absent") "when the grace ends the old agreement key is deleted"
     Check (Test-Path -LiteralPath (Join-Path $ha "relay\identity\released-000001.json")) "and its release is recorded"

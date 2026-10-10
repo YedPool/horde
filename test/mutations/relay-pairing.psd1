@@ -34,5 +34,14 @@
         @{ Name = "origin-not-under-rp"
            Find = 'if ($hostPart -cne $RpId -and -not $hostPart.EndsWith("." + $RpId)) {'
            Replace = 'if ($false) {' }
+        @{ Name = "fingerprint-not-checked"
+           Find = 'if ($given -cnotmatch ''\A[0-9]{8}\z'' -or -not (Test-HordeRelayBytesEqual'
+           Replace = 'if ($false -and -not (Test-HordeRelayBytesEqual' }
+        @{ Name = "fingerprint-ignores-offer"
+           Find = '"horde-relay/pairing/v1 fingerprint`n"), $Challenge, $Public)'
+           Replace = '"horde-relay/pairing/v1 fingerprint`n"), $Public)' }
+        @{ Name = "earlier-device-not-named"
+           Find = 'if ($null -ne $Earlier) {'
+           Replace = 'if ($false) {' }
     )
 }
