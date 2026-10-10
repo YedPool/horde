@@ -41,7 +41,9 @@
 #     a line end. A file rewritten to the same first 4 KiB and longer than the offset, with a line end
 #     exactly at the offset, is not seen; the harness has never been seen rewriting a transcript at all.
 #   - A NEW SESSION (/clear) is a new session id, a new registry record and a new file (S4); the port
-#     sees the session change and starts it from the beginning. This adapter does nothing for it.
+#     sees the session change and starts it from the beginning. The OLD session is still found by its id
+#     (the port's A PAST SESSION BY ITS ID): its registry record, retired or not, still names the role and
+#     its transcript, so a caller can read its tail to the end before moving on.
 #
 # WHAT IS A TURN (S4, and the 2026-10-10 probe):
 #   - USER: a user line whose origin.kind is "human" (485 in the live file), its content a string or text
@@ -80,20 +82,25 @@ $script:ClaudeCodeConversationSkipStep = 65536
 $script:ClaudeCodeConversationPositionPattern = '\Av1\.(\d{1,15})\.(\d{1,6})\.(\d{1,5})\.([0-9a-f]{16}|-)\z'
 
 function Find-ClaudeCodeThrall {
-    # The registry record holding -Role: known { session; locator }, absent or unknown (header).
-    param([string]$Root, [string]$Role)
+    # The registry record holding -Role: known { session; locator }, absent or unknown (header). -Session
+    # asks for that one session's record instead, retired or not, and it must name -Role too: a session
+    # that never held the role is not the Thrall's, so it is absent.
+    param([string]$Root, [string]$Role, [string]$Session = "")
     $registry = Read-HordeRegistry -Root $Root
     if ($registry.complete.state -cne "known") { return (New-HordeUnknown -Reason ("the session records could not all be read, so which session is the " + $Role + " cannot be told: " + $registry.complete.reason)) }
     $table = Get-HordeRoleTable
     $holders = New-Object System.Collections.ArrayList
     foreach ($id in @($registry.records.Keys | Sort-Object)) {
         $record = $registry.records[$id].record
-        $retired = Get-HordeField -Record $record -Name "retired"
-        if ($retired.state -ceq "known" -and [bool]$retired.value) { continue }
+        if ($Session -ne "") { if ("$id" -cne $Session) { continue } }
+        else {
+            $retired = Get-HordeField -Record $record -Name "retired"
+            if ($retired.state -ceq "known" -and [bool]$retired.value) { continue }
+        }
         $named = (Read-HordeRecordRole -Record $record -Table $table).role
         if ($named.state -ceq "known" -and "$($named.value)" -ceq $Role) { [void]$holders.Add([pscustomobject]@{ id = "$id"; record = $record }) }
     }
-    if ($holders.Count -eq 0) { return (New-HordeAbsent -Note ("no live session's record names the role " + $Role)) }
+    if ($holders.Count -eq 0) { return (New-HordeAbsent -Note $(if ($Session -ne "") { "no session record of that id names the role " + $Role } else { "no live session's record names the role " + $Role })) }
     if ($holders.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $holders.Count + " live sessions each say they are the " + $Role + " (" + (@($holders | ForEach-Object { $_.id }) -join ", ") + "); one is never chosen over another")) }
     $one = $holders[0]
     $tp = Get-HordeField -Record $one.record -Name "transcriptPath"
@@ -298,7 +305,9 @@ $null = Register-HordeConversationAdapter -Folder $PSScriptRoot -Locate {
     $root = ""
     if ($null -ne $Request.options -and $Request.options.Contains("registryRoot")) { $root = "" + $Request.options["registryRoot"] }
     if ($root -eq "") { $root = Get-HordeWezfleetRoot }
-    return (Find-ClaudeCodeThrall -Root $root -Role $Request.role)
+    $asked = ""
+    if ($null -ne $Request.PSObject.Properties["session"]) { $asked = "" + $Request.session }
+    return (Find-ClaudeCodeThrall -Root $root -Role $Request.role -Session $asked)
 } -Read {
     param($Source, [string]$Position, [int]$MaxTurns, [long]$MaxBytes)
     return (Read-ClaudeCodeConversation -Source $Source -Position $Position -MaxTurns $MaxTurns -MaxBytes $MaxBytes)

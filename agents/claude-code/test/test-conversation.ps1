@@ -6,7 +6,8 @@
 # to this harness:
 #   - FINDING THE THRALL in the fleet's registry: one live master record; a retired one is not it; two
 #     are never chosen between; a record with no transcript, or another session's, is unknown; a
-#     registry with an unreadable record is unknown; a Thrall with no file yet reads empty.
+#     registry with an unreadable record is unknown; a Thrall with no file yet reads empty; a past
+#     session asked for by its id is found though retired, and a session that never held the role is not.
 #   - WHAT IS A TURN: each kind of the harness's own line is planted alone and must give nothing; a
 #     prompt as text blocks is one turn; a line with several text blocks gives one turn each, ids
 #     uuid and uuid#1, one groupId; a response's text blocks split by tool results share the groupId; an
@@ -49,7 +50,8 @@ try {
     Check ((Find-Thrall $reg).state -ceq "absent") "an empty registry: absent"
     $old = [guid]::NewGuid().ToString()
     $null = Set-ClaudeCodeRecord -Registry $reg -Session $old -Retired $true
-    $null = Set-ClaudeCodeRecord -Registry $reg -Session ([guid]::NewGuid().ToString()) -Role "orc"
+    $orc = [guid]::NewGuid().ToString()
+    $null = Set-ClaudeCodeRecord -Registry $reg -Session $orc -Role "orc"
     $null = Set-ClaudeCodeRecord -Registry $reg -Session ([guid]::NewGuid().ToString()) -Role ""
     Check ((Find-Thrall $reg).state -ceq "absent") "a retired master, an orc and a record with no role: still absent"
     $sid = [guid]::NewGuid().ToString()
@@ -64,6 +66,10 @@ try {
     Check ($f.state -ceq "unknown" -and $f.reason -like "*2 live sessions*" -and $f.reason -like ("*" + $sid + "*")) ("two live masters: unknown, naming both (" + $f.reason + ")")
     $null = Set-ClaudeCodeRecord -Registry $reg -Session $second -Retired $true
     Check ((Find-Thrall $reg).state -ceq "known") "CONTROL: retire the second and the first is found again"
+    $past = Find-HordeConversationSource -Fleet "alpha" -Vendor $vendor -Session $second -Require @() -Refuse @() -Options @{ registryRoot = $reg.root }
+    Check ($past.state -ceq "known" -and $past.value.session -ceq $second -and $past.value.locator -ceq (Join-Path $reg.projects ($second + ".jsonl"))) ("asked by its id, a RETIRED Thrall session is found, with its own transcript (" + $past.state + ")")
+    $notThrall = Find-HordeConversationSource -Fleet "alpha" -Vendor $vendor -Session $orc -Require @() -Refuse @() -Options @{ registryRoot = $reg.root }
+    Check ($notThrall.state -ceq "absent") ("asked by its id, a session that never held the role is absent (" + $notThrall.state + ")")
     $null = Set-ClaudeCodeRecord -Registry $reg -Session $sid -TranscriptPath (Join-Path $reg.projects ($second + ".jsonl"))
     $f = Find-Thrall $reg
     Check ($f.state -ceq "unknown" -and $f.reason -like "*not its own session's file*") "a record naming another session's transcript: unknown"

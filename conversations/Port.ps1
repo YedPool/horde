@@ -40,11 +40,20 @@
 # plain data that survives being written as JSON. position is the adapter's own, opaque here: printable
 # ASCII, at most 1024 characters. $null means "from the start of the conversation". A cursor of another
 # session - the Thrall was cleared, or restarted - is not an error: the read starts the new session from
-# its beginning and says reset "session". What the old session wrote after the cursor is not read: its
-# file is no longer the Thrall's (an open question for the chat channel, recorded in the pull request).
+# its beginning and says reset "session". What the old session wrote after the cursor is not read by
+# that call: its file is no longer the Thrall's.
+#
+# A PAST SESSION BY ITS ID (the chat channel, PR plan item 10, answering this port's open question 1).
+# After a clear, the old session may hold turns written after the cursor and before the clear - the
+# Thrall's last words before it was cleared. Find-HordeConversationSource -Session <id> locates THAT
+# session of the horde's Thrall, retired or not, so a caller can read it to its end before it moves on.
+# The adapter is asked as for the Thrall now, with the id in the request; it answers known for the
+# session it was asked for, absent when that session was never this horde's Thrall (or is gone), and the
+# port refuses an answer about any other session: an adapter that ignores the id would hand back the NEW
+# session under the old cursor.
 #
 # THE OPERATIONS, each a tristate answer:
-#   Find-HordeConversationSource -Fleet [-Vendor] -Require -Refuse [-Options]
+#   Find-HordeConversationSource -Fleet [-Vendor] [-Session] -Require -Refuse [-Options]
 #                                 -> known source | absent (no adapter locates a Thrall) | unknown
 #   Read-HordeConversationTurns  -Source -Cursor [-MaxTurns] [-MaxBytes]
 #                                 -> known { source; since; next; turns; anomalies; reset; more }
@@ -58,10 +67,12 @@
 #
 # ADAPTER CONTRACT. agents/<name>/Conversation.ps1 is dot-sourced at script level and calls
 # Register-HordeConversationAdapter with two script blocks, each answering with a core/tristate answer:
-#   Locate param($Request)  Request is { fleet; role; options }: the horde, "warchief", and the caller's
-#          options (a hashtable; an adapter reads only the keys it knows, and uses its defaults for the
-#          rest). -> known { session; locator } for the one session holding the role, absent when none
-#          does, unknown when that cannot be told. locator is the adapter's own (a path), never shown.
+#   Locate param($Request)  Request is { fleet; role; session; options }: the horde, "warchief", the
+#          session asked for ("" for the one holding the role now; an id for that past or present session
+#          of the role, A PAST SESSION BY ITS ID above), and the caller's options (a hashtable; an adapter
+#          reads only the keys it knows, and uses its defaults for the rest). -> known { session; locator }
+#          for the session asked for, absent when there is none, unknown when that cannot be told.
+#          locator is the adapter's own (a path), never shown.
 #   Read   param($Source, [string]$Position, [int]$MaxTurns, [long]$MaxBytes)  Source is
 #          { vendor; session; locator }; Position "" means from the start.
 #          -> known { turns; position; more; reset; anomalies } where each turn is
@@ -243,14 +254,17 @@ function Find-HordeConversationSource {
     # The conversation of -Fleet's Thrall, as a source to read: known when exactly one adapter (of those
     # meeting -Require and -Refuse, or only -Vendor when given) locates it; absent when none does; unknown
     # when any could not tell, or more than one says it holds the Thrall - one is never chosen over another.
+    # -Session names a past (or the present) session of the Thrall instead of the one holding the role now.
     param(
         [Parameter(Mandatory = $true)][string]$Fleet,
         [string]$Vendor = "",
+        [string]$Session = "",
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Require,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Refuse,
         [System.Collections.IDictionary]$Options = @{}
     )
     if ($Fleet -cnotmatch $script:HordeConversationFleetPattern) { return (New-HordeUnknown -Reason "the horde name is not 1 to 63 of a-z, 0-9 and -, starting with a letter or digit") }
+    if ($Session -ne "" -and $Session -cnotmatch $script:HordeConversationSessionPattern) { return (New-HordeUnknown -Reason "the session asked for is not 1 to 128 of A-Z, a-z, 0-9 and . _ : -") }
     if ($Vendor -ne "") {
         $one = Resolve-HordeConversationAdapter -Name $Vendor -Require $Require -Refuse $Refuse
         if ($one.state -cne "known") { return $one }
@@ -260,7 +274,7 @@ function Find-HordeConversationSource {
         if ($fit.state -cne "known") { return $fit }
         $names = @($fit.value)
     }
-    $request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; options = $Options }
+    $request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; session = $Session; options = $Options }
     $found = New-Object System.Collections.ArrayList
     $unsure = New-Object System.Collections.ArrayList
     foreach ($n in $names) {
@@ -268,15 +282,18 @@ function Find-HordeConversationSource {
         $a = Invoke-HordeConversationAdapter -Adapter $adapter -Op "locate" -Arguments @($request) -What "locate" -AllowAbsent
         if ($a.state -ceq "absent") { continue }
         if ($a.state -cne "known") { [void]$unsure.Add($a.reason); continue }
-        $session = Get-HordeConversationMember $a.value "session"
+        $located = Get-HordeConversationMember $a.value "session"
         $locator = Get-HordeConversationMember $a.value "locator"
-        if (-not $session.has -or $session.value -isnot [string] -or $session.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add("adapter '" + $n + "' located a session whose id is not 1 to 128 of A-Z, a-z, 0-9 and . _ : -"); continue }
+        if (-not $located.has -or $located.value -isnot [string] -or $located.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add("adapter '" + $n + "' located a session whose id is not 1 to 128 of A-Z, a-z, 0-9 and . _ : -"); continue }
         if (-not $locator.has -or $locator.value -isnot [string] -or $locator.value -eq "") { [void]$unsure.Add("adapter '" + $n + "' located a session without saying where it is"); continue }
-        [void]$found.Add([pscustomobject]@{ adapter = $adapter; session = $session.value; locator = $locator.value })
+        # ASKED FOR ONE SESSION, ANSWERED ABOUT IT (A PAST SESSION BY ITS ID): another session here is the
+        # adapter not knowing the request, and its answer would put the new session under the old cursor.
+        if ($Session -ne "" -and $located.value -cne $Session) { [void]$unsure.Add("adapter '" + $n + "' was asked for a session by its id and located another one"); continue }
+        [void]$found.Add([pscustomobject]@{ adapter = $adapter; session = $located.value; locator = $locator.value })
     }
     if ($found.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $found.Count + " adapters each locate the Thrall of horde '" + $Fleet + "' (" + (@($found | ForEach-Object { $_.adapter.name }) -join ", ") + "); one is never chosen over another")) }
     if ($unsure.Count -gt 0) { return (New-HordeUnknown -Reason ("the Thrall of horde '" + $Fleet + "' could not be located: " + ($unsure -join "; "))) }
-    if ($found.Count -eq 0) { return (New-HordeAbsent -Note ("no adapter locates a Thrall for horde '" + $Fleet + "'")) }
+    if ($found.Count -eq 0) { return (New-HordeAbsent -Note $(if ($Session -ne "") { "no adapter locates that session of the Thrall of horde '" + $Fleet + "'" } else { "no adapter locates a Thrall for horde '" + $Fleet + "'" })) }
     $f = $found[0]
     $src = [pscustomobject]@{ PSTypeName = "Horde.ConversationSource"; id = [guid]::NewGuid().ToString("N"); vendor = $f.adapter.name; session = $f.session; fleet = $Fleet; locator = $f.locator; adapter = $f.adapter }
     $script:HordeConversationSources[$src.id] = $src

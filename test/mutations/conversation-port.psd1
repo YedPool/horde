@@ -84,6 +84,12 @@
         @{ Name = "second-registration-swaps"
            Find = 'if ($script:HordeConversationAdapters.ContainsKey("$($caps.vendor)")) {'
            Replace = 'if ($false) {' }
+        @{ Name = "asked-session-not-checked"
+           Find = 'if ($Session -ne "" -and $located.value -cne $Session) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "asked-session-not-passed"
+           Find = '$request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; session = $Session; options = $Options }'
+           Replace = '$request = [pscustomobject]@{ fleet = $Fleet; role = "warchief"; session = ""; options = $Options }' }
         @{ Name = "folder-name-not-checked"
            Find = 'if ($findings.Count -eq 0 -and "$($caps.vendor)" -cne $leaf) {'
            Replace = 'if ($false) {' }

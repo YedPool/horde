@@ -12,10 +12,14 @@
 #
 # A STORE is made by New-HordeMemoryConversationStore and handed to the port in Find-HordeConversationSource's
 # -Options as @{ memory = <store> }. Each horde in it has a session id, a generation (bumped by a
-# rotation, which a read from an older cursor reports), and its turns.
+# rotation, which a read from an older cursor reports), and its turns. A clear keeps the session it ends
+# under past, by its id, with its turns, so a locate of that session by id (the port's A PAST SESSION BY
+# ITS ID) finds it and a read from an old cursor reads its tail; Add-HordeMemoryConversationTurn
+# -Session writes into such a past session, as a Thrall that wrote its last line just before the clear.
 #
 # Lies, set per horde with Set-HordeMemoryConversationLie (one at a time; "" means honest):
-#   locate-throw, locate-garbage, locate-unknown, locate-bad-session
+#   locate-throw, locate-garbage, locate-unknown, locate-bad-session,
+#   locate-other-session (asked for a past session by its id, it answers with the session now)
 #   read-throw (with a secret in the message), read-garbage, read-unknown, read-absent
 #   bad-role, empty-text, bad-turn-id, duplicate-turn-id, bad-time, bad-group-id, not-an-object,
 #   no-time, overfill, bad-position, long-position, bad-more, bad-reset, no-turns, secret-anomaly,
@@ -36,15 +40,16 @@ function Get-HordeMemoryConversationHorde {
     # The horde's entry in a store, made on first use with a new session.
     param($Store, [string]$Fleet)
     if (-not $Store.hordes.ContainsKey($Fleet)) {
-        $Store.hordes[$Fleet] = [pscustomobject]@{ session = ("mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12)); generation = 1; turns = (New-Object System.Collections.ArrayList); lie = ""; next = 1 }
+        $Store.hordes[$Fleet] = [pscustomobject]@{ session = ("mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12)); generation = 1; turns = (New-Object System.Collections.ArrayList); lie = ""; next = 1; past = @{} }
     }
     return $Store.hordes[$Fleet]
 }
 
 function Add-HordeMemoryConversationTurn {
     # Add one turn as an adapter would read it: raw, unredacted, with an id and a time of its own.
-    param($Store, [string]$Fleet, [string]$Role, [string]$Text, [string]$GroupId = "")
+    param($Store, [string]$Fleet, [string]$Role, [string]$Text, [string]$GroupId = "", [string]$Session = "")
     $h = Get-HordeMemoryConversationHorde -Store $Store -Fleet $Fleet
+    if ($Session -ne "" -and $Session -cne $h.session) { $h = $h.past[$Session] }
     $t = [ordered]@{ role = $Role; text = $Text; time = [datetime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"); turnId = ($h.session + "-" + $h.next) }
     if ($GroupId -ne "") { $t["groupId"] = $GroupId }
     $h.next++
@@ -55,8 +60,9 @@ function Clear-HordeMemoryConversation {
     # The harness's clear: a new session, with no turns.
     param($Store, [string]$Fleet)
     $h = Get-HordeMemoryConversationHorde -Store $Store -Fleet $Fleet
+    $h.past[$h.session] = [pscustomobject]@{ session = $h.session; generation = $h.generation; turns = $h.turns; lie = ""; next = $h.next }
     $h.session = "mem-" + [guid]::NewGuid().ToString("N").Substring(0, 12)
-    $h.turns.Clear()
+    $h.turns = New-Object System.Collections.ArrayList
     $h.next = 1
 }
 
@@ -85,12 +91,21 @@ $null = Register-HordeConversationAdapter -Folder $script:HordeMemoryConversatio
         "locate-unknown" { return (New-HordeUnknown -Reason "the memory source does not know") }
         "locate-bad-session" { return (New-HordeKnown -Value ([pscustomobject]@{ session = "has spaces in it"; locator = ($store.id + "/" + $Request.fleet) })) }
     }
+    $asked = ""
+    if ($null -ne $Request.PSObject.Properties["session"]) { $asked = "" + $Request.session }
+    if ($asked -ne "" -and $asked -cne $h.session) {
+        if ($h.lie -ceq "locate-other-session") { return (New-HordeKnown -Value ([pscustomobject]@{ session = $h.session; locator = ($store.id + "/" + $Request.fleet) })) }
+        if (-not $h.past.ContainsKey($asked)) { return (New-HordeAbsent -Note "no such session of this horde's Thrall") }
+        return (New-HordeKnown -Value ([pscustomobject]@{ session = $asked; locator = ($store.id + "/" + $Request.fleet + "/" + $asked) }))
+    }
     return (New-HordeKnown -Value ([pscustomobject]@{ session = $h.session; locator = ($store.id + "/" + $Request.fleet) }))
 } -Read {
     param($Source, [string]$Position, [int]$MaxTurns, [long]$MaxBytes)
     $parts = $Source.locator.Split([char]'/')
     $store = $script:HordeMemoryConversationStores[$parts[0]]
     $h = $store.hordes[$parts[1]]
+    # A past session reads its own turns, and lies as its horde is told to.
+    if ($parts.Count -gt 2) { $lie = $h.lie; $h = $h.past[$parts[2]]; $h.lie = $lie }
     switch ($h.lie) {
         "read-throw" { throw ("the memory source failed with password=" + "hunter2longer in its message") }
         "read-garbage" { return 42 }
