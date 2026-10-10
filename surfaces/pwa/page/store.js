@@ -2,9 +2,7 @@
 // the five operations phone-core.js asks for (get, put, delete, list by prefix, update atomically).
 //
 // WHAT GOES IN is phone-core's to say, and it is never anything decrypted: entries of public keys,
-// ids, counters and WRAPPED keys, and the one non-extractable device key a passkey without PRF needs
-// (keywrap.js). IndexedDB keeps a CryptoKey as it is - structured clone - so a non-extractable key
-// stays non-extractable on disk: the browser can use it for this origin, nobody can read its bytes.
+// ids, counters and WRAPPED keys (keywrap.js).
 //
 // UPDATE IS ATOMIC within one readwrite transaction: the function is synchronous and runs between the
 // read and the write, so two tabs never both read the same counter (phone-core's envelope sequence).

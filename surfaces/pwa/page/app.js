@@ -136,8 +136,12 @@ function render(h, rec) {
   const d = docOf(h.id);
   d.box.hidden = false;
   show("doc");
-  $("mode").hidden = h.mode !== "recovery";
-  $("mode").textContent = h.mode === "recovery" ? "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer." : "";
+  const banners = {
+    recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
+    "read-only": "Read only: this passkey gives no PRF, so answers are never sent from this phone for this horde. Answer at the machine, or pair again with a passkey that has PRF."
+  };
+  $("mode").hidden = !banners[h.mode];
+  $("mode").textContent = banners[h.mode] || "";
   if (!d.kinds) { d.kinds = true; bridge.request("kinds").then((k) => d.doc.setKinds(k)); }
   const did = d.doc.setList(rec);
   say("relay", did === "unread" ? (rec && rec.reason ? rec.reason : "") : "");

@@ -21,6 +21,12 @@
         @{ Name = "offer-for-another-origin-paired"
            Find = 'if (o.origins.indexOf(origin) < 0) throw fail('
            Replace = 'if (false) throw fail(' }
+        @{ Name = "no-prf-session-answers"
+           Find = 'if (s.mode === "read-only") throw fail(NO_PRF);'
+           Replace = 'if (false) throw fail(NO_PRF);' }
+        @{ Name = "no-prf-passkey-unlocks"
+           Find = 'if (!got.prfFirst) throw fail(NO_PRF);'
+           Replace = 'if (false) throw fail(NO_PRF);' }
         @{ Name = "question-not-on-screen-answered"
            Find = 'const q = v && v.questions.find((x) => x.question.number === number);'
            Replace = 'const q = v && (v.questions.find((x) => x.question.number === number) || v.questions[0]);' }

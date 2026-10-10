@@ -13,7 +13,8 @@
 //     unlock: keywrap.js turns its output into the key that unwraps the phone identity key. A
 //     provider that evaluates PRF at creation hands the output at once; one that only reports
 //     prf.enabled hands it on the first get. A browser that refuses the extension on create (an older
-//     one) is asked again without it, and the phone falls back to the device wrap (keywrap.js).
+//     one) is asked again without it; a passkey that never gives PRF makes its horde read only
+//     (phone-core.js).
 //   - allowCredentials names the horde's one credential: each horde is its own pairing.
 // Timeouts are two minutes: long enough for a fingerprint that fails twice, short enough that a prompt
 // left open does not hang the app.

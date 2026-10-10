@@ -13,11 +13,11 @@
 //              passkey, so it can never sign an answer nor enroll anything (the machine verifies every
 //              answer against the passkey it pinned at pairing). The app shows a recovery unlock as
 //              read only, but the guarantee is the machine's, not the screen's.
-//   device     ONLY WHEN THE PASSKEY HAS NO PRF (a provider or browser without it): under a random
-//              AES key made NON-EXTRACTABLE in this browser and kept beside the wraps. It never leaves
-//              the browser, but any script of this origin can use it; a passkey assertion is asked
-//              before it is used, and that gate is the app's, not cryptography's. Weaker than prf, and
-//              shown as such; an open question for the founder.
+// THERE IS NO THIRD WRAP. A passkey without PRF gives the phone nothing to wrap under, and a key
+// kept in the browser instead (a non-extractable AES key beside the wraps, the first version of this
+// file) is usable by any script of this origin behind a gate that is the app's, not cryptography's.
+// The founder's decision of 2026-10-10 (open question 3 of this PR): highest security wins - such a
+// horde is READ ONLY on this phone (phone-core.js), read by the recovery code, and never answered.
 // EVERY WRAP'S ADDITIONAL DATA names its kind, the horde and the key's id, so a wrap moved to another
 // horde's record, or relabelled as another kind, does not open.
 //
@@ -87,14 +87,9 @@ export async function wrapWithRecovery(pkcs8, code, horde, agreeKeyId, iteration
   const salt = randomBytes(16);
   return seal("recovery", await recoveryWrapKey(code, salt, iterations), pkcs8, horde, agreeKeyId, { salt: b64u(salt), iterations });
 }
-// The device wrap: the record, and the non-extractable AES key to keep beside it.
-export async function wrapWithDeviceKey(pkcs8, horde, agreeKeyId) {
-  const deviceKey = await subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-  return { record: await seal("device", deviceKey, pkcs8, horde, agreeKeyId, {}), deviceKey };
-}
 
 // Unwrap one record to the phone identity key: { ok, reason, value: { privateKey, publicPoint } }.
-// secret is the PRF output (prf), the typed code (recovery) or the device key (device). The key
+// secret is the PRF output (prf) or the typed code (recovery). The key
 // unwrapped must be the one the record says, checked by agreeing with it. keepBytes also hands back
 // the key's PKCS#8 bytes (value.pkcs8), to wrap again; the caller wipes them.
 export async function unwrap(record, secret, horde, agreeKeyId, publicPoint, { keepBytes = false } = {}) {
@@ -108,8 +103,7 @@ export async function unwrap(record, secret, horde, agreeKeyId, publicPoint, { k
       if (!code) return no("that is not a recovery code: six groups of four letters and digits");
       if (!Number.isSafeInteger(record.iterations) || record.iterations < 100000) return no("the recovery wrap's work factor is not one this app accepts");
       aesKey = await recoveryWrapKey(code, unb64u(record.salt), record.iterations);
-    } else if (record.kind === "device") aesKey = secret;
-    else return no("an unknown kind of key wrap: " + record.kind);
+    } else return no("an unknown kind of key wrap: " + record.kind);
   } catch (x) { return no("the wrapping key could not be made: " + x.message); }
   let pkcs8;
   try { pkcs8 = new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv: unb64u(record.iv), additionalData: aadOf(record.kind, horde, agreeKeyId) }, aesKey, unb64u(record.ct))); }

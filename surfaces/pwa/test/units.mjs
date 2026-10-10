@@ -270,8 +270,7 @@ async function pairedApp(transport, m, opts = {}) {
   const typed = code.toLowerCase().replace(/-/g, " ").replace(/0/g, "o").replace(/1/g, "l");
   check((await K.unwrap(rw, typed, "work", kid, pk.publicPoint)).ok, "the code typed in lower case, with spaces, O for 0 and L for 1, still opens it");
   check((await K.unwrap({ ...rw, iterations: 1000 }, code, "work", kid, pk.publicPoint)).reason.indexOf("work factor") >= 0, "a wrap claiming a feeble work factor is refused before it is tried");
-  const d = await K.wrapWithDeviceKey(pk.pkcs8, "work", kid);
-  check((await K.unwrap(d.record, d.deviceKey, "work", kid, pk.publicPoint)).ok && d.deviceKey.extractable === false, "a device wrap opens with its key, which cannot be exported");
+  check((await K.unwrap({ ...w, kind: "device" }, prfA, "work", kid, pk.publicPoint)).reason.indexOf("unknown kind of key wrap") >= 0, "a record of kind device is not a wrap the app knows");
   const other = await K.newPhoneKey();
   check(!(await K.unwrap(w, prfA, "work", kid, other.publicPoint)).ok, "a record unwrapped against another public key is refused");
   // A wrap whose additional data names this key but whose bytes are ANOTHER key: it opens, the ids
@@ -285,15 +284,25 @@ async function pairedApp(transport, m, opts = {}) {
   check((await K.unwrap(fw, "o123-4567-89ab-cdef-ghjk-mnpl", "work", kid, pk.publicPoint)).ok && (await K.unwrap(fw, "OI23 4567 89AB CDEF GHJK MNPI", "work", kid, pk.publicPoint)).ok, "a code typed with O for 0 and I or L for 1 opens what the code wrapped");
 }
 
-// --- 8. a passkey without PRF ---
+// --- 8. a passkey without PRF: the horde is READ ONLY (founder decision 2026-10-10, Q3) ---
 {
   const t = R.memoryTransport();
   const m = await newMachine("work");
   const a = await pairedApp(t, m, { prf: false });
   const h = (await a.phone.hordes())[0];
-  check(h.prf === false && h.wraps.join(",") === "device,recovery", "with no PRF the key is kept under the browser's device key and the recovery code", h.wraps.join(","));
+  check(a.phoneKey !== null, "CONTROL: a passkey without PRF still announces the phone key, so the horde can be read");
+  check(h.prf === false && h.wraps.join(",") === "recovery" && h.mode === "read-only", "with no PRF the key is kept under the recovery code only - no browser device key - and the horde is read only", JSON.stringify(h));
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "One?")]);
+  check((await a.phone.refresh(a.paired.id)).questions.length === 1, "it can be read");
+  const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 1, wordingVersion: 1, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
+  check(why.indexOf("no PRF") >= 0 && why.indexOf("Read only") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer is refused in plain words, and nothing is sent", why);
   const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
-  check((await b.unlock(a.paired.id)).mode === "passkey", "and a reload unlocks it behind a passkey assertion");
+  const un = await throwsAsync(() => b.unlock(a.paired.id));
+  check(un.indexOf("no PRF") >= 0 && un.indexOf("recovery code") >= 0, "after a reload the passkey cannot unlock it, and says the recovery code reads it", un);
+  await b.recover(a.paired.id, a.paired.recoveryCode);
+  check((await b.refresh(a.paired.id)).questions.length === 1 && (await b.hordes())[0].mode === "recovery", "the recovery code reads it");
+  check(!Object.keys(K).some((k) => /device/i.test(k)), "the browser device-key wrap is gone from the app", Object.keys(K).join(","));
 }
 
 // --- 9. the relay client distrusts the relay ---

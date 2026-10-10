@@ -26,10 +26,19 @@
 // memory for the session and are gone when the page closes or the founder locks (design Q7; the
 // service worker caches the shell only, sw.js).
 //
-// A SESSION is what an unlock opens: the phone key in memory, and HOW it was unlocked - "passkey" or
-// "recovery". A recovery session READS ONLY: answer() refuses it before any passkey is asked. The
-// real guarantee is the machine's (it verifies every answer against the pinned passkey); this keeps
-// the screen honest.
+// A SESSION is what an unlock opens: the phone key in memory, and its MODE - "passkey" (the key is held
+// under the passkey's PRF: it may answer), "recovery" (opened by the printed code) or "read-only" (a
+// passkey that gives no PRF). Only a passkey session answers; answer() refuses the others in words
+// before any passkey is asked. The real guarantee for the recovery code is the machine's (it verifies
+// every answer against the pinned passkey); this keeps the screen honest.
+//
+// A PASSKEY WITHOUT PRF MAKES ITS HORDE READ ONLY (founder decision 2026-10-10: highest security wins).
+// With no PRF there is nothing to wrap the phone key under but the browser itself, so no such wrap is
+// made: the key is kept under the recovery code only, the horde can be read (right after pairing, and
+// by the recovery code after that), and it is never answered from this phone. The announcement still
+// goes out - it is what lets the machine seal snapshots to the phone at all. Should the passkey give a
+// PRF output later (a provider that only evaluates it on get), the PRF wrap is made then and the horde
+// answers from that moment.
 //
 // FRESHNESS. The relay may replay an old snapshot. The phone keeps the highest envelope seq of a
 // snapshot it has shown (lastSnapshotSeq, a number, stored) and never shows an older one: a stale
@@ -38,10 +47,10 @@
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
 import * as P from "../relay/protocol.js";
-import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, wrapWithDeviceKey, unwrap } from "./keywrap.js";
+import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
 const ENTRY = "horde/";
-const DEVICE_KEY = "devicekey/";
+const NO_PRF = "Read only: this passkey gives no PRF, so this phone has nothing to keep this horde's key under, and a horde whose key the passkey does not hold is never answered from this phone. It can still be read: unlock with the recovery code. Answer at the machine, or pair again with a passkey that has PRF.";
 
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
@@ -74,21 +83,16 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
     return { text: await P.signEnvelope(parts, assert), key: P.replayKey(parts.header) };
   }
 
-  // A durable passkey wrap from what a passkey get() just gave, while the session still holds the key's
-  // bytes (right after pairing, or after a recovery unlock). Then the bytes are wiped.
+  // The PRF wrap from what a passkey get() just gave, while the session still holds the key's bytes
+  // (right after pairing, or after a recovery unlock); then the bytes are wiped and the session may
+  // answer. With no PRF output nothing is wrapped and nothing changes: the horde stays read only.
   async function keepPasskeyWrap(e, s, prfFirst) {
-    if (!s || !s.pkcs8) return e;
-    let wraps = { ...e.wraps };
-    if (prfFirst) { wraps.prf = await wrapWithPrf(s.pkcs8, prfFirst, e.horde, e.phoneKeyId); delete wraps.device; await store.delete(DEVICE_KEY + e.id); }
-    else if (!wraps.prf) {
-      const d = await wrapWithDeviceKey(s.pkcs8, e.horde, e.phoneKeyId);
-      wraps.device = d.record;
-      await store.put(DEVICE_KEY + e.id, d.deviceKey);
-    }
-    const next = { ...e, wraps };
+    if (!s || !s.pkcs8 || !prfFirst) return e;
+    const next = { ...e, wraps: { ...e.wraps, prf: await wrapWithPrf(s.pkcs8, prfFirst, e.horde, e.phoneKeyId) } };
     await store.put(ENTRY + e.id, next);
     wipe(s.pkcs8);
     s.pkcs8 = null;
+    s.mode = "passkey";
     return next;
   }
 
@@ -137,7 +141,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
         seq: {}, announced: null, readFrom: 0, lastSnapshotSeq: -1, pairedAt: now()
       };
       await store.put(ENTRY + id, e);
-      const s = { privateKey: pk.privateKey, publicPoint: pk.publicPoint, mode: "passkey", pkcs8: pk.pkcs8, pages: [], cursor: 0, view: null };
+      const s = { privateKey: pk.privateKey, publicPoint: pk.publicPoint, mode: "read-only", pkcs8: pk.pkcs8, pages: [], cursor: 0, view: null };
       sessions.set(id, s);
       if (made.prfFirst) e = await keepPasskeyWrap(e, s, made.prfFirst);
       return { id, fingerprint, response, recoveryCode, prf: e.prfEnabled };
@@ -160,20 +164,16 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       return { key: env.key, agreeKeyId: e.phoneKeyId };
     },
 
-    // Unlock with the passkey: its PRF output unwraps the phone key (or, with no PRF, the device key
-    // does, behind the same assertion).
+    // Unlock with the passkey: its PRF output unwraps the phone key. A passkey that gives none unlocks
+    // nothing (the horde is read only, by the recovery code).
     async unlock(id) {
       let e = await entryOf(id);
       const got = await authenticator.get({ rpId: e.rpId, credentialId: P.unb64u(e.credentialId), challenge: P.randomBytes(32), prfInput: prfInput(e.horde, e.machine) });
+      if (!got.prfFirst) throw fail(NO_PRF);
       const s = sessions.get(id);
-      if (s && s.pkcs8) { e = await keepPasskeyWrap(e, s, got.prfFirst); s.mode = "passkey"; return summary(e); }
-      let opened;
-      if (got.prfFirst && e.wraps.prf) opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
-      else if (!got.prfFirst && e.wraps.device) {
-        const dk = await store.get(DEVICE_KEY + id);
-        if (!dk) throw fail("this browser lost its device key: unlock with the recovery code");
-        opened = await unwrap(e.wraps.device, dk, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
-      } else throw fail(got.prfFirst ? "this horde's key is not wrapped under this passkey's PRF: unlock with the recovery code once" : "this passkey gives no PRF here and no device key is kept: unlock with the recovery code");
+      if (s && s.pkcs8) { e = await keepPasskeyWrap(e, s, got.prfFirst); return summary(e); }
+      if (!e.wraps.prf) throw fail("this horde's key is not wrapped under this passkey's PRF yet: unlock with the recovery code once, then with the passkey");
+      const opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
       if (!opened.ok) throw fail(opened.reason + ": unlock with the recovery code");
       sessions.set(id, { privateKey: opened.value.privateKey, publicPoint: opened.value.publicPoint, mode: "passkey", pkcs8: null, pages: [], cursor: e.readFrom, view: null });
       return summary(e);
@@ -192,7 +192,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
 
     lock(id) { const s = sessions.get(id); if (s) { wipe(s.pkcs8); sessions.delete(id); } },
 
-    async forget(id) { this.lock(id); await store.delete(ENTRY + id); await store.delete(DEVICE_KEY + id); },
+    async forget(id) { this.lock(id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
     // { snapshot, seq, questions, pageKeyByNumber, withheld, counts, anomalies, stale }. waitMs > 0
@@ -247,6 +247,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       const e = await entryOf(id);
       const s = sessions.get(id);
       if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode === "read-only") throw fail(NO_PRF);
       if (s.mode !== "passkey") throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to answer.");
       const v = s.view;
       const q = v && v.questions.find((x) => x.question.number === number);
