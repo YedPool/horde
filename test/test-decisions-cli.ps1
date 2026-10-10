@@ -363,17 +363,26 @@ $secretSaid = Invoke-Decisions @("answer", "1", "-File", (Write-Json "talk-secre
 Check ($secretSaid.code -eq 1 -and $secretSaid.out -like "*Refused:*'text' holds what looks like an access token*" -and -not $secretSaid.out.Contains($talkToken) -and -not $secretSaid.out.Contains("Zx9Zx9") -and (Get-TalkKinds) -ceq "added,said,said,said,read") "words holding a token are refused, exit 1; the token is on neither stream, and nothing is written"
 
 Write-Host ""
-Write-Host "--- notify: one pass with -Once, and with no messenger it says so and records nothing ---" -ForegroundColor Cyan
+Write-Host "--- notify: one pass with -Once, and with nobody to tell it says so and records nothing ---" -ForegroundColor Cyan
 $notifyHome = Join-Path $script:work "notify-home"
-$notifyEnv = @{ HORDE_HOME = $notifyHome }
+# The fleet's registry is a folder of this suite's that does not exist, so no seat is read from the
+# machine's own fleet and no session can be told: notify's answer depends on nothing installed here.
+$notifyEnv = @{ HORDE_HOME = $notifyHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
 New-Item -ItemType Directory -Path (Join-Path $notifyHome "settings") -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $notifyHome "settings\decisions-notify.json"), '{"schemaVersion":1,"settings":{"quietSeconds":0}}', $utf8)
 $nqFile = Write-Json "notify-question.json" '{"title":"Should the doorbell be heard when he answers?","kind":"yes-no","whatItIs":"A test of notify.","group":"the fleet tool","askedBy":"orc-a"}'
 $nq = Invoke-Decisions @("add", "-File", $nqFile) $notifyEnv
 $nWords = "notify must never carry these words: amber kettle"
 $na = Invoke-Decisions @("answer", "1", "-Text", $nWords) $notifyEnv
+# WHY NOBODY CAN BE TOLD HERE, as notify says it. The situation this suite builds is a fleet registry
+# that does not exist; which of two honest reasons notify gives depends only on whether a messenger that
+# can deliver to a session is loaded (notify asks for one before it reads the seat): none loaded, or one
+# loaded and the warchief's seat unreadable because the registry is not there. Either is pending; a
+# reason naming a messenger's answer would mean a post was tried, and none may be.
+$nobodyToTell = '\Apending: (no messenger on this machine can deliver to a session|the warchief''s session cannot be told: [^\r\n]*no registry sessions directory at [^\r\n]*no-fleet)'
 $once = Invoke-Decisions @("notify", "-Once") $notifyEnv
-Check ($nq.code -eq 0 -and $na.code -eq 0 -and $once.code -eq 0 -and $once.out -like "*pending: no messenger on this machine can deliver to a session*1 answer, on question 1, stays untold, and nothing is lost*") ("notify -Once with only the test messenger here: pending, said plainly, exit 0 (" + $once.out.Trim() + ")")
+Check ($nq.code -eq 0 -and $na.code -eq 0 -and $once.code -eq 0 -and $once.out.Trim() -cmatch $nobodyToTell -and $once.out -like "*1 answer, on question 1, stays untold, and nothing is lost*") ("notify -Once with no fleet here: pending, because nobody can be told, said plainly, exit 0 (" + $once.out.Trim() + ")")
+Check ($once.out -notlike "*messenger * answered*" -and $once.out -notlike "*did not take it*") "and no post was tried: the reason names no messenger's answer"
 Check (-not $once.out.Contains("amber kettle")) "CONTROL beside it: the answer stored under question 1 is not printed by notify"
 Check (-not (Test-Path -LiteralPath (Join-Path $notifyHome "decisions\notify-told.json"))) "and nothing is recorded as told"
 $stillUnread = Get-JsonLine (Invoke-Decisions @("inbox", "-Json") $notifyEnv)

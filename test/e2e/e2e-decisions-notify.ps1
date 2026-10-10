@@ -5,9 +5,9 @@
 # the window, and never to be told a notice went out when none did. This scenario is the window's
 # short life with one answer waiting: the founder's answer is written at the real command line; the
 # window is opened where nobody sees it, and its report says notify started beside it and what notify
-# says - here, with only the in-process test messenger in this Horde, that the answer is pending
-# because no messenger on this machine can deliver to a session; the window is closed, the command
-# says what notify last said, and notify is gone; `notify -Once` is then run at the real command line,
+# says - here, with no fleet registry, that the answer is pending because nobody can be told (no
+# messenger that can deliver to a session, or no warchief's seat to deliver to); the window is closed,
+# the command says what notify last said, and notify is gone; `notify -Once` is then run at the real command line,
 # finds no other notify holding the home, and says the same plain thing. Nothing is recorded as told,
 # and the answer is still unread. Every step is the shipped horde.ps1 run as its own process.
 #
@@ -53,10 +53,16 @@ $words = "copper lantern: yes, ring it"
 $said = Invoke-Decisions @("answer", "1", "-Text", $words)
 Check ($added.code -eq 0 -and $said.code -eq 0) "question 1 is asked and the founder's answer under it is written, at the command line"
 
+# WHY NOBODY CAN BE TOLD HERE, as notify says it. The situation this suite builds is a fleet registry
+# that does not exist; which of two honest reasons notify gives depends only on whether a messenger that
+# can deliver to a session is loaded (notify asks for one before it reads the seat): none loaded, or one
+# loaded and the warchief's seat unreadable because the registry is not there. Either is pending; a
+# reason naming a messenger's answer would mean a post was tried, and none may be.
+$nobodyToTell = '\Apending: (no messenger on this machine can deliver to a session|the warchief''s session cannot be told: [^\r\n]*no registry sessions directory at [^\r\n]*no-fleet)'
 $open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report) -Env $childEnv
 $up = Wait-HordeProbeReport -Path $report -Process $open.process -Seconds 120 -Until { param($r) $null -ne $r.notify -and "$($r.notify.said)" -like "pending:*" -and $r.handle -ne 0 }
 Check ($null -ne $up -and $up.notify.started -eq $true -and $up.notify.running -eq $true) ("the window's report says notify started beside it and is running (" + $(if ($null -ne $up) { ConvertTo-Json -InputObject $up.notify -Compress } else { "no report" }) + ")")
-Check ($null -ne $up -and "$($up.notify.said)" -like "pending: no messenger on this machine can deliver to a session*1 answer, on question 1, stays untold*") "and what it says: pending, because no messenger here can deliver to a session - said plainly"
+Check ($null -ne $up -and "$($up.notify.said)" -cmatch $nobodyToTell -and "$($up.notify.said)" -like "*1 answer, on question 1, stays untold*") ("and what it says: pending, because nobody here can be told - said plainly (" + $(if ($null -ne $up) { "$($up.notify.said)" } else { "no report" }) + ")")
 Check ($null -ne $up -and -not "$($up.notify.said)".Contains("copper lantern")) "CONTROL beside it: the founder's words, which are in the store, are not in what notify says"
 
 Write-Host ""
@@ -71,7 +77,8 @@ Check ($null -ne $last -and $last.notify.running -eq $false) "its last report sa
 Write-Host ""
 Write-Host "=== notify -Once: the home is free, nothing is lost, nothing was claimed ===" -ForegroundColor Cyan
 $once = Invoke-Decisions @("notify", "-Once")
-Check ($once.code -eq 0 -and $once.out -notlike "*not run*" -and $once.out -like "*pending: no messenger on this machine can deliver to a session*") ("no notify holds the home any more, and the answer is still pending (" + $once.out.Trim() + ")")
+Check ($once.code -eq 0 -and $once.out -notlike "*not run*" -and $once.out.Trim() -cmatch $nobodyToTell) ("no notify holds the home any more, and the answer is still pending, for the same reason (" + $once.out.Trim() + ")")
+Check ($once.out -notlike "*messenger * answered*" -and $once.out -notlike "*did not take it*") "and no post was tried: the reason names no messenger's answer"
 Check (-not (Test-Path -LiteralPath (Join-Path $hordeHome "decisions\notify-told.json"))) "nothing was recorded as told"
 $inbox = Invoke-Decisions @("inbox", "-Peek")
 Check ($inbox.code -eq 0 -and $inbox.out.Contains($words)) "and the answer still waits unread, in the founder's words"
