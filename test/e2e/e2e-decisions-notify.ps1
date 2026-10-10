@@ -21,6 +21,7 @@ $root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 . (Join-Path $root "test\lib\WindowProbe.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-notify-e2e-" + [guid]::NewGuid().ToString("N"))
@@ -40,6 +41,12 @@ $realBefore = Get-RealStoreListing
 function Invoke-Decisions { param([string[]]$HordeArgs) return (Invoke-HordeCliProcess -Root $root -HordeArgs (@("decisions") + $HordeArgs) -Env $cliEnv) }
 
 try {
+
+# THE MESSENGERS ARE PINNED in the home every horde child here uses: the window loads every messenger,
+# and one may find a real program to post through by itself (test/lib/MessengerPins.ps1). The fleet's
+# registry is a folder of this scenario's that does not exist (WEZFLEET_ROOT), so no seat is read.
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $hordeHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $hordeHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
 
 Write-Host ""
 Write-Host "=== an answer waits; the window opens, and notify stands beside it ===" -ForegroundColor Cyan

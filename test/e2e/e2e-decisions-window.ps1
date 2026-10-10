@@ -39,6 +39,7 @@ $root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 . (Join-Path $root "test\lib\WindowProbe.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-window-e2e-" + [guid]::NewGuid().ToString("N"))
@@ -70,6 +71,12 @@ function Get-Foreground { return [HordeProbe.Native]::GetForegroundWindow().ToIn
 
 $open = $null; $far = $null
 try {
+
+# THE MESSENGERS ARE PINNED in the home every horde child here uses: the window loads every messenger,
+# and one may find a real program to post through by itself (test/lib/MessengerPins.ps1). The fleet's
+# registry is a folder of this scenario's that does not exist (WEZFLEET_ROOT), so no seat is read.
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $hordeHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $hordeHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
 
 Write-Host ""
 Write-Host "=== a list of 22 questions, two groups named like built-in members, and three Orcs' status files ===" -ForegroundColor Cyan
@@ -308,7 +315,9 @@ Write-Host "=== the state left behind ===" -ForegroundColor Cyan
 $names = @(Get-ChildItem -LiteralPath $store -File | Sort-Object Name | ForEach-Object { $_.Name })
 Check ($names.Count -eq 23 -and @($records | Where-Object { $names -cnotcontains $_.Name }).Count -eq 0) "the store holds 23 records, the 22 it began with among them: the window wrote none"
 $others = @(Get-ChildItem -LiteralPath $hordeHome -Recurse -File | ForEach-Object { $_.FullName.Substring($hordeHome.Length + 1) } | Where-Object { $_ -notlike "store\decisions\*" -and $_ -notlike "cache\decisions-window\*" })
-Check (($others -join ",") -ceq "settings\fleet.json") ("under the home, besides the store and the engine's own profile, only the setting this scenario wrote (" + ($others -join ", ") + ")")
+# The messengers' pins are files this scenario wrote too (the PIN check above).
+$wrote = @(@("settings\fleet.json") + @($pins | ForEach-Object { "settings\messenger-" + $_ + ".json" }) | Sort-Object)
+Check ((@($others | Sort-Object) -join ",") -ceq ($wrote -join ",")) ("under the home, besides the store and the engine's own profile, only the settings this scenario wrote (" + ($others -join ", ") + ")")
 Check (Test-Path -LiteralPath (Join-Path $hordeHome "cache\decisions-window") -PathType Container) "the engine's profile is under the home's cache, where the command's header says it is"
 $statusAfter = @(Get-ChildItem -LiteralPath $orcs -Recurse -File | ForEach-Object { $_.Name }) -join ";"
 Check ($statusAfter -ceq "status.txt;status.txt;status.txt") "the Orcs' folders hold their three status files and nothing else: the fleet line only read them"

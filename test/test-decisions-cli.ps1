@@ -24,6 +24,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-decisions-cli-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $script:work | Out-Null
@@ -369,6 +370,10 @@ $notifyHome = Join-Path $script:work "notify-home"
 # machine's own fleet and no session can be told: notify's answer depends on nothing installed here.
 $notifyEnv = @{ HORDE_HOME = $notifyHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
 New-Item -ItemType Directory -Path (Join-Path $notifyHome "settings") -Force | Out-Null
+# Notify loads every messenger, and one may find a real program to post through by itself: pinned here
+# before any horde child starts in this home (test/lib/MessengerPins.ps1).
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $notifyHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $notifyHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
 [System.IO.File]::WriteAllText((Join-Path $notifyHome "settings\decisions-notify.json"), '{"schemaVersion":1,"settings":{"quietSeconds":0}}', $utf8)
 $nqFile = Write-Json "notify-question.json" '{"title":"Should the doorbell be heard when he answers?","kind":"yes-no","whatItIs":"A test of notify.","group":"the fleet tool","askedBy":"orc-a"}'
 $nq = Invoke-Decisions @("add", "-File", $nqFile) $notifyEnv

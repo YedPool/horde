@@ -28,6 +28,13 @@ New-Item -ItemType Directory -Path $work | Out-Null
 $hordeHome = Join-Path $work "home"
 $keepHome = $env:HORDE_HOME
 $env:HORDE_HOME = $hordeHome
+# PINNED, for what this process starts that this suite cannot reach into: Start-HordeDecisionNotifyBeside
+# loads Notify.ps1 afresh in a runspace of its own, with every messenger and the real seat reader. The
+# messengers' pins hold in this home, and the fleet's registry is a folder that does not exist.
+. (Join-Path $root "test\lib\MessengerPins.ps1")
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $hordeHome)
+$keepFleet = $env:WEZFLEET_ROOT
+$env:WEZFLEET_ROOT = Join-Path $work "no-fleet"
 . (Join-Path $root "decisions\Notify.ps1")
 $fx = Join-Path $here "fixtures\decisions-notify"
 # NO REAL MESSENGER IS EVER ASKED HERE. Notify loads every messenger folder (a real one included, which
@@ -36,6 +43,7 @@ $fx = Join-Path $here "fixtures\decisions-notify"
 $loadedByNotify = @(Get-HordeMessengerNames)
 foreach ($n in $loadedByNotify) { if ($n -cne "memory") { [void]$script:HordeMessengers.Remove($n) } }
 Check ($loadedByNotify.Count -ge 2 -and $loadedByNotify -ccontains "memory") ("CONTROL: notify loads every messenger folder (" + ($loadedByNotify -join ", ") + ")")
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $hordeHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this suite's home, for the runspace beside a window (" + ($pins -join ", ") + ")")
 Check ((@(Get-HordeMessengerNames) -join ",") -ceq "memory") ("only the test messenger is left before any notice is tried (" + (@(Get-HordeMessengerNames) -join ",") + ")")
 
 # THE CLOCK this suite moves, and the seat it hands in.
@@ -348,6 +356,7 @@ Check ($after.Count -eq 1 -and $after[0] -notlike "not run*") "and once it has, 
 }
 finally {
     $env:HORDE_HOME = $keepHome
+    $env:WEZFLEET_ROOT = $keepFleet
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 Complete-HordeSuite -Success "notify rings once per set, through the port, never with his words, and never claims what it did not send"
