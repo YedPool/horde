@@ -45,20 +45,26 @@ function New-HordeTestPhoneAssertion {
     return [pscustomobject]@{ authenticatorData = $ad; clientDataJson = $cdj; signature = (ConvertTo-HordeTestPhoneDer -Sig $sig) }
 }
 
+function New-HordeTestPhonePairingResponse {
+    # The phone's response to -Offer (New-HordeRelayPairingOffer's value): a registration of its passkey
+    # with attestation "none", user verified. -Code puts another code in it.
+    param($Offer, $Phone, [string]$Code = "", [string]$Label = "Founder phone")
+    $x = New-Object byte[] 32; $y = New-Object byte[] 32
+    [System.Array]::Copy($Phone.public, 1, $x, 0, 32); [System.Array]::Copy($Phone.public, 33, $y, 0, 32)
+    $cose = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a5010203262001215820"), $x, (ConvertFrom-HordeRelayHex -Text "225820"), $y)
+    $ad = Join-HordeRelayBytes -Parts @((Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $script:HordeTestPhoneRpId)), [byte[]]@(0x45, 0, 0, 0, 0), (New-Object byte[] 16), [byte[]]@(0, 32), $Phone.credentialId, $cose)
+    $att = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a363666d74646e6f6e656761747453746d74a0686175746844617461"), [byte[]]@(0x58, $ad.Length), $ad)
+    $cdj = $script:HordeTestPhoneUtf8.GetBytes('{"type":"webauthn.create","challenge":"' + $Offer.challenge + '","origin":"' + $script:HordeTestPhoneOrigin + '","crossOrigin":false}')
+    return (New-HordeRelayPairingResponseText -Offer $Offer.offer -Code $(if ($Code -cne "") { $Code } else { $Offer.code }) -RawId $Phone.credentialId -ClientDataJson $cdj -AttestationObject $att -Label $Label -Prf $false)
+}
+
 function Add-HordeTestPhonePairing {
     # Pair the phone with the machine of -HordeHome and confirm it at the "machine" with the fingerprint:
     # its passkey becomes a TRUSTED device. -NoConfirm leaves it pending. The device's id, or a throw.
     param([string]$HordeHome, $Phone, [switch]$NoConfirm)
     $o = New-HordeRelayPairingOffer -HordeHome $HordeHome -RpId $script:HordeTestPhoneRpId -Origins @($script:HordeTestPhoneOrigin)
     if ($o.state -cne "known") { throw ("no offer: " + $o.reason) }
-    $offer = $o.value
-    $x = New-Object byte[] 32; $y = New-Object byte[] 32
-    [System.Array]::Copy($Phone.public, 1, $x, 0, 32); [System.Array]::Copy($Phone.public, 33, $y, 0, 32)
-    $cose = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a5010203262001215820"), $x, (ConvertFrom-HordeRelayHex -Text "225820"), $y)
-    $ad = Join-HordeRelayBytes -Parts @((Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $script:HordeTestPhoneRpId)), [byte[]]@(0x45, 0, 0, 0, 0), (New-Object byte[] 16), [byte[]]@(0, 32), $Phone.credentialId, $cose)
-    $att = Join-HordeRelayBytes -Parts @((ConvertFrom-HordeRelayHex -Text "a363666d74646e6f6e656761747453746d74a0686175746844617461"), [byte[]]@(0x58, $ad.Length), $ad)
-    $cdj = $script:HordeTestPhoneUtf8.GetBytes('{"type":"webauthn.create","challenge":"' + $offer.challenge + '","origin":"' + $script:HordeTestPhoneOrigin + '","crossOrigin":false}')
-    $resp = New-HordeRelayPairingResponseText -Offer $offer.offer -Code $offer.code -RawId $Phone.credentialId -ClientDataJson $cdj -AttestationObject $att -Label "Founder phone" -Prf $false
+    $resp = New-HordeTestPhonePairingResponse -Offer $o.value -Phone $Phone
     $c = Complete-HordeRelayPairing -HordeHome $HordeHome -Response $resp
     if (-not $c.ok) { throw ("pairing refused: " + $c.reason) }
     $Phone.deviceId = $c.value.device.id

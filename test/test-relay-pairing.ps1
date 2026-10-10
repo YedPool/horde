@@ -285,7 +285,7 @@ try {
     $thief = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkThief) -Now $t0.AddSeconds(10)
     Check ($thief.ok -and $thief.value.device.state -ceq "pending") "a photo of the offer lets a thief register first - as a pending device"
     $mine = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oT -Passkey $pkFounder) -Now $t0.AddSeconds(20)
-    Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device and its fingerprint (" + $mine.reason + ")")
+    Check ((-not $mine.ok) -and $mine.reason.Contains("already used") -and $mine.reason.Contains($thief.value.device.id) -and -not $mine.reason.Contains($thief.value.fingerprint) -and $mine.reason.Contains("pending")) ("the founder's own attempt is refused, naming the earlier pending device - by id and label, never by its fingerprint, which nothing at the machine shows (" + $mine.reason + ")")
     Check ($null -ne $mine.value -and $mine.value.earlier.id -ceq $thief.value.device.id) "and hands it back, so it can be rejected"
     $founderFp = Get-HordeRelayPairingFingerprint -Challenge (B $oT.challenge) -Public $pkFounder.public -CredentialId $pkFounder.credentialId -RpId $rp
     Check ($founderFp -cne $thief.value.fingerprint) "the founder's phone shows another fingerprint than the thief's device"
@@ -348,6 +348,59 @@ try {
     [void](Confirm-HordeRelayDevice -HordeHome $ha -Id $after.value.device.id -Fingerprint $after.value.fingerprint -Now $t0.AddSeconds(32))
     Check ((Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o4 -Reg $valid[3]) -Now $t0.AddSeconds(301)).reason.Contains("expired")) "a response after the offer expired is refused"
     Check ((Complete-HordeRelayPairing -HordeHome $ha -Response (New-Response -Offer $o4 -Reg $valid[3]) -Now $t0.AddSeconds(300)).ok) "CONTROL: at its last millisecond it is not expired"
+
+    Write-Host ""
+    Write-Host "--- the response through the relay: sealed to this machine, opened only for the offer it waits on ---" -ForegroundColor Cyan
+    $hs = New-TestHome
+    [void](New-HordeRelayMachineIdentity -HordeHome $hs -Provider "software")
+    $oS = New-Offer -HordeHome $hs
+    $roS = Read-HordeRelayPairingOffer -Text $oS.text
+    Check ($roS.ok -and $roS.value.pairMailbox -ceq ("work/pair-" + $oS.offer) -and $oS.pairMailbox -ceq $roS.value.pairMailbox) ("the offer names a pairing mailbox of its own: the horde and pair-<offer id> (" + $(if ($roS.ok) { $roS.value.pairMailbox } else { $roS.reason }) + ")")
+    Check ($oS.text.Length -lt 760) ("with it the offer still fits one QR code (" + $oS.text.Length + " characters)")
+    $pkS = New-TestPasskey
+    $respS = New-PasskeyResponse -Offer $oS -Passkey $pkS
+    $sealS = New-HordeRelayPairingSealedText -OfferText $oS.text -Response $respS
+    Check (-not $sealS.Contains($oS.code) -and -not $sealS.Contains((ConvertTo-HordeRelayBase64Url -Bytes $pkS.credentialId))) "the sealed text shows neither the code nor the credential to the relay"
+    $opS = Open-HordeRelayPairingSealed -HordeHome $hs -Offer $oS.offer -Text $sealS -Now $t0.AddSeconds(20)
+    Check ($opS.ok -and $opS.value -ceq $respS) ("this machine opens it, for the offer it waits on, into the phone's response exactly (" + $opS.reason + ")")
+    $oS2 = New-Offer -HordeHome $hs
+    $respS2 = New-PasskeyResponse -Offer $oS2 -Passkey (New-TestPasskey)
+    $sealS2 = New-HordeRelayPairingSealedText -OfferText $oS2.text -Response $respS2
+    $oA = New-Offer -HordeHome $ha
+    $Aagree = (Get-HordeRelayMachineIdentity -HordeHome $ha).value.agree
+    $ctAt = $sealS.IndexOf('"ct":"') + 20
+    $flipped = $sealS.Substring(0, $ctAt) + $(if ($sealS[$ctAt] -ceq [char]'A') { "B" } else { "A" }) + $sealS.Substring($ctAt + 1)
+    $openRefusals = @(
+        @{ what = "a response sealed for another open offer of this machine"; offer = $oS.offer; t = $sealS2; want = "not the offer" },
+        @{ what = "that response relabelled with this offer's id (the offer is bound in what was sealed)"; offer = $oS.offer; t = $sealS2.Replace($oS2.offer, $oS.offer); want = "does not open" },
+        @{ what = "a response for an offer this machine never made"; offer = $oA.offer; t = (New-HordeRelayPairingSealedText -OfferText $oA.text -Response $respS); want = "no pairing offer" },
+        @{ what = "a response sealed to another machine's agreement key"; offer = $oS.offer; t = (New-HordeRelayPairingSealedText -OfferText $oS.text -Response $respS -AgreePublic $Aagree.public); want = "agreement key" },
+        @{ what = "a response sealed to another key under this machine's key id"; offer = $oS.offer; t = (New-HordeRelayPairingSealedText -OfferText $oS.text -Response $respS -AgreePublic $Aagree.public).Replace($Aagree.keyId, $roS.value.agreeKeyId); want = "does not open" },
+        @{ what = "a changed ciphertext"; offer = $oS.offer; t = $flipped; want = "does not open" },
+        @{ what = "a sealed text with a space in it"; offer = $oS.offer; t = $sealS.Replace(',"ct"', ', "ct"'); want = "canonical" },
+        @{ what = "a text over the size a pairing response may be, before it is read at all"; offer = $oS.offer; t = ('{"v":1' + (" " * 9000) + '}'); want = "over the" },
+        @{ what = "a sealed response that holds another offer's response"; offer = $oS.offer; t = (New-HordeRelayPairingSealedText -OfferText $oS.text -Response $respS2); want = "another offer" },
+        @{ what = "a sealed text that holds no pairing response"; offer = $oS.offer; t = (New-HordeRelayPairingSealedText -OfferText $oS.text -Response "hello"); want = "canonical" },
+        @{ what = "a sealed response too long to be a phone's"; offer = $oS.offer; t = (New-HordeRelayPairingSealedText -OfferText $oS.text -Response ("x" * 6001)); want = "over the" }
+    )
+    foreach ($x in $openRefusals) {
+        $ans = Open-HordeRelayPairingSealed -HordeHome $hs -Offer $x.offer -Text $x.t -Now $t0.AddSeconds(20)
+        Check ((-not $ans.ok) -and $null -eq $ans.value -and $ans.reason.Contains($x.want)) ($x.what + " is refused (" + $ans.reason + ")")
+    }
+    Check ((Open-HordeRelayPairingSealed -HordeHome $hs -Offer $oS.offer -Text $sealS -Now $t0.AddSeconds(301)).reason.Contains("expired")) "a sealed response for an expired offer is not opened"
+    $bigResp = $respS.Replace('"label":"Founder phone"', ('"label":"' + ("x" * 64) + '"'))
+    $tooBig = Complete-HordeRelayPairing -HordeHome $hs -Response ($bigResp + (" " * 6000)) -Now $t0.AddSeconds(21)
+    Check ((-not $tooBig.ok) -and $tooBig.reason.Contains("over the") -and -not (Test-Path -LiteralPath (Join-Path $hs ("relay\pairing\used\" + $oS.offer + ".json")))) ("a pasted response over the size is refused before it is read, and the offer is not used (" + $tooBig.reason + ")")
+    $doneS = Complete-HordeRelayPairing -HordeHome $hs -Response $opS.value -Label "Pixel at the desk" -Now $t0.AddSeconds(22)
+    Check ($doneS.ok -and $doneS.value.device.label -ceq "Pixel at the desk" -and $doneS.value.device.state -ceq "pending") ("the opened response enrolls the phone, pending, under the label given at the machine (" + $doneS.reason + ")")
+    Check ((Complete-HordeRelayPairing -HordeHome $hs -Response $respS2 -Label 'say "hi"' -Now $t0.AddSeconds(23)).reason.Contains("label") -and -not (Test-Path -LiteralPath (Join-Path $hs ("relay\pairing\used\" + $oS2.offer + ".json")))) "a label the trust store cannot keep is refused before the offer is used"
+    # A plaintext with a line feed in it, sealed by hand: what opens must be printable ASCII.
+    $sAgree = ConvertFrom-HordeRelayBase64Url -Text $roS.value.agreePublic
+    $box = Protect-HordeRelayHpke -RecipientPublic $sAgree -Info (Get-HordeRelaySealedDomain -Part "info") -Aad (Get-HordeRelaySealedDomain -Part "aad" -Horde "work" -Offer $oS2.offer -AgreeKeyId $roS.value.agreeKeyId) -Plaintext (Get-HordeRelayAsciiBytes -Text ($respS2 + "`n"))
+    $lf = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelaySealedSpec) -Values @{ v = 1; kind = "horde-relay-pairing-sealed"; offer = $oS2.offer; agreeKeyId = $roS.value.agreeKeyId; enc = (ConvertTo-HordeRelayBase64Url -Bytes $box.enc); ct = (ConvertTo-HordeRelayBase64Url -Bytes $box.sealed) }
+    Check ((Open-HordeRelayPairingSealed -HordeHome $hs -Offer $oS2.offer -Text $lf -Now $t0.AddSeconds(23)).reason.Contains("printable ASCII")) "a sealed response whose plaintext is not printable ASCII is refused"
+    $againS = Open-HordeRelayPairingSealed -HordeHome $hs -Offer $oS.offer -Text $sealS -Now $t0.AddSeconds(24)
+    Check ((-not $againS.ok) -and $againS.reason.Contains("already used") -and $againS.reason.Contains($doneS.value.device.id)) ("once the offer is used, the same sealed response is not opened again, and the refusal names the device it enrolled (" + $againS.reason + ")")
 
     Write-Host ""
     Write-Host "--- revocation: written beside the entry, honoured by every find ---" -ForegroundColor Cyan

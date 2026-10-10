@@ -22,7 +22,9 @@
 //                         decisions channel takes answers, not acts: an open question in the PR)
 //   hordes                every horde on this phone, as phone-core's summaries
 //   pick {id}             the horde the list shows
-//   pair {offer, label}   answer a pairing offer: { id, fingerprint, response, recoveryCode, prf }
+//   pair {offer, label}   answer a pairing offer, and send the response through the relay:
+//                         { id, fingerprint, response, recoveryCode, prf, pairMailbox, relayed }
+//   sendPairing {id}      send that response through the relay again: { relayed }
 //   announce {id}  unlock {id}  recover {id, code}  lock {id}  forget {id}  refresh {}
 // EVENTS: list-changed (the list record), hordes-changed (the summaries), notice (a sentence).
 //
@@ -32,7 +34,7 @@
 // document keeps the words as the standing answer until a snapshot that holds them arrives (list.js,
 // standingOf). The same words sent again carry the same id, which is the answerId: the machine stores
 // them once (channels/decisions, Get-HordeDecisionsChannelAnswerId).
-const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "announce", "unlock", "recover", "lock", "forget", "refresh"];
+const REQUESTS = ["setup", "kinds", "list", "say", "act", "hordes", "pick", "pair", "sendPairing", "announce", "unlock", "recover", "lock", "forget", "refresh"];
 // A local act stays standing: no snapshot carries a later act of his for it (list.js, lastActOf).
 const LOCAL_ACT_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
@@ -109,6 +111,7 @@ export function createBridge(phone, options = {}) {
     hordes: async () => hordes(),
     pick: async (a) => { picked = String(a.id || ""); view = null; viewError = ""; const rec = await refresh(); poll(); return rec; },
     pair: async (a) => { const r = await phone.pair({ offerText: String(a.offer || ""), label: String(a.label || "") }); await hordes(); return r; },
+    sendPairing: async (a) => ({ relayed: await phone.sendPairing(String(a.id || "")) }),
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },
     unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },

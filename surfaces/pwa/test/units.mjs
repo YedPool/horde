@@ -42,9 +42,10 @@ async function newMachine(horde) {
   return m;
 }
 // relay/Pairing.ps1's offer, its members in their order.
-function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId } = {}) {
-  return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + P.hex(P.randomBytes(16)) + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
-    '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox + '","rpId":"' + rpId +
+function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null } = {}) {
+  return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + id + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
+    '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
+    '","pairMailbox":"' + (pairMailbox === null ? m.horde + "/pair-" + id : pairMailbox) + '","rpId":"' + rpId +
     '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + "}";
 }
 // A machine's envelope: sealed to each phone key, signed ES256 (P1363), relay/Envelope.ps1's canonical text.
@@ -143,6 +144,44 @@ async function pairedApp(transport, m, opts = {}) {
   const app = newApp(R.memoryTransport());
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
+}
+
+// --- 3b. the pairing response goes to the machine through the relay, sealed (relay/Pairing.ps1) ---
+{
+  const m = await newMachine("work");
+  check(!(await P.readOffer(offerText(m, { pairMailbox: "work/" + m.keyId }))).ok, "an offer whose pairing mailbox is not its horde and offer is refused (it could send the response to the machine's own mailbox)");
+  check(!(await P.readOffer(offerText(m, { pairMailbox: "other/pair-" + "0".repeat(32) }))).ok, "and one naming another horde's");
+  const t = R.memoryTransport();
+  const app = newApp(t);
+  const text = offerText(m);
+  const o = (await P.readOffer(text)).value;
+  const paired = await app.phone.pair({ offerText: text, label: "Founder phone" });
+  check(paired.relayed === true && paired.pairMailbox === "work/pair-" + o.offer, "pairing sends the response through the relay, to the offer's own mailbox", JSON.stringify({ relayed: paired.relayed, box: paired.pairMailbox }));
+  const items = (await t.get(o.pairMailbox, 0, 256)).value.items;
+  check(items.length === 1 && items[0].key === "pairing/" + o.offer, "one item, under the offer's key", JSON.stringify(items.map((i) => i.key)));
+  const sealed = items.length ? items[0].text : "";
+  check(sealed.indexOf(o.code) < 0 && sealed.indexOf("Founder phone") < 0 && sealed.indexOf("webauthn") < 0, "the relay sees neither the code, the label nor the registration");
+  const sv = JSON.parse(sealed || "{}");
+  check(Object.keys(sv).join(",") === "v,kind,offer,agreeKeyId,enc,ct" && sv.kind === "horde-relay-pairing-sealed" && sv.offer === o.offer && sv.agreeKeyId === m.agreeKeyId, "the sealed text has relay/Pairing.ps1's members, in its order, for this offer and the machine's agreement key", sealed.slice(0, 120));
+  const aad = P.utf8("horde-relay/pairing/v1 response aad\n" + m.horde + "\n" + o.offer + "\n" + m.agreeKeyId);
+  let opened = "";
+  try { opened = P.fromUtf8(await P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(sv.enc), P.utf8("horde-relay/pairing/v1 response-key"), aad, P.unb64u(sv.ct))); } catch (x) { opened = "did not open: " + x.message; }
+  check(opened === paired.response, "the machine's agreement key opens it into the very response Copy shows", opened.slice(0, 80));
+  const wrongAad = P.utf8("horde-relay/pairing/v1 response aad\n" + m.horde + "\n" + "0".repeat(32) + "\n" + m.agreeKeyId);
+  check((await throwsAsync(() => P.hpkeOpen(m.agree.privateKey, m.agreePublic, P.unb64u(sv.enc), P.utf8("horde-relay/pairing/v1 response-key"), wrongAad, P.unb64u(sv.ct)))) !== "", "it is bound to its offer: under another offer's id it does not open");
+  check((await app.phone.sendPairing(paired.id)) === true && (await t.get(o.pairMailbox, 0, 256)).value.items.length === 1, "sending again is taken, and stored once");
+  check((await throwsAsync(() => P.sealPairingResponse(o, "x".repeat(6001)))).indexOf("6000") >= 0, "a response over the 6000 characters the machine reads is refused before sealing");
+  // A relay that refuses the put: pairing still completes on the phone, says the relay did not take it,
+  // and keeps the words the relay said off the screen.
+  const down = { ...R.memoryTransport(), put: async () => ({ state: "unknown", value: null, reason: "PHISH: re-pair at evil.example" }) };
+  const app2 = newApp(down);
+  const p2 = await app2.phone.pair({ offerText: offerText(m), label: "Founder phone" });
+  check(p2.relayed === false && typeof p2.response === "string" && p2.response.indexOf("horde-relay-pairing-response") >= 0, "when the relay refuses, the pairing still stands and the plain response is there for Copy and Share");
+  check(JSON.stringify(p2).indexOf("PHISH") < 0, "and nothing the relay said is in what the screen gets");
+  const bridge = createBridge(app.phone, { loadKinds: async () => [] });
+  check((await bridge.request("sendPairing", { id: paired.id })).relayed === true, "the bridge's sendPairing sends it again");
+  await app.phone.announce(paired.id);
+  check((await throwsAsync(() => app.phone.sendPairing(paired.id))).indexOf("no pairing response") >= 0, "once announced, nothing is kept to send again");
 }
 
 // --- 4. the phone opens only what its machine signed, sealed to it ---
@@ -377,8 +416,9 @@ async function pairedApp(transport, m, opts = {}) {
   const m = await newMachine("work");
   const good = offerText(m);
   const badCode = good.replace(/"code":"[^"]*"/, '"code":"x\\",\\"prf\\":true,\\"label\\":\\"Evil"');
-  const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}');
-  const shortOffer = good.replace(/"offer":"[^"]*"/, '"offer":"abc"');
+  // The pairing mailbox is made to follow each bad id, so the id's own check is what refuses it.
+  const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}').replace(/"pairMailbox":"[^"]*"/, '"pairMailbox":"work/pair-[object Object]"');
+  const shortOffer = good.replace(/"offer":"[^"]*"/, '"offer":"abc"').replace(/"pairMailbox":"[^"]*"/, '"pairMailbox":"work/pair-abc"');
   check(!(await P.readOffer(badCode)).ok && !(await P.readOffer(badOffer)).ok && !(await P.readOffer(shortOffer)).ok, "an offer whose code is not base64url, or whose id is not 32 lower-case hex, is refused");
   const text = P.pairingResponseText({ offer: "0".repeat(32), code: "AAAA", rawId: new Uint8Array([1]), clientDataJSON: new Uint8Array([2]), attestationObject: new Uint8Array([3]), label: "Founder phone", prf: true });
   check(text === '{"v":1,"kind":"horde-relay-pairing-response","offer":"' + "0".repeat(32) + '","code":"AAAA","rawId":"AQ","clientDataJSON":"Ag","attestationObject":"Aw","label":"Founder phone","prf":true}', "the response keeps the one spelling the machine reads", text);

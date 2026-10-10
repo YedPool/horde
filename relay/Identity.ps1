@@ -64,7 +64,13 @@ $script:HordeRelaySettings = New-HordeModuleSettings -Module "relay" -Settings @
        what = "How many days a rotated-out agreement key is kept, to open what was sealed to it before the rotation; it never seals or signs. 0 deletes it at once." },
     # Read by relay/Pairing.ps1, declared here with the module's other settings: one table per module.
     @{ name = "pendingConfirmMinutes"; kind = "whole"; default = 10; min = 1; max = 30
-       what = "How many minutes a newly registered device waits, pending, for its fingerprint to be confirmed at this machine, counted from its registration." }
+       what = "How many minutes a newly registered device waits, pending, for its fingerprint to be confirmed at this machine, counted from its registration." },
+    # Read by cli/RelayPair.ps1 (`horde relay pair`); checked as an offer's rpId and origins are
+    # (relay/Pairing.ps1, Test-HordeRelayOriginForRpId) when the offer is made.
+    @{ name = "pairRpId"; kind = "text"; default = ""; min = 0; max = 253
+       what = "The relying party id the phone app makes its passkeys for: the host it is served from, or a parent domain of it. Empty means horde relay pair needs -RpId." },
+    @{ name = "pairOrigin"; kind = "text"; default = ""; min = 0; max = 200
+       what = "Where the phone app is served, as https://<host>[:port]. Empty means horde relay pair needs -Origin." }
 )
 
 $script:HordeRelayIdentityNamePattern = '\A(machine|retired|released)-([0-9]{6})\.json\z'

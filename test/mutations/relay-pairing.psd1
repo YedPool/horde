@@ -2,6 +2,10 @@
 # Each switches off one check of completing a pairing - replay, expiry, the code, a rotation since the
 # offer, user verification, the offer's bounds - and test\test-relay-pairing.ps1 must fail for every
 # one. Every find string occurs once in the target.
+# NOT HERE: Open-HordeRelayPairingSealed skipping its open-offer check. Without it the code that follows
+# reads an offer that is not there and stops with an error, which Mutate.ps1 rightly does not count as a
+# catch; the checks it shares with Complete (replay, expiry) are mutated above, and the suite opens a
+# sealed response for an expired, a used and an unknown offer and requires each refusal by name.
 @{
     Target = "relay\Pairing.ps1"
     Suite  = "test\test-relay-pairing.ps1"
@@ -52,6 +56,43 @@
         @{ Name = "window-from-offer"
            Find = '-PendingUntil $pendingUntil'
            Replace = '-PendingUntil $pending.expiresAt' }
+        # The response through the relay (Open-HordeRelayPairingSealed) and its bounds.
+        @{ Name = "offer-names-no-pairing-mailbox"
+           Find = 'pairMailbox = (Get-HordeRelayPairingMailbox -Horde $id.value.horde -Offer $offerId); rpId = $RpId;'
+           Replace = 'pairMailbox = $id.value.mailbox; rpId = $RpId;' }
+        @{ Name = "sealed-size-not-bounded"
+           Find = 'if ($Text.Length -gt $limits.maxSealedChars) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sealed-for-another-offer-opened"
+           Find = 'if ($sealed.offer -cne $Offer) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sealed-key-id-not-compared"
+           Find = 'if ($sealed.agreeKeyId -cne $id.value.agree.keyId) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sealed-aad-without-offer"
+           Find = '"horde-relay/pairing/v1 response aad`n" + $Horde + "`n" + $Offer + "`n" + $AgreeKeyId'
+           Replace = '"horde-relay/pairing/v1 response aad`n" + $Horde + "`n" + $AgreeKeyId' }
+        @{ Name = "sealed-inner-size-not-bounded"
+           Find = 'if ($plain.Length -gt $limits.maxResponseChars) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "sealed-inner-not-ascii-taken"
+           Find = 'foreach ($b in $plain) { if ($b -lt 0x20 -or $b -gt 0x7E) {'
+           Replace = 'foreach ($b in $plain) { if ($false) {' }
+        @{ Name = "sealed-inner-offer-not-compared"
+           Find = 'if ($resp.value.offer -cne $Offer) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pasted-response-not-bounded"
+           Find = 'if ($Response.Length -gt $limits.maxResponseChars) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "machine-label-ignored"
+           Find = '-Label $(if ($Label -cne "") { $Label } else { $resp.label })'
+           Replace = '-Label $resp.label' }
+        @{ Name = "machine-label-not-checked-first"
+           Find = 'if ($Label -cne "" -and (Test-HordeRelayRecordValue -Kind "label" -Value $Label) -cne "") {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refusal-shows-the-fingerprint"
+           Find = '"'', now " + $Earlier.state'
+           Replace = '"'', fingerprint " + $Earlier.fingerprint + ", now " + $Earlier.state' }
         @{ Name = "window-not-the-setting"
            Find = '[long]$settings.value.values.pendingConfirmMinutes * 60000'
            Replace = '[long]10 * 60000' }
