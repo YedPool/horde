@@ -217,15 +217,18 @@ function drawChat(rec) {
   if (atEnd) window.scrollTo(0, document.documentElement.scrollHeight);
 }
 // The page's id for the words in the composer: kept until they are sent, so a line sent again after a
-// failure is the same line, posted once.
+// failure is the same line, posted once - but only the SAME words: words changed since the last try
+// are a new line with a new id (review of 3d837f0, finding 1).
 let draftId = "";
+let draftTried = "";
 function newDraftId() { return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
 let sending = false;
 async function sendLine() {
   const field = $("chatText");
   const text = field.value;
   if (sending || !text.trim() || field.disabled) return;
-  if (!draftId) draftId = newDraftId();
+  if (!draftId || text !== draftTried) draftId = newDraftId();
+  draftTried = text;
   sending = true;
   say("action", "");
   try {

@@ -24,10 +24,20 @@
 #     a crash after it puts the SAME envelopes, read back from the journal by key
 #     (Test-HordeRelayJournalSent), and nothing is ever lost. A state file that cannot be read stops the
 #     channel, in words, and is never quietly started over.
+#   - NEVER PUT TO A KEY REVOKED SINCE IT WAS RECORDED (review of 3d837f0, finding 3). The state also
+#     keeps rewind: the cursor from before the oldest envelope still waiting. Before each put, the
+#     envelope's recipients are compared with the phone keys trusted now; one sealed to a key no longer
+#     trusted is dropped - every waiting envelope of turns with it - and the cursor goes back to rewind,
+#     so those turns are read again and sealed to the keys trusted now. A waiting receipt sealed to a
+#     revoked key is dropped, and that receipt is lost to the other phones (the line still shows from
+#     the phone that sent it, and from its founder turn).
 #   - A CLEAR (PR 9's open question 1). When the Thrall's session is not the cursor's, the session the
 #     cursor is in is located by its id (Find-HordeConversationSource -Session) and read to its end
 #     first: the Thrall's last words before the clear are sent before the new session's first. Then the
-#     new session is read from its start. An old session that can no longer be found is said, and left.
+#     new session is read from its start. Only an old session the port answers ABSENT for (it is gone) is
+#     left, and said; one that cannot be found or read just now (unknown) keeps the cursor and is asked
+#     again next turn (review of 3d837f0, finding 2), up to clearTries turns in a row, after which it is
+#     left, and said, so a transcript that is gone for good cannot stop the chat for ever.
 #   - SIZE AND PAGES. A batch is as many envelopes as it needs, each body within the setting pageBytes
 #     and what the relay holds (channels/Port.ps1, Get-HordeRelayChannelBodyBudget). A turn longer than a
 #     page is never cut: it is split into parts that carry its id, part and parts, and the phone joins
@@ -49,30 +59,44 @@
 #     Thrall, and failing that the one that can report what the receiver saw (receipt.receiver), so an
 #     in-process test messenger that can do neither is never picked. Two that fit are never chosen
 #     between: the line is held.
-#   - EXACTLY ONCE. The messenger's message id is derived from the sender and the phone's message id:
-#       id = the first 16 bytes of SHA-256("horde-relay/chat/v1 line id" LF <sender key id> LF <messageId>),
-#            written as a lower-case uuid
+#   - EXACTLY ONCE. The messenger's message id is derived from the sender, the phone's message id and
+#     the words:
+#       id = the first 16 bytes of SHA-256("horde-relay/chat/v1 line id" LF <sender key id> LF <messageId>
+#            LF <SHA-256 of the words, hex>), written as a lower-case uuid
 #     so a record resumed after a crash, or the phone sending the same line again in a new envelope, is
-#     the same post, which an idempotent messenger keeps once. A replayed envelope never gets this far:
-#     the journal refuses it.
+#     the same post, which an idempotent messenger keeps once - and OTHER words under one message id are
+#     another post (review of 3d837f0, finding 1: they were the first post's id, so the Thrall kept the
+#     first words while the receipt said the second were delivered). Every receipt carries the words of
+#     its own post. A replayed envelope never gets this far: the journal refuses it.
+#   - TOO LONG is counted in characters (lineChars, at most 21,000: three UTF-8 bytes a character at
+#     the most) and, whatever the setting, in the UTF-8 bytes of the whole body against the messenger
+#     port's cap (64 KiB): a line no messenger may take is refused, never retried.
 #   - THE BODY THE THRALL GETS is one header line naming the phone's message id - "FOUNDER LINE from the
-#     phone (line <messageId>)" - then a blank line, then his words exactly. The header is what lets a
-#     phone recognise its own line if an adapter ever shows a delivered line as a turn.
-#   - WHETHER A DELIVERED LINE COMES BACK AS A TURN (PR 9's open question 5), measured 2026-10-10: a
-#     line handed over by the fleet messenger's Stop hook is written to the transcript as a user line
-#     with isMeta true whose text starts "Stop hook feedback:" (227 of 227 such lines across 193 local
-#     transcripts, counted by shape only; and an isolated throwaway session with a blocking Stop hook in
-#     its project settings wrote the same shape). The first adapter skips meta lines, so a delivered
-#     line is NOT a turn: the Thrall's reply is. The phone therefore shows its own line from its send
-#     and from the receipt below, and still drops a user turn carrying "(line <its messageId>)", for an
-#     adapter or messenger that would show one.
+#     phone (line <messageId>)" - then a blank line, then his words exactly.
+#   - A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN, and only a real one does (PR 9's open question
+#     5, measured 2026-10-10: a line handed over by the fleet messenger's Stop hook is written to the
+#     transcript as a meta user line starting "Stop hook feedback:" - 227 of 227 across 193 local
+#     transcripts, counted by shape only, and the same in an isolated throwaway session - which the
+#     conversation port now hands over as a DELIVERED turn). A delivered turn is shown to the phone as
+#     the founder's line, { role founder, line <messageId> }, ONLY when it holds a line header naming a
+#     line this machine posted AND the words after the header are, by length and SHA-256, exactly the
+#     words of the signed line it posted (kept in the state as id, length and hash - never the words).
+#     The Thrall, or anyone, quoting a header shows nothing as the founder's: its own text is not a
+#     delivered turn, and a delivered message that copies a header without the very words he signed
+#     fails the hash. Every other delivered turn (another session's mail) is not sent to the phone at
+#     all. A line whose words the port redacted no longer matches its hash, and is shown from its
+#     receipt instead. So the founder's lines stay in the chat after the relay's retention drops the
+#     receipts.
+#   - THE INBOUND CAP: at most linesPerMinute lines (a setting) are posted to the Thrall in any 60
+#     seconds; one past it is held (code too-many) and comes again.
 #   - THE RECEIPT. Every line that names a message id gets one back, kind receipt, sealed to every
 #     trusted phone key: { messageId, status, code, session, text } - status accepted, held or refused,
 #     code from the closed list below, and his words, so a phone that reloads (or another phone of his)
 #     still shows the line. Codes only: the phone shows its own fixed sentence for each (relay/js/
 #     protocol.js, CHAT_WORDS), never a word of the relay's or the messenger's.
 #       accepted  queued (the messenger took it), delivered (handed over, or seen by the receiver)
-#       held      thrall-unknown, no-messenger, not-now (it comes again), not-delivered, expired (final)
+#       held      thrall-unknown, no-messenger, not-now, too-many (it comes again), not-delivered,
+#                 expired (final)
 #       refused   wrong-machine, wrong-horde, empty, too-long, no-thrall, session-ended (final)
 #     A held line that comes again says so once per run, not on every turn.
 #   done     the messenger answered: delivered, or known not delivered (held for good);
@@ -106,17 +130,26 @@ $script:HordeChatChannelSettings = New-HordeModuleSettings -Module "relay-chat" 
     @{ name = "readBytes"; kind = "whole"; default = 1048576; min = 4096; max = 33554432; what = "The most bytes of the Thrall's conversation read in one look." },
     @{ name = "pageBytes"; kind = "whole"; default = 262144; min = 2048; max = 1048576; what = "The largest body of one envelope of turns, in bytes; a longer batch is sent as more envelopes." },
     @{ name = "sendIntervalMs"; kind = "whole"; default = 2000; min = 0; max = 600000; what = "The shortest time between two sends of turns, in milliseconds: turns written meanwhile go together." },
-    @{ name = "lineChars"; kind = "whole"; default = 16000; min = 1; max = 60000; what = "The longest line the founder may send to the Thrall, in characters." },
+    # 21,000: three bytes a character at the most, and the header, stay inside the messenger port's 64 KiB.
+    @{ name = "lineChars"; kind = "whole"; default = 16000; min = 1; max = 21000; what = "The longest line the founder may send to the Thrall, in characters." },
     @{ name = "ttlSeconds"; kind = "whole"; default = 86400; min = 60; max = 604800; what = "How long a line may wait in the Thrall's mailbox, in seconds." },
+    @{ name = "clearTries"; kind = "whole"; default = 60; min = 1; max = 100000; what = "How many turns in a row a session cleared from under the cursor is asked for again, while it cannot be read, before its unread tail is left." },
+    @{ name = "linesPerMinute"; kind = "whole"; default = 20; min = 1; max = 600; what = "The most of the founder's lines posted to the Thrall in any 60 seconds; one past it waits." },
     @{ name = "fromLabel"; kind = "label"; default = "F"; what = "The hub label the founder's lines are from: F, unless the person who sends them wears another." }
 )
 $script:HordeChatChannelLineMembers = @("v", "messageId", "horde", "machine", "session", "text")
 $script:HordeChatChannelIdDomain = "horde-relay/chat/v1 line id"
 $script:HordeChatChannelFrom = "horde-relay-chat"
 $script:HordeChatChannelSessionPattern = '\A[A-Za-z0-9._:-]{1,128}\z'
+# A posted line as the state keeps it: its id, the length of his words, and the first 32 hex digits of
+# their SHA-256 - enough to know his words again in a delivered turn, never the words themselves.
+$script:HordeChatChannelLineMarkPattern = '\A[0-9a-f]{32}:(0|[1-9][0-9]{0,6}):[0-9a-f]{32}\z'
+$script:HordeChatChannelLineHeader = '\AFOUNDER LINE from the phone \(line ([0-9a-f]{32})\)\n\n'
+# The most posted lines the state remembers: a busy day's lines many times over.
+$script:HordeChatChannelLinesKept = 2000
 $script:HordeChatChannelCodes = @{
     accepted = @("queued", "delivered")
-    held = @("thrall-unknown", "no-messenger", "not-now", "not-delivered", "expired")
+    held = @("thrall-unknown", "no-messenger", "not-now", "too-many", "not-delivered", "expired")
     refused = @("wrong-machine", "wrong-horde", "empty", "too-long", "no-thrall", "session-ended")
 }
 # What reads the Thrall: what the channel needs of an adapter. A turn sent is never sent again changed,
@@ -159,11 +192,11 @@ function Get-HordeChatChannelStatePath {
 }
 
 function Read-HordeChatChannelState {
-    # The durable state: known { cursor; session; phones; pending }, the empty state when there is no file
+    # The durable state: known { cursor; session; phones; pending; lines }, the empty state when there is no file
     # yet, unknown when the file cannot be read or does not hold together - never a guess.
     param([Parameter(Mandatory = $true)][string]$HordeHome)
     $path = Get-HordeChatChannelStatePath -HordeHome $HordeHome
-    $empty = [pscustomobject]@{ cursor = $null; session = ""; phones = @(); pending = @() }
+    $empty = [pscustomobject]@{ cursor = $null; session = ""; phones = @(); pending = @(); lines = @(); rewind = $null }
     if (-not [System.IO.File]::Exists($path)) { return (New-HordeKnown -Value $empty) }
     try { $bytes = [System.IO.File]::ReadAllBytes($path); Assert-HordeAsciiBytes -Bytes $bytes -What ("the chat state " + $path); $text = [System.Text.Encoding]::ASCII.GetString($bytes) }
     catch { return (New-HordeUnknown -Reason ("the chat state " + $path + " cannot be read: " + $_.Exception.Message)) }
@@ -172,13 +205,31 @@ function Read-HordeChatChannelState {
     try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }
     if ($s -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": it is not an object")) }
     $names = @($s.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object
-    if (($names -join ",") -cne "cursor,pending,phones,session,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }
+    if (($names -join ",") -cne "cursor,lines,pending,phones,rewind,session,v") { return (New-HordeUnknown -Reason ($why + ": its members are " + ($names -join ", "))) }
     if (-not ($s.v -is [int] -or $s.v -is [long]) -or $s.v -ne 1) { return (New-HordeUnknown -Reason ($why + ": it is not version 1")) }
     if ($s.session -isnot [string]) { return (New-HordeUnknown -Reason ($why + ": its session is not text")) }
     foreach ($p in @($s.phones)) { if ($p -isnot [string] -or $p -cnotmatch '\A[0-9a-f]{32}\z') { return (New-HordeUnknown -Reason ($why + ": a phone key is not a key id")) } }
     foreach ($k in @($s.pending)) { if ($k -isnot [string] -or $k.Length -gt 160) { return (New-HordeUnknown -Reason ($why + ": a pending envelope is not a replay key")) } }
+    foreach ($l in @($s.lines)) { if ($l -isnot [string] -or $l -cnotmatch $script:HordeChatChannelLineMarkPattern) { return (New-HordeUnknown -Reason ($why + ": a posted line is not an id, a length and a hash")) } }
     if ($null -ne $s.cursor -and $s.cursor -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": its cursor is not an object")) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ cursor = $s.cursor; session = $s.session; phones = @($s.phones); pending = @($s.pending) }))
+    if ($null -ne $s.rewind -and $s.rewind -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ($why + ": its rewind is not a cursor")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ cursor = $s.cursor; session = $s.session; phones = @($s.phones); pending = @($s.pending); lines = @($s.lines); rewind = $s.rewind }))
+}
+
+function ConvertTo-HordeChatChannelCursorText {
+    # A cursor as the state writes it, or null.
+    param($Cursor)
+    if ($null -eq $Cursor) { return "null" }
+    return ('{"schemaVersion":1,"vendor":' + (ConvertTo-HordeChatChannelJsonString "$($Cursor.vendor)") + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($Cursor.session)") + ',"position":' + (ConvertTo-HordeChatChannelJsonString "$($Cursor.position)") + '}')
+}
+
+function Add-HordeChatChannelPending {
+    # Keys recorded and to be put, after those waiting. The first to wait marks rewind: the cursor
+    # before them (NEVER PUT TO A KEY REVOKED SINCE IT WAS RECORDED, in the header).
+    param($State, [string[]]$Keys, $Before)
+    if (@($Keys).Count -eq 0) { return }
+    if (@($State.pending).Count -eq 0) { $State.rewind = $Before }
+    $State.pending = @(@($State.pending) + @($Keys))
 }
 
 function Write-HordeChatChannelState {
@@ -187,14 +238,12 @@ function Write-HordeChatChannelState {
     $path = Get-HordeChatChannelStatePath -HordeHome $HordeHome
     $dir = [System.IO.Path]::GetDirectoryName($path)
     [void][System.IO.Directory]::CreateDirectory($dir)
-    $cursor = "null"
-    if ($null -ne $State.cursor) {
-        $c = $State.cursor
-        $cursor = '{"schemaVersion":1,"vendor":' + (ConvertTo-HordeChatChannelJsonString "$($c.vendor)") + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($c.session)") + ',"position":' + (ConvertTo-HordeChatChannelJsonString "$($c.position)") + '}'
-    }
+    $cursor = ConvertTo-HordeChatChannelCursorText -Cursor $State.cursor
+    $rewind = ConvertTo-HordeChatChannelCursorText -Cursor $State.rewind
     $phones = (@($State.phones) | ForEach-Object { '"' + $_ + '"' }) -join ","
     $pending = (@($State.pending) | ForEach-Object { ConvertTo-HordeChatChannelJsonString $_ }) -join ","
-    $text = '{"v":1,"cursor":' + $cursor + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($State.session)") + ',"phones":[' + $phones + '],"pending":[' + $pending + ']}'
+    $lines = (@($State.lines) | ForEach-Object { '"' + $_ + '"' }) -join ","
+    $text = '{"v":1,"cursor":' + $cursor + ',"session":' + (ConvertTo-HordeChatChannelJsonString "$($State.session)") + ',"phones":[' + $phones + '],"pending":[' + $pending + '],"lines":[' + $lines + '],"rewind":' + $rewind + '}'
     $tmp = [System.IO.Path]::Combine($dir, ("state-" + [guid]::NewGuid().ToString("N") + ".tmp"))
     $fs = New-Object System.IO.FileStream -ArgumentList $tmp, ([System.IO.FileMode]::CreateNew), ([System.IO.FileAccess]::Write), ([System.IO.FileShare]::None)
     try { $b = [System.Text.Encoding]::ASCII.GetBytes($text); $fs.Write($b, 0, $b.Length); $fs.Flush($true) } finally { $fs.Dispose() }
@@ -206,14 +255,15 @@ function Get-HordeChatChannelStateMark {
     param($State)
     $c = $State.cursor
     $cur = $(if ($null -eq $c) { "-" } else { "$($c.vendor)|$($c.session)|$($c.position)" })
-    return ($cur + "#" + $State.session + "#" + (@($State.phones) -join ",") + "#" + (@($State.pending) -join ","))
+    $rw = $(if ($null -eq $State.rewind) { "-" } else { "$($State.rewind.session)|$($State.rewind.position)" })
+    return ($cur + "#" + $State.session + "#" + (@($State.phones) -join ",") + "#" + (@($State.pending) -join ",") + "#" + (@($State.lines) -join ",") + "#" + $rw)
 }
 
 function Get-HordeChatChannelMemory {
     # The channel's memory in this run's context, its durable state read on first use: { ok; reason; mine }.
     param($Context)
     if (-not $Context.state.ContainsKey("chat")) {
-        $Context.state["chat"] = @{ loaded = $false; durable = $null; lastSentAt = [datetime]::MinValue; said = @{}; heldSaid = @{} }
+        $Context.state["chat"] = @{ loaded = $false; durable = $null; lastSentAt = [datetime]::MinValue; said = @{}; heldSaid = @{}; posted = (New-Object System.Collections.ArrayList) }
     }
     $mine = $Context.state["chat"]
     if (-not $mine.loaded) {
@@ -238,17 +288,54 @@ function Find-HordeChatChannelSource {
     return (Find-HordeConversationSource -Fleet $Context.horde -Vendor $script:HordeChatChannelSourceVendor -Session $Session -Require $script:HordeChatChannelRequire -Refuse $script:HordeChatChannelRefuse -Options $script:HordeChatChannelSourceOptions)
 }
 
+function Get-HordeChatChannelLineMark {
+    # A posted line as the state keeps it (the pattern above).
+    param([Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $h = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::UTF8.GetBytes($Text)))
+    return ($MessageId + ":" + $Text.Length + ":" + $h.Substring(0, 32))
+}
+
+function Select-HordeChatChannelShown {
+    # The turns the phone is shown, of those read (A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN):
+    # user, assistant and system as they are; a delivered turn as the founder's line when it is one this
+    # machine posted, word for word; any other delivered turn not at all.
+    param([object[]]$Turns, [string[]]$Lines)
+    $byId = @{}
+    foreach ($l in @($Lines)) { $p = $l.Split([char]':'); $byId[$p[0]] = [pscustomobject]@{ length = [int]$p[1]; mark = $l } }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($t in @($Turns)) {
+        if ($t.role -cne "delivered") { [void]$out.Add($t); continue }
+        $text = [string]$t.text
+        $at = $text.IndexOf("FOUNDER LINE from the phone (line ", [System.StringComparison]::Ordinal)
+        if ($at -lt 0) { continue }
+        $m = [regex]::Match($text.Substring($at), $script:HordeChatChannelLineHeader)
+        if (-not $m.Success -or -not $byId.ContainsKey($m.Groups[1].Value)) { continue }
+        $known = $byId[$m.Groups[1].Value]
+        $start = $at + $m.Length
+        if ($text.Length - $start -lt $known.length) { continue }
+        $words = $text.Substring($start, $known.length)
+        $rest = $text.Substring($start + $known.length)
+        # What may follow his words is the messenger's own: nothing, or its next line.
+        if ($rest -ne "" -and -not $rest.StartsWith("`n")) { continue }
+        if ((Get-HordeChatChannelLineMark -MessageId $m.Groups[1].Value -Text $words) -cne $known.mark) { continue }
+        $f = [ordered]@{ role = "founder"; text = $words; turnId = $t.turnId; line = $m.Groups[1].Value; source = $t.source }
+        if ($null -ne $t.PSObject.Properties["time"]) { $f["time"] = $t.time }
+        [void]$out.Add([pscustomobject]$f)
+    }
+    return @($out.ToArray())
+}
+
 function Read-HordeChatChannelTail {
     # The last -Keep turns of -Source from -Cursor to its end, and the cursor at the end: known { turns;
     # next }, or the port's unknown. Every read is bounded; a conversation longer than 10,000 reads is
     # not one (10 million turns at the most a read may give).
-    param($Source, $Cursor, [int]$Keep, $Settings)
+    param($Source, $Cursor, [int]$Keep, $Settings, [string[]]$Lines = @())
     $queue = New-Object System.Collections.Generic.Queue[object]
     $at = $Cursor
     for ($i = 0; $i -lt 10000; $i++) {
         $r = Read-HordeConversationTurns -Source $Source -Cursor $at -MaxTurns ([int]$Settings.readTurns) -MaxBytes ([long]$Settings.readBytes)
         if ($r.state -cne "known") { return $r }
-        foreach ($t in @($r.value.turns)) { $queue.Enqueue($t); if ($queue.Count -gt $Keep) { [void]$queue.Dequeue() } }
+        foreach ($t in @(Select-HordeChatChannelShown -Turns @($r.value.turns) -Lines $Lines)) { $queue.Enqueue($t); if ($queue.Count -gt $Keep) { [void]$queue.Dequeue() } }
         $at = $r.value.next
         if (-not $r.value.more) { break }
     }
@@ -262,6 +349,7 @@ function ConvertTo-HordeChatChannelEntries {
     $head = '{"id":' + (ConvertTo-HordeChatChannelJsonString $Turn.turnId) + ',"role":"' + $Turn.role + '","session":' + (ConvertTo-HordeChatChannelJsonString $Turn.source.session)
     if ($null -ne $Turn.PSObject.Properties["time"]) { $head += ',"time":"' + $Turn.time + '"' }
     if ($null -ne $Turn.PSObject.Properties["groupId"]) { $head += ',"group":' + (ConvertTo-HordeChatChannelJsonString $Turn.groupId) }
+    if ($null -ne $Turn.PSObject.Properties["line"]) { $head += ',"line":"' + $Turn.line + '"' }
     if ($null -ne $Turn.PSObject.Properties["truncated"]) { $head += ',"truncated":true' }
     if ($null -ne $Turn.PSObject.Properties["redactions"]) { $head += ',"redactions":' + [int]$Turn.redactions }
     $whole = $head + ',"text":' + (ConvertTo-HordeChatChannelJsonString $Turn.text) + '}'
@@ -316,16 +404,41 @@ function Send-HordeChatChannelPending {
     param($Context, $Mine)
     $homeDir = Get-HordeChatChannelHome $Context
     $mailbox = New-HordeRelayMailbox -Horde $Context.horde -Reader "phone"
+    $trusted = $null
     while (@($Mine.durable.pending).Count -gt 0) {
         $key = @($Mine.durable.pending)[0]
         $rec = Test-HordeRelayJournalSent -Key $key -HordeHome $homeDir
         if ($rec.state -cne "known") { return ("the journal cannot give back " + $key + ": " + $rec.reason) }
         if ($rec.value.sent) {
+            if ($null -eq $trusted) {
+                $now = Get-HordeChatChannelPhones -Context $Context
+                if ($now.state -cne "known") { return ("the phone keys trusted now cannot be read, so nothing is put: " + $now.reason) }
+                $trusted = @($now.value | ForEach-Object { $_.agreeKeyId })
+            }
+            $to = @((Read-HordeRelayEnvelope -Text $rec.value.text).value.header.to)
+            if (@($to | Where-Object { $trusted -cnotcontains $_ }).Count -gt 0) {
+                if ($rec.value.kind -ceq "turns") {
+                    # Every waiting envelope of turns goes, and the turns are read again from rewind.
+                    $keep = New-Object System.Collections.ArrayList
+                    foreach ($k in @($Mine.durable.pending)) {
+                        $kr = Test-HordeRelayJournalSent -Key $k -HordeHome $homeDir
+                        if ($kr.state -ceq "known" -and $kr.value.sent -and $kr.value.kind -ceq "turns") { continue }
+                        [void]$keep.Add($k)
+                    }
+                    $Mine.durable.pending = @($keep.ToArray())
+                    $Mine.durable.cursor = $Mine.durable.rewind
+                }
+                else { $Mine.durable.pending = @(@($Mine.durable.pending) | Select-Object -Skip 1) }
+                if (@($Mine.durable.pending).Count -eq 0) { $Mine.durable.rewind = $null }
+                try { Write-HordeChatChannelState -HordeHome $homeDir -State $Mine.durable } catch { return ("the chat state could not be written: " + $_.Exception.Message) }
+                continue
+            }
             $put = Send-HordeRelayChannelSaved -Context $Context -Saved ([pscustomobject]@{ key = $key; text = $rec.value.text }) -Mailbox $mailbox
             if ($put.state -cne "known") { return $put.reason }
         }
         # A key the journal does not hold was never recorded (a state written by hand): nothing to put.
         $Mine.durable.pending = @(@($Mine.durable.pending) | Select-Object -Skip 1)
+        if (@($Mine.durable.pending).Count -eq 0) { $Mine.durable.rewind = $null }
         try { Write-HordeChatChannelState -HordeHome $homeDir -State $Mine.durable } catch { return ("the chat state could not be written: " + $_.Exception.Message) }
     }
     return ""
@@ -394,7 +507,7 @@ function Invoke-HordeChatChannelTick {
     $cursor = $d.cursor
     if ($null -eq $cursor) {
         # THE FIRST LOOK: from the end, for every key there is.
-        $tail = Read-HordeChatChannelTail -Source $source -Cursor $null -Settings $set -Keep ([int]$set.startTurns)
+        $tail = Read-HordeChatChannelTail -Source $source -Cursor $null -Settings $set -Keep ([int]$set.startTurns) -Lines @($d.lines)
         if ($tail.state -cne "known") { return (& $once "read" ("no turns sent: the Thrall's conversation could not be read: " + $tail.reason) $false) }
         [void]$batches.Add([pscustomobject]@{ phones = $all; backfill = $true; turns = @($tail.value.turns) })
         $next = $tail.value.next
@@ -402,7 +515,7 @@ function Invoke-HordeChatChannelTick {
         $fresh = @($all | Where-Object { @($d.phones) -cnotcontains $_.agreeKeyId })
         if ($fresh.Count -gt 0) {
             # A KEY TRUSTED SINCE: the last startTurns turns of the session now, to it alone.
-            $tail = Read-HordeChatChannelTail -Source $source -Cursor $null -Keep ([int]$set.startTurns) -Settings $set
+            $tail = Read-HordeChatChannelTail -Source $source -Cursor $null -Keep ([int]$set.startTurns) -Settings $set -Lines @($d.lines)
             if ($tail.state -cne "known") { return (& $once "read" ("no turns sent: the Thrall's conversation could not be read: " + $tail.reason) $false) }
             [void]$batches.Add([pscustomobject]@{ phones = $fresh; backfill = $true; turns = @($tail.value.turns) })
         }
@@ -410,10 +523,21 @@ function Invoke-HordeChatChannelTick {
             # A CLEAR: the old session read to its end first.
             $old = Find-HordeChatChannelSource -Context $Context -Session "$($cursor.session)"
             $next = New-HordeConversationCursor -Vendor $source.vendor -Session $source.session -Position ""
-            if ($old.state -ceq "known") {
-                $r = Read-HordeConversationTurns -Source $old.value -Cursor $cursor -MaxTurns ([int]$set.readTurns) -MaxBytes ([long]$set.readBytes)
+            $r = $null
+            if ($old.state -ceq "known") { $r = Read-HordeConversationTurns -Source $old.value -Cursor $cursor -MaxTurns ([int]$set.readTurns) -MaxBytes ([long]$set.readBytes) }
+            $why = $(if ($old.state -ceq "unknown") { $old.reason } elseif ($null -ne $r -and $r.state -cne "known") { $r.reason } else { "" })
+            if ($why -ne "") {
+                if (-not $mine.ContainsKey("clearTries")) { $mine["clearTries"] = 0 }
+                $mine["clearTries"]++
+                if ($mine["clearTries"] -lt [int]$set.clearTries) { return (& $once "read" ("no turns sent: the Thrall's session before the clear cannot be read now, and is asked again: " + $why) $false) }
+                [void]$notes.Add("the Thrall's session before the clear could not be read in " + $set.clearTries + " tries, and its unread tail is left: " + $why)
+                $r = $null
+            }
+            $mine["clearTries"] = 0
+            if ($old.state -ceq "known" -and $null -ne $r) {
                 if ($r.state -ceq "known") {
-                    if (@($r.value.turns).Count -gt 0) { [void]$batches.Add([pscustomobject]@{ phones = $all; backfill = $false; turns = @($r.value.turns) }) }
+                    $shown = @(Select-HordeChatChannelShown -Turns @($r.value.turns) -Lines @($d.lines))
+                    if ($shown.Count -gt 0) { [void]$batches.Add([pscustomobject]@{ phones = $all; backfill = $false; turns = $shown }) }
                     if ($r.value.more) { $next = $r.value.next }
                     else { [void]$notes.Add("the Thrall's session before the clear was read to its end") }
                 }
@@ -424,7 +548,8 @@ function Invoke-HordeChatChannelTick {
             $r = Read-HordeConversationTurns -Source $source -Cursor $cursor -MaxTurns ([int]$set.readTurns) -MaxBytes ([long]$set.readBytes)
             if ($r.state -cne "known") { return (& $once "read" ("no turns sent: the Thrall's conversation could not be read: " + $r.reason) $false) }
             foreach ($a in @($r.value.anomalies)) { [void]$notes.Add($a) }
-            if (@($r.value.turns).Count -gt 0) { [void]$batches.Add([pscustomobject]@{ phones = $all; backfill = $false; turns = @($r.value.turns) }) }
+            $shown = @(Select-HordeChatChannelShown -Turns @($r.value.turns) -Lines @($d.lines))
+            if ($shown.Count -gt 0) { [void]$batches.Add([pscustomobject]@{ phones = $all; backfill = $false; turns = $shown }) }
             $next = $r.value.next
         }
     }
@@ -442,16 +567,16 @@ function Invoke-HordeChatChannelTick {
         foreach ($k in $saved.keys) { [void]$keys.Add($k) }
         if (-not $saved.ok) {
             # What was recorded is kept to be put; the cursor stays, so the rest is read again.
-            $d.pending = @($d.pending) + @($keys.ToArray())
+            Add-HordeChatChannelPending -State $d -Keys @($keys.ToArray()) -Before $d.cursor
             try { Write-HordeChatChannelState -HordeHome $homeDir -State $d } catch { }
             return [pscustomobject]@{ lines = @("turns not sent: " + $saved.reason); failed = $true }
         }
         $count += @($b.turns).Count
     }
+    Add-HordeChatChannelPending -State $d -Keys @($keys.ToArray()) -Before $d.cursor
     $d.cursor = $next
     $d.session = $source.session
     $d.phones = $known
-    $d.pending = @(@($d.pending) + @($keys.ToArray()))
     # Written only when it changed: a runner turns every second, and a quiet Thrall is no reason to
     # rewrite a file each time.
     try { if ($keys.Count -gt 0 -or (Get-HordeChatChannelStateMark -State $d) -cne $was) { Write-HordeChatChannelState -HordeHome $homeDir -State $d } }
@@ -492,8 +617,9 @@ function Read-HordeChatChannelLine {
 
 function Get-HordeChatChannelMessageId {
     # The messenger's message id of one line (EXACTLY ONCE, in the header): a lower-case uuid.
-    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$MessageId)
-    $h = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ($script:HordeChatChannelIdDomain + "`n" + $From + "`n" + $MessageId)))
+    param([Parameter(Mandatory = $true)][string]$From, [Parameter(Mandatory = $true)][string]$MessageId, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    $words = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::UTF8.GetBytes($Text)))
+    $h = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ($script:HordeChatChannelIdDomain + "`n" + $From + "`n" + $MessageId + "`n" + $words)))
     return ($h.Substring(0, 8) + "-" + $h.Substring(8, 4) + "-" + $h.Substring(12, 4) + "-" + $h.Substring(16, 4) + "-" + $h.Substring(20, 12))
 }
 
@@ -525,7 +651,7 @@ function Send-HordeChatChannelReceipt {
     $body = '{"v":1,"kind":"chat-receipt","horde":"' + $Context.horde + '","machine":"' + $Context.signKeyId + '","session":' + (ConvertTo-HordeChatChannelJsonString $Session) + ',"messageId":"' + $MessageId + '","status":"' + $Status + '","code":"' + $Code + '","text":' + (ConvertTo-HordeChatChannelJsonString $Text) + '}'
     $saved = Save-HordeChatChannelBodies -Context $Context -Kind "receipt" -Bodies @($body) -Phones @($phones.value)
     if (-not $saved.ok) { return ("no receipt: " + $saved.reason) }
-    $Mine.durable.pending = @(@($Mine.durable.pending) + @($saved.keys))
+    Add-HordeChatChannelPending -State $Mine.durable -Keys @($saved.keys) -Before $Mine.durable.cursor
     try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $Mine.durable } catch { }
     return (Send-HordeChatChannelPending -Context $Context -Mine $Mine)
 }
@@ -557,21 +683,33 @@ function Invoke-HordeChatChannelAccept {
     if ($line.horde -cne $Context.horde) { return (& $answer "refused" "refused" "wrong-horde" ("it is for the horde " + $line.horde + ", not " + $Context.horde) $line.session) }
     if ($line.text.Trim() -eq "") { return (& $answer "refused" "refused" "empty" "it holds no words" $line.session) }
     if ($line.text.Length -gt [int]$set.lineChars) { return (& $answer "refused" "refused" "too-long" ("it is " + $line.text.Length + " characters; a line holds " + $set.lineChars) $line.session) }
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetByteCount((Get-HordeChatChannelThrallBody -MessageId $line.messageId -Text $line.text))
+    if ($bodyBytes -gt $script:HordeMessengerBodyBytes) { return (& $answer "refused" "refused" "too-long" ("its message is " + $bodyBytes + " UTF-8 bytes; a message holds " + $script:HordeMessengerBodyBytes) $line.session) }
     $src = Find-HordeChatChannelSource -Context $Context
     if ($src.state -ceq "absent") { return (& $answer "refused" "refused" "no-thrall" "no Thrall of this horde is found on this machine" $line.session) }
     if ($src.state -cne "known") { return (& $answer "retry" "held" "thrall-unknown" ("the Thrall cannot be found now: " + $src.reason) $line.session) }
     if ($src.value.session -cne $line.session) { return (& $answer "refused" "refused" "session-ended" ("it was written to the session " + $line.session + ", and the Thrall's session is now " + $src.value.session) $src.value.session) }
+    $now = [datetime]::UtcNow
+    while ($mine.posted.Count -gt 0 -and ($now - [datetime]$mine.posted[0]).TotalSeconds -ge 60) { $mine.posted.RemoveAt(0) }
+    if ($mine.posted.Count -ge [int]$set.linesPerMinute) { return (& $answer "retry" "held" "too-many" ("" + $mine.posted.Count + " lines were posted in the last minute; a minute holds " + $set.linesPerMinute) $line.session) }
     $messenger = Find-HordeChatChannelMessenger
     if ($messenger.state -cne "known") { return (& $answer "retry" "held" "no-messenger" $messenger.reason $line.session) }
     $deviceId = ""
     try { $deviceId = Get-HordeDeviceId -HomeRoot (Get-HordeChatChannelHome $Context) } catch { return (& $answer "retry" "held" "not-now" ("this machine's device id could not be had: " + $_.Exception.Message) $line.session) }
     $message = [pscustomobject]@{
-        messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId); sessionId = $src.value.session
+        messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId -Text $line.text); sessionId = $src.value.session
         from = [pscustomobject]@{ deviceId = $deviceId; sessionId = $script:HordeChatChannelFrom; label = $set.fromLabel }
         body = (Get-HordeChatChannelThrallBody -MessageId $line.messageId -Text $line.text); ttlSeconds = [int]$set.ttlSeconds
     }
     $posted = Send-HordeMessengerMessage -Messenger $messenger.value -Message $message
     if ($posted.state -cne "known") { return (& $answer "retry" "held" "not-now" ("messenger " + $messenger.value.name + " did not take it now: " + $posted.reason) $line.session) }
+    [void]$mine.posted.Add($now)
+    # His words, as id, length and hash, so the line is known again when it comes back as a turn.
+    $mark = Get-HordeChatChannelLineMark -MessageId $line.messageId -Text $line.text
+    if (@($mine.durable.lines) -cnotcontains $mark) {
+        $mine.durable.lines = @(@($mine.durable.lines) + @($mark) | Select-Object -Last $script:HordeChatChannelLinesKept)
+        try { Write-HordeChatChannelState -HordeHome (Get-HordeChatChannelHome $Context) -State $mine.durable } catch { }
+    }
     switch ("$($posted.value.stage)") {
         "accepted" { return (& $answer "done" "accepted" "queued" ("messenger " + $messenger.value.name + " took it for the Thrall") $line.session) }
         "held" { return (& $answer "done" "held" "not-delivered" ("messenger " + $messenger.value.name + " holds it, not delivered") $line.session) }

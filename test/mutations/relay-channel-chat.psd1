@@ -73,6 +73,42 @@
         @{ Name = "pending-put-from-elsewhere"
            Find = 'if ($rec.value.sent) {'
            Replace = 'if ($false) {' }
+        @{ Name = "delivered-words-not-checked"
+           Find = 'if ((Get-HordeChatChannelLineMark -MessageId $m.Groups[1].Value -Text $words) -cne $known.mark) { continue }'
+           Replace = '$null = $known' }
+        @{ Name = "delivered-words-added-kept"
+           Find = 'if ($rest -ne "" -and -not $rest.StartsWith("`n")) { continue }'
+           Replace = '$null = $rest' }
+        @{ Name = "other-mail-sent-to-the-phone"
+           Find = 'if ($at -lt 0) { continue }'
+           Replace = 'if ($at -lt 0) { [void]$out.Add($t); continue }' }
+        @{ Name = "posted-line-not-remembered"
+           Find = '$mine.durable.lines = @(@($mine.durable.lines) + @($mark) | Select-Object -Last $script:HordeChatChannelLinesKept)'
+           Replace = '$null = $mark' }
+        @{ Name = "inbound-cap-ignored"
+           Find = 'if ($mine.posted.Count -ge [int]$set.linesPerMinute) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "messenger-id-without-the-words"
+           Find = '$MessageId + "`n" + $words)))'
+           Replace = '$MessageId)))' }
+        @{ Name = "receipt-words-not-the-posted"
+           Find = 'messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId -Text $line.text)'
+           Replace = 'messageId = (Get-HordeChatChannelMessageId -From $Item.from -MessageId $line.messageId -Text "")' }
+        @{ Name = "clear-unknown-moves-on"
+           Find = 'if ($mine["clearTries"] -lt [int]$set.clearTries) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "pending-put-to-a-revoked-key"
+           Find = 'if (@($to | Where-Object { $trusted -cnotcontains $_ }).Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "revoked-turns-not-read-again"
+           Find = '$Mine.durable.cursor = $Mine.durable.rewind'
+           Replace = '$null = $Mine.durable.rewind' }
+        @{ Name = "body-bytes-not-counted"
+           Find = 'if ($bodyBytes -gt $script:HordeMessengerBodyBytes) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "line-chars-allows-no-message"
+           Find = 'default = 16000; min = 1; max = 21000;'
+           Replace = 'default = 16000; min = 1; max = 60000;' }
         @{ Name = "damaged-state-started-over"
            Find = 'try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeUnknown -Reason ($why + ": it is not JSON")) }'
            Replace = 'try { $s = ConvertFrom-Json -InputObject $text } catch { return (New-HordeKnown -Value $empty) }' }

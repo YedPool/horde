@@ -410,6 +410,7 @@ export const CHAT_WORDS = {
     "thrall-unknown": "Held: the machine cannot find the Thrall just now; it will try again.",
     "no-messenger": "Held: the machine has no way to deliver it yet; it will try again.",
     "not-now": "Held: delivery failed for now; it will try again.",
+    "too-many": "Held: too many lines in a minute; it goes shortly.",
     "not-delivered": "Not delivered: the Thrall's mailbox holds it back.",
     expired: "Not delivered: it waited too long."
   },
@@ -423,7 +424,9 @@ export const CHAT_WORDS = {
   }
 };
 export const CHAT_SENDING = "Sending...";
-export const CHAT_ROLES = ["user", "assistant", "system"];
+// founder: a line of his that the MACHINE found delivered to the Thrall word for word (channels/chat,
+// A DELIVERED LINE COMES BACK AS THE FOUNDER'S TURN); it always names that line.
+export const CHAT_ROLES = ["user", "assistant", "system", "founder"];
 const SESSION = /^[A-Za-z0-9._:-]{1,128}$/;
 const TURN_ID = /^[\x21-\x7e]{1,200}$/;
 
@@ -437,8 +440,9 @@ export function lineBody({ messageId, horde, machine, session, text }) {
   return utf8(JSON.stringify({ v: 1, messageId, horde, machine, session, text }));
 }
 
-// What the Thrall reads begins with this, naming the line (channels/chat, THE BODY THE THRALL GETS): a
-// user turn holding it is the phone's own line coming back.
+// What the Thrall reads begins with this, naming the line (channels/chat, THE BODY THE THRALL GETS).
+// The phone never trusts it in a turn's text: anyone can quote it. Only the machine, which knows the
+// words it posted, marks a turn as the founder's.
 export function lineMarker(messageId) { return "(line " + messageId + ")"; }
 
 function chatHead(bodyBytes, kind, horde, machine) {
@@ -462,11 +466,11 @@ export function readChatTurns(bodyBytes, horde, machine) {
   let dropped = 0;
   for (const t of b.turns) {
     const ok = t && typeof t.id === "string" && TURN_ID.test(t.id) && CHAT_ROLES.indexOf(t.role) >= 0 && typeof t.text === "string" &&
-      typeof t.session === "string" && SESSION.test(t.session) &&
+      typeof t.session === "string" && SESSION.test(t.session) && (t.role !== "founder" || (typeof t.line === "string" && /^[0-9a-f]{32}$/.test(t.line))) &&
       (t.part === undefined || (Number.isSafeInteger(t.part) && Number.isSafeInteger(t.parts) && t.part >= 1 && t.part <= t.parts && t.parts <= 100000));
     if (!ok) { dropped++; continue; }
     turns.push({ id: t.id, role: t.role, session: t.session, text: t.text, time: typeof t.time === "string" ? t.time : "", group: typeof t.group === "string" ? t.group : "",
-      part: t.part || 0, parts: t.parts || 0, truncated: t.truncated === true, redactions: Number.isSafeInteger(t.redactions) ? t.redactions : 0 });
+      part: t.part || 0, parts: t.parts || 0, truncated: t.truncated === true, redactions: Number.isSafeInteger(t.redactions) ? t.redactions : 0, line: t.role === "founder" ? t.line : "" });
   }
   return { ok: true, reason: "", value: { session: b.session, backfill: b.backfill, turns, dropped } };
 }
@@ -489,9 +493,11 @@ export function readChatReceipt(bodyBytes, horde, machine) {
 //   sent      the lines this phone sent this session: { messageId, text, at, session }
 // -> { session, items } where items are, in order of time, { kind: "turn", id, role, text, time, session,
 // truncated, redactions } and { kind: "line", messageId, text, at, status, code, words }. A turn is shown
-// once, by id, and only once all its parts are here; a user turn that is the phone's own line coming
-// back (it holds a line's marker) is shown as that line, not twice; a line is shown once, its newest
-// receipt's status on it, or "sending" when there is none yet.
+// once, by id, and only once all its parts are here; a line is shown once, its newest receipt's status
+// on it, or "sending" when there is none yet. A founder turn (the machine found the line delivered) is
+// that line: beside a send or a receipt it is not shown twice, and with neither - after a reload, once
+// the relay dropped the receipt - it is shown as his line, delivered. A user turn that merely QUOTES a
+// line's header is a user turn: nothing in a turn's text makes it the founder's.
 export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
   const byId = new Map();
   for (const t of turns) {
@@ -505,7 +511,8 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
   for (const r of receipts) {
     const had = lines.get(r.messageId);
     if (had && had.seq > r.seq) continue;
-    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts, session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
+    // The receipt's words are the words posted: what the line shows, whatever the phone kept.
+    lines.set(r.messageId, { kind: "line", messageId: r.messageId, text: r.text, at: had && had.at ? had.at : r.ts, session: r.session, status: r.status, code: r.code, words: CHAT_WORDS[r.status][r.code], seq: r.seq });
   }
   const items = [];
   for (const [id, g] of byId) {
@@ -518,14 +525,16 @@ export function chatTimeline({ turns = [], receipts = [], sent = [] }) {
       for (let i = 1; i <= n; i++) text += g.parts.get(i).text;
     }
     const t = g.whole || g.first;
-    if (t.role === "user") {
-      let echo = false;
-      for (const m of lines.keys()) if (text.indexOf(lineMarker(m)) >= 0) { echo = true; break; }
-      if (echo) continue;
+    if (t.role === "founder") {
+      const had = lines.get(t.line);
+      if (had) { if (had.status === "sending") { had.status = "accepted"; had.code = "delivered"; had.words = CHAT_WORDS.accepted.delivered; } }
+      // Kept as the line, by its id: a messenger that delivers at least once may hand it over twice.
+      else lines.set(t.line, { kind: "line", messageId: t.line, text, at: Date.parse(t.time) || 0, session: t.session, status: "accepted", code: "delivered", words: CHAT_WORDS.accepted.delivered, seq: -1, order: g.seq });
+      continue;
     }
     items.push({ kind: "turn", id, role: t.role, text, time: t.time, session: t.session, truncated: t.truncated, redactions: t.redactions, at: Date.parse(t.time) || 0, order: g.seq });
   }
-  for (const l of lines.values()) items.push({ ...l, order: Number.MAX_SAFE_INTEGER });
+  for (const l of lines.values()) items.push({ ...l, order: l.order === undefined ? Number.MAX_SAFE_INTEGER : l.order });
   items.sort((a, b) => (a.at - b.at) || (a.order - b.order));
   return items;
 }

@@ -323,6 +323,8 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       if (s.mode !== "passkey") { throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to write to the Thrall."); }
       if (typeof text !== "string" || !text.trim()) throw fail("There is nothing to send.");
       if (!s.chat.session) throw fail("Nothing has come from the Thrall yet, so there is no session to write to. Wait for its turns, then send.");
+      // One id, one set of words (review of 3d837f0, finding 1): the same id is how a resend is known.
+      if (s.chat.sent.some((x) => x.messageId === messageId && x.text !== text)) throw fail("These are other words than the line first sent under this id: send them as a new line.");
       const body = P.lineBody({ messageId, horde: e.horde, machine: e.machine, session: s.chat.session, text });
       const env = await sealAndSign(e, "line", "chat", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);

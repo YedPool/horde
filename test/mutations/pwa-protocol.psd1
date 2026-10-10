@@ -45,9 +45,15 @@
         @{ Name = "chat-receipt-any-code-shown"
            Find = 'if (!Object.prototype.hasOwnProperty.call(CHAT_WORDS, b.status) || !Object.prototype.hasOwnProperty.call(CHAT_WORDS[b.status], b.code)) return'
            Replace = 'if (false) return' }
-        @{ Name = "chat-echo-shown-twice"
-           Find = 'if (echo) continue;'
-           Replace = 'if (false) continue;' }
+        @{ Name = "chat-receipt-words-not-shown"
+           Find = 'text: r.text, at: had && had.at ? had.at : r.ts'
+           Replace = 'text: had ? had.text : r.text, at: had && had.at ? had.at : r.ts' }
+        @{ Name = "chat-founder-turn-shown-twice"
+           Find = 'if (t.role === "founder") {'
+           Replace = 'if (false) {' }
+        @{ Name = "chat-founder-turn-without-line-kept"
+           Find = '(t.role !== "founder" || (typeof t.line === "string" && /^[0-9a-f]{32}$/.test(t.line))) &&'
+           Replace = 'true &&' }
         @{ Name = "chat-turn-shown-before-its-parts"
            Find = 'if (g.parts.size !== n) continue;'
            Replace = 'if (g.parts.size === 0) continue;' }

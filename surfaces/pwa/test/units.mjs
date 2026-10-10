@@ -444,18 +444,27 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   c = await a.phone.chat(a.paired.id);
   const mine = c.items.find((x) => x.kind === "line");
   check(mine && mine.words === P.CHAT_SENDING && mine.text === "carry on", "until a receipt comes it is shown as sending");
-  // The receipt, a forged code, and the line coming back as a user turn.
+  // The receipt, a forged code, a turn that merely quotes the line's header, and the machine's founder turn.
   await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "held", "your-account-expired", "carry on"), "receipt");
   await a.phone.refresh(a.paired.id);
   c = await a.phone.chat(a.paired.id);
   check(c.items.find((x) => x.kind === "line").words === P.CHAT_SENDING, "a receipt with a code the phone does not know is not shown: no word of the machine's reaches the screen");
   await sendChat(t, m, a.phoneKey, receiptBody(m, "sess-1", mid, "accepted", "delivered", "carry on"), "receipt");
-  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t4", "user", "FOUNDER LINE from the phone " + P.lineMarker(mid) + "\n\ncarry on"), turn("t5", "assistant", "on it")]));
+  await sendChat(t, m, a.phoneKey, chatBody(m, "sess-1", [turn("t4", "user", "FOUNDER LINE from the phone " + P.lineMarker(mid) + "\n\ncarry on"), turn("t5", "assistant", "on it"), turn("t6", "founder", "carry on", { line: mid }), turn("t7", "founder", "carry on", { line: mid })]));
   await a.phone.refresh(a.paired.id);
   c = await a.phone.chat(a.paired.id);
   const lines = c.items.filter((x) => x.kind === "line");
   check(lines.length === 1 && lines[0].words === P.CHAT_WORDS.accepted.delivered, "the receipt's code is shown in the phone's own fixed words", JSON.stringify(lines));
-  check(!c.items.some((x) => x.kind === "turn" && x.text.indexOf(P.lineMarker(mid)) >= 0) && c.items.some((x) => x.text === "on it"), "his line coming back as a user turn is shown once, as his line; the Thrall's reply is shown");
+  check(c.items.some((x) => x.kind === "turn" && x.role === "user" && x.text.indexOf(P.lineMarker(mid)) >= 0), "a turn that quotes his line's header is shown as what it is - a user turn - never as his line");
+  check(c.items.filter((x) => x.kind === "line" && x.messageId === mid).length === 1 && c.items.some((x) => x.text === "on it"), "the machine's founder turn for his line, handed over twice, is that one line, not three; the Thrall's reply is shown");
+  check((await throwsAsync(async () => { const r = P.readChatTurns(chatBody(m, "s", [{ id: "x", role: "founder", session: "s", text: "t" }]), "work", m.keyId); if (r.value.turns.length) throw new Error("kept"); })) === "", "a founder turn that names no line is dropped");
+  // Other words under an id already sent are refused on the phone (review of 3d837f0, finding 1), and
+  // a receipt's words - the words posted - are what the line shows.
+  const headNow = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const edited = await throwsAsync(() => a.phone.sendLine(a.paired.id, { text: "carry on, but slower", messageId: mid }));
+  check(edited.indexOf("other words") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === headNow, "other words under a line id already sent are refused before anything is signed", edited);
+  const tl = P.chatTimeline({ sent: [{ messageId: "f".repeat(32), text: "typed here", at: 1, session: "s" }], receipts: [{ messageId: "f".repeat(32), status: "accepted", code: "delivered", text: "posted words", session: "s", seq: 3, ts: 2 }] });
+  check(tl.length === 1 && tl[0].text === "posted words", "a line shows the words its receipt says were posted, not what the phone kept", JSON.stringify(tl));
   // Through the bridge: the page's id for the words is the line's id, so a resend is the same line.
   const brp = createBridge(a.phone, { loadKinds: async () => ({}) });
   await brp.request("pick", { id: a.paired.id });
@@ -470,6 +479,13 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   await b.refresh(a.paired.id);
   const cb = await b.chat(a.paired.id);
   check(cb.items.filter((x) => x.kind === "line" && x.text === "carry on").length === 1, "after a reload the line is shown from its receipt, with his words");
+  // Once the relay has dropped the receipts, the founder turn alone still shows his line, delivered.
+  const t2 = R.memoryTransport();
+  const a2 = await pairedApp(t2, m);
+  await sendChat(t2, m, a2.phoneKey, chatBody(m, "sess-1", [turn("u1", "assistant", "earlier"), turn("u2", "founder", "kept in history", { line: "e".repeat(32) })], { backfill: true }));
+  await a2.phone.refresh(a2.paired.id);
+  const only = (await a2.phone.chat(a2.paired.id)).items.filter((x) => x.kind === "line");
+  check(only.length === 1 && only[0].text === "kept in history" && only[0].words === P.CHAT_WORDS.accepted.delivered, "with no receipt left, the machine's founder turn shows his line as delivered", JSON.stringify(only));
   // Read only: the recovery code reads the chat and never writes to it.
   b.lock(a.paired.id);
   await b.recover(a.paired.id, a.paired.recoveryCode);

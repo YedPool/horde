@@ -27,6 +27,9 @@
         @{ Name = "recovery-session-writes-to-the-thrall"
            Find = 'if (s.mode !== "passkey") { throw fail("Read only:'
            Replace = 'if (false) { throw fail("Read only:' }
+        @{ Name = "other-words-under-a-sent-id"
+           Find = 'if (s.chat.sent.some((x) => x.messageId === messageId && x.text !== text)) throw fail('
+           Replace = 'if (false) throw fail(' }
         @{ Name = "line-without-a-session-sent"
            Find = 'if (!s.chat.session) throw fail('
            Replace = 'if (false) throw fail(' }
