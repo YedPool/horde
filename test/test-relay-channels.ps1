@@ -435,6 +435,11 @@ try {
     [void](Send-ToMachine $B $stale.text)
     $tB = Invoke-Turn $B
     Check ((Has $tB "not a snapshot this machine sent") -and @(Get-Said $B.store).Count -eq $Bsaid) ("an answer naming a snapshot this machine never sent is refused (" + $tB.text + ")")
+    $own = Get-SentKey $B
+    $forgedKey = $own.Substring(0, $own.Length - 1) + $(if ($own.EndsWith("0")) { "1" } else { "0" })
+    [void](Send-ToMachine $B (Get-Answer $B -Phone $W.phone -Machine $B.id.sign.keyId -Snapshot $forgedKey -Text "a snapshot of the right seq, not the right envelope").text)
+    $tB = Invoke-Turn $B
+    Check ((Has $tB "not a snapshot this machine sent") -and @(Get-Said $B.store).Count -eq $Bsaid) ("and so is one naming this machine's seq with another envelope's nonce (" + $tB.text + ")")
     Use-World $W
     $junk = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "answer" -Channel "decisions" -Body ($utf8.GetBytes('{"v":1,"answerId":"' + (New-Id) + '","machine":"' + $W.id.sign.keyId + '","snapshot":"' + (Get-SentKey $W) + '","number":1,"wordingVersion":1,"text":"x","extra":1}')) -To $W.agree
     [void](Send-ToMachine $W $junk.text)
