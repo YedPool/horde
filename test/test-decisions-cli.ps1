@@ -24,6 +24,7 @@ $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-decisions-cli-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $script:work | Out-Null
@@ -184,12 +185,13 @@ $setValues = @($cmdAst.FindAll({ param($node) $node -is [System.Management.Autom
 Check (($setValues -join ",") -ceq ($verbNames -join ",") -and $verbNames.Count -ge 6) ("the verbs the command file accepts are the table's, in its order (" + ($setValues -join ",") + ")")
 # Every verb is an operation - its own name, or the one its entry names - and every operation has a verb.
 $operationNames = @(Get-HordeDecisionOperations | ForEach-Object { $_.name })
-$verbOperations = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens } | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
+$verbOperations = @($verbNames | Where-Object { -not (Get-HordeDecisionCommandVerb -Verb $_).opens -and -not (Get-HordeDecisionCommandVerb -Verb $_).notifies } | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("operation")) { "$($entry.operation)" } else { $_ } })
 $thenOperations = @($verbNames | ForEach-Object { $entry = $script:HordeDecisionCommandVerbs[$_]; if ($entry.ContainsKey("then")) { "$($entry.then)" } })
 Check (@(@($verbOperations) + @($thenOperations) | Where-Object { $operationNames -cnotcontains $_ }).Count -eq 0 -and @($operationNames | Where-Object { $verbOperations -cnotcontains $_ -and $thenOperations -cnotcontains $_ }).Count -eq 0) ("every verb is an operation, and every operation is a verb's own or what a verb asks for once its lines are out (" + (@(@($verbOperations) + @($thenOperations) | Sort-Object -Unique) -join ",") + ")")
 Check (($thenOperations -join ",") -ceq "mark-read" -and "$($script:HordeDecisionCommandVerbs['inbox'].then)" -ceq "mark-read") "inbox reads, and then asks for mark-read: two operations, in that order"
 Check ((@($verbNames | Where-Object { $script:HordeDecisionCommandVerbs[$_].ContainsKey("says") }) -join ",") -ceq "answer,reply" -and $script:HordeDecisionCommandVerbs["answer"].says.speaker -ceq "founder" -and $script:HordeDecisionCommandVerbs["answer"].says.route -ceq "chat-recorded" -and $script:HordeDecisionCommandVerbs["reply"].says.speaker -ceq "warchief" -and $script:HordeDecisionCommandVerbs["reply"].says.route -ceq "command") "answer is the founder's words recorded from chat, and reply is the warchief's own: who speaks is the verb's, never a flag's"
-Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).opens }) -join ",") -ceq "open" -and $verbNames[$verbNames.Count - 1] -ceq "open") "but for open, the one verb that is no operation: it opens a window that calls them"
+Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).opens }) -join ",") -ceq "open" -and $verbNames[$verbNames.Count - 1] -ceq "open") "but for open, a verb that is no operation: it opens a window that calls them"
+Check ((@($verbNames | Where-Object { (Get-HordeDecisionCommandVerb -Verb $_).notifies }) -join ",") -ceq "notify" -and $verbNames[$verbNames.Count - 2] -ceq "notify") "and notify, the other: it reads the inbox and rings, through decisions/Notify.ps1"
 Check (([regex]::Matches($tableUsage, ' \| ')).Count -eq ($verbNames.Count - 1) -and -not ($tableUsage -replace ' \| ', ' ').Contains("|")) "in the usage line a bar stands between two verbs, and for nothing else"
 $unsaid = New-Object System.Collections.ArrayList
 foreach ($verbName in $verbNames) {
@@ -360,6 +362,40 @@ Check ($shownText -like "*Conversation: 3 message(s); turn: the warchief*" -and 
 $talkToken = "gh" + "p_" + ("Zx9" * 12)
 $secretSaid = Invoke-Decisions @("answer", "1", "-File", (Write-Json "talk-secret.txt" ("the token is " + $talkToken + " - use it"))) $talkEnv
 Check ($secretSaid.code -eq 1 -and $secretSaid.out -like "*Refused:*'text' holds what looks like an access token*" -and -not $secretSaid.out.Contains($talkToken) -and -not $secretSaid.out.Contains("Zx9Zx9") -and (Get-TalkKinds) -ceq "added,said,said,said,read") "words holding a token are refused, exit 1; the token is on neither stream, and nothing is written"
+
+Write-Host ""
+Write-Host "--- notify: one pass with -Once, and with nobody to tell it says so and records nothing ---" -ForegroundColor Cyan
+$notifyHome = Join-Path $script:work "notify-home"
+# The fleet's registry is a folder of this suite's that does not exist, so no seat is read from the
+# machine's own fleet and no session can be told: notify's answer depends on nothing installed here.
+$notifyEnv = @{ HORDE_HOME = $notifyHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
+New-Item -ItemType Directory -Path (Join-Path $notifyHome "settings") -Force | Out-Null
+# Notify loads every messenger, and one may find a real program to post through by itself: pinned here
+# before any horde child starts in this home (test/lib/MessengerPins.ps1).
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $notifyHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $notifyHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
+[System.IO.File]::WriteAllText((Join-Path $notifyHome "settings\decisions-notify.json"), '{"schemaVersion":1,"settings":{"quietSeconds":0}}', $utf8)
+$nqFile = Write-Json "notify-question.json" '{"title":"Should the doorbell be heard when he answers?","kind":"yes-no","whatItIs":"A test of notify.","group":"the fleet tool","askedBy":"orc-a"}'
+$nq = Invoke-Decisions @("add", "-File", $nqFile) $notifyEnv
+$nWords = "notify must never carry these words: amber kettle"
+$na = Invoke-Decisions @("answer", "1", "-Text", $nWords) $notifyEnv
+# WHY NOBODY CAN BE TOLD HERE, as notify says it. The situation this suite builds is a fleet registry
+# that does not exist; which of two honest reasons notify gives depends only on whether a messenger that
+# can deliver to a session is loaded (notify asks for one before it reads the seat): none loaded, or one
+# loaded and the warchief's seat unreadable because the registry is not there. Either is pending; a
+# reason naming a messenger's answer would mean a post was tried, and none may be.
+$nobodyToTell = '\Apending: (no messenger on this machine can deliver to a session|the warchief''s session cannot be told: [^\r\n]*no registry sessions directory at [^\r\n]*no-fleet)'
+$once = Invoke-Decisions @("notify", "-Once") $notifyEnv
+Check ($nq.code -eq 0 -and $na.code -eq 0 -and $once.code -eq 0 -and $once.out.Trim() -cmatch $nobodyToTell -and $once.out -like "*1 answer, on question 1, stays untold, and nothing is lost*") ("notify -Once with no fleet here: pending, because nobody can be told, said plainly, exit 0 (" + $once.out.Trim() + ")")
+Check ($once.out -notlike "*messenger * answered*" -and $once.out -notlike "*did not take it*") "and no post was tried: the reason names no messenger's answer"
+Check (-not $once.out.Contains("amber kettle")) "CONTROL beside it: the answer stored under question 1 is not printed by notify"
+Check (-not (Test-Path -LiteralPath (Join-Path $notifyHome "decisions\notify-told.json"))) "and nothing is recorded as told"
+$stillUnread = Get-JsonLine (Invoke-Decisions @("inbox", "-Json") $notifyEnv)
+Check ($null -ne $stillUnread -and @($stillUnread.value.messages).Count -eq 1 -and "$($stillUnread.value.messages[0].message.text)" -ceq $nWords) "nothing is lost: the answer still waits unread in the inbox"
+$nNumber = Invoke-Decisions @("notify", "3") $notifyEnv
+Check ($nNumber.code -ne 0 -and $nNumber.out -like "*decisions notify takes no question number*") "notify takes no question number"
+$nJson = Invoke-Decisions @("notify", "-Json") $notifyEnv
+Check ($nJson.code -ne 0 -and $nJson.out -like "*-Json does not belong to decisions notify*Usage: horde decisions notify ``[-Once``]*") "and no flag but -Once, answered with its usage"
 
 Write-Host ""
 Write-Host "--- HORDE_HOME decides where the store is ---" -ForegroundColor Cyan

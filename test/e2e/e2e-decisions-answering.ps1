@@ -31,6 +31,7 @@ $root = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
 . (Join-Path $root "test\lib\Cli.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
 . (Join-Path $root "test\lib\WindowProbe.ps1")
 
 $script:work = Join-Path $env:TEMP ("horde-answer-e2e-" + [guid]::NewGuid().ToString("N"))
@@ -39,8 +40,14 @@ $hordeHome = Join-Path $script:work "home"
 $store = Join-Path $hordeHome "store\decisions"
 $report = Join-Path $script:work "report.json"
 $script:probeFile = Join-Path $script:work "probe.json"
-$toldFile = Join-Path $script:work "told.json"
+# The told record is notify's, under the home (decisions/Notify.ps1), and this scenario plays notify by
+# writing it. Notify itself is kept from standing beside the window here, by its own setting: it would
+# read the same record, and this scenario is about the window's marks.
+$toldFile = Join-Path $hordeHome "decisions\notify-told.json"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+New-Item -ItemType Directory -Path (Join-Path $hordeHome "settings") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $hordeHome "decisions") -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $hordeHome "settings\decisions-notify.json"), '{"schemaVersion":1,"settings":{"startWithWindow":false}}', $utf8)
 $childEnv = @{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet"); PSModulePath = $null }
 $cliEnv = @{ HORDE_HOME = $hordeHome; WEZFLEET_ROOT = (Join-Path $script:work "no-fleet") }
 $script:probeN = 0
@@ -89,6 +96,12 @@ function Step { param([string]$Do, $Q = $null, [string]$Text = "", [string]$Key 
 $again = $null
 try {
 
+# THE MESSENGERS ARE PINNED in the home every horde child here uses: the window loads every messenger,
+# and one may find a real program to post through by itself (test/lib/MessengerPins.ps1). The fleet's
+# registry is a folder of this scenario's that does not exist (WEZFLEET_ROOT), so no seat is read.
+$pins = @(Set-HordeTestMessengerPins -Root $root -HordeHome $hordeHome)
+Check ($pins.Count -ge 1 -and @($pins | Where-Object { -not (Test-Path -LiteralPath (Join-Path $hordeHome ("settings\messenger-" + $_ + ".json")) -PathType Leaf) }).Count -eq 0) ("PIN: every messenger that has a pin is pinned in this home, so no horde started here can post for real (" + ($pins -join ", ") + ")")
+
 Write-Host ""
 Write-Host "=== a list of 22 questions: one very long, some with a recommendation and some with none ===" -ForegroundColor Cyan
 $long = "Should the work that was parked yesterday be committed to a branch of its own exactly as it stands, with no change to it at all, so that the server work that links an email to a device can go to the test server without rolling back what was deployed there two days ago, and so that both then go there together?"
@@ -111,7 +124,7 @@ Check ($list.Count -eq 22 -and @(Get-ChildItem -LiteralPath $store -File).Count 
 
 Write-Host ""
 Write-Host "=== the window is opened: 22 fields with no click, the recommendation in grey, every question whole ===" -ForegroundColor Cyan
-$script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report, "-Probe", $script:probeFile, "-ToldMarks", $toldFile) -Env $childEnv
+$script:open = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report, "-Probe", $script:probeFile) -Env $childEnv
 $first = Wait-HordeProbeReport -Path $report -Process $script:open.process -Seconds 150 -Until { param($r) $null -ne $r.drawn -and @($r.drawn.lines).Count -eq 22 -and $null -ne $r.drawn.answer }
 $drawn = $first.drawn
 Check ($null -ne $drawn -and @($drawn.lines).Count -eq 22) "the page reports the 22 question lines it drew"
@@ -285,7 +298,7 @@ $closed = Close-HordeProbeWindow -Process $script:open.process -Handle ([long]$r
 Check ($closed.asked -and $closed.exited -and -not $closed.killed -and $closed.code -eq 0) "the window is closed as its close button would, and the command exits 0"
 Check ($script:open.err.Result.Trim() -ceq "") "with nothing on the error stream"
 $report2 = Join-Path $script:work "report2.json"
-$again = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report2, "-ToldMarks", $toldFile) -Env $childEnv
+$again = Start-HordeProbeCommand -Root $root -HordeArgs @("decisions", "open", "-Hidden", "-Report", $report2) -Env $childEnv
 $back = Wait-HordeProbeReport -Path $report2 -Process $again.process -Seconds 150 -Until { param($x) $null -ne $x.drawn -and @($x.drawn.lines).Count -eq (23 - $thrallN) -and $null -ne $x.drawn.answer }
 Check ($back.pid -eq $again.process.Id -and $back.pid -ne $first.pid) "opened again: a new window, a new process"
 Check ($back.drawn.answer.fields -eq (22 - $thrallN) -and @($back.drawn.headings | Where-Object { $_.kind -ceq "parked" })[0].folded -eq $true) "what is parked is folded again, out of the way"

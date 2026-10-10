@@ -67,6 +67,13 @@ $notRole = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionWindowSet
 Check ($notRole.state -ceq "refused" -and @($notRole.findings).Count -eq 1 -and $notRole.findings[0] -like "*'role'*") "a role that is not one of the role table's refuses the file, by name"
 
 Write-Host ""
+Write-Host "--- what is told is notify's record under the home, and nothing a caller names ---" -ForegroundColor Cyan
+Check (-not (Get-Command Open-HordeDecisionWindow).Parameters.ContainsKey("ToldMarks")) "open takes no file of announced messages: there is one, and notify keeps it"
+$composer = [System.IO.File]::ReadAllText((Join-Path $root "decisions\Window.ps1"))
+Check ($composer.Contains('$toldPath = Get-HordeDecisionNotifyRecordPath -HordeHome $hordeHome') -and $composer.Contains('$record = Read-HordeDecisionNotifyRecord -Path $Path')) "open hands the window notify's told record under the home, read by notify's own reader"
+Check ((Get-HordeDecisionNotifySettingsDeclaration).module -ceq "decisions-notify" -and (Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionNotifySettingsDeclaration) -Text $null).values.startWithWindow -eq $true) "and notify's own settings, read by open, start it beside the window unless a person turns that off"
+
+Write-Host ""
 Write-Host "--- a settings file that fails a check refuses the window, every finding said ---" -ForegroundColor Cyan
 $ok = Read-HordeModuleSettingsText -Declaration (Get-HordeDecisionWindowSettingsDeclaration) -Text $null
 Check ((Get-HordeDecisionWindowSettingsRefusal -Answers @($ok, $person, $ok, $ok)) -ceq "") "four answers that are the defaults or read refuse nothing"
@@ -97,6 +104,16 @@ $openPast = & {
     try { Open-HordeDecisionWindow -Hidden | Out-Null; "returned" } catch { "" + $_.Exception.Message }
 }
 Check ($openPast -ceq "PAST THE SETTINGS CHECK") ("CONTROL: a finder whose settings are the defaults lets open go on past the check (" + $openPast + ")")
+# Notify's settings are read by open too, because open starts notify beside the window.
+$notifyFile = Join-Path $hordeHome "settings\decisions-notify.json"
+New-Item -ItemType Directory -Path (Split-Path -Parent $notifyFile) -Force | Out-Null
+[System.IO.File]::WriteAllText($notifyFile, '{"schemaVersion":1,"settings":{"quietSeconds":-1}}')
+$openNotify = & {
+    function Enable-HordeWindowFollowRealScale { throw "PAST THE SETTINGS CHECK" }
+    try { Open-HordeDecisionWindow -Hidden | Out-Null; "returned" } catch { "" + $_.Exception.Message }
+}
+Remove-Item -LiteralPath $notifyFile
+Check ($openNotify -clike "the decisions window was not opened, because a settings file is refused:*decisions-notify*quietSeconds*") ("a refused settings file of notify, which open starts, refuses the window before anything starts (" + $openNotify + ")")
 $script:HordeHostWindowFinders.Clear()
 Check ((Get-HordeDecisionWindowName -HordeHome "C:\H\") -ceq (Get-HordeDecisionWindowName -HordeHome "c:\h") -and (Get-HordeDecisionWindowName -HordeHome "C:\h") -cmatch '\Ahorde-decisions-window-[0-9a-f]{16}\z' -and (Get-HordeDecisionWindowName -HordeHome "C:\h2") -cne (Get-HordeDecisionWindowName -HordeHome "C:\h")) "the one window of a home is known by a name ending in 16 hex of the home's fingerprint, the same however the path is written and another for another home"
 Check ((Get-HordeDecisionWindowDataFolder -HordeHome "C:\h") -ceq "C:\h\cache\decisions-window") "the surface's own files are kept under the home's cache, by the module's name"
@@ -145,10 +162,10 @@ $src = [System.IO.File]::ReadAllText((Join-Path $root "decisions\Window.ps1"))
 $operations = @([regex]::Matches($src, 'Get-HordeDecisionWindowRecord -Operation "([a-z-]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 Check (($operations -join ",") -ceq "kinds,list") "the composer asks the decisions operations for the list and the kinds, and for nothing else"
 $reads = 'Get-HordeDecisionRecords|ConvertTo-HordeDecisionState|Add-HordeDecisionRecord|Get-ChildItem|Get-Content|\*\.json'
-# The two files it does open are not the store's: the file of announced messages and a check's steps,
-# each read whole from the path the command was given.
+# The one file it opens itself is not the store's: a check's steps, read whole from the path the command
+# was given. The told record is notify's, read by notify's reader (decisions/Notify.ps1).
 $opened = @([regex]::Matches($src, '(?m)^.*ReadAllText.*$') | ForEach-Object { $_.Value })
-Check (-not ($src -match $reads) -and $opened.Count -eq 2 -and @($opened | Where-Object { $_ -notmatch 'ReadAllText\(\$Path, ' }).Count -eq 0) "and reads no record of the store itself: no listing of it, no name of a record's file, and the only two files it opens are the two it was handed by path"
+Check (-not ($src -match $reads) -and $opened.Count -eq 1 -and @($opened | Where-Object { $_ -notmatch 'ReadAllText\(\$Path, ' }).Count -eq 0) "and reads no record of the store itself: no listing of it, no name of a record's file, and the only file it opens is the one it was handed by path"
 Check ([System.IO.File]::ReadAllText((Join-Path $root "decisions\Store.ps1")) -match $reads) "CONTROL: the same search finds such a read in the store's own file, so finding none in the composer means something"
 $platform = 'HordeWindows|platform\\windows|user32|SetForegroundWindow'
 Check (-not ($src -match $platform)) "the composer calls no function of a platform by name: the follower and the surface are asked through their ports"

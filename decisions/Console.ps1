@@ -80,11 +80,14 @@ $script:HordeDecisionCommandVerbs = [ordered]@{
     # mark-read: record that everything said up to a record has been read. What `inbox` does by itself
     # in plain text, and what a caller of `inbox -Json` does once it has the line.
     "mark-read" = @{ number = $false; flags = @("UpTo", "Id", "Json");              usage = "mark-read -UpTo <record> [-Id <32 hex>] [-Json]" }
-    # THE ONE VERB THAT IS NOT AN OPERATION. It changes and reads nothing itself: it opens a window
+    # NOTIFY IS NOT AN OPERATION EITHER: it reads the inbox and rings the warchief's session through a
+    # messenger (decisions/Notify.ps1); `notifies` tells the dispatch below to hand it on, like `opens`.
+    notify = @{ number = $false; flags = @("Once");                                 usage = "notify [-Once]"; notifies = $true }
+    # THE VERB THAT OPENS A WINDOW IS NOT AN OPERATION. It changes and reads nothing itself: it opens a window
     # that is another caller of the same operations (decisions/Window.ps1). It is in this table so
     # that its flags are checked and its usage is printed like any verb's; `opens` is what tells the
     # dispatch below to hand it on instead of calling an operation of its name.
-    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc", "ToldMarks", "Probe"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>] [-ToldMarks <file.json>] [-Probe <file.json>]"; opens = $true }
+    open   = @{ number = $false; flags = @("Hidden", "OffScreen", "Report", "Picture", "Unfold", "Orc", "Probe"); usage = "open [-Hidden] [-OffScreen] [-Report <file.json>] [-Picture <file.png>] [-Unfold <numbers>] [-Orc <letter>] [-Probe <file.json>]"; opens = $true }
 }
 # The role this caller acts as. The command line is the warchief's tool: nobody else writes to the list
 # today, and the operations refuse a role the rules' list of actors does not hold.
@@ -93,11 +96,11 @@ $script:HordeDecisionCommandActor = "warchief"
 function Get-HordeDecisionCommandVerbs { return @($script:HordeDecisionCommandVerbs.Keys) }
 
 function Get-HordeDecisionCommandVerb {
-    # One verb's entry of the table, as { number; flags; usage; opens }, or $null for a word that is no verb.
+    # One verb's entry of the table, as { number; flags; usage; opens; notifies }, or $null for a word that is no verb.
     param([Parameter(Mandatory = $true)][string]$Verb)
     $entry = $script:HordeDecisionCommandVerbs[$Verb]
     if ($null -eq $entry) { return $null }
-    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens") }
+    return [pscustomobject]@{ number = [bool]$entry.number; flags = @($entry.flags); usage = "$($entry.usage)"; opens = [bool]$entry.ContainsKey("opens"); notifies = [bool]$entry.ContainsKey("notifies") }
 }
 
 function Get-HordeDecisionCommandUsage {
@@ -458,10 +461,10 @@ function Complete-HordeDecisionCommand {
 
 function Invoke-HordeDecisionCommand {
     # Run one `horde decisions <verb>`. -Given is the command's bound parameters, by name. Returns
-    # { lines; failure; after; opens }: the lines to print; when the command must fail, the message to fail
-    # with; what is to be done once the lines are out (Complete-HordeDecisionCommand), or $null; and opens,
-    # true for the one verb that is not an operation: its command line has been checked like any other,
-    # nothing was done, and the caller opens the window.
+    # { lines; failure; after; opens; notifies }: the lines to print; when the command must fail, the message
+    # to fail with; what is to be done once the lines are out (Complete-HordeDecisionCommand), or $null; and
+    # opens and notifies, true for the two verbs that are not operations: the command line has been checked
+    # like any other, nothing was done, and the caller opens the window or runs notify.
     # It throws only for a command line it cannot act on: an unknown verb, a flag that belongs to
     # another verb, a missing number, a file it cannot read.
     param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Given)
@@ -490,7 +493,8 @@ function Invoke-HordeDecisionCommand {
         if ($numberText -cnotmatch '\A[1-9][0-9]{0,8}\z') { throw ("decisions " + $Verb + " needs the question's number, as in: horde decisions " + $Verb + " 7" + $(if ($numberText -ne "") { " (got '" + $numberText + "')" } else { "" })) }
     }
     elseif ($numberText -ne "") { throw ("decisions " + $Verb + " takes no question number, and got '" + $numberText + "'" + $usageNote) }
-    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true } }
+    if ($spec.ContainsKey("opens")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $true; notifies = $false } }
+    if ($spec.ContainsKey("notifies")) { return [pscustomobject]@{ lines = @(); failure = ""; after = $null; opens = $false; notifies = $true } }
     $id = [guid]::NewGuid().ToString("N")
     if ($have.ContainsKey("Id")) {
         $id = "$($have['Id'])"
@@ -586,5 +590,5 @@ function Invoke-HordeDecisionCommand {
     $failure = ""
     if ($answer.state -cne "known") { $failure = "$($answer.reason)" }
     elseif ($answer.value.outcome -ceq "refused") { $failure = "$($answer.value.reason)" }
-    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false }
+    return [pscustomobject]@{ lines = $lines; failure = $failure; after = $after; opens = $false; notifies = $false }
 }
