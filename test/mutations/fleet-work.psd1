@@ -3,8 +3,8 @@
 # Each breaks one refusal or one rule of the fold; test\test-fleet-work.ps1 must fail a check for every one.
 #
 # NOT HERE: the patterns of the content check (credential, customer data, conversation). They are
-# core/Finding.ps1's and decisions/Rules.ps1's, held by test\mutations\finding.psd1 and
-# test\mutations\decisions-rules.psd1; here only their use is mutated.
+# core/Finding.ps1's and core/Secrets.ps1's, held by test\mutations\finding.psd1 and
+# test\mutations\secrets-decisions.psd1; here only their use is mutated.
 @{
     Target = "core\FleetWork.ps1"
     Suite  = "test\test-fleet-work.ps1"
