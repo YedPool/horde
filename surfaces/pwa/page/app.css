@@ -64,4 +64,24 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
    2026-10-09 in a picture of the app at 412 pixels wide, surfaces/pwa/test/test-pwa-browser.ps1). Here
    the cell takes what it needs, at least the window's 40, and the margin it hangs in grows to match. */
 #lists .hd-qrow { --hang: 70px; }
+
+/* THE TWO VIEWS of a horde: its open questions and its chat with the Thrall, side by side as tabs. */
+#viewTabs { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+#viewTabs button { flex: 1 1 0; }
+#viewTabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* THE CHAT: the log scrolls, the composer stands over the soft keyboard like the answering row. */
+#chat { padding: 8px 12px calc(var(--compose-h, 120px) + 16px + var(--kb)); max-width: 720px; margin: 0 auto; }
+#chatMode { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 4px 0 8px; }
+.chat-item { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.chat-item.founder { margin-left: 15%; border-color: var(--accent); }
+.chat-item.assistant { margin-right: 15%; }
+.chat-item.system { color: var(--warn); }
+.chat-who { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); }
+.chat-text { white-space: pre-wrap; }
+.chat-note { color: var(--muted); font-size: var(--small-px); line-height: var(--small-line-px); margin-top: 4px; }
+#chatCompose { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 6; padding: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--line); }
+#chatText { display: block; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); resize: none; max-height: 40vh; }
+#chatKeys { display: flex; gap: 6px; margin-top: 6px; }
+#chatKeys button { flex: 1 1 0; }
 #lists .hd-qt > .hd-num { flex: 0 0 auto; width: auto; min-width: 40px; }

@@ -19,6 +19,12 @@
 // drive), so a touch does exactly what the key does at the desk. A key is pressed on pointerdown with
 // the default prevented, so the field keeps the caret and the keyboard stays up.
 //
+// THE CHAT is the horde's second view, a tab beside its questions: the Thrall's turns and the founder's
+// lines, as the bridge's chat request answers them, and a composer with the same keys as an answer -
+// Enter sends, Shift+Enter or the New line key adds a line - over the soft keyboard. A line goes only
+// from a passkey session; read only (recovery, or a passkey without PRF), the composer is shut and says
+// why. The log, like the list, is taken off the page when the horde locks.
+//
 // EVERY TEXT IS SET AS TEXT (textContent, or a field's value).
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
@@ -64,8 +70,14 @@ made.catch((e) => say("boot", "This app cannot start here: " + messageOf(e)));
 
 // --- the screens ---
 
-const VIEWS = ["pairView", "pairedView", "lockedView", "emptyView", "doc"];
-function show(view) { for (const v of VIEWS) $(v).hidden = v !== view; $("keys").hidden = view !== "doc"; }
+const VIEWS = ["pairView", "pairedView", "lockedView", "emptyView", "doc", "chat"];
+function show(view) {
+  for (const v of VIEWS) $(v).hidden = v !== view;
+  $("keys").hidden = view !== "doc";
+  $("viewTabs").hidden = view !== "doc" && view !== "chat";
+}
+// Which view of an unlocked horde is up: its questions, or its chat.
+let pane = "decisions";
 
 let hordes = [];
 let current = "";
@@ -137,7 +149,8 @@ function render(h, rec) {
   }
   const d = docOf(h.id);
   d.box.hidden = false;
-  show("doc");
+  show(pane === "chat" ? "chat" : "doc");
+  if (pane === "chat") bridge.request("chat").then(drawChat);
   const banners = {
     recovery: "Read only: unlocked with the recovery code. Lock and unlock with the passkey to answer.",
     "read-only": "Read only: this passkey gives no PRF, so answers are never sent from this phone for this horde. Answer at the machine, or pair again with a passkey that has PRF."
@@ -151,6 +164,92 @@ function render(h, rec) {
 }
 
 bridge.on("list-changed", (rec) => { const h = hordes.find((x) => x.id === current); if (h) render(h, rec); });
+bridge.on("chat-changed", (rec) => drawChat(rec));
+
+// --- the chat ---
+
+const CHAT_BANNERS = {
+  recovery: "Read only: unlocked with the recovery code, which cannot sign a line. Lock and unlock with the passkey to write to the Thrall.",
+  "read-only": "Read only: this passkey gives no PRF, so no line is ever sent from this phone for this horde."
+};
+function pickPane(which) {
+  pane = which;
+  $("tabDecisions").setAttribute("aria-selected", which === "decisions" ? "true" : "false");
+  $("tabChat").setAttribute("aria-selected", which === "chat" ? "true" : "false");
+  if (current) pick(current);
+}
+$("tabDecisions").addEventListener("click", () => pickPane("decisions"));
+$("tabChat").addEventListener("click", () => pickPane("chat"));
+function clearChat() { const log = $("chatLog"); while (log.firstChild) log.removeChild(log.firstChild); }
+function drawChat(rec) {
+  if ($("chat").hidden || !rec) return;
+  if (rec.state !== "known") { clearChat(); $("chatEmpty").hidden = true; say("relay", rec.reason || ""); return; }
+  const v = rec.value;
+  const log = $("chatLog");
+  const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
+  clearChat();
+  for (const it of v.items) {
+    const box = document.createElement("div");
+    const who = document.createElement("div");
+    const text = document.createElement("div");
+    box.className = "chat-item " + (it.kind === "line" ? "founder" : it.role);
+    who.className = "chat-who";
+    who.textContent = it.kind === "line" ? "You" : it.role === "assistant" ? "Thrall" : it.role === "user" ? "At the machine" : "The machine";
+    text.className = "chat-text";
+    text.textContent = it.text;
+    box.appendChild(who);
+    box.appendChild(text);
+    const notes = [];
+    if (it.kind === "line") notes.push(it.words);
+    if (it.truncated) notes.push("Cut short at the machine: it was longer than a turn may be.");
+    if (it.redactions) notes.push(it.redactions + " thing(s) that look like secrets were hidden at the machine.");
+    for (const n of notes) { const d = document.createElement("div"); d.className = "chat-note"; d.textContent = n; box.appendChild(d); }
+    log.appendChild(box);
+  }
+  $("chatEmpty").hidden = v.items.length > 0 || !!v.session;
+  const banner = CHAT_BANNERS[v.mode] || "";
+  $("chatMode").hidden = !banner;
+  $("chatMode").textContent = banner;
+  const canWrite = v.mode === "passkey";
+  $("chatText").disabled = !canWrite;
+  $("chatSend").disabled = !canWrite;
+  $("chatNewline").disabled = !canWrite;
+  if (atEnd) window.scrollTo(0, document.documentElement.scrollHeight);
+}
+// The page's id for the words in the composer: kept until they are sent, so a line sent again after a
+// failure is the same line, posted once.
+let draftId = "";
+function newDraftId() { return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); }
+let sending = false;
+async function sendLine() {
+  const field = $("chatText");
+  const text = field.value;
+  if (sending || !text.trim() || field.disabled) return;
+  if (!draftId) draftId = newDraftId();
+  sending = true;
+  say("action", "");
+  try {
+    const r = await bridge.request("chat-send", { text, id: draftId });
+    if (r.ok) { field.value = ""; draftId = ""; } else say("action", r.reason);
+  } catch (e) { say("action", messageOf(e)); } finally { sending = false; }
+}
+$("chatText").addEventListener("input", () => { if (!$("chatText").value) draftId = ""; });
+$("chatText").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.isComposing) { e.preventDefault(); sendLine(); }
+});
+// The keys are pressed on pointerdown with the default prevented, so the field keeps the caret and the
+// soft keyboard stays up, as the answering row's keys are.
+$("chatSend").addEventListener("pointerdown", (e) => { e.preventDefault(); sendLine(); });
+$("chatSend").addEventListener("click", (e) => { if (e.detail === 0) sendLine(); });
+$("chatNewline").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const f = $("chatText");
+  if (f.disabled) return;
+  const a = f.selectionStart, b = f.selectionEnd;
+  f.value = f.value.slice(0, a) + "\n" + f.value.slice(b);
+  f.selectionStart = f.selectionEnd = a + 1;
+  f.focus();
+});
 bridge.on("hordes-changed", (list) => { hordes = list; drawTabs(); });
 bridge.on("notice", (words) => say("relay", words));
 
@@ -231,7 +330,7 @@ $("forgetBtn").addEventListener("click", () => {
 // A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
 // and with it the document's drafts, which live in that box's memory storage - not only hidden behind
 // the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
-function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } }
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } if (id === current) { clearChat(); $("chatText").value = ""; draftId = ""; } }
 async function lockAll() {
   const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
   for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
@@ -255,6 +354,7 @@ document.addEventListener("visibilitychange", () => {
   }
   $("doc").hidden = true;
   $("keys").hidden = true;
+  $("chat").hidden = true;
   clearTimeout(lockTimer);
   const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;

@@ -227,7 +227,57 @@ const commands = {
   async caches() { return await evaluate("(async () => { const out = {}; for (const n of await caches.keys()) { const c = await caches.open(n); out[n] = (await c.keys()).map((r) => new URL(r.url).pathname); } return out; })()"); },
   async serve(c) { serving = c.on === true; if (!serving) for (const s of sockets) s.destroy(); return { serving }; },
   async credentials() { const r = await cdp("WebAuthn.getCredentials", { authenticatorId: auth.authenticatorId }); return r.credentials.map((x) => ({ rpId: x.rpId, signCount: x.signCount, resident: x.isResidentCredential })); },
-  async problems() { return problems.slice(); }
+  async problems() { return problems.slice(); },
+  // THE CHAT: its tab, its log, and its composer driven by real keys and a real touch.
+  async chatTab(c) {
+    await evaluate("document.getElementById('" + (c.which === "decisions" ? "tabDecisions" : "tabChat") + "').click()", true);
+    await until(shown(c.which === "decisions" ? "doc" : "chat"), 15000);
+    return await evaluate("({ chat: " + shown("chat") + ", doc: " + shown("doc") + ", keys: " + shown("keys") + ", log: document.getElementById('chatLog').innerText })");
+  },
+  async chatWait(c) {
+    const found = await until("document.getElementById('chatLog').innerText.indexOf(" + JSON.stringify(c.text) + ") >= 0", c.timeoutMs || 30000);
+    return { found: !!found, log: await evaluate("document.getElementById('chatLog').innerText") };
+  },
+  async chatState() {
+    return await evaluate("({ mode: document.getElementById('chatMode').hidden ? '' : document.getElementById('chatMode').textContent, disabled: document.getElementById('chatText').disabled, items: document.querySelectorAll('#chatLog .chat-item').length, log: document.getElementById('chatLog').innerText })");
+  },
+  async chatNewline(c) {
+    const before = headOf(c.mailbox);
+    await evaluate("document.getElementById('chatText').focus()", true);
+    await cdp("Input.insertText", { text: "one" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 8, text: "\r" });
+    await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 8 });
+    await cdp("Input.insertText", { text: "two" });
+    const at = await centre("#chatNewline");
+    await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+    await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp("Input.insertText", { text: "three" });
+    await sleep(500);
+    const value = await evaluate("document.getElementById('chatText').value");
+    await evaluate("document.getElementById('chatText').value = ''");
+    return { value, sent: headOf(c.mailbox) !== before };
+  },
+  async chatSend(c) {
+    const before = headOf(c.mailbox);
+    await evaluate("document.getElementById('chatText').focus()", true);
+    await cdp("Input.insertText", { text: c.text });
+    if (c.via === "touch") {
+      const at = await centre("#chatSend");
+      await cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+      await cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } else {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    }
+    const end = Date.now() + (c.expectNone ? 2000 : 30000);
+    while (headOf(c.mailbox) === before && Date.now() < end) await sleep(100);
+    return { put: headOf(c.mailbox) > before, left: await evaluate("document.getElementById('chatText').value"), notice: await evaluate(notice) };
+  },
+  async chatShot(c) {
+    const shot = await cdp("Page.captureScreenshot", { format: "png" });
+    writeFileSync(c.path, Buffer.from(shot.data, "base64"));
+    return await evaluate("({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth, composeBottom: document.getElementById('chatCompose').getBoundingClientRect().bottom, innerHeight: window.innerHeight })");
+  }
 };
 
 async function shutdown() {

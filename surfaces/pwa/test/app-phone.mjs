@@ -46,6 +46,8 @@ const commands = {
   hordes: () => phone.hordes(),
   refresh: (c) => phone.refresh(c.id, { waitMs: c.waitMs || 0 }),
   answer: (c) => phone.answer(c.id, { number: c.number, wordingVersion: c.wordingVersion, text: c.text, answerId: c.answerId }),
+  chat: (c) => phone.chat(c.id),
+  line: (c) => phone.sendLine(c.id, { text: c.text, messageId: c.messageId }),
   bridge: (c) => bridge.request(c.name, c.args || {}),
   reload: async () => { reload(); return true; },
   // What a person could read in the store: every value, as JSON (CryptoKeys show as {}), for the

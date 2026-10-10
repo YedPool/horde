@@ -56,6 +56,14 @@
 //
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
+//
+// THE CHAT (channels/chat) comes through the same mailbox and the same refresh: the Thrall's turns and
+// the receipts of the founder's lines are opened with the same key, kept IN MEMORY ONLY for the session
+// like the snapshot, and put together by relay/js/protocol.js's chatTimeline (a turn once by id, a long
+// one only once all its parts are here, the phone's own line once). A line is a command-equivalent: it
+// is sent only from a passkey session, signed by the passkey (user verification), bound to the horde,
+// the machine and the Thrall's session the phone last heard of - the same keys rule as an answer: a
+// recovery or a read-only session reads the chat and never writes to it.
 import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
@@ -71,7 +79,8 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
   const sessions = new Map();
   // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
   const diagnostics = [];
-  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null });
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null, chat: newChat() });
+  const newChat = () => ({ turns: [], receipts: [], sent: [], session: "", sessionSeq: -1, ids: new Set() });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
   async function entryOf(id) {
@@ -110,6 +119,26 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
     s.pkcs8 = null;
     s.mode = "passkey";
     return next;
+  }
+
+  // One opened chat envelope into the session's memory. The relay may repeat or replay one: an envelope
+  // already taken (by its replay key) is skipped, and the timeline shows each turn and line once anyway.
+  function takeChat(e, s, opened, item, anomalies) {
+    const c = s.chat;
+    if (c.ids.has(opened.key)) return;
+    c.ids.add(opened.key);
+    const h = opened.header;
+    if (h.kind === "turns") {
+      const r = P.readChatTurns(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      if (r.value.dropped) anomalies.push("item " + item.seq + ": " + r.value.dropped + " turn(s) that do not hold together were left out");
+      for (const t of r.value.turns) c.turns.push({ ...t, seq: h.seq });
+      if (h.seq > c.sessionSeq) { c.session = r.value.session; c.sessionSeq = h.seq; }
+    } else if (h.kind === "receipt") {
+      const r = P.readChatReceipt(opened.body, e.horde, e.machine);
+      if (!r.ok) { anomalies.push("item " + item.seq + ": " + r.reason); return; }
+      c.receipts.push({ ...r.value, seq: h.seq, ts: h.ts });
+    }
   }
 
   function summary(e) {
@@ -236,6 +265,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
             anomalies.push("the relay's numbering went backwards (its first item is not the one this phone read under that number); the mailbox is read again from the start");
             s.cursor = 0;
             s.seen.clear();
+            s.chat.ids.clear();
             restarted = true;
             continue;
           }
@@ -246,6 +276,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
           // Another machine's envelope, or one sealed to another phone key, is not an anomaly: the
           // mailbox is the horde's. A forged or broken one from "this" machine is.
           if (!o.ok) { if (o.reason !== "not from the machine this phone paired with" && o.reason !== "not sealed to this phone") anomalies.push("item " + item.seq + ": " + o.reason); continue; }
+          if (o.value.header.channel === "chat") { takeChat(e, s, o.value, item, anomalies); continue; }
           if (o.value.header.channel !== "decisions" || o.value.header.kind !== "snapshot") continue;
           const page = P.readSnapshotPage(o.value.body, e.horde, e.machine);
           if (!page.ok) { anomalies.push("item " + item.seq + ": " + page.reason); continue; }
@@ -270,6 +301,34 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
         withheld: v ? v.withheld : [], counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
         anomalies, stale, mode: s.mode, relayDown: said.length > 0, diagnostics: said.concat(diagnostics.splice(0))
       };
+    },
+
+    // The chat of the horde as this session holds it (refresh reads it): { session, items, mode } -
+    // items from relay/js/protocol.js's chatTimeline. Needs an unlocked session.
+    async chat(id) {
+      await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      return { session: s.chat.session, items: P.chatTimeline(s.chat), mode: s.mode };
+    },
+
+    // One line of the founder to the Thrall, signed with the passkey (user verification) and put into the
+    // machine's mailbox, bound to the horde, the machine and the Thrall's session last heard of.
+    // messageId is the page's id for these words: sent again, they are posted once. { key, seq }.
+    async sendLine(id, { text, messageId }) {
+      const e = await entryOf(id);
+      const s = sessions.get(id);
+      if (!s) throw fail("This horde is locked.", "locked");
+      if (s.mode === "read-only") { throw fail(NO_PRF); }
+      if (s.mode !== "passkey") { throw fail("Read only: this horde was unlocked with the recovery code, which cannot sign. Unlock with the passkey to write to the Thrall."); }
+      if (typeof text !== "string" || !text.trim()) throw fail("There is nothing to send.");
+      if (!s.chat.session) throw fail("Nothing has come from the Thrall yet, so there is no session to write to. Wait for its turns, then send.");
+      const body = P.lineBody({ messageId, horde: e.horde, machine: e.machine, session: s.chat.session, text });
+      const env = await sealAndSign(e, "line", "chat", body, assertWith(e));
+      const put = await relay.put(e.machineMailbox, env.key, env.text);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Send it again; the same line is never delivered twice."); }
+      if (!s.chat.sent.some((x) => x.messageId === messageId)) s.chat.sent.push({ messageId, text, at: now(), session: s.chat.session });
+      return { key: env.key, seq: put.value.seq };
     },
 
     // The founder's answer to one question of the snapshot on screen, signed with the passkey (user
