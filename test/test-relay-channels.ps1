@@ -1,0 +1,552 @@
+# DOES THE FOUNDER'S PHONE SEE THE OPEN QUESTIONS, AND DOES EACH OF HIS SIGNED ANSWERS LAND IN THE
+# DECISIONS LIST EXACTLY ONCE - AND NOTHING ELSE LAND AT ALL?
+#
+# The relay channels (relay design 2026-10-09, PR plan item 6): channels/Port.ps1, the decisions channel
+# (channels/decisions), the trust channel (channels/trust), relay/Journal.ps1's done marks and resumption,
+# relay/Trust.ps1's phone keys, and cli/RelayRun.ps1's loop - over relays/local, in this process, with a
+# phone held in memory (test/lib/RelayPhone.ps1). It attacks:
+#   - TRUST: only a trusted founder passkey answers or vouches; a pending, revoked, unknown or forged
+#     sender, a machine key, an envelope for another machine, another channel or kind - all refused,
+#     and none of them journaled;
+#   - EXACTLY ONCE: a repeated put, a re-signed copy, a resent answer, a crash between the journal and the
+#     list, a list that could not be written, and a relay that reorders, repeats, serves stale items,
+#     conflicts and salts its batches with garbage - each answer is one record;
+#   - THE FIRST ANSWER WINS: other words under one answerId are refused for good;
+#   - THE SNAPSHOT: sealed to the trusted phone keys only, sent only when it changed, never carrying what
+#     looks like a secret;
+#   - THE RUNNER: turns, stops cleanly, backs off with jitter, refuses refused settings, releases
+#     retired keys.
+# The end to end, with a phone made by WebCrypto and the real horde command, is
+# test/test-relay-phone-e2e.ps1.
+#
+# EVERY HORDE HOME IS A FOLDER OF THE SUITE'S OWN under %TEMP% (CONTRIBUTING 9), never the real one:
+# HORDE_HOME is pointed at the home of each world for the decisions module's settings, and put back.
+# Every key is made with the software provider, named by its home's install id, removed in the finally
+# block, and checked gone. Off Windows there is no key store: the suite says so and exits 3.
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
+. (Join-Path $root "test\lib\Suite.ps1")
+trap { Register-HordeSuiteError $_; continue }
+. (Join-Path $root "core\ModuleSettings.ps1")
+. (Join-Path $root "channels\Port.ps1")
+foreach ($f in @(Get-HordeRelayFiles)) { . $f }
+foreach ($f in @(Get-HordeRelayChannelFiles)) { . $f }
+. (Join-Path $root "cli\RelayRun.ps1")
+. (Join-Path $root "test\lib\RelayPhone.ps1")
+. (Join-Path $root "test\lib\HostileRelay.ps1")
+Set-StrictMode -Version Latest
+Write-Host ("  runtime: PowerShell " + $PSVersionTable.PSVersion + " (" + $PSVersionTable.PSEdition + ")") -ForegroundColor DarkGray
+
+$utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$script:homes = New-Object System.Collections.ArrayList
+$script:worlds = New-Object System.Collections.ArrayList
+$realHome = $env:HORDE_HOME
+
+if ((Get-HordeRelayKeyStore).state -cne "known") {
+    Check ($true) "CONTROL: the suite reached its skip honestly"
+    Complete-HordeSuite -Success "no key store here: no machine identity can be made, so nothing was run" -PassCode 3
+}
+
+# THE DECISIONS MODULE UNDER POWERSHELL 7. Horde's JSON reads differ between the runtimes (issue #173),
+# and on origin/main the decisions list cannot add a question under PowerShell 7 at all (measured
+# 2026-10-09: test/test-decisions-threads.ps1 fails there the same way). The channels' own code runs
+# under both; what needs the decisions list to work is skipped under a runtime where it does not, said
+# so, and the suite then exits 3, a partial run - never 0.
+$probeStore = Join-Path $env:TEMP ("horde-relay-channels-probe-" + [guid]::NewGuid().ToString("N"))
+$probe = $null
+try { $probe = Invoke-HordeDecision -Operation "add" -Root $probeStore -Request @{ id = [guid]::NewGuid().ToString("N"); actor = "warchief"; question = @{ title = "Can this runtime add a question here?"; kind = "yes-no"; whatItIs = "A probe."; group = "probe"; askedBy = "suite" } } } catch { $probe = $null }
+$script:canDecide = ($null -ne $probe -and $probe.state -ceq "known" -and $probe.value.outcome -ceq "done")
+if ((Split-Path -Leaf $probeStore) -match '^horde-relay-channels-probe-[0-9a-f]{32}$' -and (Test-Path -LiteralPath $probeStore)) { Remove-Item -LiteralPath $probeStore -Recurse -Force }
+$script:partial = $false
+if (-not $script:canDecide) { Write-Host ("  [SKIP] the decisions list cannot add a question under this runtime (issue #173): every check that needs it is skipped, and the suite exits 3") -ForegroundColor Yellow; $script:partial = $true }
+
+function New-TestHome {
+    param([string]$Horde = "work")
+    $h = Join-Path $env:TEMP ("horde-relay-channels-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path (Join-Path $h "settings") -Force | Out-Null
+    [void]$script:homes.Add($h)
+    [System.IO.File]::WriteAllText((Join-Path $h "settings\relay.json"), ('{"schemaVersion": 1, "settings": {"horde": "' + $Horde + '"}}'), $utf8)
+    return $h
+}
+function Get-TestKeyNames {
+    param([string]$HordeHome)
+    $out = New-Object System.Collections.ArrayList
+    $dir = Join-Path $HordeHome "relay\identity"
+    if (-not (Test-Path -LiteralPath $dir)) { return @() }
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "machine-*.json")) {
+        $m = [regex]::Match([System.IO.File]::ReadAllText($f.FullName), '"scope":"([a-z]+)","signName":"([a-z0-9-]+)".*"agreeName":"([a-z0-9-]+)"')
+        if ($m.Success) { [void]$out.Add(@{ n = $m.Groups[2].Value; s = $m.Groups[1].Value }); [void]$out.Add(@{ n = $m.Groups[3].Value; s = $m.Groups[1].Value }) }
+    }
+    return @($out)
+}
+function New-World {
+    # A machine (home, identity, decisions store with one open question), a phone paired and confirmed
+    # and its identity key in the trust store, a local relay, and a run context over it.
+    param([switch]$NoPhoneKey, $Connection = $null)
+    $h = New-TestHome
+    $env:HORDE_HOME = $h
+    $id = New-HordeRelayMachineIdentity -HordeHome $h -Provider "software"
+    if ($id.state -cne "known") { throw ("no identity: " + $id.reason) }
+    $phone = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $h -Phone $phone)
+    if (-not $NoPhoneKey) {
+        $v = New-HordeTestPhoneVouch -Phone $phone -Horde "work"
+        $k = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $phone.agreePublic -By $phone.keyId -AuthenticatorData $v.authenticatorData -ClientDataJson $v.clientDataJson -Signature $v.signature
+        if ($k.state -cne "known") { throw ("no phone key: " + $k.reason) }
+    }
+    $relayDir = Join-Path $h "relay-mailboxes"
+    if ($null -eq $Connection) {
+        $c = Connect-HordeRelay -Name "local" -Options @{ root = $relayDir }
+        if ($c.state -cne "known") { throw ("no relay: " + $c.reason) }
+        $Connection = $c.value
+    }
+    $ctx = New-HordeRelayRunContext -HordeHome $h -Connection $Connection
+    if ($ctx.state -cne "known") { throw ("no context: " + $ctx.reason) }
+    $store = Join-Path $h "store\decisions"
+    if ($script:canDecide) {
+    $q = Invoke-HordeDecision -Operation "add" -Root $store -Request @{ id = (New-Id); actor = "warchief"; question = @{ title = "Should the closing sound play when the assistant closes?"; kind = "yes-no"; whatItIs = "The app has no closing sound today."; group = "voice"; askedBy = "orc-b" } }
+    if ($q.state -cne "known" -or $q.value.outcome -cne "done") { throw "the question was not added" }
+    }
+    $w = [pscustomobject]@{ home = $h; id = $id.value; phone = $phone; conn = $Connection; ctx = $ctx.value; store = $store; agree = @(, ([byte[]]$id.value.agree.public)) }
+    [void]$script:worlds.Add($w)
+    return $w
+}
+function New-Id { return [guid]::NewGuid().ToString("N") }
+function Use-World { param($World) $env:HORDE_HOME = $World.home }
+function Send-ToMachine {
+    # Put an envelope text into the machine's mailbox, under its replay key unless -Key says otherwise.
+    param($World, [string]$Text, [string]$Key = "-")
+    if ($Key -ceq "-") { $Key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $Text).value.header) }
+    return (Send-HordeRelayItem -Connection $World.conn -Mailbox $World.ctx.mailbox -Text $Text -Key $Key)
+}
+function Invoke-Turn {
+    # One inbound turn: the mailbox read and journaled, then every unfinished record handed over.
+    # { inbox; unfinished; lines } - lines everything said, for a check to search.
+    param($World)
+    Use-World $World
+    $in = Receive-HordeRelayInbox -Context $World.ctx -TimeoutMs 0
+    $un = Invoke-HordeRelayUnfinished -Context $World.ctx
+    $lines = New-Object System.Collections.ArrayList
+    if ($in.state -ceq "known") { foreach ($l in @($in.value.refused)) { [void]$lines.Add("refused " + $l) }; foreach ($l in @($in.value.held)) { [void]$lines.Add("held " + $l) }; foreach ($l in @($in.value.missing)) { [void]$lines.Add("missing " + $l) }; foreach ($l in @($in.value.anomalies)) { [void]$lines.Add("relay " + $l) } }
+    else { [void]$lines.Add("inbox " + $in.state + ": " + $in.reason) }
+    foreach ($l in @(Get-HordeRelayRunLines -Report $un.value)) { [void]$lines.Add($l) }
+    return [pscustomobject]@{ inbox = $in; unfinished = $un; lines = @($lines.ToArray()); text = (@($lines.ToArray()) -join " | ") }
+}
+function Get-Said {
+    # The message-said records of a store, parsed, in order.
+    param([string]$Store)
+    if (-not (Test-Path -LiteralPath $Store)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Store -Filter "*.json" | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8) | ConvertFrom-Json } | Where-Object { $_.kind -ceq "message-said" })
+}
+function Get-RecordFile {
+    # The journal record file of one received envelope.
+    param($World, $Header)
+    return (Join-Path $World.home ("relay\journal\in\s-" + $Header.from + "\c-" + $Header.channel + "\" + ([long]$Header.seq).ToString("D16") + ".rec"))
+}
+function Get-FileHash256 { param([string]$Path) return (ConvertTo-HordeRelayHex -Bytes (Get-HordeRelaySha256 -Bytes ([System.IO.File]::ReadAllBytes($Path)))) }
+function Get-PhoneMail {
+    # The texts in the horde's phone mailbox.
+    param($World)
+    $r = Receive-HordeRelayItems -Connection $World.conn -Mailbox "work/phone" -Since 0
+    if ($r.state -cne "known") { return @() }
+    return @($r.value.items | ForEach-Object { $_.text })
+}
+function Get-Answer {
+    # An answer envelope from the world's phone.
+    param($World, [string]$AnswerId = "", [string]$Text = "Yes, play it.", [int]$Number = 1, $Phone = $null, [object[]]$To = $null)
+    if ($null -eq $Phone) { $Phone = $World.phone }
+    if ($null -eq $To) { $To = $World.agree }
+    return (New-HordeTestPhoneEnvelope -Phone $Phone -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody -AnswerId $AnswerId -Text $Text -Number $Number) -To $To)
+}
+function Has { param($Turn, [string]$Text) return [bool]($Turn.text.Contains($Text)) }
+
+try {
+    Write-Host ""
+    Write-Host "--- phone keys: vouched for by a trusted passkey, and trusted only while it is ---" -ForegroundColor Cyan
+    $h = New-TestHome
+    $env:HORDE_HOME = $h
+    [void](New-HordeRelayMachineIdentity -HordeHome $h -Provider "software")
+    $p = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $h -Phone $p -NoConfirm)
+    $v = New-HordeTestPhoneVouch -Phone $p -Horde "work"
+    $a = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p.agreePublic -By $p.keyId -AuthenticatorData $v.authenticatorData -ClientDataJson $v.clientDataJson -Signature $v.signature
+    Check ($a.state -ceq "unknown" -and $a.reason.Contains("not a trusted device")) ("a pending passkey cannot vouch for a phone key (" + $a.reason + ")")
+    $p2 = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $h -Phone $p2)
+    $v2 = New-HordeTestPhoneVouch -Phone $p2 -Horde "work"
+    $other = New-HordeTestPhoneVouch -Phone $p2 -Horde "personal"
+    $x = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p2.keyId -AuthenticatorData $other.authenticatorData -ClientDataJson $other.clientDataJson -Signature $other.signature
+    Check ($x.state -ceq "unknown" -and $x.reason.Contains("challenge")) ("a vouch made for another horde is refused (" + $x.reason + ")")
+    $byOther = New-HordeTestPhoneAssertion -Phone $p -Challenge (Get-HordeRelayPhoneKeyChallenge -Horde "work" -AgreePublic (ConvertTo-HordeRelayBase64Url -Bytes $p2.agreePublic))
+    $y = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p2.keyId -AuthenticatorData $byOther.authenticatorData -ClientDataJson $byOther.clientDataJson -Signature $byOther.signature
+    Check ($y.state -ceq "unknown" -and $y.reason.Contains("does not verify")) ("a vouch signed by another passkey than the one named is refused (" + $y.reason + ")")
+    $z = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p2.keyId -AuthenticatorData $v2.authenticatorData -ClientDataJson $v2.clientDataJson -Signature $v2.signature
+    Check ($z.state -ceq "known" -and -not $z.value.duplicate -and $z.value.record.state -ceq "trusted" -and $z.value.record.agreeKeyId -ceq (Get-HordeRelayKeyId -Public $p2.agreePublic)) "a trusted passkey's vouch adds the phone key, trusted"
+    $z2 = Add-HordeRelayPhoneKey -HordeHome $h -AgreePublic $p2.agreePublic -By $p2.keyId -AuthenticatorData $v2.authenticatorData -ClientDataJson $v2.clientDataJson -Signature $v2.signature
+    Check ($z2.state -ceq "known" -and $z2.value.duplicate) "the same key again is a duplicate, and the first vouch stands"
+    $f = Find-HordeRelayPhoneKeys -HordeHome $h
+    Check ($f.state -ceq "known" -and @($f.value).Count -eq 1 -and (Get-HordeRelayKeyId -Public $f.value[0].public) -ceq $z.value.record.agreeKeyId) "Find-HordeRelayPhoneKeys hands out the trusted key's point"
+    [void](Revoke-HordeRelayTrust -HordeHome $h -Subject "device" -Id $p2.deviceId -Reason "phone lost")
+    $f2 = Find-HordeRelayPhoneKeys -HordeHome $h
+    $t2 = Get-HordeRelayTrust -HordeHome $h
+    Check ($f2.state -ceq "known" -and @($f2.value).Count -eq 0 -and $t2.value.phones[0].state -ceq "untrusted" -and $t2.value.phones[0].why.Contains("revoked")) "revoking the passkey that vouched stops the phone key at once: nothing is sealed to it"
+    $pf = Join-Path $h ("relay\trust\phones\" + $z.value.record.agreeKeyId + ".json")
+    $orig = [System.IO.File]::ReadAllText($pf)
+    [System.IO.File]::WriteAllText($pf, $orig.Replace('"horde":"work"', '"horde":"evil"'), [System.Text.Encoding]::ASCII)
+    $t3 = Get-HordeRelayTrust -HordeHome $h
+    Check ($t3.state -ceq "unknown" -and $t3.reason.Contains("does not verify")) ("a phone key record changed on disk no longer verifies, and the whole store is unknown (" + $t3.reason + ")")
+    [System.IO.File]::WriteAllText($pf, $orig, [System.Text.Encoding]::ASCII)
+    Check ((Get-HordeRelayTrust -HordeHome $h).state -ceq "known") "CONTROL: put back, the store reads"
+
+    Write-Host ""
+    Write-Host "--- the journal: an unfinished record is resumable, a done mark finishes it, evidence is its hash ---" -ForegroundColor Cyan
+    $W = New-World
+    $e = Get-Answer $W
+    $read = (Read-HordeRelayEnvelope -Text $e.text).value
+    $senders = (Find-HordeRelayTrustedSenders -HordeHome $W.home).value
+    $reg = Register-HordeRelayJournalReceived -Envelope $read -Senders $senders -RecipientKeyIds @($W.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $W.home
+    Check ($reg.state -ceq "known" -and $reg.value.fresh) "CONTROL: the envelope is journaled, as a run killed before opening it would leave it"
+    $u = Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home
+    $rec = Get-RecordFile -World $W -Header $e.header
+    Check ($u.state -ceq "known" -and @($u.value).Count -eq 1 -and $u.value[0].key -ceq $e.key -and $u.value[0].text -ceq $e.text -and $u.value[0].kind -ceq "answer") "it is listed unfinished, with its envelope exactly as recorded"
+    Check ($u.value[0].verdict.state -ceq "known" -and $u.value[0].verdict.value.fresh -eq $true -and $u.value[0].verdict.value.resumed -eq $true -and $u.value[0].verdict.value.key -ceq $e.key) "with a verdict Unprotect takes: this envelope's key, fresh, resumed"
+    Check ($u.value[0].evidence -ceq (Get-FileHash256 $rec) -and $u.value[0].evidence -cmatch '\A[0-9a-f]{64}\z') "its evidence is the SHA-256 of the whole record file"
+    $ev = Get-HordeRelayJournalEvidence -From $e.header.from -Channel "decisions" -Seq $e.header.seq -HordeHome $W.home
+    Check ($ev.state -ceq "known" -and $ev.value -ceq $u.value[0].evidence) "Get-HordeRelayJournalEvidence says the same"
+    Check ((Get-HordeRelayJournalEvidence -From $e.header.from -Channel "decisions" -Seq 99 -HordeHome $W.home).state -ceq "absent") "and there is no evidence of a record that is not there"
+    $again = Register-HordeRelayJournalReceived -Envelope $read -Senders $senders -RecipientKeyIds @($W.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $W.home
+    Check ($again.state -ceq "known" -and -not $again.value.fresh -and $again.value.why.Contains("replay")) "CONTROL: the journal still refuses it as a replay - only resumption opens it again"
+    $mk = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq $e.header.seq -HordeHome $W.home
+    $mk2 = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq $e.header.seq -HordeHome $W.home
+    Check ($mk.state -ceq "known" -and -not $mk.value.already -and $mk2.state -ceq "known" -and $mk2.value.already) "a done mark is written once, and again is already"
+    Check (@((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "a done record is not listed"
+    $none = Complete-HordeRelayJournalReceived -From $e.header.from -Channel "decisions" -Seq 7 -HordeHome $W.home
+    Check ($none.state -ceq "unknown" -and $none.reason.Contains("beside its record")) "no done mark is written for a record that is not there"
+    $stray = Join-Path (Split-Path -Parent $rec) ("0000000000000009.done")
+    [System.IO.File]::WriteAllText($stray, '{"v":1}', [System.Text.Encoding]::ASCII)
+    $bad = Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home
+    Check ($bad.state -ceq "unknown" -and $bad.reason.Contains("never recorded")) ("a done mark beside nothing is damage, and nothing is resumed (" + $bad.reason + ")")
+    Remove-Item -LiteralPath $stray
+    New-Item -ItemType Directory -Path (Join-Path $W.home "relay\journal\in\stray") | Out-Null
+    $bad2 = Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home
+    Check ($bad2.state -ceq "unknown" -and $bad2.reason.Contains("never makes")) "a folder the journal never makes among the received streams is damage"
+    Remove-Item -LiteralPath (Join-Path $W.home "relay\journal\in\stray")
+    Check ((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).state -ceq "known") "CONTROL: put back, it reads"
+
+    Write-Host ""
+    Write-Host "--- the phone key arrives through the trust channel ---" -ForegroundColor Cyan
+    $W = New-World -NoPhoneKey
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    Check ((@($tick) -join " | ").Contains("no phone identity key")) ("with no phone key, no snapshot is sent, and it says why (" + (@($tick) -join " | ") + ")")
+    Check (@(Get-PhoneMail $W).Count -eq 0) "and the phone's mailbox is empty"
+    $bodyOther = New-HordeTestPhoneKeyBody -Phone $W.phone -Horde "work" -Vouch (New-HordeTestPhoneVouch -Phone $W.phone -Horde "personal")
+    $pk1 = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "phone-key" -Channel "trust" -Body $bodyOther -To $W.agree
+    [void](Send-ToMachine $W $pk1.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "refused") -and (Has $t "the phone key is refused") -and @((Find-HordeRelayPhoneKeys -HordeHome $W.home).value).Count -eq 0) ("a vouch for another horde is refused, and no key is added (" + $t.text + ")")
+    Check (@((Get-HordeRelayJournalUnfinished -Channel "trust" -HordeHome $W.home).value).Count -eq 0) "and it is finished for good, not tried again"
+    $extra = $utf8.GetString((New-HordeTestPhoneKeyBody -Phone $W.phone -Horde "work"))
+    $extra = $extra.Substring(0, $extra.Length - 1) + ',"note":"x"}'
+    $pk0 = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "phone-key" -Channel "trust" -Body ($utf8.GetBytes($extra)) -To $W.agree
+    [void](Send-ToMachine $W $pk0.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "the body's members are") -and @((Find-HordeRelayPhoneKeys -HordeHome $W.home).value).Count -eq 0) "a phone-key body with a member it should not have is refused, and says which"
+    $pk2 = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "phone-key" -Channel "trust" -Body (New-HordeTestPhoneKeyBody -Phone $W.phone -Horde "work") -To $W.agree
+    [void](Send-ToMachine $W $pk2.text)
+    $t = Invoke-Turn $W
+    $keys = Find-HordeRelayPhoneKeys -HordeHome $W.home
+    Check ((Has $t "done") -and $keys.state -ceq "known" -and @($keys.value).Count -eq 1 -and $keys.value[0].by -ceq $W.phone.keyId) ("the phone's key announced through the trust channel is in the store, vouched for by its passkey (" + $t.text + ")")
+
+    if ($script:canDecide) {
+    Write-Host ""
+    Write-Host "--- the snapshot: sealed to the phone, sent when it changed, never carrying a secret ---" -ForegroundColor Cyan
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    $mail = @(Get-PhoneMail $W)
+    Check ((@($tick) -join " ").Contains("snapshot of 1 open question(s)") -and $mail.Count -eq 1) ("the first look sends a snapshot of the one open question (" + (@($tick) -join " | ") + ")")
+    $o = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[0] -MachineSignPublic $W.id.sign.public
+    Check ($o.ok -and $o.header.channel -ceq "decisions" -and $o.header.kind -ceq "snapshot" -and $o.header.from -ceq $W.id.sign.keyId) ("the phone opens it, signed by the machine, on channel decisions, kind snapshot (" + $o.reason + ")")
+    Check ($o.ok -and $o.body.kind -ceq "decisions-snapshot" -and @($o.body.questions).Count -eq 1 -and $o.body.questions[0].title -ceq "Should the closing sound play when the assistant closes?" -and $o.body.questions[0].wordingVersion -eq 1 -and $o.body.horde -ceq "work") "and it holds the open question as the window shows it, with its wording"
+    $outSeq = (Read-HordeRelayEnvelope -Text $mail[0]).value.header.seq
+    Check (Test-Path -LiteralPath (Join-Path $W.home ("relay\journal\out\s-" + $W.id.sign.keyId + "\c-decisions\" + ([long]$outSeq).ToString("D16") + ".rec"))) "the snapshot was recorded in the journal as sent, under its seq"
+    $stranger = New-HordeTestPhone
+    $so = Open-HordeTestPhoneEnvelope -Phone $stranger -Text $mail[0] -MachineSignPublic $W.id.sign.public
+    Check (-not $so.ok) "a phone whose key was never vouched for cannot open it"
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    Check ($tick.Count -eq 0 -and @(Get-PhoneMail $W).Count -eq 1) "a look with nothing changed sends nothing"
+    # And reads nothing: with the list made unreadable, a look at an unchanged store says nothing, because
+    # the fingerprint - the record names and the phone keys - is all it asked.
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\decisions.json"), "{ not json", $utf8)
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    Remove-Item -LiteralPath (Join-Path $W.home "settings\decisions.json")
+    Check ($tick.Count -eq 0) ("a look at an unchanged store does not read the list at all (" + (@($tick) -join " | ") + ")")
+    $null = Invoke-HordeDecision -Operation "say" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; number = 1; speaker = "warchief"; route = "command"; text = "A short chime, or none?" }
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    $mail = @(Get-PhoneMail $W)
+    $o2 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
+    Check ($mail.Count -eq 2 -and $o2.ok -and $o2.body.questions[0].thread.count -eq 1 -and $o2.body.questions[0].thread.turn -ceq "founder") "a change the window would show sends a new snapshot: the warchief's reply, and the turn is the founder's"
+    $null = Invoke-HordeDecision -Operation "mark-read" -Root $W.store -Request @{ id = (New-Id); actor = "warchief"; upTo = 1 }
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    Check (@(Get-PhoneMail $W).Count -eq 2) "a change that shows nothing new (a read mark) sends nothing: the snapshot is the same"
+    $token = "ghp_" + ("Ab3" * 10)
+    $planted = '{"schemaVersion":1,"sequence":4,"id":"' + (New-Id) + '","kind":"question-added","at":"2026-10-09T12:00:00.0000000Z","actor":"warchief","requestHash":"' + ("0" * 64) + '","data":{"number":2,"question":{"title":"Rotate the deploy token please now","kind":"yes-no","whatItIs":"The token is ' + $token + '","group":"ops","askedBy":"orc-a"}}}'
+    [System.IO.File]::WriteAllText((Join-Path $W.store "0000000004.json"), $planted, $utf8)
+    $tick = @(Invoke-HordeRelayChannelTicks -Context $W.ctx)
+    $mail = @(Get-PhoneMail $W)
+    $o3 = Open-HordeTestPhoneEnvelope -Phone $W.phone -Text $mail[$mail.Count - 1] -MachineSignPublic $W.id.sign.public
+    Check ((@($tick) -join " ").Contains("1 withheld") -and $o3.ok -and @($o3.body.questions).Count -eq 1 -and @($o3.body.withheld).Count -eq 1 -and $o3.body.withheld[0].number -eq 2) ("a question holding what looks like a secret is withheld by number (" + (@($tick) -join " | ") + ")")
+    $raw = $utf8.GetString([byte[]](Unprotect-HordeRelayEnvelope -Envelope (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value -Senders @{ ($W.id.sign.keyId) = (New-HordeRelaySender -Public $W.id.sign.public -Proof "es256") } -RecipientKeys @{ (Get-HordeRelayKeyId -Public $W.phone.agreePublic) = $W.phone.agree } -Replay (New-HordeKnown -Value ([pscustomobject]@{ key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $mail[$mail.Count - 1]).value.header); fresh = $true })) -Channel "decisions" -Kind "snapshot").value)
+    Check (-not $raw.Contains($token) -and -not $raw.Contains("ghp_")) "and nothing of the secret is anywhere in the snapshot's text"
+    Remove-Item -LiteralPath (Join-Path $W.store "0000000004.json")
+
+    Write-Host ""
+    Write-Host "--- an answer lands once: the first answer wins ---" -ForegroundColor Cyan
+    $W = New-World
+    $aid = New-Id
+    $e1 = Get-Answer $W -AnswerId $aid
+    [void](Send-ToMachine $W $e1.text)
+    $t = Invoke-Turn $W
+    $said = @(Get-Said $W.store)
+    $rec = Get-RecordFile -World $W -Header $e1.header
+    Check ((Has $t "done") -and $said.Count -eq 1 -and $said[0].data.route -ceq "phone" -and $said[0].data.speaker -ceq "founder" -and $said[0].actor -ceq "founder" -and $said[0].data.text -ceq "Yes, play it." -and $said[0].data.wordingVersion -eq 1) ("the answer is in the list once, as the founder's words by the route phone (" + $t.text + ")")
+    Check ((Test-Path -LiteralPath $rec) -and $said[0].data.evidence -ceq (Get-FileHash256 $rec)) "its evidence is the hash of the journal record that holds the signed envelope"
+    $idHash = Get-HordeRelaySha256 -Bytes ([System.Text.Encoding]::ASCII.GetBytes("horde-relay/decisions/v1 answer id`n" + $W.phone.keyId + "`n" + $aid))
+    $wantId = (@($idHash[0..15] | ForEach-Object { $_.ToString("x2") }) -join "")
+    Check ($said[0].id -ceq $wantId) "its id is the first 16 bytes of SHA-256 of the domain, the sender and the answerId, as the channel's header says"
+    Check ($W.ctx.acked -ge 1 -and @((Receive-HordeRelayItems -Connection $W.conn -Mailbox $W.ctx.mailbox -Since 0).value.items).Count -eq 0) "the relay was acked through it, and has forgotten it"
+    $dup = Send-ToMachine $W $e1.text
+    $t = Invoke-Turn $W
+    Check (@(Get-Said $W.store).Count -eq 1) ("the same envelope put again is still one answer (" + $t.text + ")")
+    $re = New-HordeTestPhoneResigned -Phone $W.phone -Envelope $e1
+    Check ($re -cne $e1.text) "CONTROL: a re-signed copy is another text"
+    [void](Send-ToMachine $W $re (Get-HordeRelayContentKey -Text $re))
+    $t = Invoke-Turn $W
+    Check ((Has $t "replay") -and @(Get-Said $W.store).Count -eq 1) ("a re-signed copy of the same envelope is refused by the journal as a replay (" + $t.text + ")")
+    $e2 = Get-Answer $W -AnswerId $aid
+    [void](Send-ToMachine $W $e2.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "(replayed)") -and @(Get-Said $W.store).Count -eq 1) ("the same answer sent again in a new envelope is the first record answered again (" + $t.text + ")")
+    $e3 = Get-Answer $W -AnswerId $aid -Text "No, keep it silent."
+    [void](Send-ToMachine $W $e3.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "already used for a different request") -and @(Get-Said $W.store).Count -eq 1 -and (@(Get-Said $W.store))[0].data.text -ceq "Yes, play it.") ("other words under the same answerId are refused: the first answer wins (" + $t.text + ")")
+    Check (@((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "and that refusal is final: nothing is left to retry"
+    $e4 = Get-Answer $W -Text "No, keep it silent."
+    [void](Send-ToMachine $W $e4.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "done") -and @(Get-Said $W.store).Count -eq 2) "a new answer is a second record, kept after the first"
+    $e5 = Get-Answer $W -Number 9
+    [void](Send-ToMachine $W $e5.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "there is no question 9") -and @(Get-Said $W.store).Count -eq 2 -and @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "an answer to a question that does not exist is refused, for good"
+    $junk = New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "answer" -Channel "decisions" -Body ($utf8.GetBytes('{"v":1,"answerId":"' + (New-Id) + '","number":1,"wordingVersion":1,"text":"x","extra":1}')) -To $W.agree
+    [void](Send-ToMachine $W $junk.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "the answer's members are") -and @(Get-Said $W.store).Count -eq 2) "a body with a member it should not have is refused, and says which"
+
+    }
+    Write-Host ""
+    Write-Host "--- nothing but a trusted founder passkey answers, and nothing refused is journaled ---" -ForegroundColor Cyan
+    $W = New-World
+    $pending = New-HordeTestPhone
+    [void](Add-HordeTestPhonePairing -HordeHome $W.home -Phone $pending -NoConfirm)
+    [void](Send-ToMachine $W (Get-Answer $W -Phone $pending).text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "pending") -and @(Get-Said $W.store).Count -eq 0) ("an answer from a passkey still pending is refused (" + $t.text + ")")
+    $nobody = New-HordeTestPhone
+    [void](Send-ToMachine $W (Get-Answer $W -Phone $nobody).text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "no trusted sender has the key") -and @(Get-Said $W.store).Count -eq 0) "an answer from a passkey never paired is refused"
+    $forged = New-HordeTestPhoneEnvelope -Phone $nobody -Kind "answer" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree -From $W.phone.keyId
+    [void](Send-ToMachine $W $forged.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "does not verify") -and @(Get-Said $W.store).Count -eq 0) ("an answer that names the founder's passkey and is signed by another is refused (" + $t.text + ")")
+    $peerHome = New-TestHome
+    [void](New-HordeRelayMachineIdentity -HordeHome $peerHome -Provider "software")
+    $card = (Export-HordeRelayMachineCard -HordeHome $peerHome -Label "Second machine").value
+    $added = Add-HordeRelayPeerMachine -HordeHome $W.home -Card $card
+    $cs = New-HordeTestPhoneAssertion -Phone $W.phone -Challenge (Get-HordeRelayCardChallenge -Card $card)
+    $vouched = Confirm-HordeRelayPeerMachine -HordeHome $W.home -KeyId $added.value.record.keyId -By $W.phone.keyId -AuthenticatorData $cs.authenticatorData -ClientDataJson $cs.clientDataJson -Signature $cs.signature
+    Check ($vouched.state -ceq "known" -and $vouched.value.record.state -ceq "trusted") "CONTROL: a peer machine of the horde is trusted, countersigned by the founder's passkey"
+    $peerId = Get-HordeRelayMachineIdentity -HordeHome $peerHome -Open
+    $peerAnswer = New-HordeRelayEnvelope -Kind "answer" -Channel "decisions" -Seq 1 -Body (New-HordeTestPhoneAnswerBody) -Recipients $W.agree -Signer $peerId.value.sign.key
+    $peerId.value.sign.key.Dispose(); $peerId.value.agree.key.Dispose()
+    [void](Send-ToMachine $W $peerAnswer)
+    $t = Invoke-Turn $W
+    Check ((Has $t "a trusted sender, but not one the channel decisions takes (founder)") -and @(Get-Said $W.store).Count -eq 0) ("a TRUSTED peer machine's answer is refused: only the founder's passkeys answer (" + $t.text + ")")
+    $machineKey = New-HordeRelayP256Key -Use "ecdsa"
+    $es = New-HordeRelayEnvelope -Kind "answer" -Channel "decisions" -Seq 1 -Body (New-HordeTestPhoneAnswerBody) -Recipients $W.agree -Signer $machineKey
+    [void](Send-ToMachine $W $es)
+    $t = Invoke-Turn $W
+    Check ((Has $t "refused") -and @(Get-Said $W.store).Count -eq 0) "an answer signed by a machine key is refused"
+    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "line" -Channel "chat" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
+    [void](Send-ToMachine $W (New-HordeTestPhoneEnvelope -Phone $W.phone -Kind "snapshot" -Channel "decisions" -Body (New-HordeTestPhoneAnswerBody) -To $W.agree).text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "no channel 'chat' is registered") -and (Has $t "takes answer, not snapshot") -and @(Get-Said $W.store).Count -eq 0) ("another channel, and another kind on this one, are refused (" + $t.text + ")")
+    $elsewhere = New-HordeRelayP256Key -Use "ecdh"
+    [void](Send-ToMachine $W (Get-Answer $W -To @(, ([byte[]](ConvertTo-HordeRelayP256Public -Key $elsewhere)))).text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "not addressed to any agreement key of this machine") -and @(Get-Said $W.store).Count -eq 0) "an answer sealed to another machine is refused"
+    [void](Send-ToMachine $W "not an envelope at all" "k-garbage")
+    $t = Invoke-Turn $W
+    Check ((Has $t "not an envelope") -and @(Get-Said $W.store).Count -eq 0) "text that is not an envelope is refused"
+    $cursorBefore = $W.ctx.cursor
+    $junkDevice = Join-Path $W.home "relay\trust\devices\not-a-record.txt"
+    [System.IO.File]::WriteAllText($junkDevice, "x", $utf8)
+    $heldAnswer = Get-Answer $W
+    [void](Send-ToMachine $W $heldAnswer.text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "held ") -and $W.ctx.cursor -eq $cursorBefore -and $W.ctx.acked -le $cursorBefore) ("while the trust store cannot be read, an answer is held: neither judged nor acked, the cursor before it (" + $t.text + ")")
+    Remove-Item -LiteralPath $junkDevice
+    $inDir = Join-Path $W.home "relay\journal\in"
+    $streams = @(Get-ChildItem -LiteralPath $inDir -Directory -ErrorAction SilentlyContinue)
+    Check ($streams.Count -eq 0) ("none of the refused was journaled: the journal has no received stream (" + $streams.Count + ")")
+    if ($script:canDecide) {
+        $t = Invoke-Turn $W
+        Check ((Has $t "done") -and @(Get-Said $W.store).Count -eq 1) ("once the store reads again, the held answer comes again and lands: the founder's own answer, after all that (" + $t.text + ")")
+    }
+
+    if ($script:canDecide) {
+    Write-Host ""
+    Write-Host "--- a record journaled and not finished is finished later, once ---" -ForegroundColor Cyan
+    $W = New-World
+    $badSettings = Join-Path $W.home "settings\decisions.json"
+    [System.IO.File]::WriteAllText($badSettings, "{ this is not json", $utf8)
+    [void](Send-ToMachine $W (Get-Answer $W -AnswerId "0123456789abcdef0123456789abcdef").text)
+    $t = Invoke-Turn $W
+    Check ((Has $t "retry") -and @(Get-Said $W.store).Count -eq 0) ("while the decisions list cannot be written, the answer is kept for later (" + $t.text + ")")
+    Check (@((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 1 -and $W.ctx.acked -ge 1) "it stays unfinished in the journal, and the relay may forget it: the journal holds it whole"
+    Remove-Item -LiteralPath $badSettings
+    $t = Invoke-Turn $W
+    Check ((Has $t "done") -and @(Get-Said $W.store).Count -eq 1) ("once the list can be written, the next turn lands it (" + $t.text + ")")
+    $t = Invoke-Turn $W
+    Check (@(Get-Said $W.store).Count -eq 1 -and @((Get-HordeRelayJournalUnfinished -Channel "decisions" -HordeHome $W.home).value).Count -eq 0) "and only once"
+    # A crash after the act and before the done mark: the act is done, the record still unfinished.
+    $e = Get-Answer $W
+    $read = (Read-HordeRelayEnvelope -Text $e.text).value
+    [void](Register-HordeRelayJournalReceived -Envelope $read -Senders (Find-HordeRelayTrustedSenders -HordeHome $W.home).value -RecipientKeyIds @($W.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $W.home)
+    $first = Invoke-HordeRelayUnfinished -Context $W.ctx
+    $mark = Join-Path (Split-Path -Parent (Get-RecordFile -World $W -Header $e.header)) (([long]$e.header.seq).ToString("D16") + ".done")
+    Remove-Item -LiteralPath $mark
+    $second = Invoke-HordeRelayUnfinished -Context $W.ctx
+    Check (@($first.value.done).Count -eq 1 -and @($second.value.done).Count -eq 1 -and (@($second.value.done)[0]).Contains("(replayed)") -and @(Get-Said $W.store).Count -eq 2) "a record handed over again after a crash before its done mark is the first record answered again: one record"
+    $e = Get-Answer $W
+    [void](Register-HordeRelayJournalReceived -Envelope (Read-HordeRelayEnvelope -Text $e.text).value -Senders (Find-HordeRelayTrustedSenders -HordeHome $W.home).value -RecipientKeyIds @($W.ctx.openingKeys.Keys) -Channel "decisions" -Kind "answer" -HordeHome $W.home)
+    [void](Revoke-HordeRelayTrust -HordeHome $W.home -Subject "device" -Id $W.phone.deviceId -Reason "phone lost")
+    $after = Invoke-HordeRelayUnfinished -Context $W.ctx
+    Check (@($after.value.refused).Count -eq 1 -and (@($after.value.refused)[0]).Contains("not opened") -and @(Get-Said $W.store).Count -eq 2) "a record journaled before its passkey was revoked is not opened after: the senders are the ones trusted now"
+
+    Write-Host ""
+    Write-Host "--- a relay that lies cannot make an answer land twice, or out of order ---" -ForegroundColor Cyan
+    Reset-HordeHostileRelay
+    $hc = Connect-HordeRelay -Name "hostile" -Options @{}
+    $W = New-World -Connection $hc.value
+    $answers = @(1..3 | ForEach-Object { Get-Answer $W -Text ("answer " + $_) })
+    foreach ($a in $answers) { [void](Send-ToMachine $W $a.text) }
+    Set-HordeHostileRelayFaults -Faults @("reorder", "duplicate", "garbage")
+    $t = Invoke-Turn $W
+    $said = @(Get-Said $W.store)
+    Check ($said.Count -eq 3 -and (@($said | ForEach-Object { $_.data.text }) -join ",") -ceq "answer 1,answer 2,answer 3") ("reversed, doubled and salted with garbage, the three answers land once each, in the phone's order (" + (@($said | ForEach-Object { $_.data.text }) -join ",") + ")")
+    Set-HordeHostileRelayFaults -Faults @("stale", "duplicate")
+    $t = Invoke-Turn $W
+    Check (@(Get-Said $W.store).Count -eq 3 -and (Has $t "at or before the cursor")) ("served again from the start, nothing lands twice: the port drops what is behind the cursor (" + $t.text + ")")
+    [void](Send-ToMachine $W (Get-Answer $W -Text "answer 4").text)
+    Set-HordeHostileRelayFaults -Faults @("conflict")
+    $t = Invoke-Turn $W
+    Check (@(Get-Said $W.store).Count -eq 4 -and (Has $t "came again with other text")) ("a conflicting copy after the real one is dropped, and the real one lands (" + $t.text + ")")
+    # In the relay's own order a forgery may come FIRST: relays/Port.ps1 keeps the first, as it must
+    # (it cannot tell which text is real). The forgery is not an envelope and is refused; the answer it
+    # displaced is lost from the relay - as if dropped, which a relay can always do - and the journal
+    # says so when the phone's next envelope arrives.
+    @(5..6 | ForEach-Object { Get-Answer $W -Text ("answer " + $_) }) | ForEach-Object { [void](Send-ToMachine $W $_.text) }
+    Set-HordeHostileRelayFaults -Faults @("conflict", "reorder")
+    $t = Invoke-Turn $W
+    $texts = (@(Get-Said $W.store) | ForEach-Object { $_.data.text }) -join ","
+    Check ($texts -ceq "answer 1,answer 2,answer 3,answer 4,answer 6" -and (Has $t "not an envelope") -and (Has $t "1 envelope(s) of this sender before it are missing")) ("a forgery the relay puts first is refused, and the answer it displaced is reported missing, never landed wrong (" + $texts + ")")
+    @(7..9 | ForEach-Object { Get-Answer $W -Text ("answer " + $_) }) | ForEach-Object { [void](Send-ToMachine $W $_.text) }
+    Set-HordeHostileRelayFaults -Faults @("drop")
+    $before = @(Get-Said $W.store).Count
+    $t = Invoke-Turn $W
+    $got = @(Get-Said $W.store)
+    # The hostile relay drops every EVEN relay seq; these three are its 7, 8 and 9.
+    Check (($got.Count - $before) -eq 2 -and (@($got | Select-Object -Last 2 | ForEach-Object { $_.data.text }) -join ",") -ceq "answer 7,answer 9" -and (Has $t "relay gap: seq 8 to 8") -and (Has $t "missing ")) ("an answer the relay drops is reported as a gap and as missing, not silence; the ones it delivers land (" + $t.text + ")")
+    Set-HordeHostileRelayFaults -Faults @("throw")
+    $before = @(Get-Said $W.store).Count
+    $t = Invoke-Turn $W
+    Check ($t.inbox.state -ceq "unknown" -and @(Get-Said $W.store).Count -eq $before) "a relay that throws is an unknown read, and changes nothing"
+    Set-HordeHostileRelayFaults -Faults @()
+
+    }
+    Write-Host ""
+    Write-Host "--- the runner: turns, stops cleanly, backs off with jitter, releases retired keys ---" -ForegroundColor Cyan
+    $set = [pscustomobject]@{ backoffMinMs = 1000; backoffMaxMs = 60000; backoffJitterPercent = 20 }
+    $rnd = New-Object System.Random -ArgumentList 7
+    $waits = @(1..8 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures $_ -Settings $set -Random $rnd })
+    Check ($waits[0] -ge 800 -and $waits[0] -le 1200 -and $waits[2] -ge 3200 -and $waits[2] -le 4800 -and $waits[7] -ge 48000 -and $waits[7] -le 72000) ("the wait doubles per failure, is capped, and moves by up to 20% either way (" + ($waits -join ", ") + ")")
+    $flat = [pscustomobject]@{ backoffMinMs = 500; backoffMaxMs = 1500; backoffJitterPercent = 0 }
+    Check ((@(1..4 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures $_ -Settings $flat -Random $rnd }) -join ",") -ceq "500,1000,1500,1500" -and (Get-HordeRelayRunBackoffMs -Failures 0 -Settings $flat -Random $rnd) -eq 0) "with no jitter it is exactly 500, 1000, then the cap of 1500; and no wait after no failure"
+    $spread = @(1..200 | ForEach-Object { Get-HordeRelayRunBackoffMs -Failures 1 -Settings $set -Random $rnd } | Sort-Object -Unique)
+    Check ($spread.Count -gt 50) ("CONTROL: the jitter does vary (" + $spread.Count + " distinct waits in 200)")
+    $W = New-World
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0}}', $utf8)
+    [void](Send-ToMachine $W (Get-Answer $W).text)
+    $said = New-Object System.Collections.ArrayList
+    $script:released = 0
+    function Remove-HordeRelayRetiredAgreeKeys { param([string]$HordeHome = "", $Now = $null) $script:released++; return (New-HordeKnown -Value ([pscustomobject]@{ released = @(); problems = "" })) }
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 3 -Say { param($Line) [void]$said.Add($Line) }
+    $sayText = (@($said) -join " | ")
+    Check ($r.turns -eq 3 -and $r.stoppedBy -ceq "turns" -and $sayText.Contains("watching " + $W.ctx.mailbox) -and $sayText.Contains("stopped after 3 turn(s)")) ("it turns the number asked, watching the machine's mailbox, and says when it stops (" + $sayText + ")")
+    if ($script:canDecide) { Check ($sayText.Contains("done ") -and $sayText.Contains("snapshot of 1 open question(s)") -and @(Get-Said $W.store).Count -eq 1) "in those turns the answer landed and the snapshot went out" }
+    Check ($script:released -eq 1) ("retired agreement keys are checked when it starts, not on every turn (" + $script:released + ")")
+    if ($script:canDecide) {
+        [void](Send-ToMachine $W (Get-Answer $W -Text "in one turn").text)
+        $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) }
+        Check ($r.turns -eq 1 -and @(@(Get-Said $W.store) | Where-Object { $_.data.text -ceq "in one turn" }).Count -eq 1) "an answer read in a turn lands in that same turn, not the next"
+    }
+    Request-HordeRelayRunStop -HordeHome $W.home | Out-Null
+    $said.Clear()
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 2 -Say { param($Line) [void]$said.Add($Line) }
+    Check ((@($said) -join " ").Contains("a stop file from before was removed") -and $r.turns -eq 2) "a stop file left from before is removed at the start, not obeyed"
+    $said.Clear()
+    $stopNow = { param($Line) [void]$said.Add($Line); if ("$Line".StartsWith("watching")) { [void](Request-HordeRelayRunStop -HordeHome $W.home) } }
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -Say $stopNow
+    Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and -not (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file is taken away (" + $r.stoppedBy + ", " + $r.turns + ")")
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 999999}}', $utf8)
+    $said.Clear()
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) }
+    Check ($r.stoppedBy -ceq "settings" -and $r.turns -eq 0 -and (@($said) -join " ").Contains("watchMs")) "a refused settings file stops the run before it starts, in the settings' own words"
+    [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 0, "backoffMinMs": 100, "backoffMaxMs": 400, "backoffJitterPercent": 0}}', $utf8)
+    Reset-HordeHostileRelay
+    Set-HordeHostileRelayFaults -Faults @("throw")
+    $slept = New-Object System.Collections.ArrayList
+    $said.Clear()
+    $hostileConn = Connect-HordeRelay -Name "hostile" -Options @{}
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep { param($Ms) [void]$slept.Add($Ms) }
+    Check ($r.failures -eq 4 -and (@($slept) -join ",") -ceq "100,200,400" -and (@($said) -join " ").Contains("the mailbox could not be read")) ("a relay that keeps failing is waited for 100, 200, 400 ms - doubled, capped - and said each time (" + (@($slept) -join ",") + ")")
+    $slept.Clear()
+    $heal = { param($Ms) [void]$slept.Add($Ms); if ($slept.Count -ge 2) { Set-HordeHostileRelayFaults -Faults @() } }
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $hostileConn.value -MaxTurns 4 -Say { param($Line) [void]$said.Add($Line) } -Sleep $heal
+    Set-HordeHostileRelayFaults -Faults @()
+    Check ($r.failures -eq 0 -and (@($slept) -join ",") -ceq "100,200") ("once the relay answers again the run goes on, and its failures in a row start again from none (" + (@($slept) -join ",") + ", " + $r.failures + ")")
+    Remove-Item Function:\Remove-HordeRelayRetiredAgreeKeys
+} finally {
+    $env:HORDE_HOME = $realHome
+    foreach ($w in @($script:worlds)) { Close-HordeRelayRunContext -Context $w.ctx }
+    $made = New-Object System.Collections.ArrayList
+    foreach ($h in @($script:homes)) {
+        foreach ($k in @(Get-TestKeyNames -HordeHome $h)) {
+            [void]$made.Add($k)
+            try { [void](Remove-HordeRelayKey -Name $k.n -Scope $k.s) } catch { Write-Host ("  cleanup of " + $k.n + " failed: " + $_.Exception.Message) -ForegroundColor Yellow }
+        }
+    }
+    $left = @($made | Where-Object { (Find-HordeRelayCngKey -Name $_.n -Scope $_.s) -cne "" })
+    Check ($made.Count -ge 2 -and $left.Count -eq 0) ("every key the suite's homes name is gone (" + $made.Count + " names, " + $left.Count + " left)")
+    foreach ($h in @($script:homes)) {
+        if ((Split-Path -Leaf $h) -match '^horde-relay-channels-[0-9a-f]{32}$') { Remove-Item -LiteralPath $h -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    Check (@($script:homes | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0) "every temporary home is gone"
+}
+Check ($env:HORDE_HOME -ceq $realHome) "HORDE_HOME is what it was"
+
+if ($script:partial) { Complete-HordeSuite -Success "the channels' own code holds under this runtime; what needs the decisions list was skipped (issue #173)" -PassCode 3 }
+Complete-HordeSuite -Success "the phone sees the open questions sealed to it alone, each of its signed answers lands once, the first answer wins, and nothing untrusted lands at all"
