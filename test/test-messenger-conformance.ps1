@@ -34,6 +34,11 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "messengers\Port.ps1")
 foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
+. (Join-Path $root "test\lib\MessengerPins.ps1")
+# PINNED (test\lib\MessengerPins.ps1): every messenger is loaded, and a messenger may find a real program
+# on its own (the wezfleet command on PATH). Under this home each has pinned itself to nothing, so no
+# case, and no child it starts, can post into a real fleet on a machine where one is installed.
+$pinned = Enter-HordeTestPinnedHome -Root $root
 
 $script:seq = 0
 function New-Msg {
@@ -158,4 +163,5 @@ foreach ($name in @(Get-HordeMessengerNames)) {
     } finally { & $fx.Remove $state }
 }
 
+Exit-HordeTestPinnedHome -State $pinned
 Complete-HordeSuite -Success "every messenger shows each capability it claims and is refused where it lacks one"

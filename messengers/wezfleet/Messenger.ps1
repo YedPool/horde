@@ -65,11 +65,29 @@
 # -MessageFile and deleted when the command has answered, whatever it answered; a node killed in between
 # leaves it behind, so the node sweeps the folder when it starts (Clear-HordeWezfleetMessengerOutgoing).
 #
-# WHERE THE FLEET IS, is configuration, never a guess: Set-HordeWezfleetMessengerRoot names the folder
-# (the node sets it from its own configuration, slice 4). It must be an absolute local folder with no ..,
+# WHERE THE FLEET IS, in this order, and never a guess:
+#   1. Set-HordeWezfleetMessengerRoot, when it named a folder: for tests, which point the messenger at a
+#      fake checkout in the process they run.
+#   2. The setting root of this messenger's own settings (core/ModuleSettings.ps1, module
+#      messenger-wezfleet: <HORDE_HOME>\settings\messenger-wezfleet.json), when it names a folder. A file
+#      there that is REFUSED makes every post and status unknown with its findings: the command on PATH is
+#      never used in its place, because the person's file says something else.
+#   3. With no root set, the checkout the wezfleet command on PATH runs - the first Get-Command finds, as a
+#      shell typing wezfleet would. A .ps1 there is the checkout's own wezfleet.ps1, so its folder is the
+#      checkout. A .cmd or .bat shim is READ, NEVER RUN, for the one %~dp0<folder>wezfleet.ps1 it names, as
+#      the shim wezfleet installs does (bin\wezfleet.cmd running %~dp0wezfleet\wezfleet.ps1, read
+#      2026-10-09); a shim naming none, or two, and anything else on PATH, is unknown with the reason. The
+#      folder is joined as written, never resolved, so a .. in it is refused below like a configured one.
+# THE DECISION IS MADE ON EVERY CALL, post and status alike, not once when the file is loaded: a node runs
+# for days, and a person who installs wezfleet or writes the settings file must not have to restart it;
+# the cost is one small file read and one PATH lookup per call, which start a process anyway. Loading
+# this file declares the setting and reads nothing.
+# Whatever chose it, the folder must be an absolute local folder with no ..,
 # no reparse point on it or above it - a junction could be re-aimed after it was configured - and a
 # wezfleet checkout with #65's mail commands: wezfleet.ps1, lib\Mail.ps1, lib\MailPost.ps1 and
-# commands\mail.ps1 (review of #106, G1). Otherwise every call is unknown and nothing starts. Every call
+# commands\mail.ps1 (review of #106, G1). Otherwise every call is unknown, saying how the folder was
+# chosen, and nothing starts. A test that must never reach the fleet's real command pins its home with
+# test\Pin.ps1 (test\lib\MessengerPins.ps1 runs it): the setting then names an empty folder. Every call
 # has a deadline; past it the child and every process it started are stopped and the answer is unknown
 # (review of #106, F7). The answer is read once the command has exited, even while a process it started
 # still holds its output open (F6).
@@ -77,9 +95,21 @@
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced, after messengers/Port.ps1.
 
 . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1")
 
 $script:HordeWezfleetMessengerFolder = $PSScriptRoot
+# Set only by Set-HordeWezfleetMessengerRoot; "" means the setting, then the command on PATH, decide.
 $script:HordeWezfleetMessengerRoot = ""
+$script:HordeWezfleetMessengerSettings = New-HordeModuleSettings -Module "messenger-wezfleet" -Settings @(
+    @{ name = "root"; kind = "folder"; default = ""; what = "The wezfleet checkout whose mail commands are run; empty means the one the wezfleet command on PATH runs." }
+)
+# The command looked up on PATH, and the most of a shim that is read: a real one is about 700 bytes.
+$script:HordeWezfleetMessengerCommand = "wezfleet"
+$script:HordeWezfleetMessengerShimMaxBytes = 65536
+# What a shim names: %~dp0 (its own folder, with the trailing backslash), then folders each ending in a
+# slash, then wezfleet.ps1 itself (so mywezfleet.ps1 is not read as a folder "my"). No quote, percent
+# sign, colon or wildcard in a folder: a second variable or a drive is not followed.
+$script:HordeWezfleetMessengerShimPattern = '%~dp0((?:[^"%:*?<>|\r\n\\/]+[\\/])*)wezfleet\.ps1'
 $script:HordeWezfleetMessengerTimeoutSeconds = 30
 $script:HordeWezfleetMessengerScript = "wezfleet.ps1"
 # What makes a folder a wezfleet checkout with #65's commands, beside the script itself.
@@ -107,36 +137,100 @@ $script:HordeWezfleetMessengerExits = @{
 }
 
 function Set-HordeWezfleetMessengerRoot {
-    # Name the folder holding the fleet's wezfleet.ps1, and the deadline of each call. "" unsets it.
+    # For tests: name the folder holding the fleet's wezfleet.ps1, over the setting and the command on
+    # PATH, and the deadline of each call. "" unsets it, and the setting, then PATH, decide again.
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path, [int]$TimeoutSeconds = 30)
     if ($TimeoutSeconds -lt 1) { throw ("TimeoutSeconds must be at least 1, not " + $TimeoutSeconds) }
     $script:HordeWezfleetMessengerRoot = $Path
     $script:HordeWezfleetMessengerTimeoutSeconds = $TimeoutSeconds
 }
 
+function New-HordeWezfleetMessengerChoice {
+    # A choice of folder: { ok; root; how; reason }. how finishes "the folder was ...".
+    param([string]$Root = "", [string]$How = "", [string]$Reason = "")
+    return [pscustomobject]@{ ok = ($Reason -eq ""); root = $Root; how = $How; reason = $Reason }
+}
+
+function Find-HordeWezfleetMessengerOnPath {
+    # The checkout the wezfleet command on PATH runs (header, WHERE THE FLEET IS, 3), as a choice. The shim
+    # is read as text and never run. -SettingsPath is named in every reason, as the place to say otherwise.
+    param([Parameter(Mandatory = $true)][string]$SettingsPath)
+    $instead = "; name its checkout as root in " + $SettingsPath
+    $cmd = $null
+    try { $cmd = @(Get-Command -Name $script:HordeWezfleetMessengerCommand -CommandType Application, ExternalScript -ErrorAction SilentlyContinue) | Select-Object -First 1 } catch { $cmd = $null }
+    if ($null -eq $cmd) { return (New-HordeWezfleetMessengerChoice -Reason ("no wezfleet command is on PATH and no root is set, so the fleet's command was not run" + $instead)) }
+    $src = [string]$cmd.Path
+    $from = "found from the wezfleet command on PATH, " + $src
+    $ext = [System.IO.Path]::GetExtension($src).ToLowerInvariant()
+    $dir = Split-Path -Parent $src
+    if ($ext -ceq ".ps1") { return (New-HordeWezfleetMessengerChoice -Root $dir -How $from) }
+    if ($ext -cne ".cmd" -and $ext -cne ".bat") {
+        return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH is '" + $src + "', neither a .ps1 nor a .cmd or .bat shim, so its checkout is not known" + $instead))
+    }
+    $text = ""
+    try {
+        $info = New-Object System.IO.FileInfo($src)
+        if ($info.Length -gt $script:HordeWezfleetMessengerShimMaxBytes) { return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH, the shim '" + $src + "', is larger than " + $script:HordeWezfleetMessengerShimMaxBytes + " bytes, so it was not read" + $instead)) }
+        $text = [System.IO.File]::ReadAllText($src)
+    } catch { return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH, the shim '" + $src + "', could not be read: " + $_.Exception.Message + $instead)) }
+    # ONE FOLDER, compared ignoring case as Windows compares paths: the same line twice is one folder.
+    $named = @([regex]::Matches($text, $script:HordeWezfleetMessengerShimPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) | ForEach-Object { $_.Groups[1].Value.Replace('/', '\').ToLowerInvariant() } | Select-Object -Unique)
+    if ($named.Count -ne 1) {
+        return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet command on PATH is the shim '" + $src + "', which names " + $named.Count + " scripts as %~dp0<folder>wezfleet.ps1, not one, so its checkout is not known" + $instead))
+    }
+    # The folder as the shim wrote it (its own case), joined and NOT resolved: a .. stays, to be refused.
+    $m = [regex]::Match($text, $script:HordeWezfleetMessengerShimPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $rel = $m.Groups[1].Value.Replace('/', '\').TrimEnd('\')
+    $root = $(if ($rel -eq "") { $dir } else { $dir.TrimEnd('\') + '\' + $rel })
+    return (New-HordeWezfleetMessengerChoice -Root $root -How $from)
+}
+
+function Get-HordeWezfleetMessengerChoice {
+    # Which folder, and how it was chosen (header, WHERE THE FLEET IS), as a choice. Read on every call.
+    if ("$script:HordeWezfleetMessengerRoot" -ne "") { return (New-HordeWezfleetMessengerChoice -Root $script:HordeWezfleetMessengerRoot -How "set by Set-HordeWezfleetMessengerRoot") }
+    $s = $null
+    try { $s = Get-HordeModuleSettings -Declaration $script:HordeWezfleetMessengerSettings }
+    catch { return (New-HordeWezfleetMessengerChoice -Reason ("the wezfleet messenger's settings could not be read, so the fleet's command was not run: " + $_.Exception.Message)) }
+    # A REFUSED FILE IS NO FOLDER AT ALL: anything but the two states that carry values is the refusal,
+    # and the command on PATH is never asked in its place.
+    if ($s.state -cne "defaults" -and $s.state -cne "read") { return (New-HordeWezfleetMessengerChoice -Reason ("the fleet's command was not run, because the wezfleet messenger's settings are refused: " + (@($s.findings) -join "; "))) }
+    if ("$($s.values.root)" -ne "") { return (New-HordeWezfleetMessengerChoice -Root $s.values.root -How ("set as root in " + $s.path)) }
+    return (Find-HordeWezfleetMessengerOnPath -SettingsPath $s.path)
+}
+
 function Get-HordeWezfleetMessengerScriptPath {
     # The fleet's script, as { ok; path; reason }: only in an absolute local folder with no .., no reparse
-    # point on its path, holding every marker of a wezfleet checkout with #65's commands.
-    $dir = $script:HordeWezfleetMessengerRoot
-    if ("$dir" -eq "") { return [pscustomobject]@{ ok = $false; path = ""; reason = "the wezfleet folder is not configured, so the fleet's command was not run" } }
+    # point on its path, holding every marker of a wezfleet checkout with #65's commands - whichever way
+    # the folder was chosen, and a refusal says which.
+    $choice = Get-HordeWezfleetMessengerChoice
+    if (-not $choice.ok) { return [pscustomobject]@{ ok = $false; path = ""; reason = $choice.reason } }
+    $why = Test-HordeWezfleetMessengerCheckout -Folder $choice.root
+    if ($why -ne "") { return [pscustomobject]@{ ok = $false; path = ""; reason = ($why + " (the folder was " + $choice.how + ")") } }
+    return [pscustomobject]@{ ok = $true; path = (Join-Path $choice.root $script:HordeWezfleetMessengerScript); reason = "" }
+}
+
+function Test-HordeWezfleetMessengerCheckout {
+    # Why -Folder is not a folder to run the fleet's script from, or "" when it is.
+    param([Parameter(Mandatory = $true)][string]$Folder)
+    $dir = $Folder
     if (-not [System.IO.Path]::IsPathRooted($dir) -or $dir -notmatch '\A[A-Za-z]:\\' -or @($dir -split '[\\/]') -contains "..") {
-        return [pscustomobject]@{ ok = $false; path = ""; reason = ("the wezfleet folder '" + $dir + "' is not an absolute local folder without .., so it was not used") }
+        return ("the wezfleet folder '" + $dir + "' is not an absolute local folder without .., so it was not used")
     }
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return [pscustomobject]@{ ok = $false; path = ""; reason = ("the wezfleet folder '" + $dir + "' does not exist") } }
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return ("the wezfleet folder '" + $dir + "' does not exist") }
     # NO REPARSE POINT on the folder or any folder above it: each is read as it is, not followed.
     $d = New-Object System.IO.DirectoryInfo($dir)
     while ($null -ne $d) {
         if (($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            return [pscustomobject]@{ ok = $false; path = ""; reason = ("the wezfleet folder '" + $dir + "' has a reparse point on its path ('" + $d.FullName + "'), so it was not used") }
+            return ("the wezfleet folder '" + $dir + "' has a reparse point on its path ('" + $d.FullName + "'), so it was not used")
         }
         $d = $d.Parent
     }
     foreach ($marker in $script:HordeWezfleetMessengerMarkers) {
         if (-not (Test-Path -LiteralPath (Join-Path $dir $marker) -PathType Leaf)) {
-            return [pscustomobject]@{ ok = $false; path = ""; reason = ("'" + $dir + "' is not a wezfleet checkout with the mail commands: no " + $marker + " in it") }
+            return ("'" + $dir + "' is not a wezfleet checkout with the mail commands: no " + $marker + " in it")
         }
     }
-    return [pscustomobject]@{ ok = $true; path = (Join-Path $dir $script:HordeWezfleetMessengerScript); reason = "" }
+    return ""
 }
 
 function Get-HordeWezfleetMessengerOutgoing {

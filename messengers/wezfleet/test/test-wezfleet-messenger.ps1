@@ -23,6 +23,11 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "messengers\Port.ps1")
 . (Join-Path $root "messengers\wezfleet\Messenger.ps1")
+. (Join-Path $root "test\lib\MessengerPins.ps1")
+# PINNED (test\Pin.ps1): with no folder set, the messenger runs the checkout the wezfleet command on PATH
+# runs - the real fleet, on a machine where it is installed. So the whole suite runs under a home pinned
+# to an empty folder, and the fixture puts this home back after each state.
+$pinned = Enter-HordeTestPinnedHome -Root $root
 
 $fx = & (Join-Path $here "Fixture.ps1") -Root $root
 $m = Get-HordeMessenger -Name "wezfleet"
@@ -76,7 +81,7 @@ Write-Host "--- A. where the fleet is: configured, absolute, local, no reparse p
 
 Set-HordeWezfleetMessengerRoot -Path ""
 $a = Send-HordeMessengerMessage -Messenger $m -Message (New-Msg)
-Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not configured")) "with no folder configured, a post is unknown: the messenger never guesses where the fleet is"
+Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not a wezfleet checkout") -and "$($a.reason)".Contains("set as root in")) ("with no folder set in the process, the pinned setting decides, and its empty folder is no checkout: the messenger never looks further (" + $a.reason + ")")
 Check ((Get-HordeMessengerStatus -Messenger $m -MessageId "0e000000-0000-4000-8000-000000000001").state -ceq "unknown") "and so is a status"
 foreach ($bad in @("relative\folder", ($tempRoot + "a\..\b"), "\\server\share\x", "\\?\C:\x")) {
     Set-HordeWezfleetMessengerRoot -Path $bad
@@ -549,4 +554,5 @@ With-Fake {
     Check ((Clear-HordeWezfleetMessengerOutgoing) -eq 0) "and a sweep with nothing to do removes nothing"
 }
 
+Exit-HordeTestPinnedHome -State $pinned
 Complete-HordeSuite -Success "the wezfleet messenger starts only the fixed PowerShell on a real local wezfleet checkout, hands the body only through a file only this user can open, and reads nothing it was not told"
