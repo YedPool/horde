@@ -571,7 +571,9 @@ function Find-HordeRelayPhoneKeys {
     if (-not $s.ok) { return (New-HordeUnknown -Reason ($s.reason + "; nothing is sealed to a phone until it is repaired")) }
     $seen = @{}
     $out = New-Object System.Collections.ArrayList
-    foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" } | Sort-Object agreeKeyId, by)) {
+    # The store reads its records in file name order, <agreeKeyId>-<by>: key id order, and the voucher
+    # with the lowest key id first (Sort-Object takes one literal name under tools/ExecScan.ps1).
+    foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" })) {
         if ($seen.ContainsKey($ph.agreeKeyId)) { continue }
         $seen[$ph.agreeKeyId] = $true
         [void]$out.Add([pscustomobject]@{ agreeKeyId = $ph.agreeKeyId; public = (ConvertFrom-HordeRelayBase64Url -Text $ph.agreePublic); by = $ph.by })

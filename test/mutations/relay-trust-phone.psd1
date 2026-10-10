@@ -19,8 +19,8 @@
            Find = 'if ($by.state -cne "trusted") { $state = "untrusted";'
            Replace = 'if ($false) { $state = "untrusted";' }
         @{ Name = "untrusted-phone-keys-handed-out"
-           Find = 'foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" } | Sort-Object agreeKeyId, by)) {'
-           Replace = 'foreach ($ph in @($s.phones | Sort-Object agreeKeyId, by)) {' }
+           Find = '    foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" })) {'
+           Replace = '    foreach ($ph in @($s.phones)) {' }
         @{ Name = "vouch-not-bound-to-the-horde"
            Find = '("horde-relay/phone-key/v1 vouch`n" + $Horde + "`n" + $AgreePublic)'
            Replace = '("horde-relay/phone-key/v1 vouch`n" + "`n" + $AgreePublic)' }
