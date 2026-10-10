@@ -61,7 +61,7 @@
            Find = 'if ($found.Count -gt 1) {'
            Replace = 'if ($false) {' }
         @{ Name = "bad-session-id-believed"
-           Find = ' -or $session.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add'
+           Find = ' -or $located.value -cnotmatch $script:HordeConversationSessionPattern) { [void]$unsure.Add'
            Replace = ') { [void]$unsure.Add' }
         @{ Name = "look-alike-source-read"
            Find = 'if (-not [object]::ReferenceEquals($script:HordeConversationSources[$id.Value], $Source)) { return $false }'
