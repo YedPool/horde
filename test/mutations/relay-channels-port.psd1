@@ -35,5 +35,21 @@
         @{ Name = "sent-without-the-journal"
            Find = '        $rec = Register-HordeRelayJournalSent -Text $text -HordeHome $Context.hordeHome -Now $Now'
            Replace = '        $rec = New-HordeKnown -Value ([pscustomobject]@{ fresh = $true; key = (Get-HordeRelayReplayKey -Header (Read-HordeRelayEnvelope -Text $text).value.header) })' }
+        # --- review of 48bc492 ---
+        @{ Name = "senders-read-for-every-item"
+           Find = '    if ($null -ne $Cache -and $Cache.ContainsKey("all")) { $all = $Cache["all"] }'
+           Replace = '    if ($false) { }' }
+        @{ Name = "reopen-forgets-the-cursor"
+           Find = '    if ($made.value.mailbox -ceq $Context.mailbox) { $made.value.cursor = $Context.cursor; $made.value.acked = $Context.acked }'
+           Replace = '' }
+        @{ Name = "reopen-forgets-the-channels"
+           Find = '    $made.value.state = $Context.state'
+           Replace = '' }
+        @{ Name = "oversized-envelope-journaled"
+           Find = '        if ($text.Length -gt $most) {'
+           Replace = '        if ($false) {' }
+        @{ Name = "failed-tick-not-reported"
+           Find = '                if ($null -ne $got[0].PSObject.Properties["failed"] -and $got[0].failed -eq $true) { $failed = $true }'
+           Replace = '' }
     )
 }

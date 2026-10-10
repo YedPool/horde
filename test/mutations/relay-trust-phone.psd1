@@ -19,10 +19,17 @@
            Find = 'if ($by.state -cne "trusted") { $state = "untrusted";'
            Replace = 'if ($false) { $state = "untrusted";' }
         @{ Name = "untrusted-phone-keys-handed-out"
-           Find = '$out = @($s.phones | Where-Object { $_.state -ceq "trusted" } | Sort-Object agreeKeyId'
-           Replace = '$out = @($s.phones | Sort-Object agreeKeyId' }
+           Find = 'foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" } | Sort-Object agreeKeyId, by)) {'
+           Replace = 'foreach ($ph in @($s.phones | Sort-Object agreeKeyId, by)) {' }
         @{ Name = "vouch-not-bound-to-the-horde"
            Find = '("horde-relay/phone-key/v1 vouch`n" + $Horde + "`n" + $AgreePublic)'
            Replace = '("horde-relay/phone-key/v1 vouch`n" + "`n" + $AgreePublic)' }
+        # --- review of 48bc492 ---
+        @{ Name = "horde-not-checked-on-read"
+           Find = '        elseif ($nowHorde.state -cne "known" -or $nowHorde.value -cne $r.horde) {'
+           Replace = '        elseif ($false) {' }
+        @{ Name = "another-passkeys-vouch-stands-in"
+           Find = '$prior = @($s.phones | Where-Object { $_.agreeKeyId -ceq $agreeKeyId -and $_.by -ceq $By }) | Select-Object -First 1'
+           Replace = '$prior = @($s.phones | Where-Object { $_.agreeKeyId -ceq $agreeKeyId }) | Select-Object -First 1' }
     )
 }

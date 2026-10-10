@@ -17,15 +17,15 @@
            Find = '    $ms = $base - $spread + ($Random.NextDouble() * 2 * $spread)'
            Replace = '    $ms = $base' }
         @{ Name = "failures-never-reset"
-           Find = '            } else { $failures = 0 }'
-           Replace = '            } else { }' }
+           Find = '                $failures = 0'
+           Replace = '' }
         # --- a clean stop ---
         @{ Name = "stop-file-not-obeyed"
-           Find = '            if ([System.IO.File]::Exists($stopPath)) { $stoppedBy = "stop file"; break }'
+           Find = '            if (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs) { $stoppedBy = "stop file"; break }'
            Replace = '' }
         @{ Name = "stale-stop-file-obeyed"
-           Find = '    if ([System.IO.File]::Exists($stopPath)) { [System.IO.File]::Delete($stopPath);'
-           Replace = '    if ($false) { [System.IO.File]::Delete($stopPath);' }
+           Find = '    if ([System.IO.File]::Exists($stopPath) -and -not (Test-HordeRelayRunStopAsked -Path $stopPath -StartedMs $startedMs)) {'
+           Replace = '    if ($false) {' }
         @{ Name = "refused-settings-run-anyway"
            Find = 'if ($settings.state -cne "known") { $null = & $Say ("the run does not start: " + $settings.reason); return'
            Replace = 'if ($false) { $null = & $Say ("the run does not start: " + $settings.reason); return' }
@@ -36,5 +36,21 @@
         @{ Name = "answer-waits-a-turn"
            Find = '                    $r2 = Invoke-HordeRelayUnfinished -Context $ctx'
            Replace = '                    $r2 = [pscustomobject]@{ value = $null }' }
+        # --- review of 48bc492 ---
+        @{ Name = "stop-not-asked-between-slices"
+           Find = '        if (Test-HordeRelayRunStopAsked -Path $StopPath -StartedMs $StartedMs) { return $true }'
+           Replace = '' }
+        @{ Name = "slices-as-long-as-the-wait"
+           Find = '$script:HordeRelayRunSliceMs = 500'
+           Replace = '$script:HordeRelayRunSliceMs = 500000' }
+        @{ Name = "empty-turns-not-padded"
+           Find = '                if ($empty -and $left -gt 0 -and -not $last) {'
+           Replace = '                if ($false) {' }
+        @{ Name = "failed-tick-not-counted"
+           Find = '                if ($failed -ceq "" -and $ticks.failed) {'
+           Replace = '                if ($false) {' }
+        @{ Name = "no-floor-under-the-minimum-turn"
+           Find = 'default = 1000; min = 50; max = 60000'
+           Replace = 'default = 1000; min = 0; max = 60000' }
     )
 }
