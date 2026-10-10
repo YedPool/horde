@@ -416,8 +416,9 @@ async function pairedApp(transport, m, opts = {}) {
   const m = await newMachine("work");
   const good = offerText(m);
   const badCode = good.replace(/"code":"[^"]*"/, '"code":"x\\",\\"prf\\":true,\\"label\\":\\"Evil"');
-  const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}');
-  const shortOffer = good.replace(/"offer":"[^"]*"/, '"offer":"abc"');
+  // The pairing mailbox is made to follow each bad id, so the id's own check is what refuses it.
+  const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}').replace(/"pairMailbox":"[^"]*"/, '"pairMailbox":"work/pair-[object Object]"');
+  const shortOffer = good.replace(/"offer":"[^"]*"/, '"offer":"abc"').replace(/"pairMailbox":"[^"]*"/, '"pairMailbox":"work/pair-abc"');
   check(!(await P.readOffer(badCode)).ok && !(await P.readOffer(badOffer)).ok && !(await P.readOffer(shortOffer)).ok, "an offer whose code is not base64url, or whose id is not 32 lower-case hex, is refused");
   const text = P.pairingResponseText({ offer: "0".repeat(32), code: "AAAA", rawId: new Uint8Array([1]), clientDataJSON: new Uint8Array([2]), attestationObject: new Uint8Array([3]), label: "Founder phone", prf: true });
   check(text === '{"v":1,"kind":"horde-relay-pairing-response","offer":"' + "0".repeat(32) + '","code":"AAAA","rawId":"AQ","clientDataJSON":"Ag","attestationObject":"Aw","label":"Founder phone","prf":true}', "the response keeps the one spelling the machine reads", text);
