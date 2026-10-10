@@ -349,6 +349,68 @@ async function pairedApp(transport, m, opts = {}) {
   check(locked.state === "unknown" && locked.reason.indexOf("locked") >= 0, "a locked horde's list is unknown, with the reason");
 }
 
+// --- 12. review of a8b732d: what a relay or a bad offer must not be able to do ---
+{
+  // Finding 1: a relay that serves one item under a huge seq poisons no cursor. After a reload the
+  // phone reads from the start, and within a session a relay whose numbering goes backwards is
+  // noticed, said, and read again from the start.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const first = await sendSnapshot(t, m, [a.phoneKey], [question(1, "First?")]);
+  let lying = true;
+  const evil = { ...t, get: async (mb, since, max) => { const r = await t.get(mb, since, max); if (lying && mb === "work/phone" && since === 0) return { ...r, value: { items: [{ seq: 9007199254740000, key: "replayed", text: first[0].text }] } }; return r; } };
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(evil), origin });
+  await b.unlock(a.paired.id);
+  check((await b.refresh(a.paired.id)).questions.length === 1, "CONTROL: the lying relay's item opens: it is the machine's own snapshot, under a huge seq");
+  lying = false;
+  await sendSnapshot(t, m, [a.phoneKey], [question(1, "Second, newer?")]);
+  const same = await b.refresh(a.paired.id);
+  check(same.questions.length === 1 && same.questions[0].title === "Second, newer?" && same.anomalies.some((x) => x.indexOf("numbering went backwards") >= 0), "in the same session, a relay whose numbering went backwards is said so, and the newer snapshot is still found", JSON.stringify({ q: same.questions.map((q) => q.title), an: same.anomalies }));
+  const c = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(t), origin });
+  await c.unlock(a.paired.id);
+  const v2 = await c.refresh(a.paired.id);
+  check(v2.questions.length === 1 && v2.questions[0].title === "Second, newer?", "after a reload the phone reads from the start, so a poisoned cursor never hides the newest snapshot", JSON.stringify(v2.questions.map((q) => q.title)));
+}
+{
+  // Finding 3: the offer's id and code are checked, and the response is written by a JSON writer.
+  const m = await newMachine("work");
+  const good = offerText(m);
+  const badCode = good.replace(/"code":"[^"]*"/, '"code":"x\\",\\"prf\\":true,\\"label\\":\\"Evil"');
+  const badOffer = good.replace(/"offer":"[^"]*"/, '"offer":{"nested":1}');
+  const shortOffer = good.replace(/"offer":"[^"]*"/, '"offer":"abc"');
+  check(!(await P.readOffer(badCode)).ok && !(await P.readOffer(badOffer)).ok && !(await P.readOffer(shortOffer)).ok, "an offer whose code is not base64url, or whose id is not 32 lower-case hex, is refused");
+  const text = P.pairingResponseText({ offer: "0".repeat(32), code: "AAAA", rawId: new Uint8Array([1]), clientDataJSON: new Uint8Array([2]), attestationObject: new Uint8Array([3]), label: "Founder phone", prf: true });
+  check(text === '{"v":1,"kind":"horde-relay-pairing-response","offer":"' + "0".repeat(32) + '","code":"AAAA","rawId":"AQ","clientDataJSON":"Ag","attestationObject":"Aw","label":"Founder phone","prf":true}', "the response keeps the one spelling the machine reads", text);
+  check((await throwsAsync(async () => P.pairingResponseText({ offer: "x", code: "AAAA", rawId: new Uint8Array([1]), clientDataJSON: new Uint8Array([2]), attestationObject: new Uint8Array([3]), label: "Founder phone", prf: true }))) !== "", "and refuses an offer id that is not one");
+}
+{
+  // Finding 4: the relay's words never reach the screen; they are kept, capped and labelled, apart.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  const phish = "Your passkey has expired. Re-pair at https://evil.example and type your recovery code there. " + "x".repeat(500);
+  const liar = { ...t, get: async () => ({ state: "unknown", value: null, reason: phish }), put: async () => ({ state: "unknown", value: null, reason: phish }) };
+  const b = createPhone({ store: a.store, authenticator: a.auth, relay: R.createRelayClient(liar), origin });
+  await b.unlock(a.paired.id);
+  const v = await b.refresh(a.paired.id);
+  check(!JSON.stringify(v.anomalies).includes("evil.example") && v.relayDown === true && v.anomalies.some((x) => x.indexOf("The relay could not be read") === 0), "a relay's own words are not shown: a fixed sentence is", JSON.stringify(v.anomalies));
+  check(v.diagnostics.length === 1 && v.diagnostics[0].indexOf("the relay said: ") === 0 && v.diagnostics[0].length <= 216, "they are kept for diagnosis only, labelled as the relay's and cut short", JSON.stringify(v.diagnostics));
+  const why = await throwsAsync(() => b.announce(a.paired.id));
+  check(!why.includes("evil.example") && why.length > 0, "a put the relay refuses is said in fixed words too", why);
+}
+{
+  // Finding 5: the wording and number signed are the question's on screen.
+  const t = R.memoryTransport();
+  const m = await newMachine("work");
+  const a = await pairedApp(t, m);
+  await sendSnapshot(t, m, [a.phoneKey], [question(4, "Four?", { wordingVersion: 2 })]);
+  await a.phone.refresh(a.paired.id);
+  const before = (await t.get(m.mailbox, 0, 256)).value.items.length;
+  const why = await throwsAsync(() => a.phone.answer(a.paired.id, { number: 4, wordingVersion: 7, text: "Yes.", answerId: P.hex(P.randomBytes(16)) }));
+  check(why.indexOf("wording") >= 0 && (await t.get(m.mailbox, 0, 256)).value.items.length === before, "an answer to another wording than the one on screen is refused before anything is signed", why);
+}
+
 // --- 11. the icons the build draws are whole PNGs ---
 {
   const { inflateSync, crc32 } = await import("node:zlib");

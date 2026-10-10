@@ -299,6 +299,10 @@ export async function readOffer(text, now = Date.now()) {
   if (names.join(",") !== OFFER_FIELDS.join(",")) return no("the pairing offer's members are not " + OFFER_FIELDS.join(", "));
   if (o.v !== 1 || o.kind !== "horde-relay-pairing-offer") return no("this is not a version 1 pairing offer");
   if (typeof o.horde !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(o.horde)) return no("the offer's horde is not a horde name");
+  // The offer's id and code go back in the response (review of a8b732d, finding 3): read as
+  // relay/Records.ps1 spells them, so nothing the offer carries can reshape the response.
+  if (typeof o.offer !== "string" || !/^[0-9a-f]{32}$/.test(o.offer)) return no("the offer's id is not 32 lower-case hex");
+  if (typeof o.code !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(o.code)) return no("the offer's code is not base64url");
   if (typeof o.machine !== "string" || !KEY_ID.test(o.machine) || typeof o.agreeKeyId !== "string" || !KEY_ID.test(o.agreeKeyId)) return no("the offer's key ids are not key ids");
   if (typeof o.mailbox !== "string" || o.mailbox !== o.horde + "/" + o.machine) return no("the offer's mailbox is not its horde and machine");
   if (typeof o.rpId !== "string" || !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(o.rpId)) return no("the offer's rpId is not a relying party id");
@@ -324,11 +328,14 @@ export async function pairingFingerprint({ challenge, publicPoint, credentialId,
   return d.slice(0, 4) + "-" + d.slice(4, 8) + "-" + d.slice(8, 12);
 }
 export function validLabel(label) { return typeof label === "string" && LABEL.test(label); }
-// relay/Pairing.ps1's New-HordeRelayPairingResponseText, the one spelling Complete reads.
+// relay/Pairing.ps1's New-HordeRelayPairingResponseText, the one spelling Complete reads: written by a
+// JSON writer from an object whose members are in that order, every value checked first, so its text is
+// the machine's canonical one and nothing in it can be read two ways.
 export function pairingResponseText({ offer, code, rawId, clientDataJSON, attestationObject, label, prf }) {
   if (!validLabel(label)) throw new Error("a device label is 1 to 64 printable characters, no quote or backslash, not starting or ending with a space");
-  return '{"v":1,"kind":"horde-relay-pairing-response","offer":"' + offer + '","code":"' + code + '","rawId":"' + b64u(rawId) + '","clientDataJSON":"' + b64u(clientDataJSON) +
-    '","attestationObject":"' + b64u(attestationObject) + '","label":"' + label + '","prf":' + (prf ? "true" : "false") + "}";
+  if (typeof offer !== "string" || !/^[0-9a-f]{32}$/.test(offer)) throw new Error("the offer id is 32 lower-case hex");
+  if (typeof code !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(code)) throw new Error("the offer code is base64url");
+  return JSON.stringify({ v: 1, kind: "horde-relay-pairing-response", offer, code, rawId: b64u(rawId), clientDataJSON: b64u(clientDataJSON), attestationObject: b64u(attestationObject), label, prf: prf === true });
 }
 
 // --- the phone identity key (relay/Trust.ps1, PHONE KEYS; channels/trust/Channel.ps1) ---

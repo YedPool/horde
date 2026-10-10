@@ -33,6 +33,12 @@
         @{ Name = "hpke-kem-label-wrong"
            Find = 'labeledExtract(new Uint8Array(0), KEM_ID, "eae_prk", dh)'
            Replace = 'labeledExtract(new Uint8Array(0), KEM_ID, "eae-prk", dh)' }
+        @{ Name = "offer-code-unchecked"
+           Find = 'if (typeof o.code !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(o.code)) return no('
+           Replace = 'if (false) return no(' }
+        @{ Name = "offer-id-unchecked"
+           Find = 'if (typeof o.offer !== "string" || !/^[0-9a-f]{32}$/.test(o.offer)) return no('
+           Replace = 'if (false) return no(' }
         @{ Name = "expired-offer-taken"
            Find = 'if (now >= o.expiresAt) return no('
            Replace = 'if (false) return no(' }

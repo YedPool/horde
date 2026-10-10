@@ -26,9 +26,10 @@
 #   app/sw.js       its VERSION (a hash of every other file of the shell) and its SHELL (their paths)
 #                   are written into the two placeholder lines it carries, so a new deployment is a new
 #                   worker and a new cache.
-# and three are made: app/config.json, { schemaVersion, transport, relayOrigin } - which relay
-# transport the app uses (surfaces/pwa/page/relay-client.js, transportFromConfig) and where the relay
-# is - and app/icon-192.png and app/icon-512.png, the icons an installable app needs at those sizes
+# and three are made: app/config.json, { schemaVersion, transport, relayOrigin, lockAfterHiddenSeconds }
+# - which relay transport the app uses (surfaces/pwa/page/relay-client.js, transportFromConfig), where
+# the relay is, and how long the app may stay hidden before it locks every horde (300 s, the founder's
+# five minutes, decided 2026-10-10; a suite builds with less to see it happen) - and app/icon-192.png and app/icon-512.png, the icons an installable app needs at those sizes
 # (Chrome's install criteria), drawn here from the shape of page/icon.svg (New-HordePwaIconPng). They
 # are made, not committed: every file in the repository is ASCII text (CONTRIBUTING 13), and
 # tools/HostNames.ps1 excuses only pinned program libraries from being read as text.
@@ -167,7 +168,9 @@ function New-HordePwaIconPng {
 function New-HordePwaSite {
     # Build the site into -Out. Known { out; version; files; shell } or unknown with the reason; nothing
     # is written on a refusal found before writing.
-    param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Transport, [AllowEmptyString()][string]$RelayOrigin = "")
+    param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Transport, [AllowEmptyString()][string]$RelayOrigin = "",
+        [int]$LockAfterHiddenSeconds = 300)
+    if ($LockAfterHiddenSeconds -lt 1 -or $LockAfterHiddenSeconds -gt 86400) { return (New-HordeUnknown -Reason ("the app locks after 1 to 86400 seconds hidden, not " + $LockAfterHiddenSeconds)) }
     if ($script:HordePwaTransports -cnotcontains $Transport) { return (New-HordeUnknown -Reason ("'" + $Transport + "' is not a relay transport the app knows: " + ($script:HordePwaTransports -join ", "))) }
     $why = Test-HordePwaRelayOrigin -Origin $RelayOrigin
     if ($why -cne "") { return (New-HordeUnknown -Reason $why) }
@@ -190,7 +193,7 @@ function New-HordePwaSite {
     if ((Get-HordePwaPlaceholderCount -Text $page -Find $script:HordePwaCspPlaceholder) -ne 1) { return (New-HordeUnknown -Reason ("app/index.html must carry " + $script:HordePwaCspPlaceholder + " exactly once, in its policy line")) }
     $connect = $script:HordePwaCspPlaceholder + $(if ($RelayOrigin -cne "") { " " + $RelayOrigin } else { "" })
     $bytes["app/index.html"] = $ascii.GetBytes($page.Replace($script:HordePwaCspPlaceholder, $connect))
-    $configText = '{"schemaVersion":1,"transport":"' + $Transport + '","relayOrigin":"' + $RelayOrigin + '"}' + "`n"
+    $configText = '{"schemaVersion":1,"transport":"' + $Transport + '","relayOrigin":"' + $RelayOrigin + '","lockAfterHiddenSeconds":' + $LockAfterHiddenSeconds + '}' + "`n"
     $bytes["app/config.json"] = $ascii.GetBytes($configText)
     $bytes["app/icon-192.png"] = New-HordePwaIconPng -Size 192
     $bytes["app/icon-512.png"] = New-HordePwaIconPng -Size 512

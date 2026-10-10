@@ -43,8 +43,10 @@ function messageOf(e) { return e && e.message ? e.message : String(e); }
 
 // --- the phone and the bridge, made once ---
 
+// The deployment's config.json, once read: the transport, and how long the app may stay hidden.
+let config = null;
 async function makeBridge() {
-  const config = await fetch("config.json", { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error("this deployment has no config.json"); return r.json(); });
+  config = await fetch("config.json", { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error("this deployment has no config.json"); return r.json(); });
   const transport = transportFromConfig(config, window);
   if (!transport) throw new Error("this deployment names no relay transport this app knows ('" + String(config.transport) + "')");
   const phone = createPhone({ store: await openStore(), authenticator: browserAuthenticator(), relay: createRelayClient(transport), origin: window.location.origin });
@@ -223,17 +225,40 @@ $("forgetBtn").addEventListener("click", () => {
   if (!h || !window.confirm("Forget " + h.horde + " on this phone? Its key leaves this phone; the recovery code still opens nothing without pairing again.")) return;
   const id = current;
   current = "";
-  if (docs[id]) { docs[id].box.remove(); delete docs[id]; }
+  dropDoc(id);
   acted("forget", { id }).then(() => pick((hordes[0] && hordes[0].id) || ""));
 });
-$("lockBtn").addEventListener("click", () => acted("lock", { id: current }));
-// Leaving the app for a while locks every horde: the key is not left in memory behind a closed screen.
-const LOCK_AFTER_HIDDEN_MS = 5 * 60 * 1000;
+// A LOCK TAKES THE OPENED WORDS OFF THE PAGE (review of a8b732d, finding 2): the horde's list box goes,
+// and with it the document's drafts, which live in that box's memory storage - not only hidden behind
+// the locked screen. Unlocked again, the list is drawn afresh from the snapshot.
+function dropDoc(id) { if (docs[id]) { docs[id].box.remove(); delete docs[id]; } }
+async function lockAll() {
+  const open = hordes.filter((h) => h.unlocked).map((h) => h.id);
+  for (const id of open) { dropDoc(id); await bridge.request("lock", { id }); }
+  await loadHordes();
+}
+$("lockBtn").addEventListener("click", () => { const id = current; dropDoc(id); acted("lock", { id }); });
+// LEAVING THE APP FOR A WHILE LOCKS EVERY HORDE, the key and the opened list not left behind a closed
+// screen: the timer starts when the page is hidden, so the lock happens while it is hidden (if the
+// browser lets the timer run), and is checked again on return in case it did not. On return the list
+// is hidden AT ONCE, before that check, so nothing opened shows for a moment on a phone picked up
+// after the time. The time is the deployment's (config.json, lockAfterHiddenSeconds; 300 s).
 let hiddenAt = 0;
+let lockTimer = null;
+const lockAfterMs = () => 1000 * ((config && Number.isSafeInteger(config.lockAfterHiddenSeconds) && config.lockAfterHiddenSeconds > 0) ? config.lockAfterHiddenSeconds : 300);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
-  if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_HIDDEN_MS) { for (const h of hordes) if (h.unlocked) bridge.request("lock", { id: h.id }); loadHordes().then(() => pick(current)); }
+  if (document.visibilityState === "hidden") {
+    hiddenAt = Date.now();
+    clearTimeout(lockTimer);
+    lockTimer = setTimeout(() => { lockAll().then(() => pick(current)); }, lockAfterMs());
+    return;
+  }
+  $("doc").hidden = true;
+  $("keys").hidden = true;
+  clearTimeout(lockTimer);
+  const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;
+  (expired ? lockAll() : Promise.resolve()).then(() => pick(current));
 });
 
 // --- the answering keys ---

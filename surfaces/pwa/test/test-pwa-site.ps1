@@ -68,7 +68,8 @@ try {
     }
     Check ($true) "every other file is copied byte for byte (a difference is a failure above)"
     $config = (Read-Site $site "app/config.json") | ConvertFrom-Json
-    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test") "config.json names the transport and the relay"
+    Check ($config.schemaVersion -eq 1 -and $config.transport -ceq "memory" -and $config.relayOrigin -ceq "https://relay.example.test" -and $config.lockAfterHiddenSeconds -eq 300) "config.json names the transport, the relay, and the founder's five minutes before a hidden app locks"
+    Check ((New-HordePwaSite -Out (Join-Path $work "x3") -Transport "memory" -LockAfterHiddenSeconds 0).reason.Contains("1 to 86400 seconds")) "a lock time of none is refused"
     $sw = Read-Site $site "app/sw.js"
     $ver = [regex]::Match($sw, 'const VERSION = "([0-9a-f]{16})";').Groups[1].Value
     Check ($ver -ceq $b.value.version) "the worker carries the site's version"

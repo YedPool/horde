@@ -42,7 +42,17 @@
 //
 // FRESHNESS. The relay may replay an old snapshot. The phone keeps the highest envelope seq of a
 // snapshot it has shown (lastSnapshotSeq, a number, stored) and never shows an older one: a stale
-// snapshot is reported as an anomaly, not drawn.
+// snapshot is reported as an anomaly, not drawn. That number is the ONLY thing freshness rests on.
+// THE RELAY'S OWN NUMBERING IS NOT TRUSTED ACROSS A RELOAD (review of a8b732d, finding 1: a relay that
+// served one item under a seq near 2^53 made a stored cursor skip every honest item after a reload,
+// and the list stayed empty with no word said). So every session reads the mailbox from the start
+// (the relay's retention bounds it), and within a session a read that finds nothing past the cursor
+// asks for the first item again: if it is not the item this session read under that seq, the relay's
+// numbering went backwards, which is said, and the mailbox is read again from the start.
+//
+// THE RELAY'S WORDS ARE NEVER SHOWN (finding 4): a relay that answers "your passkey expired, re-pair
+// at ..." must not get that sentence onto the founder's screen. What it says is kept in diagnostics,
+// labelled as the relay's and cut to 200 characters; the screen gets a fixed sentence.
 //
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
@@ -50,12 +60,18 @@ import * as P from "../relay/protocol.js";
 import { newPhoneKey, wipe, prfInput, newRecoveryCode, wrapWithPrf, wrapWithRecovery, unwrap } from "./keywrap.js";
 
 const ENTRY = "horde/";
+const RELAY_DOWN = "The relay could not be read just now; the phone will try again.";
+const RELAY_REFUSED = "The relay did not take it just now.";
+const relaySaid = (reason) => "the relay said: " + String(reason || "").slice(0, 200);
 const NO_PRF = "Read only: this passkey gives no PRF, so this phone has nothing to keep this horde's key under, and a horde whose key the passkey does not hold is never answered from this phone. It can still be read: unlock with the recovery code. Answer at the machine, or pair again with a passkey that has PRF.";
 
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
 export function createPhone({ store, authenticator, relay, origin, now = () => Date.now() }) {
   const sessions = new Map();
+  // The relay's own words from puts, kept for the next refresh's diagnostics (THE RELAY'S WORDS).
+  const diagnostics = [];
+  const newSession = (privateKey, publicPoint, mode, pkcs8) => ({ privateKey, publicPoint, mode, pkcs8, pages: [], cursor: 0, seen: new Map(), view: null });
   const fail = (reason, code = "refused") => { const e = new Error(reason); e.code = code; return e; };
 
   async function entryOf(id) {
@@ -138,10 +154,10 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
         rpId: o.rpId, origin, credentialId: P.b64u(made.rawId), deviceKeyId: await P.keyId(cred.value.publicPoint), devicePublic: P.b64u(cred.value.publicPoint),
         label, fingerprint, prfEnabled: made.prfEnabled === true, phonePublic: P.b64u(pk.publicPoint), phoneKeyId,
         wraps: { recovery: await wrapWithRecovery(pk.pkcs8, recoveryCode, o.horde, phoneKeyId) },
-        seq: {}, announced: null, readFrom: 0, lastSnapshotSeq: -1, pairedAt: now()
+        seq: {}, announced: null, lastSnapshotSeq: -1, pairedAt: now()
       };
       await store.put(ENTRY + id, e);
-      const s = { privateKey: pk.privateKey, publicPoint: pk.publicPoint, mode: "read-only", pkcs8: pk.pkcs8, pages: [], cursor: 0, view: null };
+      const s = newSession(pk.privateKey, pk.publicPoint, "read-only", pk.pkcs8);
       sessions.set(id, s);
       if (made.prfFirst) e = await keepPasskeyWrap(e, s, made.prfFirst);
       return { id, fingerprint, response, recoveryCode, prf: e.prfEnabled };
@@ -159,7 +175,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       e = await keepPasskeyWrap(e, s, vouch.prfFirst);
       const env = await sealAndSign(e, "phone-key", "trust", P.phoneKeyBody(phonePublic, vouch), assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") throw fail("the relay did not take the announcement: " + put.reason);
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The announcement was not sent; try again."); }
       await store.update(ENTRY + id, (x) => ({ ...x, announced: { key: env.key, at: now() } }));
       return { key: env.key, agreeKeyId: e.phoneKeyId };
     },
@@ -175,7 +191,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       if (!e.wraps.prf) throw fail("this horde's key is not wrapped under this passkey's PRF yet: unlock with the recovery code once, then with the passkey");
       const opened = await unwrap(e.wraps.prf, got.prfFirst, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic));
       if (!opened.ok) throw fail(opened.reason + ": unlock with the recovery code");
-      sessions.set(id, { privateKey: opened.value.privateKey, publicPoint: opened.value.publicPoint, mode: "passkey", pkcs8: null, pages: [], cursor: e.readFrom, view: null });
+      sessions.set(id, newSession(opened.value.privateKey, opened.value.publicPoint, "passkey", null));
       return summary(e);
     },
 
@@ -186,7 +202,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       const e = await entryOf(id);
       const opened = await unwrap(e.wraps.recovery, code, e.horde, e.phoneKeyId, P.unb64u(e.phonePublic), { keepBytes: true });
       if (!opened.ok) throw fail(opened.reason);
-      sessions.set(id, { privateKey: opened.value.privateKey, publicPoint: opened.value.publicPoint, mode: "recovery", pkcs8: opened.value.pkcs8, pages: [], cursor: e.readFrom, view: null });
+      sessions.set(id, newSession(opened.value.privateKey, opened.value.publicPoint, "recovery", opened.value.pkcs8));
       return summary(e);
     },
 
@@ -195,7 +211,9 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
     async forget(id) { this.lock(id); await store.delete(ENTRY + id); },
 
     // Read the horde's phone mailbox and return the newest complete snapshot this phone can open:
-    // { snapshot, seq, questions, pageKeyByNumber, withheld, counts, anomalies, stale }. waitMs > 0
+    // { snapshot, seq, questions, pageKeyByNumber, withheld, counts, anomalies, stale, diagnostics }:
+    // anomalies are this phone's own sentences, for the screen; diagnostics hold what the relay said,
+    // for a person diagnosing, never the screen. waitMs > 0
     // long-polls the relay first (a watch). Needs an unlocked session.
     async refresh(id, { waitMs = 0 } = {}) {
       const e = await entryOf(id);
@@ -203,13 +221,27 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       if (!s) throw fail("This horde is locked.", "locked");
       const mailbox = e.horde + "/phone";
       const anomalies = [];
+      const said = [];
       let first = true;
+      let restarted = false;
       for (let round = 0; round < 64; round++) {
         const r = (first && waitMs > 0) ? await relay.watch(mailbox, s.cursor, 256, waitMs) : await relay.get(mailbox, s.cursor, 256);
         first = false;
-        if (r.state !== "known") { anomalies.push("the relay could not be read: " + r.reason); break; }
+        if (r.state !== "known") { anomalies.push(RELAY_DOWN); said.push(relaySaid(r.reason)); break; }
         anomalies.push(...r.value.anomalies);
+        if (r.value.items.length === 0 && s.cursor > 0 && !restarted) {
+          const head = await relay.get(mailbox, 0, 1);
+          const one = head.state === "known" ? head.value.items[0] : null;
+          if (one && s.seen.get(one.key) !== one.seq) {
+            anomalies.push("the relay's numbering went backwards (its first item is not the one this phone read under that number); the mailbox is read again from the start");
+            s.cursor = 0;
+            s.seen.clear();
+            restarted = true;
+            continue;
+          }
+        }
         for (const item of r.value.items) {
+          s.seen.set(item.key, item.seq);
           const o = await P.openEnvelope(item.text, { keyId: e.machine, signPublic: P.unb64u(e.machineSignPublic) }, { privateKey: s.privateKey, publicPoint: s.publicPoint });
           // Another machine's envelope, or one sealed to another phone key, is not an anomaly: the
           // mailbox is the horde's. A forged or broken one from "this" machine is.
@@ -228,7 +260,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       else if (best) {
         s.view = best;
         s.pages = s.pages.filter((p) => p.relaySeq >= best.firstSeq);
-        if (best.seq !== e.lastSnapshotSeq || best.firstSeq - 1 !== e.readFrom) await store.update(ENTRY + id, (x) => ({ ...x, lastSnapshotSeq: best.seq, readFrom: Math.max(0, best.firstSeq - 1) }));
+        if (best.seq !== e.lastSnapshotSeq) await store.update(ENTRY + id, (x) => ({ ...x, lastSnapshotSeq: best.seq }));
       }
       const v = s.view;
       const pageKeyByNumber = {};
@@ -236,7 +268,7 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       return {
         snapshot: v ? v.snapshot : "", seq: v ? v.seq : -1, questions: v ? v.questions.map((q) => q.question) : [], pageKeyByNumber,
         withheld: v ? v.withheld : [], counts: v ? v.counts : null, unreadable: v ? v.unreadable : 0, notUnderstood: v ? v.notUnderstood : 0,
-        anomalies, stale, mode: s.mode
+        anomalies, stale, mode: s.mode, relayDown: said.length > 0, diagnostics: said.concat(diagnostics.splice(0))
       };
     },
 
@@ -252,10 +284,13 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       const v = s.view;
       const q = v && v.questions.find((x) => x.question.number === number);
       if (!q) throw fail("question " + number + " is not in the snapshot this phone holds");
+      // What is signed is the question on screen (review of a8b732d, finding 5): a wording the page did
+      // not show is refused before the passkey is asked.
+      if (Number(q.question.wordingVersion) !== wordingVersion) throw fail("question " + number + " is shown in wording " + q.question.wordingVersion + ", not " + wordingVersion + ": the answer was not sent. Read it again and answer.");
       const body = P.answerBody({ answerId, machine: e.machine, snapshot: q.pageKey, number, wordingVersion, text });
       const env = await sealAndSign(e, "answer", "decisions", body, assertWith(e));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
-      if (put.state !== "known") throw fail("not sent: the relay did not take it (" + put.reason + "). Press Enter to try again; the same words are never saved twice.");
+      if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail("Not sent: " + RELAY_REFUSED + " Press Enter to try again; the same words are never saved twice."); }
       return { key: env.key, seq: put.value.seq };
     }
   };

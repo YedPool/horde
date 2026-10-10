@@ -124,6 +124,8 @@ async function load(url) {
 const fieldOf = (question) => "(Array.from(document.querySelectorAll('#lists .horde-list:not([hidden]) .hd-qrow')).find((r) => r.textContent.indexOf(" + JSON.stringify(question || "") + ") >= 0).querySelector('textarea.hd-field'))";
 // What the lists show: their text, and what stands in every field (a saved answer rests in its field).
 const listed = "(document.getElementById('lists').innerText + ' ' + Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join(' '))";
+// What a locked page still holds of the lists: their boxes, and the words standing in any field.
+const leftovers = "({ boxes: document.querySelectorAll('#lists .horde-list').length, fields: Array.from(document.querySelectorAll('#lists textarea')).map((f) => f.value).join('|') })";
 const shown = (id) => "(document.getElementById('" + id + "') && !document.getElementById('" + id + "').hidden)";
 const notice = "document.getElementById('notice').textContent";
 function headOf(mailbox) {
@@ -201,7 +203,19 @@ const commands = {
     await until(shown("doc") + " || (" + notice + ") !== " + JSON.stringify(was), 30000);
     return await evaluate("({ doc: " + shown("doc") + ", mode: document.getElementById('mode').hidden ? '' : document.getElementById('mode').textContent, notice: " + notice + " })");
   },
-  async lock() { await evaluate("document.getElementById('lockBtn').click()", true); return { locked: !!(await until(shown("lockedView"), 10000)) }; },
+  async lock() { await evaluate("document.getElementById('lockBtn').click()", true); return { locked: !!(await until(shown("lockedView"), 10000)), ...(await evaluate(leftovers)) }; },
+  // The page told it is hidden (as a phone's screen going off or the app switched away does), then
+  // left so for ms: what is still on it.
+  async hide(c) {
+    await evaluate("Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange'))");
+    await sleep(c.ms);
+    return await evaluate("({ tabs: document.getElementById('tabs').textContent, " + leftovers.slice(2, -2) + " })");
+  },
+  // The page told it is visible again: whether the list was hidden in the same moment, before any
+  // lock check could run.
+  async show() {
+    return await evaluate("(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); return { docHiddenAtOnce: document.getElementById('doc').hidden }; })()");
+  },
   async screenshot(c) {
     const shot = await cdp("Page.captureScreenshot", { format: "png" });
     writeFileSync(c.path, Buffer.from(shot.data, "base64"));

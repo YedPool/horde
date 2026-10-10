@@ -95,7 +95,7 @@ function Save-Shot {
 
 try {
     $env:HORDE_HOME = $hh
-    $built = New-HordePwaSite -Out $site -Transport "binding"
+    $built = New-HordePwaSite -Out $site -Transport "binding" -LockAfterHiddenSeconds 2
     Check ($built.state -ceq "known") "CONTROL: the site is built as it ships, with the local test transport"
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay.json"), '{"schemaVersion": 1, "settings": {"horde": "work"}}', $utf8)
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 200}}', $utf8)
@@ -198,7 +198,8 @@ try {
     Check ($rc.ok -and $rc.value.doc -and $rc.value.mode.Contains("Read only")) ("the recovery code unlocks the horde, said to be read only (" + $(if ($rc.ok) { $rc.value.notice } else { $rc.reason }) + ")")
     $ro = Invoke-Browser @{ cmd = "answer"; text = "Not from a recovery code."; via = "enter"; mailbox = $mailbox }
     Check ($ro.ok -and -not $ro.value.put) "an answer typed then is not sent: nothing reaches the machine's mailbox"
-    $null = Invoke-Browser @{ cmd = "lock" }
+    $lk = Invoke-Browser @{ cmd = "lock" }
+    Check ($lk.ok -and $lk.value.locked -and $lk.value.boxes -eq 0 -and $lk.value.fields -ceq "") ("a lock removes the horde's list and the words left in its fields, not only hides them (review of a8b732d, finding 2: " + $(if ($lk.ok) { "" + $lk.value.boxes + " box(es), fields '" + $lk.value.fields + "'" } else { $lk.reason }) + ")")
     $null = Invoke-Browser @{ cmd = "unlock" }
 
     Write-Host ""
@@ -212,6 +213,16 @@ try {
     $run = Invoke-Run -Turns 1
     $said = @(Get-Said)
     Check ($seen2.ok -and $seen2.value.found -and $touch.ok -and $touch.value.put -and $said.Count -eq 2 -and @($said | Where-Object { $_.data.text -ceq "The second one." }).Count -eq 1) ("a touch on Send sends the answer in the field with the caret, and it lands (" + $said.Count + " records; seen " + $(if ($seen2.ok) { $seen2.value.found } else { $seen2.reason }) + "; touch " + $(if ($touch.ok) { ConvertTo-Json $touch.value -Compress } else { $touch.reason }) + ")")
+
+    Write-Host ""
+    Write-Host "--- 9. hidden, it locks itself; shown again, nothing opened shows first ---" -ForegroundColor Cyan
+    $hid = Invoke-Browser @{ cmd = "hide"; ms = 3500 }
+    Check ($hid.ok -and $hid.value.tabs.Contains("(locked)") -and $hid.value.boxes -eq 0 -and $hid.value.fields -ceq "") ("left hidden past the lock time (2 s in this build), every horde locks while still hidden, its list removed (" + $(if ($hid.ok) { $hid.value.tabs + "; " + $hid.value.boxes + " box(es)" } else { $hid.reason }) + ")")
+    $null = Invoke-Browser @{ cmd = "unlock" }
+    $null = Invoke-Browser @{ cmd = "waitText"; text = $title }
+    $null = Invoke-Browser @{ cmd = "hide"; ms = 200 }
+    $sh = Invoke-Browser @{ cmd = "show" }
+    Check ($sh.ok -and $sh.value.docHiddenAtOnce) "shown again, the list is hidden in the same moment, before the lock check runs"
     $probs = Invoke-Browser @{ cmd = "problems" }
     Check ($probs.ok -and @($probs.value).Count -eq 0) ("no exception, no console error and no policy violation in the whole run (" + $(if ($probs.ok) { @($probs.value) -join " | " } else { $probs.reason }) + ")")
     }

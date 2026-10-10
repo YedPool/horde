@@ -27,6 +27,15 @@
         @{ Name = "no-prf-passkey-unlocks"
            Find = 'if (!got.prfFirst) throw fail(NO_PRF);'
            Replace = 'if (false) throw fail(NO_PRF);' }
+        @{ Name = "relay-numbering-backwards-not-noticed"
+           Find = 'if (one && s.seen.get(one.key) !== one.seq) {'
+           Replace = 'if (false) {' }
+        @{ Name = "relay-words-shown"
+           Find = 'if (r.state !== "known") { anomalies.push(RELAY_DOWN);'
+           Replace = 'if (r.state !== "known") { anomalies.push(RELAY_DOWN + r.reason);' }
+        @{ Name = "another-wording-signed"
+           Find = 'if (Number(q.question.wordingVersion) !== wordingVersion) throw fail('
+           Replace = 'if (false) throw fail(' }
         @{ Name = "question-not-on-screen-answered"
            Find = 'const q = v && v.questions.find((x) => x.question.number === number);'
            Replace = 'const q = v && (v.questions.find((x) => x.question.number === number) || v.questions[0]);' }

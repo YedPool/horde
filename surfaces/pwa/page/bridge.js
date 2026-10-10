@@ -62,7 +62,7 @@ export function createBridge(phone, options = {}) {
     try {
       const r = await phone.refresh(picked, { waitMs });
       locked = false;
-      relayDown = r.anomalies.some((a) => a.indexOf("the relay could not be read") === 0);
+      relayDown = r.relayDown === true;
       if (r.anomalies.length) emit("notice", r.anomalies.join(" "));
       view = r.snapshot ? r : null;
       viewError = r.snapshot ? "" : "No snapshot has come from the machine yet. Once the machine trusts this phone and its runner turns, the questions appear here; if none come, announce this phone again.";
@@ -112,7 +112,9 @@ export function createBridge(phone, options = {}) {
     announce: async (a) => { const r = await phone.announce(String(a.id)); await hordes(); return r; },
     unlock: async (a) => { const r = await phone.unlock(String(a.id)); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
     recover: async (a) => { const r = await phone.recover(String(a.id), String(a.code || "")); await hordes(); if (String(a.id) === picked) { await refresh(); poll(); } return r; },
-    lock: async (a) => { phone.lock(String(a.id)); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return hordes(); },
+    // The summaries are pushed BEFORE the list: a frame that hears list-changed already knows the horde
+    // is locked, and draws the locked screen, not an empty list.
+    lock: async (a) => { phone.lock(String(a.id)); const h = await hordes(); if (String(a.id) === picked) { locked = true; view = null; viewError = "This horde is locked."; emit("list-changed", listRecord()); } return h; },
     forget: async (a) => { await phone.forget(String(a.id)); if (String(a.id) === picked) { picked = ""; view = null; emit("list-changed", listRecord()); } return hordes(); },
     refresh: async () => refresh()
   };
