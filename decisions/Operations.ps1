@@ -319,12 +319,15 @@ function Get-HordeDecisionListAnswer {
         $why = $named + " is not a state a question can be in; give one of: " + ($states -join ", ") + ", or all"
         return (Complete-HordeDecisionAnswer -Value (New-HordeDecisionResult -Operation "list" -Outcome "refused" -Reason $why -Findings @($why) -State $State) -Definitions $Definitions -Now $Now)
     }
+    # WITH MESSAGES, each thread as show gives it: one read of the store for every question's
+    # conversation, where a show per question would read it once a question (channels/decisions).
+    $withMessages = ((Test-HordeDecisionMember -Object $Request -Name "messages") -and $Request.messages -eq $true)
     $counts = [ordered]@{}
     foreach ($s in $states) { $counts[$s] = 0 }
     $views = New-Object System.Collections.ArrayList
     foreach ($question in $State.questions.Values) {
         if ($counts.Contains("$($question.state)")) { $counts["$($question.state)"] = [int]$counts["$($question.state)"] + 1 }
-        if ($want -ceq "all" -or "$($question.state)" -ceq $want) { [void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State)) }
+        if ($want -ceq "all" -or "$($question.state)" -ceq $want) { [void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State -Messages:$withMessages)) }
     }
     $value = New-HordeDecisionResult -Operation "list" -Outcome "done" -State $State -More ([ordered]@{ questions = @($views); counts = [pscustomobject]$counts })
     return (Complete-HordeDecisionAnswer -Value $value -Definitions $Definitions -Now $Now)
