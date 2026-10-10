@@ -242,7 +242,9 @@ const rl = createInterface({ input: process.stdin });
 for await (const line of rl) {
   if (!line.trim()) continue;
   let c;
-  try { c = JSON.parse(line); } catch (x) { say({ ok: false, reason: "not JSON" }); continue; }
+  // A leading U+FEFF: Windows PowerShell 5.1 under a UTF-8 console (code page 65001) writes a BOM
+  // first on a redirected stdin, so the first command would not parse.
+  try { c = JSON.parse(line.replace(/^\uFEFF/, "")); } catch (x) { say({ ok: false, reason: "not JSON" }); continue; }
   if (c.cmd === "exit") break;
   try {
     if (!commands[c.cmd]) throw new Error("no such command: " + c.cmd);
