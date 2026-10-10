@@ -152,7 +152,20 @@ $script:HordeDecisionRoutes = [ordered]@{
     "window"        = @{ speakers = @("founder");  actors = @("founder");  shown = "typed in the window";                statesWording = $true }
     "chat-recorded" = @{ speakers = @("founder");  actors = @("warchief"); shown = "recorded by the warchief from chat"; statesWording = $false }
     "command"       = @{ speakers = @("warchief"); actors = @("warchief"); shown = "by command";                         statesWording = $false }
+    # "phone": the founder's answer from his phone, through the relay (relay design 2026-10-09, PR plan
+    # item 5, and the founder's decision of the same day). The phone shows him the wording, so it always
+    # states it, as the window does. His own caller records it - the relay channel, which has verified
+    # his passkey's signature over the answer - so the actor is the founder, as for the window.
+    # evidence: the route's words always carry the SHA-256, in lower-case hex, of the relay journal
+    # record that proved them (relay/Journal.ps1 keeps the envelope whole, signature and all); no other
+    # route's words may carry one. The proof itself stays in relay's journal: a decision record holds
+    # only the hash, so this module never stores a signature, and never judges one - it cannot read the
+    # journal, and is not the place that decides who signed. A route with no evidence member carries
+    # none.
+    "phone"         = @{ speakers = @("founder");  actors = @("founder");  shown = "answered on the founder's phone";    statesWording = $true; evidence = $true }
 }
+# THE EVIDENCE'S ONE SPELLING: a SHA-256 in lower-case hex. Never the proof, which is relay's to keep.
+$script:HordeDecisionEvidencePattern = '\A[0-9a-f]{64}\z'
 
 # THE FIELDS OF A QUESTION, in the order they are stored and shown. type: text, list (of texts) or
 # flag. oneLine: a line break is refused. wording: a change to it is a new wording, because it is what
@@ -630,7 +643,9 @@ function Test-HordeDecisionSaying {
     # route, who is making the request, and the words. Empty means they may be written. THE TEXT IS
     # NEVER REPEATED in a finding, and never changed: what cannot be stored is refused whole.
     # Secrets are not looked for here: Find-HordeDecisionSecrets runs over the whole request first.
-    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true)
+    # -EvidenceStated says whether the request carries evidence at all, and -Evidence what it is: a
+    # [string] cannot hold "not given" (CONTRIBUTING 12), and "given, but empty" is a wrong value.
+    param([string]$Speaker, [string]$Route, [string]$Actor, [string]$Text, [bool]$WordingStated = $true, [bool]$EvidenceStated = $false, [string]$Evidence = "")
     $out = New-Object System.Collections.ArrayList
     $speakerKnown = $script:HordeDecisionSpeakers.Contains($Speaker)
     $routeEntry = $script:HordeDecisionRoutes[$Route]
@@ -640,7 +655,13 @@ function Test-HordeDecisionSaying {
         if (@($routeEntry.speakers) -cnotcontains $Speaker) { [void]$out.Add("words " + $routeEntry.shown + " are never " + $script:HordeDecisionSpeakers[$Speaker].shown + "'s: by the route '" + $Route + "' only these speak: " + (@($routeEntry.speakers) -join ", ")) }
         if (@($routeEntry.actors) -cnotcontains $Actor) { [void]$out.Add("words " + $routeEntry.shown + " are recorded only by: " + (@($routeEntry.actors) -join ", ") + ". The request came from '" + $Actor + "'") }
         if ([bool]$routeEntry.statesWording -and -not $WordingStated) { [void]$out.Add("words " + $routeEntry.shown + " always say which wording of the question was on screen ('wordingVersion'), and these do not") }
+        $needsEvidence = ($routeEntry.ContainsKey("evidence") -and [bool]$routeEntry.evidence)
+        if ($needsEvidence -and -not $EvidenceStated) { [void]$out.Add("words " + $routeEntry.shown + " always carry the hash of the proof that they came from the speaker ('evidence'), and these do not") }
+        if (-not $needsEvidence -and $EvidenceStated) { [void]$out.Add("words " + $routeEntry.shown + " carry no 'evidence': only words answered on the founder's phone do") }
     }
+    # Its spelling, whatever the route: the request's schema says the same, and this is what a caller
+    # that reaches the rules without it is held to.
+    if ($EvidenceStated -and $Evidence -cnotmatch $script:HordeDecisionEvidencePattern) { [void]$out.Add("'evidence' is not a SHA-256 in lower-case hex: 64 of 0-9 and a-f") }
     if ($Text.Trim().Length -eq 0) { [void]$out.Add("'text' is blank: nothing was said") }
     if ($Text.Length -gt $script:HordeDecisionMaxTextChars) { [void]$out.Add("'text' is " + $Text.Length + " characters long; the most is " + $script:HordeDecisionMaxTextChars + ". It is refused whole, never cut") }
     $notWords = Get-HordeDecisionCharProblem -Text $Text -Said
@@ -857,6 +878,9 @@ function Step-HordeDecisionSaid {
         # A note (asks false) and an act, as the record holds them (Test-HordeDecisionSayMarks).
         asks = [bool](-not ((Test-HordeDecisionMember -Object $Ev.data -Name "asks") -and $Ev.data.asks -eq $false))
         act = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "act") { [string]$Ev.data.act } else { "" })
+        # The hash of the proof (the route phone), as the record holds it; "" when it holds none. A stored
+        # record is a fact: one by the route phone without evidence is read, and shows none.
+        evidence = $(if (Test-HordeDecisionMember -Object $Ev.data -Name "evidence") { [string]$Ev.data.evidence } else { "" })
     })
     $last = $question.thread[$question.thread.Count - 1]
     # AN EDIT (the owner, 2026-10-07): words of the same speaker straight after their own last
@@ -1046,6 +1070,7 @@ function ConvertTo-HordeDecisionMessageView {
         asks = [bool]$Message.asks
         act = "$($Message.act)"
         replaces = [bool]$Message.replaces
+        evidence = "$($Message.evidence)"
     }
 }
 
