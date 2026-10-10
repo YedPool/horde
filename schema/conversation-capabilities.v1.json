@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/conversation-capabilities.v1",
+  "title": "conversation-capabilities v1",
+  "description": "What one agent harness's conversation adapter says it can do, as data: agents/<name>/conversation.json (relay design 2026-10-09, Q2 and PR plan item 9; conversations/Port.ps1). Each capability is declared in the vocabulary the host, transport, messenger and relay capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no, and a yes needs evidence that was run (test/test-conversation-conformance.ps1 demonstrates every yes it can). The list is closed: an adapter declares every one, and nothing else. Four are things a reader can rely on (incremental, stableTurnIds, timestamps, roles); two are HAZARDS a reader must cope with when they are anything but no (partialTurns, mutableHistory): a caller that cannot cope refuses an adapter for which they are not a plain no (Find-HordeConversationAdapter -Refuse), so an unverified hazard is treated as present.",
+  "type": "object",
+  "required": ["schemaVersion", "vendor", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "vendor": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under agents/." },
+    "capabilities": {
+      "type": "object",
+      "required": ["incremental", "stableTurnIds", "timestamps", "roles", "partialTurns", "mutableHistory"],
+      "additionalProperties": false,
+      "properties": {
+        "incremental": { "$ref": "#/definitions/capability", "description": "A read resumes from the cursor of the last one and returns only what came after it, without reading the conversation again from its start." },
+        "stableTurnIds": { "$ref": "#/definitions/capability", "description": "turnId is the harness's own id for the item, the same however and whenever it is read. no: the adapter derives it from where the turn sits in its file (offset and content hash), which holds only while the file is never rewritten." },
+        "timestamps": { "$ref": "#/definitions/capability", "description": "Every turn carries the time the harness wrote it." },
+        "roles": { "$ref": "#/definitions/capability", "description": "What a person typed is told apart from what the model wrote, and from the harness's own text, by the harness's own marks - never by guessing from the words." },
+        "partialTurns": { "$ref": "#/definitions/capability", "description": "HAZARD. A turn already returned may come again later with more text (a response streamed into one record that grows). no: once returned, a turn's text never changes." },
+        "mutableHistory": { "$ref": "#/definitions/capability", "description": "HAZARD. The harness may edit, rewind or remove turns already written (an operation log, a file rewritten in place), so a turn already returned may be withdrawn. no: what was written stays written." }
+      }
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+        "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, and when. Never blank." }
+      }
+    }
+  }
+}
