@@ -85,7 +85,7 @@
            Replace = '$more["number"] = [int]$prior.number' }
         # --- the thread, as list and show hand it back ---
         @{ Name = "list-carries-every-message"
-           Find = '[void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State))'
+           Find = '[void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State -Messages:$withMessages))'
            Replace = '[void]$views.Add((ConvertTo-HordeDecisionView -Question $question -State $State -Messages))' }
         @{ Name = "show-carries-no-message"
            Find = '$view = ConvertTo-HordeDecisionView -Question $State.questions[[int]$number] -State $State -Messages'

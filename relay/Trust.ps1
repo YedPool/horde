@@ -10,6 +10,10 @@
 #                           the founder confirmed this device at the machine, by its fingerprint.
 #   confirmed\machine-<keyId>.json
 #                           a trusted founder passkey countersigned this peer's card.
+#   phones\<agreeKeyId>-<by>.json
+#                           a vouch for a phone identity key - the agreement key a phone opens what is
+#                           sealed to it with (relay design, Q7) - by the founder passkey whose key id is
+#                           <by> (PHONE KEYS, below). One key may have several.
 #   revoked\device-<id>.json, revoked\machine-<keyId>.json
 #                           the end of an entry: when, and why. Revocation is a record BESIDE the entry,
 #                           never its deletion, so the trust store keeps its own history and a revoked
@@ -32,6 +36,22 @@
 # with it (prf: the client's own report, which nothing signs - a hint for the phone-key wrap of a later
 # pull request, never a trust decision), hmac-secret, backup eligibility, its label, when and through
 # which offer it was enrolled, its fingerprint and pendingUntil.
+#
+# PHONE KEYS (relay PR 6, the decisions channel). A passkey signs; it cannot open anything sealed to it.
+# So what the machines seal for the founder - the decisions snapshot - goes to a separate PHONE IDENTITY
+# KEY (design Q7), an agreement key the phone makes and keeps. It is added from a VOUCH: a WebAuthn
+# assertion (UV) by a founder passkey over Get-HordeRelayPhoneKeyChallenge - SHA-256 of a domain, the
+# horde and the key - so a key nobody vouched for is never sealed to, and a vouch for one horde is
+# useless in another. A phone key is TRUSTED while ONE of its vouches is by a passkey that is trusted,
+# made in the horde this home belongs to NOW: revoking the passkey (a lost phone) stops every key only it
+# vouched for, as it does a countersigned peer; renaming the home's horde stops every key vouched for in
+# the old one (review of 48bc492, finding 8: the horde was checked only when a key was added).
+# A KEY CAN BE VOUCHED FOR AGAIN (finding 7). The founder who replaces the passkey on his phone vouches
+# for the same phone key with the new one: that is a second record beside the first, write-once like
+# every record here, and the key is trusted again. A vouch is never answered "already there" unless the
+# key IS trusted by that very vouch.
+# A phone key has no revocation of its own yet: rotating the phone key is the PWA's later pull request.
+# Each vouch is kept in its record and verified again on every read, like a countersignature.
 #
 # EVERY READ RE-CHECKS EVERY RECORD: canonical form, key ids that are their keys', public keys that are
 # points on P-256, file names that are their records' ids, a peer's card that still verifies and still
@@ -76,6 +96,28 @@ function Get-HordeRelayDeviceConfirmedSpec {
 function Get-HordeRelayCountersignSpec {
     return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "keyId", "hex32", "by", "hex32", "authenticatorData", "b64u",
         "clientDataJSON", "b64u", "signature", "b64u", "countersignedAt", "int"))
+}
+
+function Get-HordeRelayPhoneKeySpec {
+    return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "agreeKeyId", "hex32", "horde", "name", "agreePublic", "point", "by", "hex32",
+        "authenticatorData", "b64u", "clientDataJSON", "b64u", "signature", "b64u", "addedAt", "int"))
+}
+
+function Get-HordeRelayPhoneKeyChallenge {
+    # What a founder passkey signs to vouch for a phone identity key: SHA-256 of the domain, the horde
+    # and the key's base64url, each on its own line.
+    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$AgreePublic)
+    return ,(Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ("horde-relay/phone-key/v1 vouch`n" + $Horde + "`n" + $AgreePublic)))
+}
+
+function Test-HordeRelayPhoneKeyVouch {
+    # Does a phone key record's vouch verify: an assertion by Device's key over the key's challenge, for
+    # its relying party and origins, user verified? The WebAuthn answer.
+    param($Phone, $Device)
+    return (Test-HordeRelayWebAuthnAssertion -Public (ConvertFrom-HordeRelayBase64Url -Text $Device.publicKey) `
+        -AuthenticatorData (ConvertFrom-HordeRelayBase64Url -Text $Phone.authenticatorData) -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $Phone.clientDataJSON) `
+        -Signature (ConvertFrom-HordeRelayBase64Url -Text $Phone.signature) -Challenge (Get-HordeRelayPhoneKeyChallenge -Horde $Phone.horde -AgreePublic $Phone.agreePublic) `
+        -RpId $Device.rpId -Origins @($Device.origins) -RequireUserVerification $true)
 }
 
 function Get-HordeRelayDeviceId {
@@ -125,13 +167,15 @@ function Read-HordeRelayTrustStore {
     # revoked, confirmed and state added; each machine has revoked, countersign, cardText, state and
     # why. State is judged at -Now (a pending device expires).
     param([string]$HordeHome, $Now = $null)
-    $fail = [pscustomobject]@{ ok = $false; reason = ""; devices = @(); machines = @(); revoked = @() }
+    $fail = [pscustomobject]@{ ok = $false; reason = ""; devices = @(); machines = @(); revoked = @(); phones = @() }
     try { $root = Get-HordeRelayStateDir -HordeHome $HordeHome -Part "trust" } catch { $fail.reason = $_.Exception.Message; return $fail }
     $nowMs = ConvertTo-HordeRelayRecordMs -Time $Now
     $devs = Read-HordeRelayTrustFolder -Dir ([System.IO.Path]::Combine($root, "devices")) -Pattern '\A[0-9a-f]{32}\.json\z' -Spec (Get-HordeRelayDeviceSpec) -Kind "horde-relay-device"
     if (-not $devs.ok) { $fail.reason = $devs.reason; return $fail }
     $peers = Read-HordeRelayTrustFolder -Dir ([System.IO.Path]::Combine($root, "machines")) -Pattern '\A[0-9a-f]{32}\.json\z' -Spec (Get-HordeRelayPeerSpec) -Kind "horde-relay-peer"
     if (-not $peers.ok) { $fail.reason = $peers.reason; return $fail }
+    $phs = Read-HordeRelayTrustFolder -Dir ([System.IO.Path]::Combine($root, "phones")) -Pattern '\A[0-9a-f]{32}-[0-9a-f]{32}\.json\z' -Spec (Get-HordeRelayPhoneKeySpec) -Kind "horde-relay-phone-key"
+    if (-not $phs.ok) { $fail.reason = $phs.reason; return $fail }
     $revs = Read-HordeRelayTrustFolder -Dir ([System.IO.Path]::Combine($root, "revoked")) -Pattern '\A(device|machine)-[0-9a-f]{32}\.json\z' -Spec (Get-HordeRelayRevocationSpec) -Kind "horde-relay-revocation"
     if (-not $revs.ok) { $fail.reason = $revs.reason; return $fail }
     $confDir = [System.IO.Path]::Combine($root, "confirmed")
@@ -234,7 +278,27 @@ function Read-HordeRelayTrustStore {
     foreach ($k in @($csBy.Keys)) {
         if (@($peerOut | Where-Object { $_.keyId -ceq $k }).Count -ne 1) { $fail.reason = ("the countersignature of machine " + $k + " vouches for a machine the store does not hold"); return $fail }
     }
-    return [pscustomobject]@{ ok = $true; reason = ""; devices = @($devOut.ToArray()); machines = @($peerOut.ToArray()); revoked = @(@($revs.records) | ForEach-Object { $_.record }) }
+    $phoneOut = New-Object System.Collections.ArrayList
+    # The horde the home belongs to now (finding 8). Unnamed or refused, no phone key is trusted.
+    $nowHorde = Get-HordeRelayHorde -HordeHome $HordeHome
+    foreach ($p in @($phs.records)) {
+        $r = $p.record
+        if ($p.file -cne ($r.agreeKeyId + "-" + $r.by + ".json")) { $fail.reason = ("the phone key record " + $p.file + " is filed under another key id than its own"); return $fail }
+        if ($r.agreeKeyId -cne (Get-HordeRelayKeyId -Public (ConvertFrom-HordeRelayBase64Url -Text $r.agreePublic))) { $fail.reason = ("the phone key record " + $p.file + " names a key id that is not its key's"); return $fail }
+        if ($byKey.ContainsKey($r.agreeKeyId)) { $fail.reason = ("the key " + $r.agreeKeyId + " is in the store twice"); return $fail }
+        $by = @($devOut | Where-Object { $_.keyId -ceq $r.by }) | Select-Object -First 1
+        if ($null -eq $by) { $fail.reason = ("the phone key " + $r.agreeKeyId + " is vouched for by a passkey the store does not hold"); return $fail }
+        $check = Test-HordeRelayPhoneKeyVouch -Phone $r -Device $by
+        if (-not $check.ok) { $fail.reason = ("the vouch for the phone key " + $r.agreeKeyId + " does not verify: " + $check.reason); return $fail }
+        $state = "trusted"
+        $why = ""
+        if ($by.state -cne "trusted") { $state = "untrusted"; $why = ("the passkey that vouched for it (" + $by.label + ") is " + $by.state) }
+        elseif ($nowHorde.state -cne "known" -or $nowHorde.value -cne $r.horde) { $state = "untrusted"; $why = ("it was vouched for in the horde '" + $r.horde + "', and this home belongs to " + $(if ($nowHorde.state -ceq "known") { "'" + $nowHorde.value + "'" } else { "no horde now" })) }
+        $r | Add-Member -NotePropertyName "state" -NotePropertyValue $state
+        $r | Add-Member -NotePropertyName "why" -NotePropertyValue $why
+        [void]$phoneOut.Add($r)
+    }
+    return [pscustomobject]@{ ok = $true; reason = ""; devices = @($devOut.ToArray()); machines = @($peerOut.ToArray()); revoked = @(@($revs.records) | ForEach-Object { $_.record }); phones = @($phoneOut.ToArray()) }
 }
 
 function Get-HordeRelayTrust {
@@ -243,7 +307,7 @@ function Get-HordeRelayTrust {
     param([string]$HordeHome = "", $Now = $null)
     $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
     if (-not $s.ok) { return (New-HordeUnknown -Reason $s.reason) }
-    return (New-HordeKnown -Value ([pscustomobject]@{ devices = @($s.devices); machines = @($s.machines); revoked = @($s.revoked) }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ devices = @($s.devices); machines = @($s.machines); revoked = @($s.revoked); phones = @($s.phones) }))
 }
 
 function Write-HordeRelayTrustRecord {
@@ -451,4 +515,69 @@ function Find-HordeRelayTrustedSender {
     if ($hit.state -ceq "pending") { return (New-HordeAbsent -Note ("the machine with the key " + $KeyId + " is pending: " + $hit.why)) }
     if ($null -ne $d) { return (New-HordeKnown -Value (New-HordeRelaySender -Public (ConvertFrom-HordeRelayBase64Url -Text $d.publicKey) -Proof "webauthn" -RpId $d.rpId -Origins @($d.origins) -RequireUserVerification $true)) }
     return (New-HordeKnown -Value (New-HordeRelaySender -Public (ConvertFrom-HordeRelayBase64Url -Text $m.signPublic) -Proof "es256"))
+}
+
+function Add-HordeRelayPhoneKey {
+    # Add a phone identity key from a founder passkey's vouch (PHONE KEYS, in the header). By is the key
+    # id of a TRUSTED founder device; the assertion (authenticatorData, clientDataJSON, signature) must
+    # be by it, over Get-HordeRelayPhoneKeyChallenge of this horde and the key, user verified. Known
+    # { record; duplicate } - record is this passkey's vouch, trusted; duplicate when it was already
+    # recorded. Unknown when anything is refused or the store is damaged - including a vouch by this
+    # passkey already recorded for another horde, which is never answered as done.
+    param([string]$HordeHome = "", [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$AgreePublic, [Parameter(Mandatory = $true)][string]$By,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$AuthenticatorData, [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$ClientDataJson,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Signature, $Now = $null)
+    $public = ConvertTo-HordeRelayBase64Url -Bytes $AgreePublic
+    if ((Test-HordeRelayRecordValue -Kind "point" -Value $public) -cne "") { return (New-HordeUnknown -Reason "the phone key is not a P-256 public point") }
+    $horde = Get-HordeRelayHorde -HordeHome $HordeHome
+    if ($horde.state -cne "known") { return (New-HordeUnknown -Reason ("this machine's horde is not named, so no phone key can be vouched for in it: " + $horde.reason)) }
+    $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
+    if (-not $s.ok) { return (New-HordeUnknown -Reason ($s.reason + "; nothing is added until it is repaired")) }
+    $agreeKeyId = Get-HordeRelayKeyId -Public $AgreePublic
+    $voucher = @($s.devices | Where-Object { $_.keyId -ceq $By -and $_.state -ceq "trusted" }) | Select-Object -First 1
+    if ($null -eq $voucher) { return (New-HordeUnknown -Reason ("the key " + $By + " is not a trusted device of the founder, so it cannot vouch for a phone key")) }
+    if (@($s.devices | Where-Object { $_.keyId -ceq $agreeKeyId }).Count -gt 0 -or @($s.machines | Where-Object { $_.keyId -ceq $agreeKeyId -or $_.agreeKeyId -ceq $agreeKeyId }).Count -gt 0) {
+        return (New-HordeUnknown -Reason "this key is already in the store as a device's or a machine's")
+    }
+    # This passkey's own vouch for this key, if any. A vouch by ANOTHER passkey does not stand in for it:
+    # that passkey may be revoked (finding 7), and a new vouch is how the key is trusted again.
+    $prior = @($s.phones | Where-Object { $_.agreeKeyId -ceq $agreeKeyId -and $_.by -ceq $By }) | Select-Object -First 1
+    if ($null -ne $prior) {
+        if ($prior.state -ceq "trusted") { return (New-HordeKnown -Value ([pscustomobject]@{ record = $prior; duplicate = $true })) }
+        return (New-HordeUnknown -Reason ("this passkey's vouch for the phone key " + $agreeKeyId + " is already recorded, and it is untrusted: " + $prior.why))
+    }
+    $values = @{
+        v = 1; kind = "horde-relay-phone-key"; agreeKeyId = $agreeKeyId; horde = $horde.value; agreePublic = $public; by = $By
+        authenticatorData = (ConvertTo-HordeRelayBase64Url -Bytes $AuthenticatorData); clientDataJSON = (ConvertTo-HordeRelayBase64Url -Bytes $ClientDataJson)
+        signature = (ConvertTo-HordeRelayBase64Url -Bytes $Signature); addedAt = (ConvertTo-HordeRelayRecordMs -Time $Now)
+    }
+    $check = Test-HordeRelayPhoneKeyVouch -Phone ([pscustomobject]$values) -Device $voucher
+    if (-not $check.ok) { return (New-HordeUnknown -Reason ("the vouch for the phone key is refused: " + $check.reason)) }
+    try { $moved = Write-HordeRelayTrustRecord -HordeHome $HordeHome -Folder "phones" -Name ($agreeKeyId + "-" + $By + ".json") -Spec (Get-HordeRelayPhoneKeySpec) -Values $values }
+    catch { return (New-HordeUnknown -Reason "the phone key could not be added" -ErrorRecord $_) }
+    if ($moved -cne "moved" -and $moved -cne "exists") { return (New-HordeUnknown -Reason ("the phone key " + $agreeKeyId + " has its name, but nothing says it reached the disk")) }
+    $again = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
+    if (-not $again.ok) { return (New-HordeUnknown -Reason $again.reason) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ record = (@($again.phones | Where-Object { $_.agreeKeyId -ceq $agreeKeyId -and $_.by -ceq $By }) | Select-Object -First 1); duplicate = ($moved -ceq "exists") }))
+}
+
+function Find-HordeRelayPhoneKeys {
+    # The phone identity keys what is sealed for the founder goes to: every key with a TRUSTED vouch at
+    # -Now, once, as { agreeKeyId; public (65 bytes); by } (by: the first trusted voucher), in key id
+    # order. Known (empty when there is none); unknown when the store is damaged - and then nothing is
+    # sealed to anyone.
+    param([string]$HordeHome = "", $Now = $null)
+    $s = Read-HordeRelayTrustStore -HordeHome $HordeHome -Now $Now
+    if (-not $s.ok) { return (New-HordeUnknown -Reason ($s.reason + "; nothing is sealed to a phone until it is repaired")) }
+    $seen = @{}
+    $out = New-Object System.Collections.ArrayList
+    # The store reads its records in file name order, <agreeKeyId>-<by>: key id order, and the voucher
+    # with the lowest key id first (Sort-Object takes one literal name under tools/ExecScan.ps1).
+    foreach ($ph in @($s.phones | Where-Object { $_.state -ceq "trusted" })) {
+        if ($seen.ContainsKey($ph.agreeKeyId)) { continue }
+        $seen[$ph.agreeKeyId] = $true
+        [void]$out.Add([pscustomobject]@{ agreeKeyId = $ph.agreeKeyId; public = (ConvertFrom-HordeRelayBase64Url -Text $ph.agreePublic); by = $ph.by })
+    }
+    $out = @($out.ToArray())
+    return (New-HordeKnown -Value $out)
 }
