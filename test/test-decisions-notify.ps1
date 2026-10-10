@@ -30,6 +30,13 @@ $keepHome = $env:HORDE_HOME
 $env:HORDE_HOME = $hordeHome
 . (Join-Path $root "decisions\Notify.ps1")
 $fx = Join-Path $here "fixtures\decisions-notify"
+# NO REAL MESSENGER IS EVER ASKED HERE. Notify loads every messenger folder (a real one included, which
+# would start the fleet's mail command); this suite keeps only the in-process test messenger and its own
+# stand-ins, so a post can never leave the process. The control shows notify did load more than that.
+$loadedByNotify = @(Get-HordeMessengerNames)
+foreach ($n in $loadedByNotify) { if ($n -cne "memory") { [void]$script:HordeMessengers.Remove($n) } }
+Check ($loadedByNotify.Count -ge 2 -and $loadedByNotify -ccontains "memory") ("CONTROL: notify loads every messenger folder (" + ($loadedByNotify -join ", ") + ")")
+Check ((@(Get-HordeMessengerNames) -join ",") -ceq "memory") ("only the test messenger is left before any notice is tried (" + (@(Get-HordeMessengerNames) -join ",") + ")")
 
 # THE CLOCK this suite moves, and the seat it hands in.
 $script:now = [datetime]::new(2026, 10, 9, 12, 0, 0, [System.DateTimeKind]::Utc)
