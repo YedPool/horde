@@ -229,6 +229,16 @@ try {
     Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge (Get-HordeRelayRandomBytes -Count 32) -Public $fpArgs.Public -CredentialId $fpArgs.CredentialId -RpId $rp)) "CONTROL: the same key under another offer has another fingerprint"
     Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge $fpArgs.Challenge -Public $fpArgs.Public -CredentialId (Get-HordeRelayRandomBytes -Count 32) -RpId $rp)) "the same key under another credential id has another fingerprint"
     Check ($fp -cne (Get-HordeRelayPairingFingerprint -Challenge $fpArgs.Challenge -Public $fpArgs.Public -CredentialId $fpArgs.CredentialId -RpId "other.example.test")) "and for another relying party"
+    # A known answer, computed here a second way (the 8 bytes as one unsigned number, then modulo
+    # 10^12): what the phone's code must also produce for these inputs.
+    $kaCh = New-Object byte[] 32; for ($i = 0; $i -lt 32; $i++) { $kaCh[$i] = 0x11 }
+    $kaId = New-Object byte[] 16; for ($i = 0; $i -lt 16; $i++) { $kaId[$i] = 0x22 }
+    $kaPub = B $valid[0].publicKey
+    $kaHash = Get-HordeRelaySha256 -Bytes (Join-HordeRelayBytes -Parts @((Get-HordeRelayAsciiBytes -Text "horde-relay/pairing/v1 fingerprint`n"), $kaCh, $kaPub, [byte[]]@(0, 16), $kaId, (Get-HordeRelayAsciiBytes -Text $rp)))
+    $kaNum = [decimal]0; for ($i = 0; $i -lt 8; $i++) { $kaNum = $kaNum * 256 + [decimal]$kaHash[$i] }
+    $kaDigits = ([decimal]($kaNum % [decimal]1000000000000)).ToString("000000000000")
+    $kaWant = $kaDigits.Substring(0, 4) + "-" + $kaDigits.Substring(4, 4) + "-" + $kaDigits.Substring(8, 4)
+    Check ((Get-HordeRelayPairingFingerprint -Challenge $kaCh -Public $kaPub -CredentialId $kaId -RpId $rp) -ceq $kaWant) ("it is the first 8 bytes of the hash, as one number, modulo 10^12 (" + $kaWant + ")")
     Check (-not (Find-HordeRelayTrustedSenders -HordeHome $ha).value.ContainsKey($dev.keyId)) "a pending device is not a trusted sender"
     $one = Find-HordeRelayTrustedSender -HordeHome $ha -KeyId $dev.keyId -Now $t0.AddSeconds(65)
     Check ($one.state -ceq "absent" -and $one.reason.Contains("pending")) ("asked for by key id it is absent, pending (" + $one.reason + ")")

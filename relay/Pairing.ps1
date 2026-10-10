@@ -43,9 +43,15 @@
 # default, 1 to 30), counted from the registration and independent of the offer, so a phone that
 # registers in the offer's last seconds still has the whole window (founder answer, 2026-10-09). The
 # fingerprint is:
-#   fingerprint = 8 decimal digits, dddd-dddd, of SHA-256("horde-relay/pairing/v1 fingerprint" LF ||
-#                 challenge (32 bytes) || the passkey's 65-byte public point), the first 8 bytes read
-#                 as a number modulo 10^8
+#   fingerprint = 12 decimal digits, dddd-dddd-dddd, of SHA-256("horde-relay/pairing/v1 fingerprint"
+#                 LF || challenge (32 bytes) || the passkey's 65-byte public point || the credential
+#                 id's length (2 bytes, big-endian) || the credential id || the rpId in ASCII), the first
+#                 8 bytes read as a number modulo 10^12
+# WHY 12 DIGITS AND ALL FOUR INPUTS (review of 2243720, F1): a thief who holds the offer and can see the
+# founder's screen could grind passkeys until one's fingerprint matched what the founder expects; 8
+# digits fall to about 2^26.6 key generations, 12 need about 2^40, each a full key pair and hash. The
+# credential id and rpId are bound too, so no part of what is enrolled can be swapped under the same
+# fingerprint.
 # The phone computes it from the challenge it signed and the key it made, so the two screens agree
 # only when the machine enrolled the phone's OWN key under THIS offer. Unconfirmed when the window
 # closes (pendingUntil), the device is expired for good.
@@ -58,7 +64,8 @@
 # any origin). But that passkey is only PENDING: it signs nothing this machine accepts until the
 # founder confirms its fingerprint at the machine - a fingerprint the THIEF's key produced, which is not
 # the one the founder's phone shows. So a thief now needs the founder to type, at his own machine, a
-# fingerprint he did not produce. And:
+# fingerprint he did not produce - and grinding a key to match the founder's costs about 2^40 key
+# generations: 12 digits over the challenge, key, credential id and rpId (above). And:
 #   - SINGLE USE. The thief's registration uses the offer, so the founder's own attempt is refused - and
 #     the refusal names the thief's pending device, its label and fingerprint, so the founder rejects it
 #     (Revoke-HordeRelayTrust) and makes a new offer.
@@ -120,14 +127,17 @@ function Get-HordeRelayPairingChallenge {
 }
 
 function Get-HordeRelayPairingFingerprint {
-    # The fingerprint both screens show for one passkey under one offer (the header): dddd-dddd, from
-    # the offer's challenge and the passkey's 65-byte public point.
-    param([Parameter(Mandatory = $true)][byte[]]$Challenge, [Parameter(Mandatory = $true)][byte[]]$Public)
-    $h = Get-HordeRelaySha256 -Bytes (Join-HordeRelayBytes -Parts @((Get-HordeRelayAsciiBytes -Text "horde-relay/pairing/v1 fingerprint`n"), $Challenge, $Public))
+    # The fingerprint both screens show for one passkey under one offer (the header): dddd-dddd-dddd,
+    # from the offer's challenge, the passkey's 65-byte public point, its credential id and the rpId.
+    param([Parameter(Mandatory = $true)][byte[]]$Challenge, [Parameter(Mandatory = $true)][byte[]]$Public,
+        [Parameter(Mandatory = $true)][byte[]]$CredentialId, [Parameter(Mandatory = $true)][string]$RpId)
+    if ($CredentialId.Length -gt 65535) { throw "a credential id is at most 65535 bytes here" }
+    $idLen = [byte[]]@([byte]($CredentialId.Length -shr 8), [byte]($CredentialId.Length -band 255))
+    $h = Get-HordeRelaySha256 -Bytes (Join-HordeRelayBytes -Parts @((Get-HordeRelayAsciiBytes -Text "horde-relay/pairing/v1 fingerprint`n"), $Challenge, $Public, $idLen, $CredentialId, (Get-HordeRelayAsciiBytes -Text $RpId)))
     $n = [long]0
-    for ($i = 0; $i -lt 8; $i++) { $n = ($n * 256 + [long]$h[$i]) % 100000000 }
-    $digits = $n.ToString("00000000")
-    return ($digits.Substring(0, 4) + "-" + $digits.Substring(4, 4))
+    for ($i = 0; $i -lt 8; $i++) { $n = ($n * 256 + [long]$h[$i]) % 1000000000000 }
+    $digits = $n.ToString("000000000000")
+    return ($digits.Substring(0, 4) + "-" + $digits.Substring(4, 4) + "-" + $digits.Substring(8, 4))
 }
 
 function Get-HordeRelayEarlierDevice {
@@ -270,7 +280,7 @@ function Complete-HordeRelayPairing {
     }
     if ($moved -cne "moved") { $fail.reason = "the offer's used mark has its name, but nothing says it reached the disk; nothing was enrolled, and the offer is spent"; return $fail }
     $pendingUntil = $nowMs + [long]$settings.value.values.pendingConfirmMinutes * 60000
-    $fingerprint = Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $pending.challenge) -Public $reg.public
+    $fingerprint = Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $pending.challenge) -Public $reg.public -CredentialId $reg.credentialId -RpId $pending.rpId
     $dev = Add-HordeRelayPendingDevice -HordeHome $HordeHome -Registration $reg -Horde $pending.horde -RpId $pending.rpId -Origins @($pending.origins) -Label $resp.label `
         -Prf $resp.prf -OfferId $resp.offer -Fingerprint $fingerprint -PendingUntil $pendingUntil -Now $Now
     if ($dev.state -cne "known") { $fail.reason = ("the offer is now used, but the device was not enrolled: " + $dev.reason); return $fail }
@@ -294,10 +304,11 @@ function Confirm-HordeRelayDevice {
     if (-not $pf.ok -or -not $pf.found) { $fail.reason = ("the offer that enrolled device " + $Id + " cannot be read, so its fingerprint cannot be checked"); return $fail }
     $p = Read-HordeRelayRecordText -Text $pf.text -Spec (Get-HordeRelayPendingSpec) -Kind "horde-relay-pairing-pending" -What ("the pending offer " + $d.offer)
     if (-not $p.ok) { $fail.reason = $p.reason; return $fail }
-    $want = Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $p.value.challenge) -Public (ConvertFrom-HordeRelayBase64Url -Text $d.publicKey)
+    $want = Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $p.value.challenge) -Public (ConvertFrom-HordeRelayBase64Url -Text $d.publicKey) `
+        -CredentialId (ConvertFrom-HordeRelayBase64Url -Text $d.credentialId) -RpId $d.rpId
     if ($want -cne $d.fingerprint) { $fail.reason = ("the device " + $Id + " records a fingerprint that is not its offer's and key's; the store is damaged"); return $fail }
     $given = [regex]::Replace($Fingerprint, '[ -]', '')
-    if ($given -cnotmatch '\A[0-9]{8}\z' -or -not (Test-HordeRelayBytesEqual -Left (Get-HordeRelayAsciiBytes -Text $given) -Right (Get-HordeRelayAsciiBytes -Text $want.Replace("-", "")))) {
+    if ($given -cnotmatch '\A[0-9]{12}\z' -or -not (Test-HordeRelayBytesEqual -Left (Get-HordeRelayAsciiBytes -Text $given) -Right (Get-HordeRelayAsciiBytes -Text $want.Replace("-", "")))) {
         $fail.reason = ("the fingerprint does not match the one this machine computed for device " + $Id + "; if the phone shows another, this device is not that phone's - reject it")
         return $fail
     }
