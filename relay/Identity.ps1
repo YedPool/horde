@@ -61,7 +61,10 @@ $script:HordeRelaySettings = New-HordeModuleSettings -Module "relay" -Settings @
     @{ name = "horde"; kind = "text"; default = ""; min = 0; max = 63
        what = "The name of the horde this machine belongs to (work, personal): a-z, 0-9 and -, starting with a letter or digit. Empty means none is named yet, and nothing is made or paired until it is." },
     @{ name = "retiredAgreeKeyDays"; kind = "whole"; default = 7; min = 0; max = 30
-       what = "How many days a rotated-out agreement key is kept, to open what was sealed to it before the rotation; it never seals or signs. 0 deletes it at once." }
+       what = "How many days a rotated-out agreement key is kept, to open what was sealed to it before the rotation; it never seals or signs. 0 deletes it at once." },
+    # Read by relay/Pairing.ps1, declared here with the module's other settings: one table per module.
+    @{ name = "pendingConfirmMinutes"; kind = "whole"; default = 10; min = 1; max = 30
+       what = "How many minutes a newly registered device waits, pending, for its fingerprint to be confirmed at this machine, counted from its registration." }
 )
 
 $script:HordeRelayIdentityNamePattern = '\A(machine|retired|released)-([0-9]{6})\.json\z'

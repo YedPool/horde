@@ -43,5 +43,11 @@
         @{ Name = "earlier-device-not-named"
            Find = 'if ($null -ne $Earlier) {'
            Replace = 'if ($false) {' }
+        @{ Name = "window-from-offer"
+           Find = '-PendingUntil $pendingUntil'
+           Replace = '-PendingUntil $pending.expiresAt' }
+        @{ Name = "window-not-the-setting"
+           Find = '[long]$settings.value.values.pendingConfirmMinutes * 60000'
+           Replace = '[long]10 * 60000' }
     )
 }

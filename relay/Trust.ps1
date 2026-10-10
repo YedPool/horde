@@ -19,7 +19,8 @@
 #   A DEVICE is enrolled through pairing (relay/Pairing.ps1) as PENDING: its registration verified, its
 #   key on the curve, but not trusted. It becomes TRUSTED only when the founder confirms it at the
 #   machine with the fingerprint both screens show (Confirm-HordeRelayDevice), before pendingUntil - the
-#   offer's own expiry. Past that, unconfirmed, it is EXPIRED, for good. A pending device can be
+#   end of its confirm window, counted from its registration. Past that, unconfirmed, it is EXPIRED,
+#   for good. A pending device can be
 #   rejected at any time by revoking it.
 #   A PEER MACHINE is added from its self-signed card (relay/Identity.ps1, Read-HordeRelayMachineCard):
 #   the card proves its maker holds the signing key, names this horde, and is not this machine - and

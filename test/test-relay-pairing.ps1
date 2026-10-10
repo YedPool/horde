@@ -294,8 +294,8 @@ try {
     $oE3 = New-Offer -HordeHome $ht
     $pe3 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE3 -Passkey (New-TestPasskey)) -Now $t0.AddSeconds(10)
     Check ($pe3.ok -and $pe3.value.pendingUntil -eq ((ConvertTo-HordeRelayRecordMs -Time $t0.AddSeconds(10)) + 60000)) "the window is the setting pendingConfirmMinutes"
-    Set-TestHorde -HordeHome $ht -Horde "work" -ConfirmMinutes 31
     $oE4 = New-Offer -HordeHome $ht
+    Set-TestHorde -HordeHome $ht -Horde "work" -ConfirmMinutes 31
     $pe4 = Complete-HordeRelayPairing -HordeHome $ht -Response (New-PasskeyResponse -Offer $oE4 -Passkey (New-TestPasskey)) -Now $t0.AddSeconds(10)
     Check ((-not $pe4.ok) -and $pe4.reason.Contains("pendingConfirmMinutes") -and -not (Test-Path -LiteralPath (Join-Path $ht ("relay\pairing\used\" + $oE4.offer + ".json")))) "a window over 30 minutes is refused, and the offer is not used"
     Set-TestHorde -HordeHome $ht -Horde "work"

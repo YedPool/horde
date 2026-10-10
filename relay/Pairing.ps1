@@ -39,13 +39,16 @@
 #
 # CONFIRMING (Confirm-HordeRelayDevice, founder decision of 2026-10-09). A pending device is trusted
 # only when the founder, at this machine, enters the FINGERPRINT his phone shows, and it matches the
-# one this machine computed:
+# one this machine computed, within its CONFIRM WINDOW: the relay setting pendingConfirmMinutes (10 by
+# default, 1 to 30), counted from the registration and independent of the offer, so a phone that
+# registers in the offer's last seconds still has the whole window (founder answer, 2026-10-09). The
+# fingerprint is:
 #   fingerprint = 8 decimal digits, dddd-dddd, of SHA-256("horde-relay/pairing/v1 fingerprint" LF ||
 #                 challenge (32 bytes) || the passkey's 65-byte public point), the first 8 bytes read
 #                 as a number modulo 10^8
 # The phone computes it from the challenge it signed and the key it made, so the two screens agree
-# only when the machine enrolled the phone's OWN key under THIS offer. It must be confirmed before the
-# offer expires (pendingUntil = the offer's expiresAt); after that the device is expired for good.
+# only when the machine enrolled the phone's OWN key under THIS offer. Unconfirmed when the window
+# closes (pendingUntil), the device is expired for good.
 # The check is constant-time and spaces or a dash may separate the groups.
 #
 # WHAT A STOLEN OFFER CAN AND CANNOT DO. The offer is a bearer secret for its short life: whoever holds
@@ -59,8 +62,8 @@
 #   - SINGLE USE. The thief's registration uses the offer, so the founder's own attempt is refused - and
 #     the refusal names the thief's pending device, its label and fingerprint, so the founder rejects it
 #     (Revoke-HordeRelayTrust) and makes a new offer.
-#   - SHORT LIFE: 300 seconds by default, at most 900. An expired offer enrolls nothing, and a pending
-#     device not confirmed by then never can be.
+#   - SHORT LIFE: an offer lives 300 seconds by default, at most 900, and an expired offer enrolls
+#     nothing; a pending device not confirmed within its window (30 minutes at most) never can be.
 #   - THE OFFER IS SHOWN ON THE MACHINE'S OWN SCREEN, to a person in front of it (the runner's job): it
 #     is never sent through the relay.
 # A stolen offer CANNOT: get a device trusted without the founder confirming its fingerprint at the
@@ -246,6 +249,8 @@ function Complete-HordeRelayPairing {
     $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome
     if ($id.state -cne "known") { $fail.reason = ("this machine's identity cannot be read, so no device is enrolled: " + $id.reason); return $fail }
     if ($id.value.horde -cne $pending.horde -or $id.value.sign.keyId -cne $pending.machine) { $fail.reason = "this machine's horde or signing key changed since the offer was made; the offer is void, make a new one"; return $fail }
+    $settings = Get-HordeRelaySettingValues -HordeHome $HordeHome
+    if ($settings.state -cne "known") { $fail.reason = ("the relay settings are refused, so nothing is enrolled: " + $settings.reason); return $fail }
     $reg = Test-HordeRelayWebAuthnRegistration -ClientDataJson (ConvertFrom-HordeRelayBase64Url -Text $resp.clientDataJSON) -AttestationObject (ConvertFrom-HordeRelayBase64Url -Text $resp.attestationObject) `
         -RawId (ConvertFrom-HordeRelayBase64Url -Text $resp.rawId) -Challenge (ConvertFrom-HordeRelayBase64Url -Text $pending.challenge) -RpId $pending.rpId -Origins @($pending.origins) -RequireUserVerification $true
     if (-not $reg.ok) { $fail.reason = ("the registration is refused: " + $reg.reason); return $fail }
@@ -264,11 +269,12 @@ function Complete-HordeRelayPairing {
         return (Get-HordeRelayUsedRefusal -Offer $resp.offer -Earlier $(if ($uf.ok -and $uf.found) { Get-HordeRelayEarlierDevice -HordeHome $HordeHome -UsedText $uf.text -Now $Now } else { $null }) -Race ", by another response at the same moment")
     }
     if ($moved -cne "moved") { $fail.reason = "the offer's used mark has its name, but nothing says it reached the disk; nothing was enrolled, and the offer is spent"; return $fail }
+    $pendingUntil = $nowMs + [long]$settings.value.values.pendingConfirmMinutes * 60000
     $fingerprint = Get-HordeRelayPairingFingerprint -Challenge (ConvertFrom-HordeRelayBase64Url -Text $pending.challenge) -Public $reg.public
     $dev = Add-HordeRelayPendingDevice -HordeHome $HordeHome -Registration $reg -Horde $pending.horde -RpId $pending.rpId -Origins @($pending.origins) -Label $resp.label `
-        -Prf $resp.prf -OfferId $resp.offer -Fingerprint $fingerprint -PendingUntil $pending.expiresAt -Now $Now
+        -Prf $resp.prf -OfferId $resp.offer -Fingerprint $fingerprint -PendingUntil $pendingUntil -Now $Now
     if ($dev.state -cne "known") { $fail.reason = ("the offer is now used, but the device was not enrolled: " + $dev.reason); return $fail }
-    return [pscustomobject]@{ ok = $true; reason = ""; value = ([pscustomobject]@{ device = $dev.value; fingerprint = $fingerprint; pendingUntil = $pending.expiresAt }) }
+    return [pscustomobject]@{ ok = $true; reason = ""; value = ([pscustomobject]@{ device = $dev.value; fingerprint = $fingerprint; pendingUntil = $pendingUntil }) }
 }
 
 function Confirm-HordeRelayDevice {
@@ -282,7 +288,7 @@ function Confirm-HordeRelayDevice {
     if ($null -eq $d) { $fail.reason = ("the trust store holds no device " + $Id); return $fail }
     if ($d.state -ceq "trusted") { return [pscustomobject]@{ ok = $true; reason = ""; value = ([pscustomobject]@{ device = $d; already = $true }) } }
     if ($d.state -ceq "revoked") { $fail.reason = ("the device " + $Id + " was revoked (rejected) and is never confirmed"); return $fail }
-    if ($d.state -ceq "expired") { $fail.reason = ("the device " + $Id + " expired unconfirmed with its offer; pair again with a new passkey"); return $fail }
+    if ($d.state -ceq "expired") { $fail.reason = ("the device " + $Id + " expired unconfirmed when its confirm window closed; pair again with a new passkey"); return $fail }
     try { $root = Get-HordeRelayStateDir -HordeHome $HordeHome -Part "pairing" } catch { $fail.reason = $_.Exception.Message; return $fail }
     $pf = Read-HordeRelayRecordFile -Path ([System.IO.Path]::Combine($root, "offers", ($d.offer + ".json")))
     if (-not $pf.ok -or -not $pf.found) { $fail.reason = ("the offer that enrolled device " + $Id + " cannot be read, so its fingerprint cannot be checked"); return $fail }
