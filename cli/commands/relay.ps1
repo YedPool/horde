@@ -38,5 +38,6 @@ $HordeCommand = @{
         # Each line as it happens, to the host: the loop's own return value stays its own.
         $r = Invoke-HordeRelayRun -Connection $c.value -MaxTurns $MaxTurns -Say { param($Line) Write-Host $Line }
         if ($r.stoppedBy -ceq "settings") { throw "the relay run did not start: its settings are refused (above)" }
+        if ($r.stoppedBy -ceq "locked") { throw "the relay run did not start: another relay run is already running on this home" }
     }
 }

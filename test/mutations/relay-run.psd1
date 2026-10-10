@@ -52,5 +52,8 @@
         @{ Name = "no-floor-under-the-minimum-turn"
            Find = 'default = 1000; min = 50; max = 60000'
            Replace = 'default = 1000; min = 0; max = 60000' }
+        @{ Name = "two-runs-share-a-home"
+           Find = '([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::None)'
+           Replace = '([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::ReadWrite)' }
     )
 }

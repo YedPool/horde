@@ -680,6 +680,16 @@ try {
     $stopNow = { param($Line) [void]$said.Add($Line); if ("$Line".StartsWith("watching")) { [void](Request-HordeRelayRunStop -HordeHome $W.home) } }
     $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 5 -Say $stopNow
     Check ($r.stoppedBy -ceq "stop file" -and $r.turns -eq 1 -and (Test-Path -LiteralPath (Get-HordeRelayRunStopPath -HordeHome $W.home))) ("a stop asked during a turn ends the run after that turn, and the stop file stays for every other run that started before it (" + $r.stoppedBy + ", " + $r.turns + ")")
+    # ONE RUN PER HOME (review of 3d837f0): a run while another holds the home refuses, plainly, and does nothing.
+    # The holder here even shares the file: only a run that shares nothing can tell it is there.
+    $lockPath = Get-HordeRelayRunLockPath -HordeHome $W.home
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($lockPath))
+    $held = New-Object System.IO.FileStream -ArgumentList $lockPath, ([System.IO.FileMode]::OpenOrCreate), ([System.IO.FileAccess]::ReadWrite), ([System.IO.FileShare]::ReadWrite)
+    $said.Clear()
+    try { $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) [void]$said.Add($Line) } } finally { $held.Dispose() }
+    Check ($r.stoppedBy -ceq "locked" -and $r.turns -eq 0 -and (@($said) -join " ").Contains("another relay run is already running on this home")) ("while another run holds the home, a run refuses before its first turn, plainly (" + (@($said) -join " | ") + ")")
+    $r = Invoke-HordeRelayRun -HordeHome $W.home -Connection $W.conn -MaxTurns 1 -Say { param($Line) }
+    Check ($r.stoppedBy -ceq "turns" -and $r.turns -eq 1) "and once the other has let go, a run starts"
     [System.IO.File]::WriteAllText((Join-Path $W.home "settings\relay-run.json"), '{"schemaVersion": 1, "settings": {"watchMs": 999999}}', $utf8)
     $said.Clear()
     $r = $null

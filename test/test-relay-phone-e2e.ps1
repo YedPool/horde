@@ -18,7 +18,8 @@
 #      one record; other words under the same answerId: refused, the first answer wins;
 #   5. over the hostile test relay (test/lib/HostileRelay.ps1), in this process because the command
 #      cannot pick a test relay: reordered, repeated, stale and garbage-salted, a new answer lands once;
-#   6. a run started with no end stops cleanly when `horde relay stop` asks.
+#   6. one run per home: a second run started beside a first refuses, plainly, and the first stops
+#      cleanly when `horde relay stop` asks.
 #
 # NODE IS NEEDED for the phone. Without it the suite says so and exits 3, a partial run, never 0. The
 # phone's private keys live in a state file in the suite's own folder, deleted with it; nothing private
@@ -198,8 +199,9 @@ try {
     Check ((@($lines) -join " ").Contains("a replay")) "the copies after the first are refused by the journal as replays"
 
     Write-Host ""
-    Write-Host "--- 6. two runs with no end on one home both stop when asked ---" -ForegroundColor Cyan
-    # Review of 48bc492, finding 4: the first run to stop deleted the stop file, and the second ran on.
+    Write-Host "--- 6. one run per home: a second refuses; the first stops when asked ---" -ForegroundColor Cyan
+    # Review of 3d837f0: two runs on one home were let race on its state; now the second refuses. The stop
+    # file still obeys every run started before it (review of 48bc492, finding 4).
     $runs = New-Object System.Collections.ArrayList
     foreach ($i in 1..2) {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -216,11 +218,12 @@ try {
     }
     try {
         Start-Sleep -Milliseconds 3000
-        Check (@($runs | Where-Object { $_.p.HasExited }).Count -eq 0) "CONTROL: two runs started with no end are both running"
+        $second = $runs[1]
+        Check (-not $runs[0].p.HasExited -and $second.p.HasExited -and $second.p.ExitCode -ne 0) "the first run is running; the second, started beside it on the same home, has ended with an error"
+        Check (($second.out.Result + $second.err.Result).Contains("another relay run is already running on this home")) "and it says why, plainly"
         $stop = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "stop") -Env @{ HORDE_HOME = $hh }
-        $ended = @($runs | Where-Object { $_.p.WaitForExit(30000) })
-        Check ($stop.code -eq 0 -and $ended.Count -eq 2 -and @($runs | Where-Object { $_.p.ExitCode -ne 0 }).Count -eq 0) ("horde relay stop ends both within a turn, and both exit 0 (" + $ended.Count + " of 2 ended)")
-        Check ($ended.Count -eq 2 -and @($runs | Where-Object { $_.out.Result.Contains("stopped after") -and $_.out.Result.Contains("stop file") }).Count -eq 2) "each says it stopped for the stop file"
+        $ended = $runs[0].p.WaitForExit(30000)
+        Check ($stop.code -eq 0 -and $ended -and $runs[0].p.ExitCode -eq 0 -and $runs[0].out.Result.Contains("stopped after") -and $runs[0].out.Result.Contains("stop file")) "horde relay stop ends the first within a turn; it exits 0 and says it stopped for the stop file"
         $next = Invoke-Run -Turns 1
         Check ($next.code -eq 0 -and $next.out.Contains("stopped after 1 turn(s): turns") -and $next.out.Contains("stop file from before")) "a run started after the stop does not obey it: it was a request to the runs before it, and it clears it"
     } finally { foreach ($x in $runs) { if (-not $x.p.HasExited) { $x.p.Kill() }; $x.p.Dispose() } }
