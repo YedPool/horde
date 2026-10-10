@@ -56,7 +56,10 @@ const commands = {
 // Every answer is ASCII: anything past it is a \u escape, which the suite's JSON reader turns back.
 const ascii = (v) => JSON.stringify(v).replace(/[^\x20-\x7e]/g, (ch) => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
 const rl = createInterface({ input: process.stdin });
-for await (const line of rl) {
+for await (const raw of rl) {
+  // Windows PowerShell may open the pipe with a byte order mark (measured 2026-10-10: once the suite has
+  // started a horde child, the first line arrived as U+FEFF then the JSON), which is not JSON's.
+  const line = raw.replace(/^﻿/, "");
   if (!line.trim()) continue;
   let c;
   try { c = JSON.parse(line); } catch (x) { process.stdout.write(ascii({ ok: false, reason: "not JSON" }) + "\n"); continue; }

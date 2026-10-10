@@ -187,11 +187,21 @@ $("pairBtn").addEventListener("click", async () => {
     $("recoveryCode").textContent = paired.recoveryCode;
     $("responseText").value = paired.response;
     $("shareResponse").hidden = typeof navigator.share !== "function";
+    showRelayed(paired.relayed);
     $("wroteCode").checked = false;
     $("announceBtn").disabled = true;
     show("pairedView");
     await loadHordes();
   } catch (e) { say("action", messageOf(e)); } finally { $("pairBtn").disabled = false; }
+});
+// Whether the response went through the relay; when it did not, Send again, Copy and Share are the way.
+function showRelayed(relayed) {
+  $("relayStatus").textContent = relayed ? "Sent to the machine through the relay. Type the number above at the machine." : "It could not be sent through the relay just now. Tap Send again, or copy it to the machine yourself.";
+  $("resendResponse").hidden = relayed;
+}
+$("resendResponse").addEventListener("click", async () => {
+  if (!paired) return;
+  try { const r = await bridge.request("sendPairing", { id: paired.id }); showRelayed(r.relayed); } catch (e) { say("action", messageOf(e)); }
 });
 $("copyResponse").addEventListener("click", () => { if (navigator.clipboard) navigator.clipboard.writeText($("responseText").value).catch(() => say("action", "Could not copy: select the text and copy it.")); });
 $("shareResponse").addEventListener("click", () => { navigator.share({ text: $("responseText").value }).catch(() => {}); });
@@ -203,6 +213,7 @@ $("announceBtn").addEventListener("click", async () => {
     // The recovery code leaves the screen for good.
     $("recoveryCode").textContent = "";
     $("responseText").value = "";
+    $("relayStatus").textContent = "";
     const id = paired.id;
     paired = null;
     await loadHordes();
