@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "relay": "cloudflare",
+  "capabilities": {
+    "durable": {
+      "support": "yes",
+      "evidence": "Every mailbox is one Durable Object whose items, head and floor are in its own transactional storage (worker/mailbox.js); test/test-relay-conformance.ps1 reads on from a cursor, and puts the next seq, from a fresh runspace that shares no state with the writer, against a local wrangler dev of the same Worker."
+    },
+    "realtime": {
+      "support": "yes",
+      "evidence": "A watch is a WebSocket the mailbox's Durable Object holds (hibernating) and answers in the put that fills it; test/test-relay-conformance.ps1 has another runspace put while a watch waits, three rounds, and requires each watch to return within a second of that put."
+    },
+    "reach.remote": {
+      "support": "yes",
+      "evidence": "The relay is a Worker on a public HTTPS origin, and this adapter reaches it only over HTTP and WebSocket; test/test-relay-conformance.ps1 has a second client, with its own connection, put what the first reads. That run is against a local wrangler dev on 127.0.0.1: the network between two machines is not in it, and the live smoke test after the first deploy is (PR plan item 8)."
+    },
+    "trim.on.ack": {
+      "support": "yes",
+      "evidence": "An ack raises the mailbox's floor and deletes the items through it in one storage transaction, and the head never moves back; test/test-relay-conformance.ps1 reads only what is after the ack and sees the next put numbered after the trimmed ones, also once every item is trimmed."
+    }
+  },
+  "limits": {
+    "maxTextChars": 65536,
+    "maxBatch": 256,
+    "maxWatchMs": 60000,
+    "retentionSeconds": 0
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "messenger": "doorbell-two",
+  "capabilities": {
+    "body.untyped": { "support": "yes", "evidence": "A fixture for test/test-decisions-notify.ps1." },
+    "idempotent.post": { "support": "yes", "evidence": "A fixture for test/test-decisions-notify.ps1." },
+    "receipt.receiver": { "support": "declined", "evidence": "A fixture for test/test-decisions-notify.ps1: notify does not need it." },
+    "wake": { "support": "yes", "evidence": "A fixture for test/test-decisions-notify.ps1." }
+  }
+}

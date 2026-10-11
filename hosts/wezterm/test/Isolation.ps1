@@ -329,7 +329,15 @@ function Start-HordeIsolatedWezterm {
     # process and which was created after the launch. The first version adopted ANY new wezterm-gui,
     # so a terminal the user opened, or one a parallel test started, during the wait could be taken
     # for ours - and then spawned into, and killed. (The original had the same weakness.)
-    param([int]$TimeoutSeconds = 30)
+    #
+    # -ConfigFile: A CONFIG OF THE TEST'S OWN, in place of none. The terminal is then started with
+    # --config-file <that file> and without --skip-config: the person's own wezterm.lua is still never
+    # read, because the named file REPLACES the terminal's search for one (`wezterm --help`, 20240203:
+    # "overrides the normal configuration file resolution"). It exists for the one thing --skip-config
+    # cannot show: how the finder fares in a terminal that titles and pads its windows its own way
+    # (trial of 2026-10-07). The file must exist and be named in full, or nothing is started.
+    param([int]$TimeoutSeconds = 30, [string]$ConfigFile = "")
+    if ($ConfigFile -ne "" -and (-not [System.IO.Path]::IsPathRooted($ConfigFile) -or $ConfigFile.Contains('"') -or -not (Test-Path -LiteralPath $ConfigFile -PathType Leaf))) { throw ("the config file '" + $ConfigFile + "' is not an existing file named in full; no terminal was started") }
 
     $origSocket = $env:WEZTERM_UNIX_SOCKET
     $origRoot = $env:HORDE_ROOT
@@ -348,6 +356,7 @@ function Start-HordeIsolatedWezterm {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "wezterm"
     $psi.Arguments = "--skip-config start --always-new-process --class horde-iso"
+    if ($ConfigFile -ne "") { $psi.Arguments = "--config-file " + '"' + $ConfigFile + '"' + " start --always-new-process --class horde-iso" }
     $psi.UseShellExecute = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Minimized
     $launcher = $null

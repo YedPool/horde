@@ -141,3 +141,5 @@ test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-800
 test/fixtures/projection/fleet/wezfleet/registry/sessions/aaaaaaaa-0000-4000-8000-000000000033.json | 1 | the old registry record names this harness's session id field (claudeSessionId), the store's own key; the fixture keeps it
 test/mutations/faults.psd1 | 2 | mutants of the fault checks that read this harness's processes; they move with them in engines A4
 test/mutations/projection.psd1 | 8 | mutants of the projection lines that read this harness's stores; they move with those lines in engines A4
+test/test-session-seat.ps1 | 3 | builds old-system session records, whose key field carries the harness's name, and hands the identity reader a folder through its parameter of that name, to test finding the session that holds a role
+test/lib/WindowProbe.ps1 | 2 | builds old-system session records, whose key field carries the harness's name, and a control file in the folder of that name the harness keeps them in, for scenarios that need the session holding a role to be found running

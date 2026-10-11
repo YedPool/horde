@@ -55,9 +55,12 @@ $script:HordeLayerOrder = @{ L0 = 0; L1 = 1; L3 = 3; L4 = 4; L5 = 5 }
 $script:HordeMatchRanks = @{ session = 70; fleetId = 60; title = 50; label = 50; parent = 40; run = 30; role = 20 }
 $script:HordeBindingKeys = @("harness", "provider", "model")
 
-function Get-HordeRoleRequirements {
-    # role -> capability names, from core/role-requirements.json or -Path. Every name must be in the
-    # capability vocabulary, so a typo cannot quietly require nothing.
+function Read-HordeRoleRequirementsFile {
+    # The whole of core/role-requirements.json (or -Path), checked: `requires` (role -> capability
+    # names, every name in the capability vocabulary, so a typo cannot quietly require nothing) and
+    # the optional `duties` (role -> { id; rule; doc? }, what a role must DO rather than what it needs
+    # from its harness). Both readers below go through here, so neither can load a file the other
+    # would refuse.
     param([string]$Path = (Join-Path $PSScriptRoot "role-requirements.json"), $Vocabulary = $null)
     if ($null -eq $Vocabulary) { $Vocabulary = @(Get-HordeCapabilityVocabulary) }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -65,14 +68,47 @@ function Get-HordeRoleRequirements {
     $t = [System.Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
     $req = Get-HordeAgentProp $t "requires"
     $names = @($Vocabulary | ForEach-Object { $_.name })
+    $roles = @("warchief", "orc", "goblin")
     $problems = @()
-    foreach ($role in @("warchief", "orc", "goblin")) {
+    foreach ($role in $roles) {
         $list = Get-HordeAgentProp $req $role
         if ($null -eq $list) { $problems += ("the role " + $role + " has no requirement list"); continue }
         foreach ($c in @($list)) { if ($names -cnotcontains $c) { $problems += ("the role " + $role + " requires " + $c + ", which core/capabilities.json does not have") } }
     }
+    # A DUTY POINTS AT PROSE IN THE REPOSITORY, never outside it: the document is the duty's full
+    # statement, so one that is missing or elsewhere would leave a rule nobody can read in full.
+    $repo = Split-Path -Parent $PSScriptRoot
+    $duties = Get-HordeAgentProp $t "duties"
+    if ($null -eq $duties) { $duties = [pscustomobject]@{} }
+    foreach ($p in @($duties.PSObject.Properties)) {
+        if ($roles -cnotcontains $p.Name) { $problems += ("a duty is given for " + $p.Name + ", which is not a role"); continue }
+        foreach ($d in @($p.Value)) {
+            $id = "" + (Get-HordeAgentProp $d "id")
+            if ($id -cnotmatch '^[a-z][a-z0-9-]{0,63}$') { $problems += ("the " + $p.Name + " has a duty with id '" + $id + "', which is not lowercase letters, digits and dashes"); continue }
+            if (("" + (Get-HordeAgentProp $d "rule")).Trim() -eq "") { $problems += ("the " + $p.Name + "'s duty " + $id + " has no rule") }
+            $doc = Get-HordeAgentProp $d "doc"
+            if ($null -ne $doc) {
+                # Every segment starts with a letter or digit, so no segment can be "..", and no
+                # path can be absolute or carry a drive.
+                if ("$doc" -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\.md$') { $problems += ("the " + $p.Name + "'s duty " + $id + " names '" + $doc + "', which is not a repository-relative .md path") }
+                elseif (-not (Test-Path -LiteralPath (Join-Path $repo ("$doc".Replace("/", "\"))) -PathType Leaf)) { $problems += ("the " + $p.Name + "'s duty " + $id + " names " + $doc + ", which is not in the repository") }
+            }
+        }
+    }
     if ($problems.Count -gt 0) { throw ("the role requirements are malformed: " + ($problems -join "; ")) }
-    return $req
+    return [pscustomobject]@{ requires = $req; duties = $duties }
+}
+
+function Get-HordeRoleRequirements {
+    # role -> capability names (see Read-HordeRoleRequirementsFile).
+    param([string]$Path = (Join-Path $PSScriptRoot "role-requirements.json"), $Vocabulary = $null)
+    return (Read-HordeRoleRequirementsFile -Path $Path -Vocabulary $Vocabulary).requires
+}
+
+function Get-HordeRoleDuties {
+    # role -> { id; rule; doc? } list, for the roles that have duties (see Read-HordeRoleRequirementsFile).
+    param([string]$Path = (Join-Path $PSScriptRoot "role-requirements.json"), $Vocabulary = $null)
+    return (Read-HordeRoleRequirementsFile -Path $Path -Vocabulary $Vocabulary).duties
 }
 
 function Get-HordeRuleSpecificity {

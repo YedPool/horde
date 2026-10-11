@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "claim": "A status record with only 'blocked: yes/no' hides waiting lanes.",
+  "metric": {
+    "what": "Status files whose 'doing' line says waiting, standing by or parked while 'blocked' says no, at one moment.",
+    "numbers": [
+      {
+        "name": "lanes",
+        "values": [
+          9
+        ]
+      },
+      {
+        "name": "waitingButShownUnblocked",
+        "values": [
+          4
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "lane status files"
+      ],
+      "window": {
+        "from": "2026-10-07T18:23Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Add a 'waiting: <on whom> - <what ends it>' line, separate from blocked, and keep status history. This is also the precondition for measuring who waits on whom.",
+  "confidence": "high",
+  "whyItGeneralises": "A two-state status field cannot express waiting on any fleet; the gap is in the record format, not in this fleet's habits.",
+  "limits": "Single snapshot."
+}

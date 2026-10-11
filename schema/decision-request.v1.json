@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/decision-request.v1",
+  "title": "decision-request v1",
+  "description": "WHAT A CALLER HANDS TO ONE DECISIONS OPERATION (decisions/Operations.ps1, Invoke-HordeDecision): plain data, one definition per operation, named for it. The command line builds these today; a window and a link between machines are meant to send the same objects later, so nothing here assumes a console, a file or a person typing. A request is checked against its definition before anything is read or written, and one that does not match is refused with what is wrong. The top of this schema describes no value by itself: a caller always names the operation, and the operation table in decisions/Operations.ps1 names the definition. A new operation is a new definition here and a new entry in that table.",
+  "type": "object",
+  "definitions": {
+    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "The idempotency id of a request that writes: 32 lowercase hex digits, chosen by the caller and reused unchanged when the same request is sent again."},
+    "actor": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "The role label of who is asking. The closed list is the actors of decisions/Rules.ps1; a label it does not hold is refused."},
+    "number": {"type": "integer", "minimum": 1, "description": "A question's permanent number."},
+    "add": {
+      "type": "object",
+      "required": ["id", "actor", "question"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "question": {"type": "object", "description": "The new question, schema/decision-question.v1."}
+      }
+    },
+    "update": {
+      "type": "object",
+      "required": ["id", "actor", "number", "changes"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "changes": {"type": "object", "description": "The fields to change, schema/decision-question.v1; at least one."}
+      }
+    },
+    "close": {
+      "type": "object",
+      "required": ["id", "actor", "number", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "outcome": {"type": "string", "description": "What was done, in plain words."}
+      }
+    },
+    "reopen": {
+      "type": "object",
+      "required": ["id", "actor", "number", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "reason": {"type": "string", "description": "Why it is open again, on one line."}
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {"type": "string", "description": "Which questions: a state name, or all, in any case. Absent means open. The states are the list in decisions/Rules.ps1; any other text is refused there, in words, and no pattern is set here so that the refusal is never a regular expression."},
+        "messages": {"type": "boolean", "description": "True: each question's thread carries its messages, as show gives them - the window's view, for a reader that is not the window (the relay's snapshot for the founder's phone). Absent or false: the counts only."}
+      }
+    },
+    "show": {
+      "type": "object",
+      "required": ["number"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"$ref": "#/definitions/number"}
+      }
+    },
+    "kinds": {
+      "type": "object",
+      "description": "Asks for the table of question kinds. It takes nothing.",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "say": {
+      "type": "object",
+      "description": "Record words said under a question. They are kept whatever the question's state: under a closed question they are flagged as having arrived after closing, and reopen nothing.",
+      "required": ["id", "actor", "number", "speaker", "route", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "number": {"$ref": "#/definitions/number"},
+        "speaker": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "Whose words they are. The closed list is the speakers of decisions/Rules.ps1."},
+        "route": {"type": "string", "pattern": "^[a-z][a-z-]{0,31}$", "description": "By what route they arrived. The closed list is the routes of decisions/Rules.ps1, which also says whose words may arrive by each and who may record them: the actor recording a person's chat words is not the speaker."},
+        "text": {"type": "string", "description": "The words, verbatim. No pattern is set here, so that a refusal never describes them."},
+        "wordingVersion": {"type": "integer", "minimum": 1, "description": "The wording of the question the speaker was looking at. Absent means NOT STATED, and is recorded as that: nothing is guessed. Words typed in the window always state it (the routes of decisions/Rules.ps1 say which routes must)."},
+        "asks": {"type": "boolean", "description": "For the keeper's words only: false when they tell the founder something and ask him nothing (a note), so that the turn stays the keeper's. Absent means true: words said to him ask him."},
+        "act": {"type": "string", "pattern": "^(park|unpark)$", "description": "For the founder's words typed in the window only: the words record an act of his - park (set the question aside) or unpark (bring it back). The turn does not pass."},
+        "evidence": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "For the route phone only, and always there: the SHA-256, in lower-case hex, of the relay journal record that proved the words came from the founder's passkey. The proof itself is kept in relay's own journal and never here. It is not part of what makes a request the same: the same words sent again under the same id with another delivery's proof are the first record answered again (decisions/Operations.ps1)."}
+      }
+    },
+    "inbox": {
+      "type": "object",
+      "description": "What others have said, under every question, that the actor has not read yet: oldest first. IT ONLY READS. It marks nothing and writes nothing; marking is the operation mark-read, asked separately, after the messages have been shown.",
+      "required": ["actor"],
+      "additionalProperties": false,
+      "properties": {
+        "actor": {"$ref": "#/definitions/actor"}
+      }
+    },
+    "mark-read": {
+      "type": "object",
+      "description": "Record that the actor has read what others said, under every question, up to a given record. One record of its own. Idempotent: up to a record already read it is done and writes nothing, and a mark never moves back. There is no way to mark everything: the caller names the last record it showed.",
+      "required": ["id", "actor", "upTo"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/definitions/id"},
+        "actor": {"$ref": "#/definitions/actor"},
+        "upTo": {"type": "integer", "minimum": 1, "description": "The sequence number of the last record the actor has read up to: the upTo an inbox answered with, for a caller that showed all of it. A record that is not written yet is refused."}
+      }
+    }
+  }
+}

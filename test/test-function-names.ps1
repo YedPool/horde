@@ -8,7 +8,7 @@
 #
 # Two instruments, each with a control:
 #   - THE PARSE, over every shipped file: two top-level definitions of one name, ignoring case.
-#   - THE LOAD, of every core/ and remote/ file into one fresh session, as a caller that needs all of
+#   - THE LOAD, of every core/, remote/ and relay/ file into one fresh session, as a caller that needs all of
 #     them would: every function the parse found must resolve to the one file the parse says defines
 #     it. This measures the symptom for every name the parse saw; a name the parse cannot see (one
 #     built at run time) is the guard's stated limit, in tools/FunctionNames.ps1.
@@ -29,6 +29,13 @@ Check ($files.Count -ge 30) ("CONTROL: the shipped files were found (" + $files.
 Check (($files -ccontains "core/Ownership.ps1") -and ($files -ccontains "core/PermissionLevels.ps1") -and ($files -ccontains "tools/FunctionNames.ps1")) "CONTROL: the two files of the 2026-10-02 collision, and this tool, are scanned"
 Check (($files -ccontains "transports/local/Transport.ps1") -and ($files -ccontains "cli/commands/help.ps1") -and ($files -ccontains "horde.ps1")) "CONTROL: files in subfolders, and horde.ps1, are scanned"
 Check (($files -ccontains "messengers/Port.ps1") -and ($files -ccontains "messengers/memory/Messenger.ps1") -and -not ($files -ccontains "messengers/memory/test/Fixture.ps1")) "CONTROL: the messengers ship and are scanned, their test fixtures not"
+Check (($files -ccontains "decisions/Store.ps1") -and ($files -ccontains "decisions/Rules.ps1") -and ($files -ccontains "decisions/Operations.ps1")) "CONTROL: the decisions module ships and is scanned"
+Check ($files -ccontains "platform/windows/Scale.ps1") "CONTROL: the platform code ships and is scanned"
+Check (($files -ccontains "surfaces/Port.ps1") -and (@($files | Where-Object { $_ -clike "surfaces/*/Surface.ps1" }).Count -ge 1) -and -not ($files -clike "surfaces/*/test/*")) "CONTROL: the surfaces ship and are scanned, their suites not"
+Check ($files -ccontains "fleet/StatusPanel.ps1") "CONTROL: the fleet code ships and is scanned"
+Check (($files -ccontains "relay/Envelope.ps1") -and ($files -ccontains "relay/BackendCng.ps1") -and -not ($files -clike "relay/*/test/*")) "CONTROL: the relay module ships and is scanned"
+Check (($files -ccontains "relays/Port.ps1") -and (@($files | Where-Object { $_ -clike "relays/*/Relay.ps1" }).Count -ge 1) -and -not ($files -clike "relays/*/test/*")) "CONTROL: the relays ship and are scanned, their test fixtures not"
+Check (($files -ccontains "conversations/Port.ps1") -and (@($files | Where-Object { $_ -clike "agents/*/Conversation.ps1" }).Count -ge 1) -and -not ($files -clike "agents/*/test/*")) "CONTROL: the conversation port and its adapters ship and are scanned, their test fixtures not"
 Check (@($files | Where-Object { @($_ -split '/') -contains "test" }).Count -eq 0) "no file in a test folder is scanned: a suite may override a function in its own process"
 $defs = @(Get-HordeTopFunctionDefinitions -Root $root -Files $files)
 Check (@($defs | Where-Object { $_.name -ceq "<parse error>" }).Count -eq 0) ("every shipped file parses (" + (@($defs | Where-Object { $_.name -ceq "<parse error>" } | ForEach-Object { $_.file }) -join ", ") + ")")
@@ -64,7 +71,7 @@ try {
 } finally { Remove-Item -LiteralPath $badFile -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
-Write-Host "--- the load: every core and remote function resolves to its own file ---" -ForegroundColor Cyan
+Write-Host "--- the load: every core, remote and relay function resolves to its own file ---" -ForegroundColor Cyan
 # A child process loads the files in one session, as a caller needing all of them would, then reports
 # the file each function name resolves to. Names come from the parse; files the parse places them in.
 function Invoke-HordeLoadCheck {
@@ -97,11 +104,11 @@ function Invoke-HordeLoadCheck {
         if ((Split-Path -Leaf $work) -match '^horde-fload-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
-$loadFiles = @($files | Where-Object { $_ -like "core/*" -or $_ -like "remote/*" } | Sort-Object)
+$loadFiles = @($files | Where-Object { $_ -like "core/*" -or $_ -like "remote/*" -or $_ -like "relay/*" } | Sort-Object)
 $load = Invoke-HordeLoadCheck -Base $root -Rels $loadFiles
 foreach ($w in $load.wrong) { Write-Host ("    " + $w) -ForegroundColor Red }
 Check ($load.ended -eq $true -and $load.count -ge 150) ("CONTROL: the load ran to its end over " + $loadFiles.Count + " files and " + $load.count + " functions")
-Check ($load.wrong.Count -eq 0) ("every core and remote function resolves to the one file that defines it (" + $load.wrong.Count + " do not)")
+Check ($load.wrong.Count -eq 0) ("every core, remote and relay function resolves to the one file that defines it (" + $load.wrong.Count + " do not)")
 $fxLoad = Invoke-HordeLoadCheck -Base $fx -Rels @("one.ps1", "two.ps1")
 Check ($fxLoad.ended -eq $true -and @($fxLoad.wrong | Where-Object { $_ -like "Get-FixtureThing resolves to *two.ps1, not one.ps1" }).Count -eq 1) "CONTROL: the load sees the first of two definitions lose to the second"
 

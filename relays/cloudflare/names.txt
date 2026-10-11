@@ -1,0 +1,16 @@
+# What identifies the hosted relay. tools/HostNames.ps1 fails test/test-host-names.ps1 when any of these
+# appears in a file outside relays/cloudflare/ (and outside the prose under planning/, by rule) that
+# relays/cloudflare/allowlist.txt does not list, exactly as often as it lists (CONTRIBUTING rule 14;
+# relay design 2026-10-09, PR plan item 8). Each is matched as a case-insensitive substring, on every line
+# and on the file's path.
+#
+# name | why it identifies this relay
+cloudflare | the host the relay runs on: the port, the channels, the phone app and the command line never say where the relay is
+wrangler | the host's tool that runs and deploys the Worker; only this folder runs it
+workers.dev | the host's domain, where the deployed relay answers
+#
+# CONSIDERED AND LEFT OUT:
+#   Durable Object, Worker - the host's words for its parts, but also ordinary words (a worker is the
+#     phone app's offline worker too, surfaces/pwa/page/sw.js).
+#   CloudflareRelay - the stem of this relay's functions and variables; "cloudflare" above already
+#     matches every one of them.

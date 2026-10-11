@@ -6,14 +6,20 @@
     Suite  = "test\test-suite.ps1"
     Mutations = @(
         @{ Name = "transports-not-gated"
-           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
-           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "agents/*/test", "messengers/*/test")' }
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")' }
         @{ Name = "agents-not-gated"
-           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
-           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "messengers/*/test")' }
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")' }
         @{ Name = "messengers-not-gated"
-           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test")'
-           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test")' }
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "surfaces/*/test", "relays/*/test")' }
+        @{ Name = "surfaces-not-gated"
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "relays/*/test")' }
+        @{ Name = "relays-not-gated"
+           Find = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")'
+           Replace = '$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test")' }
         @{ Name = "fixtures-counted-as-stray"
            Find = 'if ($rel -like ".git/*" -or $rel -like ($script:HordeSuiteDataFolder + "/*")) { continue }'
            Replace = 'if ($rel -like ".git/*") { continue }' }

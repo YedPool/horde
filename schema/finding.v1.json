@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/finding.v1",
+  "title": "finding v1",
+  "description": "ONE GENERALISABLE FINDING about how a fleet works: a claim in plain words, the metric behind it with its numbers and exactly what they were counted from, the change it proposes, how sure it is and why it should hold on another fleet. One finding is one file, <HORDE_HOME>/findings/finding-<32 hex>.json, read by core/Finding.ps1 and written only by core/FindingStore.ps1, locally; nothing in Horde sends it anywhere. This schema is the SHAPE, and bounds every text by its pattern, since the subset of draft-07 that core/Schema.ps1 implements has no maxLength. What it cannot say is checked in core/Finding.ps1: how many items a list may hold (the subset has no minItems or maxItems), that a window does not end before it starts, and that no text holds anything shaped like a conversation, a credential or customer data. A finding that fails any of these is refused whole.",
+  "type": "object",
+  "required": ["schemaVersion", "claim", "metric", "proposedChange", "confidence", "whyItGeneralises"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "claim": { "type": "string", "pattern": "^[^\\r\\n]{1,400}$", "description": "What was found, in plain words, on one line of at most 400 characters." },
+    "metric": {
+      "type": "object",
+      "required": ["what", "numbers", "countedFrom"],
+      "additionalProperties": false,
+      "properties": {
+        "what": { "type": "string", "pattern": "^[\\s\\S]{1,400}$", "description": "The measure, in words: what was timed or counted, against what. At most 400 characters." },
+        "numbers": {
+          "type": "array",
+          "description": "The figures, 1 to 24 of them (counted in core/Finding.ps1). Each is a name and its values: one value for a single figure, two for a range (low, high), more for a series.",
+          "items": {
+            "type": "object",
+            "required": ["name", "values"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]{0,30}$", "description": "Lower camel case, at most 31 characters: a 32-character name with both cases and a digit is what the secret check reads as a key." },
+              "values": { "type": "array", "items": { "type": "number" }, "description": "1 to 16 numbers (counted in core/Finding.ps1)." }
+            }
+          }
+        },
+        "countedFrom": {
+          "type": "object",
+          "required": ["recordKinds", "window", "machine", "versions"],
+          "additionalProperties": false,
+          "properties": {
+            "recordKinds": { "type": "array", "items": { "type": "string", "pattern": "^[^\\r\\n]{1,80}$" }, "description": "The kinds of record the numbers were counted from (transcripts, a mail store, status files), 1 to 10, each one line of at most 80 characters." },
+            "window": {
+              "type": "object",
+              "required": ["from", "to"],
+              "additionalProperties": false,
+              "description": "The period the records cover, in UTC. A single snapshot has from equal to to; to before from is refused.",
+              "properties": {
+                "from": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$" },
+                "to": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$" }
+              }
+            },
+            "machine": { "type": "string", "pattern": "^[^\\r\\n]{1,160}$", "description": "The shape of the machine and fleet the records came from, never its name: operating system, cores, how many sessions of each role. One line of at most 160 characters." },
+            "versions": { "type": "array", "items": { "type": "string", "pattern": "^[^\\r\\n]{1,80}$" }, "description": "The versions of what produced the records, 1 to 10, each one line of at most 80 characters. A version that was not recorded is said to be so, in words." }
+          }
+        }
+      }
+    },
+    "proposedChange": { "type": "string", "pattern": "^[\\s\\S]{1,600}$", "description": "The change the finding argues for. At most 600 characters." },
+    "confidence": { "type": "string", "enum": ["high", "medium", "low"], "description": "A closed list, not a number: high is a direct count from timestamps, medium is inferred from turn boundaries or command text, low is a keyword pattern or a single reported incident. A number would claim a precision none of these methods has." },
+    "whyItGeneralises": { "type": "string", "pattern": "^[\\s\\S]{1,400}$", "description": "Why the finding should hold on another fleet, not only the one it was measured on. At most 400 characters." },
+    "limits": { "type": "string", "pattern": "^[\\s\\S]{1,400}$", "description": "Optional. What the numbers cannot show: a single snapshot, one incident, figures reported rather than measured. At most 400 characters." }
+  },
+  "x-horde-file": {
+    "directory": "<HORDE_HOME>/findings",
+    "name": "finding-<the first 32 hex digits of the SHA-256 of the file's bytes>.json",
+    "encoding": "ASCII; any other character is written as a \\u escape",
+    "readers": "core/Finding.ps1 (Read-HordeFindingText)",
+    "writers": "core/FindingStore.ps1 (Save-HordeFinding), which never replaces a file and sends nothing anywhere"
+  }
+}

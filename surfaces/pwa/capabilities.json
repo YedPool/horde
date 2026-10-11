@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "surface": "pwa",
+  "capabilities": {
+    "page.local": {
+      "support": "no",
+      "evidence": "The phone app is a static site served to a phone by a web host (Site.ps1, New-HordePwaSite builds it); it is not loaded from folders on this machine, and Horde never opens it, so this folder registers no surface and is never picked by Resolve-HordeSurface."
+    },
+    "page.locked": {
+      "support": "unverified",
+      "evidence": "The page's policy line (page/index.html) allows only the site's own scripts and styles, nothing inline, no frames, no objects, no form targets, and connections to the site and the one relay origin New-HordePwaSite writes in; surfaces/pwa/test/test-pwa-site.ps1 reads the built policy. Navigation away is not blocked by anything but the page having no link that leaves, and a browser was not driven to try each load, so it is not claimed."
+    },
+    "requests.closed": {
+      "support": "yes",
+      "evidence": "Every request of the page goes through page/bridge.js, a closed list of named requests; any other name is refused before a handler runs. surfaces/pwa/test/test-pwa-phone-e2e.ps1 runs the built bridge over the phone's logic and sees a request off the list refused in words, and every listed request it makes answered, 2026-10-09."
+    },
+    "push": {
+      "support": "unverified",
+      "evidence": "The bridge pushes list-changed after each long-poll of the relay while a horde is unlocked (page/bridge.js, the live refresh), but no suite has yet watched a page redraw from a pushed event; Web Push to the installed app is the hosted relay's (PR plan item 8)."
+    },
+    "window.native": {
+      "support": "no",
+      "evidence": "A page on a phone, with no window of this machine and no handle to give."
+    },
+    "picture": {
+      "support": "no",
+      "evidence": "Horde has no way to ask a phone for a picture of its page."
+    }
+  }
+}
