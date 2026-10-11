@@ -184,6 +184,25 @@ function Get-HordeHubLiveAddresses {
     return @($out)
 }
 
+function Get-HordeHubListedNodes {
+    # The nodes `horde nodes` lists: -Own (the hub's own, cli/HubServe.ps1's Get-HordeHubRegistry), then
+    # every device the register holds live at -Now, by id, each once, named "(dialled)" as `hub serve` names
+    # a dialled node until its mirror says its name. WHY (the first live mesh link, 2026-10-11): a dialled
+    # node is bound by this register, not by the hub's own list, so `horde nodes` read only the hub's own
+    # node's mirror and never showed the node it had just heard. A revoked or expired device is not listed.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Own, [Parameter(Mandatory = $true)][string]$HordeHome, $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($e in @($Own | Where-Object { $null -ne $_ })) { [void]$out.Add($e); $seen["$($e.deviceId)"] = $true }
+    foreach ($id in @((Get-HordeHubLiveKeys -HordeHome $HordeHome -Now $Now).Keys | Sort-Object)) {
+        if ($seen.ContainsKey("$id")) { continue }
+        [void]$out.Add([pscustomobject]@{ deviceId = "$id"; deviceName = "(dialled)" })
+        $seen["$id"] = $true
+    }
+    return $out.ToArray()
+}
+
 function Test-HordeHubAdmits {
     # May a link be bound to -DeviceId at -Now? "" when it may; otherwise why not. Both records must agree:
     # the register holds the device live, and -Enrollment - the transport's enrolment, transports/Port.ps1 -

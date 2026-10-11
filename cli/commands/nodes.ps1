@@ -10,11 +10,13 @@ $HordeCommand = @{
         . (Join-Path $root "transports\Port.ps1")
         . (Join-Path $root "remote\Mirror.ps1")
         . (Join-Path $root "cli\HubServe.ps1")
+        . (Join-Path $root "cli\HubRegistry.ps1")
         $node = Get-HordeNode
         $mirrorRoot = Get-HordeHubMirrorRoot -HomeRoot (Get-HordeHome)
         $contract = Get-HordeLinkContract
         $mirrors = New-Object System.Collections.ArrayList
-        foreach ($e in @(Get-HordeHubRegistry -Node $node)) {
+        # The hub's own node and every node its register holds live: a dialled node is bound by the register.
+        foreach ($e in @(Get-HordeHubListedNodes -Own @(Get-HordeHubRegistry -Node $node) -HordeHome (Get-HordeHome))) {
             $m = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $e.deviceId) -DeviceId $e.deviceId -Contract $contract
             # A registered node with no mirror, or one that cannot be read, is shown as never heard:
             # its sessions are unknown, never absent, and the reason says why.

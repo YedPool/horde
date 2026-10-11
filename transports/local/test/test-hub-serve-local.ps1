@@ -153,6 +153,13 @@ try {
         Check ($ended -and $hubRun.ExitCode -eq 0) ("horde hub serve -Listen ran its round and exited 0 (" + $said.Trim() + ")")
         Check ($said -clike ("*a dialled link for device " + $stranger + " was refused: device " + $stranger + " is not enrolled: *not in the hub's register*")) "it refused the stranger's link, saying the device is not in the hub's register"
         Check ($said -clike ("*node (dialled) (" + $enrolled + "): unreachable:*") -and $said -cnotlike ("*device " + $enrolled + " was refused*")) "and bound the enrolled device's link, pulling it until the suite hung up"
+        # horde nodes lists a dialled node too (the first live mesh link, 2026-10-11): it is bound by the
+        # hub's register, not by the hub's own list, and before this only the hub's own node was read.
+        $listed = Invoke-HordeTestRun "nodes -Json"
+        $lj = Read-HordeTestJson $listed.out
+        $ids = @(); if ($null -ne $lj) { $ids = @($lj.nodes | ForEach-Object { "$($_.deviceId)" }) }
+        Check ($listed.code -eq 0 -and $ids.Count -eq 2 -and $ids -ccontains $deviceId -and $ids -ccontains $enrolled) ("horde nodes -Json lists the hub's own node and the enrolled dialled one, from its mirror (" + ($ids -join ", ") + ")")
+        Check (-not ($ids -ccontains $stranger)) "and never a device nobody enrolled"
     } finally { if (-not $hubRun.HasExited) { try { $hubRun.Kill() } catch { }; $null = $hubRun.WaitForExit(10000) } }
 } finally {
     # Only the process this suite started, by its own handle.

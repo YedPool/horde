@@ -75,5 +75,15 @@
         @{ Name = "transport-throw-admits"
            Find = 'try { $t = & $Enrollment.hubEnrolled $HordeHome $DeviceId $Now } catch { return ('
            Replace = 'try { $t = & $Enrollment.hubEnrolled $HordeHome $DeviceId $Now } catch { return ""; return (' }
+        # --- the first live mesh link (2026-10-11): the nodes horde nodes lists
+        @{ Name = "listed-skips-register"
+           Find = 'foreach ($id in @((Get-HordeHubLiveKeys -HordeHome $HordeHome -Now $Now).Keys | Sort-Object)) {'
+           Replace = 'foreach ($id in @()) {' }
+        @{ Name = "listed-twice"
+           Find = 'if ($seen.ContainsKey("$id")) { continue }'
+           Replace = '' }
+        @{ Name = "listed-own-dropped"
+           Find = 'foreach ($e in @($Own | Where-Object { $null -ne $_ })) { [void]$out.Add($e); $seen["$($e.deviceId)"] = $true }'
+           Replace = '' }
     )
 }
