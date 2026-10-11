@@ -13,11 +13,19 @@
 # THE FIXTURE. messengers/<name>/test/Fixture.ps1, run with -Root, returns one object of script blocks:
 #   New      ()                      -> a state, everything the messenger writes kept inside it
 #   Remove   param($State)
-#   Observe  param($State, $MessageId) -> { records; typed; wakes } - how many records the messenger
-#            holds for that id, how many times any body was typed anywhere, how many wakes it made
+#   Observe  param($State, $MessageId) -> { records; bodies; typed; wakes }, READ FROM WHAT THE MESSENGER
+#            ACTUALLY DID, never from the messenger's own report (review of #102, finding 1; plan R21
+#            slice 3b, merge condition 1): records, how many records the target store holds for that id;
+#            bodies, the body each of them holds; typed, every text typed into any session during the
+#            state's life, as the fake target recorded it; wakes, how many wake notices for that id the
+#            fake target recorded.
 #   Receive  param($State, $MessageId) - plays the RECEIVING session's side (its hook confirming the id
 #            in its own transcript), by the messenger's own receiving mechanism, never by the port
 # A fixture writes nothing outside the temp folder, touches no pane and no real session's mail.
+#
+# WHAT A TYPED TEXT MAY BE. Only a wake notice is ever typed: one line, no control character, and never
+# any part of the body. Each case below holds every typed text to that, so a messenger that typed the
+# body, or a notice carrying it, fails whichever case was running.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -26,6 +34,11 @@ trap { Register-HordeSuiteError $_; continue }
 Set-StrictMode -Version Latest
 . (Join-Path $root "messengers\Port.ps1")
 foreach ($f in @(Get-HordeMessengerFiles)) { . $f }
+. (Join-Path $root "test\lib\MessengerPins.ps1")
+# PINNED (test\lib\MessengerPins.ps1): every messenger is loaded, and a messenger may find a real program
+# on its own (the wezfleet command on PATH). Under this home each has pinned itself to nothing, so no
+# case, and no child it starts, can post into a real fleet on a machine where one is installed.
+$pinned = Enter-HordeTestPinnedHome -Root $root
 
 $script:seq = 0
 function New-Msg {
@@ -37,9 +50,22 @@ function New-Msg {
         sessionId = $SessionId
         label = "A"
         from = [pscustomobject]@{ deviceId = "0f000000-0000-4000-8000-000000000001"; sessionId = "33333333-4444-4555-8666-777777777777"; label = "M" }
-        body = ("conformance body " + [guid]::NewGuid().ToString("N"))
+        # Two lines and a non-ASCII letter: a body cut at a newline, or read in the wrong encoding, would
+        # not arrive as itself (wezfleet's cmd.exe shim measured cutting at the first newline, 2026-09-16).
+        body = ("conformance body " + [guid]::NewGuid().ToString("N") + "`nsecond line caf" + [char]0x00E9)
         ttlSeconds = 3600
     }
+}
+
+function Test-TypedClean {
+    # Every typed text is a wake notice: one line, no control character, and none of the body - checked
+    # against each line of the body, so a notice that carried its first line is caught too.
+    param($Observed, [string]$Body)
+    foreach ($t in @($Observed.typed)) {
+        if ("$t" -cmatch '[\x00-\x1F\x7F]') { return $false }
+        foreach ($line in @($Body -split "`n" | Where-Object { $_.Trim() -ne "" })) { if ("$t".Contains($line.Trim())) { return $false } }
+    }
+    return $true
 }
 
 # Every capability of the closed list must have a case here. Each case gets the messenger, its
@@ -50,15 +76,24 @@ $cases = [ordered]@{
         $msg = New-Msg
         $a = Send-HordeMessengerMessage -Messenger $M -Message $msg
         $o = & $Fx.Observe $State $msg.messageId
-        return ($a.state -ceq "known" -and $o.records -eq 1 -and $o.typed -eq 0)
+        # THE BODY ARRIVED AS ITSELF, and was never typed.
+        return ($a.state -ceq "known" -and $o.records -eq 1 -and @($o.bodies).Count -eq 1 -and "$(@($o.bodies)[0])" -ceq $msg.body -and (Test-TypedClean $o $msg.body))
     }
     "idempotent.post" = {
         param($M, $Fx, $State)
         $msg = New-Msg
         $a1 = Send-HordeMessengerMessage -Messenger $M -Message $msg
+        $o1 = & $Fx.Observe $State $msg.messageId
         $a2 = Send-HordeMessengerMessage -Messenger $M -Message $msg
-        $o = & $Fx.Observe $State $msg.messageId
-        return ($a1.state -ceq "known" -and $a2.state -ceq "known" -and "$($a2.value.stage)" -ceq "$($a1.value.stage)" -and $o.records -eq 1)
+        $o2 = & $Fx.Observe $State $msg.messageId
+        # A REPOST WRITES NOTHING AND WAKES NOTHING.
+        $first = ($a1.state -ceq "known" -and $a2.state -ceq "known" -and "$($a2.value.stage)" -ceq "$($a1.value.stage)" -and $o2.records -eq 1 -and $o2.wakes -eq $o1.wakes -and @($o2.typed).Count -eq @($o1.typed).Count)
+        # AND NEVER RESETS A STAGE: after the receiver took it, a repost answers with the later stage.
+        & $Fx.Receive $State $msg.messageId
+        $a3 = Send-HordeMessengerMessage -Messenger $M -Message $msg
+        $o3 = & $Fx.Observe $State $msg.messageId
+        $after = Get-HordeMessengerStatus -Messenger $M -MessageId $msg.messageId
+        return ($first -and $a3.state -ceq "known" -and "$($a3.value.stage)" -ceq "seen" -and $after.state -ceq "known" -and "$($after.value.stage)" -ceq "seen" -and $o3.records -eq 1 -and $o3.wakes -eq $o1.wakes -and (Test-TypedClean $o3 $msg.body))
     }
     "receipt.receiver" = {
         param($M, $Fx, $State)
@@ -77,7 +112,8 @@ $cases = [ordered]@{
         $msg = New-Msg
         $null = Send-HordeMessengerMessage -Messenger $M -Message $msg
         $o = & $Fx.Observe $State $msg.messageId
-        return ($o.wakes -ge 1 -and $o.typed -eq 0)
+        # One wake, as the fake target recorded it: one line, no control character, never the body.
+        return ($o.wakes -eq 1 -and @($o.typed).Count -ge 1 -and (Test-TypedClean $o $msg.body))
     }
 }
 # What requires each capability, for the honest refusal of any word but yes.
@@ -123,8 +159,9 @@ foreach ($name in @(Get-HordeMessengerNames)) {
         $bad.body = " "
         $a = Send-HordeMessengerMessage -Messenger $m -Message $bad
         $o = & $fx.Observe $state $bad.messageId
-        Check ($a.state -ceq "unknown" -and $o.records -eq 0) ("[" + $name + "] an invalid message never reaches it")
+        Check ($a.state -ceq "unknown" -and $o.records -eq 0 -and $o.wakes -eq 0) ("[" + $name + "] an invalid message never reaches it, and wakes nothing")
     } finally { & $fx.Remove $state }
 }
 
+Exit-HordeTestPinnedHome -State $pinned
 Complete-HordeSuite -Success "every messenger shows each capability it claims and is refused where it lacks one"

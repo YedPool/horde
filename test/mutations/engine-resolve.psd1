@@ -75,6 +75,24 @@
         @{ Name = "role-without-list-accepted"
            Find = 'if ($null -eq $list) { $problems +='
            Replace = 'if ($false) { $problems +=' }
+        @{ Name = "duty-for-unknown-role-accepted"
+           Find = 'if ($roles -cnotcontains $p.Name) { $problems +='
+           Replace = 'if ($false) { $problems +=' }
+        @{ Name = "duty-id-unchecked"
+           Find = 'if ($id -cnotmatch ''^[a-z][a-z0-9-]{0,63}$'') {'
+           Replace = 'if ($false) {' }
+        @{ Name = "duty-without-rule-accepted"
+           Find = '.Trim() -eq "") { $problems +='
+           Replace = '.Trim() -eq "never") { $problems +=' }
+        @{ Name = "duty-doc-outside-accepted"
+           Find = 'if ("$doc" -cnotmatch'
+           Replace = 'if ($false -and "$doc" -cnotmatch' }
+        @{ Name = "duty-doc-missing-accepted"
+           Find = 'elseif (-not (Test-Path -LiteralPath (Join-Path $repo'
+           Replace = 'elseif ($false -and -not (Test-Path -LiteralPath (Join-Path $repo' }
+        @{ Name = "duties-dropped"
+           Find = 'return [pscustomobject]@{ requires = $req; duties = $duties }'
+           Replace = 'return [pscustomobject]@{ requires = $req; duties = [pscustomobject]@{} }' }
         @{ Name = "project-layer-resolved"
            Find = 'if ($l.layer -ceq "L2") { throw'
            Replace = 'if ($false) { throw' }

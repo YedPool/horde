@@ -230,11 +230,17 @@ function New-HordeWeztermTarget {
     return (New-HordeKnown -Value ([pscustomobject]@{ socket = $Socket; guiPid = $gp; guiStart = "" + $start }))
 }
 
+function Get-HordeWeztermSockDir {
+    # Where a profile's terminals keep their sockets: the user's own profile unless another is given.
+    param([string]$ProfileDir = $env:USERPROFILE)
+    return (Join-Path $ProfileDir ".local\share\wezterm")
+}
+
 function Resolve-HordeWeztermOwnMux {
     # THIS NODE'S OWN TERMINAL, named explicitly for a node that acts in it: the one gui of this user
     # with a socket in the terminal's socket folder. None, or more than one (an isolated test instance
     # beside the user's own counts), is refused: which one is meant cannot be told.
-    param([string]$SockDir = (Join-Path $env:USERPROFILE ".local\share\wezterm"), [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
+    param([string]$SockDir = (Get-HordeWeztermSockDir), [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
     $pids = @()
     if ($null -ne $Guis) { $pids = @(& $Guis) } else { $pids = @(Get-Process -Name "wezterm-gui" -ErrorAction SilentlyContinue | ForEach-Object { [long]$_.Id }) }
     $socks = @($pids | ForEach-Object { Join-Path $SockDir ("gui-sock-" + $_) } | Where-Object { Test-Path -LiteralPath $_ })
@@ -491,10 +497,92 @@ function Stop-HordeWeztermPane {
     return (New-HordeKnown -Value $true)
 }
 
+function Test-HordeWeztermProfileDir {
+    # "" when -Path may stand for a profile folder, else why not: a full path on a fixed or removable
+    # local drive (never a share, nor a drive letter mapped to one, which Test-Path would reach over the
+    # network), already in full form (no '..'), and with no junction or link on any folder that exists
+    # from the drive down to the socket folder inside it (review of #108; issue #119: a junction at the
+    # profile's .local was adopted, and a mapped network drive passed). -DriveType stands in for the
+    # drive's type in a test: root -> type name. -ItemOf stands in for Get-Item in a test: path -> item.
+    # A folder that exists but cannot be read is refused: whether it is a junction cannot be told.
+    param([AllowEmptyString()][string]$Path, [scriptblock]$DriveType = $null, [scriptblock]$ItemOf = $null)
+    if ($Path -cnotmatch '\A[A-Za-z]:\\') { return ("the profile folder '" + $Path + "' is not a full path on a local drive") }
+    $driveRoot = $Path.Substring(0, 3)
+    $kind = ""
+    try { if ($null -ne $DriveType) { $kind = "" + (& $DriveType $driveRoot) } else { $kind = "" + (New-Object System.IO.DriveInfo($driveRoot)).DriveType } } catch { $kind = "" }
+    if (@("Fixed", "Removable") -cnotcontains $kind) { return ("the profile folder '" + $Path + "' is on drive " + $driveRoot + " of type '" + $kind + "'; only a fixed or removable local drive may stand for a profile") }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return ("the profile folder '" + $Path + "' is not a path") }
+    if ($full.TrimEnd('\') -cne $Path.TrimEnd('\')) { return ("the profile folder '" + $Path + "' is not in full form (it reads as " + $full + ")") }
+    $p = (Get-HordeWeztermSockDir -ProfileDir $full.TrimEnd('\')).TrimEnd('\')
+    while ($p.Length -gt 3) {
+        if (Test-Path -LiteralPath $p) {
+            $it = $null
+            try { if ($null -ne $ItemOf) { $it = & $ItemOf $p } else { $it = Get-Item -LiteralPath $p -Force -ErrorAction Stop } } catch { $it = $null }
+            if ($null -eq $it) { return ("the profile folder '" + $Path + "' passes through " + $p + ", which cannot be read, so whether it is a junction or link cannot be told") }
+            if (($it.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return ("the profile folder '" + $Path + "' passes through " + $p + ", a junction or link") }
+        }
+        $p = Split-Path -Parent $p
+    }
+    return ""
+}
+
+function Test-HordeWeztermRunningList {
+    # "" when -Running is a list of { pid; start } with a numeric pid and a start time of digits, else
+    # why not (review of #108: a pid of 'abc' made Own throw where the port says it answers).
+    param($Running)
+    if ($Running -is [System.Collections.IDictionary]) { return "the running terminals are a table, not a list of { pid; start }" }
+    foreach ($e in @($Running)) {
+        if ($null -eq $e -or $e -is [System.Collections.IDictionary] -or $null -eq $e.PSObject.Properties["pid"] -or $null -eq $e.PSObject.Properties["start"]) { return "a running terminal is not a { pid; start }" }
+        if (("" + $e.pid) -cnotmatch '\A[0-9]{1,10}\z') { return ("a running terminal's pid '" + $e.pid + "' is not a number") }
+        if (("" + $e.start) -cnotmatch '\A[0-9]{1,20}\z') { return ("a running terminal's start '" + $e.start + "' is not a time in digits") }
+    }
+    return ""
+}
+
+function Get-HordeWeztermOwnMarker {
+    # The port's OwnMarker: the socket file whose presence makes terminal -GuiPid -ProfileDir's own, or
+    # $null when the pid is not a number or the folder may not stand for a profile (review of #108).
+    param([AllowEmptyString()][string]$ProfileDir, $GuiPid)
+    if (("" + $GuiPid) -cnotmatch '\A[0-9]{1,10}\z') { return $null }
+    if ((Test-HordeWeztermProfileDir -Path $ProfileDir) -ne "") { return $null }
+    return (Join-Path (Get-HordeWeztermSockDir -ProfileDir $ProfileDir) ("gui-sock-" + $GuiPid))
+}
+
+function Invoke-HordeWeztermOwn {
+    # The port's Own (core/HostAct.ps1). With no arguments, as a node calls it: this user's terminals now,
+    # in %USERPROFILE%\.local\share\wezterm. Given a profile folder, the sockets under it; given running
+    # terminals ({ pid; start } each), those in place of the processes listed now - the isolation probe's
+    # control, which plants one and must find it (test-hub-act-local, 2026-10-06). Either given argument
+    # that cannot mean what it says is answered unknown, never a throw. -Guis and -ProcessStart stand in
+    # for the process table in a test of the no-argument path; the port never passes them.
+    param([string]$ProfileDir = "", $Running = $null, [scriptblock]$Guis = $null, [scriptblock]$ProcessStart = $null)
+    $pd = $ProfileDir
+    if ($pd -ne "") { $why = Test-HordeWeztermProfileDir -Path $pd; if ($why -ne "") { return (New-HordeUnknown -Reason $why) } }
+    if ($pd -eq "") {
+        # The node's own path gets the same checks (review of #131): its own profile, on a local drive,
+        # with no junction or link from the drive down to its socket folder.
+        $pd = "" + $env:USERPROFILE
+        $why = Test-HordeWeztermProfileDir -Path $pd
+        if ($why -ne "") { return (New-HordeUnknown -Reason ("this user's profile cannot be trusted for its terminals: " + $why)) }
+    }
+    $sd = Get-HordeWeztermSockDir -ProfileDir $pd
+    if ($null -eq $Running) { return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $Guis -ProcessStart $ProcessStart) }
+    $why = Test-HordeWeztermRunningList -Running $Running
+    if ($why -ne "") { return (New-HordeUnknown -Reason $why) }
+    $list = @($Running)
+    # Not $guis: that is the [scriptblock]$Guis parameter (names ignore case), which this would overwrite
+    # (tools/ParamShadow.ps1, PR #111).
+    $runningGuis = { @($list | ForEach-Object { [long]$_.pid }) }.GetNewClosure()
+    $starts = { param($p) $hit = @($list | Where-Object { [long]$_.pid -eq [long]$p }); if ($hit.Count -eq 1) { "" + $hit[0].start } else { $null } }.GetNewClosure()
+    return (Resolve-HordeWeztermOwnMux -SockDir $sd -Guis $runningGuis -ProcessStart $starts)
+}
+
 # THE PORT (core/HostAct.ps1). A node reaches these functions only through it, so nothing outside
 # hosts/wezterm/ names the terminal (CONTRIBUTING 14). Own names this node's own terminal explicitly.
 Register-HordeHostActor -Name "wezterm" `
-    -Own { Resolve-HordeWeztermOwnMux } `
+    -Own { param($profileDir, $running) Invoke-HordeWeztermOwn -ProfileDir $profileDir -Running $running } `
+    -OwnMarker { param($profileDir, $guiPid) Get-HordeWeztermOwnMarker -ProfileDir $profileDir -GuiPid $guiPid } `
     -Resolve { param($n) Resolve-HordeWeztermProgram -Name $n } `
     -Start { param($target, $prog, $argv, $cwd, $envMap) if ($null -eq $envMap) { $envMap = @{} }; Start-HordeWeztermPane -Target $target -Program $prog -Argv $argv -Cwd $cwd -Environment $envMap } `
     -Send { param($target, $h, $t, $submit) Send-HordeWeztermText -Target $target -Handle $h -Text $t -Submit:([bool]$submit) } `

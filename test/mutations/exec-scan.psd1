@@ -130,5 +130,20 @@
         @{ Name = "remote-functions-not-read"
            Find = '[void]$names.Add($d.Name)'
            Replace = '' }
+        @{ Name = "relay-add-type-any-form"
+           Find = 'if (-not $formOk) { [void]$out.Add('
+           Replace = 'if ($false) { [void]$out.Add(' }
+        @{ Name = "relay-add-type-any-root"
+           Find = '$join.CommandElements[1].Extent.Text -ceq ''$PSScriptRoot'''
+           Replace = '$true' }
+        @{ Name = "relay-add-type-any-file"
+           Find = '''\A[A-Za-z][A-Za-z0-9]*\.cs\z'''
+           Replace = '''\A.*\z''' }
+        @{ Name = "relay-add-type-more-parameters"
+           Find = '$formOk = ($els.Count -eq 3 -and'
+           Replace = '$formOk = ($els.Count -ge 3 -and' }
+        @{ Name = "relay-lists-not-restored"
+           Find = '$script:HordeExecCmdlets = $saved.c;'
+           Replace = '' }
     )
 }

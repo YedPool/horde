@@ -228,9 +228,17 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    any other target is refused, never forwarded. Tests first: a deliver to a session above the ceiling
    is refused with the reason, as a spawn is; a deliver to a session the hub did not spawn is refused.
    **Amended 2026-10-05 (coordinator's decision, for cross-PC messaging, R21):** a deliver may also
-   target a session whose label the node's own `remote.deliverTo` lists. That key is read only from the
-   node's own L1, like `admission.*`, never from the link, and its default is no label. **Until R9
-   lands, hub-spawned or opted-in is the whole deliver gate.** What R9 changes: the permission ceiling
+   target a session whose label the node's own `remote.deliverTo` lists. That key is the node owner's
+   exactly like `remote.permissionCeiling`: settable only in the node's own layers, L1
+   (`<HordeHome>\engine.json`) and L4 (`<HordeHome>\engine-live.json`), the engines plan's two files,
+   read by the node's one layer reader, `core/NodeEngineLayers.ps1`'s `Get-HordeNodeEngineLayers` (#109), again
+   for every deliver as for every spawn - one source of truth for a node's configuration; never from
+   the link; and its default is no label. A live rule beats L1, and an empty value withdraws every
+   opt-in. The value is a bounded list: at most 64 hub labels, each `^[A-Z]{1,2}([1-9][0-9]{0,3})?$`,
+   none twice, and every refusal names the entry. **A node layer that fails its checks refuses every
+   deliver, exactly as it refuses every spawn** (coordinator's decision, 2026-10-06), a deliver to a
+   hub-spawned session included. **Until R9 lands, hub-spawned or opted-in is the whole deliver
+   gate.** What R9 changes: the permission ceiling
    is checked on top of that rule, for an opted-in session exactly as for a hub-spawned one, so an
    opted-in label running above the ceiling is refused with the reason; R9 does not widen the rule.
    **The gate is applied to the resolved session** (review of PR #97, F1): the one the session id, or
@@ -521,6 +529,34 @@ E. Acting over the link
            ExecScan or ExecGuard allowlist that refuses a second start site.
            (3) wezfleet missing, the wrong version, or output that is not JSON each comes back
            `unknown` with the reason, never a stage.
+           **Decided 2026-10-06, review of #106, against wezfleet #65 as revised** (fields id, to,
+           stage, reason as a code, detail; post adds woken; exits 0 ok, 1 write-failed, 2 refused,
+           3 status absent, 4 post stale-session, 5 internal-error):
+           - detail is read but never fatal: cut to one capped line of printable ASCII, or dropped
+             when it is not text; the answer it came with is kept.
+           - exit 4 stale-session is **held** in both its shapes - absent (nothing written) and queued
+             (written under a session that no longer holds its pane) - with reason stale-session and
+             the detail. Held is final under #97's rules: the hub reports it to the sender, a retry is
+             a NEW message, and nothing re-aims this messageId (its argsHash would refuse it anyway).
+             Exits 1 and 5 are unknown.
+           - a post's `to` must be the session it was asked for, except on a repost (reason
+             already-posted), where it may name any session UUID - the mailbox wezfleet's
+             Repair-WfMailbox moved the record to after a compact, by pid and start time only - and
+             the reason says "followed to <to>". A status's `to` must be a session UUID or empty and
+             is never compared by the adapter; the reason says "at <to>".
+           - who wezfleet can name: -To and -FromSessionId only as lower-case session UUIDs, -FromLabel
+             only as a hub label. A target that is not a session UUID is held, bad-to; a sender whose
+             session id is not one (any non-Claude engine today) is named by its hub label alone,
+             -FromSessionId never passed; a sender label that is not a hub label, or a sender with
+             neither, is held, bad-from. All of these before any process starts.
+           - the configured wezfleet folder is an absolute local path with no `..`, no reparse point on
+             it or above it, holding wezfleet.ps1, lib\Mail.ps1, lib\MailPost.ps1 and commands\mail.ps1.
+           - body files go in `<HORDE_HOME>\messengers\wezfleet\outgoing`, whose access list grants this
+             user alone full control and inherits nothing, and the node sweeps it at start
+             (`Clear-HordeWezfleetMessengerOutgoing`).
+           - the start-site list (`tools/StartSites.ps1`, `messengers/start-sites.txt`) also lists every
+             property set on the start info, every call of the start function, Add-Type, COM, WMI and
+             CIM; the start function finds the script itself.
          The node takes its messenger injected in both: slice 4 does not wait for 3b.
       4. The node side: `node serve` answers `session.deliver` and `delivery.status` through the
          message journal (R3, kind `message`, keyed by messageId with its argsHash: a resend returns the
@@ -529,7 +565,10 @@ E. Acting over the link
          what the port passes through** (review of #102, findings 2 and 4): a stage a messenger reports
          is never allowed to move a message backward or overwrite a final stage (forward-only, as
          `Resolve-HordeMailReceipt` already rules for receipts), and a repost of one messageId with a
-         different argsHash is refused, never answered with the first content's stage. The
+         different argsHash is refused, never answered with the first content's stage. **And the
+         target a status reports** (review of #106, G7): a messenger's status names where a message
+         is now (wezfleet: "at <session>"), and slice 4, which journaled the target, compares it - a
+         move by the session's own process is followed, anything else refused. The
          `remote.deliverTo` gate, the journal and the wake-notice decision are this slice's and 3b's,
          not 3a's.
          The gate above (hub-spawned or `remote.deliverTo`) is checked here, on the resolved session,

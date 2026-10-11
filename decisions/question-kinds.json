@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "kinds": {
+    "yes-no": {
+      "label": "yes or no",
+      "means": "Answered with yes or no.",
+      "list": ""
+    },
+    "choice": {
+      "label": "a choice among options",
+      "means": "Answered by picking one of the options listed with the question.",
+      "list": "options"
+    },
+    "value": {
+      "label": "a value",
+      "means": "Answered with one value, such as a time, a number or a name.",
+      "list": ""
+    },
+    "parts": {
+      "label": "several parts",
+      "means": "Several sub-points asked together; each part gets its own answer.",
+      "list": "parts"
+    },
+    "do-then-say": {
+      "label": "do something, then say",
+      "means": "The person does something first, such as trying a build, and then says the word.",
+      "list": ""
+    }
+  }
+}

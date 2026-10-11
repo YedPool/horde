@@ -1,0 +1,277 @@
+{
+  "about": "WebAuthn registrations (attestation none) built with WebCrypto and a CBOR encoder (Node v24.18.0) by test/fixtures/relay/registration/make-fixtures.mjs. Only public keys are kept. expect is 'accepted' or a word the refusal reason must contain. clientDataJSON is written by the suites.",
+  "rpId": "relay.example.test",
+  "origin": "https://relay.example.test",
+  "registrations": [
+    {
+      "name": "valid: synced passkey (BE and BS), counter 0",
+      "expect": "accepted",
+      "rawId": "c8VXnp8xow4g9f-IXs9dviQ33CotweEjXAGE9uF6MdY",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIHPFV56fMaMOIPX_iF7PXb4kN9wqLcHhI1wBhPbhejHWpQECAyYgASFYIJHP90zu8ygyIXXxzJNS_1aJZVTj0gcZrdRrLFhxAxpqIlggU5a8Yk5YcpczjXos-bCtrcuz0lHZ4KDyTuFlnMdQmIE",
+      "publicKey": "BJHP90zu8ygyIXXxzJNS_1aJZVTj0gcZrdRrLFhxAxpqU5a8Yk5YcpczjXos-bCtrcuz0lHZ4KDyTuFlnMdQmIE",
+      "credentialId": "c8VXnp8xow4g9f-IXs9dviQ33CotweEjXAGE9uF6MdY",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEUCIQCfqUSc-mxaQA35u27CzzGw4ARjHij8Mi065GzjYOmV-QIgZ_J2CS62oSOqPpgqV_4Wc4Np9t3EkQadRC4eigAw0e0"
+      }
+    },
+    {
+      "name": "valid: device-bound passkey, counter 5",
+      "expect": "accepted",
+      "rawId": "jU-HsBRMMaVjQ3x2VJnh5iVoZCqI922ajd9zi3PIcQA",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpFAAAABeqbjWZNAR0hPOS2tIy1ddQAII1Ph7AUTDGlY0N8dlSZ4eYlaGQqiPdtmo3fc4tzyHEApQECAyYgASFYIJLVHcMLynYF1KZ0LqXUFqA12sW6lzjIEwFE5EpY2q5BIlggaWxoQwr-Ub8ZxsTln_j2del2rRldulrCrsCcrtX0JS4",
+      "publicKey": "BJLVHcMLynYF1KZ0LqXUFqA12sW6lzjIEwFE5EpY2q5BaWxoQwr-Ub8ZxsTln_j2del2rRldulrCrsCcrtX0JS4",
+      "credentialId": "jU-HsBRMMaVjQ3x2VJnh5iVoZCqI922ajd9zi3PIcQA",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEYCIQCiqk2Bo7tRIgJn-titfvqgFfZyaylOwdDIYmLqgxenUQIhANWJdtavydigxXEMJQRCn5tBO7Q28HvaQj9O7CPzJFLf"
+      }
+    },
+    {
+      "name": "valid: PRF asked at create, hmac-secret in the extensions",
+      "expect": "accepted",
+      "rawId": "xzuATHudWJnDaMBXxdK_sJKyTUSqJS4Rxm72YzWTE7w",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViyhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QrFAAAAAOqbjWZNAR0hPOS2tIy1ddQAIMc7gEx7nViZw2jAV8XSv7CSsk1EqiUuEcZu9mM1kxO8pQECAyYgASFYIES0X1-9iHiuiiUzEkkSoLwdTSfGSG-OFRet8-nYYaPxIlggXIdr57K4dRYbQZ7U8ekhusHJiqrHHCq_tNp1ENSqdb2ha2htYWMtc2VjcmV09Q",
+      "publicKey": "BES0X1-9iHiuiiUzEkkSoLwdTSfGSG-OFRet8-nYYaPxXIdr57K4dRYbQZ7U8ekhusHJiqrHHCq_tNp1ENSqdb0",
+      "credentialId": "xzuATHudWJnDaMBXxdK_sJKyTUSqJS4Rxm72YzWTE7w",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEQCIA92rPBDZaDwCz7dfHuxz66oLkLGBxc3HVDygRdWnM1yAiBTSxcm2lOkMwQzuRSfgoaj-EH8T7Pk7ur8Mh6cVUImkQ"
+      }
+    },
+    {
+      "name": "valid: a 16-byte credential id",
+      "expect": "accepted",
+      "rawId": "dnHgui0Zeyf_oRzAokCRdw",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViUhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAEHZx4LotGXsn_6EcwKJAkXelAQIDJiABIVggdBlaBRF6_6NVbtqYuYcBaIkc-49aTjdW5jM3x4dYg5YiWCCJ-0ATcL_yqj3rGvMEQcn8-vvQ3mVN1tTxD0-1V3rdEg",
+      "publicKey": "BHQZWgURev-jVW7amLmHAWiJHPuPWk43VuYzN8eHWIOWiftAE3C_8qo96xrzBEHJ_Pr70N5lTdbU8Q9PtVd63RI",
+      "credentialId": "dnHgui0Zeyf_oRzAokCRdw",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEUCIQDTwbC1iSjaN2ed_7U6pYiA5sEBkdlbiSTkwsSCgJ0CGAIgRbBsZ63qobrKWVF0qAzcJiSxk6EAcxRo5vo5_rh91mg"
+      }
+    },
+    {
+      "name": "valid: COSE members in another order",
+      "expect": "accepted",
+      "rawId": "pQzxnBG3AOHU07ovgs74NuLedAlK_gbedSzTFgBbWw8",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIKUM8ZwRtwDh1NO6L4LO-Dbi3nQJSv4G3nUs0xYAW1sPpSJYIGV3xG8oQdAw4XVFFgtbSV4T7sPOwQW0j_6kIH_Z5ZzzIVggcN5T-HSTiFjoM6POtwZkjkwd4V5u-_Q586iApOQCvUMgAQMmAQI",
+      "publicKey": "BHDeU_h0k4hY6DOjzrcGZI5MHeFebvv0OfOogKTkAr1DZXfEbyhB0DDhdUUWC1tJXhPuw87BBbSP_qQgf9nlnPM",
+      "credentialId": "pQzxnBG3AOHU07ovgs74NuLedAlK_gbedSzTFgBbWw8",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEUCIGIIvB19SxyxbK1xEcHIWaWUAY0fja2acbh_wu-PJFzoAiEA1xuza6WO0sPtRlAktQlSqbYYpfkTHtPu9tho0UaMjWQ"
+      }
+    },
+    {
+      "name": "valid: attestationObject members in another order",
+      "expect": "accepted",
+      "rawId": "LnMD3FvhG39geDWlB4GGT1j300IXuMxFX3eG-DEyU2g",
+      "attestationObject": "o2hhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIC5zA9xb4Rt_YHg1pQeBhk9Y99NCF7jMRV93hvgxMlNopQECAyYgASFYICHGGhPQg_FpfdoPFK8osXIxrneUvmtE2rS6yd9z8bYOIlggEXmkApWc6L_vHUF4dkqAnRuHPQSlIUET40WGTwwcBB1jZm10ZG5vbmVnYXR0U3RtdKA",
+      "publicKey": "BCHGGhPQg_FpfdoPFK8osXIxrneUvmtE2rS6yd9z8bYOEXmkApWc6L_vHUF4dkqAnRuHPQSlIUET40WGTwwcBB0",
+      "credentialId": "LnMD3FvhG39geDWlB4GGT1j300IXuMxFX3eG-DEyU2g",
+      "assertion": {
+        "challenge": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+        "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAAQ",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEYCIQD8QqM3K-UBesegEim51RZ5COaBvYxMWdfFgTU7PFE_gAIhAKUfcwuaaG3OC7BlBFxuXrFlJIOilFUN1SwJkyu4ulrC"
+      }
+    },
+    {
+      "name": "refused: packed attestation",
+      "expect": "attestation format",
+      "rawId": "j9G-jcvx0MAE7omWvsVbECcfU-dpjAazgYdNnZx3zTM",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAaGF1dGhEYXRhWKSEpgAQVk4SGoM9HEp0XRZpeDaW8GW4pvZSOw5pUtrdCl0AAAAA6puNZk0BHSE85La0jLV11AAgj9G-jcvx0MAE7omWvsVbECcfU-dpjAazgYdNnZx3zTOlAQIDJiABIVgg6fzA8FdoZgba9KnJuzR2M2vZRgk083W2DY1XEEBYm8ciWCARc1JNenhxB7j8SlMX4DUHLgDZTkv5k-WRE_DynNW4yg"
+    },
+    {
+      "name": "refused: none with a statement",
+      "expect": "attStmt",
+      "rawId": "xUTJ5tT3SzmG_v1vRBj8uVfuylXVlqyVZ9chh7CtExc",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oWN4NWOAaGF1dGhEYXRhWKSEpgAQVk4SGoM9HEp0XRZpeDaW8GW4pvZSOw5pUtrdCl0AAAAA6puNZk0BHSE85La0jLV11AAgxUTJ5tT3SzmG_v1vRBj8uVfuylXVlqyVZ9chh7CtExelAQIDJiABIVgg9hqH0bZf4f6v2ly62xxzevjsr_6Vqe4aGGV7aIaUcd0iWCAfjuxYEVuI8IwgOojN6VKjgiezrfgeJKs3dL5v-VRXRQ"
+    },
+    {
+      "name": "refused: an extra attestationObject member",
+      "expect": "attestationObject",
+      "rawId": "AtMLoECH_kC3Y563dO3Kt0HPh4jF1GP0YF1BFzeHL7g",
+      "attestationObject": "pGNmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIALTC6BAh_5At2Oet3TtyrdBz4eIxdRj9GBdQRc3hy-4pQECAyYgASFYIF-6Wbpt-sAv1dcvdKfgBlmm5bQ-58VpJthXUxCkq8FAIlggvOHBzuq7uuNMuVBCX47xOmzxB_OFSwq6FbE7KwdRteRlZXh0cmEB"
+    },
+    {
+      "name": "refused: attestationObject member twice",
+      "expect": "more than once",
+      "rawId": "Wkhoy3UDq4vpoO0G0XGsYTfNesEoSr7AoC16i0uSHtQ",
+      "attestationObject": "pGNmbXRkbm9uZWNmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIFpIaMt1A6uL6aDtBtFxrGE3zXrBKEq-wKAteotLkh7UpQECAyYgASFYIKXWZNlwBhwCe6nV-yDasRz2XIat-NNKD7dQw1cYw6P2IlggLqGN0fMuxGKUvZVefwt0b5crB7Z0MyyqO5GqBiWpdFU"
+    },
+    {
+      "name": "refused: bytes after the attestationObject",
+      "expect": "after",
+      "rawId": "P2BZOhE28tjrMYA5SbE-MMeXmHnt1fdRLGxdb8lw0MY",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAID9gWToRNvLY6zGAOUmxPjDHl5h57dX3USxsXW_JcNDGpQECAyYgASFYIBTDaFiF1ARErUau2cYyWS1Sz93mgWdeNWgU-IzpjOoFIlggjkBQIDC-_CMWEBAdPSCBD29H_4BF3wksNwAS2miblmsA"
+    },
+    {
+      "name": "refused: an indefinite-length map",
+      "expect": "indefinite",
+      "rawId": "M0MaP3yHOnm0nfYgSRJnlJMs0ZPMv-o12z3Wk0BlvdY",
+      "attestationObject": "v2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIDNDGj98hzp5tJ32IEkSZ5STLNGTzL_qNds91pNAZb3WpQECAyYgASFYIIjDqyzd8mravk0tfaq1NQbXXZtyBYxdKfKe2g3cy3Z0IlggazD2RiVJCWOuxyg_k7wBMafRa26-h2_-MCYVexbw94X_"
+    },
+    {
+      "name": "refused: a length not in its shortest form",
+      "expect": "shortest",
+      "rawId": "gLN4eOIQqRMhvEAoRnQ5XXaYSgF2HjOv8sMWEv7S1Xo",
+      "attestationObject": "o3gDZm10ZG5vbmVnYXR0U3RtdKBoYXV0aERhdGFYpISmABBWThIagz0cSnRdFml4NpbwZbim9lI7DmlS2t0KXQAAAADqm41mTQEdITzktrSMtXXUACCAs3h44hCpEyG8QChGdDlddphKAXYeM6_ywxYS_tLVeqUBAgMmIAEhWCDqUG2IkQoiuHPavJ0RA351tJE5tB9Nnyi8lZqVCJPdAyJYIGZfntOgW6JSIBxEfZbNt9NRV57eHpZ5afRrZqQGOUz2"
+    },
+    {
+      "name": "refused: a tagged value",
+      "expect": "tag",
+      "rawId": "ov368UMF2HcuhLJUgqy9uBpdBUb1BzPTlMHRyC9ToZ8",
+      "attestationObject": "o2NmbXTAZG5vbmVnYXR0U3RtdKBoYXV0aERhdGFYpISmABBWThIagz0cSnRdFml4NpbwZbim9lI7DmlS2t0KXQAAAADqm41mTQEdITzktrSMtXXUACCi_frxQwXYdy6EslSCrL24Gl0FRvUHM9OUwdHIL1Ohn6UBAgMmIAEhWCCv0B9JVRQns3L6_GRjsEmDNSpQoa06AjnkZ1PrzK1zsyJYIH_X3QNJe8qFZ52THC5EnWBODSmGzFu7mtA_95cRQ87v"
+    },
+    {
+      "name": "refused: authData that is text, not bytes",
+      "expect": "authData",
+      "rawId": "tS4Zxt5S_qxKY1Zla1aSibrzOOIqgz8xDYCUSI6J6Sc",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YWNhYmM"
+    },
+    {
+      "name": "refused: no attested credential data (AT clear)",
+      "expect": "attested credential data",
+      "rawId": "MhP3UCH__Moa8DP55vtP9iy0cclUYmviW5oa7LNRkgs",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QodAAAAAOqbjWZNAR0hPOS2tIy1ddQAIDIT91Ah__zKGvAz-eb7T_YstHHJVGJr4luaGuyzUZILpQECAyYgASFYIFCUBtvJYLzHwc77YxklfDAW39aopDt-aqArn-EkgSaIIlgg92EnlVqhWxZw5XMjQsLaqeUyRJiS6kggcpQDAWJNHTo"
+    },
+    {
+      "name": "refused: user not verified",
+      "expect": "user verification",
+      "rawId": "ipkTZiHIKivqOXd_V7a01Pjp3GN9YipHbQKycZ0o4jw",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpBAAAAAOqbjWZNAR0hPOS2tIy1ddQAIIqZE2YhyCor6jl3f1e2tNT46dxjfWIqR20CsnGdKOI8pQECAyYgASFYIM4xEhHD4XsiLwnKzA0pGxdLalU57oUPcmC7FMZViDPPIlggdQbmC_zqwZHDBzNK3igZ2gHZuJP_IymaQdDqGsl_Qps"
+    },
+    {
+      "name": "refused: user not present",
+      "expect": "user presence",
+      "rawId": "nOpC6yfKGDtbI_o8_dvFaD7BWVnkW0nAyEEDoss3BMI",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpEAAAAAOqbjWZNAR0hPOS2tIy1ddQAIJzqQusnyhg7WyP6PP3bxWg-wVlZ5FtJwMhBA6LLNwTCpQECAyYgASFYICCRoEX19VD5Ck5T0RWvQSMUMZut1Kl9hOkoeHdlshzrIlggRNdRWK0w_fpdlln1BPTrULhvNVB1ttJ1j_Yjy0JKbqo"
+    },
+    {
+      "name": "refused: backed up but not backup eligible",
+      "expect": "backup",
+      "rawId": "0juDAlPjvKhE9WPhoaNlCW9kZtS6i5lB0ITFkmN3t3w",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpVAAAAAOqbjWZNAR0hPOS2tIy1ddQAINI7gwJT47yoRPVj4aGjZQlvZGbUuouZQdCExZJjd7d8pQECAyYgASFYICRofolvfU1GFQv1V3ZxKB90vqaR2zrFzfcCvuwv8UzLIlggRLsvdggicKK9A5yZ5JkT7cNOYK3GKdE_aHpkby2DXT0"
+    },
+    {
+      "name": "refused: registered for another relying party",
+      "expect": "rpIdHash",
+      "rawId": "y3hK7-8c--PqGeilfzD8kL1KYWq1-qAtqzGIzTqKd3Y",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVik7BLEjRZWRNZnjgG2IWorOh4Rkf8dKV1cTqMUOko_COhdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIMt4Su_vHPvj6hnopX8w_JC9SmFqtfqgLasxiM06ind2pQECAyYgASFYIGrtf2lj6iTmERbpjr6FZg-e5ZG1V3gfw_VjpRqzCb7BIlggpOaIiprc5yxV8HidLcw4ud748f7xfOeLYmcfv-b0vAw"
+    },
+    {
+      "name": "refused: extension flag with no extensions",
+      "expect": "no extensions follow",
+      "rawId": "5seN7Ld71GJKQV1KHzW3YFjEQ85OmWcsN0X-h16PFJQ",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QrFAAAAAOqbjWZNAR0hPOS2tIy1ddQAIObHjey3e9RiSkFdSh81t2BYxEPOTplnLDdF_odejxSUpQECAyYgASFYIPg9ZNbshnZ5A77yG8Up0meo7FneU1RXNI_9LcvFeoxOIlggcY6hf5aS6PQDcG--Kj3boyQhswy4ur9rUDHusAMbf8w"
+    },
+    {
+      "name": "refused: bytes after the key with no extension flag",
+      "expect": "after the credential public key",
+      "rawId": "ZQrDI2_GK-CmWByXNq78u1DJoE7tkgnjmVcT-5EpezM",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVilhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIGUKwyNvxivgplgclzau_LtQyaBO7ZIJ45lXE_uRKXszpQECAyYgASFYIFCcXW_-rNbFyEzaW6NYypHuJa_sOiAeO4NlTqutAhyyIlggbkWoHxFC56TKoe8vK4WqaGKCJ75engDKCVvwvN5Du4-g"
+    },
+    {
+      "name": "refused: extensions that are not a map",
+      "expect": "extensions",
+      "rawId": "RXskL9TPtUox9EhCNzIK1IDH0H2ElHcttZphGoSgfSU",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVilhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QrFAAAAAOqbjWZNAR0hPOS2tIy1ddQAIEV7JC_Uz7VKMfRIQjcyCtSAx9B9hJR3LbWaYRqEoH0lpQECAyYgASFYIL72di6UuuE-eGDW-KQOtGKCMYKfMt-_5Wh_US-sT7ECIlggAMOu7pZ0bGUKGBvWGh9YlGcZJGNTbd-7TTmSUVfaM9kB"
+    },
+    {
+      "name": "refused: a credential id longer than 1023 bytes",
+      "expect": "credential id",
+      "rawId": "CKWwPDYsjVjLF_bD50LKe3BkWVlyw0zZ1kwOScczXCpD6FHQqGlmDnqftWGtUmmqG0ewTJZ7VDeTUXl678ZayfRxmPSBGS1pqWFxNx3TQhinH-zkp_oxm-cbCpYFvFGboTHRC5xnoYLhlcyAtcesLK5XwG3cmPMf4WQQP20U3f547dPwv7-jRB-3XbRL0eCiyKbeZaVMEYa4DCSN91XCdR-iY1pQCpjHkWzT-ANiMSG-MrWtPEfHqJf-nacY7wLcgBwx2oFzoFSHjdJOe5y7do8qcgJwrHUhY5wAjyQOVsATwnjJ5PmOfZbvxSBUi_SIq9k_HO3VjrJg69tLtSlOoY0gEvDfOvEv6AswbcqU42rpb8CX8JaJoLHNFO_FlDgW0wtlnxi4Pc39UH9AMFHPvcuyKxsIWt8BXtHdJnzvE6ROVgZjJaFf9TOYCVZxxMaEcFeg-NIVAYMCv_4fb9FFowXZCJNoh85KWrSYsmM7Lss0LM8zsMYXk5t3W9Lem--l7hqcXbjvkIM3rym3HwvUgses-Q6mdowrAvzB8k7grJy4idXV6vmQt6NfaWPJpIMMTyVIc-kfQsXLK8u3RYs_yZYN53uNTMORVaRsoOLoh1hdYlafciU3dhwrt1K0cB_MoqKfWp0JQw-JnuO5XKoQCfpZuHywH0AVbrIAl36vK2Nq-BfLr94MJHOqwvMabiMiKk9xirq99voztf1fsA5MKiE_5OsvdTzpmQrQlAfGG5tNaNeH_wkSJaGxFNiBuo2UCWPC1t5Rx7dXOwW8AdKGRdIzUoPgfVkgNocY2juigbfaeWRnebkFEAu4qhNd4r-yzu6ZdsMCXO71KZBDSG8vUgCO50922hF50S03xZV-QjqO9ADU0c9eAOHR8hItbgW5WuqyjxUv0O6JtrFfbMru3nTRRkfbujUcqduSTy3XiRUAzvonu2WstZert-IIRs-sJkvrCuZlEyZWxyixScoy_WMXdYMM5kjW4eybGjWbWvuzpIVBZ8wLQ6DJFIA7lvu05Pzdc1yJSdZJ6X15A76VW7lIVKYZEdQYtNsJZrTmRQpJBzqfKlZMw_4hOVDLCpkgmneBh5uj6tFVlEPCVMhq9KmX8Gn3bgYoK0mBPab7_IqPFY_a9--5sEGGymnvh0j-H68v_U2MifQq3y7wupLmHf_fG17bMIwwztHiXWoDkEr9c_yB9d8RhnENtY2muLSFwAvAdMrEV-9VQSX_wAv2CHcgZpLgDp82yFwCBEcclSPCLiNMg4Zz7Cgz92i_1O2bnMtXQF8Lbg_j3xVHcuGwx9Va2xqlAKFcyO65q8w3rWVvEdxz3JgIYK7H8esWgz_HjjXJ2NgvFx-DDXI0br0g7w",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVkEhISmABBWThIagz0cSnRdFml4NpbwZbim9lI7DmlS2t0KXQAAAADqm41mTQEdITzktrSMtXXUBAAIpbA8NiyNWMsX9sPnQsp7cGRZWXLDTNnWTA5JxzNcKkPoUdCoaWYOep-1Ya1SaaobR7BMlntUN5NReXrvxlrJ9HGY9IEZLWmpYXE3HdNCGKcf7OSn-jGb5xsKlgW8UZuhMdELnGehguGVzIC1x6wsrlfAbdyY8x_hZBA_bRTd_njt0_C_v6NEH7ddtEvR4KLIpt5lpUwRhrgMJI33VcJ1H6JjWlAKmMeRbNP4A2IxIb4yta08R8eol_6dpxjvAtyAHDHagXOgVIeN0k57nLt2jypyAnCsdSFjnACPJA5WwBPCeMnk-Y59lu_FIFSL9Iir2T8c7dWOsmDr20u1KU6hjSAS8N868S_oCzBtypTjaulvwJfwlomgsc0U78WUOBbTC2WfGLg9zf1Qf0AwUc-9y7IrGwha3wFe0d0mfO8TpE5WBmMloV_1M5gJVnHExoRwV6D40hUBgwK__h9v0UWjBdkIk2iHzkpatJiyYzsuyzQszzOwxheTm3db0t6b76XuGpxduO-QgzevKbcfC9SCx6z5DqZ2jCsC_MHyTuCsnLiJ1dXq-ZC3o19pY8mkgwxPJUhz6R9Cxcsry7dFiz_Jlg3ne41Mw5FVpGyg4uiHWF1iVp9yJTd2HCu3UrRwH8yiop9anQlDD4me47lcqhAJ-lm4fLAfQBVusgCXfq8rY2r4F8uv3gwkc6rC8xpuIyIqT3GKur32-jO1_V-wDkwqIT_k6y91POmZCtCUB8Ybm01o14f_CRIlobEU2IG6jZQJY8LW3lHHt1c7BbwB0oZF0jNSg-B9WSA2hxjaO6KBt9p5ZGd5uQUQC7iqE13iv7LO7pl2wwJc7vUpkENIby9SAI7nT3baEXnRLTfFlX5COo70ANTRz14A4dHyEi1uBbla6rKPFS_Q7om2sV9syu7edNFGR9u6NRyp25JPLdeJFQDO-ie7Zay1l6u34ghGz6wmS-sK5mUTJlbHKLFJyjL9Yxd1gwzmSNbh7JsaNZta-7OkhUFnzAtDoMkUgDuW-7Tk_N1zXIlJ1knpfXkDvpVbuUhUphkR1Bi02wlmtOZFCkkHOp8qVkzD_iE5UMsKmSCad4GHm6Pq0VWUQ8JUyGr0qZfwafduBigrSYE9pvv8io8Vj9r377mwQYbKae-HSP4fry_9TYyJ9CrfLvC6kuYd_98bXtswjDDO0eJdagOQSv1z_IH13xGGcQ21jaa4tIXAC8B0ysRX71VBJf_AC_YIdyBmkuAOnzbIXAIERxyVI8IuI0yDhnPsKDP3aL_U7Zucy1dAXwtuD-PfFUdy4bDH1VrbGqUAoVzI7rmrzDetZW8R3HPcmAhgrsfx6xaDP8eONcnY2C8XH4MNcjRuvSDvpQECAyYgASFYIN_gEfHWZgoMiV8-4YNJCw2nzxvjM-gOmc4XigJevHxYIlgghJbS3hYUkvxWGwT-cGxShJFpmwBQad5Z8q1emLJGDfw"
+    },
+    {
+      "name": "refused: a credential id length past the end",
+      "expect": "credential id",
+      "rawId": "KbHFyCMN1f7tmkbIP5DzXmRW5xdXMhARw2hHRaRqEJI",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddR__ymxxcgjDdX-7ZpGyD-Q815kVucXVzIQEcNoR0WkahCSpQECAyYgASFYICC14VcSB4hkoBvjy9nQxuiWtflmnaTuzKihe5nu6byUIlggOj1C4TPM09DdN7y09tbPJrGEb5P2Vdh2X5j-yh0BABg"
+    },
+    {
+      "name": "refused: rawId is not the credential id",
+      "expect": "rawId",
+      "rawId": "9Kk3X0iJJxxaHygSUTGP6tkm7ww4unXjTQYBq8CghDc",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAILtIpRplVLDJUS7fRDF1GVh82Amja8YPQjvjDRR2_uwYpQECAyYgASFYIIicc3rlzJFVAc8KxxXRpISjsVriUc8TVqbrRhqO04tSIlggAV-lOYgJr2gekB8S1XoIa8jJwKXVF4y1t9WIcIi3j1k"
+    },
+    {
+      "name": "refused: an EdDSA (OKP) key",
+      "expect": "EC2",
+      "rawId": "ShQ63j004cymDVKcsJHjey4vKUuccTsYg3krxuEu7fY",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViBhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIEoUOt49NOHMpg1SnLCR43suLylLnHE7GIN5K8bhLu32pAEBAycgBiFYICQZIZRfauqrCwtarmU62eq6FTBvuObe_IRGDIcc1jPs"
+    },
+    {
+      "name": "refused: an RS256 key",
+      "expect": "EC2",
+      "rawId": "OumIMEMRCB1RvTB3lXD-7cTFnndEushaLUjYmjX9IpQ",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViGhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIDrpiDBDEQgdUb0wd5Vw_u3ExZ53RLrIWi1I2Jo1_SKUpAEDAzkBACBYIJuc7f1l4SAFvsXfvgKtqaUdRnIWeg1jVXXX0a7exSHzIUMBAAE"
+    },
+    {
+      "name": "refused: an EC2 key for ES384",
+      "expect": "ES256",
+      "rawId": "K_hag3NmMinWUwjCcZFA-TFRUKmxaraN5eMOnArwzEs",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVilhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAICv4WoNzZjIp1lMIwnGRQPkxUVCpsWq2jeXjDpwK8MxLpQECAzgiIAEhWCAeWhMy9z5kYF77q4nTkNjspXYwNYwjdZnaAT66vCpMDiJYIHRHnjHo1AeSQFE-amY9oAo85ug-TqpxdSVXEJ7hBYA6"
+    },
+    {
+      "name": "refused: an EC2 key on P-384",
+      "expect": "P-256",
+      "rawId": "4IAVCQfz_bZeh1h1c54_2thrBNJ4bC3EMtNNCr5qa5s",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIOCAFQkH8_22XodYdXOeP9rYawTSeGwtxDLTTQq-amubpQECAyYgAiFYIHMN6G08ADPHWiFPxnQqIyuMr-JbO0PiqwX5bkEDasfxIlggOJCQCIKie7XcmAN-vGKAb4Ibd-HsdBT8qHgOoyCiqJM"
+    },
+    {
+      "name": "refused: a COSE label twice",
+      "expect": "more than once",
+      "rawId": "8fpVnI0yca40mGZ0-akBeSZry6M256n-JBE670hT0dc",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVimhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIPH6VZyNMnGuNJhmdPmpAXkma8ujNuep_iQROu9IU9HXpgECAyYDJiABIVggXQUIA8GmmxIprU7soCj3U718NwX-tZnOnR2y9lNXmMAiWCCekhhtHAyLlOipxocQQHXtzCV3fSw3pcGu1zzSvHVx9A"
+    },
+    {
+      "name": "refused: a COSE key with a private part (d)",
+      "expect": "member",
+      "rawId": "fNEUvV_nWQSLSCMfB6uCXsBW8PuAzvSiX-JNeBPaeVI",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVjHhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIHzRFL1f51kEi0gjHwergl7AVvD7gM70ol_iTXgT2nlSpgECAyYgASFYIJLTDXi7QjTplDVOU7cA2yoJ1HEjUTeBtVOwZs5S0P5uIlgg3coxhXOJ6LNZHXY1MK7DaVLjVJG3Lyv-q2qZSISyazsjWCBNfxpzgrF5nZk7ev4_3Bo9ZDwZPjd8jLxUejqJ_tjwDA"
+    },
+    {
+      "name": "refused: x of 31 bytes",
+      "expect": "32 bytes",
+      "rawId": "kZJ1XDqDFhPnS6k1cVlLDbF2dKIDqqEOU7NnxNMvp4s",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVijhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIJGSdVw6gxYT50upNXFZSw2xdnSiA6qhDlOzZ8TTL6eLpQECAyYgASFYH0Iod5aurcxkKZubo2xYHKAWogBc9a5HdpPYa_6cu0ciWCD1VUm-0FeC2zXtDdp2LAnIqd8WX1Nq4alB_NU4hfBQ1A"
+    },
+    {
+      "name": "refused: a point not on the curve",
+      "expect": "not a point on P-256",
+      "rawId": "qBQCFljFa_0cZNnvs-lvpSaY_Vum1N7iXeIQYjEg7SQ",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIKgUAhZYxWv9HGTZ77Ppb6UmmP1bptTe4l3iEGIxIO0kpQECAyYgASFYINRqtfJ7OIFrGI-EyCT7Fc9iJIekv4UyUWrYFg7V0zNuIlggjcvVTyoFpoWLqJECns_K6xPwMNtMLqVtsDX_VI5rgFw"
+    },
+    {
+      "name": "refused: compressed y (a boolean)",
+      "expect": "y",
+      "rawId": "yj2EJPXMnLL0Ir4P49BBw56Yhv17lCvQ3Op8sqxAYdU",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViDhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIMo9hCT1zJyy9CK-D-PQQcOemIb9e5Qr0NzqfLKsQGHVpQECAyYgASFYIAnTvFjZ1jFVsAguLWB6Ex6VkSF0WMY6NXP1elU1EIriIvU"
+    },
+    {
+      "name": "refused: no alg member",
+      "expect": "alg",
+      "rawId": "yOp65HSyGUYluISbzwtsfECzqr7-_Uo2DsNGbpyhpUY",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViihKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIMjqeuR0shlGJbiEm88LbHxAs6q-_v1KNg7DRm6coaVGpAECIAEhWCBAW38q5UHwJL6PfBAa8bka8ZCtzNEZAZH-JjNTyfRTMSJYIHG4sDbKA2azkbOYGaQzaeKDmSU1OPUfLfAbropHdMYD"
+    },
+    {
+      "name": "refused: x not below the field prime",
+      "expect": "field",
+      "rawId": "ghDpzaoIZh13UwkqsbPw_R2zRbRSe0ORhtVvfOrf5_0",
+      "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikhKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpdAAAAAOqbjWZNAR0hPOS2tIy1ddQAIIIQ6c2qCGYdd1MJKrGz8P0ds0W0UntDkYbVb3zq3-f9pQECAyYgASFYIP____8AAAABAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAIlggRIzSqhzDSYimVki6W2x86yo2QS4vdnWstvFfI6QerCM"
+    }
+  ]
+}

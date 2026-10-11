@@ -1,10 +1,15 @@
-# CAN ANYTHING IN remote/ START A PROGRAM OR A SHELL?
+# CAN ANYTHING IN remote/ OR relay/ START A PROGRAM OR A SHELL?
 #
 # Plan step R1 (planning/execution-plan-remote.md) implies it: the link is an allowlisted command
 # protocol, never a remote shell, so the code beside the verb table must not hold one either.
 # tools/ExecScan.ps1 reads every file's syntax tree against an allowlist on every axis; this suite
 # proves it refuses each of the forms in test/fixtures/link/shell-control.ps1 for its own reason,
 # passes a file written the way remote/ is, and finds nothing in remote/ itself.
+#
+# SECTION II holds relay/ (relay design 2026-10-09) to the same promise under the wider relay profile
+# of tools/ExecScan.ps1: every form of the remote control file is still refused under it, the one
+# admitted Add-Type form is the only compile, and test/fixtures/relay/exec-control.ps1 names each
+# other form's refusal.
 #
 # WHY A SUITE OF ITS OWN. These checks were section I of test/test-link-contracts.ps1. The exec-scan
 # mutation spec reruns its suite once per mutant, and a mutant of tools/ExecScan.ps1 can change only
@@ -77,4 +82,45 @@ foreach ($file in $remoteFiles) {
     Check ($got.Count -eq 0) ("remote/" + $file.Name + " starts no program and no shell"); Show $got
 }
 
-Complete-HordeSuite -Success "nothing in remote/ can start a program, a shell or a script, and every way to is refused for its own reason"
+Write-Host ""
+Write-Host "--- II. nothing in relay/ can start a program or a shell, under its wider profile ---" -ForegroundColor Cyan
+
+# relay/ reads text from an untrusted relay, so it is held to the same promise as remote/, under the
+# relay profile of tools/ExecScan.ps1: the cryptography types it needs, and one form of Add-Type.
+$rfx = Join-Path $here "fixtures\relay"
+$relayKnown = Get-HordeExecFunctionNames -Roots @(Join-Path $root "relay")
+Check ($relayKnown.Contains("Read-HordeRelayEnvelope") -and -not $relayKnown.Contains("Test-HordeLinkFrame")) "CONTROL: the functions relay/ defines are read, and remote's are not"
+$before = ($script:HordeExecCmdlets -join ",") + "|" + ($script:HordeExecTypes -join ",") + "|" + ($script:HordeExecInstanceMethods -join ",") + "|" + (@($script:HordeExecStatic.Keys | Sort-Object) -join ",") + "|" + ($script:HordeExecStatic["array"] -join ",")
+$rctlPath = Join-Path $rfx "exec-control.ps1"
+$rctl = @(Get-HordeExecRelayFindings -Path $rctlPath -Known $relayKnown)
+$after = ($script:HordeExecCmdlets -join ",") + "|" + ($script:HordeExecTypes -join ",") + "|" + ($script:HordeExecInstanceMethods -join ",") + "|" + (@($script:HordeExecStatic.Keys | Sort-Object) -join ",") + "|" + ($script:HordeExecStatic["array"] -join ",")
+Check ($before -ceq $after -and $script:HordeExecCmdlets -cnotcontains "Add-Type") "after a relay scan the remote lists are exactly as they were"
+$rLines = 0
+$lineNo = 0
+foreach ($text in [System.IO.File]::ReadAllLines($rctlPath)) {
+    $lineNo++
+    $m = [regex]::Match($text, '#\s*expect:\s*(.+?)\s*$')
+    if (-not $m.Success -or $text.TrimStart().StartsWith("#")) { continue }
+    $rLines++
+    $hits = @(Get-LineFindings $rctl $lineNo)
+    Check (@($hits | Where-Object { "$_".Contains($m.Groups[1].Value) }).Count -ge 1) ("CONTROL: relay control line " + $lineNo + " is refused because: " + $m.Groups[1].Value)
+    if (@($hits | Where-Object { "$_".Contains($m.Groups[1].Value) }).Count -eq 0) { Show $hits }
+}
+Check ($rLines -eq 12) ("CONTROL: 12 lines of the relay control file name their reason (found " + $rLines + ")")
+$rclean = @(Get-HordeExecRelayFindings -Path (Join-Path $rfx "exec-clean.ps1") -Known $relayKnown)
+Check ($rclean.Count -eq 0) "CONTROL: a file written the way relay/ is written has no finding under the relay profile"; Show $rclean
+$rcleanRemote = @(Get-HordeExecFindings -Path (Join-Path $rfx "exec-clean.ps1") -Known $relayKnown)
+Check ((Says $rcleanRemote "Add-Type is not an allowlisted cmdlet") -and (Says $rcleanRemote "ECDsa")) "and the remote profile still refuses that same file: the widening is relay's alone"
+# The profile widens what may be NAMED; every way to run something must still be refused under it.
+$ctlRelay = @(Get-HordeExecRelayFindings -Path $ctlPath -Known $known)
+$missed = @($forms | Where-Object { @(Get-LineFindings $ctlRelay $_.Extent.StartLineNumber).Count -eq 0 } | ForEach-Object { $_.Name })
+Check ($missed.Count -eq 0) ("every one of the " + $forms.Count + " forms of the remote control file is still refused under the relay profile (" + ($missed -join ", ") + ")")
+$relayFiles = @(Get-ChildItem -LiteralPath (Join-Path $root "relay") -Filter "*.ps1" -Recurse)
+Check ($relayFiles.Count -ge 8) ("there is code in relay/ to check (" + $relayFiles.Count + " files)")
+foreach ($file in $relayFiles) {
+    $got = @(Get-HordeExecRelayFindings -Path $file.FullName -Known $relayKnown)
+    Check ($got.Count -eq 0) ("relay/" + $file.Name + " starts no program and no shell"); Show $got
+}
+Check (@($relayFiles | Where-Object { [System.IO.File]::ReadAllText($_.FullName).Contains("Add-Type") } | ForEach-Object { $_.Name }) -join "," -ceq "BackendCng.ps1") "exactly one relay file compiles anything: BackendCng.ps1"
+
+Complete-HordeSuite -Success "nothing in remote/ or relay/ can start a program, a shell or a script, and every way to is refused for its own reason"
