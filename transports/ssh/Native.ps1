@@ -24,6 +24,15 @@
 # measurement (transports/ssh/Listen.ps1). It keeps kill-on-close: SetInformationJobObject replaces the
 # whole limit set.
 #
+# AND FOR THE JOB AS A WHOLE (mesh v1, issue #147 item 2, 2026-10-11). A per-process cap does not bound
+# many processes: an enrolled key may open connection after connection, and each starts a PowerShell
+# for attach (150 MB at its start, measured) before attach's one-link-per-device check ends it, so a
+# burst of them commits gigabytes. LimitListenerJob sets, on the same job, JOB_OBJECT_LIMIT_JOB_MEMORY (what
+# all its processes may commit together) and JOB_OBJECT_LIMIT_ACTIVE_PROCESS (how many may run at once),
+# beside the per-process cap and kill-on-close. Windows refuses to start a process past the count and
+# fails an allocation past the job's memory, so a burst ends there, and the listener and the links
+# already up go on.
+#
 # The C# below is pinned by SHA-256 in transports/ssh/test/ExecGuard.ps1: the guard cannot read C#, so
 # a change to it is a finding until the pin is changed with it, in review.
 # Compiled once per process with Add-Type; a second load finds the type and skips it.
@@ -84,13 +93,18 @@ public static class HordeSshNative {
         if (!AssignProcessToJobObject(job, process)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
     }
 
+    const uint JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x8;
     const uint JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100;
+    const uint JOB_OBJECT_LIMIT_JOB_MEMORY = 0x200;
 
-    // Cap the memory any one process in the job may commit, keeping kill-on-close. Throws if Windows refuses.
-    public static void LimitProcessMemory(HordeSshJob job, ulong bytes) {
+    // Cap the job: the memory any one process may commit, the memory all of them may commit together,
+    // and how many may run at once; kill-on-close kept. Throws if Windows refuses.
+    public static void LimitListenerJob(HordeSshJob job, ulong processBytes, ulong jobBytes, uint activeProcesses) {
         EXTENDED_LIMIT info = new EXTENDED_LIMIT();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-        info.ProcessMemoryLimit = new UIntPtr(bytes);
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        info.BasicLimitInformation.ActiveProcessLimit = activeProcesses;
+        info.ProcessMemoryLimit = new UIntPtr(processBytes);
+        info.JobMemoryLimit = new UIntPtr(jobBytes);
         if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf(typeof(EXTENDED_LIMIT)))) {
             throw new Win32Exception(Marshal.GetLastWin32Error());
         }

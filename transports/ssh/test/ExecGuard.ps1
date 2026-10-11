@@ -62,14 +62,18 @@ $script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Pat
     # Enroll.ps1 (R17b): its own files under Horde's home, the key's ACL, and its registration.
     "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
     # Listen.ps1 (R17a): its registration.
-    "Register-HordeListener")
-$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
+    "Register-HordeListener",
+    # Listen.ps1, mesh v1 (2026-10-11): the port's rule for which address the hub may listen on, applied again.
+    "Get-HordeListenAddressKind")
+$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Files.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
 # Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
 $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
 # Add-Type: only here, and only this source (SHA-256 of the C# with line endings as LF).
 $script:HordeSshGuardNativeFile = "Native.ps1"
 # Re-pinned 2026-10-07 (issue #147, item 1): LimitProcessMemory added, the listener job's per-process memory cap.
-$script:HordeSshGuardNativeSha = "AFB933CB7D43F3112384B833AD85134F2C91C21B43594D1EE2A2B2CEFFCF8E9E"
+# Re-pinned 2026-10-11 (mesh v1, issue #147 item 2): LimitProcessMemory became LimitListenerJob, which also
+# caps the job's memory as a whole and how many processes it may run.
+$script:HordeSshGuardNativeSha = "D4647A9BD504D220A357027B336397F478022F81335C5BD9820F87A772094229"
 $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Contains", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
     "IsMatch", "Kill", "Match", "Max", "Min", "Assign", "Combine", "NewKillOnCloseJob", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
     "ToCharArray", "ToString", "Trim", "TrimEnd", "Wait", "WaitAny", "WaitForExit", "WriteAsync",
@@ -79,8 +83,14 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     "FromBase64String", "ComputeHash", "Create", "ToBase64String", "ReadAllLines", "WriteAllText", "CreateDirectory", "AddDays",
     # Listen.ps1 (R17a), measured 2026-10-07: its configuration file, the user's name, sshd's start time.
     "ToLowerInvariant", "WriteAllLines", "ToUniversalTime",
-    # Listen.ps1, issue #147: the per-process memory cap on the listener's job (Native.ps1).
-    "LimitProcessMemory")
+    # Listen.ps1, issue #147 items 1 and 2: the listener job's memory caps and process count (Native.ps1).
+    "LimitListenerJob",
+    # Enroll.ps1, issue #144 item 3 (2026-10-11): an enrolment's expiry read as sshd reads it. None runs anything.
+    "ParseExact", "ToLocalTime",
+    # Files.ps1, issue #123 (2026-10-11): who owns and may write the link's files and their folders.
+    "GetOwner", "Equals",
+    # Listen.ps1, mesh v1 (2026-10-11): the address it binds and checks it answers on.
+    "Parse")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
@@ -88,7 +98,11 @@ $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datet
     "system.threading.tasks.task[]", "void",
     # Enroll.ps1 (R17b), measured 2026-10-06.
     "system.security.principal.windowsidentity", "system.security.principal.securityidentifier", "system.convert",
-    "system.security.cryptography.sha256", "system.io.directory", "switch", "system.globalization.cultureinfo")
+    "system.security.cryptography.sha256", "system.io.directory", "switch", "system.globalization.cultureinfo",
+    # Listen.ps1, issue #144 item 3 (2026-10-11): the hub's register, handed over as a table of device and key.
+    "hashtable",
+    # Listen.ps1, mesh v1 (2026-10-11): the address it binds.
+    "system.net.ipaddress")
 $script:HordeSshGuardNewTypes = @("System.Diagnostics.ProcessStartInfo", "System.IO.FileStream", "byte[]", "System.Net.Sockets.TcpClient", "System.Text.StringBuilder",
     "System.Collections.Generic.List[byte]",
     # Enroll.ps1 (R17b): the key's ACL, and a list of lines.

@@ -12,11 +12,16 @@
 #
 # THE CEILING COMES FROM THE NODE'S OWN LAYERS AND NOWHERE ELSE. The registry already refuses the key
 # in a run spec (L3) or a spawn (L5), and the resolver keeps L4 from raising it. This file checks the
-# provenance again, because it is the last thing between a link and a bypassed session: a ceiling
-# whose winning rule is not in L1 or L4 is not used, the default is, and the reason says so. The
-# default, with no rule at all, is the level just below the top of R0's vocabulary - every approval
-# skipped is never the default (remote design decision 4). The always-on node's owner may set the
-# ceiling to the top in L1 (decision of 2026-10-05: ssh access to that box is already that trust).
+# provenance again, because a ceiling whose winning rule is not in L1 or L4 is not used, the default
+# is, and the reason says so.
+#
+# THE DEFAULT IS THE TOP OF R0'S VOCABULARY (founder's decision of 2026-10-11: "Let's not do security by
+# limiting the power of this"). Remote sessions run with every approval skipped unless the node's owner
+# lowers the ceiling in the node's own layers (L1, or L4 which may only lower); security comes from
+# closing doors - a key-only link forced to attach, host-key pinning, a hub that never listens on a
+# public address, instant revoke and key expiry - never from a weaker session. It replaces remote
+# design decision 4's "below prompts-bypassed" default and the act path's "level below the top"
+# (remote plan R9 and R19, amended the same day). Nothing the link carries can raise or lower it.
 #
 # EVERY RULE IS CHECKED, AND EVERY REFUSAL IS NAMED. A request that breaks three rules is told all
 # three, so its sender fixes it once.
@@ -30,6 +35,10 @@
 # The most sessions a node may allow a hub to start per UTC day. A larger number is a typo, not a
 # policy: the fleet's busiest day on record started about 120 sessions on one machine.
 $script:HordeNodeSpawnCapMax = 1000
+# THE CAP WHEN THE POLICY NAMES NONE (founder's decision of 2026-10-11, not security by limiting power):
+# generous - one link per node runs any number of Orcs and Wargs - and still a bound on a runaway hub.
+# The node's owner sets dailySpawnCap in policy.json to anything from 0 to the maximum.
+$script:HordeNodeSpawnCapDefault = 32
 # The layers the ceiling may come from (core/config-keys.json says the same; this is the second line).
 $script:HordeCeilingLayers = @("L1", "L4")
 
@@ -104,7 +113,7 @@ function Read-HordeNodePolicyText {
     }
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($p in @($doc.profiles)) { if ($null -ne $p -and -not $names.Add("" + $p)) { [void]$problems.Add("the profile " + $p + " is offered twice") } }
-    if ($null -eq (ConvertTo-HordeNodeSpawnCap -Value $doc.dailySpawnCap)) { [void]$problems.Add("the daily spawn cap " + $doc.dailySpawnCap + " is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax) }
+    if ($null -ne $doc.PSObject.Properties["dailySpawnCap"] -and $null -eq (ConvertTo-HordeNodeSpawnCap -Value $doc.dailySpawnCap)) { [void]$problems.Add("the daily spawn cap " + $doc.dailySpawnCap + " is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax) }
     if ($problems.Count -gt 0) { return (New-HordeUnknown -Reason ("the node policy is malformed: " + ($problems -join "; "))) }
     return (New-HordeKnown -Value $doc)
 }
@@ -142,6 +151,14 @@ function Resolve-HordeNodeWorkdir {
     return (New-HordeKnown -Value $path)
 }
 
+function Get-HordeNodeSpawnCap {
+    # The policy's daily spawn cap: its own dailySpawnCap when it names one, the default when it does not.
+    # A value it names that is not a cap stays as written, for the caller to refuse (never the default).
+    param([Parameter(Mandatory = $true)]$Policy)
+    if ($null -eq $Policy.PSObject.Properties["dailySpawnCap"]) { return $script:HordeNodeSpawnCapDefault }
+    return $Policy.dailySpawnCap
+}
+
 function Get-HordeNodeCeiling {
     # The ceiling for one resolution: { level; from; note; forged }. level $null refuses every spawn.
     #
@@ -158,7 +175,8 @@ function Get-HordeNodeCeiling {
     param([Parameter(Mandatory = $true)]$Resolution, $Levels = $null)
     if ($null -eq $Levels) { $Levels = @(Get-HordePermissionLevels) }
     $names = @(@($Levels) | ForEach-Object { "" + $_.name })
-    $default = $names[$names.Count - 2]
+    # The top of the vocabulary (header: the founder's decision of 2026-10-11).
+    $default = $names[$names.Count - 1]
     $s = $null
     if ($Resolution.settings.Contains("remote.permissionCeiling")) { $s = $Resolution.settings["remote.permissionCeiling"] }
     if ($null -eq $s) { return [pscustomobject]@{ level = $default; from = "default"; note = ("no rule sets the ceiling, so it is the default, " + $default); forged = $false } }
@@ -204,8 +222,9 @@ function Test-HordeRemotePolicy {
     if ($null -ne $pol) {
         $profile = "" + $Request.profile
         if (@($pol.profiles) -cnotcontains $profile) { [void]$reasons.Add("this node does not offer the profile '" + $profile + "'") }
-        $capN = ConvertTo-HordeNodeSpawnCap -Value $pol.dailySpawnCap
-        if ($null -eq $capN) { [void]$reasons.Add("this node's daily spawn cap '" + $pol.dailySpawnCap + "' is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax + ", so it starts nothing") }
+        $capV = Get-HordeNodeSpawnCap -Policy $pol
+        $capN = ConvertTo-HordeNodeSpawnCap -Value $capV
+        if ($null -eq $capN) { [void]$reasons.Add("this node's daily spawn cap '" + $capV + "' is not a whole number from 0 to " + $script:HordeNodeSpawnCapMax + ", so it starts nothing") }
         elseif ($SpawnsToday -ge $capN) { [void]$reasons.Add("this node's daily spawn cap of " + $capN + " is reached (" + $SpawnsToday + " today)") }
         $wd = Resolve-HordeNodeWorkdir -Policy $pol -RepoId ("" + $Request.repoId) -Worktree $Request.worktree
         if ($wd.state -eq "known") { $out.workdir = $wd.value } else { [void]$reasons.Add($wd.reason) }

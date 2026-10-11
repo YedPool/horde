@@ -4,6 +4,9 @@
 # (schema/node-policy.v1) and the engine resolution together decide one spawn request. Every rule has
 # a refusal case and a control; a request above the ceiling is refused and never lowered; a ceiling
 # from anywhere but the node's own layers (L1, L4) never raises what the node allows.
+# THE DEFAULTS (founder's decision of 2026-10-11, "Let's not do security by limiting the power of
+# this"): with no rule the ceiling is the top level, bypass, and a policy naming no daily cap gets 32;
+# the node's owner lowers either in the node's own layers, and nothing else moves them.
 #
 # NEUTRAL NAMES ONLY (CONTRIBUTING 14): the fixture harnesses and layers of test-engine-resolve.
 
@@ -72,6 +75,15 @@ Check (-not $d.allowed -and (Has $d "*not a whole number*starts nothing*")) "a c
 Check ($null -eq (ConvertTo-HordeNodeSpawnCap -Value 1.5) -and $null -eq (ConvertTo-HordeNodeSpawnCap -Value "5") -and (ConvertTo-HordeNodeSpawnCap -Value 0) -eq 0) "a cap is a whole number, never a fraction or text; 0 is a real cap"
 Check (Bad ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 5, "dailySpawnCap": 9')) "*") "a key repeated in one object is refused"
 Check (Bad ($policyText.Replace('example/app', ('example/' + [char]0x00E9))) "*not ASCII*") "a character that is not ASCII is refused"
+$noCap = Read-HordeNodePolicyText -Text ($policyText -replace ',\s*"dailySpawnCap": 5', '')
+Check ($noCap.state -eq "known" -and (Get-HordeNodeSpawnCap -Policy $noCap.value) -eq 32) ("a policy that names no daily cap reads, and its cap is the generous default, 32 (" + $noCap.reason + ")")
+$d = Decide (Resolve @(Ask "ask")) -Pol $noCap -Today 31
+Check ($d.allowed) "CONTROL: under the default cap the 32nd spawn of a day is allowed"
+$d = Decide (Resolve @(Ask "ask")) -Pol $noCap -Today 32
+Check (-not $d.allowed -and (Has $d "*daily spawn cap of 32 is reached*")) "and the 33rd is refused: the default is generous, never no cap"
+Check ((Get-HordeNodeSpawnCap -Policy $policy.value) -eq 5) "a cap the owner wrote stands over the default, lower here"
+$d = Decide (Resolve @(Ask "ask")) -Pol (Read-HordeNodePolicyText -Text ($policyText.Replace('"dailySpawnCap": 5', '"dailySpawnCap": 0')))
+Check (-not $d.allowed -and (Has $d "*daily spawn cap of 0 is reached*")) "an owner's cap of 0 refuses every spawn, never read as 'none, so the default'"
 $missing = Get-HordeNodePolicy -Path (Join-Path $env:TEMP ("horde-no-policy-" + [guid]::NewGuid().ToString("N") + ".json"))
 Check ($missing.state -eq "absent") "a node with no policy file has an absent policy, not an empty one"
 $d = Decide (Resolve @(Ask "ask")) -Pol $missing
@@ -127,9 +139,10 @@ Check (-not $d.allowed -and @($d.reasons).Count -eq 3) "a request breaking three
 Write-Host ""
 Write-Host "--- the ceiling: refused above it, never lowered; only the node's own layers set it ---" -ForegroundColor Cyan
 $d = Decide (Resolve @(Ask "bypass"))
-Check (-not $d.allowed -and $d.ceiling -ceq "edits" -and $d.ceilingFrom -ceq "default" -and (Has $d "*bypass is above this node's ceiling, edits*never lowered*")) "with no ceiling set, the default is the level below the top, and the top is refused"
-$d = Decide (Resolve @(Ask "edits"))
-Check ($d.allowed -and $d.level -ceq "edits") "CONTROL: the default ceiling itself is allowed"
+Check ($d.allowed -and $d.ceiling -ceq "bypass" -and $d.ceilingFrom -ceq "default") "with no ceiling set, the default is the top level, bypass, and a bypassed session is allowed (founder, 2026-10-11)"
+Check ((Get-HordeNodeCeiling -Resolution (Resolve @(Ask "plan"))).level -ceq (@(Get-HordePermissionLevels)[-1]).name) "the default is the top of R0's vocabulary, whatever it is named"
+$d = Decide (Resolve @((Ceil "L1" "edits"), (Ask "bypass")))
+Check (-not $d.allowed -and $d.ceiling -ceq "edits" -and (Has $d "*bypass is above this node's ceiling, edits*never lowered*")) "the node's owner may lower it in L1, and the top is then refused, never lowered"
 $d = Decide (Resolve @((Ceil "L1" "bypass"), (Ask "bypass")))
 Check ($d.allowed -and $d.ceiling -ceq "bypass" -and $d.ceilingFrom -like "L1*") "the node's owner may set the ceiling to the top in L1 (decision 3 of 2026-10-05), and bypass is then allowed"
 $d = Decide (Resolve @((Ceil "L1" "plan"), (Ask "ask")))
@@ -140,12 +153,12 @@ $d = Decide (Resolve @((Ceil "L1" "edits"), (Ceil "L4" "bypass" "cli"), (Ask "by
 Check (-not $d.allowed -and $d.ceiling -ceq "edits") "a live rule (L4) may not raise it"
 # A LINK-SUPPLIED CEILING CANNOT RAISE IT (decision 3). The link has no field for it; if a node ever
 # compiled one into its spawn layer (L5) or a run spec (L3), it still moves nothing up.
-$d = Decide (Resolve @((Ceil "L5" "bypass" "cli"), (Ask "bypass")))
-Check (-not $d.allowed -and $d.ceiling -ceq "edits") "a ceiling in the spawn layer (L5), where a link's arguments land, does not raise the default"
+$d = Decide (Resolve @((Ceil "L5" "plan" "cli"), (Ask "bypass")))
+Check ($d.allowed -and $d.ceiling -ceq "bypass") "a ceiling in the spawn layer (L5), where a link's arguments land, does not move the default either way"
 $d = Decide (Resolve @((Ceil "L1" "edits"), (Ceil "L5" "bypass" "cli"), (Ask "bypass")))
 Check (-not $d.allowed -and $d.ceiling -ceq "edits") "nor an owner's ceiling"
-$d = Decide (Resolve @((Ceil "L3" "bypass"), (Ask "bypass")))
-Check (-not $d.allowed -and $d.ceiling -ceq "edits") "nor a run spec's (L3)"
+$d = Decide (Resolve @((Ceil "L1" "ask"), (Ceil "L3" "bypass"), (Ask "bypass")))
+Check (-not $d.allowed -and $d.ceiling -ceq "ask") "nor a run spec's (L3) raise an owner's"
 # The provenance check is the second line behind the resolver: a resolution whose ceiling claims a
 # layer outside L1 and L4 is not believed.
 $forged = Resolve @(Ask "bypass")
@@ -160,7 +173,7 @@ Check (-not $d.allowed -and (Has $d "*ceiling cannot be told*")) "a ceiling that
 # A CEILING THE OWNER WROTE AND THE RESOLVER REJECTED NEVER FALLS TO THE DEFAULT (review of PR #98, F1).
 foreach ($badv in @("Plan", "read-only", "")) {
     $d = Decide (Resolve @((Ceil "L1" $badv), (Ask "edits")))
-    Check (-not $d.allowed -and $null -eq $d.ceiling -and (Has $d ("*sets '" + $badv + "', which is not a permission level*"))) ("an owner's ceiling of '" + $badv + "' refuses every spawn, naming the value - never the default edits")
+    Check (-not $d.allowed -and $null -eq $d.ceiling -and (Has $d ("*sets '" + $badv + "', which is not a permission level*"))) ("an owner's ceiling of '" + $badv + "' refuses every spawn, naming the value - never the default bypass")
     $d = Decide (Resolve @((Ceil "L1" $badv), (Ask "plan")))
     Check (-not $d.allowed) ("and refuses even the lowest level under it ('" + $badv + "')")
 }
@@ -172,14 +185,17 @@ $d = Decide (Resolve @((Ceil "L4" "ask" "cli"), (Ask "edits")))
 Check (-not $d.allowed -and $d.ceiling -ceq "ask") "and ask refuses edits"
 $d = Decide (Resolve @((Ceil "L4" "ask" "cli"), (Ask "ask")))
 Check ($d.allowed -and $d.ceiling -ceq "ask") "CONTROL: under a live ask ceiling, ask is allowed"
+$d = Decide (Resolve @((Ceil "L4" "edits" "cli"), (Ask "bypass")))
+Check (-not $d.allowed -and $d.ceiling -ceq "edits" -and $d.ceilingFrom -like "L4*") "a live rule alone lowers the default top: edits in engine-live.json refuses bypass"
 $d = Decide (Resolve @((Ceil "L4" "bypass" "cli"), (Ask "bypass")))
-Check (-not $d.allowed -and $d.ceiling -ceq "edits") "a live rule alone cannot raise the default: bypass stays refused"
+Check ($d.allowed -and $d.ceiling -ceq "bypass") "CONTROL: a live rule at the top changes nothing"
 $d = Decide (Resolve @((New-Layer "L4" (New-Doc @((New-Rule "c1" @{ "remote.permissionCeiling" = "plan" } @{} "cli"), (New-Rule "c2" @{ "remote.permissionCeiling" = "ask" } @{} "cli")))), (Ask "plan")))
 Check (-not $d.allowed -and $null -eq $d.ceiling) "two live rules that disagree on the ceiling refuse every spawn"
 # The environment moves nothing: the resolver reads no variable, so a variable named like the key
 # changes no answer. CONTROL: the L1 rule above did.
 $env:HORDE_REMOTE_PERMISSIONCEILING = "bypass"
-try { $d = Decide (Resolve @(Ask "bypass")); Check (-not $d.allowed -and $d.ceiling -ceq "edits") "an environment variable named like the ceiling moves nothing" }
+$env:HORDE_REMOTE_PERMISSIONCEILING = "plan"
+try { $d = Decide (Resolve @(Ask "bypass")); Check ($d.allowed -and $d.ceiling -ceq "bypass") "an environment variable named like the ceiling moves nothing" }
 finally { Remove-Item Env:\HORDE_REMOTE_PERMISSIONCEILING -ErrorAction SilentlyContinue }
 
 Complete-HordeSuite -Success "a node starts only what its own policy allows, at or below its own ceiling, and refuses everything else with every reason"

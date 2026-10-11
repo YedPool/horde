@@ -127,6 +127,10 @@ function Register-HordeTransport {
 # operation takes Horde's home and plain strings and returns { ok; line; reason }: the line is what
 # the founder carries to the other machine. hubEnroll is given Horde's root, never a command: what a
 # device's link may run is built by the transport's own attach-command builder, not by a caller.
+# hubEnroll's answer also carries key (the transport's public key line for the device, as it holds it)
+# and expires (YYYYMMDD), which the hub's register records (cli/HubRegistry.ps1). hubEnrolled answers,
+# for the hub's admission of a dialled link (issue #144, item 3), whether the transport still holds a
+# key for the device at a given time, unrevoked and unexpired: { ok; line (that key); reason }.
 if ($null -eq (Get-Variable -Name HordeEnrollments -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeEnrollments = @{} }
 
 function Get-HordeEnrollmentFiles {
@@ -146,11 +150,12 @@ function Register-HordeEnrollment {
         [Parameter(Mandatory = $true)][scriptblock]$NodePin,
         [Parameter(Mandatory = $true)][scriptblock]$HubInit,
         [Parameter(Mandatory = $true)][scriptblock]$HubEnroll,
-        [Parameter(Mandatory = $true)][scriptblock]$HubRevoke
+        [Parameter(Mandatory = $true)][scriptblock]$HubRevoke,
+        [Parameter(Mandatory = $true)][scriptblock]$HubEnrolled
     )
     $name = Split-Path -Leaf $Folder
     if ($script:HordeEnrollments.ContainsKey($name)) { throw ("enrolment for transport '" + $name + "' is already registered; the first registration stands") }
-    $e = [pscustomobject]@{ PSTypeName = "Horde.Enrollment"; name = $name; nodeInit = $NodeInit; nodeRotate = $NodeRotate; nodePin = $NodePin; hubInit = $HubInit; hubEnroll = $HubEnroll; hubRevoke = $HubRevoke }
+    $e = [pscustomobject]@{ PSTypeName = "Horde.Enrollment"; name = $name; nodeInit = $NodeInit; nodeRotate = $NodeRotate; nodePin = $NodePin; hubInit = $HubInit; hubEnroll = $HubEnroll; hubRevoke = $HubRevoke; hubEnrolled = $HubEnrolled }
     $script:HordeEnrollments[$name] = $e
     return $e
 }

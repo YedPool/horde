@@ -20,6 +20,9 @@
 #   - issue #147's hardening: a line over the 4 MiB frame ceiling ends the link and is never passed
 #     on; a second link for the same device ends at once; a key line written while horde listen runs
 #     stops it; a subsystem request still runs attach.
+#   - the hub's register (issue #144 item 3): every key line here is for a device the suite enrols in
+#     the hub's register (cli/HubRegistry.ps1) first, and revoking it there while horde listen runs
+#     stops the listener.
 #
 # THE MACHINE IS LEFT AS IT WAS, CHECKED, NOT ASSUMED: the sshd service's state and start mode, the
 # OpenSSH-Server-In-TCP firewall rule, listeners on port 22, C:\ProgramData\ssh and ~/.ssh are read at the
@@ -33,7 +36,8 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+foreach ($f in @("Tristate", "Schema", "Home", "Device", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+. (Join-Path $root "cli\HubRegistry.ps1")
 . (Join-Path $root "transports\Port.ps1")
 . (Join-Path $root "transports\local\Transport.ps1")
 . (Join-Path $root "transports\ssh\Transport.ps1")
@@ -42,7 +46,9 @@ foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root (
 . (Join-Path $root "remote\LinkBinding.ps1")
 . (Join-Path $here "ListenFixture.ps1")
 
-$limitSeconds = 480
+# The whole suite's budget. 600 s since the job-limit cases (mesh v1, 2026-10-11) added about a minute to a
+# run that already came near 480 s on a loaded machine, where every wait shrinks toward the end (Left).
+$limitSeconds = 600
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 function Left { param([int]$Ms) return [int][Math]::Max(1, [Math]::Min($Ms, ($limitSeconds * 1000) - $clock.ElapsedMilliseconds - 10000)) }
 $tl = Get-HordeTransport -Name "local"
@@ -86,8 +92,10 @@ try {
         $attach = Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $nodeDev
         Check ($attach -ceq ([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe") + " -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + (Join-Path $root "cli\attach.ps1") + " -Device " + $nodeDev)) ("PIN: the forced command is cli\attach.ps1 -Device <id>, as Get-HordeSshAttachCommand builds it (" + $attach + ")")
         $good = 'command="' + $attach + '",restrict ' + $clientPub + " horde-device-" + $nodeDev
-        Check (@(Test-HordeSshListenKeys -Lines @($good) -Root $root).Count -eq 0) "CONTROL: a line forced to the attach Get-HordeSshAttachCommand returns for its device, restricted, is admitted"
-        Check (@(Test-HordeSshListenKeys -Lines @(('command="' + $attach + '",restrict,expiry-time="20991231" ' + $clientPub + " horde-device-" + $nodeDev), "") -Root $root).Count -eq 0) "and with an expiry, beside a blank line"
+        # The hub's register holds the device with that key, as horde hub enroll leaves it.
+        $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $nodeDev -Transport "ssh" -Key $clientPub -Expires "20991231"
+        Check (@(Test-HordeSshListenKeys -Lines @($good) -Root $root -Register (Get-HordeHubLiveKeys -HordeHome $hh)).Count -eq 0) "CONTROL: a line forced to the attach Get-HordeSshAttachCommand returns for its device, restricted, is admitted"
+        Check (@(Test-HordeSshListenKeys -Lines @(('command="' + $attach + '",restrict,expiry-time="20991231" ' + $clientPub + " horde-device-" + $nodeDev), "") -Root $root -Register (Get-HordeHubLiveKeys -HordeHome $hh)).Count -eq 0) "and with an expiry, beside a blank line"
 
         Write-Host ""
         Write-Host "--- horde listen refuses to start while a key is not held to attach ---" -ForegroundColor Cyan
@@ -108,6 +116,7 @@ try {
         Check ("$first" -like ("listening on 127.0.0.1:" + $p1 + " for hub " + $hubId + "*")) ("it says where it listens and for which hub (" + $first + ")")
         $bound = @(Get-NetTCPConnection -State Listen -LocalPort $p1 -ErrorAction SilentlyContinue)
         Check ($bound.Count -ge 1 -and @($bound | Where-Object { $_.LocalAddress -ne "127.0.0.1" }).Count -eq 0) ("it binds 127.0.0.1 only (" + (@($bound | ForEach-Object { $_.LocalAddress }) -join ", ") + ")")
+        Check ((Test-HordeSshKeyAcl -Path $files.revoked) -eq "") "the revoked_keys it made is this user's alone (issue #123)"
         $cfg = [System.IO.File]::ReadAllText($files.config)
         Check ($cfg -notmatch '(?im)^\s*ForceCommand' -and $cfg -match '(?m)^ListenAddress 127\.0\.0\.1\r?$' -and $cfg -match '(?m)^DisableForwarding yes\r?$' -and $cfg -match '(?m)^PermitTTY no\r?$') "its configuration: no ForceCommand (it would replace the key's -Device), loopback only, no forwarding, no terminal"
         Check ($cfg.Contains($hh.Replace('\', '/') + "/hub/listen/authorized_keys") -and -not $cfg.ToLowerInvariant().Contains("programdata") -and -not $cfg.Contains(".ssh")) "and every file it names is under Horde's home: never ProgramData\ssh, never ~/.ssh"
@@ -121,7 +130,7 @@ try {
         # so here the listener is started and stopped in this process, which lives on.
         $ad = Get-HordeListenerAdapter -Name "ssh"
         $p1b = Get-ListenFreePort; [void]$ports.Add($p1b)
-        $run = Start-HordeListener -Adapter $ad.value -HordeHome $hh -HubId $hubId -Root $root -Port $p1b
+        $run = Start-HordeListener -Adapter $ad.value -HordeHome $hh -HubId $hubId -Root $root -Register { Get-HordeHubLiveKeys -HordeHome $hh } -Port $p1b
         Check ($run.state -ceq "known" -and (Get-ListenListeners -Port $p1b) -ge 1) ("CONTROL: started in this process, it listens on " + $p1b + " " + $run.reason)
         if ($run.state -ceq "known") {
             $null = Stop-HordeListener -Running $run.value
@@ -144,6 +153,21 @@ try {
         $d = [datetime]::UtcNow.AddSeconds(10); while ((Get-ListenListeners -Port $p1c) -gt 0 -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 200 }
         Check ((Get-ListenListeners -Port $p1c) -eq 0) "and its sshd is gone: nothing listens on its port"
         if (-not $r.process.HasExited) { try { $r.process.Kill() } catch { } }
+
+        Write-Host ""
+        Write-Host "--- a device revoked in the hub's register while it runs stops the listener (issue #144 item 3) ---" -ForegroundColor Cyan
+        $p1d = Get-ListenFreePort; [void]$ports.Add($p1d)
+        $r = Start-Listen -Port $p1d -Seconds 120
+        $first = Read-ListenLine -Reader $r.process.StandardOutput -Ms (Left 60000)
+        Check ("$first" -like ("listening on 127.0.0.1:" + $p1d + "*")) ("CONTROL: it listens with the device enrolled in the register (" + $first + ")")
+        $err = $r.process.StandardError.ReadToEndAsync(); $null = $r.process.StandardOutput.ReadToEndAsync()
+        $null = Set-HordeHubEnrolmentRevoked -HordeHome $hh -DeviceId $nodeDev
+        $ended = $r.process.WaitForExit((Left 20000))
+        Check ($ended -and $r.process.ExitCode -eq 1 -and (Get-ListenText $err) -like ("*device " + $nodeDev + ", which the hub's register does not hold*")) ("the next health check sees the revoke and horde listen stops, exit 1, saying why (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $err).Trim() + ")")
+        $d = [datetime]::UtcNow.AddSeconds(10); while ((Get-ListenListeners -Port $p1d) -gt 0 -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 200 }
+        Check ((Get-ListenListeners -Port $p1d) -eq 0) "and its sshd is gone"
+        if (-not $r.process.HasExited) { try { $r.process.Kill() } catch { } }
+        $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $nodeDev -Transport "ssh" -Key $clientPub -Expires "20991231"
 
         Write-Host ""
         Write-Host "--- a node dials in: the session reaches the hub's pipe, bound to the key's device ---" -ForegroundColor Cyan
@@ -324,11 +348,62 @@ try {
 
 
         Write-Host ""
+        Write-Host "--- the listener's job: how many processes, and how much memory together (mesh v1, issue #147 item 2) ---" -ForegroundColor Cyan
+        # A listener of this process's own, on its own port, so its job's limits can be set for the case:
+        # Listen.ps1's limits are script variables of this suite's scope (it dot-sources Listen.ps1).
+        $ad = Get-HordeListenerAdapter -Name "ssh"
+        $savedEndpoint = $endpoint
+        $limits = @{ count = $script:HordeSshListenActiveProcesses; bytes = $script:HordeSshListenJobBytes }
+        function Test-JobCase { param([string]$Name)
+            # Start a listener with the limits as they are now, try one node link, and say { opened; sessionProcs; serving }.
+            $pj = Get-ListenFreePort; [void]$ports.Add($pj)
+            $run = Start-HordeListener -Adapter $ad.value -HordeHome $hh -HubId $hubId -Root $root -Register { Get-HordeHubLiveKeys -HordeHome $hh } -Port $pj
+            if ($run.state -cne "known") { Write-Host ("         " + $Name + ": the listener did not start: " + $run.reason) -ForegroundColor DarkYellow; return $null }
+            $script:endpoint = $user + "@127.0.0.1:" + $pj + "/" + $hubId
+            $out = [pscustomobject]@{ opened = $false; sessionProcs = -1; serving = $false }
+            try {
+                $o = & $ts.open $script:endpoint (Left 15000)
+                if ($o.ok) {
+                    $n = New-HordeLink -Transport $ts -Role "node" -Endpoint $script:endpoint -Channel $o.channel -Peer $o.peer
+                    $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 20000)
+                    if ($a.state -ceq "known") {
+                        $pre = Receive-HordeLinkFrame -Link (Get-HordeValue $a) -TimeoutMs (Left 15000)
+                        $out.opened = ($pre.state -ceq "known")
+                        # Every process under the listener's sshd: the session's own, counted once.
+                        $all = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
+                        $tree = New-Object System.Collections.ArrayList; [void]$tree.Add([int]$run.value.listener.process.Id)
+                        $grew = $true
+                        while ($grew) { $grew = $false; foreach ($p in $all) { if ($tree -contains [int]$p.ParentProcessId -and $tree -notcontains [int]$p.ProcessId) { [void]$tree.Add([int]$p.ProcessId); $grew = $true } } }
+                        $out.sessionProcs = $tree.Count - 1
+                        Close-HordeLink -Link (Get-HordeValue $a)
+                    }
+                    Close-HordeLink -Link $n
+                } else { Write-Host ("         " + $Name + ": no node link: " + $o.reason) -ForegroundColor DarkGray }
+                $out.serving = ((Test-HordeListenerServing -Running $run.value).value -eq $true)
+            } finally { $null = Stop-HordeListener -Running $run.value; $script:endpoint = $savedEndpoint }
+            return $out
+        }
+        $c = Test-JobCase -Name "control"
+        Check ($null -ne $c -and $c.opened -and $c.serving) "CONTROL: with its own limits, a node's link through the listener reaches the hub"
+        Check ($null -ne $c -and $c.sessionProcs -ge 2 -and $c.sessionProcs * 10 + 1 -le $limits.count) ("a session is " + $c.sessionProcs + " processes under the listener's sshd (six measured 2026-10-11), so the count of " + $limits.count + " holds at least ten sessions and sshd")
+        $script:HordeSshListenActiveProcesses = 2
+        $c = Test-JobCase -Name "two processes"
+        $script:HordeSshListenActiveProcesses = $limits.count
+        Check ($null -ne $c -and -not $c.opened -and $c.serving) "with room for two processes, a session cannot start: the job's count refuses it, and the listener still serves"
+        $script:HordeSshListenJobBytes = 96MB
+        $c = Test-JobCase -Name "96 MB"
+        $script:HordeSshListenJobBytes = $limits.bytes
+        Check ($null -ne $c -and -not $c.opened -and $c.serving) "with 96 MB for the whole job, attach (150 MB starting) cannot start: the job's memory refuses it, and the listener still serves"
+        $null = Wait-AttachGone -Ms (Left 15000)
+
+        Write-Host ""
         Write-Host "--- a never-ending line: the job's memory cap ends that attach, and nothing else (issue #147) ---" -ForegroundColor Cyan
         # A second enrolled device keeps a session open beside the one that sends an endless line, so
         # the case can show the cap ends one process, not the listener or another session.
         $dev2 = [guid]::NewGuid().ToString()
         $pub2 = New-ListenKey -Path (Join-Path $work "client2_ed25519")
+        # Into the register first: a line for a device it does not hold would stop the listener.
+        $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $dev2 -Transport "ssh" -Key $pub2 -Expires "20991231"
         [System.IO.File]::AppendAllText($files.authorized, ('command="' + (Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $dev2) + '",restrict ' + $pub2 + " horde-device-" + $dev2 + "`n"))
         $other = Start-RawSsh -Extra @() -After @() -Identity (Join-Path $work "client2_ed25519")
         $ao = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)

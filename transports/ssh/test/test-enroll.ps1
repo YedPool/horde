@@ -199,6 +199,62 @@ try {
     Check (@(Get-ChildItem -LiteralPath $lp.dir -File -Filter "*.tmp-*").Count -eq 0) "and no temporary file is left beside it"
 
     Write-Host ""
+    Write-Host "--- authorized_keys, revoked_keys and known_hosts are this user's alone, every write (issue #123) ---" -ForegroundColor Cyan
+    foreach ($f in @($lp.authorized, $lp.revoked, $paths.knownHosts)) {
+        Check ((Test-HordeSshKeyAcl -Path $f) -eq "") ("written by enrolment, " + (Split-Path -Leaf $f) + " is protected and admits this user alone")
+    }
+    # A widened folder: the files written into it are still this user's alone.
+    $wide = Join-Path $tmp "widened-home"
+    New-Item -ItemType Directory -Path $wide | Out-Null
+    $users = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545")
+    $a = Get-Acl -LiteralPath $wide
+    $a.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($users, "Modify", ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit), [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-Acl -LiteralPath $wide -AclObject $a
+    $plain = Join-Path $wide "plain.txt"
+    [System.IO.File]::WriteAllText($plain, "x")
+    Check (@((Get-Acl -LiteralPath $plain).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.IdentityReference)" -ceq "S-1-5-32-545" }).Count -ge 1) "CONTROL: in this widened home a file written plainly admits the Users group"
+    $wkey2 = (New-HordeSshKey -Path (Join-Path $kgDir "widened") -Passphrase "" -HordeHome $hh).line
+    $null = Add-HordeSshEnrolment -HordeHome $wide -DeviceId $dev -Key $wkey2 -HordeRoot $hr -Now $now
+    $null = Remove-HordeSshEnrolment -HordeHome $wide -DeviceId $dev
+    $null = Add-HordeSshPin -HordeHome $wide -HubId $hub -HostKey $hk
+    $wlp = Get-HordeSshListenPaths -HordeHome $wide
+    $wpaths = Get-HordeSshPaths -HordeHome $wide
+    foreach ($f in @($wlp.authorized, $wlp.revoked, $wpaths.knownHosts)) {
+        Check ((Test-Path -LiteralPath $f) -and (Test-HordeSshKeyAcl -Path $f) -eq "") ("in that widened home, " + (Split-Path -Leaf $f) + " is still this user's alone")
+    }
+    Check (@(Get-ChildItem -LiteralPath $wlp.dir -File -Filter "*.tmp-*").Count -eq 0) "and no temporary file is left beside them"
+
+    Write-Host ""
+    Write-Host "--- what the listener still admits, for the hub's admission (issue #144, item 3) ---" -ForegroundColor Cyan
+    $ah = Join-Path $tmp "admit-home"
+    New-Item -ItemType Directory -Path $ah | Out-Null
+    $akey = (New-HordeSshKey -Path (Join-Path $kgDir "admit") -Passphrase "" -HordeHome $hh).line
+    $abare = ConvertTo-HordeSshBareKey $akey
+    $aen = Add-HordeSshEnrolment -HordeHome $ah -DeviceId $dev -Key $akey -HordeRoot $hr -Days 365 -Now $now
+    Check ($aen.ok -and $aen.key -ceq $abare -and $aen.expires -ceq "20271006") ("an enrolment answers its bare key and expiry, for the hub's register (" + $aen.key + " " + $aen.expires + ")")
+    $t = Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $now
+    Check ($t.ok -and $t.line -ceq $abare -and $t.expires -ceq "20271006") "CONTROL: an enrolled device with its line, unrevoked and unexpired, is admitted with its key"
+    $alp = Get-HordeSshListenPaths -HordeHome $ah
+    $endDay = [datetime]::SpecifyKind([datetime]"2027-10-06T00:00:00", [System.DateTimeKind]::Local).ToUniversalTime()
+    Check ((Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $endDay.AddMinutes(-1)).ok) "a minute before 00:00 of the expiry day, local time, it is still admitted"
+    $t = Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $endDay
+    Check (-not $t.ok -and $t.reason -clike "*expired at the start of 20271006*") ("from 00:00 of that day it is not, as sshd reads expiry-time (" + $t.reason + ")")
+    $t = Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev2 -Now $now
+    Check (-not $t.ok -and $t.reason -clike "*holds no line for device*") "a device with no line is not admitted"
+    Check (-not (Test-HordeSshEnrolled -HordeHome $ah -DeviceId "NOT-A-DEVICE" -Now $now).ok) "a device id that is not one is not admitted"
+    $aline = $aen.line
+    $null = Remove-HordeSshEnrolment -HordeHome $ah -DeviceId $dev
+    Check ((Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $now).reason -clike "*holds no line*") "revoked, its line is gone and it is not admitted"
+    [System.IO.File]::AppendAllText($alp.authorized, ($aline + "`n"))
+    $t = Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $now
+    Check (-not $t.ok -and $t.reason -clike "*is in revoked_keys*") ("with its line restored by hand it is still not admitted: its key is revoked (" + $t.reason + ")")
+    [System.IO.File]::WriteAllText($alp.authorized, ('command="' + $cmd + '",restrict ' + (ConvertTo-HordeSshBareKey $other) + " horde-device-" + $dev + "`n"))
+    $t = Test-HordeSshEnrolled -HordeHome $ah -DeviceId $dev -Now $now
+    Check (-not $t.ok -and $t.reason -clike "*carries no expiry-time*") ("a line written by hand with no expiry is not admitted: enrolment always writes one (" + $t.reason + ")")
+    $viaPort = & (Get-HordeEnrollment -Name "ssh").value.hubEnrolled $ah $dev $now
+    Check ($null -ne $viaPort -and -not $viaPort.ok -and "$($viaPort.reason)" -clike "*carries no expiry-time*") "the transport registers this check with the port, as hubEnrolled: asked through the port, it answers the same"
+
+    Write-Host ""
     Write-Host "--- the exec guard: the second start, exactly as approved, and nothing like it ---" -ForegroundColor Cyan
     $found = @(Get-HordeSshExecFindings -Dir (Join-Path $root "transports\ssh"))
     Check ($found.Count -eq 0) ("the folder, Enroll.ps1 included, passes the guard (" + $found.Count + " finding(s))")
@@ -207,7 +263,7 @@ try {
     function Test-GuardWith { param([string]$EnrollText, [string]$Extra = "")
         $md = Join-Path $tmp ("guard-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
         New-Item -ItemType Directory -Path $md | Out-Null
-        foreach ($f in @("Argv.ps1", "Attach.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
+        foreach ($f in @("Argv.ps1", "Attach.ps1", "Files.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
         [System.IO.File]::WriteAllText((Join-Path $md "Enroll.ps1"), $EnrollText)
         if ($Extra -ne "") { [System.IO.File]::WriteAllText((Join-Path $md "Other.ps1"), $Extra) }
         return @(Get-HordeSshExecFindings -Dir $md) }
@@ -247,6 +303,15 @@ try {
     $auth = ""; if (Test-Path (Join-Path $ch "hub\listen\authorized_keys")) { $auth = [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys")) }
     $wantCmd = Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $enCmd.Groups["dev"].Value
     Check ($e.code -eq 0 -and $auth.StartsWith('command="' + $wantCmd + '",restrict,expiry-time="') -and $wantCmd.EndsWith("\cli\attach.ps1 -Device " + $enCmd.Groups["dev"].Value)) ("horde hub enroll admits the key, forced to cli\attach.ps1 for that device, with restrict (" + $auth.Trim() + ")")
+    $regPath = Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json")
+    $reg = $null; if (Test-Path -LiteralPath $regPath) { $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json }
+    Check ($null -ne $reg -and $reg.key -ceq $enCmd.Groups["key"].Value -and $reg.transport -ceq "ssh" -and $auth.Contains('expiry-time="' + $reg.expires + '"') -and $null -eq $reg.PSObject.Properties["revokedAt"]) "and records the device in the hub's register: its key, its transport and the same expiry"
+    $ea = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "192.168.1.156") -Env $envs
+    $regA = [System.IO.File]::ReadAllText((Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json"))) | ConvertFrom-Json
+    Check ($ea.code -eq 0 -and $regA.address -ceq "192.168.1.156") ("horde hub enroll -Address records the node's last-known address in the hub's register (mesh v1) (exit " + $ea.code + ")")
+    $authBefore = [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys"))
+    $eb = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "8.8.8.8") -Env $envs
+    Check ($eb.code -ne 0 -and $eb.out -clike "*-Address*public address*" -and [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys")) -ceq $authBefore) "a public -Address is refused before anything is written"
     $pn = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "pin", "-Hub", $pinCmd.Groups["hub"].Value, "-HostKey", $pinCmd.Groups["key"].Value) -Env $envs
     Check ($pn.code -eq 0 -and [System.IO.File]::ReadAllText((Join-Path $ch "node\known_hosts")) -clike ("horde-hub-" + $pinCmd.Groups["hub"].Value + " ssh-ed25519 *")) "horde node pin pins the hub's host key"
     $e1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
@@ -254,6 +319,27 @@ try {
     $rv = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", $enCmd.Groups["dev"].Value) -Env $envs
     $e2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs
     Check ($rv.code -eq 0 -and $e2.code -eq 1 -and $e2.out -clike "*was revoked*") "horde hub revoke, then the same key enrolled again: exit 1, saying it was revoked"
+    $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json
+    Check ($null -ne $reg.PSObject.Properties["revokedAt"] -and "$($reg.revokedAt)" -cmatch '\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\z') ("horde hub revoke marks the register entry revoked, so the hub binds no link to it (" + $reg.revokedAt + ")")
+    # A register that cannot be written or read is said, never passed over (issue #144 item 3).
+    $ch2 = Join-Path $tmp "cli-home-blocked"
+    New-Item -ItemType Directory -Path (Join-Path $ch2 "hub") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $ch2 "hub\nodes"), "a file where the register's folder goes")
+    $envs2 = @{ HORDE_HOME = $ch2 }
+    $n2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "init") -Env $envs2
+    $en2 = [regex]::Match($n2.out, 'horde hub enroll -Device (?<dev>\S+) -Key "(?<key>[^"]+)"')
+    $e3 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $en2.Groups["dev"].Value, "-Key", $en2.Groups["key"].Value) -Env $envs2
+    Check ($en2.Success -and $e3.code -ne 0 -and $e3.out -clike "*the hub's register could not record it*horde hub enroll again*") ("horde hub enroll whose register cannot be written fails, saying the hub admits the device nowhere yet (exit " + $e3.code + ")")
+    Remove-Item -LiteralPath (Join-Path $ch2 "hub\nodes")
+    $e4 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $en2.Groups["dev"].Value, "-Key", $en2.Groups["key"].Value) -Env $envs2
+    $reg2 = Join-Path $ch2 ("hub\nodes\" + $en2.Groups["dev"].Value + ".json")
+    Check ($e4.code -eq 0 -and (Test-Path -LiteralPath $reg2)) "CONTROL: run again once the register can be written, it is recorded"
+    [System.IO.File]::WriteAllText($reg2, "not json")
+    $rv3 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", $en2.Groups["dev"].Value) -Env $envs2
+    $auth2 = [System.IO.File]::ReadAllText((Join-Path $ch2 "hub\listen\authorized_keys"))
+    Check ($rv3.code -ne 0 -and $rv3.out -clike "*is revoked for the ssh transport, but*cannot be read*" -and -not $auth2.Contains("horde-device-" + $en2.Groups["dev"].Value)) ("horde hub revoke with an unreadable register entry still revokes the key, and says the entry could not be marked (exit " + $rv3.code + ")")
+    $rv2 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "revoke", "-Device", "..\x") -Env $envs
+    Check ($rv2.code -ne 0 -and $rv2.out -clike "*not a device id*") "horde hub revoke refuses a device id that is not one before it touches anything"
     $wrong = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "init", "-Hub", "x") -Env $envs
     Check ($wrong.code -ne 0 -and $wrong.out -clike "*does not belong to node init*") "a flag of another verb is refused, never ignored"
 } finally {

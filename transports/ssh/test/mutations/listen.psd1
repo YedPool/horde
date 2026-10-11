@@ -8,12 +8,45 @@
     Suite  = "transports\ssh\test\test-listen.ps1"
     Mutations = @(
         # --- what it admits ---
+        # --- the hub's register (issue #144 item 3) ---
+        @{ Name = "register-not-consulted"
+           Find = 'if ($null -eq $enrolledKey) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "register-key-not-compared"
+           Find = 'if ("$enrolledKey" -cne $m.Groups["key"].Value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "no-register-starts"
+           Find = 'if ($Request.register -isnot [hashtable]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "health-holds-keys-to-no-register"
+           Find = '-Root $Listener.root -Register $Register)'
+           Replace = '-Root $Listener.root -Register @{ "0f1e2d3c-4b5a-4968-8776-655443322110" = ("ssh-ed25519 " + ("A" * 68)) })' }
+        # --- who may write its files (issue #123) ---
+        @{ Name = "loose-files-admitted"
+           Find = 'if ($loose.Count -gt 0) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "home-not-checked"
+           Find = '-Paths @($files.authorized, $files.revoked, $files.hostKey) -Top "$($Request.hordeHome)")'
+           Replace = '-Paths @($files.authorized, $files.revoked, $files.hostKey) -Top $files.dir)' }
+        @{ Name = "authorized-keys-not-checked"
+           Find = '-Paths @($files.authorized, $files.revoked, $files.hostKey) -Top'
+           Replace = '-Paths @($files.revoked, $files.hostKey) -Top' }
+        # --- mesh v1: the one address it binds (the founder's rule 4) ---
+        @{ Name = "adapter-binds-any-address"
+           Find = 'if ($where.state -cne "known") { return (New-HordeSshListenResult -Ok $false -Reason ("the listener will not bind that address: "'
+           Replace = 'if ($false) { return (New-HordeSshListenResult -Ok $false -Reason ("the listener will not bind that address: "' }
+        @{ Name = "config-ignores-address"
+           Find = '("ListenAddress " + $Address),'
+           Replace = '"ListenAddress 127.0.0.1",' }
+        @{ Name = "config-always-ipv4"
+           Find = '$af = "inet"; if ($Family -ceq "v6") { $af = "inet6" }'
+           Replace = '$af = "inet"' }
         @{ Name = "restrict-optional"
            Find = '",restrict(?:,expiry-time='
            Replace = '"(?:,restrict)?(?:,expiry-time=' }
         @{ Name = "any-option-after-restrict"
-           Find = '",restrict(?:,expiry-time="[0-9]{8}")? ssh-ed25519'
-           Replace = '",restrict(?:,[^ ]+)? ssh-ed25519' }
+           Find = '",restrict(?:,expiry-time="[0-9]{8}")? (?<key>ssh-ed25519'
+           Replace = '",restrict(?:,[^ ]+)? (?<key>ssh-ed25519' }
         @{ Name = "command-optional"
            Find = "'\Acommand=""(?<cmd>[^""]+)"",restrict"
            Replace = "'\A(?:command=""(?<cmd>[^""]+)"",)?restrict"
@@ -46,7 +79,7 @@
            Replace = 'if ($false) { return (New-HordeSshListenResult' }
         # --- the configuration ---
         @{ Name = "listens-on-every-address"
-           Find = '"ListenAddress 127.0.0.1",'
+           Find = '("ListenAddress " + $Address),'
            Replace = '"ListenAddress 0.0.0.0",' }
         @{ Name = "forwarding-allowed"
            Find = '"DisableForwarding yes",'
