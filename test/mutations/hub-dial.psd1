@@ -15,6 +15,10 @@
         @{ Name = "dialled-link-left-open"
            Find = '    } finally { Close-HordeLink -Link $Link }'
            Replace = '    } finally { }' }
+        # Issue #144, item 2: a round whose pulls ran past its interval still listens.
+        @{ Name = "dial-window-floor-dropped"
+           Find = 'return [int][Math]::Max([Math]::Max(0, $MinMs), $IntervalMs - $ElapsedMs)'
+           Replace = 'return [int][Math]::Max(0, $IntervalMs - $ElapsedMs)' }
         @{ Name = "listener-window-skipped"
            Find = 'if ($null -ne $Listener) {'
            Replace = 'if ($false) {' }

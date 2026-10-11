@@ -465,6 +465,21 @@ function Enter-HordeHubLock {
     }
 }
 
+# EVERY ROUND LISTENS FOR AT LEAST THIS LONG (issue #144, item 2). The listening window was the interval
+# less the time the registered nodes' pulls took, so a round whose pulls ran past the interval - one
+# slow node at its 45 s budget does - listened for 0 ms, round after round, and no dialled node was ever
+# taken. 5 s: a node waiting on the hub pipe is taken at once (the accept returns as soon as one waits),
+# and a node between dials, which redials 15 s after a link ends (cli/NodeServe.ps1), meets a window
+# within a few rounds even when every round runs long.
+$script:HordeHubDialWindowMinMs = 5000
+
+function Get-HordeHubDialWindowMs {
+    # How long this round listens for dialled links: what is left of -IntervalMs after -ElapsedMs, and
+    # never less than -MinMs.
+    param([int]$IntervalMs, [int]$ElapsedMs, [int]$MinMs = $script:HordeHubDialWindowMinMs)
+    return [int][Math]::Max([Math]::Max(0, $MinMs), $IntervalMs - $ElapsedMs)
+}
+
 function Invoke-HordeHubServe {
     # Pull every node, once per round, until -Rounds rounds are done (0: until stopped). -Nodes are
     # registry entries with their transports resolved. Returns one { at; outcomes } per round.
@@ -479,6 +494,8 @@ function Invoke-HordeHubServe {
         # The bound on each node's part of a round; 0 for none. See $script:HordeHubNodeBudgetMs.
         [int]$NodeBudgetMs = $script:HordeHubNodeBudgetMs,
         [scriptblock]$OnRound = $null,
+        # The least each round listens for dialled links (Get-HordeHubDialWindowMs).
+        [int]$DialWindowMinMs = $script:HordeHubDialWindowMinMs,
         # A listener nodes dial (R17c): between rounds the hub accepts links on it instead of sleeping,
         # and each dialled node's part is in the round it came in. With a listener the last round
         # waits its interval too, so a node can still dial into it.
@@ -499,8 +516,8 @@ function Invoke-HordeHubServe {
         foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) { [void]$outcomes.Add((Update-HordeHubNode -Entry $e -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) }
         if ($done.Count -eq 0) { foreach ($l in $swept) { [void]$outcomes.Add($l) } }
         if ($null -ne $Listener) {
-            $window = $IntervalMs - [int]([datetime]::UtcNow - $began).TotalMilliseconds
-            foreach ($l in @(Receive-HordeHubDialled -Listener $Listener -WindowMs ([Math]::Max(0, $window)) -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) { [void]$outcomes.Add($l) }
+            $window = Get-HordeHubDialWindowMs -IntervalMs $IntervalMs -ElapsedMs ([int]([datetime]::UtcNow - $began).TotalMilliseconds) -MinMs $DialWindowMinMs
+            foreach ($l in @(Receive-HordeHubDialled -Listener $Listener -WindowMs $window -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) { [void]$outcomes.Add($l) }
         }
         $round = [pscustomobject]@{ at = (Get-HordeLinkTime -At $began); outcomes = $outcomes.ToArray() }
         [void]$done.Add($round)

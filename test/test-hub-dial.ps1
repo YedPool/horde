@@ -146,6 +146,24 @@ try {
     Check ($null -ne $nd -and $nd.dials -eq 1 -and $nd.served -eq 1 -and "$(@($nd.endings)[0])" -ceq "closed by the protocol") ("the node served the link it dialled until the hub's bye (" + "$(@($nd.endings) -join ' | ')" + "$(@($nd.failures) -join ' | ')" + ")")
 
     Write-Host ""
+    Write-Host "--- a round whose pulls ran past its interval still listens (issue #144, item 2) ---" -ForegroundColor Cyan
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 3000 -MinMs 5000) -eq 17000) "CONTROL: a quick round listens for the rest of its interval"
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 60000 -MinMs 5000) -eq 5000) "a round whose pulls took 60 s of a 20 s interval still listens for the guaranteed 5 s"
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 60000 -MinMs -5) -eq 0) "and a floor below 0 is 0, never a negative wait"
+    Check ($script:HordeHubDialWindowMinMs -ge 1000) ("the default floor is a real window (" + $script:HordeHubDialWindowMinMs + " ms)")
+    # The interval is 1 ms, so every round has run past it before it listens: before the floor, the
+    # window was 0 and this node was never taken.
+    $mr = Join-Path $work "mirror-late"
+    $listener = New-HubListener -Name $ep
+    try {
+        $node = Start-Dialler -HubEndpoint $ep -Preamble ("horde-attach 1 " + $device)
+        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 1 -DialWindowMinMs 8000 -TimeoutMs 20000 -Listener $listener)
+        $nd = Stop-Dialler $node
+    } finally { Stop-HordeTransportListener -Listener $listener }
+    $outs = @($rounds[0].outcomes)
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $device + "): heard, 2 session(s)*") }).Count -eq 1) ("a round with no time left of its interval still takes the dialled node (" + ($outs -join " | ") + ")")
+
+    Write-Host ""
     Write-Host "--- a hello that claims another device than the preamble is refused ---" -ForegroundColor Cyan
     $mr = Join-Path $work "mirror-b"
     $listener = New-HubListener -Name $ep
