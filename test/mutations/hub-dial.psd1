@@ -39,11 +39,11 @@
            Find = '$null = Send-HordeHubFrame -Link $Link -Frame (New-HordeLinkBye -Code "refused" -Reason $reason -Seq $Seq -Contract $Contract) -Contract $Contract'
            Replace = '' }
         @{ Name = "dialled-pull-not-rechecked"
-           Find = '-BudgetMs $BudgetMs -Link $Link -Admit $Admit)'
-           Replace = '-BudgetMs $BudgetMs -Link $Link)' }
+           Find = '-Link $Link -Admit $Admit -ActDir $ActDir -ActTimeoutMs $ActTimeoutMs)'
+           Replace = '-Link $Link -ActDir $ActDir -ActTimeoutMs $ActTimeoutMs)' }
         @{ Name = "serve-drops-the-check"
-           Find = '-BudgetMs $NodeBudgetMs -Admit $Admit)) {'
-           Replace = '-BudgetMs $NodeBudgetMs)) {' }
+           Find = '-BudgetMs $NodeBudgetMs -Admit $Admit -ActDir $ActDir -ActTimeoutMs $ActTimeoutMs)) {'
+           Replace = '-BudgetMs $NodeBudgetMs -ActDir $ActDir -ActTimeoutMs $ActTimeoutMs)) {' }
         @{ Name = "listener-window-skipped"
            Find = 'if ($null -ne $Listener) {'
            Replace = 'if ($false) {' }

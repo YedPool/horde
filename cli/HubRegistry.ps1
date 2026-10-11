@@ -171,6 +171,33 @@ function Get-HordeHubLiveKeys {
     return $out
 }
 
+function Get-HordeHubEnrolledDevices {
+    # Every device the register holds, live or not, sorted by id: { deviceId; live; reason; expires;
+    # address }. reason says why one is not live (revoked, past its expiry, or an entry that cannot be
+    # trusted). The one list `horde nodes` shows dialled nodes from and `horde session` resolves a
+    # dialled node by (remote plan R13b: the register is the single source); a revoked device stays
+    # listed, said revoked, never silently dropped.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $dir = Get-HordeHubRegistryRoot -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return @() }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter "*.json" | Where-Object { $_.Name -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json\z' } | Sort-Object Name)) {
+        $id = $f.Name.Substring(0, 36)
+        $k = Get-HordeHubEnrolledKey -HordeHome $HordeHome -DeviceId $id -Now $Now
+        $e = Read-HordeHubEnrolment -HordeHome $HordeHome -DeviceId $id
+        $expires = ""; $address = ""
+        if ($e.state -ceq "known") {
+            $expires = "$($e.value.expires)"
+            if ($null -ne $e.value.PSObject.Properties["address"]) { $address = "$($e.value.address)" }
+        }
+        $why = ""
+        if ($k.state -cne "known") { $why = "$($k.reason)" }
+        [void]$out.Add([pscustomobject][ordered]@{ deviceId = $id; live = ($k.state -ceq "known"); reason = $why; expires = $expires; address = $address })
+    }
+    return @($out)
+}
+
 function Get-HordeHubLiveAddresses {
     # The last-known addresses of every device the register holds live at -Now, sorted, each once: who
     # `horde listen` on a network address lets in when -AllowFrom names nobody (mesh v1).

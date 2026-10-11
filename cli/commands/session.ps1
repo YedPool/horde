@@ -2,7 +2,7 @@ $HordeCommand = @{
     name    = "session"
     group   = "hub"
     usage   = "session spawn -Node <device> -Label <L> -Run <runId> -Profile <p> -Repo <repoId> -Prompt <text> [-Role orc] [-Title <t>] [-Permission <level>] [-Worktree <name> -Branch <b>] [-HostName <h>] | session close -SessionId <id> [-Node <device>] [-Reason <why>] | session status -RequestId <id> [-Node <device>] | any of them -Resend <requestId>"
-    summary = "ask a node to start or close a session (remote plan R19): one request per id, written down before it is sent, so a request whose answer was lost is sent again with -Resend and acted on once"
+    summary = "ask a node to start or close a session (remote plan R19): one request per id, written down before it is sent, so a request whose answer was lost is sent again with -Resend and acted on once; a node that dials in (enrolled with horde hub enroll) gets its requests carried by horde hub serve -Listen over the link it dials, and this command waits for the answer"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("spawn", "close", "status")][string]$Verb,
@@ -18,17 +18,30 @@ $HordeCommand = @{
             [int]$TimeoutSeconds = 240
         )
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device", "Schema")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
         . (Join-Path $root "transports\Port.ps1")
         foreach ($t in @(Get-HordeTransportFiles)) { . $t }
         . (Join-Path $root "remote\Protocol.ps1")
         . (Join-Path $root "cli\HubServe.ps1")
         . (Join-Path $root "cli\HubAct.ps1")
+        . (Join-Path $root "cli\HubRegistry.ps1")
         $me = Get-HordeNode
         $version = "$(Get-Content -LiteralPath (Join-Path $root 'VERSION') -TotalCount 1)".Trim()
         $hub = [pscustomobject]@{ id = $me.deviceId; name = $me.deviceName; hordeVersion = $version }
-        $actDir = Get-HordeHubActDir -HomeRoot (Get-HordeHome)
+        $hordeHome = Get-HordeHome
+        $actDir = Get-HordeHubActDir -HomeRoot $hordeHome
         $contract = Get-HordeLinkContract
+        # Every node a request may go to: the registry the hub opens links to (its own node), and the
+        # hub's register of enrolled nodes, which dial in (cli/HubRegistry.ps1), each named as its mirror
+        # last heard it.
+        $pulled = @(Get-HordeHubRegistry -Node $me)
+        $mirrorRoot = Get-HordeHubMirrorRoot -HomeRoot $hordeHome
+        $enrolled = @(Get-HordeHubEnrolledDevices -HordeHome $hordeHome | ForEach-Object {
+            $name = ""
+            try { $m = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $_.deviceId) -DeviceId $_.deviceId -Contract $contract; if ($m.state -ceq "known") { $name = "" + $m.value.deviceName } } catch { }
+            if ($name -ceq "(dialled)") { $name = "" }
+            $_ | Add-Member -NotePropertyName deviceName -NotePropertyValue $name -PassThru
+        })
 
         # The request: written down first, or read back to be sent again.
         $rec = $null
@@ -57,9 +70,8 @@ $HordeCommand = @{
                     # The process to expect is the one the node named when it started the session.
                     $sp = Find-HordeHubSpawn -Dir $actDir -SessionId $SessionId
                     if ($sp.state -ne "known") { throw ("cannot close " + $SessionId + ": " + $sp.reason) }
-                    $ex = $sp.value.answer.expect
-                    $args2 = [pscustomobject][ordered]@{ sessionId = $SessionId; expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $ex.ns.device; space = "" + $ex.ns.space }; pid = [long]$ex.pid; procStart = "" + $ex.procStart }; reason = $Reason }
-                    $ct = Resolve-HordeHubCloseTarget -Spawn $sp.value -Node $Node -Entries @(Get-HordeHubRegistry -Node $me)
+                    $args2 = New-HordeHubCloseArgs -Spawn $sp.value -Reason $Reason
+                    $ct = Resolve-HordeHubCloseTarget -Spawn $sp.value -Node $Node -Entries @(@($pulled) + @($enrolled))
                     if ($ct.state -ne "known") { throw ("cannot close " + $SessionId + ": " + $ct.reason) }
                     $target = "" + $ct.value
                 }
@@ -68,21 +80,37 @@ $HordeCommand = @{
                     $args2 = [pscustomobject]@{ requestId = $RequestId }
                     $old = Read-HordeHubActRecord -Dir $actDir -RequestId $RequestId
                     if ($target -eq "" -and $null -ne $old) { $target = "" + $old.deviceId }
+                    # A dialled node's request is answered from its own record, which the hub settles -
+                    # through request.status itself when an answer was lost (cli/HubCarry.ps1).
+                    if ($null -ne $old -and "$(Get-HordeLinkProp $old 'via')" -ceq $script:HordeHubDialledRoute -and ($Node -eq "" -or $Node -ceq "" + $old.deviceId)) { $rec = $old }
                 }
             }
-            $entries = @(Get-HordeHubRegistry -Node $me)
-            if ($target -eq "") { throw ("session " + $Verb + " cannot tell which node to ask: name it with -Node") }
-            $match = @($entries | Where-Object { $_.deviceId -ceq $target -or $_.deviceName -ceq $target })
-            if ($match.Count -ne 1) { throw ("the hub has no registered node '" + $target + "'; it knows " + (@($entries | ForEach-Object { $_.deviceName + " (" + $_.deviceId + ")" }) -join ", ")) }
-            $verbName = @{ spawn = "session.spawn"; close = "session.close"; status = "request.status" }[$Verb]
-            # A request the contract refuses is refused here, before it is written down or sent.
-            $bad = Test-HordeHubActArgs -Contract $contract -Verb $verbName -Arguments $args2
-            if ($bad -ne "") { Write-Output ("REFUSED (by the hub, nothing written or sent): the link contract refuses the request: " + $bad); return }
-            $rec = [pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = $verbName; deviceId = "" + $match[0].deviceId; issuedAt = (Get-HordeLinkTime); args = $args2; answer = $null; error = $null; sentAt = @() }
-            if ($verbName -cne "request.status") { Write-HordeHubActRecord -Dir $actDir -Record $rec }
+            if ($null -eq $rec) {
+                if ($target -eq "") { throw ("session " + $Verb + " cannot tell which node to ask: name it with -Node") }
+                $tg = Resolve-HordeHubActTarget -Target $target -Pulled $pulled -Enrolled $enrolled
+                if ($tg.state -cne "known") { throw ("session " + $Verb + ": " + $tg.reason) }
+                $verbName = @{ spawn = "session.spawn"; close = "session.close"; status = "request.status" }[$Verb]
+                # A request the contract refuses is refused here, before it is written down or sent.
+                $bad = Test-HordeHubActArgs -Contract $contract -Verb $verbName -Arguments $args2
+                if ($bad -ne "") { Write-Output ("REFUSED (by the hub, nothing written or sent): the link contract refuses the request: " + $bad); return }
+                $via = ""
+                # Carried by the hub, never sent from here: the node cannot be dialled. A status is
+                # written down too, since it waits for the node's link like any other request.
+                if ($tg.value.route -ceq "dialled") { $via = $script:HordeHubDialledRoute }
+                $rec = New-HordeHubActRecord -Verb $verbName -DeviceId ("" + $tg.value.deviceId) -Arguments $args2 -Via $via
+                if ($via -ne "" -or $verbName -cne "request.status") { Write-HordeHubActRecord -Dir $actDir -Record $rec }
+            }
         }
 
-        $entry = @(Get-HordeHubRegistry -Node $me | Where-Object { $_.deviceId -ceq "" + $rec.deviceId })
+        if ("$(Get-HordeLinkProp $rec 'via')" -ceq $script:HordeHubDialledRoute) {
+            # A dialled node: the hub carries it; this waits for the answer the hub writes down.
+            $got = Wait-HordeHubCarried -Dir $actDir -RequestId "$($rec.requestId)" -TimeoutMs ($TimeoutSeconds * 1000)
+            if ($null -eq $got) { $got = $rec }
+            Write-Output (Format-HordeHubCarriedRecord -Record $got)
+            if (Test-HordeHubActPending -Record $got) { Write-Output ("ask again with: horde session status -RequestId " + $rec.requestId) }
+            return
+        }
+        $entry = @($pulled | Where-Object { $_.deviceId -ceq "" + $rec.deviceId })
         if ($entry.Count -ne 1) { throw ("the node " + $rec.deviceId + " is no longer registered") }
         $tr = Resolve-HordeLinkTransport -Name $entry[0].transportName
         $resolved = $null; $why = ""
