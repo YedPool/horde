@@ -120,6 +120,18 @@ try {
     $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $other -Transport "ssh" -Key $key -Expires "20261011" -Now $later
     $said = @{ ok = $true; line = $key; reason = "" }
     Check ((Test-HordeHubAdmits -HordeHome $hh -DeviceId $other -Enrollment $fake -Now $later) -clike "*is not enrolled*is over*") "an entry past its expiry is refused though the transport still holds it"
+
+    Write-Host ""
+    Write-Host "--- the live register, as the listener is handed it: live devices and their keys only ---" -ForegroundColor Cyan
+    # Now: $dev revoked, $other past its expiry. A third, live; a fourth, unreadable; a stray file.
+    $third = "22222222-3333-4444-8555-666666666666"
+    $fourth = "33333333-4444-4555-8666-777777777777"
+    $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $third -Transport "ssh" -Key $key2 -Expires "20991231" -Now $later
+    [System.IO.File]::WriteAllText((Get-HordeHubEnrolmentPath -HordeHome $hh -DeviceId $fourth), "not json")
+    [System.IO.File]::WriteAllText((Join-Path (Get-HordeHubRegistryRoot -HordeHome $hh) "notes.json"), "{}")
+    $live = Get-HordeHubLiveKeys -HordeHome $hh -Now $later
+    Check ($live -is [hashtable] -and $live.Count -eq 1 -and $live[$third] -ceq $key2) ("only the live device is in it, with its key; revoked, expired, unreadable and stray files are not (" + (@($live.Keys) -join ", ") + ")")
+    Check ((Get-HordeHubLiveKeys -HordeHome (Join-Path $tmp "no-such-home") -Now $later).Count -eq 0) "a home with no register gives an empty table, never an error"
 } finally {
     if ((Split-Path -Leaf $tmp) -match '^horde-hub-registry-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

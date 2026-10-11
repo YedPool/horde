@@ -48,6 +48,10 @@
         @{ Name = "revoke-of-unreadable-entry-silent"
            Find = 'if ($r.state -cne "known") { return ("the hub''s register entry for device "'
            Replace = 'if ($r.state -cne "known") { return ""; return ("the hub''s register entry for device "' }
+        # --- the live register the listener is handed ---
+        @{ Name = "live-keys-include-dead-entries"
+           Find = 'if ($k.state -ceq "known") { $out[$id] = $k.value }'
+           Replace = '$out[$id] = "" + $k.value' }
         # --- admission: both records must agree ---
         @{ Name = "register-not-asked"
            Find = 'if ($k.state -cne "known") { return ("device " + $DeviceId + " is not enrolled: " + $k.reason) }'

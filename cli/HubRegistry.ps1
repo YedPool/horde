@@ -144,6 +144,23 @@ function Get-HordeHubEnrolledKey {
     return (New-HordeKnown -Value "$($e.key)")
 }
 
+function Get-HordeHubLiveKeys {
+    # Every device the register holds live at -Now, as a hashtable: device id -> its key. What the
+    # listener holds authorized_keys to (transports/Listener.ps1). An entry that is not live, or cannot be
+    # read, is left out: it admits nothing.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $out = @{}
+    $dir = Get-HordeHubRegistryRoot -HordeHome $HordeHome
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $out }
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter "*.json" | Where-Object { $_.Name -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json\z' })) {
+        $id = $f.Name.Substring(0, 36)
+        $k = Get-HordeHubEnrolledKey -HordeHome $HordeHome -DeviceId $id -Now $Now
+        if ($k.state -ceq "known") { $out[$id] = $k.value }
+    }
+    return $out
+}
+
 function Test-HordeHubAdmits {
     # May a link be bound to -DeviceId at -Now? "" when it may; otherwise why not. Both records must agree:
     # the register holds the device live, and -Enrollment - the transport's enrolment, transports/Port.ps1 -

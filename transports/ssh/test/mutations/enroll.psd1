@@ -26,12 +26,6 @@
         @{ Name = "key-acl-not-set"
            Find = '$acl = Set-HordeSshKeyAcl -Path $full'
            Replace = '$acl = ""' }
-        @{ Name = "key-acl-check-admits-others"
-           Find = 'if ($rules.Count -lt 1 -or $others.Count -gt 0) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "key-acl-inheritance-allowed"
-           Find = 'if (-not $read.AreAccessRulesProtected) {'
-           Replace = 'if ($false) {' }
         @{ Name = "key-type-rsa"
            Find = '"-q", "-t", "ed25519", "-N"'
            Replace = '"-q", "-t", "rsa", "-N"' }
@@ -64,9 +58,6 @@
         @{ Name = "expiry-shortened"
            Find = 'if ($was -gt $expiry) { $expiry = $was }'
            Replace = '' }
-        @{ Name = "written-in-place"
-           Find = 'Move-HordeFileAtomic -From $tmp -To $Path'
-           Replace = '[System.IO.File]::WriteAllText($Path, $text, [System.Text.Encoding]::ASCII)' }
         @{ Name = "no-command"
            Find = 'return (''command="'' + $Command + ''",restrict,expiry-time="'''
            Replace = 'return (''restrict,expiry-time="''' }

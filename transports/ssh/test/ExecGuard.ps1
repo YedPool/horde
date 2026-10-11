@@ -63,7 +63,7 @@ $script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Pat
     "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
     # Listen.ps1 (R17a): its registration.
     "Register-HordeListener")
-$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
+$script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Files.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
 # Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
 $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
 # Add-Type: only here, and only this source (SHA-256 of the C# with line endings as LF).
@@ -82,7 +82,9 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     # Listen.ps1, issue #147: the per-process memory cap on the listener's job (Native.ps1).
     "LimitProcessMemory",
     # Enroll.ps1, issue #144 item 3 (2026-10-11): an enrolment's expiry read as sshd reads it. None runs anything.
-    "ParseExact", "ToLocalTime")
+    "ParseExact", "ToLocalTime",
+    # Files.ps1, issue #123 (2026-10-11): who owns and may write the link's files and their folders.
+    "GetOwner", "Equals")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
@@ -90,7 +92,9 @@ $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datet
     "system.threading.tasks.task[]", "void",
     # Enroll.ps1 (R17b), measured 2026-10-06.
     "system.security.principal.windowsidentity", "system.security.principal.securityidentifier", "system.convert",
-    "system.security.cryptography.sha256", "system.io.directory", "switch", "system.globalization.cultureinfo")
+    "system.security.cryptography.sha256", "system.io.directory", "switch", "system.globalization.cultureinfo",
+    # Listen.ps1, issue #144 item 3 (2026-10-11): the hub's register, handed over as a table of device and key.
+    "hashtable")
 $script:HordeSshGuardNewTypes = @("System.Diagnostics.ProcessStartInfo", "System.IO.FileStream", "byte[]", "System.Net.Sockets.TcpClient", "System.Text.StringBuilder",
     "System.Collections.Generic.List[byte]",
     # Enroll.ps1 (R17b): the key's ACL, and a list of lines.

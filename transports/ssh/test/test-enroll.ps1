@@ -199,6 +199,32 @@ try {
     Check (@(Get-ChildItem -LiteralPath $lp.dir -File -Filter "*.tmp-*").Count -eq 0) "and no temporary file is left beside it"
 
     Write-Host ""
+    Write-Host "--- authorized_keys, revoked_keys and known_hosts are this user's alone, every write (issue #123) ---" -ForegroundColor Cyan
+    foreach ($f in @($lp.authorized, $lp.revoked, $paths.knownHosts)) {
+        Check ((Test-HordeSshKeyAcl -Path $f) -eq "") ("written by enrolment, " + (Split-Path -Leaf $f) + " is protected and admits this user alone")
+    }
+    # A widened folder: the files written into it are still this user's alone.
+    $wide = Join-Path $tmp "widened-home"
+    New-Item -ItemType Directory -Path $wide | Out-Null
+    $users = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545")
+    $a = Get-Acl -LiteralPath $wide
+    $a.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($users, "Modify", ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit), [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-Acl -LiteralPath $wide -AclObject $a
+    $plain = Join-Path $wide "plain.txt"
+    [System.IO.File]::WriteAllText($plain, "x")
+    Check (@((Get-Acl -LiteralPath $plain).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object { "$($_.IdentityReference)" -ceq "S-1-5-32-545" }).Count -ge 1) "CONTROL: in this widened home a file written plainly admits the Users group"
+    $wkey2 = (New-HordeSshKey -Path (Join-Path $kgDir "widened") -Passphrase "" -HordeHome $hh).line
+    $null = Add-HordeSshEnrolment -HordeHome $wide -DeviceId $dev -Key $wkey2 -HordeRoot $hr -Now $now
+    $null = Remove-HordeSshEnrolment -HordeHome $wide -DeviceId $dev
+    $null = Add-HordeSshPin -HordeHome $wide -HubId $hub -HostKey $hk
+    $wlp = Get-HordeSshListenPaths -HordeHome $wide
+    $wpaths = Get-HordeSshPaths -HordeHome $wide
+    foreach ($f in @($wlp.authorized, $wlp.revoked, $wpaths.knownHosts)) {
+        Check ((Test-Path -LiteralPath $f) -and (Test-HordeSshKeyAcl -Path $f) -eq "") ("in that widened home, " + (Split-Path -Leaf $f) + " is still this user's alone")
+    }
+    Check (@(Get-ChildItem -LiteralPath $wlp.dir -File -Filter "*.tmp-*").Count -eq 0) "and no temporary file is left beside them"
+
+    Write-Host ""
     Write-Host "--- what the listener still admits, for the hub's admission (issue #144, item 3) ---" -ForegroundColor Cyan
     $ah = Join-Path $tmp "admit-home"
     New-Item -ItemType Directory -Path $ah | Out-Null
@@ -237,7 +263,7 @@ try {
     function Test-GuardWith { param([string]$EnrollText, [string]$Extra = "")
         $md = Join-Path $tmp ("guard-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
         New-Item -ItemType Directory -Path $md | Out-Null
-        foreach ($f in @("Argv.ps1", "Attach.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
+        foreach ($f in @("Argv.ps1", "Attach.ps1", "Files.ps1", "Native.ps1", "Transport.ps1")) { Copy-Item -LiteralPath (Join-Path $root ("transports\ssh\" + $f)) -Destination $md }
         [System.IO.File]::WriteAllText((Join-Path $md "Enroll.ps1"), $EnrollText)
         if ($Extra -ne "") { [System.IO.File]::WriteAllText((Join-Path $md "Other.ps1"), $Extra) }
         return @(Get-HordeSshExecFindings -Dir $md) }

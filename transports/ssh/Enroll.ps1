@@ -13,6 +13,8 @@
 #                                        no ForceCommand, so command= and restrict are the whole guard
 #   <home>\hub\listen\revoked_keys       every key revoked, for sshd's RevokedKeys (R17a): a revoked
 #                                        key stays refused even if its line is restored by hand
+# authorized_keys, revoked_keys and known_hosts are written by Files.ps1's writer, this user's alone
+# (issue #123); the keys are made so by New-HordeSshKey.
 # Enrolment and pinning move strings the founder carries between machines; no host key is ever taken
 # from the network (remote plan R17).
 #
@@ -27,7 +29,7 @@
 
 . (Join-Path $PSScriptRoot "Argv.ps1")
 . (Join-Path $PSScriptRoot "Attach.ps1")
-. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")
+. (Join-Path $PSScriptRoot "Files.ps1")
 
 # A public key line Horde accepts: ed25519 only, base64 of the 51-byte blob (68 characters), and an
 # optional comment of plain characters. Anything else is refused, never cleaned.
@@ -49,30 +51,6 @@ function Test-HordeSshInHome {
     $full = [System.IO.Path]::GetFullPath($Path)
     $homeFull = [System.IO.Path]::GetFullPath($HordeHome).TrimEnd('\')
     if (-not $full.StartsWith($homeFull + "\", [System.StringComparison]::OrdinalIgnoreCase)) { return ("'" + $full + "' is not inside Horde's home " + $homeFull) }
-    return ""
-}
-
-function Set-HordeSshKeyAcl {
-    # The file's ACL: this user alone, inheritance cut. Returns "" when it reads back so, or why not.
-    param([string]$Path)
-    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = New-Object System.Security.AccessControl.FileSecurity
-    $acl.SetAccessRuleProtection($true, $false)
-    $acl.SetOwner($me)
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, "FullControl", "Allow")))
-    Set-Acl -LiteralPath $Path -AclObject $acl
-    return (Test-HordeSshKeyAcl -Path $Path)
-}
-
-function Test-HordeSshKeyAcl {
-    # "" when -Path's ACL is protected and admits this user alone; otherwise why not.
-    param([string]$Path)
-    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $read = Get-Acl -LiteralPath $Path
-    if (-not $read.AreAccessRulesProtected) { return ("the key " + $Path + " inherits access from its folder") }
-    $rules = @($read.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-    $others = @($rules | Where-Object { "$($_.IdentityReference)" -cne "$me" })
-    if ($rules.Count -lt 1 -or $others.Count -gt 0) { return ("the key " + $Path + " admits someone besides this user: " + (@($others | ForEach-Object { "$($_.IdentityReference)" }) -join ", ")) }
     return ""
 }
 
@@ -128,28 +106,6 @@ function ConvertFrom-HordeSshKeyLine {
     $out.ok = $true; $out.type = "ssh-ed25519"; $out.b64 = $m.Groups["b64"].Value
     $out.fingerprint = "SHA256:" + [System.Convert]::ToBase64String($hash).TrimEnd("=")
     return $out
-}
-
-function Read-HordeSshLines {
-    param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
-    return @([System.IO.File]::ReadAllLines($Path) | Where-Object { "$_".Trim() -ne "" })
-}
-
-function Write-HordeSshLines {
-    # The whole file at once, LF line ends, ASCII: sshd reads these. Written beside it and renamed over
-    # it in one step (core/FileAtomic.ps1), never rewritten in place: a kill mid-write of an in-place
-    # write left authorized_keys empty, every device locked out (review of PR #111, N5).
-    param([string]$Path, [string[]]$Lines)
-    $text = ""
-    foreach ($l in @($Lines)) { $text = $text + $l + "`n" }
-    $tmp = $Path + ".tmp-" + [System.IO.Path]::GetRandomFileName()
-    try {
-        [System.IO.File]::WriteAllText($tmp, $text, [System.Text.Encoding]::ASCII)
-        Move-HordeFileAtomic -From $tmp -To $Path
-    } finally {
-        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
-    }
 }
 
 function Initialize-HordeSshNode {
