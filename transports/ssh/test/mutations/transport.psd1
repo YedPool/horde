@@ -56,9 +56,11 @@
         @{ Name = "listen-pretends"
            Find = 'return [pscustomobject]@{ ok = $false; listener = $null; reason = $script:HordeSshHubSide }'
            Replace = 'return [pscustomobject]@{ ok = $true; listener = @{}; reason = "" }' }
-        @{ Name = "peer-claimed-verified"
-           Find = 'verified = $false'
-           Replace = 'verified = $true' }
+        # R17c-3: the pin is shown live, so the peer is claimed verified; a link that does not say so
+        # would make every caller distrust a hub ssh.exe already checked.
+        @{ Name = "peer-not-claimed-verified"
+           Find = 'verified = $true'
+           Replace = 'verified = $false' }
         @{ Name = "a-second-program-start"
            Find = 'return (Test-HordeSshBanner -Endpoint $Endpoint)'
            Replace = 'if ($false) { $null = [System.Diagnostics.Process]::Start("cmd.exe") }; return (Test-HordeSshBanner -Endpoint $Endpoint)' }
