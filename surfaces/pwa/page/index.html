@@ -37,6 +37,7 @@
   <div id="tabs" role="tablist" aria-label="Hordes"></div>
   <span class="grow"></span>
   <span class="counts" id="counts"></span>
+  <button type="button" id="accountBtn" aria-label="Your account" hidden>Account</button>
   <button type="button" id="addBtn" aria-label="Pair with a machine">+</button>
 </div>
 <div id="notice" hidden></div>
@@ -44,6 +45,22 @@
   <button type="button" id="tabDecisions" role="tab" aria-selected="true">Decisions</button>
   <button type="button" id="tabChat" role="tab" aria-selected="false">Chat</button>
 </div>
+
+<section id="signInView" hidden>
+  <h1>Sign in</h1>
+  <p class="hint">This relay lets in only a signed-in phone, and the machines it registers. Sign in with your Google account. The relay learns who may use it; what passes through it stays sealed for your phone and your machines.</p>
+  <div class="row"><button type="button" id="signInBtn" class="primary">Sign in with Google</button></div>
+</section>
+
+<section id="accountView" hidden>
+  <h1>Your account</h1>
+  <p id="accountWho" class="hint"></p>
+  <h2>Machines</h2>
+  <p class="hint">Each machine reaches the relay with the key this phone registered when it paired. Remove one and it reaches nothing more, until it is paired again with a new offer.</p>
+  <ul id="machineList"></ul>
+  <p id="machineEmpty" class="hint" hidden>No machine yet: pairing registers one.</p>
+  <div class="row"><button type="button" id="signOutBtn">Sign out</button> <button type="button" id="accountBack">Back</button></div>
+</section>
 
 <section id="pairView" hidden>
   <h1>Pair with a machine</h1>

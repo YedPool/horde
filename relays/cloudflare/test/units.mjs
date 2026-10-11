@@ -74,7 +74,8 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   check(!(await v(tampered.join("."))).ok, "a token whose claims were changed after signing is refused");
   check((await v(await token({ ...base, aud: [CLIENT, "x"], azp: CLIENT }))).ok, "CONTROL: an audience list naming this client, with azp this client, is taken");
   check((await v(await token({ ...base, exp: now / 1000 - 59 }))).ok && (await v(await token({ ...base, iat: now / 1000 + 59 }))).ok, "CONTROL: within the minute's skew either way, a token is taken");
-  check(!(await v("a".repeat(9000))).ok, "a text longer than any id token is refused unread");
+  const long = await v("a".repeat(9000));
+  check(!long.ok && long.reason === "the id token is not a token", "a text longer than any id token is refused unread", long.reason);
   const wrongUse = async () => ({ ...goodJwk, use: "enc" });
   check(!(await J.verifyIdToken(await token(base), wrongUse, expect)).ok, "a key the provider publishes for encryption, not signing, is not used");
 }
@@ -132,7 +133,7 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   check(r && r.keyId === keyId && r.time === 1760000000000 && r.nonce === "f".repeat(32) && r.sig === sig, "a machine's header is read into its key, time, nonce and signature");
   for (const [what, bad] of [["a bearer token", "Bearer abc"], ["another order", h.replace("key=" + keyId + ",time=1760000000000", "time=1760000000000,key=" + keyId)],
     ["a missing nonce", h.replace(",nonce=" + "f".repeat(32), "")], ["a time with a leading zero", h.replace("time=1", "time=01")], ["upper-case hex", h.replace(keyId, keyId.toUpperCase())],
-    ["a short signature", h.slice(0, -1)], ["a space more", h.replace(",time", ", time")]]) {
+    ["a short signature", h.slice(0, -1)], ["anything before the scheme", "Bearer x, " + h], ["a space more", h.replace(",time", ", time")]]) {
     check(S.readMachineAuthorization(bad) === null, what + " is not a machine's header");
   }
   const bytes = P.fromUtf8(S.requestSignedBytes({ origin: "https://relay.example.test", method: "POST", target: "/v1/mailboxes/work/phone/items", time: 5, nonce: "n", keyId: "k", hash: "h" }));

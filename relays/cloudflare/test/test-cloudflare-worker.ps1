@@ -234,7 +234,7 @@ try {
             Check $ok ("strict headers on " + $what + " (" + $a.code + "; policy: " + $h["content-security-policy"] + ")")
         }
         Check ($answers["the site's root"].text.Contains("app/index.html")) "the site's root is its own index.html, which sends a visitor to app/index.html"
-        Check ("" + $answers["a mailbox answer"].headers["cache-control"] -ceq "no-store" -and "" + $answers["a refusal (no sign-in)"].headers["cache-control"] -ceq "no-store") "the mailbox API's answers are never cached"
+        Check ("" + $answers["a mailbox answer"].headers["cache-control"] -ceq "no-store" -and "" + $answers["a refusal (no sign-in)"].headers["cache-control"] -ceq "no-store" -and "" + $answers["the sign-in callback, with no sign-in begun"].headers["cache-control"] -ceq "no-store") "the mailbox API's answers, and sign-in's, are never cached"
         Check ("" + $answers["the app's page"].headers["cache-control"] -cne "no-store") "CONTROL: the app's files are not marked no-store, so the header above is the API's own"
         $up = Get-UpgradeHeaders -Path ($mbPath + "/watch?since=0&max=1&timeoutMs=1000") -Authorization $bearer
         Check ($up.status -clike "HTTP/1.1 101*" -and $up.headers["content-security-policy"] -ceq $wantCsp -and $up.headers["x-content-type-options"] -ceq "nosniff" -and $up.headers["strict-transport-security"] -ceq "max-age=63072000; includeSubDomains") ("strict headers on a WebSocket upgrade too (" + $up.status + ")")

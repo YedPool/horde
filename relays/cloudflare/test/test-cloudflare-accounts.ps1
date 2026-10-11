@@ -22,6 +22,10 @@
 #        unregistered signature is refused; the machine reaches only its horde, never the account; a
 #        revoked key signs nothing more, and its spent grant cannot bring it back;
 #      - the phone's own account and relay clients, signed in, over this Worker (node);
+#      - the app itself in headless Chrome (browser-signin.mjs): the sign-in screen, Sign in with Google
+#        through the provider and back, the cookie as Chrome keeps it, the Account screen, Sign out, a
+#        refused sign-in said on the screen - when Chrome is installed; without it that part is skipped
+#        and the suite exits 3;
 #   3. A SECOND DEV WITH THE ALLOWLIST SWITCHED ON: the listed account signs in, another does not.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the tree);
@@ -248,6 +252,7 @@ try {
     $ss = @($a.callback.cookies | Where-Object { $_.StartsWith("__Host-horde-session=") })
     Check ($ss.Count -eq 1 -and $ss[0] -cmatch '\A__Host-horde-session=[A-Za-z0-9_-]{43}; Max-Age=2592000; Path=/; Secure; HttpOnly; SameSite=Lax\z') ("the session is an opaque 256-bit id in a __Host- cookie for 30 days: HttpOnly, Secure, SameSite=Lax, Path=/ (" + ($ss -join " | ") + ")")
     Check (@($a.callback.cookies | Where-Object { $_ -clike "__Host-horde-signin=x; Max-Age=0;*" }).Count -eq 1) "and the sign-in's cookie is cleared"
+    Check ((Get-Header $a.start "cache-control") -ceq "no-store" -and (Get-Header $a.callback "cache-control") -ceq "no-store") "no answer of sign-in is ever cached"
     $A1 = "__Host-horde-session=" + $a.session
     $who = Send-To -Url ($O + "/auth/session") -Cookie $A1
     Check ($who.code -eq 200 -and $who.text -ceq '{"signedIn":true,"email":"founder@example.test"}') ("the app can ask who is signed in (" + $who.text + ")")
@@ -276,6 +281,8 @@ try {
     Check ($noStart.session -ceq "" -and $noStart.refused.Contains("started no sign-in")) ("a callback this browser did not start makes no session (" + $noStart.refused + ")")
     $otherState = Invoke-SignIn -Dev $dev -Provider $fake -Mangle { param($cb, $cookie) return @(($cb -replace 'state=[^&]+', ('state=' + ("A" * 43))), $cookie) }
     Check ($otherState.session -ceq "" -and $otherState.refused.Contains("state")) ("a callback with another state makes no session (" + $otherState.refused + ")")
+    $stalled = Invoke-SignIn -Dev $dev -Provider $fake -Mangle { param($cb, $cookie) return @($cb, ($cookie -replace '\.[0-9]{13}\z', ("." + ([System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - 601000)))) }
+    Check ($stalled.session -ceq "" -and $stalled.refused.Contains("ten minutes")) ("a sign-in begun more than ten minutes ago makes no session (" + $stalled.refused + ")")
     $plain = Invoke-SignIn -Dev $dev -Provider $fake -Mangle { param($cb, $cookie) return @($cb, $cookie.Replace("__Host-horde-signin=", "horde-signin=")) }
     Check ($plain.session -ceq "" -and $plain.refused.Contains("started no sign-in")) "a sign-in cookie without the __Host- prefix is not this browser's sign-in"
     $once = Invoke-SignIn -Dev $dev -Provider $fake
@@ -299,6 +306,10 @@ try {
     $wsEvil = Get-UpgradeStatus -Origin $O -Path "/v1/mailboxes/work/phone/watch?since=0&max=1&timeoutMs=1000" -Cookie $A1 -PageOrigin "https://evil.example.test"
     $wsOwn = Get-UpgradeStatus -Origin $O -Path "/v1/mailboxes/work/phone/watch?since=0&max=1&timeoutMs=1000" -Cookie $A1 -PageOrigin $O
     Check ($wsEvil -clike "HTTP/1.1 401*" -and $wsOwn -clike "HTTP/1.1 101*") ("a watch opened from another site's page is refused, and from the app's own is upgraded (" + $wsEvil + "; " + $wsOwn + ")")
+
+    $renamed = Invoke-SignIn -Dev $dev -Provider $fake -Scenario @{ email = "renamed@example.test" }
+    $rr = (Send-To -Url ($mb + "/items?since=0&max=10") -Cookie ("__Host-horde-session=" + $renamed.session)).text | ConvertFrom-Json
+    Check ($renamed.session -ne "" -and @($rr.items).Count -eq 1 -and $rr.items[0].text -ceq "hello from account a") "the account is the Google account id, never the email: the same account under a new address reaches the same mailboxes"
 
     Write-Host ""
     Write-Host "--- two accounts, apart ---" -ForegroundColor Cyan
@@ -377,6 +388,8 @@ try {
     $putTarget = "/v1/mailboxes/work/phone/items"
     $signedFor = New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin $O -Method "POST" -Target $putTarget -Body ([System.Text.Encoding]::ASCII.GetBytes('{"key":"m-2","text":"signed"}'))
     Check ((Send-To -Url ($O + $putTarget) -Method "POST" -Body '{"key":"m-2","text":"swapped"}' -Authorization $signedFor).code -eq 401) "a signed put whose body was swapped is refused"
+    $queryFor = New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin $O -Method "GET" -Target "/v1/mailboxes/work/phone/items?since=0&max=10"
+    Check ((Send-To -Url ($O + "/v1/mailboxes/work/phone/items?since=1&max=10") -Authorization $queryFor).code -eq 401) "a signature for one cursor does not read from another: the query is signed too"
     $pathFor = New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin $O -Method "GET" -Target "/v1/mailboxes/work/other/items?since=0&max=10"
     Check ((Send-To -Url ($O + $target) -Authorization $pathFor).code -eq 401) "a signature for one mailbox does not open another"
     $originFor = New-HordeCloudflareRelayMachineAuthorization -Key $signer.key -KeyId $kid -Origin "https://relay.example.test" -Method "GET" -Target $target
@@ -422,6 +435,34 @@ try {
     Check ((Send-To -Url ($mb + "/items?since=0&max=1") -Cookie $A1).code -eq 401) "and ends the session at the relay: the old cookie, kept, reads nothing"
 
     Write-Host ""
+    Write-Host "--- the app itself, in headless Chrome ---" -ForegroundColor Cyan
+    $chrome = @(
+        (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe"),
+        (Join-Path ${env:LOCALAPPDATA} "Google\Chrome\Application\chrome.exe")
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if ($null -eq $chrome) {
+        Write-Host "  [SKIP] Chrome is not installed here, so the app's sign-in is not run in a browser" -ForegroundColor Yellow
+        $partial = $true
+    } else {
+        $profileDir = Join-Path $work "chrome"
+        [void][System.IO.Directory]::CreateDirectory($profileDir)
+        # The first machine again, with a NEW offer - its old grant is spent, a new one is not - so the
+        # app's Account screen has one machine to list and to remove.
+        $again = Invoke-SignIn -Dev $dev -Provider $fake
+        $offer3 = New-HordeRelayPairingOffer -HordeHome $m1.home -RpId "relay.example.test" -Origins @("https://relay.example.test")
+        $back = Send-To -Url ($O + "/v1/account/machines") -Method "POST" -Body (Get-Registration -OfferText $offer3.value.text) -Cookie ("__Host-horde-session=" + $again.session) -Origin $O
+        $mc3 = (Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $O; hordeHome = $m1.home }).value
+        Check ($back.code -eq 200 -and (Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0).state -ceq "known") "a removed machine paired again with a new offer is registered again, and reads"
+        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, $chrome, $profileDir, $kid) -WorkDir $work -TimeoutSeconds 180
+        $lines = @(("" + $r.out) -split "`r?`n" | Where-Object { $_ -ne "" })
+        foreach ($l in $lines) { if ($l -clike "[[]PASS[]] *") { Check $true $l.Substring(7) } elseif ($l -clike "[[]FAIL[]] *") { Check $false $l.Substring(7) } }
+        Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 11) ("the browser's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
+        $afterUi = Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0
+        Check ($afterUi.state -ceq "unknown" -and $afterUi.reason.Contains("401")) ("the machine removed on the app's screen is refused at its next request (" + $afterUi.reason + ")")
+    }
+
+    Write-Host ""
     Write-Host "--- 3. the allowlist switched on ---" -ForegroundColor Cyan
     $list = '{"on":true,"emails":["founder@example.test"],"subs":["300000000000000000003"]}'
     $vars2 = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret; HORDE_RELAY_SIGNIN_ALLOWLIST = $list }
@@ -454,4 +495,5 @@ try {
 }
 Check (-not (Test-Path -LiteralPath $work)) "the suite's folder is gone"
 
+if ($partial) { Complete-HordeSuite -Success "the Worker's sign-in and machines hold; the app was NOT RUN in a browser here" -PassCode 3 }
 Complete-HordeSuite -Success "only a phone signed in with Google and a machine it registered get in, each to its own account, and every forged, stale, replayed or cross-site attempt is refused"
