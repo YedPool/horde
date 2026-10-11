@@ -273,7 +273,7 @@ try {
         Check ($o.ok) ("with Horde's files in place, Open starts ssh.exe (" + $o.reason + ")")
         if ($o.ok) {
             [void]$children.Add($o.channel.state.process)
-            Check ($o.peer.verified -eq $false -and "$($o.peer.identity)" -ceq "horde-hub-test-hub") "the peer is named by the hub alias and not claimed verified: no live sshd has shown the pin (R16, R17)"
+            Check ($o.peer.verified -eq $true -and "$($o.peer.identity)" -ceq "horde-hub-test-hub" -and "$($o.peer.how)" -clike "*StrictHostKeyChecking=yes*carries no frame*") "the peer is named by the hub alias, verified by the pin: ssh.exe opens no session to any other host key (shown live, R17c-3)"
             $read = $null
             $until = (Get-Date).AddSeconds(20)
             while ((Get-Date) -lt $until) {
