@@ -93,6 +93,9 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   await cache(prov, "nope");
   check(fetches === 1, "a key id the cache lacks, a moment after a fetch, does not fetch again", String(fetches));
   clock += 61000;
+  await cache(prov, "k1");
+  check(fetches === 1, "a key the cache holds is served from it for as long as max-age says, minutes on", String(fetches));
+  clock += 61000;
   await cache(prov, "nope");
   check(fetches === 2, "a minute on, it fetches the keys again (the provider rotated them)", String(fetches));
   await cache(prov, "nope2");
@@ -166,6 +169,7 @@ const v = (t, e = expect) => J.verifyIdToken(t, keyFor, e);
   check(A.admits(on, { sub: "222", email: "" }), "and so does a listed account id");
   check(!A.admits(on, { sub: "333", email: "other@example.com" }), "an account on neither list does not");
   check(!A.admits(A.readAllowlist("{not json"), claims) && !A.admits(A.readAllowlist('{"on":true,"emails":["UP@x.y"],"subs":[]}'), claims) && !A.admits(A.readAllowlist('{"on":"yes","emails":[],"subs":[]}'), claims), "a broken list lets nobody in: it fails closed");
+  check(!A.admits(A.readAllowlist('{"on":true,"emails":["founder@example.com"],"subs":[],"more":1}'), claims), "even one that names the account, if it carries a member the Worker does not know");
 }
 
 // --- 7. the site ---

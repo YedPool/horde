@@ -6,9 +6,12 @@
     Suite  = "relays\cloudflare\test\test-cloudflare-worker.ps1"
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
-        @{ Name = "sign-in-path-not-reserved"
-           Find = 'if (reserved) response = refuse(501,'
-           Replace = 'if (false) response = refuse(501,' }
+        @{ Name = "sign-in-not-served"
+           Find = 'if (auth) response = await handleAuth(request, env, url);'
+           Replace = 'if (false) response = await handleAuth(request, env, url);' }
+        @{ Name = "sign-in-answers-cached"
+           Find = 'const api = auth || isApiPath(url.pathname);'
+           Replace = 'const api = isApiPath(url.pathname);' }
         @{ Name = "root-not-the-site-index"
            Find = 'if (url.pathname === "/") return env.ASSETS.fetch('
            Replace = 'if (false) return env.ASSETS.fetch(' }
