@@ -34,7 +34,7 @@
 # Runs on Windows PowerShell 5.1 and PowerShell 7 alike: System.Net.Http and System.Net.WebSockets.
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
-. (Join-Path $PSScriptRoot "Wrangler.ps1")
+. (Join-Path $PSScriptRoot "Deploy.ps1")
 Add-Type -AssemblyName System.Net.Http
 
 # https with a host name, or plain http to this machine only. No path, no user, no wildcard.
@@ -200,4 +200,8 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         if ($a.state -cne "known") { return $a }
         $t = $a.value.PSObject.Properties["through"]
         return (New-HordeKnown -Value ([pscustomobject]@{ through = $(if ($t) { $t.Value } else { $null }) }) -ObservedAt $a.observedAt)
+    } `
+    -Deploy {
+        param([string]$Site, [scriptblock]$Say, [string]$HordeHome)
+        return (Publish-HordeCloudflareRelay -Site $Site -Say $Say -HordeHome $HordeHome)
     }
