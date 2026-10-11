@@ -22,7 +22,10 @@
 //   binding   every operation handed, as JSON text, to a function the HOST put on the page under a
 //             name (a test harness, through the browser's debugging protocol): the local test
 //             transport. Nothing on a deployed page provides that function, so there it answers unknown.
-// The hosted transport (PR 8) is added beside these and picked by the same config line.
+//   http      the hosted relay's mailbox API (PR plan item 8): put, read and ack by fetch, a watch by a
+//             WebSocket the relay answers with one message of items the moment there are any. At the
+//             config's relayOrigin, or - the deployed case - at the page's own origin, because one host
+//             serves the app and its relay: no cross-origin request, and connect-src 'self' covers it.
 //
 // THE RULES ARE relays/Port.ps1's, copied: a mailbox is "<horde>/<reader>", each part 1 to 63 of
 // [a-z0-9-] starting with a letter or digit and never a Windows device name; a key 1 to 160 of
@@ -194,10 +197,65 @@ export function bindingTransport(host, name) {
   };
 }
 
+// The hosted relay's transport. The paths are the hosted relay's (relays/Port.ps1's four operations
+// under /v1/mailboxes/<horde>/<reader>/). Requests go with the page's own credentials and never from a
+// cache: an envelope is fetched fresh, and kept by nothing but the phone's memory. A refusal's words
+// are the relay's, cut to 200 characters, and only ever shown as text. A watch that has heard nothing
+// when its time is up closes its socket and answers no items, as a relay's watch does.
+export function httpTransport(origin, fetchFn, WebSocketCtor) {
+  const url = (mailbox, op) => origin + "/v1/mailboxes/" + mailbox + "/" + op;
+  const words = (body) => (body && typeof body.error === "string" ? ": " + body.error.slice(0, 200) : "");
+  const answerOf = async (response, what) => {
+    let body = null;
+    try { body = await response.json(); } catch (x) { body = null; }
+    if (response.status !== 200) return unknown("the relay answered the " + what + " with " + response.status + words(body));
+    if (!body || typeof body !== "object" || Array.isArray(body)) return unknown("the relay answered the " + what + " with something that is not a JSON object");
+    return known(body);
+  };
+  const send = (method, address, body) => fetchFn(address, {
+    method, credentials: "same-origin", cache: "no-store", redirect: "error",
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const read = async (mailbox, since, max, what) => answerOf(await send("GET", url(mailbox, "items") + "?since=" + since + "&max=" + max), what);
+  return {
+    put: async (mailbox, key, text) => answerOf(await send("POST", url(mailbox, "items"), { key, text }), "put"),
+    get: (mailbox, since, max) => read(mailbox, since, max, "read"),
+    // A watch of 0 ms is a read: a socket shut before its first message would lose what is already there.
+    watch: (mailbox, since, max, timeoutMs) => (timeoutMs <= 0 ? read(mailbox, since, max, "watch") : new Promise((resolve) => {
+      let settled = false;
+      let socket = null;
+      const finish = (a) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { socket.close(); } catch (x) { /* already closed */ }
+        resolve(a);
+      };
+      const timer = setTimeout(() => finish(known({ items: [] })), timeoutMs);
+      try { socket = new WebSocketCtor(url(mailbox, "watch").replace(/^http/, "ws") + "?since=" + since + "&max=" + max + "&timeoutMs=" + timeoutMs); }
+      catch (x) { finish(unknown("the relay's watch could not be opened")); return; }
+      socket.onmessage = (event) => {
+        let body = null;
+        try { body = JSON.parse(String(event.data)); } catch (x) { body = null; }
+        finish(body && typeof body === "object" && !Array.isArray(body) ? known(body) : unknown("the relay's watch message is not a JSON object"));
+      };
+      socket.onerror = () => finish(unknown("the relay's watch failed"));
+      socket.onclose = () => finish(known({ items: [] }));
+    })),
+    ack: async (mailbox, through) => answerOf(await send("POST", url(mailbox, "ack"), { through }), "ack")
+  };
+}
+
 // The transport a deployment's config names. config is app/config.json: { transport, relayOrigin }.
 export function transportFromConfig(config, host) {
   const name = config && config.transport;
   if (name === "memory") return memoryTransport();
   if (name === "binding") return bindingTransport(host, "hordeRelayBinding");
+  if (name === "http") {
+    const origin = config.relayOrigin || (host && host.location ? host.location.origin : "");
+    if (!origin || !host || typeof host.fetch !== "function" || typeof host.WebSocket !== "function") return null;
+    return httpTransport(origin, host.fetch.bind(host), host.WebSocket);
+  }
   return null;
 }

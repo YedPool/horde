@@ -17,6 +17,21 @@
         @{ Name = "non-ascii-text-kept"
            Find = '|| !TEXT.test(text)) return "a relay holds printable ASCII'
            Replace = ') return "a relay holds printable ASCII' }
+        @{ Name = "http-refusal-read-as-an-answer"
+           Find = 'if (response.status !== 200) return unknown('
+           Replace = 'if (false) return unknown(' }
+        @{ Name = "http-answers-from-a-cache"
+           Find = 'credentials: "same-origin", cache: "no-store", redirect: "error",'
+           Replace = 'credentials: "same-origin", redirect: "error",' }
+        @{ Name = "http-watch-of-zero-opens-a-socket"
+           Find = '(timeoutMs <= 0 ? read(mailbox, since, max, "watch")'
+           Replace = '(false ? read(mailbox, since, max, "watch")' }
+        @{ Name = "http-watch-socket-left-open"
+           Find = 'try { socket.close(); } catch (x) { /* already closed */ }'
+           Replace = '' }
+        @{ Name = "http-watch-failure-read-as-nothing"
+           Find = 'socket.onerror = () => finish(unknown("the relay''s watch failed"));'
+           Replace = 'socket.onerror = () => finish(known({ items: [] }));' }
         @{ Name = "transport-throw-escapes"
            Find = 'try { return await fn(); } catch (x) {'
            Replace = 'try { return await fn(); } finally { } if (false) { const x = null;' }
