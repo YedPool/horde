@@ -75,5 +75,14 @@
         @{ Name = "sealed-response-not-bounded"
            Find = '|| responseText.length > PAIRING_LIMITS.maxResponseChars) throw'
            Replace = ') throw' }
+        @{ Name = "offer-without-a-grant-read"
+           Find = 'if (typeof o.grant !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(o.grant)) return no('
+           Replace = 'if (false) return no(' }
+        @{ Name = "high-s-machine-signature-taken"
+           Find = 'if (BigInt("0x" + hex(sig.slice(32))) > P256_HALF_ORDER) return false;'
+           Replace = '' }
+        @{ Name = "grant-unbound-to-its-expiry"
+           Find = 'machine + "\n" + expiresAt); }'
+           Replace = 'machine + "\n"); }' }
     )
 }

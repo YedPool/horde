@@ -210,7 +210,14 @@ try {
     Check ($ro.value.expiresAt - $ro.value.issuedAt -eq 300000 -and $ro.value.issuedAt -eq (ConvertTo-HordeRelayRecordMs -Time $t0)) "it lives 300 s from when it was made"
     $expectCh = ConvertTo-HordeRelayBase64Url -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text ("horde-relay/pairing/v1 challenge`n" + $o1.text)))
     Check ($o1.challenge -ceq $expectCh) "its challenge is SHA-256 of the domain and the offer's exact text"
-    Check ($o1.text.Length -lt 700) ("it is short enough for one QR code (" + $o1.text.Length + " characters)")
+    Check ($o1.text.Length -lt 850) ("it is short enough for one QR code (" + $o1.text.Length + " characters)")
+    $gv = $ro.value
+    Check ($gv.grant -cmatch '\A[A-Za-z0-9_-]{86}\z' -and $o1.text.EndsWith(',"grant":"' + $gv.grant + '"}')) "it carries an account grant, last: 64 bytes, a signature"
+    Check (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt $gv.expiresAt -SignPublic (B $gv.signPublic) -Grant $gv.grant) "the grant verifies under the machine's own signing key, over its horde, offer, key id and expiry"
+    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt ($gv.expiresAt + 1) -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "and not over a later expiry: a relay cannot stretch it"
+    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer ("0" * 32) -Machine $gv.machine -ExpiresAt $gv.expiresAt -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "nor for another offer"
+    $gb = Get-HordeRelayAccountGrantBytes -Horde "work" -Offer ("0" * 32) -Machine ("a" * 32) -ExpiresAt 1760000000000
+    Check ([System.Text.Encoding]::ASCII.GetString($gb) -ceq ("horde-relay/pairing/v1 account-grant`nwork`n" + ("0" * 32) + "`n" + ("a" * 32) + "`n1760000000000")) "its signed lines are the domain, the horde, the offer, the key id and the expiry (relay/js/protocol.js signs the same)"
     $pendingText = [System.IO.File]::ReadAllText((Join-Path $ha ("relay\pairing\offers\" + $o1.offer + ".json")))
     Check (-not $pendingText.Contains($o1.code)) "the machine keeps the code's hash, not the code"
     Check ((New-HordeRelayPairingOffer -HordeHome $ha -RpId $rp -Origins $origins -TtlSeconds 10).reason.Contains("30 to 900")) "an offer of 10 s is refused"

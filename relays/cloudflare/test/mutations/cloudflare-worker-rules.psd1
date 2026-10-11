@@ -16,6 +16,9 @@
         @{ Name = "cursor-with-leading-zero-taken"
            Find = '!/^(0|[1-9][0-9]{0,15})$/.test(text)'
            Replace = '!/^[0-9]{1,16}$/.test(text)' }
+        @{ Name = "body-cap-forgets-escapes"
+           Find = 'export const BODY_BYTES = 2 * MAX_TEXT_CHARS + 1024;'
+           Replace = 'export const BODY_BYTES = MAX_TEXT_CHARS + 1024;' }
         @{ Name = "cursor-past-the-ceiling-taken"
            Find = 'return Number.isSafeInteger(n) && n <= max ? n : null;'
            Replace = 'return n;' }

@@ -19,8 +19,11 @@
 # THE CONFIG IT RUNS WITH IS WRITTEN, NOT USED IN PLACE. wrangler.json beside this file is the one
 # production config; New-HordeCloudflareRelayConfig writes a copy into a work folder outside the tree,
 # with main, base_dir and the app's folder made absolute, so wrangler's own scratch (.wrangler) lands
-# there too. A test run adds test-bindings.json's binding with a fresh random token; a production copy
-# REFUSES a config that holds that binding anywhere (worker/auth.js, THE TEST AUTHENTICATOR).
+# there too. A test run adds test-bindings.json's bindings with a fresh random token, points the
+# Worker's origin at the dev's own port (worker/site.js: what sign-in redirects to and machine
+# signatures cover), and may add a suite's own vars (the fake provider, a test client, an allowlist);
+# a production copy REFUSES a config that holds any HORDE_RELAY_TEST_ binding anywhere (worker/auth.js,
+# THE TEST AUTHENTICATOR; worker/oidc.js, THE TEST PROVIDER).
 #
 # NOTHING IS SENT TO CLOUDFLARE BY A LOCAL RUN. Every run here sets: CLOUDFLARE_CF_FETCH_ENABLED=false
 # (a local dev otherwise fetches a request-metadata file from workers.cloudflare.com: measured
@@ -36,6 +39,8 @@
 
 $script:HordeCloudflareRelayFolder = $PSScriptRoot
 $script:HordeCloudflareRelayTestBinding = "HORDE_RELAY_TEST_AUTH"
+# Every test-only binding starts so (test-bindings.json); none may be in the production config.
+$script:HordeCloudflareRelayTestPrefix = "HORDE_RELAY_TEST_"
 # How long a local dev may take to answer its first request. Measured 2026-10-11: 1.6 s on this box.
 $script:HordeCloudflareRelayDevReadyMs = 60000
 
@@ -140,33 +145,41 @@ function Install-HordeCloudflareRelayTools {
 }
 
 function Test-HordeCloudflareRelayHasTestBinding {
-    # Does this config text name the test binding anywhere at all - in vars, in an env section, in a
-    # comment? Matched as text, so no shape of config can hide it.
+    # Does this config text name a test binding (HORDE_RELAY_TEST_...) anywhere at all - in vars, in an
+    # env section, in a comment? Matched as text, so no shape of config can hide it.
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
-    return ($Text.IndexOf($script:HordeCloudflareRelayTestBinding, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+    return ($Text.IndexOf($script:HordeCloudflareRelayTestPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
 }
 
 function New-HordeCloudflareRelayConfig {
     # Write the config wrangler runs with into -Out (a folder outside the tree): wrangler.json with main,
     # base_dir and assets.directory absolute, the app's files at -Site. -TestToken adds the test binding
     # (test runs only). -CommittedTestBinding adds test-bindings.json exactly as committed, placeholder
-    # and all: only for the suite that shows the Worker refuses the placeholder. Known: the config's path.
-    # Unknown when wrangler.json holds the test binding, or the token is too short to count.
-    param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Site, [string]$TestToken = "", [switch]$CommittedTestBinding)
+    # and all: only for the suite that shows the Worker refuses the placeholder. With either, -Origin
+    # (http to this machine) replaces HORDE_RELAY_ORIGIN and -ExtraVars adds a suite's own vars over the rest.
+    # Known: the config's path. Unknown when wrangler.json holds a test binding, the token is too short
+    # to count, or the origin is not this machine's.
+    param([Parameter(Mandatory = $true)][string]$Out, [Parameter(Mandatory = $true)][string]$Site, [string]$TestToken = "", [switch]$CommittedTestBinding,
+        [string]$Origin = "", [hashtable]$ExtraVars = @{})
     $text = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "wrangler.json"), [System.Text.Encoding]::UTF8)
-    if (Test-HordeCloudflareRelayHasTestBinding -Text $text) { return (New-HordeUnknown -Reason ("wrangler.json names " + $script:HordeCloudflareRelayTestBinding + ": the production config must never carry the test binding")) }
+    if (Test-HordeCloudflareRelayHasTestBinding -Text $text) { return (New-HordeUnknown -Reason ("wrangler.json names a " + $script:HordeCloudflareRelayTestPrefix + " binding: the production config must never carry the test binding, nor any other test-only one")) }
+    $isTest = $TestToken -ne "" -or $CommittedTestBinding
+    if (-not $isTest -and ($Origin -ne "" -or $ExtraVars.Count -gt 0)) { return (New-HordeUnknown -Reason "-Origin and -ExtraVars are for a test config only") }
+    if ($Origin -ne "" -and $Origin -cnotmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') { return (New-HordeUnknown -Reason "a test origin is http://127.0.0.1:<port>") }
     $cfg = $text | ConvertFrom-Json
     $slash = { param([string]$p) ([System.IO.Path]::GetFullPath($p)) -replace '\\', '/' }
     $cfg.main = & $slash (Join-Path $script:HordeCloudflareRelayFolder $cfg.main)
     $cfg.base_dir = & $slash (Get-HordeCloudflareRelayRepoRoot)
     $cfg.assets.directory = & $slash $Site
-    if ($TestToken -ne "" -or $CommittedTestBinding) {
+    if ($isTest) {
         if (-not $CommittedTestBinding -and $TestToken -cnotmatch '\A[0-9a-f]{32,}\z') { return (New-HordeUnknown -Reason "a test token is 32 or more lower-case hex digits") }
         $overlay = [System.IO.File]::ReadAllText((Join-Path $script:HordeCloudflareRelayFolder "test-bindings.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
         $vars = [ordered]@{}
         if ($null -ne $cfg.PSObject.Properties["vars"]) { foreach ($p in $cfg.vars.PSObject.Properties) { $vars[$p.Name] = $p.Value } }
         foreach ($p in $overlay.vars.PSObject.Properties) { $vars[$p.Name] = $p.Value }
         if (-not $CommittedTestBinding) { $vars[$script:HordeCloudflareRelayTestBinding] = $TestToken }
+        if ($Origin -ne "") { $vars["HORDE_RELAY_ORIGIN"] = $Origin }
+        foreach ($k in @($ExtraVars.Keys)) { $vars[$k] = $ExtraVars[$k] }
         $cfg | Add-Member -NotePropertyName vars -NotePropertyValue ([pscustomobject]$vars) -Force
     }
     [void][System.IO.Directory]::CreateDirectory($Out)
@@ -205,15 +218,18 @@ function Start-HordeCloudflareRelayDev {
     # A local `wrangler dev` of the Worker with the test binding, serving the app's files at -Site, its
     # state and scratch in -Work: known { process; origin; token; work } once it answers, or unknown.
     # Stop it with Stop-HordeCloudflareRelayDev; if the caller dies first, it ends with it (dev-host.cjs).
-    # -CommittedTestBinding runs it with test-bindings.json's placeholder instead of a token (Config).
-    param([Parameter(Mandatory = $true)][string]$Work, [Parameter(Mandatory = $true)][string]$Site, [Parameter(Mandatory = $true)][string]$Script, [switch]$CommittedTestBinding)
+    # -CommittedTestBinding runs it with test-bindings.json's placeholder instead of a token (Config);
+    # -ExtraVars adds a suite's own (Config). Its origin is its own port's, written in as the Worker's.
+    param([Parameter(Mandatory = $true)][string]$Work, [Parameter(Mandatory = $true)][string]$Site, [Parameter(Mandatory = $true)][string]$Script, [switch]$CommittedTestBinding,
+        [hashtable]$ExtraVars = @{})
     $node = Find-HordeCloudflareRelayNode
     if ($node -eq "") { return (New-HordeUnknown -Reason "node is not installed here") }
     $token = New-HordeCloudflareRelayToken
-    if ($CommittedTestBinding) { $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $Work "config") -Site $Site -CommittedTestBinding }
-    else { $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $Work "config") -Site $Site -TestToken $token }
-    if ($cfg.state -cne "known") { return $cfg }
     $port = Get-HordeCloudflareRelayFreePort
+    $origin = "http://127.0.0.1:" + $port
+    if ($CommittedTestBinding) { $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $Work "config") -Site $Site -CommittedTestBinding -Origin $origin -ExtraVars $ExtraVars }
+    else { $cfg = New-HordeCloudflareRelayConfig -Out (Join-Path $Work "config") -Site $Site -TestToken $token -Origin $origin -ExtraVars $ExtraVars }
+    if ($cfg.state -cne "known") { return $cfg }
     $inspector = Get-HordeCloudflareRelayFreePort
     $argv = @((Join-Path $script:HordeCloudflareRelayFolder "dev-host.cjs"), $Script, "dev", "--config", $cfg.value, "--ip", "127.0.0.1", "--port", "$port",
         "--inspector-port", "$inspector", "--persist-to", (Join-Path $Work "state"), "--show-interactive-dev-session=false")
@@ -232,7 +248,6 @@ function Start-HordeCloudflareRelayDev {
     $quiet = Get-HordeCloudflareRelayQuietEnv -Work $Work
     foreach ($k in @($quiet.Keys)) { $psi.EnvironmentVariables[$k] = $quiet[$k] }
     $p = [System.Diagnostics.Process]::Start($psi)
-    $origin = "http://127.0.0.1:" + $port
     $dev = [pscustomobject]@{ process = $p; origin = $origin; token = $token; work = $Work; out = $p.StandardOutput.ReadToEndAsync(); err = $p.StandardError.ReadToEndAsync() }
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
     Add-Type -AssemblyName System.Net.Http
