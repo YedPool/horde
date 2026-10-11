@@ -509,6 +509,19 @@ function Invoke-HordeNodeDeliveryStatus {
     return (New-HordeNodeReply -Reply (New-HordeNodeResult -State $State -Request $f -Answer ([ordered]@{ state = "unknown"; reason = (Limit-HordeNodeReason ("the messenger could not say where the message is (" + $why + "); last stage recorded: " + $recorded.stage)) })))
 }
 
+function Get-HordeNodeReadOnlyRefusal {
+    # The refusal a read-only node gives -Verb, or $null when the node is not read-only or the verb is a
+    # read. The effect class comes from remote/Contract.ps1's pinned table, so a verb added later is
+    # judged by it too; a verb the table does not class is not a read (review of #112, B1).
+    param([Parameter(Mandatory = $true)]$State, [Parameter(Mandatory = $true)]$Frame, [Parameter(Mandatory = $true)]$Data, [Parameter(Mandatory = $true)][string]$Verb)
+    if ((Get-HordeLinkProp $Data "readOnly") -eq $true) {
+        $effect = "unclassed"
+        if ($script:HordeLinkVerbAllow.ContainsKey($Verb)) { $effect = "$($script:HordeLinkVerbAllow[$Verb].effect)" }
+        if ($effect -cne "read") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason ("this node serves read verbs only (horde node serve -ReadOnly); " + $Verb + " is a " + $effect + " verb"))) }
+    }
+    return $null
+}
+
 function Invoke-HordeNodeFrame {
     # One received line, answered. -Data is what the node knows: manifest (node.info's value), view (the
     # session-view document, or $null until asked for), viewError (why the view could not be built, or
@@ -548,16 +561,21 @@ function Invoke-HordeNodeFrame {
     }
     if ($kind -cne "req") { return (New-HordeNodeReply) }
     $verb = "$($f.verb)"
-    if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) { return (Invoke-HordeNodeAct -State $State -Frame $f -Data $Data) }
+    if ($script:HordeNodeActVerbs -ccontains $verb -and (Get-HordeLinkProp $Data "acts") -eq $true) {
+        # READ-ONLY DECIDES BEFORE ANY ACT (R17c, 2026-10-07): handed both an act and -ReadOnly, the node
+        # acted - the check below came after this dispatch. horde node serve drops the act under -ReadOnly,
+        # but a dialled link is the always-on box's production path, and the flag, not what was passed,
+        # must decide (as it does for messaging).
+        $roAct = Get-HordeNodeReadOnlyRefusal -State $State -Frame $f -Data $Data -Verb $verb
+        if ($null -ne $roAct) { return $roAct }
+        return (Invoke-HordeNodeAct -State $State -Frame $f -Data $Data)
+    }
     if ($script:HordeNodeServedVerbs -cnotcontains $verb) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "unsupported-verb" -Reason ("this node answers " + ($script:HordeNodeServedVerbs -join ", ") + "; '" + $verb + "' is not one of them"))) }
     # A READ-ONLY NODE ANSWERS READS AND NOTHING ELSE (review of #112, B1). The verb's effect class is read
     # from remote/Contract.ps1's pinned table, not from a list of names here, so a write, drive, spawn or
     # kill verb added later is refused too; a verb the table does not class is not a read.
-    if ((Get-HordeLinkProp $Data "readOnly") -eq $true) {
-        $effect = "unclassed"
-        if ($script:HordeLinkVerbAllow.ContainsKey($verb)) { $effect = "$($script:HordeLinkVerbAllow[$verb].effect)" }
-        if ($effect -cne "read") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "refused" -Reason ("this node serves read verbs only (horde node serve -ReadOnly); " + $verb + " is a " + $effect + " verb"))) }
-    }
+    $ro = Get-HordeNodeReadOnlyRefusal -State $State -Frame $f -Data $Data -Verb $verb
+    if ($null -ne $ro) { return $ro }
     if ($script:HordeNodeViewVerbs -ccontains $verb) {
         if ("$($Data.viewError)" -ne "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $f -Code "internal" -Reason ("the node could not build its view of its sessions: " + $Data.viewError))) }
         if ($null -eq $Data.view) { return (New-HordeNodeReply -NeedView $true) }
