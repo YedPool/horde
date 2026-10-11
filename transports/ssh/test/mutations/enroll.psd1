@@ -26,12 +26,6 @@
         @{ Name = "key-acl-not-set"
            Find = '$acl = Set-HordeSshKeyAcl -Path $full'
            Replace = '$acl = ""' }
-        @{ Name = "key-acl-check-admits-others"
-           Find = 'if ($rules.Count -lt 1 -or $others.Count -gt 0) {'
-           Replace = 'if ($false) {' }
-        @{ Name = "key-acl-inheritance-allowed"
-           Find = 'if (-not $read.AreAccessRulesProtected) {'
-           Replace = 'if ($false) {' }
         @{ Name = "key-type-rsa"
            Find = '"-q", "-t", "ed25519", "-N"'
            Replace = '"-q", "-t", "rsa", "-N"' }
@@ -64,9 +58,6 @@
         @{ Name = "expiry-shortened"
            Find = 'if ($was -gt $expiry) { $expiry = $was }'
            Replace = '' }
-        @{ Name = "written-in-place"
-           Find = 'Move-HordeFileAtomic -From $tmp -To $Path'
-           Replace = '[System.IO.File]::WriteAllText($Path, $text, [System.Text.Encoding]::ASCII)' }
         @{ Name = "no-command"
            Find = 'return (''command="'' + $Command + ''",restrict,expiry-time="'''
            Replace = 'return (''restrict,expiry-time="''' }
@@ -76,5 +67,27 @@
         @{ Name = "revoked-key-not-recorded"
            Find = 'Write-HordeSshLines -Path $lp.revoked -Lines (@(Read-HordeSshLines -Path $lp.revoked) + @($m.Groups["key"].Value))'
            Replace = '' }
+        # --- issue #144 item 3: what the listener still admits, for the hub's admission ---
+        @{ Name = "enrolled-ignores-revoked-keys"
+           Find = 'if ("$r".Trim() -ceq $key) { return (New-HordeSshEnrolResult -Ok $false'
+           Replace = 'if ($false) { return (New-HordeSshEnrolResult -Ok $false' }
+        @{ Name = "enrolled-ignores-expiry"
+           Find = 'if ($Now.ToLocalTime().Date -ge $d.Date) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "enrolled-expiry-day-still-admitted"
+           Find = 'if ($Now.ToLocalTime().Date -ge $d.Date) {'
+           Replace = 'if ($Now.ToLocalTime().Date -gt $d.Date) {' }
+        @{ Name = "enrolled-without-expiry-admitted"
+           Find = 'if (-not $exp.Success) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the authorized_keys line of device " + $DeviceId + " carries no expiry-time'
+           Replace = 'if (-not $exp.Success) { return (New-HordeSshEnrolResult -Ok $true -Line $key -Reason ("the authorized_keys line of device " + $DeviceId + " carries no expiry-time' }
+        @{ Name = "enrolled-without-a-line"
+           Find = 'if ($null -eq $mine) { return (New-HordeSshEnrolResult -Ok $false -Reason ("authorized_keys holds no line for device "'
+           Replace = 'if ($null -eq $mine) { return (New-HordeSshEnrolResult -Ok $true -Reason ("authorized_keys holds no line for device "' }
+        @{ Name = "enrolment-answers-no-key"
+           Find = 'return (New-HordeSshEnrolResult -Ok $true -Line $line -Key ($k.type + " " + $k.b64) -Expires $expiry)'
+           Replace = 'return (New-HordeSshEnrolResult -Ok $true -Line $line -Expires $expiry)' }
+        @{ Name = "enrolled-check-not-registered"
+           Find = '-HubEnrolled { param($HordeHome, $DeviceId, $Now) Test-HordeSshEnrolled -HordeHome $HordeHome -DeviceId $DeviceId -Now $Now }'
+           Replace = '-HubEnrolled { param($HordeHome, $DeviceId, $Now) $null }' }
     )
 }

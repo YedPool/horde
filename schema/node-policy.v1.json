@@ -4,7 +4,7 @@
   "title": "node-policy v1",
   "description": "What a node lets a hub start on it (remote plan step R9): the repositories it has registered, the engine profiles it offers, and how many sessions a hub may start on it in one UTC day. Written by the node's owner, on the node, in <HordeHome>/node/policy.json; never written from the link, and no verb carries any of it. Its LISTS are here and not in the engine configuration because a rule's set holds one value per key: a repository is an id mapped to a folder, which is a definition, not a setting. The permission ceiling is a setting and lives in the engine configuration (core/config-keys.json, remote.permissionCeiling: L1 and L4 only, lower-only), so it resolves through the one resolver like every other setting. core/NodePolicy.ps1 reads this file and enforces the rules a draft-07 schema cannot say: every path absolute and with no '..' segment, a worktree root that is not inside the clone, each repository id once, each profile once, and the spawn cap at most 1000.",
   "type": "object",
-  "required": ["schemaVersion", "repos", "profiles", "dailySpawnCap"],
+  "required": ["schemaVersion", "repos", "profiles"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "type": "integer", "enum": [1] },
@@ -27,6 +27,6 @@
       "description": "The engine profiles a hub may name in a spawn, by name. A profile not listed is refused even if the engine configuration defines it.",
       "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,39}$" }
     },
-    "dailySpawnCap": { "type": "integer", "minimum": 0, "description": "Sessions a hub may start on this node per UTC day, counted from the node's own request journal. 0 refuses every remote spawn." }
+    "dailySpawnCap": { "type": "integer", "minimum": 0, "description": "Sessions a hub may start on this node per UTC day, counted from the node's own request journal. 0 refuses every remote spawn. Absent: 32 (core/NodePolicy.ps1, the founder's decision of 2026-10-11: generous, not security by limiting power)." }
   }
 }

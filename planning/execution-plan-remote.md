@@ -214,7 +214,8 @@ A. The protocol core (test-only, installs nothing; each step's tag in its line)
    `remote.profiles[]` (names offered to the hub), `remote.dailySpawnCap`, and
    `remote.permissionCeiling`. The ceiling is a level of R0's vocabulary; each harness maps the
    levels to its own flags in `agents/<name>/agent.json` `permissionLevels` (engines E2), so core
-   names no flag. Default: **below prompts-bypassed**, unless the node's owner sets it higher. Like
+   names no flag. Default: **the top level, prompts-bypassed** (founder's decision of 2026-10-11, see
+   "Mesh v1" under step R17; it replaces "below prompts-bypassed"), lowered only by the node's owner. Like
    `admission.*`, the keys may be set only in L1 or L4; the checker refuses them in a run spec or a
    spawn. This step is the key, the checker and a pure `Test-HordeRemotePolicy` over a request;
    enforcement is R19. Tests first: a request above the ceiling is **refused with the reason, never
@@ -407,6 +408,31 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
     rule it calls is `Test-HordeHelloBinding`. Suites: `transports/ssh/test/test-listen.ps1` (pure) and
     `test-listen-local.ps1` (machine-bound), `test/test-link-binding.ps1`.
 
+    **Mesh v1: the first live link (founder's decisions of 2026-10-11).** The aim is a first live ssh
+    link from an office node to the hub over the office LAN, and the rule for every choice on the way is
+    the founder's: **security by closing doors, never by limiting power.** In his words: **"Let's not do
+    security by limiting the power of this."** So:
+    - Remote sessions run with prompts bypassed: the node permission ceiling's default is the top level
+      (R9), and the daily spawn cap's default is a generous 32 when a node's policy names none; a node's
+      owner lowers either in the node's own layers, and nothing the link carries moves them.
+    - One link per node carries any number of Orcs and Wargs.
+    - No lock-in to one overlay: the listener binds to whichever private network the founder picks -
+      the office LAN, Tailscale, WireGuard - never only to an overlay's address (`horde listen -Address`).
+    - Non-negotiable doors: (1) the link is key-only; (2) every key is forced to Horde's attach, with no
+      shell, no forwarding and no files; (3) the hub's host key is pinned on every node; (4) the hub never
+      listens on a public address; (5) revoke is instant and every key expires.
+    - Device posture checks and a TPM challenge are later PRs, not mesh v1.
+    Mesh v1's must-fixes before any LAN listener (branch mesh/v1-fixes): every round listens for dialled
+    links for at least 5 s (#144 item 2); the hub keeps a register of enrolled nodes
+    (`<home>\hub\nodes`, schema `hub-enrolment.v1`, written by `horde hub enroll` and `revoke`) and binds a
+    dialled link only to a device the register and the transport both hold live with one key, checked
+    at the preamble and again before every request, so a revoke ends a link before its next request
+    (#144 item 3, #124); the listener's files are this user's alone on every write, the listener does not
+    start while one of them or a folder above them may be written by another principal, and it serves a
+    key line only for a device the register holds live with that key (#123, #147 item 4); the
+    listener's job caps its processes' memory together as well as each, and how many may run (#147
+    item 2); the hub reads preambles through `remote/LinkBinding.ps1` alone (#144 item 7).
+
 E. Acting over the link
 
 18. **R18. Containment: the anchor holds the job, the node daemon never does** (SPAWN; after lifecycle
@@ -447,9 +473,9 @@ E. Acting over the link
       until then a remote session's descendants are what the host's own teardown leaves (R18).
     - **The worktree is optional.** Absent, the session runs in the node's registered clone
       (`node-policy.v1` repos); present, in `<worktreeRoot>\<name>` and nowhere else.
-    - **The ceiling** defaults to the level below the top. A node's owner may set it to the top in L1
-      (the always-on box: ssh access there is already that trust); L4 may only lower it; nothing the
-      link carries can raise it.
+    - **The ceiling** defaults to the top level, bypass (founder's decision of 2026-10-11, "Mesh v1"
+      under step R17; it was the level below the top). A node's owner may lower it in L1; L4 may only
+      lower it; nothing the link carries can move it. A policy that names no daily spawn cap gets 32.
     - **The name** is the label plus the run title, capped at 60 characters, given at birth with
       Remote Control on.
     - **Fail closed on the mode, before any work.** The session starts with no prompt. The node reads

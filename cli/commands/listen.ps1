@@ -18,7 +18,8 @@ $HordeCommand = @{
         # Loaded here, in the command's own scope, so the listeners' helpers stay visible to the blocks
         # they register (transports/Listener.ps1, the adapter contract).
         $root = Get-HordeRoot
-        foreach ($f in @("Tristate", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+        . (Join-Path $root "cli\HubRegistry.ps1")
         . (Join-Path $root "transports\Listener.ps1")
         foreach ($l in @(Get-HordeListenerFiles)) { . $l }
         if ($Seconds -lt 0) { throw "-Seconds must be 0 (listen until stopped) or more" }
@@ -27,7 +28,10 @@ $HordeCommand = @{
         $hordeHome = Get-HordeHome
         # The hub id is this machine's device id (remote design, decision 1): attach relays to its pipe.
         $hubId = (Get-HordeNode).deviceId
-        $s = Start-HordeListener -Adapter $a.value -HordeHome $hordeHome -HubId $hubId -Root $root -Port $Port
+        # The hub's register (cli/HubRegistry.ps1): a key is served only for a device it holds, live, with
+        # that key; read again at every health check.
+        $register = { Get-HordeHubLiveKeys -HordeHome $hordeHome }
+        $s = Start-HordeListener -Adapter $a.value -HordeHome $hordeHome -HubId $hubId -Root $root -Port $Port -Register $register
         if ($s.state -cne "known") { throw $s.reason }
         $running = $s.value
         $why = "stopped"

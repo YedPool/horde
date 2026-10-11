@@ -9,12 +9,13 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "node-of-another-device-accepted"
-           Find = 'else { $refusal = Test-HordeHubHelloBound -Frame $f -BoundDeviceId "$($Entry.deviceId)" }'
+           Find = 'else { $refusal = (@(Test-HordeHelloBinding -Frame $f -BoundDeviceId "$($Entry.deviceId)") -join "; ") }'
            Replace = 'else { $refusal = "" }' }
-        # R17c: the binding stand-in itself (swapped for R17a's Test-HordeHelloBinding when it lands).
-        @{ Name = "hello-binding-ignored"
-           Find = 'if ("$($Frame.hello.id)" -cne $BoundDeviceId) {'
-           Replace = 'if ($false) {' }
+        # The binding rule is remote/LinkBinding.ps1's, mutated by test\mutations\link-binding.psd1; here,
+        # that the hub calls it for the device the link is bound to and not for the one the hello names.
+        @{ Name = "hello-bound-to-its-own-claim"
+           Find = '(@(Test-HordeHelloBinding -Frame $f -BoundDeviceId "$($Entry.deviceId)") -join "; ")'
+           Replace = '(@(Test-HordeHelloBinding -Frame $f -BoundDeviceId "$($f.hello.id)") -join "; ")' }
         @{ Name = "refusal-without-bye"
            Find = '$null = Send-HordeHubFrame -Link $link -Frame (New-HordeLinkBye -Code "refused" -Reason $refusal -Seq $seq -Contract $Contract) -Contract $Contract'
            Replace = '' }

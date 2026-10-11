@@ -21,8 +21,17 @@
            Replace = ''
            Expect = "survives"
            Reason = "measured 2026-10-07: a session of this non-SYSTEM sshd inherits horde listen's environment, HORDE_HOME included, so attach finds the home without SetEnv; SetEnv is kept so that does not rest on the inheritance (Listen.ps1 header), and test-listen.ps1 holds the line in the configuration (home-not-passed)" }
+        @{ Name = "revoked-keys-written-plainly"
+           Find = 'if (-not (Test-Path -LiteralPath $files.revoked -PathType Leaf)) { Write-HordeSshLines -Path $files.revoked -Lines @() }'
+           Replace = 'if (-not (Test-Path -LiteralPath $files.revoked -PathType Leaf)) { [System.IO.File]::WriteAllText($files.revoked, "") }' }
         @{ Name = "no-memory-cap"
-           Find = '[HordeSshNative]::LimitProcessMemory($job, [long]$script:HordeSshListenProcessBytes)'
+           Find = '[HordeSshNative]::LimitListenerJob($job, [long]$script:HordeSshListenProcessBytes, [long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
            Replace = '' }
+        @{ Name = "no-job-memory-cap"
+           Find = '[long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
+           Replace = '[long]0x7FFFFFFFFFFF, [int]$script:HordeSshListenActiveProcesses)' }
+        @{ Name = "no-process-count"
+           Find = '[long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
+           Replace = '[long]$script:HordeSshListenJobBytes, [int]100000)' }
     )
 }

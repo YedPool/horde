@@ -11,8 +11,9 @@
 # (test/fixtures/node-serve/dial-peer.ps1), whose transport writes the preamble as attach will. The live
 # dial is R17c-3 (test-transport-conformance's live far end).
 #
-# R17a OWNS THE PREAMBLE CONTRACT (remote/LinkBinding.ps1, not yet merged): the preamble cases here are
-# that contract's wire form, and keep holding when cli/HubServe.ps1's stand-ins become calls to it.
+# R17a OWNS THE PREAMBLE CONTRACT (remote/LinkBinding.ps1, tested on its own by test/test-link-binding.ps1).
+# cli/HubServe.ps1 calls it and restates none of it (issue #144, item 7): the preamble cases here run
+# through the hub's own reader.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -104,6 +105,9 @@ function New-HubListener {
     if ($l.state -cne "known") { throw ("the test hub could not listen: " + $l.reason) }
     return $l.value
 }
+# The hub's admission check as the suite's fixture: $device is enrolled, every other device is not. The
+# real check, the hub's register and the transport together, is test/test-hub-registry.ps1's.
+$admitDevice = { param($D) if ($D -ceq $device) { return "" } return ("device " + $D + " is not enrolled in this fixture") }
 function Mirror-Of {
     param([string]$Root, [string]$Id)
     return (Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $Root -DeviceId $Id) -DeviceId $Id -Contract $contract)
@@ -112,7 +116,7 @@ function Mirror-Of {
 try {
     Write-Host ""
     Write-Host "--- the preamble: one exact line, or nothing is bound ---" -ForegroundColor Cyan
-    $ok = Get-HordeHubPreambleDevice -Text ("horde-attach 1 " + $device)
+    $ok = Read-HordeAttachPreamble -Line ("horde-attach 1 " + $device)
     Check ($ok.state -ceq "known" -and $ok.value -ceq $device) "CONTROL: 'horde-attach 1 <device id>' binds that device"
     $bad = [ordered]@{
         "another version" = ("horde-attach 2 " + $device)
@@ -124,8 +128,8 @@ try {
         "nothing" = ""
     }
     foreach ($k in $bad.Keys) {
-        $r = Get-HordeHubPreambleDevice -Text $bad[$k]
-        Check ($r.state -ceq "unknown" -and "$($r.reason)" -clike "*not an attach preamble*") ("a first line of " + $k + " binds nothing, and says so")
+        $r = Read-HordeAttachPreamble -Line $bad[$k]
+        Check ($r.state -ceq "unknown" -and "$($r.reason)" -clike "*preamble*") ("a first line of " + $k + " binds nothing, and says so (" + $r.reason + ")")
     }
 
     Write-Host ""
@@ -135,7 +139,7 @@ try {
     $listener = New-HubListener -Name $ep
     try {
         $node = Start-Dialler -HubEndpoint $ep -Preamble ("horde-attach 1 " + $device)
-        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 8000 -TimeoutMs 20000 -Listener $listener)
+        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 8000 -TimeoutMs 20000 -Listener $listener -Admit $admitDevice)
         $nd = Stop-Dialler $node
     } finally { Stop-HordeTransportListener -Listener $listener }
     $outs = @($rounds[0].outcomes)
@@ -145,29 +149,48 @@ try {
     Check ($null -ne $nd -and $nd.dials -eq 1 -and $nd.served -eq 1 -and "$(@($nd.endings)[0])" -ceq "closed by the protocol") ("the node served the link it dialled until the hub's bye (" + "$(@($nd.endings) -join ' | ')" + "$(@($nd.failures) -join ' | ')" + ")")
 
     Write-Host ""
+    Write-Host "--- a round whose pulls ran past its interval still listens (issue #144, item 2) ---" -ForegroundColor Cyan
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 3000 -MinMs 5000) -eq 17000) "CONTROL: a quick round listens for the rest of its interval"
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 60000 -MinMs 5000) -eq 5000) "a round whose pulls took 60 s of a 20 s interval still listens for the guaranteed 5 s"
+    Check ((Get-HordeHubDialWindowMs -IntervalMs 20000 -ElapsedMs 60000 -MinMs -5) -eq 0) "and a floor below 0 is 0, never a negative wait"
+    Check ($script:HordeHubDialWindowMinMs -ge 1000) ("the default floor is a real window (" + $script:HordeHubDialWindowMinMs + " ms)")
+    # The interval is 1 ms, so every round has run past it before it listens: before the floor, the
+    # window was 0 and this node was never taken.
+    $mr = Join-Path $work "mirror-late"
+    $listener = New-HubListener -Name $ep
+    try {
+        $node = Start-Dialler -HubEndpoint $ep -Preamble ("horde-attach 1 " + $device)
+        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 1 -DialWindowMinMs 8000 -TimeoutMs 20000 -Listener $listener -Admit $admitDevice)
+        $nd = Stop-Dialler $node
+    } finally { Stop-HordeTransportListener -Listener $listener }
+    $outs = @($rounds[0].outcomes)
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $device + "): heard, 2 session(s)*") }).Count -eq 1) ("a round with no time left of its interval still takes the dialled node (" + ($outs -join " | ") + ")")
+
+    Write-Host ""
     Write-Host "--- a hello that claims another device than the preamble is refused ---" -ForegroundColor Cyan
     $mr = Join-Path $work "mirror-b"
     $listener = New-HubListener -Name $ep
     try {
         $node = Start-Dialler -HubEndpoint $ep -As $device -Preamble ("horde-attach 1 " + $other)
-        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 8000 -TimeoutMs 20000 -Listener $listener)
+        # Both devices admitted here: what is under test is the hello, not the enrolment.
+        $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 8000 -TimeoutMs 20000 -Listener $listener -Admit { param($D) return "" })
         $nd = Stop-Dialler $node
     } finally { Stop-HordeTransportListener -Listener $listener }
     $outs = @($rounds[0].outcomes)
-    Check (@($outs | Where-Object { $_ -clike ("*(" + $other + "): unreachable: *answered as device " + $device + "*bound to " + $other + "*") }).Count -eq 1) ("the hub refuses the hello, naming both devices (" + ($outs -join " | ") + ")")
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $other + "): unreachable: *claims device '" + $device + "'*enrolled for device " + $other + "*") }).Count -eq 1) ("the hub refuses the hello, naming both devices (" + ($outs -join " | ") + ")")
     Check (-not (Test-Path -LiteralPath (Get-HordeHubMirrorPath -Root $mr -DeviceId $device))) "and writes nothing under the device the hello claimed"
     $bm = Mirror-Of -Root $mr -Id $other
-    Check ($bm.state -ceq "known" -and "$(Get-HordeLinkProp (Get-HordeLinkProp $bm.value 'lost') 'reason')" -clike "*bound to*" -and $null -eq (Get-HordeLinkProp $bm.value "inventory")) "the bound device's mirror records the failed round, never an inventory from the other"
+    Check ($bm.state -ceq "known" -and "$(Get-HordeLinkProp (Get-HordeLinkProp $bm.value 'lost') 'reason')" -clike "*enrolled for device*" -and $null -eq (Get-HordeLinkProp $bm.value "inventory")) "the bound device's mirror records the failed round, never an inventory from the other"
     Check ($null -ne $nd -and $nd.served -eq 1 -and "$(@($nd.endings)[0])" -clike "*closed by the protocol*") ("the node got the hub's bye (" + "$(@($nd.endings) -join ' | ')" + ")")
 
     Write-Host ""
     Write-Host "--- no preamble, or a wrong one, binds nothing and ends the link ---" -ForegroundColor Cyan
-    foreach ($case in @(@{ name = "a wrong version"; pre = ("horde-attach 2 " + $device); want = "*not an attach preamble*" }, @{ name = "no preamble"; pre = ""; want = "*no preamble came*" })) {
+    foreach ($case in @(@{ name = "a wrong version"; pre = ("horde-attach 2 " + $device); want = "*preamble is version '2'*" }, @{ name = "no preamble"; pre = ""; want = "*no preamble came*" })) {
         $mr = Join-Path $work ("mirror-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
         $listener = New-HubListener -Name $ep
         try {
             $node = Start-Dialler -HubEndpoint $ep -Preamble $case.pre
-            $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 6000 -TimeoutMs 3000 -Listener $listener)
+            $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 6000 -TimeoutMs 3000 -Listener $listener -Admit $admitDevice)
             $nd = Stop-Dialler $node
         } finally { Stop-HordeTransportListener -Listener $listener }
         $outs = @($rounds[0].outcomes)
@@ -181,10 +204,50 @@ try {
         $o = Open-HordeTransportLink -Transport $mem -Endpoint $ep -Role "node" -TimeoutMs 2000
         $null = Send-HordeLinkFrame -Link $o.value -Frame "not a preamble"
         $acc = Receive-HordeTransportLink -Listener $listener -TimeoutMs 2000
-        $said = Invoke-HordeHubDialled -Link $acc.value -Root (Join-Path $work "mirror-c") -Hub $hub -Contract $contract -TimeoutMs 2000
+        $said = Invoke-HordeHubDialled -Link $acc.value -Root (Join-Path $work "mirror-c") -Hub $hub -Contract $contract -TimeoutMs 2000 -Admit $admitDevice
         Check ($said -clike "a dialled link was refused:*" -and $acc.value.closed) ("a refused dialled link is closed at the hub's end (" + $said + ")")
         Close-HordeLink -Link $o.value
     } finally { Stop-HordeTransportListener -Listener $listener }
+
+    Write-Host ""
+    Write-Host "--- only an enrolled device is bound, and only while it stays enrolled (issues #144 item 3, #124) ---" -ForegroundColor Cyan
+    # One dialled round with -Admit, the dialler naming -As in its preamble: { outs; node; mirror }.
+    function Dial-Round { param([string]$As, $Admit, [switch]$NoAdmit)
+        $mr = Join-Path $work ("mirror-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+        $listener = New-HubListener -Name $ep
+        try {
+            $node = Start-Dialler -HubEndpoint $ep -As $As -Preamble ("horde-attach 1 " + $As)
+            if ($NoAdmit) { $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 6000 -TimeoutMs 8000 -Listener $listener) }
+            else { $rounds = @(Invoke-HordeHubServe -Nodes @() -Root $mr -Hub $hub -Contract $contract -Rounds 1 -IntervalMs 6000 -TimeoutMs 8000 -Listener $listener -Admit $Admit) }
+            $nd = Stop-Dialler $node
+        } finally { Stop-HordeTransportListener -Listener $listener }
+        return [pscustomobject]@{ outs = @($rounds[0].outcomes); node = $nd; root = $mr }
+    }
+    # An unenrolled device's well-formed preamble: the line is right, the device is not admitted.
+    $r = Dial-Round -As $other -Admit $admitDevice
+    Check (@($r.outs | Where-Object { $_ -clike ("a dialled link for device " + $other + " was refused: *not enrolled*") }).Count -eq 1) ("a well-formed preamble naming a device that is not enrolled is refused, naming it (" + ($r.outs -join " | ") + ")")
+    Check (@(Get-ChildItem -LiteralPath $r.root -File -ErrorAction SilentlyContinue).Count -eq 0) "and no mirror is written for it: nothing was asked of it"
+    Check ($null -ne $r.node -and "$(@($r.node.endings)[0])" -clike "the link ended: *") ("and its link is closed by the hub (" + "$(@($r.node.endings) -join ' | ')" + ")")
+    $r = Dial-Round -As $device -Admit $admitDevice
+    Check (@($r.outs | Where-Object { $_ -clike ("*(" + $device + "): heard, 2 session(s)*") }).Count -eq 1) ("CONTROL: the same round with the enrolled device hears it (" + ($r.outs -join " | ") + ")")
+    $r = Dial-Round -As $device -NoAdmit
+    Check (@($r.outs | Where-Object { $_ -clike ("a dialled link for device " + $device + " was refused: *no enrolment check*") }).Count -eq 1) ("a hub given no enrolment check binds no dialled link, even an enrolled one (" + ($r.outs -join " | ") + ")")
+    $r = Dial-Round -As $device -Admit { param($D) throw "the register is unreadable" }
+    Check (@($r.outs | Where-Object { $_ -clike ("a dialled link for device " + $device + " was refused: *could not be checked*register is unreadable*") }).Count -eq 1) ("a check that throws admits no one, and says why (" + ($r.outs -join " | ") + ")")
+    # REVOKED MID-LINK (issue #124): admitted at the preamble and before the ping, revoked before the
+    # sessions.list. The hub asks it nothing more, says why in a bye, and records the round as lost.
+    $calls = [hashtable]::Synchronized(@{ n = 0 })
+    $revokeAfterTwo = { param($D) $calls["n"] = [int]$calls["n"] + 1; if ([int]$calls["n"] -le 2) { return "" } return ("device " + $D + " was revoked at 2026-10-11T00:00:00Z") }
+    $r = Dial-Round -As $device -Admit $revokeAfterTwo
+    Check ([int]$calls["n"] -eq 3) ("the check is asked at the preamble and again before each request (" + $calls["n"] + " times)")
+    Check (@($r.outs | Where-Object { $_ -clike ("*(" + $device + "): unreachable: device " + $device + " is no longer admitted, so the hub ended its link: *was revoked*") }).Count -eq 1) ("a device revoked mid-link is cut before its next request, saying why (" + ($r.outs -join " | ") + ")")
+    $m = Mirror-Of -Root $r.root -Id $device
+    Check ($m.state -ceq "known" -and $null -eq (Get-HordeLinkProp $m.value "inventory") -and "$(Get-HordeLinkProp (Get-HordeLinkProp $m.value 'lost') 'reason')" -clike "*no longer admitted*") "its mirror records the lost round and holds no inventory the revoked device sent"
+    Check ($null -ne $r.node -and "$(@($r.node.endings)[0])" -ceq "closed by the protocol") ("and the node got the hub's bye (" + "$(@($r.node.endings) -join ' | ')" + ")")
+    $calls["n"] = 0
+    $revokeAfterOne = { param($D) $calls["n"] = [int]$calls["n"] + 1; if ([int]$calls["n"] -le 1) { return "" } return "expired" }
+    $r = Dial-Round -As $device -Admit $revokeAfterOne
+    Check (@($r.outs | Where-Object { $_ -clike "*no longer admitted*expired*" }).Count -eq 1 -and [int]$calls["n"] -eq 2) ("revoked before the ping: cut there, asked nothing (" + ($r.outs -join " | ") + ")")
 
     Write-Host ""
     Write-Host "--- a dialled link is served as an accepted one is: acts, read-only, messaging ---" -ForegroundColor Cyan
