@@ -1,0 +1,114 @@
+// relays/cloudflare/worker/signin.js - SIGN IN WITH GOOGLE, server side: the OAuth 2.0 authorization code
+// flow with PKCE (RFC 7636), state and nonce, scopes openid email profile, and the session it ends in.
+//
+//   GET  /auth/google            start: a fresh state, nonce and PKCE verifier kept in the
+//                                __Host-horde-signin cookie for ten minutes, and a redirect to Google
+//   GET  /auth/google/callback   (wrangler.json's HORDE_RELAY_GOOGLE_CALLBACK, the address registered
+//                                with Google) the code, exchanged and its id token verified, then a
+//                                session and its __Host-horde-session cookie, and back to the app
+//   POST /auth/signout           the session ended here and its cookie cleared; the site's own Origin only
+//   GET  /auth/session           { signedIn, email }, for the app to know which screen to show
+//
+// THE CALLBACK REFUSES unless every one of these holds, and then makes no session and sets no cookie:
+// the browser holds this sign-in's cookie (so the callback is the end of a sign-in THIS browser
+// started: no login CSRF), the state Google returns is the cookie's (compared in constant time), the
+// sign-in is under ten minutes old, the provider exchanges the code - with the client's secret and the
+// PKCE verifier only this Worker and this browser's cookie knew - for an id token that verifies whole
+// (jwt.js: signature, issuer, audience, times, the cookie's nonce, a verified email), and the allowlist
+// admits the account (allowlist.js). A refusal sends the browser back to the app with #signin-refused,
+// and says why in the Horde-Signin-Refused header - the Worker's own words, never the provider's.
+//
+// The client id and secret are Worker secrets the deploy stores (Deploy.ps1). A Worker without them
+// refuses to start a sign-in at all, in words.
+import { siteOf, fromSite } from "./site.js";
+import { readCookie, cookieHeader, clearedCookieHeader, SESSION_COOKIE, SIGNIN_COOKIE } from "./cookies.js";
+import { providerOf, newSignIn, authorizeUrl, exchangeCode, keyCache } from "./oidc.js";
+import { verifyIdToken } from "./jwt.js";
+import { readAllowlist, admits } from "./allowlist.js";
+import { newSessionId, sessionOf, SESSION_MS } from "./sessions.js";
+import { ACCOUNT_PREFIX } from "./accounts.js";
+import { answer, refuse } from "./answers.js";
+
+export const AUTH_ROOT = "/auth/";
+const START = "/auth/google";
+const SIGNOUT = "/auth/signout";
+const SESSION = "/auth/session";
+const SIGNIN_MS = 600000;
+const APP = "/app/index.html";
+const PENDING = /^([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})\.([0-9]{13})$/;
+// The provider's keys, cached for this isolate (oidc.js).
+const keys = keyCache();
+
+function sameText(a, b) {
+  const x = new TextEncoder().encode(a);
+  const y = new TextEncoder().encode(b);
+  return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
+}
+
+function redirect(location, cookies, extra = {}) {
+  const headers = new Headers({ Location: location, ...extra });
+  for (const c of cookies) headers.append("Set-Cookie", c);
+  return new Response(null, { status: 303, headers });
+}
+
+async function start(request, env, url) {
+  const site = siteOf(env);
+  if (typeof env.GOOGLE_CLIENT_ID !== "string" || env.GOOGLE_CLIENT_ID === "" || typeof env.GOOGLE_CLIENT_SECRET !== "string" || env.GOOGLE_CLIENT_SECRET === "") return refuse(503, "sign-in is not set up on this relay: deploy it with the Google client");
+  const s = await newSignIn();
+  const pending = s.state + "." + s.nonce + "." + s.verifier + "." + Date.now();
+  const location = authorizeUrl(providerOf(env, url), { clientId: env.GOOGLE_CLIENT_ID, redirectUri: site.callbackUrl, state: s.state, nonce: s.nonce, challenge: s.challenge });
+  return redirect(location, [cookieHeader(SIGNIN_COOKIE, pending, SIGNIN_MS / 1000)]);
+}
+
+async function callback(request, env, url) {
+  const site = siteOf(env);
+  const refused = (why) => redirect(site.origin + APP + "#signin-refused", [clearedCookieHeader(SIGNIN_COOKIE)], { "Horde-Signin-Refused": why });
+  if (url.searchParams.has("error")) return refused("the provider did not sign this account in");
+  const m = PENDING.exec(readCookie(request, SIGNIN_COOKIE) || "");
+  if (!m) return refused("this browser started no sign-in here");
+  const state = url.searchParams.get("state");
+  const code = url.searchParams.get("code");
+  if (typeof state !== "string" || !sameText(state, m[1])) return refused("the sign-in's state is not this browser's");
+  const now = Date.now();
+  if (now - Number(m[4]) > SIGNIN_MS || Number(m[4]) > now) return refused("the sign-in took longer than ten minutes");
+  if (typeof code !== "string" || code.length < 1 || code.length > 2048) return refused("the provider sent no code");
+  const provider = providerOf(env, url);
+  const ex = await exchangeCode(provider, { code, clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, redirectUri: site.callbackUrl, verifier: m[3] });
+  if (!ex.ok) return refused(ex.reason);
+  const v = await verifyIdToken(ex.idToken, (kid) => keys(provider, kid), { issuers: provider.issuers, audience: env.GOOGLE_CLIENT_ID, nonce: m[2], now, maxAgeMs: SIGNIN_MS });
+  if (!v.ok) return refused(v.reason);
+  if (!admits(readAllowlist(env.HORDE_RELAY_SIGNIN_ALLOWLIST), v.claims)) return refused("this account is not on this relay's sign-in allowlist");
+  const id = newSessionId();
+  await sessionOf(env, id).begin({ account: ACCOUNT_PREFIX + v.claims.sub, email: v.claims.email, createdAt: now, expiresAt: now + SESSION_MS });
+  return redirect(site.origin + APP, [cookieHeader(SESSION_COOKIE, id, SESSION_MS / 1000), clearedCookieHeader(SIGNIN_COOKIE)]);
+}
+
+async function signOut(request, env) {
+  if (request.method !== "POST") return refuse(405, "sign out with POST");
+  if (!fromSite(request, siteOf(env))) return refuse(403, "sign out from the app's own page");
+  const session = sessionOf(env, readCookie(request, SESSION_COOKIE));
+  if (session) await session.end();
+  const r = answer(200, { signedIn: false });
+  r.headers.append("Set-Cookie", clearedCookieHeader(SESSION_COOKIE));
+  return r;
+}
+
+async function whoIsSignedIn(request, env) {
+  const session = sessionOf(env, readCookie(request, SESSION_COOKIE));
+  const s = session ? await session.read(Date.now()) : null;
+  return answer(200, s ? { signedIn: true, email: s.email } : { signedIn: false, email: "" });
+}
+
+export function isAuthPath(pathname) { return pathname === "/auth" || pathname.startsWith(AUTH_ROOT); }
+
+export async function handleAuth(request, env, url) {
+  const p = url.pathname;
+  if (p === START || p === siteOf(env).callbackPath || p === SESSION) {
+    if (request.method !== "GET") return refuse(405, "that is read with GET");
+    if (p === START) return start(request, env, url);
+    if (p === SESSION) return whoIsSignedIn(request, env);
+    return callback(request, env, url);
+  }
+  if (p === SIGNOUT) return signOut(request, env);
+  return refuse(404, "there is no such sign-in address");
+}

@@ -11,7 +11,7 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "any-host-name-vouched-for"
-           Find = 'if (!LOOPBACK.has(url.hostname)) return null;'
+           Find = 'if (!isLoopback(url)) return null;'
            Replace = '' }
         @{ Name = "placeholder-counts-as-a-token"
            Find = 'const TEST_TOKEN_MIN = 32;'

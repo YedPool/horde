@@ -8,18 +8,23 @@
 // answer can leave without them. A failure inside is answered 500 with words of the Worker's own, and
 // nothing about the request is logged: the Worker has no console call at all.
 //
-// /auth/ IS RESERVED for sign-in (relay PR 8b): Google returns to /auth/google/callback (wrangler.json,
-// HORDE_RELAY_GOOGLE_CALLBACK), the redirect address registered with Google. Until then every path under
-// it is refused here, so no file of the app can ever be served there and take the address over.
+// /auth/ IS SIGN-IN'S (signin.js): Sign in with Google, whose callback is /auth/google/callback
+// (wrangler.json, HORDE_RELAY_GOOGLE_CALLBACK), the redirect address registered with Google. Every path
+// under it is the Worker's own - an unknown one is 404 - so no file of the app can ever be served there
+// and take the address over. Its answers are never cached, as the API's are not.
 //
 // "/" is the site's own index.html (a redirect to app/index.html): the asset store is asked for exact
 // paths only (wrangler.json, html_handling none), because its default rewriting would answer
 // app/index.html with a redirect to app/, which the app's worker would then cache in place of the page.
 import { handleApi, isApiPath } from "./api.js";
+import { handleAuth, isAuthPath } from "./signin.js";
 import { refuse } from "./answers.js";
 import { withStrictHeaders } from "./headers.js";
 
 export { Mailbox } from "./mailbox.js";
+export { Session } from "./sessions.js";
+export { Account } from "./accounts.js";
+export { MachineKey } from "./machines.js";
 
 // A write to a file is refused by the asset store itself (405, measured 2026-10-11 against the local
 // dev): no check of the method is needed here.
@@ -28,16 +33,14 @@ async function serveFile(request, env, url) {
   return env.ASSETS.fetch(request);
 }
 
-const AUTH_ROOT = "/auth/";
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const reserved = url.pathname === "/auth" || url.pathname.startsWith(AUTH_ROOT);
-    const api = reserved || isApiPath(url.pathname);
+    const auth = isAuthPath(url.pathname);
+    const api = auth || isApiPath(url.pathname);
     let response;
     try {
-      if (reserved) response = refuse(501, "sign-in is not served by this relay yet");
+      if (auth) response = await handleAuth(request, env, url);
       else response = api ? await handleApi(request, env, url) : await serveFile(request, env, url);
     } catch (e) {
       response = refuse(500, "the relay failed this request");
