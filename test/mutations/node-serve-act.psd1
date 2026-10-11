@@ -6,6 +6,10 @@
     Target = "remote\NodeServe.ps1"
     Suite  = "test\test-node-serve-act.ps1"
     Mutations = @(
+        # R17c (2026-10-07): read-only decides before the act dispatch.
+        @{ Name = "act-before-read-only"
+           Find = 'if ($null -ne $roAct) { return $roAct }'
+           Replace = '' }
         @{ Name = "acts-without-journal"
            Find = 'if ($journal -eq "") { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "this node keeps no request journal'
            Replace = 'if ($false) { return (New-HordeNodeReply -Reply (New-HordeNodeError -State $State -Request $Frame -Code "refused" -Reason "this node keeps no request journal' }

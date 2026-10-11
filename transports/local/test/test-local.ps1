@@ -40,6 +40,13 @@ foreach ($bad in @("..\x", ($id.ToUpperInvariant()), "", "*", ($id + "\x"))) {
 }
 $l = Start-HordeTransportListener -Transport $t -Endpoint "..\x"
 Check ($l.state -ceq "unknown") "listening on a malformed id is refused"
+# The hub's own pipe (R17a): "hub:<id>" and nothing looser.
+Check ((Get-HordeLocalPipeName -DeviceId ("hub:" + $id)) -ceq ("horde-hub-" + $id)) "hub:<id> names the hub's pipe horde-hub-<id>"
+foreach ($bad in @("hub:", ("hub:" + $id.ToUpperInvariant()), ("HUB:" + $id), ("hub:..\" + $id), ("hub:" + $id + "\x"), ("hub:hub:" + $id), (" hub:" + $id), ("hub:*"))) {
+    Check ($null -eq (Get-HordeLocalPipeName -DeviceId $bad)) "'$bad' names no pipe"
+}
+$l = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + "..\x")
+Check ($l.state -ceq "unknown") "listening on a malformed hub endpoint is refused"
 
 Write-Host ""
 Write-Host "--- the live pipe's ACL, read back ---" -ForegroundColor Cyan
@@ -69,6 +76,55 @@ if ($la.state -eq "known") {
         Check ($second.state -ceq "unknown" -and "$($second.reason)" -like "*already in use*") "the name cannot be taken twice: one instance only"
     } finally { Stop-HordeTransportListener -Listener $listener }
     Check (-not (Test-PipeListed ("horde-node-" + $id))) "a stopped listener leaves no pipe behind"
+}
+
+Write-Host ""
+Write-Host "--- the hub's own pipe (R17a): beside the node's, the same rules, the dialler a node ---" -ForegroundColor Cyan
+$id = New-Id
+$ln = Start-HordeTransportListener -Transport $t -Endpoint $id
+$lh = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+Check ($ln.state -ceq "known" -and $lh.state -ceq "known") "one device holds its node pipe and its hub pipe at once"
+if ($ln.state -eq "known" -and $lh.state -eq "known") {
+    $nl = Get-HordeValue $ln; $hl = Get-HordeValue $lh
+    try {
+        Check (Test-PipeListed ("horde-hub-" + $id)) "the hub's pipe is \\.\pipe\horde-hub-<hubId>"
+        $hs = $hl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        $ns = $nl.state.server.GetAccessControl().GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner)
+        Check ($hs -ceq $ns -and $hs.Contains("(D;;") -and $hs.Contains($me.Value)) ("its owner and ACL are the node pipe's, read back: " + $hs)
+        # The ACL itself, rule by rule, not the owner: this session may be elevated, where a pipe made
+        # without an explicit owner comes out owned by Administrators (review of #138).
+        $hsec = $hl.state.server.GetAccessControl()
+        $hrules = @($hsec.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+        $netSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::NetworkSid, $null)
+        Write-Host ("  hub pipe rules: " + (($hrules | ForEach-Object { "" + $_.IdentityReference + " " + $_.AccessControlType + " " + $_.PipeAccessRights }) -join "; ")) -ForegroundColor DarkGray
+        Check ($hsec.AreAccessRulesProtected -eq $true -and $hrules.Count -eq 2 -and @($hrules | Where-Object { $_.IsInherited }).Count -eq 0) "the hub pipe's ACL is protected and holds exactly two rules, neither inherited"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -ceq "$me" -and $_.AccessControlType -eq "Allow" -and $_.PipeAccessRights -eq [System.IO.Pipes.PipeAccessRights]::FullControl }).Count -eq 1) "one allows this user, the hub's own, full control"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -ceq "$netSid" -and $_.AccessControlType -eq "Deny" }).Count -eq 1) "one denies NETWORK"
+        Check (@($hrules | Where-Object { "$($_.IdentityReference)" -cne "$me" -and "$($_.IdentityReference)" -cne "$netSid" }).Count -eq 0) "no rule names anyone else: not Administrators, SYSTEM, Everyone or Users"
+        $second = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+        Check ($second.state -ceq "unknown" -and "$($second.reason)" -like "*already in use*") "the hub's name cannot be taken twice either"
+        $o = Open-HordeTransportLink -Transport $t -Endpoint ("hub:" + $id) -Role "node" -TimeoutMs 5000
+        $ka = Receive-HordeTransportLink -Listener $hl -TimeoutMs 5000
+        Check ($o.state -ceq "known" -and $ka.state -ceq "known" -and (Get-HordeValue $o).peer.verified -eq $true) "a node-role dial to hub:<id> is opened, verified and accepted by the hub's listener"
+        if ($o.state -eq "known" -and $ka.state -eq "known") {
+            $null = Send-HordeLinkFrame -Link (Get-HordeValue $o) -Frame "to-the-hub" -TimeoutMs 5000
+            $got = Receive-HordeLinkFrame -Link (Get-HordeValue $ka) -TimeoutMs 5000
+            Check ($got.state -ceq "known" -and "$($got.value)" -ceq "to-the-hub") "a frame crosses the hub's pipe"
+            $nobody = Receive-HordeTransportLink -Listener $nl -TimeoutMs 200
+            Check ($nobody.state -ceq "unknown") "and the node's own pipe saw no client: the two names are two pipes"
+        }
+        if ($o.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $o) }
+        if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
+    } finally { Stop-HordeTransportListener -Listener $hl; Stop-HordeTransportListener -Listener $nl }
+    Check (-not (Test-PipeListed ("horde-hub-" + $id))) "a stopped hub listener leaves no pipe behind"
+    # Issue #147, item 7: a dial to a hub nobody serves says a hub did not answer, not a node.
+    $gone = Open-HordeTransportLink -Transport $t -Endpoint ("hub:" + $id) -Role "node" -TimeoutMs 300
+    Check ($gone.state -ceq "unknown" -and "$($gone.reason)" -like "*no hub answered on horde-hub-*") ("a dial to a hub nobody serves says no hub answered (" + $gone.reason + ")")
+    $gone = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 300
+    Check ($gone.state -ceq "unknown" -and "$($gone.reason)" -like "*no node answered on horde-node-*") ("CONTROL: and a dial to a node nobody serves still says no node answered (" + $gone.reason + ")")
+} else {
+    if ($ln.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $ln) }
+    if ($lh.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $lh) }
 }
 
 Write-Host ""
@@ -170,6 +226,25 @@ try {
             Check ($holdText -notmatch "node-says-hello") "and reads nothing the node sent"
         } finally { Stop-HordeTransportListener -Listener $listener }
     } else { Check $false "a listener for the low-reader case" }
+
+    # 2b. The same for the hub's own pipe (R17a; review of #138): attach is the only client meant to
+    # reach it, and the hub binds whatever device the first line names, so a process of another
+    # identity - here this user at low integrity - must not reach it at all.
+    $id = New-Id
+    $lh = Start-HordeTransportListener -Transport $t -Endpoint ("hub:" + $id)
+    if ($lh.state -eq "known") {
+        $hl = Get-HordeValue $lh
+        try {
+            $hold = Start-HordeLowChild -Mode "hold" -Pipe ("horde-hub-" + $id) -Folder $lowDir
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "hold: " -Ms 20000
+            $ka = Receive-HordeTransportLink -Listener $hl -TimeoutMs 3000
+            Check ($ka.state -ceq "unknown") "the hub's pipe accepts no link from a low-integrity process"
+            if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
+            $null = Wait-HordeLowLine -Out $hold.out -Pattern "done" -Ms 10000
+            $holdText = ""; if (Test-Path -LiteralPath $hold.out) { $holdText = [System.IO.File]::ReadAllText($hold.out) }
+            Check ($holdText -match "hold: UnauthorizedAccessException") "it is denied at open"
+        } finally { Stop-HordeTransportListener -Listener $hl }
+    } else { Check $false "a hub listener for the low-reader case" }
 
     # 3. The node's own check, reached past the label. The label stops a low reader before the node
     # sees it, so to exercise the node's check of its client's integrity, this suite builds a listener

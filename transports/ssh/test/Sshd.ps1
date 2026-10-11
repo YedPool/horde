@@ -179,17 +179,22 @@ function Get-HordeFreeLoopbackPort {
 function Write-HordeSshdConfig {
     # The test-only sshd_config: 127.0.0.1 only, keys only, everything under -Root, and -ForceCommand
     # as the one thing a session may run. Forward slashes: sshd reads its config the POSIX way.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][int]$Port, [Parameter(Mandatory = $true)][string]$ForceCommand)
+    # With -ForceCommand "" there is none, as on the hub's listener (R17a: a ForceCommand would override
+    # each key's command=), and each enrolled key's own command= and restrict are the guard. -HostKey,
+    # -AuthorizedKeys and -RevokedKeys name the hub's own enrolment files instead of -Root's.
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][int]$Port, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$ForceCommand, [string]$HostKey = "", [string]$AuthorizedKeys = "", [string]$RevokedKeys = "")
     $f = $Root.Replace('\', '/')
+    $hk = $f + "/host_ed25519"; if ($HostKey -ne "") { $hk = $HostKey.Replace('\', '/') }
+    $ak = $f + "/authorized_keys"; if ($AuthorizedKeys -ne "") { $ak = $AuthorizedKeys.Replace('\', '/') }
     # Each line in parentheses: in an array literal the comma binds tighter than +, so
     # "Port " + $Port, "next" made one line of every entry after it (measured: sshd -t, "keyword Port
     # extra arguments at end of line").
     $lines = @(
         ("Port " + $Port),
         "ListenAddress 127.0.0.1",
-        ("HostKey " + $f + "/host_ed25519"),
+        ("HostKey " + $hk),
         ("PidFile " + $f + "/sshd.pid"),
-        ("AuthorizedKeysFile " + $f + "/authorized_keys"),
+        ("AuthorizedKeysFile " + $ak),
         "PubkeyAuthentication yes",
         "PasswordAuthentication no",
         "KbdInteractiveAuthentication no",
@@ -197,9 +202,10 @@ function Write-HordeSshdConfig {
         "AllowAgentForwarding no",
         "X11Forwarding no",
         "Subsystem sftp none",
-        "LogLevel VERBOSE",
-        ("ForceCommand " + $ForceCommand)
+        "LogLevel VERBOSE"
     )
+    if ($RevokedKeys -ne "") { $lines += @(("RevokedKeys " + $RevokedKeys.Replace('\', '/'))) }
+    if ($ForceCommand -ne "") { $lines += @(("ForceCommand " + $ForceCommand)) }
     [System.IO.File]::WriteAllLines((Join-Path $Root "sshd_config"), [string[]]$lines)
     return (Join-Path $Root "sshd_config")
 }

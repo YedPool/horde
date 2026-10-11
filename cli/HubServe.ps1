@@ -35,6 +35,9 @@ $script:HordeHubOwnTransport = "local"
 $script:HordeHubAsideKept = 3
 # HRESULT 0x80070020, ERROR_SHARING_VIOLATION: another process holds the hub's run lock.
 $script:HordeHubSharingViolation = -2147024864
+# HRESULT 0x80070021, ERROR_LOCK_VIOLATION: another process has locked a range of the file. With the
+# sharing violation, the only failures read as a mirror "held open" (re-review of PR #88, F1).
+$script:HordeHubLockViolation = -2147024863
 # Each node's part of a round is bounded (issue #87, F10). 45 s: a node's sessions.list builds its
 # projection, 11.4 s measured 2026-10-02, and node serve is opted out of power throttling, so 45 s
 # is about four of those; nodes are pulled one after another, so a slow one costs the rest of the
@@ -107,10 +110,16 @@ function Read-HordeHubMirror {
         # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
         # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the
         # round leaves the file as it is rather than moving it aside and writing over its name.
+        # HELD IS A SHARING OR LOCK VIOLATION ONLY (re-review of PR #88, F1): access denied, or any other
+        # failure to open the file, is marked refused and said as its own cause; it was said as "held
+        # open by another process", round after round, for a mirror its ACL denied.
         $inner = $_.Exception; while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
         $u = New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_
-        $isHeld = ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException]))
+        $isHeld = ($inner -is [System.IO.IOException] -and ($inner.HResult -eq $script:HordeHubSharingViolation -or $inner.HResult -eq $script:HordeHubLockViolation))
+        $isRefused = ((-not $isHeld) -and ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException])))
         $u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld
+        $u | Add-Member -NotePropertyName refused -NotePropertyValue $isRefused
+        $u | Add-Member -NotePropertyName cause -NotePropertyValue $inner.Message
         return $u
     }
     if ($null -eq $m) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read: it is empty")) }
@@ -218,10 +227,17 @@ function Get-HordeHubWaitMs {
     return [math]::Min($TimeoutMs, $left)
 }
 
+# A step that fails within this much of the bound's deadline failed because of the bound. A wait cut
+# to the bound ends on the receive's own reading of the clock, and [datetime]::UtcNow moves in steps
+# (0.5 to 6 ms measured here, 2026-10-07), so it could end a few ms short of the deadline and be said as
+# a plain timeout: "no frame within 2767 ms" on a 3 s bound (remote run c2-dial, 2026-10-07).
+$script:HordeHubBoundSlackMs = 50
+
 function Get-HordeHubPastBound {
-    # The reason a step failed, said as the bound when the bound is what ran out.
+    # The reason a step failed, said as the bound when the bound is what ran out (within
+    # $script:HordeHubBoundSlackMs of its deadline).
     param([Parameter(Mandatory = $true)]$Bound, [string]$Reason)
-    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
+    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline.AddMilliseconds(-$script:HordeHubBoundSlackMs)) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
     return $Reason
 }
 
@@ -239,6 +255,37 @@ function Receive-HordeHubFrame {
     return [pscustomobject]@{ frame = $d.frame; reason = "" }
 }
 
+# DIALLED LINKS (remote plan R17c). A node behind NAT dials the hub's listener over ssh; the forced
+# command, R17a's cli\attach.ps1, dials the hub pipe for it and first writes one preamble line naming
+# the device its key is enrolled as, taken from its own argv, never from the node. The hub binds the
+# link to that device and refuses a hello claiming another.
+#
+# R17a OWNS THE CONTRACT (remote/LinkBinding.ps1: Read-HordeAttachPreamble, Test-HordeHelloBinding),
+# not yet merged. These two functions are this file's only use of it: each matches that contract and is
+# swapped for a call to it when R17a lands, with nothing else here changing.
+
+function Get-HordeHubPreambleDevice {
+    # The device a dialled link is bound to, from its first line: known <deviceId>, or unknown with the
+    # reason. R17a's wire form: ASCII "horde-attach 1 <deviceId>", the id a lowercase UUID; any other
+    # shape, version or casing is refused. Stand-in for Read-HordeAttachPreamble -Line.
+    param([AllowEmptyString()][string]$Text)
+    $m = [regex]::Match($Text, '\Ahorde-attach 1 (?<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\z')
+    if (-not $m.Success) {
+        $shown = $Text; if ($shown.Length -gt 80) { $shown = $shown.Substring(0, 80) + "..." }
+        return (New-HordeUnknown -Reason ("the link's first line is not an attach preamble ('horde-attach 1 <device id>'): '" + $shown + "'"))
+    }
+    return (New-HordeKnown -Value $m.Groups["id"].Value)
+}
+
+function Test-HordeHubHelloBound {
+    # "" when the hello -Frame claims device -BoundDeviceId; otherwise the refusal. Stand-in for
+    # Test-HordeHelloBinding -Frame -BoundDeviceId. A pulled link is bound to its registry entry's device,
+    # a dialled one to its preamble's.
+    param([Parameter(Mandatory = $true)]$Frame, [Parameter(Mandatory = $true)][string]$BoundDeviceId)
+    if ("$($Frame.hello.id)" -cne $BoundDeviceId) { return ("the node answered as device " + $Frame.hello.id + ", but this link is bound to " + $BoundDeviceId) }
+    return ""
+}
+
 function Invoke-HordeHubPull {
     # One pull from one node: { ok; reason; nodeName; list; nodeSentAt; receivedAt; clock }. -Entry is a
     # registry entry with its transport resolved: { deviceId; deviceName; endpoint; transport;
@@ -246,13 +293,18 @@ function Invoke-HordeHubPull {
     # its own; a throw from below is the caller's to catch (Update-HordeHubNode does).
     # -BudgetMs bounds the whole pull, the open and every wait in it (issue #87, F10: a node that took
     # every timeout held the round for about 195 s, 15 s to open and 60 s for each of three answers).
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
+    # -Link is a link the node dialled (R17c), already bound to -Entry's device: nothing is opened, and
+    # the exchange is the same.
+    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0, $Link = $null)
     $res = [pscustomobject]@{ ok = $false; reason = ""; nodeName = ""; list = $null; nodeSentAt = $null; receivedAt = $null; clock = $null }
-    if ($null -eq $Entry.transport) { $res.reason = "the hub has no transport for this node: " + $Entry.transportError; return $res }
     $bound = New-HordeHubBound -BudgetMs $BudgetMs
-    $open = Open-HordeTransportLink -Transport $Entry.transport -Endpoint "$($Entry.endpoint)" -Role "hub" -TimeoutMs ([Math]::Max(1, (Get-HordeHubWaitMs -Bound $bound -TimeoutMs ([Math]::Min($TimeoutMs, 15000)))))
-    if ("$($open.state)" -cne "known") { $res.reason = Get-HordeHubPastBound -Bound $bound -Reason ("could not open a link: " + $open.reason); return $res }
-    $link = $open.value
+    if ($null -ne $Link) { $link = $Link }
+    else {
+        if ($null -eq $Entry.transport) { $res.reason = "the hub has no transport for this node: " + $Entry.transportError; return $res }
+        $open = Open-HordeTransportLink -Transport $Entry.transport -Endpoint "$($Entry.endpoint)" -Role "hub" -TimeoutMs ([Math]::Max(1, (Get-HordeHubWaitMs -Bound $bound -TimeoutMs ([Math]::Min($TimeoutMs, 15000)))))
+        if ("$($open.state)" -cne "known") { $res.reason = Get-HordeHubPastBound -Bound $bound -Reason ("could not open a link: " + $open.reason); return $res }
+        $link = $open.value
+    }
     $seq = 0
     try {
         $t = Get-HordeLinkTime
@@ -266,7 +318,7 @@ function Invoke-HordeHubPull {
         $refusal = ""
         if ("$($f.kind)" -cne "hello") { $refusal = "the node answered the hello with a " + $f.kind + " frame" }
         elseif ("$($f.hello.role)" -cne "node") { $refusal = "the other end says its role is '" + $f.hello.role + "', not node" }
-        elseif ("$($f.hello.id)" -cne "$($Entry.deviceId)") { $refusal = "the node at endpoint " + $Entry.endpoint + " answered as device " + $f.hello.id + ", not " + $Entry.deviceId }
+        else { $refusal = Test-HordeHubHelloBound -Frame $f -BoundDeviceId "$($Entry.deviceId)" }
         if ($refusal -ne "") {
             $seq++
             $null = Send-HordeHubFrame -Link $link -Frame (New-HordeLinkBye -Code "refused" -Reason $refusal -Seq $seq -Contract $Contract) -Contract $Contract
@@ -323,7 +375,7 @@ function Update-HordeHubNode {
     # One node's part of a round: read its mirror, pull, record the result, write the mirror. Returns one
     # line saying what happened. A throw anywhere is that line, never the end of the hub (as the node's
     # own loop answers a fault rather than crash, cli/NodeServe.ps1).
-    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
+    param([Parameter(Mandatory = $true)]$Entry, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0, $Link = $null)
     $who = "node " + $Entry.deviceName + " (" + $Entry.deviceId + ")"
     $note = ""
     try {
@@ -333,6 +385,10 @@ function Update-HordeHubNode {
         # A mirror another process holds open is left as it is: this node's round is skipped, said so.
         if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {
             return ($who + ": its mirror is held open by another process (" + $old.reason + "); left as it is, nothing pulled or written this round")
+        }
+        # A mirror that cannot be opened for any other reason is left as it is too, and the cause is said.
+        if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["refused"] -and $old.refused -eq $true) {
+            return ($who + ": its mirror could not be opened: " + $old.cause + "; left as it is, nothing pulled or written this round")
         }
         if ($old.state -ceq "known") { $m = $old.value }
         else {
@@ -346,7 +402,7 @@ function Update-HordeHubNode {
         # A failure is dated from when this pull began: an unreachable node can take the transport's
         # whole open timeout to say so (15 s on the local link), and "since" is when the hub tried.
         $began = [datetime]::UtcNow
-        try { $p = Invoke-HordeHubPull -Entry $Entry -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs }
+        try { $p = Invoke-HordeHubPull -Entry $Entry -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs -Link $Link }
         catch { $p = [pscustomobject]@{ ok = $false; reason = ("the hub failed while pulling: " + $_.Exception.Message) } }
         $line = ""
         if ($p.ok) {
@@ -361,6 +417,49 @@ function Update-HordeHubNode {
     } catch {
         return ($who + ": the hub failed: " + $_.Exception.Message + $note)
     }
+}
+
+function Get-HordeHubListenEndpoint {
+    # Where the hub listens for dialled links on its own transport: "hub:<hubId>", the endpoint R17a's
+    # attach dials and the local transport makes the hub pipe of.
+    param([Parameter(Mandatory = $true)][string]$HubId)
+    return ("hub:" + $HubId)
+}
+
+function Invoke-HordeHubDialled {
+    # One link a node dialled: read its preamble, bind it to that device, and run that node's part of
+    # the round over it (Update-HordeHubNode). Returns the line saying what happened. The link is always
+    # closed here, whatever happened: a node's part can return before it pulls (a mirror held open).
+    param([Parameter(Mandatory = $true)]$Link, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
+    try {
+        $first = Receive-HordeLinkFrame -Link $Link -TimeoutMs ([Math]::Min($TimeoutMs, 15000))
+        if ($first.state -cne "known") { return ("a dialled link was refused: no preamble came: " + $first.reason) }
+        $dev = Get-HordeHubPreambleDevice -Text "$($first.value)"
+        if ($dev.state -cne "known") { return ("a dialled link was refused: " + $dev.reason) }
+        $entry = [pscustomobject]@{ deviceId = "$($dev.value)"; deviceName = "(dialled)"; endpoint = "(dialled)"; transport = $null; transportError = "" }
+        return (Update-HordeHubNode -Entry $entry -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs -Link $Link)
+    } finally { Close-HordeLink -Link $Link }
+}
+
+function Receive-HordeHubDialled {
+    # Accept links on -Listener until -WindowMs has passed, running each one's part as it comes.
+    # Returns the lines. A failed accept that is not the window running out is said, and the window
+    # goes on: one broken peer does not end the hub's listening.
+    param([Parameter(Mandatory = $true)]$Listener, [Parameter(Mandatory = $true)][int]$WindowMs, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Hub, [Parameter(Mandatory = $true)]$Contract, [int]$TimeoutMs = 60000, [int]$BudgetMs = 0)
+    $lines = New-Object System.Collections.ArrayList
+    $until = [datetime]::UtcNow.AddMilliseconds($WindowMs)
+    while ($true) {
+        $left = [int]($until - [datetime]::UtcNow).TotalMilliseconds
+        if ($left -le 0) { break }
+        $acc = Receive-HordeTransportLink -Listener $Listener -TimeoutMs $left
+        if ($acc.state -ceq "known") { [void]$lines.Add((Invoke-HordeHubDialled -Link $acc.value -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs)); continue }
+        if ([datetime]::UtcNow -lt $until) {
+            [void]$lines.Add("a dialled link could not be accepted: " + $acc.reason)
+            # An accept that fails at once would spin; a short pause bounds it.
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    return $lines.ToArray()
 }
 
 function Get-HordeHubLockPath {
@@ -398,7 +497,11 @@ function Invoke-HordeHubServe {
         [int]$TimeoutMs = 60000,
         # The bound on each node's part of a round; 0 for none. See $script:HordeHubNodeBudgetMs.
         [int]$NodeBudgetMs = $script:HordeHubNodeBudgetMs,
-        [scriptblock]$OnRound = $null
+        [scriptblock]$OnRound = $null,
+        # A listener nodes dial (R17c): between rounds the hub accepts links on it instead of sleeping,
+        # and each dialled node's part is in the round it came in. With a listener the last round
+        # waits its interval too, so a node can still dial into it.
+        $Listener = $null
     )
     $lock = Enter-HordeHubLock -Path (Get-HordeHubLockPath -Root $Root)
     try {
@@ -414,6 +517,10 @@ function Invoke-HordeHubServe {
         $outcomes = New-Object System.Collections.ArrayList
         foreach ($e in @($Nodes | Where-Object { $null -ne $_ })) { [void]$outcomes.Add((Update-HordeHubNode -Entry $e -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) }
         if ($done.Count -eq 0) { foreach ($l in $swept) { [void]$outcomes.Add($l) } }
+        if ($null -ne $Listener) {
+            $window = $IntervalMs - [int]([datetime]::UtcNow - $began).TotalMilliseconds
+            foreach ($l in @(Receive-HordeHubDialled -Listener $Listener -WindowMs ([Math]::Max(0, $window)) -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $NodeBudgetMs)) { [void]$outcomes.Add($l) }
+        }
         $round = [pscustomobject]@{ at = (Get-HordeLinkTime -At $began); outcomes = $outcomes.ToArray() }
         [void]$done.Add($round)
         # Whatever the block writes is not a round: discarded, so the return is only the rounds.

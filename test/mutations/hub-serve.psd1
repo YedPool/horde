@@ -9,8 +9,12 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "node-of-another-device-accepted"
-           Find = 'elseif ("$($f.hello.id)" -cne "$($Entry.deviceId)") {'
-           Replace = 'elseif ($false) {' }
+           Find = 'else { $refusal = Test-HordeHubHelloBound -Frame $f -BoundDeviceId "$($Entry.deviceId)" }'
+           Replace = 'else { $refusal = "" }' }
+        # R17c: the binding stand-in itself (swapped for R17a's Test-HordeHelloBinding when it lands).
+        @{ Name = "hello-binding-ignored"
+           Find = 'if ("$($Frame.hello.id)" -cne $BoundDeviceId) {'
+           Replace = 'if ($false) {' }
         @{ Name = "refusal-without-bye"
            Find = '$null = Send-HordeHubFrame -Link $link -Frame (New-HordeLinkBye -Code "refused" -Reason $refusal -Seq $seq -Contract $Contract) -Contract $Contract'
            Replace = '' }
@@ -110,6 +114,28 @@
         @{ Name = "held-mirror-not-told-apart"
            Find = '$u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld'
            Replace = '$u | Add-Member -NotePropertyName held -NotePropertyValue $false' }
+        # --- re-review of PR #88: held means a sharing or lock violation; the reviewer's three survivors ---
+        @{ Name = "denied-read-as-held"
+           Find = '$isHeld = ($inner -is [System.IO.IOException] -and ($inner.HResult -eq $script:HordeHubSharingViolation -or $inner.HResult -eq $script:HordeHubLockViolation))'
+           Replace = '$isHeld = ($inner -is [System.UnauthorizedAccessException] -or $inner -is [System.IO.IOException])' }
+        @{ Name = "refused-mirror-unsaid"
+           Find = 'if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["refused"] -and $old.refused -eq $true) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "refusal-cause-dropped"
+           Find = '$u | Add-Member -NotePropertyName cause -NotePropertyValue $inner.Message'
+           Replace = '$u | Add-Member -NotePropertyName cause -NotePropertyValue "it could not be opened"' }
+        @{ Name = "lock-shared-readwrite"
+           Find = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None) }'
+           Replace = '[System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite) }' }
+        @{ Name = "open-not-bounded"
+           Find = '-TimeoutMs ([Math]::Max(1, (Get-HordeHubWaitMs -Bound $bound -TimeoutMs ([Math]::Min($TimeoutMs, 15000)))))'
+           Replace = '-TimeoutMs ([Math]::Min($TimeoutMs, 15000))' }
+        @{ Name = "aside-failure-throws"
+           Find = 'catch { return ("it could not be kept aside, and is overwritten: " + $_.Exception.Message) }'
+           Replace = 'catch { throw }' }
+        @{ Name = "bound-without-slack"
+           Find = '[datetime]::UtcNow -ge $Bound.deadline.AddMilliseconds(-$script:HordeHubBoundSlackMs)'
+           Replace = '[datetime]::UtcNow -ge $Bound.deadline' }
         @{ Name = "aside-copies-uncapped"
            Find = '$old = @($copies | Select-Object -Skip $script:HordeHubAsideKept)'
            Replace = '$old = @()' }
