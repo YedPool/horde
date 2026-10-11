@@ -29,6 +29,10 @@
 #   Remove  param($State) -  removes everything New made
 #   Remote  param($State) -> options for a second client that reaches the same relay as another
 #                            machine would; required only of a relay that says reach.remote yes
+#   Unavailable ()        -> optional: why this relay cannot run on this machine (the hosted relay's
+#                            local dev needs node and its pinned tools), or "" when it can. A relay that
+#                            cannot run is skipped, said so, and the suite exits 3 - a partial run,
+#                            never 0 - so a gate never reads a skipped relay as a kept contract.
 # A fixture writes nothing outside the temp folder and the relay it made.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -154,6 +158,7 @@ $listed = @(Get-HordeRelayCapabilityNames)
 Check ((@($listed | Sort-Object) -join ",") -ceq (@($cases.Keys | Sort-Object) -join ",")) ("every capability has a case here, and every case a capability (" + ($listed -join ", ") + ")")
 Check ($relayNames.Count -ge 1) ("at least one relay is loaded from relays/ (" + ($relayNames -join ", ") + ")")
 Check ($relayNames -cnotcontains "hostile") "and the hostile test relay is not among them"
+$skipped = New-Object System.Collections.ArrayList
 
 foreach ($name in $relayNames) {
     $r = Get-HordeRelay -Name $name
@@ -164,6 +169,10 @@ foreach ($name in $relayNames) {
     Check (Test-Path -LiteralPath $fxPath -PathType Leaf) ("[" + $name + "] has a test fixture at test\Fixture.ps1")
     if (-not (Test-Path -LiteralPath $fxPath -PathType Leaf)) { continue }
     $fx = & $fxPath -Root $root
+    if ($null -ne $fx.PSObject.Properties["Unavailable"]) {
+        $why = "" + (& $fx.Unavailable)
+        if ($why -ne "") { Write-Host ("  [SKIP] [" + $name + "] " + $why) -ForegroundColor Yellow; [void]$skipped.Add($name); continue }
+    }
     $state = & $fx.New
     try {
         $c = Connect-Fixture $r $state.options
@@ -306,4 +315,5 @@ foreach ($hole in @(2, 4, 6, 8)) {
 Check (@($anoms | Where-Object { "$_".Contains("not an object") }).Count -ge 1 -and @($anoms | Where-Object { "$_".Contains("at or before the cursor") }).Count -ge 1 -and @($anoms | Where-Object { "$_".Contains("came twice") }).Count -ge 1) "and the malformed, stale and repeated items are reported, not delivered"
 Set-HordeHostileRelayFaults -Faults @()
 
+if ($skipped.Count -gt 0) { Complete-HordeSuite -Success ("every relay run here keeps the mailbox contract and shows what it claims, and the client survives one that lies; NOT RUN here: " + ($skipped -join ", ")) -PassCode 3 }
 Complete-HordeSuite -Success "every relay keeps the mailbox contract and shows what it claims, and the client survives one that lies"

@@ -1,0 +1,27 @@
+{
+  "name": "relay",
+  "main": "worker/index.js",
+  "base_dir": "../..",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "send_metrics": false,
+  "upload_source_maps": false,
+  "observability": { "enabled": false },
+  "vars": {
+    "HORDE_RELAY_ORIGIN": "https://relay.yedidyapool.workers.dev",
+    "HORDE_RELAY_GOOGLE_CALLBACK": "/auth/google/callback"
+  },
+  "assets": {
+    "directory": "site",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "MAILBOX", "class_name": "Mailbox" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox"] }],
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }]
+}

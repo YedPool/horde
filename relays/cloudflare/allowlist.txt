@@ -1,0 +1,13 @@
+# The files outside relays/cloudflare/ that may name the hosted relay, and exactly how many times
+# (CONTRIBUTING rule 14; relay design 2026-10-09, PR plan item 8). A mention is one occurrence of any
+# name in names.txt, plus one if the file's path has one. tools/HostNames.ps1 fails
+# test/test-host-names.ps1 on a file not listed here, on a listed file that names the relay more times
+# than listed, and on an entry that allows more than its file needs - and, once this list is on
+# origin/main, on an entry origin/main lacks or a count above its count. When a mention must be added,
+# add or raise the entry here AND append a line to growth.txt in this folder:
+# path | old -> new | YYYY-MM-DD | reason.
+#
+# None today: the port, the conformance suite and the command line name no relay, and reach this one
+# only through its folder, its Relay.ps1 and its test/Fixture.ps1.
+#
+# path | mentions | why this file may name the relay
