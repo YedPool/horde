@@ -197,7 +197,15 @@ function Get-HordeHubListedNodes {
     foreach ($e in @($Own | Where-Object { $null -ne $_ })) { [void]$out.Add($e); $seen["$($e.deviceId)"] = $true }
     foreach ($id in @((Get-HordeHubLiveKeys -HordeHome $HordeHome -Now $Now).Keys | Sort-Object)) {
         if ($seen.ContainsKey("$id")) { continue }
-        [void]$out.Add([pscustomobject]@{ deviceId = "$id"; deviceName = "(dialled)" })
+        # Each dialled one carries what the register says of it: route "dialled" (its requests are carried
+        # over the link it dials, cli/HubCarry.ps1), its expiry and its last-known address (mesh v1).
+        $en = Read-HordeHubEnrolment -HordeHome $HordeHome -DeviceId "$id"
+        $expires = ""; $address = ""
+        if ($en.state -ceq "known") {
+            $expires = "$($en.value.expires)"
+            if ($null -ne $en.value.PSObject.Properties["address"]) { $address = "$($en.value.address)" }
+        }
+        [void]$out.Add([pscustomobject]@{ deviceId = "$id"; deviceName = "(dialled)"; route = "dialled"; expires = $expires; address = $address })
         $seen["$id"] = $true
     }
     return $out.ToArray()

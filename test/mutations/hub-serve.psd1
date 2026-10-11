@@ -65,8 +65,8 @@
            Find = 'return (ConvertTo-HordeAnswerRecord $Answer)'
            Replace = 'return $Answer.value' }
         @{ Name = "text-hides-why-unheard"
-           Find = 'if ($n.heard.state -cne "known") { [void]$lines.Add($n.heard.reason); continue }'
-           Replace = 'if ($n.heard.state -cne "known") { [void]$lines.Add($who + ": not heard"); continue }' }
+           Find = 'if ($n.heard.state -cne "known") { [void]$lines.Add($n.heard.reason + $how); continue }'
+           Replace = 'if ($n.heard.state -cne "known") { [void]$lines.Add($who + ": not heard" + $how); continue }' }
         @{ Name = "mirror-of-another-device-read"
            Find = 'if ("$($m.deviceId)" -cne $DeviceId) { return'
            Replace = 'if ($false) { return' }

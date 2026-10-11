@@ -12,4 +12,4 @@
 # path | mentions | why this file may name the transport
 test/fixtures/link/shell-control.ps1 | 2 | the exec scan's planted control calls the ssh client by name, to show remote/ may start no program
 tasks/lessons.md | 2 | the lesson on native tools and their idea of home names the client it was measured on, and its key fallback
-test/lib/SuiteFiles.ps1 | 3 | the machine-bound list names this transport's live suites by their paths (remote plans R16 and R17a)
+test/lib/SuiteFiles.ps1 | 4 | the machine-bound list names this transport's live suites by their paths (remote plans R16 and R17a)

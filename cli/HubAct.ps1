@@ -33,6 +33,24 @@ function Write-HordeHubActRecord {
     Move-Item -LiteralPath $tmp -Destination $final -Force
 }
 
+function New-HordeHubActRecord {
+    # A request as the hub writes it down before it is sent: a new request id, issued now. -Via
+    # "dialled" marks one the hub carries over the link the node dials in (cli/HubCarry.ps1); "" is one
+    # the CLI sends itself over a link it opens.
+    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][string]$DeviceId, $Arguments, [string]$Via = "")
+    $rec = [pscustomobject][ordered]@{ requestId = (New-HordeLinkFrameId); verb = $Verb; deviceId = $DeviceId; issuedAt = (Get-HordeLinkTime); args = $Arguments; answer = $null; error = $null; sentAt = @() }
+    if ($Via -ne "") { $rec | Add-Member -NotePropertyName via -NotePropertyValue $Via }
+    return $rec
+}
+
+function New-HordeHubCloseArgs {
+    # session.close's arguments for the session a spawn record started: the process its node named when
+    # it started it, with that process's namespace (R11), so the node refuses if its view differs.
+    param([Parameter(Mandatory = $true)]$Spawn, [string]$Reason = "closed by the hub")
+    $ex = $Spawn.answer.expect
+    return [pscustomobject][ordered]@{ sessionId = "" + $Spawn.answer.sessionId; expect = [pscustomobject][ordered]@{ ns = [pscustomobject][ordered]@{ device = "" + $ex.ns.device; space = "" + $ex.ns.space }; pid = [long]$ex.pid; procStart = "" + $ex.procStart }; reason = $Reason }
+}
+
 function Read-HordeHubActRecord {
     param([Parameter(Mandatory = $true)][string]$Dir, [Parameter(Mandatory = $true)][string]$RequestId)
     $p = Join-Path $Dir ($RequestId + ".json")
@@ -75,6 +93,29 @@ function Resolve-HordeHubCloseTarget {
     if ($m.Count -eq 1) { $named = "" + $m[0].deviceId }
     if ($named -cne $own) { return (New-HordeUnknown -Reason ("the session was started on node " + $own + ", and -Node names " + $Node + $(if ($named -cne $Node) { " (" + $named + ")" } else { "" }) + "; a close goes only to the node that started it")) }
     return (New-HordeKnown -Value $own)
+}
+
+function Resolve-HordeHubActTarget {
+    # The node -Target names, by device id or name, as an answer: known { deviceId; deviceName; route },
+    # route "pulled" for a node in -Pulled (the registry the hub opens links to: its own node) and
+    # "dialled" for one in -Enrolled (the hub's register: cli/HubRegistry.ps1's Get-HordeHubListedNodes,
+    # each with the deviceName its mirror last heard, or ""), whose requests the hub carries over the link
+    # it dials in (cli/HubCarry.ps1). Unknown, with the reason, when nothing or more than one device
+    # answers to -Target, or when the one that does is enrolled but not live (revoked, expired, an entry
+    # that cannot be trusted): such a request is refused before anything is written.
+    param([string]$Target, $Pulled = @(), $Enrolled = @())
+    $known = New-Object System.Collections.ArrayList
+    foreach ($e in @($Pulled | Where-Object { $null -ne $_ })) { [void]$known.Add([pscustomobject]@{ deviceId = "" + $e.deviceId; deviceName = "" + $e.deviceName; route = "pulled"; live = $true; reason = "" }) }
+    foreach ($e in @($Enrolled | Where-Object { $null -ne $_ })) { [void]$known.Add([pscustomobject]@{ deviceId = "" + $e.deviceId; deviceName = "" + $e.deviceName; route = "dialled"; live = [bool]$e.live; reason = "" + $e.reason }) }
+    $hits = @($known | Where-Object { $_.deviceId -ceq $Target -or ($_.deviceName -ne "" -and $_.deviceName -ceq $Target) })
+    if ($hits.Count -eq 0) {
+        $names = @($known | ForEach-Object { $(if ($_.deviceName -ne "") { $_.deviceName } else { "(unnamed)" }) + " (" + $_.deviceId + $(if ($_.route -ceq "dialled") { ", dialled" } else { "" }) + ")" })
+        return (New-HordeUnknown -Reason ("the hub has no registered or enrolled node '" + $Target + "'; it knows " + $(if ($names.Count -gt 0) { $names -join ", " } else { "none" })))
+    }
+    if ($hits.Count -gt 1) { return (New-HordeUnknown -Reason ("'" + $Target + "' names " + $hits.Count + " nodes (" + (@($hits | ForEach-Object { $_.deviceId }) -join ", ") + "); name it by its device id")) }
+    $h = $hits[0]
+    if (-not $h.live) { return (New-HordeUnknown -Reason ("node " + $h.deviceId + " is not enrolled live, so nothing is sent to it: " + $h.reason)) }
+    return (New-HordeKnown -Value ([pscustomobject][ordered]@{ deviceId = $h.deviceId; deviceName = $h.deviceName; route = $h.route }))
 }
 
 function Test-HordeHubActArgs {

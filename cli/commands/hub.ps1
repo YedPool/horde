@@ -6,7 +6,7 @@ $HordeCommand = @{
     # 3 s (core/Platform.ps1), which could put a round past the link's 60 s silence window.
     sustained = $true
     usage   = "hub serve [-Rounds <n>] [-IntervalSeconds <s>] [-Listen] | hub init | hub enroll -Device <id> -Key <key> [-Days <n>] [-Address <node ip>] | hub revoke -Device <id> [-Transport <name>]"
-    summary = "serve: pull every registered node's sessions each round into one mirror file per node, read-only on the nodes; init, enroll, revoke: the listener's host key and which node keys it admits (enrolment, remote plan R17b)"
+    summary = "serve: pull every registered node's sessions each round into one mirror file per node; with -Listen, also take the links enrolled nodes dial and carry over each the session requests written down for that node (horde session); init, enroll, revoke: the listener's host key and which node keys it admits (enrolment, remote plan R17b)"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve", "init", "enroll", "revoke")][string]$Verb,
@@ -67,7 +67,10 @@ $HordeCommand = @{
         $say = { param($Round) foreach ($o in $Round.outcomes) { Write-Host ($Round.at + " " + $o) } }
         $listener = $null
         $admit = $null
+        # The requests `horde session` wrote down for dialled nodes, carried over their links (cli/HubCarry.ps1).
+        $actDir = ""
         if ($Listen) {
+            $actDir = Get-HordeHubActDir -HomeRoot (Get-HordeHome)
             # Only an enrolled device is bound (cli/HubRegistry.ps1): the hub's register and the
             # transport's enrolment must both hold it, live, with one key.
             foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
@@ -84,7 +87,7 @@ $HordeCommand = @{
             $listener = $l.value
             Write-Host ("hub listening for dialled links at " + $listener.endpoint)
         }
-        try { $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say -Listener $listener -Admit $admit) }
+        try { $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say -Listener $listener -Admit $admit -ActDir $actDir) }
         finally { if ($null -ne $listener) { Stop-HordeTransportListener -Listener $listener } }
         Write-Output ("hub ran " + $done.Count + " round(s); mirrors in " + $mirrorRoot)
     }

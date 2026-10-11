@@ -12,6 +12,9 @@
 # WHAT THE DIALLED LINK IS SERVED, as horde node serve -Dial serves it: -Acts serves acts with a fixture
 # act that counts itself in -Counter["acts"] and answers done, recorded in -JournalRoot; -ReadOnly
 # serves read verbs only; -MessagingHome builds the node's messaging there, with no messenger named.
+# -ActWorldHome serves acts through the REAL act path over test/fixtures/node-serve/act-world.ps1's fakes,
+# its policy read from that home; -ActDelayMs holds the FIRST act that long (a node slow to act, so a
+# hub can lose the answer); -IntervalMs is the wait between dials.
 param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$HubEndpoint,
@@ -24,7 +27,10 @@ param(
     [switch]$Acts,
     [switch]$ReadOnly,
     [string]$MessagingHome = "",
-    $Counter = $null
+    $Counter = $null,
+    [string]$ActWorldHome = "",
+    [int]$ActDelayMs = 0,
+    [int]$IntervalMs = 100
 )
 $ErrorActionPreference = "Stop"
 foreach ($f in @("Tristate", "Platform", "Namespace", "NodeDeliverTo")) { . (Join-Path $Root ("core\" + $f + ".ps1")) }
@@ -56,10 +62,20 @@ $viaAttach.open = {
     return $r
 }
 $act = $null
-if ($Acts) {
+if ($ActWorldHome -ne "") {
+    . (Join-Path $Root "test\fixtures\node-serve\act-world.ps1")
+    $worldCtx = New-HordeActWorldContext -Root $Root -HordeHome $ActWorldHome -Namespace $ns
     $act = {
         param($a)
         if ($null -ne $Counter) { $Counter["acts"] = 1 + [int]$Counter["acts"] }
+        if ($ActDelayMs -gt 0 -and [int]$Counter["acts"] -eq 1) { Start-Sleep -Milliseconds $ActDelayMs }
+        return (Invoke-HordeNodeActRequest -Act $a -Context $worldCtx)
+    }
+} elseif ($Acts) {
+    $act = {
+        param($a)
+        if ($null -ne $Counter) { $Counter["acts"] = 1 + [int]$Counter["acts"] }
+        if ($ActDelayMs -gt 0 -and [int]$Counter["acts"] -eq 1) { Start-Sleep -Milliseconds $ActDelayMs }
         $ex = [pscustomobject]@{ ns = [pscustomobject]@{ device = $DeviceId; space = "windows" }; pid = 4242; procStart = "134350994347710308" }
         return [pscustomobject]@{ state = "done"; sessionId = "aaaaaaaa-1111-4222-8333-444444444444"; expect = $ex; reason = "" }
     }
@@ -68,6 +84,6 @@ $messaging = $null
 if ($MessagingHome -ne "") { $messaging = New-HordeNodeMessaging -Root $Root -HordeHome $MessagingHome -GetView $getView }
 $lines = New-Object System.Collections.ArrayList
 $log = { param($Line) [void]$lines.Add($Line) }
-$r = Invoke-HordeNodeDial -Transport $viaAttach -Endpoint $HubEndpoint -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $JournalRoot -Act $act -Messaging $messaging -ReadOnly:$ReadOnly -MaxDials $MaxDials -IdleTimeoutMs $IdleTimeoutMs -IntervalMs 100 -Log $log
+$r = Invoke-HordeNodeDial -Transport $viaAttach -Endpoint $HubEndpoint -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $JournalRoot -Act $act -Messaging $messaging -ReadOnly:$ReadOnly -MaxDials $MaxDials -IdleTimeoutMs $IdleTimeoutMs -IntervalMs $IntervalMs -Log $log
 $r | Add-Member -NotePropertyName log -NotePropertyValue $lines.ToArray()
 return $r

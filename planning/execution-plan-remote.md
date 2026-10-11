@@ -439,7 +439,24 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
     nodes' last-known addresses (`horde hub enroll -Address`) or `-AllowFrom` only, Private and Domain
     profiles only, removed when it stops (`core/FirewallPort.ps1`, `platform/windows/Firewall.ps1`); it
     needs an administrator and never elevates itself. The operator's steps for the first live link are
-    `planning/first-live-link-ov615.md`. Still to build: the hub's act verbs over a dialled link.
+    `planning/first-live-link-ov615.md`.
+    Then the act verbs over a dialled link (branch mesh/remote-act): a node in the hub's register is
+    reached the only way it can be, over the link it dials. `horde session` resolves `-Node` against what
+    `horde nodes` lists (`Get-HordeHubListedNodes`: the hub's own node and every node the register holds
+    live, the single source R13b names), refuses an unknown or revoked node before anything is written,
+    and for a dialled node writes the request down (`<home>\hub\acts\<requestId>.json`, marked `via:
+    dialled`) and waits for its answer; `horde hub serve -Listen`, after its pull on that node's link,
+    carries every waiting request, oldest first, and writes each answer back (`cli/HubCarry.ps1`). One
+    link carries any number of sessions; the node's own cap and ceiling bound them. A request is written
+    down as sent before it leaves; an answer lost to a partition is UNKNOWN, and the next link asks
+    `request.status` and settles it from the node's journal, sending it again under the same id only when
+    the node never recorded it - never blind. The device is admitted again before every request; on a
+    revoke what was never sent is refused by the hub and what was sent is left for the node to say.
+    `horde nodes` marks each dialled node with its enrolment (until when, from where). Suites:
+    `test/test-hub-carry.ps1` (memory transport, the node's real act path over fakes) and
+    `transports/ssh/test/test-mesh-act-local.ps1` (machine-bound: two homes, the real CLI, the child sshd
+    of `horde listen`, a node dialling over 127.0.0.1). Still to build: R21 slice 5 (`horde tell` and the
+    hub draining node outboxes) over the same carry.
 
 E. Acting over the link
 
