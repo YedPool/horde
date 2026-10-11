@@ -27,7 +27,11 @@ button:disabled { color: var(--faint); background: var(--bg); border-color: var(
 button.link { border: 0; min-height: 44px; padding: 0 4px; color: var(--accent); background: none; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-#top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); background: var(--bg); border-bottom: 1px solid var(--line); }
+/* THE BAR STAYS ON SCREEN: the hordes and, under them, the Decisions and Chat switch, so a long chat (the
+   app scrolls it to its end) or a long list never takes the way back off the screen (the founder's first
+   live use, 2026-10-11: the chat page had no way back to the questions). */
+#bar { position: sticky; top: 0; z-index: 5; background: var(--bg); }
+#top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); background: var(--bg); border-bottom: 1px solid var(--line); }
 #tabs { display: flex; gap: 6px; overflow-x: auto; min-width: 0; }
 #tabs button { white-space: nowrap; }
 #tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
@@ -36,6 +40,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 #addBtn { min-width: 44px; padding: 0; font-weight: 600; }
 #machineList { list-style: none; margin: 0; padding: 0; }
 #machineList li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+/* What went wrong with an announcement, beside its button: in the app's own words (phone-core.js). */
+.status { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); overflow-wrap: anywhere; }
+#announceBox { padding: 8px 16px; border-bottom: 1px solid var(--line); max-width: 720px; margin: 0 auto; }
+#announceBox .row { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
 #notice { color: var(--warn); font-size: var(--small-px); line-height: var(--small-line-px); padding: 8px 16px; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
 
 section { padding: 12px 16px 24px; max-width: 640px; margin: 0 auto; }
@@ -68,7 +76,7 @@ section summary { min-height: 44px; line-height: 44px; color: var(--accent); cur
 #lists .hd-qrow { --hang: 70px; }
 
 /* THE TWO VIEWS of a horde: its open questions and its chat with the Thrall, side by side as tabs. */
-#viewTabs { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+#viewTabs { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
 #viewTabs button { flex: 1 1 0; }
 #viewTabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

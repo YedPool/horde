@@ -88,6 +88,16 @@ const SIGN_IN_FIRST = "Sign in first: this relay lets in only a signed-in phone,
 const NOT_REGISTERED = "The relay did not register this machine with your account, so the machine could not reach it. Make a new offer at the machine and pair again.";
 const NO_PRF = "Read only: this passkey gives no PRF, so this phone has nothing to keep this horde's key under, and a horde whose key the passkey does not hold is never answered from this phone. It can still be read: unlock with the recovery code. Answer at the machine, or pair again with a passkey that has PRF.";
 
+// A passkey that did not sign (the founder cancelled the prompt, or it timed out): said in the phone's own
+// words, with the browser's error NAME (NotAllowedError, a code word) and never its message, so the
+// founder sees why an announcement was not sent (his first live use, 2026-10-11: it never went, and why
+// was nowhere on the screen).
+const PASSKEY_DID_NOT_SIGN = "The passkey did not sign the announcement (the prompt was cancelled, or it timed out), so nothing was sent. Tap announce again and confirm with your passkey.";
+function passkeyDidNotSign(x) {
+  const name = x && typeof x.name === "string" && /^[A-Za-z]{1,40}$/.test(x.name) ? x.name : "";
+  return PASSKEY_DID_NOT_SIGN + (name && name !== "Error" ? " (" + name + ")" : "");
+}
+
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
 export function createPhone({ store, authenticator, relay, account = null, origin, now = () => Date.now() }) {
@@ -172,7 +182,10 @@ export function createPhone({ store, authenticator, relay, account = null, origi
     const s = sessions.get(e.id);
     return {
       id: e.id, horde: e.horde, machine: e.machine, label: e.label, fingerprint: e.fingerprint, prf: e.prfEnabled,
-      announced: !!e.announced, unlocked: !!s, mode: s ? s.mode : "", wraps: Object.keys(e.wraps || {}).sort()
+      announced: !!e.announced, unlocked: !!s, mode: s ? s.mode : "", wraps: Object.keys(e.wraps || {}).sort(),
+      // HEARD: a snapshot from the machine has been drawn on this phone (lastSnapshotSeq, stored), so the
+      // machine took the announcement. Until then the app offers to announce again (app.js).
+      heard: Number.isSafeInteger(e.lastSnapshotSeq) && e.lastSnapshotSeq >= 0
     };
   }
 
@@ -241,9 +254,11 @@ export function createPhone({ store, authenticator, relay, account = null, origi
       const s = sessions.get(id);
       if (s && s.mode === "recovery") throw fail("unlocked with the recovery code, this phone reads only: unlock with the passkey to announce it");
       const phonePublic = P.unb64u(e.phonePublic);
-      const vouch = await assertWith(e, true)(await P.vouchChallenge(e.horde, phonePublic));
+      // Each passkey prompt, its refusal said as the phone's (PASSKEY_DID_NOT_SIGN).
+      const signing = (prf) => async (challenge) => { try { return await assertWith(e, prf)(challenge); } catch (x) { throw fail(passkeyDidNotSign(x), "passkey"); } };
+      const vouch = await signing(true)(await P.vouchChallenge(e.horde, phonePublic));
       e = await keepPasskeyWrap(e, s, vouch.prfFirst);
-      const env = await sealAndSign(e, "phone-key", "trust", P.phoneKeyBody(phonePublic, vouch), assertWith(e));
+      const env = await sealAndSign(e, "phone-key", "trust", P.phoneKeyBody(phonePublic, vouch), signing(false));
       const put = await relay.put(e.machineMailbox, env.key, env.text);
       if (put.state !== "known") { diagnostics.push(relaySaid(put.reason)); throw fail(RELAY_REFUSED + " The announcement was not sent; try again."); }
       await store.update(ENTRY + id, (x) => ({ ...x, announced: { key: env.key, at: now() } }));
