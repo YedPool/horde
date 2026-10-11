@@ -213,11 +213,16 @@ try {
     Check ($o1.text.Length -lt 850) ("it is short enough for one QR code (" + $o1.text.Length + " characters)")
     $gv = $ro.value
     Check ($gv.grant -cmatch '\A[A-Za-z0-9_-]{86}\z' -and $o1.text.EndsWith(',"grant":"' + $gv.grant + '"}')) "it carries an account grant, last: 64 bytes, a signature"
-    Check (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt $gv.expiresAt -SignPublic (B $gv.signPublic) -Grant $gv.grant) "the grant verifies under the machine's own signing key, over its horde, offer, key id and expiry"
-    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt ($gv.expiresAt + 1) -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "and not over a later expiry: a relay cannot stretch it"
-    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer ("0" * 32) -Machine $gv.machine -ExpiresAt $gv.expiresAt -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "nor for another offer"
-    $gb = Get-HordeRelayAccountGrantBytes -Horde "work" -Offer ("0" * 32) -Machine ("a" * 32) -ExpiresAt 1760000000000
-    Check ([System.Text.Encoding]::ASCII.GetString($gb) -ceq ("horde-relay/pairing/v1 account-grant`nwork`n" + ("0" * 32) + "`n" + ("a" * 32) + "`n1760000000000")) "its signed lines are the domain, the horde, the offer, the key id and the expiry (relay/js/protocol.js signs the same)"
+    Check ($gv.label -ceq "machine") ("it names the machine by the label its caller gives, 'machine' when none is given (" + $gv.label + ")")
+    Check (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt $gv.expiresAt -Label $gv.label -SignPublic (B $gv.signPublic) -Grant $gv.grant) "the grant verifies under the machine's own signing key, over its horde, offer, key id, expiry and label"
+    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt ($gv.expiresAt + 1) -Label $gv.label -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "and not over a later expiry: a relay cannot stretch it"
+    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer ("0" * 32) -Machine $gv.machine -ExpiresAt $gv.expiresAt -Label $gv.label -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "nor for another offer"
+    Check (-not (Test-HordeRelayAccountGrant -Horde $gv.horde -Offer $gv.offer -Machine $gv.machine -ExpiresAt $gv.expiresAt -Label ($gv.label + "x") -SignPublic (B $gv.signPublic) -Grant $gv.grant)) "nor under another name: nobody on the way can rename the machine"
+    $gb = Get-HordeRelayAccountGrantBytes -Horde "work" -Offer ("0" * 32) -Machine ("a" * 32) -ExpiresAt 1760000000000 -Label "build-box"
+    Check ([System.Text.Encoding]::ASCII.GetString($gb) -ceq ("horde-relay/pairing/v1 account-grant`nwork`n" + ("0" * 32) + "`n" + ("a" * 32) + "`n1760000000000`nbuild-box")) "its signed lines are the domain, the horde, the offer, the key id, the expiry and the label (relay/js/protocol.js signs the same)"
+    $named = New-HordeRelayPairingOffer -HordeHome $ha -RpId $rp -Origins $origins -Label ("L" * 64)
+    Check ($named.state -ceq "known" -and (Read-HordeRelayPairingOffer -Text $named.value.text).value.label -ceq ("L" * 64) -and $named.value.text.Length -lt 850) ("a label of the most characters, 64, is the one named, and the offer still fits one QR code (" + $named.value.text.Length + " characters)")
+    Check ((New-HordeRelayPairingOffer -HordeHome $ha -RpId $rp -Origins $origins -Label 'say "hi"').reason.Contains("label")) "a label a record cannot hold is refused, and makes no offer"
     $pendingText = [System.IO.File]::ReadAllText((Join-Path $ha ("relay\pairing\offers\" + $o1.offer + ".json")))
     Check (-not $pendingText.Contains($o1.code)) "the machine keeps the code's hash, not the code"
     Check ((New-HordeRelayPairingOffer -HordeHome $ha -RpId $rp -Origins $origins -TtlSeconds 10).reason.Contains("30 to 900")) "an offer of 10 s is refused"
@@ -363,7 +368,7 @@ try {
     $oS = New-Offer -HordeHome $hs
     $roS = Read-HordeRelayPairingOffer -Text $oS.text
     Check ($roS.ok -and $roS.value.pairMailbox -ceq ("work/pair-" + $oS.offer) -and $oS.pairMailbox -ceq $roS.value.pairMailbox) ("the offer names a pairing mailbox of its own: the horde and pair-<offer id> (" + $(if ($roS.ok) { $roS.value.pairMailbox } else { $roS.reason }) + ")")
-    Check ($oS.text.Length -lt 760) ("with it the offer still fits one QR code (" + $oS.text.Length + " characters)")
+    Check ($oS.text.Length -lt 850)("with it the offer still fits one QR code (" + $oS.text.Length + " characters)")
     $pkS = New-TestPasskey
     $respS = New-PasskeyResponse -Offer $oS -Passkey $pkS
     $sealS = New-HordeRelayPairingSealedText -OfferText $oS.text -Response $respS
