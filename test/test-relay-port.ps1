@@ -333,4 +333,47 @@ $a = Receive-HordeRelayItems -Connection $cx -Mailbox $mb -Since 0
 Check ($a.state -ceq "known" -and (Seqs $a) -ceq "1") "a single item not wrapped in a list is still read (PowerShell unrolls one-element arrays)"
 Set-HordeHostileRelayFaults -Faults @()
 
+Write-Host ""
+Write-Host "--- deploying: only a relay that registered a deploy, and only its answer believed ---" -ForegroundColor Cyan
+$siteDir = Join-Path $env:TEMP ("horde-relay-port-site-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+New-Item -ItemType Directory -Path (Join-Path $siteDir "app") -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $siteDir "app\index.html"), "<!doctype html>")
+try {
+    $script:HordeRelays.Remove("fixture-good")
+    $null = Reg "fixture-good"
+    Check (@(Get-HordeRelayDeployable) -cnotcontains "fixture-good") "a relay with no deploy block is not deployable"
+    $a = Publish-HordeRelay -Name "fixture-good" -Site $siteDir
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("not one that is deployed")) "and publishing it is refused, in words"
+    $script:HordeRelays.Remove("fixture-good")
+    $script:deployArgs = $null
+    $null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { New-HordeKnown -Value 1 } -Put {} -Get {} -Watch {} -Ack {} -Deploy {
+        param($Site, $Say, $HordeHome)
+        $script:deployArgs = @($Site, $HordeHome)
+        & $Say "deploying"
+        New-HordeKnown -Value ([pscustomobject]@{ origin = "https://relay.example.test" })
+    }
+    Check (@(Get-HordeRelayDeployable) -ccontains "fixture-good") "a relay that registered a deploy block is deployable"
+    $said = New-Object System.Collections.ArrayList
+    $a = Publish-HordeRelay -Name "fixture-good" -Site $siteDir -Say { param($Line) [void]$said.Add($Line) } -HordeHome "C:\home-x"
+    Check ($a.state -ceq "known" -and $a.value.origin -ceq "https://relay.example.test" -and $a.value.relay -ceq "fixture-good") "its deploy runs, and its origin comes back"
+    Check ($null -ne $script:deployArgs -and $script:deployArgs[0] -ceq $siteDir -and $script:deployArgs[1] -ceq "C:\home-x" -and @($said) -ccontains "deploying") "it is handed the site, the home and the caller's voice"
+    $empty = Join-Path $siteDir "empty"
+    New-Item -ItemType Directory -Path $empty -Force | Out-Null
+    $script:deployArgs = $null
+    $a = Publish-HordeRelay -Name "fixture-good" -Site $empty
+    Check ($a.state -ceq "unknown" -and $null -eq $script:deployArgs) "a folder with no app in it is refused before the relay is asked"
+    foreach ($c in @(
+            @{ what = "throws"; b = { param($Site, $Say, $HordeHome) throw "boom" }; like = "failed to deploy" },
+            @{ what = "answers with something that is not an answer"; b = { param($Site, $Say, $HordeHome) "done" }; like = "not an answer" },
+            @{ what = "answers unknown"; b = { param($Site, $Say, $HordeHome) New-HordeUnknown -Reason "no login" }; like = "no login" },
+            @{ what = "answers known with no origin"; b = { param($Site, $Say, $HordeHome) New-HordeKnown -Value ([pscustomobject]@{ x = 1 }) }; like = "https origin" },
+            @{ what = "answers an http origin"; b = { param($Site, $Say, $HordeHome) New-HordeKnown -Value ([pscustomobject]@{ origin = "http://relay.example.test" }) }; like = "https origin" })) {
+        $script:HordeRelays.Remove("fixture-good")
+        $null = Register-HordeRelay -Folder (Join-Path $fx "fixture-good") -Connect { New-HordeKnown -Value 1 } -Put {} -Get {} -Watch {} -Ack {} -Deploy $c.b
+        $a = Publish-HordeRelay -Name "fixture-good" -Site $siteDir
+        Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains($c.like)) ("a deploy that " + $c.what + " is unknown (" + $a.reason + ")")
+    }
+    Check ((Publish-HordeRelay -Name "no-such-relay" -Site $siteDir).state -ceq "unknown") "a relay nobody loaded is unknown"
+} finally { Remove-Item -LiteralPath $siteDir -Recurse -Force -ErrorAction SilentlyContinue }
+
 Complete-HordeSuite -Success "the relay port refuses what it cannot vouch for, checks every answer, and never believes an item"

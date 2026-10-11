@@ -76,6 +76,14 @@
 # An adapter refuses a text over its own maxTextChars by itself too: the port's check protects the
 # adapter from this caller, not the relay from every caller.
 #
+# DEPLOYING, FOR A RELAY THAT IS HOSTED. A relay that runs somewhere it must first be put (the hosted
+# one) also hands Register-HordeRelay a sixth block, -Deploy; a relay on this disk has none. The caller
+# (`horde relay deploy`, cli/RelayDeploy.ps1) builds what the relay is to serve - the phone app, as a
+# folder of static files - so the relay never names the app and the app never names the relay:
+#   Deploy  param([string]$Site, [scriptblock]$Say, [string]$HordeHome) -> known { origin }
+# Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
+# names the relays that have one.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -152,7 +160,8 @@ function Register-HordeRelay {
         [Parameter(Mandatory = $true)][scriptblock]$Put,
         [Parameter(Mandatory = $true)][scriptblock]$Get,
         [Parameter(Mandatory = $true)][scriptblock]$Watch,
-        [Parameter(Mandatory = $true)][scriptblock]$Ack
+        [Parameter(Mandatory = $true)][scriptblock]$Ack,
+        [scriptblock]$Deploy = $null
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
@@ -166,13 +175,35 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
-        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack }
+        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy }
     $script:HordeRelays[$r.name] = $r
     return $r
 }
 
 function Get-HordeRelayNames {
     return @($script:HordeRelays.Keys | Sort-Object)
+}
+
+function Get-HordeRelayDeployable {
+    # The names of the loaded relays that can be deployed (header, DEPLOYING), in order.
+    return @(Get-HordeRelayNames | Where-Object { $null -ne $script:HordeRelays[$_].deploy })
+}
+
+function Publish-HordeRelay {
+    # Deploy relay -Name, serving the static files in -Site: known { origin } - where it now answers -
+    # or unknown with the reason. Never throws for the relay: a deploy that throws is unknown.
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Site, [scriptblock]$Say = { param($Line) }, [string]$HordeHome = "")
+    if (-not $script:HordeRelays.ContainsKey($Name)) { return (New-HordeUnknown -Reason ("no relay named '" + $Name + "' is loaded")) }
+    $r = $script:HordeRelays[$Name]
+    if ($null -eq $r.deploy) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' is not one that is deployed: it has nothing to put anywhere")) }
+    if (-not (Test-Path -LiteralPath (Join-Path $Site "app\index.html") -PathType Leaf)) { return (New-HordeUnknown -Reason ("the folder to serve, " + $Site + ", holds no app\index.html")) }
+    try { $a = & $r.deploy $Site $Say $HordeHome }
+    catch { return (New-HordeUnknown -Reason ("relay '" + $Name + "' failed to deploy") -ErrorRecord $_) }
+    if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy with something that is not an answer")) }
+    if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay '" + $Name + "' was not deployed: " + $(if ("$($a.reason)" -ne "") { $a.reason } else { $a.state }))) }
+    $o = Get-HordeRelayMember $a.value "origin"
+    if (-not $o.has -or $o.value -isnot [string] -or $o.value -cnotmatch '\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z') { return (New-HordeUnknown -Reason ("relay '" + $Name + "' answered the deploy without the https origin it answers at")) }
+    return (New-HordeKnown -Value ([pscustomobject]@{ relay = $Name; origin = $o.value }) -ObservedAt $a.observedAt)
 }
 
 function Get-HordeRelay {
