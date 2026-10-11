@@ -12,10 +12,14 @@
 #   origin         https://<host>[:port], or http://127.0.0.1|localhost[:port] for a local dev only;
 #                  when not given, the production origin wrangler.json names (Wrangler.ps1,
 #                  Get-HordeCloudflareRelayDeployment), so `horde relay run -Relay cloudflare` needs no flag
-#   authorization  optional: the whole Authorization header value every request carries. The Worker
-#                  refuses every request no authenticator vouches for (worker/auth.js); in 8a only the
-#                  test authenticator of a local dev exists, so only a suite has a value to put here.
-#                  Sign-in (8b) replaces it with a signature per request from this machine's key.
+#   authorization  optional, for a suite only: the whole Authorization header value every request
+#                  carries - the test authenticator's bearer token of a local dev (worker/auth.js).
+#   hordeHome      optional: the Horde home whose relay identity signs (empty: this user's own).
+# WITHOUT authorization, EVERY REQUEST IS SIGNED by this machine's relay signing key
+# (RequestSigner.ps1): the Worker answers a machine only by the key a signed-in phone registered to its
+# account while it paired (relay/Pairing.ps1, THE ACCOUNT GRANT), and only for that key's horde. The key
+# is opened at the first request, not at connect, and kept open for the connection's life; a machine
+# with no identity yet is told so by every operation, as unknown - never a request sent unsigned.
 #
 # THE WIRE (worker/api.js has the whole list): put is POST .../items, read is GET .../items, ack is POST
 # .../ack, and a watch is a WebSocket on .../watch that the relay answers with one message of items the
@@ -36,6 +40,7 @@
 
 $script:HordeCloudflareRelayAdapterFolder = $PSScriptRoot
 . (Join-Path $PSScriptRoot "Deploy.ps1")
+. (Join-Path $PSScriptRoot "RequestSigner.ps1")
 Add-Type -AssemblyName System.Net.Http
 
 # https with a host name, or plain http to this machine only. No path, no user, no wildcard.
@@ -68,13 +73,35 @@ function Get-HordeCloudflareRelayMailboxPath {
     return ("/v1/mailboxes/" + $Mailbox + "/" + $Op)
 }
 
+function Get-HordeCloudflareRelayAuthorization {
+    # The Authorization value for one request: the suite's given one, or this machine's signature over
+    # it (the header). Known text, or unknown when there is no key to sign with.
+    param($State, [string]$Method, [string]$Target, [AllowEmptyCollection()][byte[]]$Body = @())
+    if ($State.authorization -ne "") { return (New-HordeKnown -Value $State.authorization) }
+    if ($null -eq $State.signer) {
+        $s = Open-HordeCloudflareRelaySigner -HordeHome $State.hordeHome
+        if ($s.state -cne "known") { return (New-HordeUnknown -Reason ("this machine cannot sign its requests to the relay: " + $s.reason)) }
+        $State.signer = $s.value
+    }
+    try { return (New-HordeKnown -Value (New-HordeCloudflareRelayMachineAuthorization -Key $State.signer.key -KeyId $State.signer.keyId -Origin $State.origin -Method $Method -Target $Target -Body $Body)) }
+    catch { return (New-HordeUnknown -Reason "this machine's signing key did not sign the request" -ErrorRecord $_) }
+}
+
 function Invoke-HordeCloudflareRelayHttp {
     # One request to the relay: known, the parsed JSON body of a 200; unknown with the status and the
-    # relay's words otherwise.
+    # relay's words otherwise. The body is sent as the very bytes the signature hashed.
     param($State, [string]$Method, [string]$Path, [string]$Body = $null, [string]$What)
+    # Assigned, not piped through $(...): an empty array through a subexpression comes out $null.
+    $bytes = New-Object byte[] 0
+    if ($null -ne $Body -and $Body -ne "") { $bytes = [System.Text.Encoding]::ASCII.GetBytes($Body) }
+    $auth = Get-HordeCloudflareRelayAuthorization -State $State -Method $Method -Target $Path -Body $bytes
+    if ($auth.state -cne "known") { return $auth }
     $req = New-Object System.Net.Http.HttpRequestMessage((New-Object System.Net.Http.HttpMethod($Method)), ($State.origin + $Path))
-    if ($State.authorization -ne "") { [void]$req.Headers.TryAddWithoutValidation("Authorization", $State.authorization) }
-    if ($null -ne $Body -and $Body -ne "") { $req.Content = New-Object System.Net.Http.StringContent($Body, [System.Text.Encoding]::ASCII, "application/json") }
+    [void]$req.Headers.TryAddWithoutValidation("Authorization", $auth.value)
+    if ($bytes.Length -gt 0) {
+        $req.Content = New-Object System.Net.Http.ByteArrayContent(, $bytes)
+        $req.Content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
+    }
     try {
         $res = $State.http.SendAsync($req).GetAwaiter().GetResult()
         try {
@@ -129,10 +156,13 @@ function Invoke-HordeCloudflareRelayWatch {
     # The watch over a WebSocket: known { items } - empty when the time ran out - or unknown.
     param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
     $ws = $State.origin -replace '\Ahttp', 'ws'
-    $uri = New-Object System.Uri($ws + (Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "watch") + "?since=" + $Since + "&max=" + $Max + "&timeoutMs=" + $TimeoutMs)
+    $target = (Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "watch") + "?since=" + $Since + "&max=" + $Max + "&timeoutMs=" + $TimeoutMs
+    $auth = Get-HordeCloudflareRelayAuthorization -State $State -Method "GET" -Target $target
+    if ($auth.state -cne "known") { return $auth }
+    $uri = New-Object System.Uri($ws + $target)
     $socket = New-Object System.Net.WebSockets.ClientWebSocket
     try {
-        if ($State.authorization -ne "") { $socket.Options.SetRequestHeader("Authorization", $State.authorization) }
+        $socket.Options.SetRequestHeader("Authorization", $auth.value)
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $cts = New-Object System.Threading.CancellationTokenSource($script:HordeCloudflareRelayConnectMs)
         try { $null = $socket.ConnectAsync($uri, $cts.Token).GetAwaiter().GetResult() }
@@ -166,12 +196,15 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         $auth = & $get "authorization"
         if ($null -eq $auth) { $auth = "" }
         if ($auth -isnot [string] -or ($auth -ne "" -and $auth -cnotmatch $script:HordeCloudflareRelayAuthorizationPattern)) { return (New-HordeUnknown -Reason "Options.authorization is one line of printable ASCII") }
+        $hordeHome = & $get "hordeHome"
+        if ($null -eq $hordeHome) { $hordeHome = "" }
+        if ($hordeHome -isnot [string] -or ($hordeHome -ne "" -and -not [System.IO.Path]::IsPathRooted($hordeHome))) { return (New-HordeUnknown -Reason "Options.hordeHome is an absolute folder") }
         # TLS 1.2 at least, for Windows PowerShell on a .NET that would otherwise offer older ones.
         if ($origin.StartsWith("https:")) { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 }
         $http = New-Object System.Net.Http.HttpClient
         $http.Timeout = [TimeSpan]::FromSeconds($script:HordeCloudflareRelayRequestSeconds)
         $http.MaxResponseContentBufferSize = $script:HordeCloudflareRelayAnswerBytes
-        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; http = $http }))
+        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; hordeHome = $hordeHome; signer = $null; http = $http }))
     } `
     -Put {
         param($State, [string]$Mailbox, [string]$Key, [string]$Text)

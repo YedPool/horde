@@ -3,7 +3,7 @@
 //   argv     its arguments after this script
 //   stdin    everything read from standard input, byte for byte (latin1, so a byte order mark shows)
 //   env      the variables the deploy must set, and the test binding, which it must not
-//   config   what the --config file held when it ran: whether it names the test binding, whether its
+//   config   what the --config file held when it ran: whether it names a test binding, whether its
 //            app folder holds app/index.html, and that app's config.json
 // HORDE_FAKE_WRANGLER_FAIL names a command ("secret" or "deploy") to fail; it then prints what it was
 // given on its error stream, so the suite can see the deploy hide it.
@@ -18,7 +18,7 @@ function configSeen() {
   const cfg = JSON.parse(text);
   const dir = cfg.assets && cfg.assets.directory;
   const appConfig = dir && fs.existsSync(path.join(dir, "app/config.json")) ? fs.readFileSync(path.join(dir, "app/config.json"), "utf8").trim() : "";
-  return { path: argv[at + 1], namesTestBinding: text.indexOf("HORDE_RELAY_TEST_AUTH") >= 0, appIndex: Boolean(dir && fs.existsSync(path.join(dir, "app/index.html"))), appConfig, name: cfg.name };
+  return { path: argv[at + 1], namesTestBinding: text.indexOf("HORDE_RELAY_TEST_") >= 0, appIndex: Boolean(dir && fs.existsSync(path.join(dir, "app/index.html"))), appConfig, name: cfg.name };
 }
 process.stdin.on("data", (c) => chunks.push(c));
 process.stdin.on("end", () => {

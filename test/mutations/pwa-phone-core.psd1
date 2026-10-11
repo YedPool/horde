@@ -57,5 +57,14 @@
         @{ Name = "pairing-kept-after-announce"
            Find = '      pairings.delete(id);'
            Replace = '' }
+        @{ Name = "machine-not-registered-before-pairing"
+           Find = '      if (account) {'
+           Replace = '      if (false) {' }
+        @{ Name = "relay-words-on-the-screen"
+           Find = 'throw fail(reg.status === 401 ? SIGN_IN_FIRST : NOT_REGISTERED);'
+           Replace = 'throw fail(reg.reason);' }
+        @{ Name = "refused-registration-pairs-anyway"
+           Find = 'if (reg.state !== "known") { diagnostics.push(relaySaid(reg.reason)); throw'
+           Replace = 'if (false) { diagnostics.push(relaySaid(reg.reason)); throw' }
     )
 }

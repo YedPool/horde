@@ -1,23 +1,25 @@
 # relays/cloudflare/Deploy.ps1 - putting the hosted relay on Cloudflare: the Google client's two values
-# stored as Worker secrets, then the Worker deployed with the phone app it serves. The relay's -Deploy
+# and the sign-in allowlist stored as Worker secrets, then the Worker deployed with the phone app it serves. The relay's -Deploy
 # block (Relay.ps1); `horde relay deploy` (cli/RelayDeploy.ps1) builds the app and calls it through the
 # port (relays/Port.ps1, Publish-HordeRelay).
 #
 # THE STEPS, each stopping the deploy when it fails, with nothing done after it:
 #   1. the settings (Settings.ps1) and the Google client file they name, read and checked
-#      (GoogleClient.ps1) - before wrangler is even looked for, so a missing file costs nothing;
+#      (GoogleClient.ps1), and the sign-in allowlist they hold (SignInAllowlist.ps1: off unless
+#      switched on) - before wrangler is even looked for, so a missing file costs nothing;
 #   2. wrangler: the pinned one (Wrangler.ps1, installed outside the tree when it is not), or the one the
 #      setting wranglerScript names;
 #   3. the production config, written into a work folder outside the tree (Wrangler.ps1,
-#      New-HordeCloudflareRelayConfig), which REFUSES a wrangler.json that carries the test binding;
-#   4. `wrangler secret put GOOGLE_CLIENT_ID` and `... GOOGLE_CLIENT_SECRET`, each value written to
+#      New-HordeCloudflareRelayConfig), which REFUSES a wrangler.json that carries a test binding;
+#   4. `wrangler secret put GOOGLE_CLIENT_ID`, `... GOOGLE_CLIENT_SECRET` and
+#      `... HORDE_RELAY_SIGNIN_ALLOWLIST` (written every time, so switching it off is a deploy too), each value written to
 #      wrangler's standard input - never an argument (a process list shows those to anyone on the
 #      machine), never a file (a file outlives the run, and could be one in the repository);
 #   5. `wrangler deploy`.
 # Secrets before the deploy, as the founder set it (2026-10-11): a Worker never runs a version that is
 # missing them. The work folder is deleted at the end, whatever happened; it never held a secret.
 #
-# NOTHING SAID HOLDS A SECRET. What wrangler prints is passed on line by line, with both values
+# NOTHING SAID HOLDS A SECRET. What wrangler prints is passed on line by line, with every value
 # replaced by <redacted> wherever they appear, and a refusal says which step failed and how wrangler
 # ended, never what it was given.
 #
@@ -29,8 +31,10 @@
 . (Join-Path $PSScriptRoot "Wrangler.ps1")
 . (Join-Path $PSScriptRoot "Settings.ps1")
 . (Join-Path $PSScriptRoot "GoogleClient.ps1")
+. (Join-Path $PSScriptRoot "SignInAllowlist.ps1")
 
-$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret" }
+# The Worker's secrets, in the order they are stored, each from the value of that name below (Publish).
+$script:HordeCloudflareRelaySecretNames = [ordered]@{ GOOGLE_CLIENT_ID = "clientId"; GOOGLE_CLIENT_SECRET = "clientSecret"; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }
 $script:HordeCloudflareRelayDeploySeconds = 600
 
 function Hide-HordeCloudflareRelaySecrets {
@@ -57,7 +61,10 @@ function Publish-HordeCloudflareRelay {
     $clientFile = Get-HordeCloudflareRelayClientFile -Values $set.value
     $client = Read-HordeCloudflareRelayGoogleClient -Path $clientFile -RepoRoot (Get-HordeCloudflareRelayRepoRoot)
     if ($client.state -cne "known") { return $client }
-    $secrets = @($client.value.clientId, $client.value.clientSecret)
+    $allow = ConvertTo-HordeCloudflareRelayAllowlist -Values $set.value
+    if ($allow.state -cne "known") { return $allow }
+    $values = @{ clientId = $client.value.clientId; clientSecret = $client.value.clientSecret; allowlist = $allow.value }
+    $secrets = @($client.value.clientId, $client.value.clientSecret, $allow.value)
     & $Say ("read the Google client from " + $clientFile)
 
     $node = Find-HordeCloudflareRelayNode
@@ -79,7 +86,7 @@ function Publish-HordeCloudflareRelay {
         if ($cfg.state -cne "known") { return $cfg }
         $quiet = Get-HordeCloudflareRelayQuietEnv -Work $work
         foreach ($name in @($script:HordeCloudflareRelaySecretNames.Keys)) {
-            $value = "" + $client.value.($script:HordeCloudflareRelaySecretNames[$name])
+            $value = "" + $values[$script:HordeCloudflareRelaySecretNames[$name]]
             $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @($wrangler, "secret", "put", $name, "--config", $cfg.value) -Env $quiet -WorkDir $work -StdIn $value -TimeoutSeconds $script:HordeCloudflareRelayDeploySeconds
             if ($r.timedOut -or $r.code -ne 0) { return (New-HordeUnknown -Reason ("wrangler secret put " + $name + " failed (exit " + $r.code + $(if ($r.timedOut) { ", timed out" } else { "" }) + "): " + (Get-HordeCloudflareRelayWranglerTail -Run $r -Secrets $secrets) + "; nothing was deployed")) }
             & $Say ("stored " + $name + " as a secret of the Worker " + $dep.name)
