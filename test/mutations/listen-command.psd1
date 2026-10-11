@@ -13,6 +13,12 @@
         @{ Name = "allow-from-on-loopback"
            Find = 'if ($where.value.loopback -and @(@($AllowFrom)'
            Replace = 'if ($false -and @(@($AllowFrom)' }
+        @{ Name = "allow-public-profile-on-loopback"
+           Find = 'if ($where.value.loopback -and $AllowPublicProfile) {'
+           Replace = 'if ($false -and $AllowPublicProfile) {' }
+        @{ Name = "public-profile-switch-dropped"
+           Find = '-Root $root -Seconds $Seconds -AllowPublicProfile:$AllowPublicProfile'
+           Replace = '-Root $root -Seconds $Seconds' }
         @{ Name = "listens-when-firewall-refused"
            Find = 'if (-not $fwOpen.ok) { throw $fwOpen.reason }'
            Replace = ''

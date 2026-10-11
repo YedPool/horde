@@ -23,6 +23,33 @@
         @{ Name = "rule-not-removed"
            Find = '$why = Remove-HordeListenRule -Firewall $Firewall.value -Name $Rule'
            Replace = '$why = ""' }
+        @{ Name = "public-network-not-refused"
+           Find = 'if ($net.state -ceq "known" -and @(@($spec.value.profiles)'
+           Replace = 'if ($false -and @(@($spec.value.profiles)' }
+        @{ Name = "unknown-network-refused"
+           Find = 'if ($net.state -ceq "known" -and @(@($spec.value.profiles)'
+           Replace = 'if ($net.state -cne "known") { $out.reason = "the network could not be read"; return $out }; if ($net.state -ceq "known" -and @(@($spec.value.profiles)' }
+        @{ Name = "every-network-refused"
+           Find = '-and @(@($spec.value.profiles) | Where-Object { $_ -ceq $net.value }).Count -eq 0) {'
+           Replace = ') {' }
+        @{ Name = "refused-after-elevation"
+           Find = '    $net = Get-HordeListenNetworkProfile -Firewall $fw -Address $Where.address'
+           Replace = '    $net = New-HordeUnknown -Reason "later"; if ((@(& $fw.elevated) | Select-Object -Last 1) -eq $true) { $net = Get-HordeListenNetworkProfile -Firewall $fw -Address $Where.address }' }
+        @{ Name = "switch-not-given-to-spec"
+           Find = '-AllowFrom $from -AllowPublicProfile:$AllowPublicProfile'
+           Replace = '-AllowFrom $from' }
+        @{ Name = "switch-not-in-elevation-line"
+           Find = '-Seconds $Seconds -AllowPublicProfile:$AllowPublicProfile)'
+           Replace = '-Seconds $Seconds)' }
+        @{ Name = "refusal-drops-the-switch"
+           Find = 'Choose one: run horde listen again with -AllowPublicProfile, which'
+           Replace = 'Choose one: run horde listen again, which' }
+        @{ Name = "refusal-hides-what-private-turns-on"
+           Find = 'which also turns on every other inbound rule the system keeps for Private networks'
+           Replace = 'which is simple' }
+        @{ Name = "said-line-fixed-profiles"
+           Find = '(Join-HordeListenProfileWords -Profiles $spec.value.profiles) + " profiles only"'
+           Replace = '"Domain and Private profiles only"' }
         @{ Name = "loopback-asks-firewall"
            Find = 'if ($Where.loopback) { $out.ok = $true; $out.said = "loopback needs no firewall rule"; return $out }'
            Replace = '' }

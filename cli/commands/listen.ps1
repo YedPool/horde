@@ -4,7 +4,7 @@ $HordeCommand = @{
     # Runs until stopped, like hub serve: Windows throttles a busy background process about 7x after 3 s
     # (core/Platform.ps1), and the listener is asked whether it still serves every second.
     sustained = $true
-    usage   = "listen [-Address <ip>] [-Port <n>] [-AllowFrom <ip,...>] [-Seconds <s>] [-Transport <name>]"
+    usage   = "listen [-Address <ip>] [-Port <n>] [-AllowFrom <ip,...>] [-AllowPublicProfile] [-Seconds <s>] [-Transport <name>]"
     summary = "accept enrolled nodes' links for as long as it runs, on 127.0.0.1 or one private address of this machine (never a public one): a listener of Horde's own, its every key forced to attach, which relays to this hub's pipe; off loopback it keeps one firewall rule of its own, from the nodes' addresses only, and removes it when it stops"
     run     = {
         [CmdletBinding()] param(
@@ -21,7 +21,11 @@ $HordeCommand = @{
             [string]$Address = "127.0.0.1",
             # Off loopback: the addresses nodes may reach the listener from. None: the enrolled nodes'
             # last-known addresses (horde hub enroll -Address).
-            [string[]]$AllowFrom = @()
+            [string[]]$AllowFrom = @(),
+            # Off loopback: let the rule apply on the Public profile too, for a listen address on a
+            # network the firewall treats as Public (core/FirewallPort.ps1, THE PROFILES). Without it,
+            # such an address is refused before anything listens.
+            [switch]$AllowPublicProfile
         )
         # Loaded here, in the command's own scope, so the listeners' helpers stay visible to the blocks
         # they register (transports/Listener.ps1, the adapter contract).
@@ -37,6 +41,7 @@ $HordeCommand = @{
         $where = Resolve-HordeListenAddress -Address $Address
         if ($where.state -cne "known") { throw ("horde listen will not listen there: " + $where.reason) }
         if ($where.value.loopback -and @(@($AllowFrom) | Where-Object { "$_".Trim() -ne "" }).Count -gt 0) { throw "-AllowFrom goes with a network -Address: on loopback no firewall rule is made" }
+        if ($where.value.loopback -and $AllowPublicProfile) { throw "-AllowPublicProfile goes with a network -Address: on loopback no firewall rule is made" }
         $a = Get-HordeListenerAdapter -Name $Transport
         if ($a.state -cne "known") { throw ("no listener to start: " + $a.reason) }
         $hordeHome = Get-HordeHome
@@ -49,7 +54,7 @@ $HordeCommand = @{
             foreach ($f in @(Get-HordeFirewallFiles -Root $root)) { . $f }
             $firewall = Get-HordeFirewall
         }
-        $fwOpen = Open-HordeListenFirewall -Where $where.value -Port $Port -HubId $hubId -Firewall $firewall -AllowFrom $AllowFrom -Known @(Get-HordeHubLiveAddresses -HordeHome $hordeHome) -Root $root -Seconds $Seconds
+        $fwOpen = Open-HordeListenFirewall -Where $where.value -Port $Port -HubId $hubId -Firewall $firewall -AllowFrom $AllowFrom -Known @(Get-HordeHubLiveAddresses -HordeHome $hordeHome) -Root $root -Seconds $Seconds -AllowPublicProfile:$AllowPublicProfile
         if (-not $fwOpen.ok) { throw $fwOpen.reason }
         if ($fwOpen.rule -ne "") { Write-Host $fwOpen.said }
         $why = "stopped"
