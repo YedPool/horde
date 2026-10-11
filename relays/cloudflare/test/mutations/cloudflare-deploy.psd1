@@ -28,6 +28,12 @@
         @{ Name = "missing-return-address-not-noted"
            Find = 'if (@($client.value.redirectUris) -cnotcontains $callback) {'
            Replace = 'if ($false) {' }
+        @{ Name = "allowlist-refusal-ignored"
+           Find = 'if ($allow.state -cne "known") { return $allow }'
+           Replace = '' }
+        @{ Name = "allowlist-not-stored"
+           Find = '; HORDE_RELAY_SIGNIN_ALLOWLIST = "allowlist" }'
+           Replace = ' }' }
         @{ Name = "wrangler-script-setting-unchecked"
            Find = '} elseif (-not (Test-HordeModuleSettingFolder -Path $wrangler) -or -not (Test-Path -LiteralPath $wrangler -PathType Leaf)) {'
            Replace = '} elseif ($false) {' }

@@ -19,6 +19,12 @@
 // drive), so a touch does exactly what the key does at the desk. A key is pressed on pointerdown with
 // the default prevented, so the field keeps the caret and the keyboard stays up.
 //
+// ACCOUNTS. A deployment whose relay is this very site has accounts (account-client.js): the app shows
+// the sign-in screen until the browser is signed in - the relay's session lives in a cookie no script
+// here can read, so the app only asks the relay whether there is one - and an Account screen with the
+// machines registered to it, each removable, and Sign out. Pairing registers the machine (phone-core.js).
+// A deployment with no accounts shows none of it.
+//
 // THE CHAT is the horde's second view, a tab beside its questions: the Thrall's turns and the founder's
 // lines, as the bridge's chat request answers them, and a composer with the same keys as an answer -
 // Enter sends, Shift+Enter or the New line key adds a line - over the soft keyboard. A line goes only
@@ -29,6 +35,7 @@
 import { createPhone } from "./phone-core.js";
 import { createBridge, deferredBridge } from "../surface/bridge.js";
 import { createRelayClient, transportFromConfig } from "./relay-client.js";
+import { accountFromConfig } from "./account-client.js";
 import { openStore } from "./store.js";
 import { browserAuthenticator } from "./webauthn.js";
 import { canScan, scanQr } from "./scan.js";
@@ -51,11 +58,14 @@ function messageOf(e) { return e && e.message ? e.message : String(e); }
 
 // The deployment's config.json, once read: the transport, and how long the app may stay hidden.
 let config = null;
+// The relay's accounts, or null when it has none (account-client.js).
+let account = null;
 async function makeBridge() {
   config = await fetch("config.json", { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error("this deployment has no config.json"); return r.json(); });
   const transport = transportFromConfig(config, window);
   if (!transport) throw new Error("this deployment names no relay transport this app knows ('" + String(config.transport) + "')");
-  const phone = createPhone({ store: await openStore(), authenticator: browserAuthenticator(), relay: createRelayClient(transport), origin: window.location.origin });
+  account = accountFromConfig(config, window);
+  const phone = createPhone({ store: await openStore(), authenticator: browserAuthenticator(), relay: createRelayClient(transport), account, origin: window.location.origin });
   return createBridge(phone, {
     look: LOOK,
     waitMs: WATCH_MS,
@@ -70,7 +80,7 @@ made.catch((e) => say("boot", "This app cannot start here: " + messageOf(e)));
 
 // --- the screens ---
 
-const VIEWS = ["pairView", "pairedView", "lockedView", "emptyView", "doc", "chat"];
+const VIEWS = ["signInView", "accountView", "pairView", "pairedView", "lockedView", "emptyView", "doc", "chat"];
 function show(view) {
   for (const v of VIEWS) $(v).hidden = v !== view;
   $("keys").hidden = view !== "doc";
@@ -323,6 +333,52 @@ $("announceBtn").addEventListener("click", async () => {
   } catch (e) { say("action", messageOf(e)); }
 });
 
+// --- the account ---
+
+async function isSignedIn() {
+  if (!account) return true;
+  const s = await account.session();
+  return s.state === "known" && s.value.signedIn === true;
+}
+function showSignIn() { $("accountBtn").hidden = true; show("signInView"); }
+$("signInBtn").addEventListener("click", () => { if (account) window.location.assign(account.signInUrl()); });
+async function openAccount() {
+  say("action", "");
+  const a = await account.account();
+  if (a.state !== "known") { if (a.status === 401) { showSignIn(); return; } say("action", "The account could not be read just now; try again."); return; }
+  $("accountWho").textContent = "Signed in as " + (a.value.account.email || "your Google account") + ".";
+  const list = $("machineList");
+  while (list.firstChild) list.removeChild(list.firstChild);
+  const machines = Array.isArray(a.value.machines) ? a.value.machines : [];
+  for (const m of machines) {
+    const li = document.createElement("li");
+    const what = document.createElement("span");
+    what.textContent = String(m.horde) + " - machine " + String(m.keyId).slice(0, 12);
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      if (!window.confirm("Remove this machine of " + m.horde + " from your account? It reaches the relay no more until it is paired again.")) return;
+      const r = await account.removeMachine(m.keyId);
+      if (r.state !== "known") say("action", "The machine could not be removed just now; try again.");
+      await openAccount();
+    });
+    li.appendChild(what);
+    li.appendChild(rm);
+    list.appendChild(li);
+  }
+  $("machineEmpty").hidden = machines.length > 0;
+  show("accountView");
+}
+$("accountBtn").addEventListener("click", openAccount);
+$("accountBack").addEventListener("click", () => pick(current || (hordes[0] && hordes[0].id) || ""));
+$("signOutBtn").addEventListener("click", async () => {
+  await lockAll();
+  const r = await account.signOut();
+  if (r.state !== "known") say("action", "The relay did not sign this phone out just now; try again.");
+  else showSignIn();
+});
+
 // --- unlocking ---
 
 async function acted(request, args) {
@@ -372,7 +428,7 @@ document.addEventListener("visibilitychange", () => {
   clearTimeout(lockTimer);
   const expired = hiddenAt && Date.now() - hiddenAt >= lockAfterMs();
   hiddenAt = 0;
-  (expired ? lockAll() : Promise.resolve()).then(() => pick(current));
+  (expired ? lockAll() : Promise.resolve()).then(resume);
 });
 
 // --- the answering keys ---
@@ -398,7 +454,19 @@ if (window.visualViewport) {
 // --- start ---
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch((e) => say("boot", "Offline start is not available: " + messageOf(e)));
+// Back to the app: still signed in, the horde it was on; signed out at the relay meanwhile (the session
+// ended, or another tab signed out), every horde locked and the sign-in screen.
+async function resume() {
+  if (!(await isSignedIn())) { await lockAll(); showSignIn(); return; }
+  await pick(current);
+}
 made.then(async () => {
+  if (window.location.hash === "#signin-refused") {
+    say("action", "Sign-in was refused: this account may not use this relay, or the sign-in took too long. Try again.");
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  if (!(await isSignedIn())) { showSignIn(); return; }
+  $("accountBtn").hidden = !account;
   await loadHordes();
   if (!hordes.length) { show("emptyView"); return; }
   await pick(hordes[0].id);

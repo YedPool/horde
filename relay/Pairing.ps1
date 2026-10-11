@@ -11,8 +11,9 @@
 #   pairMailbox (where the phone sends its response through the relay: <horde>/pair-<offer>, a
 #   mailbox of this offer alone),
 #   rpId and origins (the relying party the passkey is made for, and where the PWA is served),
-#   issuedAt and expiresAt (milliseconds; 300 s by default, 30 to 900).
-# About 650 to 750 characters, which a QR code holds at version 20 or 21 (level M, cli/QrCode.ps1). The phone makes a passkey with
+#   issuedAt and expiresAt (milliseconds; 300 s by default, 30 to 900),
+#   grant (last): the ACCOUNT GRANT, below.
+# About 750 to 850 characters, which a QR code holds at version 22 or 23 (level M, cli/QrCode.ps1). The phone makes a passkey with
 #   challenge = SHA-256("horde-relay/pairing/v1 challenge" LF <the offer's text, exactly>)
 # ES256 only, user verification required, attestation "none", and answers with a response, kind
 # horde-relay-pairing-response: offer, code, rawId, clientDataJSON, attestationObject (each base64url
@@ -109,6 +110,19 @@
 # test/fixtures/relay/registration make responses of under 1000), so 6000 leaves room for any
 # credential id a WebAuthn client makes and keeps the sealed text's ct inside one record b64u (8192).
 #
+# THE ACCOUNT GRANT (relay PR 8b, the founder's plan of 2026-10-11). A hosted relay with accounts
+# answers a machine only by the signing key a signed-in phone registered to its account, and a machine's
+# public key is no secret: it is in every offer and every card. So the relay takes a key into an account
+# only with this machine's consent - the grant, an ES256 signature by the signing key the offer names
+# (low-S, relay/P256.ps1) over
+#   "horde-relay/pairing/v1 account-grant" LF horde LF offer LF machine LF expiresAt
+# which the phone hands the relay with the offer's fields when it pairs. The relay verifies it under
+# that very key, refuses it once expiresAt has passed, and takes each offer's grant once. Whoever holds
+# a live offer may register its key - the same bearer secret, for the same few minutes, as pairing
+# itself (WHAT A STOLEN OFFER CAN AND CANNOT DO, above); nobody else can, and no grant outlives its
+# offer. The grant carries no account: the machine does not know which one the phone signed in to, and
+# it needs no secret of its own to be registered - the relay's own check is that the key signed it.
+#
 # Every function that judges the far end's input answers { ok; reason; value } and never throws for it.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
@@ -132,7 +146,21 @@ function Get-HordeRelayPairingLimits {
 function Get-HordeRelayOfferSpec {
     return (New-HordeRelayRecordSpec -Pairs @("v", "int", "kind", "name", "horde", "name", "offer", "hex32", "code", "b64u", "machine", "hex32",
         "signPublic", "point", "agreeKeyId", "hex32", "agreePublic", "point", "mailbox", "mailbox", "pairMailbox", "mailbox", "rpId", "rpid",
-        "origins", "origins", "issuedAt", "int", "expiresAt", "int"))
+        "origins", "origins", "issuedAt", "int", "expiresAt", "int", "grant", "b64u"))
+}
+
+function Get-HordeRelayAccountGrantBytes {
+    # What the account grant signs (THE ACCOUNT GRANT, in the header); relay/js/protocol.js's
+    # accountGrantBytes is its twin.
+    param([Parameter(Mandatory = $true)][string]$Horde, [Parameter(Mandatory = $true)][string]$Offer, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)][long]$ExpiresAt)
+    return ,(Get-HordeRelayAsciiBytes -Text ("horde-relay/pairing/v1 account-grant`n" + $Horde + "`n" + $Offer + "`n" + $Machine + "`n" + $ExpiresAt))
+}
+
+function Test-HordeRelayAccountGrant {
+    # Does -Grant (base64url) verify, low-S, under -SignPublic over the grant's lines? Never throws.
+    param([string]$Horde, [string]$Offer, [string]$Machine, [long]$ExpiresAt, [byte[]]$SignPublic, [string]$Grant)
+    try { $sig = ConvertFrom-HordeRelayBase64Url -Text $Grant } catch { return $false }
+    return (Test-HordeRelayEs256Signature -Public $SignPublic -Bytes (Get-HordeRelayAccountGrantBytes -Horde $Horde -Offer $Offer -Machine $Machine -ExpiresAt $ExpiresAt) -Signature $sig)
 }
 
 function Get-HordeRelayPendingSpec {
@@ -240,17 +268,22 @@ function New-HordeRelayPairingOffer {
     if ($TtlSeconds -lt $limits.minTtlSeconds -or $TtlSeconds -gt $limits.maxTtlSeconds) { return (New-HordeUnknown -Reason ("an offer lives " + $limits.minTtlSeconds + " to " + $limits.maxTtlSeconds + " seconds, not " + $TtlSeconds)) }
     $why = Test-HordeRelayOriginForRpId -RpId $RpId -Origins $Origins
     if ($why -cne "") { return (New-HordeUnknown -Reason $why) }
-    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome
+    $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Open
     if ($id.state -cne "known") { return $id }
     $issued = ConvertTo-HordeRelayRecordMs -Time $Now
     $offerId = ConvertTo-HordeRelayHex -Bytes (Get-HordeRelayRandomBytes -Count 16)
     $code = ConvertTo-HordeRelayBase64Url -Bytes (Get-HordeRelayRandomBytes -Count 16)
     $expires = $issued + [long]$TtlSeconds * 1000
+    try {
+        $grant = ConvertTo-HordeRelayBase64Url -Bytes (New-HordeRelayEs256Signature -Key $id.value.sign.key -Bytes (Get-HordeRelayAccountGrantBytes -Horde $id.value.horde -Offer $offerId -Machine $id.value.sign.keyId -ExpiresAt $expires))
+    } catch { return (New-HordeUnknown -Reason "this machine's signing key did not sign the offer's account grant" -ErrorRecord $_) }
+    finally { $id.value.sign.key.Dispose(); $id.value.agree.key.Dispose() }
     $text = ConvertTo-HordeRelayRecordText -Spec (Get-HordeRelayOfferSpec) -Values @{
         v = 1; kind = "horde-relay-pairing-offer"; horde = $id.value.horde; offer = $offerId; code = $code; machine = $id.value.sign.keyId
         signPublic = (ConvertTo-HordeRelayBase64Url -Bytes $id.value.sign.public); agreeKeyId = $id.value.agree.keyId
         agreePublic = (ConvertTo-HordeRelayBase64Url -Bytes $id.value.agree.public); mailbox = $id.value.mailbox
         pairMailbox = (Get-HordeRelayPairingMailbox -Horde $id.value.horde -Offer $offerId); rpId = $RpId; origins = @($Origins); issuedAt = $issued; expiresAt = $expires
+        grant = $grant
     }
     $challenge = ConvertTo-HordeRelayBase64Url -Bytes (Get-HordeRelayPairingChallenge -OfferText $text)
     $codeHash = ConvertTo-HordeRelayBase64Url -Bytes (Get-HordeRelaySha256 -Bytes (Get-HordeRelayAsciiBytes -Text $code))
