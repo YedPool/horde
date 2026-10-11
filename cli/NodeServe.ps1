@@ -250,6 +250,106 @@ function New-HordeNodeMessaging {
     return [pscustomobject]@{ GetView = $GetView; Messenger = $Messenger; MessengerError = $why; OutboxRoot = $outbox; MessageJournalRoot = $messages; Layers = $layers; HubSpawned = @() }
 }
 
+function Invoke-HordeNodeLink {
+    # Answer one link until it ends, and close it: what each accepted link gets from node serve, and
+    # what a link the node dialled gets (R17c). Returns how the link ended.
+    param(
+        [Parameter(Mandatory = $true)]$Link,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Namespace,
+        [Parameter(Mandatory = $true)][scriptblock]$GetView,
+        [Parameter(Mandatory = $true)]$Contract,
+        [string]$JournalRoot = "",
+        [scriptblock]$Act = $null,
+        $Messaging = $null,
+        [switch]$ReadOnly,
+        [int]$IdleTimeoutMs = 120000
+    )
+    $link = $Link
+    $state = New-HordeNodeServeState -NodeId "$($Manifest.deviceId)" -NodeName "$($Manifest.deviceName)" -HordeVersion "$($Manifest.hordeVersion)" -Contract $Contract
+    $ended = "the link dropped"
+    try {
+        while ($true) {
+            $line = Receive-HordeLinkFrame -Link $link -TimeoutMs $IdleTimeoutMs
+            if ($line.state -cne "known") { $ended = "the link ended: " + $line.reason; break }
+            $r = $null
+            try {
+                $r = Invoke-HordeNodeServeStep -State $state -Line "$($line.value)" -Manifest $Manifest -Namespace $Namespace -JournalRoot $JournalRoot -Messaging $Messaging -GetView $GetView -Act $Act -ReadOnly:$ReadOnly
+            } catch {
+                $why = "$($_.Exception.Message)"
+                $req = $null
+                $d = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes("$($line.value)")) -Contract $state.contract
+                if ($d.ok -and "$($d.frame.kind)" -ceq "req") { $req = $d.frame }
+                if ($null -ne $req) { $r = New-HordeNodeReply -Reply (New-HordeNodeError -State $state -Request $req -Code "internal" -Reason ("the node failed while answering: " + $why)) }
+                else { $r = New-HordeNodeReply -Reply (New-HordeLinkBye -Code "refused" -Reason ("the node failed while reading a frame: " + $why) -Seq (Get-HordeNodeNextSeq $state) -Contract $state.contract) -Close $true }
+            }
+            if ($null -ne $r.reply) {
+                if (-not (Send-HordeNodeAnswer -Link $link -State $state -Frame $r.reply)) { $ended = "the answer could not be sent"; break }
+            }
+            if ($r.close) { $ended = "closed by the protocol"; break }
+        }
+    } finally {
+        Close-HordeLink -Link $link
+    }
+    return $ended
+}
+
+function Invoke-HordeNodeDial {
+    # `horde node serve -Dial` (remote plan R17c): the node dials the hub's listener and answers on the
+    # link it opened, the same answers an accepted link gets (Invoke-HordeNodeLink). A node behind NAT
+    # cannot be dialled, so it dials. After a link ends it dials again -IntervalMs later; after a failed
+    # dial it waits 1 s, 2 s, 4 s ... up to -BackoffMaxMs, so a hub that is down is not hammered.
+    # -MaxDials bounds the dials, links and failures alike (0: until stopped). Returns { dials; served;
+    # endings; failures }.
+    #
+    # The node says nothing about who it is before its hello: what the hub binds the link to is the
+    # preamble the hub's own forced command writes, from the key the node authenticated with (R17a).
+    param(
+        [Parameter(Mandatory = $true)]$Transport,
+        [Parameter(Mandatory = $true)][string]$Endpoint,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)]$Namespace,
+        [Parameter(Mandatory = $true)][scriptblock]$GetView,
+        [string]$JournalRoot = "",
+        [scriptblock]$Act = $null,
+        # What an accepted link gets too (Invoke-HordeNodeServe): messaging, and read verbs only.
+        $Messaging = $null,
+        [switch]$ReadOnly,
+        [int]$MaxDials = 0,
+        [int]$OpenTimeoutMs = 15000,
+        [int]$IdleTimeoutMs = 120000,
+        [int]$IntervalMs = 15000,
+        [int]$BackoffMaxMs = 60000,
+        [scriptblock]$Log = $null
+    )
+    $contract = Get-HordeLinkContract
+    $say = { param($Line) if ($null -ne $Log) { $null = & $Log $Line } else { Write-Host $Line } }
+    $dials = 0
+    $endings = New-Object System.Collections.ArrayList
+    $failures = New-Object System.Collections.ArrayList
+    $streak = 0
+    while ($MaxDials -le 0 -or $dials -lt $MaxDials) {
+        $dials++
+        $open = Open-HordeTransportLink -Transport $Transport -Endpoint $Endpoint -Role "node" -TimeoutMs $OpenTimeoutMs
+        $wait = $IntervalMs
+        if ($open.state -ceq "known") {
+            $streak = 0
+            $ended = Invoke-HordeNodeLink -Link $open.value -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs
+            [void]$endings.Add($ended)
+            & $say ("dialled " + $Transport.name + " " + $Endpoint + "; " + $ended)
+        } else {
+            $streak++
+            $why = ConvertTo-HordeNodeLogText "$($open.reason)"
+            [void]$failures.Add($why)
+            $wait = [int][Math]::Min($BackoffMaxMs, 1000 * [Math]::Pow(2, [Math]::Min(16, $streak - 1)))
+            & $say ("could not dial " + $Transport.name + " " + $Endpoint + " (" + $streak + " in a row; next try in " + $wait + " ms): " + $why)
+        }
+        if ($MaxDials -gt 0 -and $dials -ge $MaxDials) { break }
+        Start-Sleep -Milliseconds $wait
+    }
+    return [pscustomobject]@{ dials = $dials; served = $endings.Count; endings = $endings.ToArray(); failures = $failures.ToArray() }
+}
+
 function Invoke-HordeNodeServe {
     # Serve links until -MaxLinks have been served (0: until stopped). -Transport is a loaded transport
     # (transports/Port.ps1: Resolve-HordeLinkTransport for the real one, Get-HordeTransport memory in a
@@ -351,32 +451,7 @@ function Invoke-HordeNodeServe {
             }
             $inARow = 0
             $link = $acc.value
-            $state = New-HordeNodeServeState -NodeId "$($Manifest.deviceId)" -NodeName "$($Manifest.deviceName)" -HordeVersion "$($Manifest.hordeVersion)" -Contract $contract
-            $ended = "the link dropped"
-            try {
-                while ($true) {
-                    $line = Receive-HordeLinkFrame -Link $link -TimeoutMs $IdleTimeoutMs
-                    if ($line.state -cne "known") { $ended = "the link ended: " + $line.reason; break }
-                    $r = $null
-                    try {
-                        $r = Invoke-HordeNodeServeStep -State $state -Line "$($line.value)" -Manifest $Manifest -Namespace $Namespace -JournalRoot $JournalRoot -Messaging $Messaging -GetView $GetView -Act $Act -ReadOnly:$ReadOnly
-                    } catch {
-                        $why = "$($_.Exception.Message)"
-                        $req = $null
-                        $d = ConvertFrom-HordeFrameBytes -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes("$($line.value)")) -Contract $state.contract
-                        if ($d.ok -and "$($d.frame.kind)" -ceq "req") { $req = $d.frame }
-                        if ($null -ne $req) { $r = New-HordeNodeReply -Reply (New-HordeNodeError -State $state -Request $req -Code "internal" -Reason ("the node failed while answering: " + $why)) }
-                        else { $r = New-HordeNodeReply -Reply (New-HordeLinkBye -Code "refused" -Reason ("the node failed while reading a frame: " + $why) -Seq (Get-HordeNodeNextSeq $state) -Contract $state.contract) -Close $true }
-                    }
-                    if ($null -ne $r.reply) {
-                        if (-not (Send-HordeNodeAnswer -Link $link -State $state -Frame $r.reply)) { $ended = "the answer could not be sent"; break }
-                    }
-                    if ($r.close) { $ended = "closed by the protocol"; break }
-                }
-            } finally {
-                Close-HordeLink -Link $link
-            }
-            [void]$served.Add($ended)
+            [void]$served.Add((Invoke-HordeNodeLink -Link $link -Manifest $Manifest -Namespace $Namespace -GetView $GetView -Contract $contract -JournalRoot $JournalRoot -Act $Act -Messaging $Messaging -ReadOnly:$ReadOnly -IdleTimeoutMs $IdleTimeoutMs))
         }
     } finally {
         if ($unsaid -gt 0) { & $say ("refused " + $unsaid + " more peer(s), listener kept; the last: " + "$(@($refusals)[-1])") }
