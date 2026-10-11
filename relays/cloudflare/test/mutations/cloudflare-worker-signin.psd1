@@ -27,13 +27,13 @@
            Find = 'if (!admits(readAllowlist(env.HORDE_RELAY_SIGNIN_ALLOWLIST), v.claims)) return refused('
            Replace = 'if (false) return refused(' }
         @{ Name = "account-is-the-email"
-           Find = 'account: ACCOUNT_PREFIX + v.claims.sub,'
-           Replace = 'account: ACCOUNT_PREFIX + v.claims.email,' }
+           Find = 'const accountId = ACCOUNT_PREFIX + v.claims.sub;'
+           Replace = 'const accountId = ACCOUNT_PREFIX + v.claims.email;' }
         @{ Name = "sign-out-from-any-page"
            Find = 'if (!fromSite(request, siteOf(env))) return refuse(403,'
            Replace = 'if (false) return refuse(403,' }
         @{ Name = "sign-out-leaves-the-session"
-           Find = 'if (session) await session.end();'
+           Find = '    await session.end();'
            Replace = '' }
         @{ Name = "sign-in-cookie-kept"
            Find = 'return redirect(site.origin + APP, [cookieHeader(SESSION_COOKIE, id, SESSION_MS / 1000), clearedCookieHeader(SIGNIN_COOKIE)]);'

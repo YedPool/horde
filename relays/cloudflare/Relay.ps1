@@ -27,6 +27,20 @@
 # read for what is left of the timeout and never less than 250 ms, so a watch of 0 ms still gets the
 # items that were already there: the relay sends those the moment the socket opens.
 #
+# A ROTATED IDENTITY IS CARRIED TO THE RELAY (relay PR 8c; worker/rotation.js). After
+# relay/Identity.ps1 rotates this machine's keys, the relay still knows only the old signing key, so it
+# answers the new one 401. The first 401 of a connection (a request, or a watch the relay would not
+# open) is then answered once: when the identity's previous generation was retired with a vouch naming
+# this very key as its successor, that record is posted, signed by the new key, and the relay moves the
+# registration; the request is then made once more. Nothing is kept on disk for it: a relay that
+# already moved it refuses the record again, which costs one request per connection and no more.
+#
+# A WATCH THE RELAY ENDED (worker/mailbox.js: replaced by a newer watch of this machine in the mailbox -
+# one live watch per device there - or the account deleted) is a failed watch here, unknown - never
+# "nothing came" - so a caller that watches again backs off first instead of evicting the newer watch
+# in its turn. The relay says so in the watch's one message, { error, code }, and again in its close
+# code (4000 and up); either is read as the end.
+#
 # EVERY ANSWER IS THE FAR END'S, AND UNTRUSTED. A status other than 200, a body that is not the JSON
 # expected, a socket that fails: unknown, with the relay's own words cut to 200 printable characters,
 # and never thrown. The port then checks every item as it checks any relay's.
@@ -49,6 +63,9 @@ $script:HordeCloudflareRelayOriginPattern = '\A(https://[a-z0-9](?:[a-z0-9.-]{0,
 $script:HordeCloudflareRelayAuthorizationPattern = '\A[\x20-\x7E]{1,4096}\z'
 $script:HordeCloudflareRelayRequestSeconds = 30
 $script:HordeCloudflareRelayConnectMs = 15000
+# The relay's own close codes (worker/mailbox.js), and what each means.
+$script:HordeCloudflareRelayCloseWords = @{ 4001 = "the relay replaced this watch with a newer one of this machine"; 4002 = "the relay closed the watch: the account was deleted" }
+$script:HordeCloudflareRelayRotationPath = "/v1/machines/rotation"
 # The most one answer may be: the Worker's batch budget (worker/rules.js, BATCH_CHARS) and the JSON
 # around it, with room. A longer answer is not this Worker's.
 $script:HordeCloudflareRelayAnswerBytes = 2097152
@@ -87,10 +104,25 @@ function Get-HordeCloudflareRelayAuthorization {
     catch { return (New-HordeUnknown -Reason "this machine's signing key did not sign the request" -ErrorRecord $_) }
 }
 
+function Send-HordeCloudflareRelayRotation {
+    # A ROTATED IDENTITY (the header), presented at most once a connection: $true when the relay moved
+    # this machine's registration to its current key, so the refused request is worth making again.
+    param($State)
+    if ($State.authorization -ne "" -or $State.rotationTried -or $null -eq $State.signer) { return $false }
+    $State.rotationTried = $true
+    if ($State.signer.generation -lt 2) { return $false }
+    $t = Get-HordeRelayRetirementText -HordeHome $State.hordeHome -Generation ($State.signer.generation - 1)
+    if ($t.state -cne "known") { return $false }
+    if ($t.value -cnotmatch ('"successorSignKeyId":"' + $State.signer.keyId + '"') -or $t.value -cmatch '"vouch":""}\z') { return $false }
+    $a = Invoke-HordeCloudflareRelayHttp -State $State -Method "POST" -Path $script:HordeCloudflareRelayRotationPath -Body ('{"record":' + (ConvertTo-HordeCloudflareRelayJsonString $t.value) + '}') -What "rotation" -Once
+    return ($a.state -ceq "known")
+}
+
 function Invoke-HordeCloudflareRelayHttp {
     # One request to the relay: known, the parsed JSON body of a 200; unknown with the status and the
-    # relay's words otherwise. The body is sent as the very bytes the signature hashed.
-    param($State, [string]$Method, [string]$Path, [string]$Body = $null, [string]$What)
+    # relay's words otherwise. The body is sent as the very bytes the signature hashed. A 401 may carry
+    # a rotation to the relay and be made again, once (the header); -Once is that second try.
+    param($State, [string]$Method, [string]$Path, [string]$Body = $null, [string]$What, [switch]$Once)
     # Assigned, not piped through $(...): an empty array through a subexpression comes out $null.
     $bytes = New-Object byte[] 0
     if ($null -ne $Body -and $Body -ne "") { $bytes = [System.Text.Encoding]::ASCII.GetBytes($Body) }
@@ -112,6 +144,7 @@ function Invoke-HordeCloudflareRelayHttp {
     finally { $req.Dispose() }
     $parsed = $null
     try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
+    if ($code -eq 401 -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayHttp -State $State -Method $Method -Path $Path -Body $Body -What $What -Once) }
     if ($code -ne 200) {
         $words = $(if ($null -ne $parsed -and $parsed -is [System.Management.Automation.PSCustomObject] -and $null -ne $parsed.PSObject.Properties["error"]) { $parsed.error } else { $text })
         return (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words)))
@@ -144,7 +177,11 @@ function Receive-HordeCloudflareRelaySocketText {
             $seg = New-Object System.ArraySegment[byte] -ArgumentList @(, $buf)
             try { $r = $Socket.ReceiveAsync($seg, $cts.Token).GetAwaiter().GetResult() }
             catch [System.OperationCanceledException] { return $null }
-            if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { return $null }
+            if ($r.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                $code = [int]$r.CloseStatus
+                if ($code -ge 4000 -and $code -le 4999) { throw $(if ($script:HordeCloudflareRelayCloseWords.ContainsKey($code)) { $script:HordeCloudflareRelayCloseWords[$code] } else { "the relay closed the watch (" + $code + ")" }) }
+                return $null
+            }
             $all.Write($buf, 0, $r.Count)
             if ($all.Length -gt $script:HordeCloudflareRelayAnswerBytes) { throw ("the relay's watch message is over " + $script:HordeCloudflareRelayAnswerBytes + " bytes") }
             if ($r.EndOfMessage) { return [System.Text.Encoding]::ASCII.GetString($all.ToArray()) }
@@ -153,8 +190,9 @@ function Receive-HordeCloudflareRelaySocketText {
 }
 
 function Invoke-HordeCloudflareRelayWatch {
-    # The watch over a WebSocket: known { items } - empty when the time ran out - or unknown.
-    param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
+    # The watch over a WebSocket: known { items } - empty when the time ran out - or unknown. A watch the
+    # relay would not open may carry a rotation to it and be opened again, once (the header).
+    param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs, [switch]$Once)
     $ws = $State.origin -replace '\Ahttp', 'ws'
     $target = (Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "watch") + "?since=" + $Since + "&max=" + $Max + "&timeoutMs=" + $TimeoutMs
     $auth = Get-HordeCloudflareRelayAuthorization -State $State -Method "GET" -Target $target
@@ -166,7 +204,14 @@ function Invoke-HordeCloudflareRelayWatch {
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $cts = New-Object System.Threading.CancellationTokenSource($script:HordeCloudflareRelayConnectMs)
         try { $null = $socket.ConnectAsync($uri, $cts.Token).GetAwaiter().GetResult() }
-        catch { return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $_.Exception.Message))) }
+        catch {
+            # The status is in the message under pwsh 7, and in an inner exception's under Windows
+            # PowerShell 5.1 ("Unable to connect", then "(401) Unauthorized"): all of them are read.
+            $why = ""
+            for ($e = $_.Exception; $null -ne $e; $e = $e.InnerException) { $why += $e.Message + " " }
+            if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
+            return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim())))
+        }
         finally { $cts.Dispose() }
         # What is left of the timeout once the socket is open, and never less than a moment, so items
         # the relay sends at once on opening are still read.
@@ -177,6 +222,7 @@ function Invoke-HordeCloudflareRelayWatch {
         $parsed = $null
         try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null }
         if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason "the relay's watch message is not a JSON object") }
+        if ($null -ne $parsed.PSObject.Properties["error"]) { return (New-HordeUnknown -Reason ("the relay ended the watch: " + (Get-HordeCloudflareRelayWords $parsed.error))) }
         return (ConvertTo-HordeCloudflareRelayItems -Answer (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow)) -What "watch")
     } finally { $socket.Dispose() }
 }
@@ -204,7 +250,7 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
         $http = New-Object System.Net.Http.HttpClient
         $http.Timeout = [TimeSpan]::FromSeconds($script:HordeCloudflareRelayRequestSeconds)
         $http.MaxResponseContentBufferSize = $script:HordeCloudflareRelayAnswerBytes
-        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; hordeHome = $hordeHome; signer = $null; http = $http }))
+        return (New-HordeKnown -Value ([pscustomobject]@{ origin = $origin; authorization = $auth; hordeHome = $hordeHome; signer = $null; http = $http; rotationTried = $false }))
     } `
     -Put {
         param($State, [string]$Mailbox, [string]$Key, [string]$Text)

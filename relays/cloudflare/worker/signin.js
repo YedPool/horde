@@ -20,14 +20,28 @@
 //
 // The client id and secret are Worker secrets the deploy stores (Deploy.ps1). A Worker without them
 // refuses to start a sign-in at all, in words.
+//
+// THE LIMITS ON SIGNING IN (limits.js), each refused in the same way as a broken sign-in - back to the
+// app, with a code word after #signin-refused: (the app says it in its own words) and the
+// Horde-Signin-Refused header:
+//   - a start from an address past signInStartsPerMinute (address.js)                #signin-refused:busy
+//   - a NEW account from an address past newAccountsPerDay (address.js): an account
+//     already made signs in from anywhere                                            #signin-refused:new-accounts
+//   - an account with phonesPerAccount phones signed in already (accounts.js)        #signin-refused:phones
+//   - an account being deleted (accounts.js)                                          #signin-refused:deleting
+// The account is made, and the phone taken onto it, by the account's object (accounts.js, signIn),
+// which hands back the account's epoch for the session.
 import { siteOf, fromSite } from "./site.js";
 import { readCookie, cookieHeader, clearedCookieHeader, SESSION_COOKIE, SIGNIN_COOKIE } from "./cookies.js";
 import { providerOf, newSignIn, authorizeUrl, exchangeCode, keyCache } from "./oidc.js";
 import { verifyIdToken } from "./jwt.js";
 import { readAllowlist, admits } from "./allowlist.js";
 import { newSessionId, sessionOf, SESSION_MS } from "./sessions.js";
-import { ACCOUNT_PREFIX } from "./accounts.js";
-import { answer, refuse } from "./answers.js";
+import { ACCOUNT_PREFIX, accountOf } from "./accounts.js";
+import { addressOf } from "./address.js";
+import { clientAddressOf } from "./client-address.js";
+import { limitsOf } from "./limits.js";
+import { answer, refuse, CODES } from "./answers.js";
 
 export const AUTH_ROOT = "/auth/";
 const START = "/auth/google";
@@ -45,6 +59,9 @@ function sameText(a, b) {
   return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
 }
 
+// The code word after #signin-refused: for each refusal by a limit (the header).
+const LIMIT_WORDS = { busy: "busy", newAccounts: "new-accounts", [CODES.phones]: "phones", [CODES.deleting]: "deleting" };
+
 function redirect(location, cookies, extra = {}) {
   const headers = new Headers({ Location: location, ...extra });
   for (const c of cookies) headers.append("Set-Cookie", c);
@@ -54,6 +71,8 @@ function redirect(location, cookies, extra = {}) {
 async function start(request, env, url) {
   const site = siteOf(env);
   if (typeof env.GOOGLE_CLIENT_ID !== "string" || env.GOOGLE_CLIENT_ID === "" || typeof env.GOOGLE_CLIENT_SECRET !== "string" || env.GOOGLE_CLIENT_SECRET === "") return refuse(503, "sign-in is not set up on this relay: deploy it with the Google client");
+  const started = await addressOf(env, clientAddressOf(request, env, url)).signInStart({ now: Date.now(), limits: limitsOf(env, url) });
+  if (!started.ok) return redirect(site.origin + APP + "#signin-refused:" + LIMIT_WORDS.busy, [], { "Horde-Signin-Refused": "too many sign-ins were started from this address: wait a minute", "Retry-After": String(Math.max(1, Math.ceil(started.retryAfterMs / 1000))) });
   const s = await newSignIn();
   const pending = s.state + "." + s.nonce + "." + s.verifier + "." + Date.now();
   const location = authorizeUrl(providerOf(env, url), { clientId: env.GOOGLE_CLIENT_ID, redirectUri: site.callbackUrl, state: s.state, nonce: s.nonce, challenge: s.challenge });
@@ -62,7 +81,7 @@ async function start(request, env, url) {
 
 async function callback(request, env, url) {
   const site = siteOf(env);
-  const refused = (why) => redirect(site.origin + APP + "#signin-refused", [clearedCookieHeader(SIGNIN_COOKIE)], { "Horde-Signin-Refused": why });
+  const refused = (why, word = "") => redirect(site.origin + APP + "#signin-refused" + (word ? ":" + word : ""), [clearedCookieHeader(SIGNIN_COOKIE)], { "Horde-Signin-Refused": why });
   if (url.searchParams.has("error")) return refused("the provider did not sign this account in");
   const m = PENDING.exec(readCookie(request, SIGNIN_COOKIE) || "");
   if (!m) return refused("this browser started no sign-in here");
@@ -78,8 +97,19 @@ async function callback(request, env, url) {
   const v = await verifyIdToken(ex.idToken, (kid) => keys(provider, kid), { issuers: provider.issuers, audience: env.GOOGLE_CLIENT_ID, nonce: m[2], now, maxAgeMs: SIGNIN_MS });
   if (!v.ok) return refused(v.reason);
   if (!admits(readAllowlist(env.HORDE_RELAY_SIGNIN_ALLOWLIST), v.claims)) return refused("this account is not on this relay's sign-in allowlist");
+  const accountId = ACCOUNT_PREFIX + v.claims.sub;
+  const account = accountOf(env, accountId);
+  const limits = limitsOf(env, url);
+  const st = await account.status();
+  if (!st.exists && !st.deleting) {
+    const made = await addressOf(env, clientAddressOf(request, env, url)).newAccount({ now, limits });
+    if (!made.ok) return refused("too many accounts were made from this address today", LIMIT_WORDS.newAccounts);
+  }
   const id = newSessionId();
-  await sessionOf(env, id).begin({ account: ACCOUNT_PREFIX + v.claims.sub, email: v.claims.email, createdAt: now, expiresAt: now + SESSION_MS });
+  const session = sessionOf(env, id);
+  const taken = await account.signIn({ account: accountId, email: v.claims.email, phone: { id: session.id.toString(), expiresAt: now + SESSION_MS }, now, limits });
+  if (!taken.ok) return refused(taken.reason, LIMIT_WORDS[taken.code]);
+  await session.begin({ account: accountId, epoch: taken.epoch, email: v.claims.email, createdAt: now, expiresAt: now + SESSION_MS });
   return redirect(site.origin + APP, [cookieHeader(SESSION_COOKIE, id, SESSION_MS / 1000), clearedCookieHeader(SIGNIN_COOKIE)]);
 }
 
@@ -87,7 +117,11 @@ async function signOut(request, env) {
   if (request.method !== "POST") return refuse(405, "sign out with POST");
   if (!fromSite(request, siteOf(env))) return refuse(403, "sign out from the app's own page");
   const session = sessionOf(env, readCookie(request, SESSION_COOKIE));
-  if (session) await session.end();
+  if (session) {
+    const s = await session.read(Date.now());
+    await session.end();
+    if (s) await accountOf(env, s.account).signOut(session.id.toString());
+  }
   const r = answer(200, { signedIn: false });
   r.headers.append("Set-Cookie", clearedCookieHeader(SESSION_COOKIE));
   return r;

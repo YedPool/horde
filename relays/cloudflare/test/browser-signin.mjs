@@ -3,19 +3,20 @@
 // built app served by a local dev of the real Worker, and signs in through the local fake provider
 // (fake-oidc.mjs) - every redirect, cookie and policy is Chrome's own: the sign-in screen, the button,
 // the trip to the provider and back, the session cookie as Chrome keeps it (HttpOnly, Secure,
-// SameSite=Lax, __Host-), the Account screen, Sign out, and a refused sign-in's word on the screen.
+// SameSite=Lax, __Host-), the Account screen (the machine by its own name, this phone), Sign out,
+// deleting the account (relay PR 8c), and a refused sign-in's words on the screen - a limit's own too.
 //
-//   node browser-signin.mjs <dev origin> <fake provider origin> <chrome.exe> <profile folder> <machine key id>
+//   node browser-signin.mjs <dev origin> <fake provider origin> <chrome.exe> <profile folder> <machine label>
 //
-// The machine is one the suite registered to this account beforehand: the Account screen lists it, and
-// its Remove button removes it (the suite then sees the machine refused).
+// The machine is one the suite registered to this account beforehand, under that label: the Account
+// screen lists it, and its Remove button removes it (the suite then sees the machine refused).
 //
 // Prints one [PASS] or [FAIL] line a check, then [DONE] <failures>. Chrome is ended when it is done.
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const [, , origin, provider, chromePath, profileDir, machineKeyId] = process.argv;
+const [, , origin, provider, chromePath, profileDir, machineLabel] = process.argv;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
 function check(ok, name, detail = "") {
@@ -80,11 +81,31 @@ try {
   await evaluate("document.getElementById('accountBtn').click()", true);
   check(!!(await until(shown("accountView") + " && document.getElementById('accountWho').textContent.indexOf('founder@example.test') >= 0")), "the Account screen says who is signed in", await evaluate("document.getElementById('accountWho').textContent"));
   const listed = await evaluate("Array.from(document.querySelectorAll('#machineList li')).map((li) => li.textContent).join('|')");
-  check(listed === "work - machine " + machineKeyId.slice(0, 12) + "Remove" && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and key id, with a Remove button", listed);
+  check(listed === "work - " + machineLabel + "Remove" && (await evaluate("document.getElementById('machineEmpty').hidden")), "and lists the machine registered to it, by horde and the name its grant signed, with a Remove button", listed);
+  const phones = await evaluate("Array.from(document.querySelectorAll('#phoneList li')).map((li) => li.textContent + '|' + li.querySelectorAll('button').length).join(';')");
+  const rows = phones.split(";");
+  check(rows.filter((r) => /^This phone, signed in [^|]+|0$/.test(r)).length === 1 && rows.every((r) => /^This phone, signed in [^|]+|0$/.test(r) || /^A phone, signed in [^|]+Sign out|1$/.test(r)), "and lists its phones: this one once, with no Sign out of its own (the one below signs it out), each other with one", phones);
   await evaluate("window.confirm = () => true; document.querySelector('#machineList li button').click()", true);
   check(!!(await until("document.querySelectorAll('#machineList li').length === 0 && !document.getElementById('machineEmpty').hidden")), "Remove takes it off the account, and the screen says no machine is left");
   await evaluate("document.getElementById('signOutBtn').click()", true);
   check(!!(await until(shown("signInView"))) && (await sessionCookie()) === null, "Sign out ends the session and returns to the sign-in screen, the cookie gone");
+
+  await evaluate("document.getElementById('signInBtn').click()", true);
+  check(!!(await until("location.pathname === '/app/index.html' && !" + shown("signInView") + " && !document.getElementById('accountBtn').hidden")), "signed in again", await evaluate("location.href").catch((e) => e.message));
+  await evaluate("document.getElementById('accountBtn').click()", true);
+  await until(shown("accountView"));
+  await evaluate("window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return window.__asked.length < 2; }; document.getElementById('deleteAccountBtn').click()", true);
+  await sleep(500);
+  const askedOnce = await evaluate("window.__asked.length");
+  check(askedOnce === 2 && (await evaluate(shown("accountView"))) && (await (await fetch(origin + "/auth/session", { headers: { Cookie: "__Host-horde-session=" + (await sessionCookie()).value } })).json()).signedIn === true, "Delete asks twice, and a No to the second deletes nothing", String(askedOnce));
+  await evaluate("window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return true; }; document.getElementById('deleteAccountBtn').click()", true);
+  check(!!(await until(shown("signInView") + " && document.getElementById('notice').textContent.indexOf('The account is deleted') >= 0")), "Delete, confirmed twice in plain words, deletes the account and returns to the sign-in screen", await evaluate("document.getElementById('notice').textContent"));
+  const words = await evaluate("window.__asked.join(' | ')");
+  check(words.indexOf("Every mailbox") >= 0 && words.indexOf("cannot be undone") >= 0, "and its questions say what is lost, and that it cannot be undone", words);
+  check((await sessionCookie()) === null, "and the session cookie is cleared with it");
+
+  await cdp("Page.navigate", { url: origin + "/app/index.html?limit=1#signin-refused:phones" });
+  check(!!(await until(shown("signInView") + " && document.getElementById('notice').textContent.indexOf('most phones signed in') >= 0")), "a sign-in refused by a limit says which, in the app's own words", await evaluate("document.getElementById('notice').textContent").catch((e) => e.message));
 
   await fetch(provider + "/scenario", { method: "POST", body: JSON.stringify({ forge: true }) });
   await evaluate("document.getElementById('signInBtn').click()", true);

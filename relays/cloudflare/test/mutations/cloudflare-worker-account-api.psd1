@@ -33,8 +33,8 @@
            Find = 'if (!released) return refuse(404,'
            Replace = 'if (false) return refuse(404,' }
         @{ Name = "registered-but-not-listed"
-           Find = 'await accountOf(env, who.account).listMachine({ keyId: id, horde: body.horde, registeredAt: now });'
-           Replace = '' }
+           Find = 'listed = await account.listMachine({ entry: { keyId: id, horde: body.horde, label: body.label, registeredAt: now }, epoch: charged.epoch, limits });'
+           Replace = 'listed = { ok: true };' }
         @{ Name = "machine-reads-the-account"
            Find = 'if (!authorize(who, "account", "")) return refuse(403,'
            Replace = 'if (false) return refuse(403,' }

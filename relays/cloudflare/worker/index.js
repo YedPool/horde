@@ -25,6 +25,7 @@ export { Mailbox } from "./mailbox.js";
 export { Session } from "./sessions.js";
 export { Account } from "./accounts.js";
 export { MachineKey } from "./machines.js";
+export { Address } from "./address.js";
 
 // A write to a file is refused by the asset store itself (405, measured 2026-10-11 against the local
 // dev): no check of the method is needed here.
