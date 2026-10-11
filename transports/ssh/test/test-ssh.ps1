@@ -214,8 +214,18 @@ try {
         # The adapter's starter puts every ssh.exe in a kill-on-close job; these -G runs get one each.
         $gJobs = New-Object System.Collections.ArrayList
         function New-GJob { $j = [HordeSshNative]::NewKillOnCloseJob(); [void]$gJobs.Add($j); return $j }
-        $g = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv $gArgv) -Job (New-GJob)
+        # This process holds the fd-state variable Windows sshd gives a session's command, as a node started
+        # over ssh does (Transport.ps1, $script:HordeSshInheritedFdState), and a decoy whose prefix is not
+        # 32 hex digits; ssh.exe is started without the first and with the second.
+        $fdState = "c28fc6f98a2c44abbbd89d6a3037d0d9_POSIX_FD_STATE"
+        $fdDecoy = "horde-test-not-hex_POSIX_FD_STATE"
+        [System.Environment]::SetEnvironmentVariable($fdState, "AAAAAAICAjU=")
+        [System.Environment]::SetEnvironmentVariable($fdDecoy, "kept")
+        try { $g = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv $gArgv) -Job (New-GJob) }
+        finally { [System.Environment]::SetEnvironmentVariable($fdState, $null); [System.Environment]::SetEnvironmentVariable($fdDecoy, $null) }
         [void]$children.Add($g)
+        Check (-not $g.StartInfo.EnvironmentVariables.ContainsKey($fdState)) "ssh.exe is started without the POSIX_FD_STATE variable an ssh session handed this process: it describes this process's handles, not ssh.exe's (the first live mesh link)"
+        Check ($g.StartInfo.EnvironmentVariables[$fdDecoy] -ceq "kept") "CONTROL: a variable that only ends the same way, without the 32-hex-digit prefix, is passed on"
         $gOut = $g.StandardOutput.ReadToEnd()
         $null = $g.WaitForExit(30000)
         $cfg = @{}
