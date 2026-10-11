@@ -42,11 +42,12 @@ async function newMachine(horde) {
   return m;
 }
 // relay/Pairing.ps1's offer, its members in their order.
-function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null } = {}) {
+// Its account grant is the relay's to verify, so a phone reads only its shape: here, 64 zero bytes.
+function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = "A".repeat(86) } = {}) {
   return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + id + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
     '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
     '","pairMailbox":"' + (pairMailbox === null ? m.horde + "/pair-" + id : pairMailbox) + '","rpId":"' + rpId +
-    '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + "}";
+    '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + ',"grant":"' + grant + '"}';
 }
 // A machine's envelope: sealed to each phone key, signed ES256 (P1363), relay/Envelope.ps1's canonical text.
 async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }) {
@@ -141,9 +142,29 @@ async function pairedApp(transport, m, opts = {}) {
   check(!(await P.readOffer(offerText(m, { mailbox: "work/other" }))).ok, "an offer whose mailbox is not its horde and machine is refused");
   check(!(await P.readOffer(offerText(m, { agreeKeyId: "0".repeat(32) }))).ok, "an offer whose agreement key is not the one it names is refused");
   check(!(await P.readOffer(offerText(m).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
+  check(!(await P.readOffer(offerText(m).replace(/,"grant":"[^"]*"/, ""))).ok, "an offer with no account grant is refused");
+  check(!(await P.readOffer(offerText(m, { grant: "A".repeat(85) }))).ok && !(await P.readOffer(offerText(m, { grant: "A".repeat(84) + "+/" }))).ok, "and one whose grant is not 64 bytes of base64url");
   const app = newApp(R.memoryTransport());
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
+}
+
+// --- 3a. the account grant, and the machine signature check the hosted relay makes (relay/Pairing.ps1) ---
+{
+  const m = await newMachine("work");
+  const g = { horde: "work", offer: "0123456789abcdef0123456789abcdef", machine: m.keyId, expiresAt: 1760000000000 };
+  check(P.fromUtf8(P.accountGrantBytes(g)) === "horde-relay/pairing/v1 account-grant\nwork\n0123456789abcdef0123456789abcdef\n" + m.keyId + "\n1760000000000", "the grant signs the domain, the horde, the offer, the machine and the expiry, one to a line");
+  const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, P.accountGrantBytes(g)));
+  const n = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+  const s = BigInt("0x" + P.hex(sig.slice(32)));
+  const low = s > n / 2n ? n - s : s;
+  const withS = (v) => { const out = sig.slice(); out.set(P.unhex(v.toString(16).padStart(64, "0")), 32); return out; };
+  check(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low)), "a low-S signature by the machine's key verifies");
+  check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(n - low))), "its high-S twin does not: one message, one signature");
+  check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes({ ...g, expiresAt: g.expiresAt + 1 }), withS(low))), "nor does the signature over another expiry");
+  const other = await newMachine("work");
+  check(!(await P.verifyMachineSignature(other.signPublic, P.accountGrantBytes(g), withS(low))), "nor under another machine's key");
+  check(!(await P.verifyMachineSignature(m.signPublic.slice(1), P.accountGrantBytes(g), withS(low))) && !(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low).slice(1))), "and a key or a signature of the wrong length is false, not a throw");
 }
 
 // --- 3b. the pairing response goes to the machine through the relay, sealed (relay/Pairing.ps1) ---
