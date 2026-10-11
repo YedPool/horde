@@ -11,14 +11,14 @@
            Find = '$stream.Write($first, 0, $first.Length)'
            Replace = '$null = $first' }
         @{ Name = "lives-on-after-the-hub-closes"
-           Find = 'if ($ExitWhenHubCloses) { [HordeLocalRelayEnd]::ExitWhenDone($pump) }'
+           Find = 'if ($ExitWhenHubCloses) { [HordeLocalPipeRelayEnd]::ExitWhenDone($pump) }'
            Replace = '' }
         @{ Name = "lines-held-until-stdin-ends"
            Find = 'foreach ($line in $Lines) {'
            Replace = 'foreach ($line in @($Lines)) {' }
         @{ Name = "frame-terminator-dropped"
-           Find = '$script:HordeLocalRelayAscii.GetBytes("$line" + "`n")'
-           Replace = '$script:HordeLocalRelayAscii.GetBytes("$line")' }
+           Find = '$script:HordeLocalPipeRelayAscii.GetBytes("$line" + "`n")'
+           Replace = '$script:HordeLocalPipeRelayAscii.GetBytes("$line")' }
         @{ Name = "line-over-the-ceiling-passed"
            Find = 'if ("$line".Length -gt $MaxLineBytes) {'
            Replace = 'if ($false) {' }

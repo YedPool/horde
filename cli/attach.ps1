@@ -59,7 +59,7 @@ try {
     if (-not $held) { throw ("device " + $Device + " already has a live link to this hub; a device has one at a time") }
     # The longest line the relay passes on: no frame may be longer (issue #147, item 1).
     $private:ceiling = [int](Get-HordeLinkLimits (Get-HordeSchema -Name "link-frame.v1"))["frameBytesCeiling"]
-    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -MaxLineBytes $ceiling -ExitWhenHubCloses
+    $private:result = Invoke-HordeLocalPipeRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -MaxLineBytes $ceiling -ExitWhenHubCloses
     if (-not $result.ok) { throw $result.reason }
 } catch {
     [Console]::Error.WriteLine("horde attach: " + $_.Exception.Message)

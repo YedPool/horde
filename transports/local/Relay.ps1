@@ -35,23 +35,23 @@
 # closed, the relay stayed alive until the client closed its stdin; closing the relay's stdout did not
 # end the session; cancelling the stdin read (CancelIoEx) did, but PowerShell's reader then wrote "The
 # operation was canceled." to stderr. So with -ExitWhenHubCloses the copy's own continuation ends the
-# process, exit 0 when the copy completed and 1 when it failed (HordeLocalRelayEnd below). Only
+# process, exit 0 when the copy completed and 1 when it failed (HordeLocalPipeRelayEnd below). Only
 # cli\attach.ps1 asks for it: it is always a process of its own, the forced command of one session,
 # and when the hub is gone it has nothing left to do. This is the one place Horde ends a process
 # with [Environment]::Exit, the exception horde.ps1's header allows no command.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
-$script:HordeLocalRelayAscii = [System.Text.Encoding]::GetEncoding("us-ascii", (New-Object System.Text.EncoderExceptionFallback), (New-Object System.Text.DecoderExceptionFallback))
+$script:HordeLocalPipeRelayAscii = [System.Text.Encoding]::GetEncoding("us-ascii", (New-Object System.Text.EncoderExceptionFallback), (New-Object System.Text.DecoderExceptionFallback))
 
 # The continuation that ends the process when the copy from the hub ends (WHEN IT ENDS, above). A .NET
 # delegate, because a PowerShell script block has no runspace on a thread-pool thread.
-if (-not ([System.Management.Automation.PSTypeName]"HordeLocalRelayEnd").Type) {
+if (-not ([System.Management.Automation.PSTypeName]"HordeLocalPipeRelayEnd").Type) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Threading.Tasks;
 
-public static class HordeLocalRelayEnd {
+public static class HordeLocalPipeRelayEnd {
     // Cleared when the relay ends on its own (stdin ended), so closing the pipe then exits nothing.
     static volatile bool armed;
     public static void ExitWhenDone(Task copy) {
@@ -63,12 +63,12 @@ public static class HordeLocalRelayEnd {
 '@
 }
 
-function New-HordeLocalRelayResult {
+function New-HordeLocalPipeRelayResult {
     param([bool]$Ok, [string]$Reason = "", [int]$Lines = 0, [string]$Ended = "")
     return [pscustomobject]@{ ok = $Ok; reason = $Reason; lines = $Lines; ended = $Ended }
 }
 
-function Invoke-HordeLocalRelay {
+function Invoke-HordeLocalPipeRelay {
     # Relay -Lines (each one line of the session's stdin) to the hub's pipe for -HubId, and the pipe's
     # bytes to -Output, after one -Preamble line. Returns { ok; reason; lines; ended } when either side
     # ends: ended is "stdin" or "hub". ok is $false only when the relay could not start or a line could
@@ -86,30 +86,30 @@ function Invoke-HordeLocalRelay {
     )
     $t = Get-HordeTransport -Name "local"
     $o = Open-HordeTransportLink -Transport $t -Endpoint ($script:HordeLocalHubEndpointPrefix + $HubId) -Role "node" -TimeoutMs $TimeoutMs
-    if ($o.state -cne "known") { return (New-HordeLocalRelayResult -Ok $false -Reason ("the hub's pipe could not be reached: " + $o.reason)) }
+    if ($o.state -cne "known") { return (New-HordeLocalPipeRelayResult -Ok $false -Reason ("the hub's pipe could not be reached: " + $o.reason)) }
     $link = Get-HordeValue $o
     $stream = $link.channel.state.stream
     $sent = 0
     try {
-        try { $first = $script:HordeLocalRelayAscii.GetBytes($Preamble + "`n") }
-        catch { return (New-HordeLocalRelayResult -Ok $false -Reason "the preamble is not ASCII; nothing was sent") }
-        if ($Preamble.Contains("`n") -or $Preamble.Contains("`r")) { return (New-HordeLocalRelayResult -Ok $false -Reason "the preamble holds a line break; nothing was sent") }
+        try { $first = $script:HordeLocalPipeRelayAscii.GetBytes($Preamble + "`n") }
+        catch { return (New-HordeLocalPipeRelayResult -Ok $false -Reason "the preamble is not ASCII; nothing was sent") }
+        if ($Preamble.Contains("`n") -or $Preamble.Contains("`r")) { return (New-HordeLocalPipeRelayResult -Ok $false -Reason "the preamble holds a line break; nothing was sent") }
         $stream.Write($first, 0, $first.Length)
         $stream.Flush()
         $pump = $stream.CopyToAsync($Output, 65536)
-        if ($ExitWhenHubCloses) { [HordeLocalRelayEnd]::ExitWhenDone($pump) }
+        if ($ExitWhenHubCloses) { [HordeLocalPipeRelayEnd]::ExitWhenDone($pump) }
         foreach ($line in $Lines) {
-            if ($pump.IsCompleted) { return (New-HordeLocalRelayResult -Ok $true -Lines $sent -Ended "hub") }
-            if ("$line".Length -gt $MaxLineBytes) { return (New-HordeLocalRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is " + "$line".Length + " bytes, over the link's ceiling of " + $MaxLineBytes + "; no frame can be that long, so the relay ended the link without passing it on")) }
-            try { $bytes = $script:HordeLocalRelayAscii.GetBytes("$line" + "`n") }
-            catch { return (New-HordeLocalRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is not ASCII; the link carries ASCII frames only, so the relay stopped")) }
+            if ($pump.IsCompleted) { return (New-HordeLocalPipeRelayResult -Ok $true -Lines $sent -Ended "hub") }
+            if ("$line".Length -gt $MaxLineBytes) { return (New-HordeLocalPipeRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is " + "$line".Length + " bytes, over the link's ceiling of " + $MaxLineBytes + "; no frame can be that long, so the relay ended the link without passing it on")) }
+            try { $bytes = $script:HordeLocalPipeRelayAscii.GetBytes("$line" + "`n") }
+            catch { return (New-HordeLocalPipeRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is not ASCII; the link carries ASCII frames only, so the relay stopped")) }
             try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush() }
-            catch { return (New-HordeLocalRelayResult -Ok $true -Lines $sent -Ended "hub") }
+            catch { return (New-HordeLocalPipeRelayResult -Ok $true -Lines $sent -Ended "hub") }
             $sent++
         }
-        return (New-HordeLocalRelayResult -Ok $true -Lines $sent -Ended "stdin")
+        return (New-HordeLocalPipeRelayResult -Ok $true -Lines $sent -Ended "stdin")
     } finally {
-        if ($ExitWhenHubCloses) { [HordeLocalRelayEnd]::Disarm() }
+        if ($ExitWhenHubCloses) { [HordeLocalPipeRelayEnd]::Disarm() }
         Close-HordeLink -Link $link
     }
 }
