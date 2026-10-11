@@ -37,7 +37,9 @@
            Reason = "Defence in depth: a registered key's horde is the one its own grant signed, and the record's is the one its own vouch signed, so the two differ only for a record the old key never made - which vouch-unchecked shows is refused." }
         @{ Name = "handover-refusal-ignored"
            Find = 'if (!handed.ok) return fail();'
-           Replace = '' }
+           Replace = ''
+           Expect = "survives"
+           Reason = "The registration is read a moment before (old.owner) and refused when it is gone, so a rotation presented again never reaches the hand-over; only a removal landing between the read and the hand-over makes the hand-over refuse - a race no suite can place." }
         @{ Name = "registration-not-put-back"
            Find = 'if (!adopted.ok) { await old.restore(handed.owner); return fail(); }'
            Replace = 'if (!adopted.ok) { return fail(); }' }

@@ -25,6 +25,8 @@
            Replace = 'const signed = utf8(text.slice(' }
         @{ Name = "long-text-read"
            Find = 'if (typeof text !== "string" || text.length > 16384) return no("the retirement record'
-           Replace = 'if (typeof text !== "string") return no("the retirement record' }
+           Replace = 'if (typeof text !== "string") return no("the retirement record'
+           Expect = "survives"
+           Reason = "Defence in depth: the canonical form's own bounds (a vouch of at most 8192, a reason of at most 512) keep every record it reads under 16384 characters, so a longer text fails the pattern all the same; the length check only spares the pattern a long input, and the rotation route caps its body at 16384 besides." }
     )
 }

@@ -33,6 +33,9 @@
         @{ Name = "nonce-bound-makes-room-by-forgetting"
            Find = 'if (this.nonces >= limits.noncesPerKey) return { refused:'
            Replace = 'if (this.nonces >= limits.noncesPerKey) { this.nonces -= await forgetNonces(storage, now + 1); } if (false) return { refused:' }
+        @{ Name = "nonces-forgotten-at-once"
+           Find = 'await forgetNonces(storage, now - 2 * MAX_SKEW_MS - 1000)'
+           Replace = 'await forgetNonces(storage, now + 1)' }
         @{ Name = "nonces-not-counted"
            Find = '    this.nonces++;'
            Replace = '' }

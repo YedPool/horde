@@ -238,6 +238,12 @@ try {
     Write-Host "--- refused signatures, per key and address, and per address ---" -ForegroundColor Cyan
     $rs = New-Phone -Dev $R -Sub "100000000000000000501"
     $k = New-Machine -Dev $R -Cookie $rs.cookie -Label "victim-box"
+    # A machine that rotates now, and presents its rotation once its address is refused (below).
+    $rb = New-Machine -Dev $R -Cookie $rs.cookie -Label "blocked-rotating-box"
+    $null = Update-HordeRelayMachineIdentity -HordeHome $rb.home -Reason "scheduled" -Provider "software"
+    $rbs = (Open-HordeCloudflareRelaySigner -HordeHome $rb.home).value
+    [void]$script:signers.Add($rbs)
+    $rbBody = '{"record":' + (ConvertTo-HordeCloudflareRelayJsonString (Get-HordeRelayRetirementText -HordeHome $rb.home -Generation 1).value) + '}'
     $forger = New-TestHome
     $fs = (Open-HordeCloudflareRelaySigner -HordeHome $forger.home).value
     [void]$script:signers.Add($fs)
@@ -252,6 +258,8 @@ try {
     Check (($strangers -join ",") -ceq "401,401,401,401,401" -and $sixth.code -eq 429) ("five signatures under five unregistered key ids from one address are refused, and the sixth is refused at once (" + ($strangers -join ",") + "," + $sixth.code + ")")
     Check ((Send-Signed -Dev $R -Signer $k.signer -Target $tgt -Address "10.2.0.3").code -eq 429) "and that address's machine requests are all refused for now, true ones too"
     Check ((Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body '{"record":"x"}' -Authorization (Get-SignedAuthorization -Dev $R -Signer $fs -Method "POST" -Target "/v1/machines/rotation" -Body '{"record":"x"}') -Address "10.2.0.3").code -eq 429) "the rotation route too"
+    Check ((Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body $rbBody -Authorization (Get-SignedAuthorization -Dev $R -Signer $rbs -Method "POST" -Target "/v1/machines/rotation" -Body $rbBody) -Address "10.2.0.3").code -eq 429) "even a true rotation, from that address, is refused for now"
+    Check ((Send-To -Url ($O + "/v1/machines/rotation") -Method "POST" -Body $rbBody -Authorization (Get-SignedAuthorization -Dev $R -Signer $rbs -Method "POST" -Target "/v1/machines/rotation" -Body $rbBody) -Address "10.2.0.4").code -eq 200) "CONTROL: and moves the registration from another"
 
     Write-Host ""
     Write-Host "--- the nonce cache at its bound ---" -ForegroundColor Cyan
@@ -444,6 +452,23 @@ try {
     $rc4 = (Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $O; hordeHome = $r4.home }).value
     $after4 = Receive-HordeRelayItems -Connection $rc4 -Mailbox "work/phone" -Since 0
     Check ($after4.state -ceq "unknown" -and $after4.reason.Contains("401") -and $rc4.state.rotationTried -eq $true) ("a machine the account removed stays removed after it rotates: its vouch moves nothing (" + $after4.reason + ")")
+
+    Write-Host ""
+    Write-Host "--- each machine is a device of its own ---" -ForegroundColor Cyan
+    $twoP = New-Phone -Dev $X -Sub "100000000000000001201"
+    $busy = New-Machine -Dev $X -Cookie $twoP.cookie -Label "busy-box"
+    $calm = New-Machine -Dev $X -Cookie $twoP.cookie -Label "calm-box"
+    # Puts: a burst of 20, then one a second (the defaults). The busy machine puts until it is refused;
+    # the other's put follows at once, before a token could come back to a bucket the two shared.
+    $taken = 0
+    $refusedPut = $null
+    for ($i = 1; $i -le 40 -and $null -eq $refusedPut; $i++) {
+        $pa = Send-Signed -Dev $X -Signer $busy.signer -Method "POST" -Target "/v1/mailboxes/work/busy/items" -Body ('{"key":"b-' + $i + '","text":"busy"}')
+        if ($pa.code -eq 200) { $taken++ } else { $refusedPut = $pa }
+    }
+    $calmPut = Send-Signed -Dev $X -Signer $calm.signer -Method "POST" -Target "/v1/mailboxes/work/calm/items" -Body '{"key":"c-1","text":"calm"}'
+    Check ($taken -ge 20 -and $null -ne $refusedPut -and $refusedPut.code -eq 429) ("one machine puts its burst of 20, and is then refused (" + $taken + " taken)")
+    Check ($calmPut.code -eq 200) "and another machine of the same account puts at once: its bucket is its own"
 
     Write-Host ""
     Write-Host "--- deleting an account ---" -ForegroundColor Cyan
