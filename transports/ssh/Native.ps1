@@ -16,6 +16,14 @@
 # escapes the job; Open's try begins before the start, so a failure there is still stopped by the
 # finally. Only Horde dying inside that one statement would leave ssh.exe outside the job.
 #
+# A PER-PROCESS MEMORY CAP FOR THE LISTENER'S JOB (issue #147, item 1; coordinator's decision of
+# 2026-10-07). The listener's forced command reads stdin through PowerShell's $input, the only stdin
+# path that works under Windows OpenSSH, and $input holds a line until its LF arrives: a peer that never
+# sends one grows attach's memory without end. LimitProcessMemory sets JOB_OBJECT_LIMIT_PROCESS_MEMORY
+# on the job, so no process in it may commit more than the cap; the listener sizes it from a
+# measurement (transports/ssh/Listen.ps1). It keeps kill-on-close: SetInformationJobObject replaces the
+# whole limit set.
+#
 # The C# below is pinned by SHA-256 in transports/ssh/test/ExecGuard.ps1: the guard cannot read C#, so
 # a change to it is a finding until the pin is changed with it, in review.
 # Compiled once per process with Add-Type; a second load finds the type and skips it.
@@ -74,6 +82,18 @@ public static class HordeSshNative {
     // Put a running process into the job. Throws if Windows refuses.
     public static void Assign(HordeSshJob job, IntPtr process) {
         if (!AssignProcessToJobObject(job, process)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    }
+
+    const uint JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100;
+
+    // Cap the memory any one process in the job may commit, keeping kill-on-close. Throws if Windows refuses.
+    public static void LimitProcessMemory(HordeSshJob job, ulong bytes) {
+        EXTENDED_LIMIT info = new EXTENDED_LIMIT();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        info.ProcessMemoryLimit = new UIntPtr(bytes);
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf(typeof(EXTENDED_LIMIT)))) {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
     }
 }
 '@
