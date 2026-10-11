@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/hub-enrolment.v1",
+  "title": "hub-enrolment v1",
+  "description": "The hub's register of one enrolled node (remote plan R13b and R17: 'registry entries written by horde hub enroll'), one file per device under <HordeHome>/hub/nodes/<deviceId>.json, written by `horde hub enroll` and `horde hub revoke` (cli/HubRegistry.ps1) and by nothing else. It is the hub's own record of whom it admitted, kept apart from the transport's files (for ssh, authorized_keys) so that each checks the other: the listener serves a key line only for a device this register holds, live, with that same key, and the hub binds a dialled link only to such a device. transport is the transport whose enrolment admitted the key; key is that transport's public key line for the device, as the transport wrote it (for ssh, 'ssh-ed25519 <base64>'); expires is the last day the enrolment is not yet over, YYYYMMDD, as the transport's own expiry (for ssh, sshd's expiry-time: the key is refused from 00:00 of that day). revokedAt is present once the device is revoked, and the entry is then never live again; enrolling the device again with a new key writes a fresh entry without it. A file that fails this schema is unknown, never a guessed enrolment.",
+  "type": "object",
+  "required": ["schemaVersion", "deviceId", "transport", "key", "expires", "enrolledAt"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "deviceId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+    "transport": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "key": { "type": "string", "pattern": "^[A-Za-z0-9+/=@._-]{1,64} [A-Za-z0-9+/=]{1,1024}$" },
+    "expires": { "type": "string", "pattern": "^[0-9]{8}$" },
+    "enrolledAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "revokedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+  }
+}

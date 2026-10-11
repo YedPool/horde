@@ -37,8 +37,9 @@ $script:HordeSshDevicePattern = '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 $script:HordeSshEnrolDays = 365
 
 function New-HordeSshEnrolResult {
-    param([bool]$Ok, [string]$Line = "", [string]$Reason = "", [string]$Said = "")
-    return [pscustomobject]@{ ok = $Ok; line = $Line; reason = $Reason; said = $Said }
+    # -Key and -Expires: an enrolment's bare key and expiry, for the hub's register (transports/Port.ps1).
+    param([bool]$Ok, [string]$Line = "", [string]$Reason = "", [string]$Said = "", [string]$Key = "", [string]$Expires = "")
+    return [pscustomobject]@{ ok = $Ok; line = $Line; reason = $Reason; said = $Said; key = $Key; expires = $Expires }
 }
 
 function Test-HordeSshInHome {
@@ -279,14 +280,15 @@ function Add-HordeSshEnrolment {
         $was = [regex]::Match($mine, 'expiry-time="([0-9]{8})"').Groups[1].Value
         if ($was -gt $expiry) { $expiry = $was }
         $fresh = New-HordeSshEnrolLine -Command $Command -Expiry $expiry -Key $k -DeviceId $DeviceId
-        if ($fresh -ceq $mine) { return (New-HordeSshEnrolResult -Ok $true -Line $mine -Said ("device " + $DeviceId + " is already enrolled until " + $expiry + "; nothing changed.")) }
+        $bare = $k.type + " " + $k.b64
+        if ($fresh -ceq $mine) { return (New-HordeSshEnrolResult -Ok $true -Line $mine -Said ("device " + $DeviceId + " is already enrolled until " + $expiry + "; nothing changed.") -Key $bare -Expires $expiry) }
         Write-HordeSshLines -Path $lp.authorized -Lines @($lines | ForEach-Object { if ($_ -ceq $mine) { $fresh } else { $_ } })
-        return (New-HordeSshEnrolResult -Ok $true -Line $fresh -Said ("device " + $DeviceId + " is renewed until " + $expiry + " (it was until " + $was + ")."))
+        return (New-HordeSshEnrolResult -Ok $true -Line $fresh -Said ("device " + $DeviceId + " is renewed until " + $expiry + " (it was until " + $was + ").") -Key $bare -Expires $expiry)
     }
     foreach ($l in $lines) { if ($l.Contains(" " + $k.b64 + " ")) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the key " + $k.fingerprint + " is already enrolled for another device")) } }
     $line = New-HordeSshEnrolLine -Command $Command -Expiry $expiry -Key $k -DeviceId $DeviceId
     Write-HordeSshLines -Path $lp.authorized -Lines (@($lines) + @($line))
-    return (New-HordeSshEnrolResult -Ok $true -Line $line)
+    return (New-HordeSshEnrolResult -Ok $true -Line $line -Key ($k.type + " " + $k.b64) -Expires $expiry)
 }
 
 function Remove-HordeSshEnrolment {
@@ -305,10 +307,36 @@ function Remove-HordeSshEnrolment {
     return (New-HordeSshEnrolResult -Ok $true -Line $m.Groups["key"].Value)
 }
 
+function Test-HordeSshEnrolled {
+    # Does the listener still admit device -DeviceId at -Now? The hub's admission of a dialled link asks
+    # this beside its own register (cli/HubRegistry.ps1; issue #144, item 3). ok, with the bare key as
+    # line, when authorized_keys holds the device's line, its key is not in revoked_keys, and its
+    # expiry-time is not reached; otherwise why not. sshd reads expiry-time="YYYYMMDD" as 00:00 of that
+    # day, local time (sshd(8)), so a key is over from that moment here too.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, $Now = $null)
+    if ($DeviceId -cnotmatch $script:HordeSshDevicePattern) { return (New-HordeSshEnrolResult -Ok $false -Reason ("not a device id: '" + $DeviceId + "'")) }
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $lp = Get-HordeSshListenPaths -HordeHome $HordeHome
+    $mine = Get-HordeSshEnrolment -Lines @(Read-HordeSshLines -Path $lp.authorized) -DeviceId $DeviceId
+    if ($null -eq $mine) { return (New-HordeSshEnrolResult -Ok $false -Reason ("authorized_keys holds no line for device " + $DeviceId)) }
+    $m = [regex]::Match($mine, ' (?<key>ssh-ed25519 [A-Za-z0-9+/]{68}) horde-device-')
+    if (-not $m.Success) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the authorized_keys line of device " + $DeviceId + " holds no key Horde wrote")) }
+    $key = $m.Groups["key"].Value
+    foreach ($r in @(Read-HordeSshLines -Path $lp.revoked)) {
+        if ("$r".Trim() -ceq $key) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the key of device " + $DeviceId + " is in revoked_keys")) }
+    }
+    $exp = [regex]::Match($mine, 'expiry-time="([0-9]{8})"')
+    if (-not $exp.Success) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the authorized_keys line of device " + $DeviceId + " carries no expiry-time; enrolment always writes one")) }
+    $d = [datetime]::ParseExact($exp.Groups[1].Value, "yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture)
+    if ($Now.ToLocalTime().Date -ge $d.Date) { return (New-HordeSshEnrolResult -Ok $false -Reason ("the key of device " + $DeviceId + " expired at the start of " + $exp.Groups[1].Value)) }
+    return (New-HordeSshEnrolResult -Ok $true -Line $key -Expires $exp.Groups[1].Value)
+}
+
 $null = Register-HordeEnrollment -Folder $PSScriptRoot `
     -NodeInit { param($HordeHome, $DeviceId) Initialize-HordeSshNode -HordeHome $HordeHome -DeviceId $DeviceId } `
     -NodeRotate { param($HordeHome, $DeviceId) Reset-HordeSshNodeKey -HordeHome $HordeHome -DeviceId $DeviceId } `
     -NodePin { param($HordeHome, $HubId, $HostKey, $Replace) Add-HordeSshPin -HordeHome $HordeHome -HubId $HubId -HostKey $HostKey -Replace:$Replace } `
     -HubInit { param($HordeHome, $HubId) Initialize-HordeSshHub -HordeHome $HordeHome -HubId $HubId } `
     -HubEnroll { param($HordeHome, $DeviceId, $Key, $HordeRoot, $Days) Add-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId -Key $Key -HordeRoot $HordeRoot -Days $Days } `
-    -HubRevoke { param($HordeHome, $DeviceId) Remove-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId }
+    -HubRevoke { param($HordeHome, $DeviceId) Remove-HordeSshEnrolment -HordeHome $HordeHome -DeviceId $DeviceId } `
+    -HubEnrolled { param($HordeHome, $DeviceId, $Now) Test-HordeSshEnrolled -HordeHome $HordeHome -DeviceId $DeviceId -Now $Now }

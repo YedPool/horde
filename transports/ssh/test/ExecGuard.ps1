@@ -80,7 +80,9 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     # Listen.ps1 (R17a), measured 2026-10-07: its configuration file, the user's name, sshd's start time.
     "ToLowerInvariant", "WriteAllLines", "ToUniversalTime",
     # Listen.ps1, issue #147: the per-process memory cap on the listener's job (Native.ps1).
-    "LimitProcessMemory")
+    "LimitProcessMemory",
+    # Enroll.ps1, issue #144 item 3 (2026-10-11): an enrolment's expiry read as sshd reads it. None runs anything.
+    "ParseExact", "ToLocalTime")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",

@@ -7,6 +7,10 @@
 # The node then stops, and a second `horde hub serve -Rounds 1` finds nobody: `horde nodes` must show the
 # node's sessions unknown, "node D unreachable since T", never absent.
 #
+# THEN `horde hub serve -Listen` (issue #144, item 3), as a user starts it: the suite dials the hub pipe
+# itself, as attach would, with a well-formed preamble for a device nobody enrolled - refused, saying it
+# is not in the hub's register - and then for a device `horde hub enroll` admitted - bound, and pulled.
+#
 # The stores are fakes, as in test-node-serve-local.ps1: HORDE_HOME and USERPROFILE point at folders
 # this suite makes and WEZFLEET_ROOT at the projection suite's fixture fleet, so the node's projection
 # reads fixture records and no agent store (complete is then known false, which the mirror keeps).
@@ -107,6 +111,49 @@ try {
     $text = Invoke-HordeTestRun "nodes"
     Check ($text.code -eq 0 -and $text.out -clike ("*(" + $deviceId + ") unreachable since*")) "horde nodes, for a person, says the node is unreachable and since when"
     Check (-not (Test-Path -LiteralPath (Join-Path $root "Microsoft"))) "nothing was written into the repository the commands were started from"
+
+    # --- horde hub serve -Listen binds only an enrolled device ---
+    foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+    . (Join-Path $root "transports\Port.ps1")
+    . (Join-Path $root "transports\local\Transport.ps1")
+    $tl = Get-HordeTransport -Name "local"
+    $init = Invoke-HordeTestRun "node init"
+    $enCmd = [regex]::Match($init.out, 'horde hub enroll -Device (?<dev>\S+) -Key "(?<key>[^"]+)"')
+    $enrolled = [guid]::NewGuid().ToString()
+    $stranger = [guid]::NewGuid().ToString()
+    $en = Invoke-HordeTestRun ("hub enroll -Device " + $enrolled + " -Key `"" + $enCmd.Groups["key"].Value + "`"")
+    Check ($enCmd.Success -and $en.code -eq 0 -and (Test-Path -LiteralPath (Join-Path $homeDir ("hub\nodes\" + $enrolled + ".json")))) ("CONTROL: a device is enrolled with a key node init made, and the hub's register holds it (" + $en.out.Trim() + $en.err.Trim() + ")")
+    $hubRun = [System.Diagnostics.Process]::Start((New-HordeTestStart "hub serve -Rounds 1 -Listen -IntervalSeconds 20"))
+    $hubOut = $hubRun.StandardOutput.ReadToEndAsync()
+    $hubErr = $hubRun.StandardError.ReadToEndAsync()
+    try {
+        # One dial as attach makes it: the preamble, then whatever the hub does with the link.
+        function Invoke-HordeTestDial { param([string]$Device)
+            $deadline = (Get-Date).AddSeconds(60)
+            $o = $null
+            while ((Get-Date) -lt $deadline -and -not $hubRun.HasExited) {
+                $o = Open-HordeTransportLink -Transport $tl -Endpoint ("hub:" + $deviceId) -Role "node" -TimeoutMs 2000
+                if ($o.state -ceq "known") { break }
+                Start-Sleep -Milliseconds 300
+            }
+            if ($null -eq $o -or $o.state -cne "known") { return "not opened" }
+            try {
+                $null = Send-HordeLinkFrame -Link $o.value -Frame ("horde-attach 1 " + $Device)
+                $got = Receive-HordeLinkFrame -Link $o.value -TimeoutMs 30000
+                return ("" + $got.state + ": " + $got.value + $got.reason)
+            } finally { Close-HordeLink -Link $o.value }
+        }
+        $d1 = Invoke-HordeTestDial -Device $stranger
+        # Closed before the hello: a link the hub refused is never spoken to.
+        Check ($d1 -clike "unknown:*") ("a dialled link for a device nobody enrolled gets nothing but its end (" + $d1 + ")")
+        $d2 = Invoke-HordeTestDial -Device $enrolled
+        Check ($d2 -clike 'known: {*"kind":"hello"*') ("a dialled link for the enrolled device is bound, and the hub says hello on it (" + $d2.Substring(0, [Math]::Min(60, $d2.Length)) + ")")
+        $ended = $hubRun.WaitForExit(120000)
+        $said = "$($hubOut.Result)" + "$($hubErr.Result)"
+        Check ($ended -and $hubRun.ExitCode -eq 0) ("horde hub serve -Listen ran its round and exited 0 (" + $said.Trim() + ")")
+        Check ($said -clike ("*a dialled link for device " + $stranger + " was refused: device " + $stranger + " is not enrolled: *not in the hub's register*")) "it refused the stranger's link, saying the device is not in the hub's register"
+        Check ($said -clike ("*node (dialled) (" + $enrolled + "): unreachable:*") -and $said -cnotlike ("*device " + $enrolled + " was refused*")) "and bound the enrolled device's link, pulling it until the suite hung up"
+    } finally { if (-not $hubRun.HasExited) { try { $hubRun.Kill() } catch { }; $null = $hubRun.WaitForExit(10000) } }
 } finally {
     # Only the process this suite started, by its own handle.
     if ($null -ne $node -and -not $node.HasExited) { try { $node.Kill() } catch { }; $null = $node.WaitForExit(10000) }

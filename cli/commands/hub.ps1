@@ -29,10 +29,11 @@ $HordeCommand = @{
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to hub " + $Verb) } }
         if ($Verb -ne "serve") {
             $root = Get-HordeRoot
-            foreach ($f in @("Tristate", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+            foreach ($f in @("Tristate", "Home", "Device", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
             . (Join-Path $root "transports\Port.ps1")
             foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
             . (Join-Path $root "cli\Enroll.ps1")
+            . (Join-Path $root "cli\HubRegistry.ps1")
             foreach ($l in @(Invoke-HordeHubEnrollVerb -Verb $Verb -Root $root -Device $Device -Key $Key -Days $Days -Transport $Transport)) { Write-Output $l }
             return
         }
@@ -62,7 +63,16 @@ $HordeCommand = @{
         # Write-Host, not Write-Output: the block runs inside the loop, whose output is its rounds.
         $say = { param($Round) foreach ($o in $Round.outcomes) { Write-Host ($Round.at + " " + $o) } }
         $listener = $null
+        $admit = $null
         if ($Listen) {
+            # Only an enrolled device is bound (cli/HubRegistry.ps1): the hub's register and the
+            # transport's enrolment must both hold it, live, with one key.
+            foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
+            . (Join-Path $root "cli\Enroll.ps1")
+            . (Join-Path $root "cli\HubRegistry.ps1")
+            $enrollment = Get-HordeEnrollTransport
+            $hubHome = Get-HordeHome
+            $admit = { param($DeviceId) Test-HordeHubAdmits -HordeHome $hubHome -DeviceId $DeviceId -Enrollment $enrollment }
             # The hub pipe: the hub's own transport, at the endpoint R17a's attach dials.
             $lt = Resolve-HordeLinkTransport -Name $script:HordeHubOwnTransport
             if ($lt.state -cne "known") { throw ("the hub cannot listen: " + $lt.reason) }
@@ -71,7 +81,7 @@ $HordeCommand = @{
             $listener = $l.value
             Write-Host ("hub listening for dialled links at " + $listener.endpoint)
         }
-        try { $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say -Listener $listener) }
+        try { $done = @(Invoke-HordeHubServe -Nodes $entries -Root $mirrorRoot -Hub $hub -Contract $contract -Rounds $Rounds -IntervalMs ($IntervalSeconds * 1000) -OnRound $say -Listener $listener -Admit $admit) }
         finally { if ($null -ne $listener) { Stop-HordeTransportListener -Listener $listener } }
         Write-Output ("hub ran " + $done.Count + " round(s); mirrors in " + $mirrorRoot)
     }
