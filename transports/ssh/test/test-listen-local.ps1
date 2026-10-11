@@ -17,6 +17,9 @@
 #   - CONTROL for issue #100: under the same sshd a forced command that reads stdin through a .NET
 #     Console stream gets nothing, while $input in the same session gets the line - which is why attach
 #     reads $input and never a Console stream.
+#   - issue #147's hardening: a line over the 4 MiB frame ceiling ends the link and is never passed
+#     on; a second link for the same device ends at once; a key line written while horde listen runs
+#     stops it; a subsystem request still runs attach.
 #
 # THE MACHINE IS LEFT AS IT WAS, CHECKED, NOT ASSUMED: the sshd service's state and start mode, the
 # OpenSSH-Server-In-TCP firewall rule, listeners on port 22, C:\ProgramData\ssh and ~/.ssh are read at the
@@ -39,7 +42,7 @@ foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root (
 . (Join-Path $root "remote\LinkBinding.ps1")
 . (Join-Path $here "ListenFixture.ps1")
 
-$limitSeconds = 240
+$limitSeconds = 480
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 function Left { param([int]$Ms) return [int][Math]::Max(1, [Math]::Min($Ms, ($limitSeconds * 1000) - $clock.ElapsedMilliseconds - 10000)) }
 $tl = Get-HordeTransport -Name "local"
@@ -126,6 +129,21 @@ try {
             while (((Get-ListenListeners -Port $p1b) -gt 0 -or -not $run.value.listener.process.HasExited) -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 200 }
             Check ($run.value.listener.process.HasExited -and (Get-ListenListeners -Port $p1b) -eq 0) "Stop ends sshd while its caller lives on: nothing listens on its port"
         }
+
+        Write-Host ""
+        Write-Host "--- a key line added after start stops the listener (issue #147, item 4) ---" -ForegroundColor Cyan
+        $p1c = Get-ListenFreePort; [void]$ports.Add($p1c)
+        $r = Start-Listen -Port $p1c -Seconds 120
+        $first = Read-ListenLine -Reader $r.process.StandardOutput -Ms (Left 60000)
+        Check ("$first" -like ("listening on 127.0.0.1:" + $p1c + "*")) ("CONTROL: it listens (" + $first + ")")
+        $err = $r.process.StandardError.ReadToEndAsync(); $null = $r.process.StandardOutput.ReadToEndAsync()
+        [System.IO.File]::AppendAllText($files.authorized, ($clientPub + " horde-device-" + $otherDev + "`n"))
+        $ended = $r.process.WaitForExit((Left 20000))
+        [System.IO.File]::WriteAllText($files.authorized, ($good + "`n"))
+        Check ($ended -and $r.process.ExitCode -eq 1 -and (Get-ListenText $err) -like "*changed after the listener started*") ("a bare key written while it runs makes horde listen stop and exit 1, saying why (exit " + $(if ($ended) { $r.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $err).Trim() + ")")
+        $d = [datetime]::UtcNow.AddSeconds(10); while ((Get-ListenListeners -Port $p1c) -gt 0 -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 200 }
+        Check ((Get-ListenListeners -Port $p1c) -eq 0) "and its sshd is gone: nothing listens on its port"
+        if (-not $r.process.HasExited) { try { $r.process.Kill() } catch { } }
 
         Write-Host ""
         Write-Host "--- a node dials in: the session reaches the hub's pipe, bound to the key's device ---" -ForegroundColor Cyan
@@ -220,8 +238,8 @@ try {
         Write-Host "--- what a client asks for: never a command of its choosing, never a forward ---" -ForegroundColor Cyan
         function Start-RawSsh {
             # ssh.exe itself, with the node's key and pin and -Extra before the destination.
-            param([string[]]$Extra, [string[]]$After)
-            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + (Join-Path $nodeDir "link_ed25519") + '"'),
+            param([string[]]$Extra, [string[]]$After, [string]$Identity = (Join-Path $nodeDir "link_ed25519"))
+            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + $Identity + '"'),
                 "-o", ('UserKnownHostsFile="' + (Join-Path $nodeDir "known_hosts") + '"'), "-o", "GlobalKnownHostsFile=none", "-o", "StrictHostKeyChecking=yes", "-o", ("HostKeyAlias=horde-hub-" + $hubId),
                 "-o", "ConnectTimeout=10", "-p", "$p2") + @($Extra) + @(($user + "@127.0.0.1")) + @($After)
             return (Start-ListenChild -Exe $script:ListenSshExe -Arguments (Join-HordeSshCommandLine -Argv $argv) -Job $job)
@@ -241,7 +259,113 @@ try {
         Check ($fended -and $fwd.process.ExitCode -ne 0 -and (Get-ListenText $ferr) -match "(?i)prohibited|forward|refused") ("a stdio forward (-W) is refused (exit " + $(if ($fended) { $fwd.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $ferr).Trim() + ")")
         $nobody = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 500
         Check ($nobody.state -ceq "unknown") "and it reached nothing: the hub's pipe saw no session from it"
+        # With no Subsystem line a subsystem request names nothing sshd offers, so it is refused and
+        # nothing runs, not even the forced attach (measured 2026-10-07, round 2 of the hardening gate).
+        $sub = Start-RawSsh -Extra @("-s") -After @("sftp")
+        $suberr = $sub.process.StandardError.ReadToEndAsync(); $null = $sub.process.StandardOutput.ReadToEndAsync()
+        $subEnded = $sub.process.WaitForExit((Left 20000))
+        Check ($subEnded -and $sub.process.ExitCode -ne 0 -and (Get-ListenText $suberr) -match "(?i)subsystem") ("a request for the sftp subsystem is refused: no subsystem is offered (issue #147, item 8; exit " + $(if ($subEnded) { $sub.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $suberr).Trim() + ")")
+        $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 1000
+        Check ($a.state -ceq "unknown") "and it reached nothing: the hub's pipe saw no session from it"
+        if ($a.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $a) }
+        if (-not $sub.process.HasExited) { try { $sub.process.Kill() } catch { } }
 
+        Write-Host ""
+        Write-Host "--- a line longer than any frame ends the link (issue #147, item 1) ---" -ForegroundColor Cyan
+        # Raw ssh.exe, because the node's own sender refuses a frame over its cap. The stand-in hub's
+        # link caps frames at 1 MiB, so a 2 MiB line that the relay passes on arrives as "over the cap",
+        # while a line over the 4 MiB ceiling never arrives at all: the link just closes.
+        foreach ($case in @(@{ n = 2097152; passed = $true }, @{ n = 4194305; passed = $false })) {
+            $big = Start-RawSsh -Extra @() -After @()
+            $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
+            if ($a.state -cne "known") { Check $false ("a session for the " + $case.n + "-byte line"); continue }
+            $hlink = Get-HordeValue $a
+            $pre = Receive-HordeLinkFrame -Link $hlink -TimeoutMs (Left 15000)
+            $writer = $big.process.StandardInput.BaseStream.WriteAsync(([System.Text.Encoding]::ASCII.GetBytes(("y" * $case.n) + "`n")), 0, ($case.n + 1))
+            $r = Receive-HordeLinkFrame -Link $hlink -TimeoutMs (Left 30000)
+            if ($case.passed) {
+                Check ($pre.state -ceq "known" -and $r.state -ceq "unknown" -and "$($r.reason)" -like "*over the 1048576-byte cap*") ("CONTROL: a " + $case.n + "-byte line, under the ceiling, is passed on (" + $r.reason + ")")
+            } else {
+                Check ($pre.state -ceq "known" -and $r.state -ceq "unknown" -and "$($r.reason)" -notlike "*over the*" -and "$($r.reason)" -notlike "*partial*") ("a " + $case.n + "-byte line, over the ceiling, is not passed on: the link closes with nothing more (" + $r.reason + ")")
+                Check (Wait-AttachGone -Ms (Left 15000)) "and attach has ended"
+            }
+            Close-HordeLink -Link $hlink
+            try { $big.process.StandardInput.Close() } catch { }
+            $null = $big.process.WaitForExit((Left 15000))
+            if (-not $big.process.HasExited) { try { $big.process.Kill() } catch { } }
+            $null = Wait-AttachGone -Ms (Left 15000)
+        }
+
+        Write-Host ""
+        Write-Host "--- one link per device (issue #147, item 2) ---" -ForegroundColor Cyan
+        $pair = Open-Pair
+        if ($null -ne $pair) {
+            try {
+                $pre = Receive-HordeLinkFrame -Link $pair.hub -TimeoutMs (Left 20000)
+                Check ($pre.state -ceq "known") "CONTROL: a first link for the device is open"
+                $second = Start-RawSsh -Extra @() -After @()
+                $serr = $second.process.StandardError.ReadToEndAsync()
+                $ended = $second.process.WaitForExit((Left 20000))
+                Check ($ended -and $second.process.ExitCode -ne 0 -and (Get-ListenText $serr) -like "*already has a live link*") ("a second link for the same device ends at once, saying why (exit " + $(if ($ended) { $second.process.ExitCode } else { "none" }) + ": " + (Get-ListenText $serr).Trim() + ")")
+                $nobody = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs 1000
+                Check ($nobody.state -ceq "unknown" -and (Get-AttachCount) -eq 1) "and reaches nothing: the hub saw no second session, one attach runs"
+                if (-not $second.process.HasExited) { try { $second.process.Kill() } catch { } }
+                $null = Send-HordeLinkFrame -Link $pair.node -Frame "still-here"
+                $s = Receive-HordeLinkFrame -Link $pair.hub -TimeoutMs (Left 15000)
+                Check ($s.state -ceq "known" -and "$($s.value)" -ceq "still-here") "the first link is untouched"
+            } finally { Close-HordeLink -Link $pair.node; Close-HordeLink -Link $pair.hub }
+            $null = Wait-AttachGone -Ms (Left 15000)
+            $pair = Open-Pair
+            $ok = $false
+            if ($null -ne $pair) { try { $ok = ((Receive-HordeLinkFrame -Link $pair.hub -TimeoutMs (Left 20000)).state -ceq "known") } finally { Close-HordeLink -Link $pair.node; Close-HordeLink -Link $pair.hub } }
+            Check $ok "CONTROL: once that link has ended, the device's next link opens"
+            $null = Wait-AttachGone -Ms (Left 15000)
+        } else { Check $false "a first link for the one-per-device case" }
+
+
+        Write-Host ""
+        Write-Host "--- a never-ending line: the job's memory cap ends that attach, and nothing else (issue #147) ---" -ForegroundColor Cyan
+        # A second enrolled device keeps a session open beside the one that sends an endless line, so
+        # the case can show the cap ends one process, not the listener or another session.
+        $dev2 = [guid]::NewGuid().ToString()
+        $pub2 = New-ListenKey -Path (Join-Path $work "client2_ed25519")
+        [System.IO.File]::AppendAllText($files.authorized, ('command="' + (Get-HordeSshAttachCommand -HordeRoot $root -DeviceId $dev2) + '",restrict ' + $pub2 + " horde-device-" + $dev2 + "`n"))
+        $other = Start-RawSsh -Extra @() -After @() -Identity (Join-Path $work "client2_ed25519")
+        $ao = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
+        $endless = $null; $ae = $null
+        try {
+            $po = $null; if ($ao.state -ceq "known") { $po = Receive-HordeLinkFrame -Link (Get-HordeValue $ao) -TimeoutMs (Left 15000) }
+            Check ($null -ne $po -and "$($po.value)" -ceq ("horde-attach 1 " + $dev2)) "CONTROL: a second device's session is open"
+            $endless = Start-RawSsh -Extra @() -After @()
+            $ae = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 30000)
+            $pe = $null; if ($ae.state -ceq "known") { $pe = Receive-HordeLinkFrame -Link (Get-HordeValue $ae) -TimeoutMs (Left 15000) }
+            Check ($null -ne $pe -and "$($pe.value)" -ceq ("horde-attach 1 " + $nodeDev)) "and the device that will send the endless line has its own"
+            $victim = @(Get-ListenProcesses -Marker ("attach.ps1 -Device " + $nodeDev) | Where-Object { $_.Name -ieq "powershell.exe" })
+            $chunk = [System.Text.Encoding]::ASCII.GetBytes("z" * 1048576)
+            $sent = 0
+            $gone = $false
+            # 200 MiB at most: the cap (320 MiB of commit) is reached after about 120 MiB (Listen.ps1).
+            while ($sent -lt 200 -and (Left 60000) -gt 30000) {
+                $w = $endless.process.StandardInput.BaseStream.WriteAsync($chunk, 0, $chunk.Length)
+                $wrote = $false; try { $wrote = $w.Wait(15000) } catch { }
+                if ($wrote) { $sent++ }
+                if ($victim.Count -eq 1 -and $null -eq (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue)) { $gone = $true; break }
+                if (-not $wrote) { break }
+            }
+            if (-not $gone -and $victim.Count -eq 1) { $d = [datetime]::UtcNow.AddSeconds(10); while ($null -ne (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue) -and [datetime]::UtcNow -lt $d) { Start-Sleep -Milliseconds 250 }; $gone = ($null -eq (Get-Process -Id $victim[0].ProcessId -ErrorAction SilentlyContinue)) }
+            Check ($victim.Count -eq 1 -and $gone) ("the attach fed a line with no end is ended by the job's memory cap (" + $sent + " MiB sent)")
+            Check ((Get-ListenListeners -Port $p2) -ge 1 -and -not $listen.process.HasExited) "the listener goes on: sshd still listens, horde listen still runs"
+            $other.process.StandardInput.Write("still-alive`n"); $other.process.StandardInput.Flush()
+            $s = $null; if ($ao.state -ceq "known") { $s = Receive-HordeLinkFrame -Link (Get-HordeValue $ao) -TimeoutMs (Left 15000) }
+            Check ($null -ne $s -and "$($s.value)" -ceq "still-alive") "and the other device's session still relays"
+        } finally {
+            if ($null -ne $endless) { try { $endless.process.Kill() } catch { } }
+            try { $other.process.Kill() } catch { }
+            if ($null -ne $ae -and $ae.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $ae) }
+            if ($ao.state -ceq "known") { Close-HordeLink -Link (Get-HordeValue $ao) }
+            [System.IO.File]::WriteAllText($files.authorized, ($good + "`n"))
+            $null = Wait-AttachGone -Ms (Left 15000)
+        }
         Write-Host ""
         Write-Host "--- CONTROL (issue #100): a .NET Console stream reads nothing in a session; `$input reads the line ---" -ForegroundColor Cyan
         # A second sshd, this suite's own, from the listener's very configuration on another port, whose

@@ -117,6 +117,11 @@ if ($ln.state -eq "known" -and $lh.state -eq "known") {
         if ($ka.state -eq "known") { Close-HordeLink -Link (Get-HordeValue $ka) }
     } finally { Stop-HordeTransportListener -Listener $hl; Stop-HordeTransportListener -Listener $nl }
     Check (-not (Test-PipeListed ("horde-hub-" + $id))) "a stopped hub listener leaves no pipe behind"
+    # Issue #147, item 7: a dial to a hub nobody serves says a hub did not answer, not a node.
+    $gone = Open-HordeTransportLink -Transport $t -Endpoint ("hub:" + $id) -Role "node" -TimeoutMs 300
+    Check ($gone.state -ceq "unknown" -and "$($gone.reason)" -like "*no hub answered on horde-hub-*") ("a dial to a hub nobody serves says no hub answered (" + $gone.reason + ")")
+    $gone = Open-HordeTransportLink -Transport $t -Endpoint $id -Role "hub" -TimeoutMs 300
+    Check ($gone.state -ceq "unknown" -and "$($gone.reason)" -like "*no node answered on horde-node-*") ("CONTROL: and a dial to a node nobody serves still says no node answered (" + $gone.reason + ")")
 } else {
     if ($ln.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $ln) }
     if ($lh.state -eq "known") { Stop-HordeTransportListener -Listener (Get-HordeValue $lh) }
