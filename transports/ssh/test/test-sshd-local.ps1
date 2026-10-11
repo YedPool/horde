@@ -118,8 +118,12 @@ try {
         # by the mutant echo-reads-console-stdin (mutations/sshd-live.psd1): with the Console stream the
         # frame round trip fails (review of PR #103, H2, probe p8: it hangs).
         # LF only: the link's frames end at LF, and WriteLine would end them with CR LF.
+        # ONE TEST-ONLY TURN (the first live mesh link, 2026-10-11): a session that asks for "nested-node"
+        # runs nested.ps1 in a PowerShell of its own instead - a node inside an ssh session, as a node
+        # started over ssh is, with the environment Windows sshd gives a session's command.
         $echo = Join-Path $sshdRoot "echo.ps1"
-        [System.IO.File]::WriteAllText($echo, "[Console]::Out.Write('horde-test-forced' + [char]10); [Console]::Out.Flush(); foreach (`$l in `$input) { [Console]::Out.Write(`$l + [char]10); [Console]::Out.Flush() }")
+        $nested = Join-Path $sshdRoot "nested.ps1"
+        [System.IO.File]::WriteAllText($echo, ("if (`$env:SSH_ORIGINAL_COMMAND -ceq 'nested-node') { & (Join-Path ([System.Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File '" + $nested + "'; [Environment]::Exit(0) }; " + "[Console]::Out.Write('horde-test-forced' + [char]10); [Console]::Out.Flush(); foreach (`$l in `$input) { [Console]::Out.Write(`$l + [char]10); [Console]::Out.Flush() }"))
         $port = Get-HordeFreeLoopbackPort
         $config = Write-HordeSshdConfig -Root $sshdRoot -Port $port -ForceCommand ("powershell.exe -NoProfile -NonInteractive -File " + $echo.Replace('\', '/'))
         $clientPub = [System.IO.File]::ReadAllText((Join-Path $sshdRoot "client_ed25519.pub")).Trim()
@@ -214,14 +218,14 @@ try {
         # Raw ssh.exe here, not the transport: the options under test are the server's, and the
         # transport's own argv clears every forwarding before a server could refuse one.
         function Invoke-Ssh {
-            param([string[]]$Extra)
-            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + (Join-Path $sshdRoot "client_ed25519") + '"'), "-o", ('UserKnownHostsFile="' + (Join-Path $node "known_hosts") + '"'), "-o", "GlobalKnownHostsFile=none", "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=horde-hub-test-hub", "-o", "ConnectTimeout=10", "-p", "$port") + @($Extra) + @(($user + "@127.0.0.1"), "requested")
+            param([string[]]$Extra, [string]$Command = "requested", [int]$WaitMs = 20000)
+            $argv = @("-F", "none", "-T", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", ('IdentityFile="' + (Join-Path $sshdRoot "client_ed25519") + '"'), "-o", ('UserKnownHostsFile="' + (Join-Path $node "known_hosts") + '"'), "-o", "GlobalKnownHostsFile=none", "-o", "StrictHostKeyChecking=yes", "-o", "HostKeyAlias=horde-hub-test-hub", "-o", "ConnectTimeout=10", "-p", "$port") + @($Extra) + @(($user + "@127.0.0.1"), $Command)
             $psi = New-Object System.Diagnostics.ProcessStartInfo((Resolve-HordeSshExe).path, (Join-HordeSshCommandLine -Argv $argv))
             $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
             $p = [System.Diagnostics.Process]::Start($psi)
             $p.StandardInput.Close()
             $o = $p.StandardOutput.ReadToEndAsync(); $e = $p.StandardError.ReadToEndAsync()
-            if (-not $p.WaitForExit((Left 20000))) { try { $p.Kill() } catch { }; return [pscustomobject]@{ code = -1; out = ""; err = "timed out" } }
+            if (-not $p.WaitForExit((Left $WaitMs))) { try { $p.Kill() } catch { }; return [pscustomobject]@{ code = -1; out = ""; err = "timed out" } }
             $p.WaitForExit()
             return [pscustomobject]@{ code = $p.ExitCode; out = ("" + $o.Result).Trim(); err = ("" + $e.Result).Trim() }
         }
@@ -248,6 +252,31 @@ try {
         [System.IO.File]::WriteAllText($ak, ($clientPub + "`n"))
         $open = Invoke-Ssh $remoteForward
         Check ($open.code -eq 0 -and $open.out -ceq "horde-test-forced") ("CONTROL: the same forward from the same key without restrict is allowed, and the session runs (exit " + $open.code + ", " + $open.out + $open.err + ")")
+
+        Write-Host ""
+        Write-Host "--- a node inside an ssh session: the far end speaks first, and frames go both ways ---" -ForegroundColor Cyan
+        # THE FIRST LIVE MESH LINK (2026-10-11): a node started over ssh dialled its hub, and the hub's
+        # hello never reached it. Windows sshd gives a session's command a <32 hex>_POSIX_FD_STATE
+        # variable describing its handles; passed on to the node's ssh.exe, it made ssh.exe read its
+        # synchronous stdin as an asynchronous one, and its whole loop waited on that read
+        # (Transport.ps1, $script:HordeSshInheritedFdState). Outside an ssh session the variable is
+        # absent, so the node here runs inside one - this sshd's own, through the turn in echo.ps1 - and
+        # first says whether it holds the variable, so the case cannot pass without the condition.
+        [System.IO.File]::WriteAllText($ak, ($clientPub + "`n"))
+        [System.IO.File]::WriteAllText($nested, ("`$env:HORDE_HOME = '" + $hh + "'`r`n" +
+            ". '" + (Join-Path $root "transports\Port.ps1") + "'`r`n" +
+            ". '" + (Join-Path $root "transports\ssh\Transport.ps1") + "'`r`n" +
+            "`$fd = @(Get-ChildItem env: | Where-Object { `$_.Name -match '_POSIX_FD_STATE\z' }).Count`r`n" +
+            "`$o = Open-HordeTransportLink -Transport (Get-HordeTransport -Name 'ssh') -Endpoint '" + $endpoint + "' -Role 'node' -TimeoutMs 15000`r`n" +
+            "if (`$o.state -cne 'known') { [Console]::Out.Write('nested fd-state ' + `$fd + ': no link: ' + `$o.reason + [char]10); [Environment]::Exit(0) }`r`n" +
+            "`$first = Receive-HordeLinkFrame -Link `$o.value -TimeoutMs 15000`r`n" +
+            "`$null = Send-HordeLinkFrame -Link `$o.value -Frame 'nested-ping'`r`n" +
+            "`$back = Receive-HordeLinkFrame -Link `$o.value -TimeoutMs 15000`r`n" +
+            "Close-HordeLink -Link `$o.value`r`n" +
+            "[Console]::Out.Write('nested fd-state ' + `$fd + ': ' + `$first.value + `$first.reason + ' | ' + `$back.value + `$back.reason + [char]10)`r`n"))
+        $inSession = Invoke-Ssh -Extra @() -Command "nested-node" -WaitMs 60000
+        Check ($inSession.out -clike "nested fd-state 1: *") ("CONTROL: the node ran inside the ssh session, holding the fd-state variable sshd gives a session's command (" + $inSession.out + $inSession.err + ")")
+        Check ($inSession.out -ceq "nested fd-state 1: horde-test-forced | nested-ping") ("a node inside an ssh session hears the far end speak first, and its own frame comes back (" + $inSession.out + $inSession.err + ")")
     }
 } finally {
     $env:HORDE_HOME = $savedHome

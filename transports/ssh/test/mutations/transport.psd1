@@ -171,5 +171,12 @@
         @{ Name = "border-line-taken-as-reason"
            Find = 'if ($clean -notmatch ''[A-Za-z0-9]'') { continue }'
            Replace = '' }
+        # --- the first live mesh link (2026-10-11): an ssh session's fd state is not passed on to ssh.exe
+        @{ Name = "fd-state-passed-on"
+           Find = 'if ("$name" -match $script:HordeSshInheritedFdState) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "fd-state-match-too-broad"
+           Find = '''\A[0-9A-Fa-f]{32}_POSIX_FD_STATE\z'''
+           Replace = '''_POSIX_FD_STATE\z''' }
     )
 }

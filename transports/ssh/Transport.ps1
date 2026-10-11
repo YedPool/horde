@@ -56,6 +56,20 @@ $script:HordeSshProbeTimeoutMs = 5000
 $script:HordeSshBannerPrefixes = @("SSH-2.0-", "SSH-1.99-")
 $script:HordeSshStderrKeepBytes = 4096
 $script:HordeSshReasonChars = 200
+# WIN32-OPENSSH'S FD STATE IS NOT PASSED ON (the first live mesh link, 2026-10-11). Windows sshd starts a
+# session's command with an environment variable, c28fc6f98a2c44abbbd89d6a3037d0d9_POSIX_FD_STATE, that
+# tells an OpenSSH program started there what kind of handles its stdin, stdout and stderr are (sshd's
+# own asynchronous pipes). A node started over ssh inherits it, and so did the ssh.exe it starts, whose
+# stdin is a synchronous pipe .NET made: ssh.exe read that stdin as an asynchronous one, so its read
+# returned only when 32 KiB had come or stdin ended, and its whole loop waited with it - it sent
+# nothing, and wrote nothing it received. The hub speaks first, so the link stalled with the hub's hello
+# delivered to the node's machine and never to the node (pktmon on the hub: hello sent and ACKed; the
+# node's next packet only when its stdin closed; a 40000-byte write to its stdin freed it at once).
+# Measured on two Windows 11 25H2 machines, OpenSSH_for_Windows 9.5p2: with the variable removed
+# from ssh.exe's environment, the same node inside an ssh session hears the hello. Outside an ssh
+# session the variable is absent, which is why the loopback harnesses passed. The name is matched by
+# shape - a 32-hex-digit prefix - so another build's prefix is removed too.
+$script:HordeSshInheritedFdState = '\A[0-9A-Fa-f]{32}_POSIX_FD_STATE\z'
 $script:HordeSshHubSide = "the ssh transport's accepting end is the hub's sshd with a forced command, run by horde listen (remote plan R16) for keys enrollment writes (R17); neither is built in step R5"
 
 function Resolve-HordeSshExe {
@@ -111,6 +125,9 @@ function Start-HordeSshProcess {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # The fd state an ssh session handed this process describes its handles, not ssh.exe's (see
+    # $script:HordeSshInheritedFdState), so ssh.exe is started without it.
+    foreach ($name in @($psi.EnvironmentVariables.Keys)) { if ("$name" -match $script:HordeSshInheritedFdState) { $psi.EnvironmentVariables.Remove("$name") } }
     $started = [System.Diagnostics.Process]::Start($psi)
     try { [HordeSshNative]::Assign($Job, $started.Handle) }
     catch {

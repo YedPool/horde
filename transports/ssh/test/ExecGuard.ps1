@@ -90,7 +90,10 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     # Files.ps1, issue #123 (2026-10-11): who owns and may write the link's files and their folders.
     "GetOwner", "Equals",
     # Listen.ps1, mesh v1 (2026-10-11): the address it binds and checks it answers on.
-    "Parse")
+    "Parse",
+    # Transport.ps1, the first live mesh link (2026-10-11): the fd state an ssh session handed this process,
+    # taken out of ssh.exe's environment. It narrows what the start passes on and runs nothing.
+    "Remove")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
