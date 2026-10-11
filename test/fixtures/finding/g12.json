@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "claim": "Live multi-turn model sessions re-bill the whole conversation on every turn. Per-answer estimates that ignore it run several times low; once the estimate must state its basis (turns x re-billed context), it holds within a few percent. Splitting into one-answer sessions saves less than expected when each session has a fixed set-up of several turns.",
+  "metric": {
+    "what": "Estimated against actual cost per answer of one live model test run, as reported by the master (not measured by the analyst).",
+    "numbers": [
+      {
+        "name": "estimatedUsdPer150AnswersRange",
+        "values": [
+          1.5,
+          2.0
+        ]
+      },
+      {
+        "name": "actualUsdPerAnswer",
+        "values": [
+          0.07
+        ]
+      },
+      {
+        "name": "overrunFactor",
+        "values": [
+          4
+        ]
+      },
+      {
+        "name": "answersBeforeCapStopped",
+        "values": [
+          33
+        ]
+      },
+      {
+        "name": "capUsd",
+        "values": [
+          2.5
+        ]
+      },
+      {
+        "name": "oneAnswerSessionUsdPerAnswer",
+        "values": [
+          0.053
+        ]
+      },
+      {
+        "name": "multiAnswerSessionUsdPerAnswer",
+        "values": [
+          0.07
+        ]
+      },
+      {
+        "name": "saving",
+        "values": [
+          0.25
+        ]
+      },
+      {
+        "name": "setupTurnsFloor",
+        "values": [
+          4
+        ]
+      },
+      {
+        "name": "estimateErrorAfterBasisRequired",
+        "values": [
+          0.03
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "a report from the master, not a record",
+        "test run manifest"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "AI tests that do not need long context run as one-question sessions in parallel; estimates are computed from measured cost per turn including re-billed context, checked against the first session before the rest run; alarm when cost per answer exceeds 2x estimate or a session exceeds 5 turns without a stated reason. Count the per-session set-up turns as the floor: short sessions mainly buy predictability and no runaway growth, and save money only above that floor.",
+  "confidence": "medium",
+  "whyItGeneralises": "Re-billing of the whole conversation per turn is how multi-turn model sessions are priced generally; an estimate that ignores it is low on any fleet.",
+  "limits": "Two runs on one stack: the 4x overrun (master's figures) and a 4-case validation whose manifest the monitor read (estimate 0.055, measured 0.053 USD per answer)."
+}

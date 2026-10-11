@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "claim": "Mail is fast, but it cannot interrupt a turn; long worker turns and ended sessions produce the whole tail.",
+  "metric": {
+    "what": "Created-to-read time per message from the mail store, by route.",
+    "numbers": [
+      {
+        "name": "messages",
+        "values": [
+          1113
+        ]
+      },
+      {
+        "name": "medianSeconds",
+        "values": [
+          12
+        ]
+      },
+      {
+        "name": "p90Seconds",
+        "values": [
+          120
+        ]
+      },
+      {
+        "name": "over5min",
+        "values": [
+          64
+        ]
+      },
+      {
+        "name": "over30min",
+        "values": [
+          10
+        ]
+      },
+      {
+        "name": "totalWaitHours",
+        "values": [
+          45
+        ]
+      },
+      {
+        "name": "waitHoursOnOneWorker",
+        "values": [
+          22.5
+        ]
+      },
+      {
+        "name": "manualWakeAttempts",
+        "values": [
+          3
+        ]
+      },
+      {
+        "name": "manualWakesRefusedAsBusy",
+        "values": [
+          3
+        ]
+      },
+      {
+        "name": "unreadToEndedSessionsAfter48h",
+        "values": [
+          6
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "mail store"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Workers run long jobs in the background so turns stay short. A send to a session with no live process fails loudly. Document that an unread message usually means mid-turn, not idle.",
+  "confidence": "high",
+  "whyItGeneralises": "Mail between sessions that cannot interrupt a turn has a tail set by turn length on any fleet; the created-to-read measure is fleet-independent."
+}

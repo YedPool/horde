@@ -231,7 +231,48 @@ try {
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "telepathy") "a requirement the capability vocabulary does not have is refused, so a typo cannot require nothing"
     [System.IO.File]::WriteAllText($tmpReq, '{ "requires": { "warchief": [], "orc": [] } }')
     Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "goblin has no requirement list") "a role with no requirement list is refused"
+
+    # DUTIES: what a role must DO, beside what it needs from its harness. Each is checked when the
+    # file is read, so a duty cannot name a role that does not exist, say nothing, or point at a
+    # document that is not there.
+    $okRequires = '"requires": { "warchief": [], "orc": [], "goblin": [] }'
+    $okDoc = "planning/ledger/README.md"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "' + $okDoc + '" } ] } }')
+    Check (@((Get-HordeRoleDuties -Path $tmpReq).warchief).Count -eq 1) "CONTROL: a well-formed duty loads"
+    Check ((Get-HordeRoleRequirements -Path $tmpReq).PSObject.Properties["warchief"] -ne $null) "CONTROL: and the requirements beside it still load"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ' }')
+    Check (@((Get-HordeRoleDuties -Path $tmpReq).PSObject.Properties).Count -eq 0) "a file with no duties section has no duties, and is not refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warlord": [ { "id": "keeps-x", "rule": "keep x" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "warlord, which is not a role") "a duty for a role that does not exist is refused, so a typo cannot bind nobody"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": " " } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "keeps-x has no rule") "a duty with no rule text is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "Keeps X", "rule": "keep x" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "id 'Keeps X'") "a duty id that is not lowercase-and-dashes is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "planning/roles/no-such-role.md" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "no-such-role.md, which is not in the repository") "a duty pointing at a document that is not there is refused"
+    [System.IO.File]::WriteAllText($tmpReq, '{ ' + $okRequires + ', "duties": { "warchief": [ { "id": "keeps-x", "rule": "keep x", "doc": "../outside.md" } ] } }')
+    Check (Throws { Get-HordeRoleRequirements -Path $tmpReq } "repository-relative") "a duty document outside the repository is refused"
 } finally { Remove-Item -LiteralPath $tmpReq -Force -ErrorAction SilentlyContinue }
+
+# THE WARCHIEF'S ANALYST (protocol change, 2026-10-08). The rule is held as data, worded as
+# given, and the role document it points at quotes it verbatim, so the two cannot drift apart.
+$analystRule = "every warchief keeps one read-only analyst under it, reporting only to its warchief; speed, accuracy, efficiency and parallelisation first, cost second"
+$dutiesReal = Get-HordeRoleDuties
+$keeps = @(@($dutiesReal.warchief) | Where-Object { $_.id -ceq "keeps-analyst" })
+Check ($keeps.Count -eq 1) "the warchief has exactly one keeps-analyst duty"
+Check ($keeps.Count -eq 1 -and $keeps[0].rule -ceq $analystRule) "the duty is worded exactly as the rule was given"
+Check ($keeps.Count -eq 1 -and $keeps[0].doc -ceq "planning/roles/fleet-analyst.md") "the duty points at the analyst's role document"
+$docPath = Join-Path $root "planning\roles\fleet-analyst.md"
+$docText = ""
+if (Test-Path -LiteralPath $docPath) { $docText = [System.IO.File]::ReadAllText($docPath) }
+Check ($docText.Length -gt 0) "CONTROL: the analyst's role document was read"
+Check ($docText.Contains($analystRule)) "the role document quotes the warchief's duty verbatim"
+Check (@([System.Text.Encoding]::UTF8.GetBytes($docText) | Where-Object { $_ -gt 127 }).Count -eq 0) "the role document is ASCII only"
+Check ($docText -notmatch '(?i)[a-z]:\\|\\Users\\|/Users/|/home/|~/') "the role document names no absolute or home path"
+Check ($docText.Contains("schema/finding.v1.json")) "the role document names the finding record by its schema"
+foreach ($heading in @("## Reads", "## Never", "## Reports to", "## Produces")) {
+    Check ($docText.Contains($heading)) ("the role document has the section '" + $heading + "'")
+}
 $l0 = @(Get-HordeBuiltinLayer -Root $root)
 $realDesc = (Get-HordeAgentDescriptors -Root $root).value
 Check ($l0.Count -ge 1 -and @($l0 | Where-Object { $_.layer -cne "L0" }).Count -eq 0) ("the repository's built-in layer is read from the harness folders, every file as L0 (" + $l0.Count + " files)")

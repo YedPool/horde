@@ -9,11 +9,17 @@
     Mutations = @(
         # --- agents/ is scanned at all
         @{ Name = "agents-family-dropped"
-           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")'
-           Replace = '$script:HordePortFamilies = @("hosts", "transports", "messengers")' }
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")'
+           Replace = '$script:HordePortFamilies = @("hosts", "transports", "messengers", "surfaces", "relays")' }
         @{ Name = "messengers-family-dropped"
-           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers")'
-           Replace = '$script:HordePortFamilies = @("hosts", "agents", "transports")' }
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents", "transports", "surfaces", "relays")' }
+        @{ Name = "surfaces-family-dropped"
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "relays")' }
+        @{ Name = "relays-family-dropped"
+           Find = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces", "relays")'
+           Replace = '$script:HordePortFamilies = @("hosts", "agents", "transports", "messengers", "surfaces")' }
         # --- a port is its family AND its name, never its name alone
         # The whole Add: since 56e99a7 (PR #57) the same own = (...) expression also builds the list of
         # declared names, so the expression alone matched twice and the mutant did not apply.
