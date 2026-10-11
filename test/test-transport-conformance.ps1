@@ -87,6 +87,100 @@ function Open-To {
 $script:farEndRan = New-Object System.Collections.ArrayList
 $script:farEndSkipped = New-Object System.Collections.ArrayList
 
+# A LIVE FAR END (remote plan R17c-3). A transport whose accept is not yes may bring one:
+# transports/<name>/test/FarEnd.ps1, found by folder. Its cases run here, each a named check, and a
+# capability is shown by them only when EVERY kind of evidence below passed for it: a yes with a kind
+# missing, or failed, is a yes no case demonstrated, and the suite fails (coordinator, 2026-10-07: each
+# capability its own evidence, and no flip without a named check behind it).
+$script:HordeEvidenceKinds = @{
+    "dial.out" = @("round-trip")
+    "auth.peer" = @("admits-enrolled", "refuses-unknown-client", "refuses-changed-host", "refuses-revoked")
+}
+$script:HordeFarEnds = @{}
+
+function Invoke-FarEndCases {
+    # Run transport -Name's live far end, if it has one and claims something of it. Returns the
+    # capabilities its cases showed. Every case is a Check; the far end's teardown is one too.
+    param($Transport, [string]$Name)
+    $shownHere = @{}
+    $feFile = Join-Path $Transport.folder "test\FarEnd.ps1"
+    if (-not (Test-Path -LiteralPath $feFile -PathType Leaf)) { return $shownHere }
+    . $feFile
+    $entry = $script:HordeFarEnds[$Name]
+    Check ($null -ne $entry) "[$Name] its test\FarEnd.ps1 registers a far end under its own name"
+    if ($null -eq $entry) { return $shownHere }
+    $claimed = @($script:HordeEvidenceKinds.Keys | Where-Object { Test-HordeTransportCapability -Transport $Transport -Capability $_ })
+    if ($claimed.Count -eq 0) { Write-Host ("  [SKIP] [" + $Name + "] the live far end did not run: none of " + (@($script:HordeEvidenceKinds.Keys) -join ", ") + " is declared yes") -ForegroundColor Yellow; return $shownHere }
+    Write-Host ("--- [" + $Name + "] its live far end ---") -ForegroundColor Cyan
+    $fe = & $entry.start
+    if ("$($fe.skip)" -ne "") {
+        Write-Host ("  [SKIP] [" + $Name + "] the live far end could not run here: " + $fe.skip) -ForegroundColor Yellow
+        [void]$script:farEndSkipped.Add($Name + " live far end (" + $fe.skip + ")")
+        $null = & $entry.stop $fe
+        return $shownHere
+    }
+    [void]$script:farEndRan.Add($Name + " (live far end)")
+    $passed = @{}
+    $saved = $env:HORDE_HOME
+    try {
+        foreach ($c in @($fe.cases)) {
+            $env:HORDE_HOME = $c.homeDir
+            $o = Open-HordeTransportLink -Transport $Transport -Endpoint $c.endpoint -Role "node" -TimeoutMs 15000
+            $ok = $false
+            $detail = ""
+            if ($c.expect -ceq "carries") {
+                if ($o.state -ceq "known") {
+                    $link = $o.value
+                    try {
+                        $sent = @("first", "{""v"":1,""kind"":""ping""}", (-join ([char[]](32..126))))
+                        $got = New-Object System.Collections.ArrayList
+                        foreach ($s in $sent) {
+                            $null = Send-HordeLinkFrame -Link $link -Frame $s -TimeoutMs 15000
+                            $a = Receive-HordeLinkFrame -Link $link -TimeoutMs 20000
+                            if ($a.state -ceq "known") { [void]$got.Add($a.value) } else { [void]$got.Add("<" + $a.reason + ">") }
+                        }
+                        $ok = (($got -join "|") -ceq ($sent -join "|"))
+                        $detail = ($got -join " | ")
+                        if ($c.kind -ceq "admits-enrolled") {
+                            $ok = $ok -and $link.peer.verified -eq $true -and "$($link.peer.identity)" -ne ""
+                            $detail = $detail + "; peer " + $link.peer.identity + " verified=" + $link.peer.verified
+                        }
+                    } finally { Close-HordeLink -Link $link }
+                } else { $detail = $o.reason }
+            } else {
+                $why = ""
+                if ($o.state -ceq "known") {
+                    $link = $o.value
+                    try {
+                        $null = Send-HordeLinkFrame -Link $link -Frame "anyone there" -TimeoutMs 15000
+                        $a = Receive-HordeLinkFrame -Link $link -TimeoutMs 20000
+                        if ($a.state -ceq "known") { $why = "" ; $detail = "a frame came back: " + $a.value } else { $why = "$($a.reason)" }
+                    } finally { Close-HordeLink -Link $link }
+                } else { $why = "$($o.reason)" }
+                $ok = ($why -ne "" -and $why -match $c.refusal)
+                if ($detail -eq "") { $detail = $why }
+            }
+            Check $ok ("[$Name] " + $c.capability + ", " + $c.kind + ": " + $c.name + " (" + $detail + ")")
+            if ($ok) {
+                if (-not $passed.ContainsKey($c.capability)) { $passed[$c.capability] = New-Object System.Collections.ArrayList }
+                [void]$passed[$c.capability].Add($c.kind)
+            }
+        }
+    } finally {
+        $env:HORDE_HOME = $saved
+        $left = & $entry.stop $fe
+        Check ($left -eq 0) ("[$Name] the live far end is torn down: nothing it started is left alive (" + $left + " left)")
+    }
+    foreach ($cap in @($script:HordeEvidenceKinds.Keys)) {
+        $need = @($script:HordeEvidenceKinds[$cap])
+        $have = @(); if ($passed.ContainsKey($cap)) { $have = @($passed[$cap]) }
+        $missing = @($need | Where-Object { $have -cnotcontains $_ })
+        if ($missing.Count -eq 0) { $shownHere[$cap] = $true }
+        elseif (Test-HordeTransportCapability -Transport $Transport -Capability $cap) { Write-Host ("         " + $cap + " lacks evidence of kind: " + ($missing -join ", ")) -ForegroundColor Red }
+    }
+    return $shownHere
+}
+
 $names = @(Get-HordeTransportNames)
 $folders = @(Get-HordeTransportFiles)
 Write-Host ""
@@ -133,11 +227,12 @@ foreach ($n in $names) {
         foreach ($bad in @("..\x", "a b", "A")) {
             Check ((Test-HordeTransportReachable -Transport $t -Endpoint $bad).state -ceq "unknown") "[$n] probing '$bad' is unknown"
         }
-        Write-Host ("  [SKIP] [" + $n + "] the far-end cases did not run: " + $why) -ForegroundColor Yellow
+        Write-Host ("  [SKIP] [" + $n + "] the in-process far-end cases did not run: " + $why) -ForegroundColor Yellow
         [void]$script:farEndSkipped.Add($n + " (" + $why + ")")
+        $live = Invoke-FarEndCases -Transport $t -Name $n
         Write-Host "--- every yes was shown ---" -ForegroundColor Cyan
         foreach ($c in $caps) {
-            if (Yes $c) { Check $false "[$n] $c is declared yes, and with no far end in this process no case here can demonstrate it" }
+            if (Yes $c) { Check ($live.ContainsKey($c)) "[$n] $c is declared yes, and its live far end's named checks showed every kind of evidence it needs" }
         }
         continue
     }
