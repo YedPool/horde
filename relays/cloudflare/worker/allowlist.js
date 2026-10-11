@@ -13,8 +13,8 @@
 //
 // It is checked at every sign-in, not only the first: switching it on shuts out an account already made
 // as soon as its session ends. Ending sessions early is 8c's (account deletion).
-// Written in lower case by the deploy, so one address has one spelling here.
-const EMAIL = /^[^\sA-Z@",;]{1,64}@[a-z0-9.-]{1,253}$/;
+// Written in lower case by the deploy (SignInAllowlist.ps1, its twin), so one address has one spelling.
+const EMAIL = /^[a-z0-9._%+'-]{1,64}@[a-z0-9.-]{1,253}$/;
 const SUB = /^[0-9]{1,255}$/;
 
 function listOf(x, pattern) {

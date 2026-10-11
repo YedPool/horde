@@ -4,13 +4,16 @@
 # Relay PR 8a. Every wrangler here is test/fake-wrangler.cjs, named by the relay's own setting
 # wranglerScript in a Horde home of the suite's own: NOTHING HERE RUNS THE REAL WRANGLER OR CONTACTS
 # CLOUDFLARE, and the Google client file is a fake of the suite's own, never the founder's.
-#   1. a deploy, in this process: secrets first, each value on standard input exactly - no byte order
+#   1. a deploy, in this process: secrets first - the client's two values and the sign-in allowlist
+#      (relay PR 8b: off by default, written as the Worker reads it) - each value on standard input exactly - no byte order
 #      mark, no line end - and in no argument; then the deploy; of the production config, which names no
 #      test binding, serving the app built with the http transport at its own origin; quiet; and
 #      nothing said holds a value; the work folders are gone after; the redirect-address note;
 #   2. refusals before wrangler is ever run: no client file, one inside the repository, one that is not
 #      JSON, not a web client, a malformed id, no secret, a relative path, a settings file that fails
-#      its checks, a wranglerScript that is not there - each reason free of the values planted in it;
+#      its checks, a wranglerScript that is not there, an allowlist entry that is neither an email nor a
+#      Google account id, an allowlist switched on with nobody on it - each reason free of the values
+#      planted in it;
 #   3. a wrangler that fails: at a secret, nothing is deployed; at the deploy, it says so; and what it
 #      printed reaches the founder with the values hidden;
 #   4. which relay: the one that can be deployed, and a refusal for one that cannot;
@@ -59,8 +62,12 @@ function Write-Client {
 }
 function Set-Settings {
     # The relay's settings file in the suite's home: -Raw as is, or googleClientFile and wranglerScript.
-    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "")
-    if ($Raw -eq "") { $Raw = (@{ schemaVersion = 1; settings = @{ googleClientFile = $Client; wranglerScript = $Wrangler } } | ConvertTo-Json -Depth 4) }
+    param([string]$Client = "", [string]$Wrangler = $fake, [string]$Raw = "", [hashtable]$More = @{})
+    if ($Raw -eq "") {
+        $set = @{ googleClientFile = $Client; wranglerScript = $Wrangler }
+        foreach ($k in @($More.Keys)) { $set[$k] = $More[$k] }
+        $Raw = (@{ schemaVersion = 1; settings = $set } | ConvertTo-Json -Depth 4)
+    }
     [System.IO.File]::WriteAllText((Join-Path $hh "settings\relay-cloudflare.json"), $Raw, $utf8)
 }
 function Read-Log {
@@ -87,19 +94,20 @@ try {
     $d = Deploy
     $runs = @(Read-Log)
     Check ($d.answer.state -ceq "known" -and $d.answer.value.origin -ceq $dep.origin -and $d.answer.value.relay -ceq "cloudflare") ("the deploy answers where the relay now is (" + $d.answer.state + " " + $d.answer.reason + ")")
-    Check ($runs.Count -eq 3) ("wrangler ran three times (" + $runs.Count + ")")
-    if ($runs.Count -eq 3) {
+    Check ($runs.Count -eq 4) ("wrangler ran four times (" + $runs.Count + ")")
+    if ($runs.Count -eq 4) {
         $cmds = @($runs | ForEach-Object { (@($_.argv) | Select-Object -First 3) -join " " })
-        Check ($cmds[0] -ceq "secret put GOOGLE_CLIENT_ID" -and $cmds[1] -ceq "secret put GOOGLE_CLIENT_SECRET" -and $cmds[2] -clike "deploy --config*") ("the two secrets first, then the deploy (" + ($cmds -join "; ") + ")")
+        Check ($cmds[0] -ceq "secret put GOOGLE_CLIENT_ID" -and $cmds[1] -ceq "secret put GOOGLE_CLIENT_SECRET" -and $cmds[2] -ceq "secret put HORDE_RELAY_SIGNIN_ALLOWLIST" -and $cmds[3] -clike "deploy --config*") ("the three secrets first, then the deploy (" + ($cmds -join "; ") + ")")
         Check ($runs[0].stdin -ceq $clientId -and $runs[1].stdin -ceq $clientSecret) "each secret's value is on standard input exactly: no byte order mark, no line end"
-        Check ($runs[2].stdin -ceq "") "the deploy is given nothing on its input"
+        Check ($runs[2].stdin -ceq '{"on":false,"emails":[],"subs":[]}') ("with the settings untouched the allowlist is OFF: signup is public (" + $runs[2].stdin + ")")
+        Check ($runs[3].stdin -ceq "") "the deploy is given nothing on its input"
         $argvAll = (@($runs | ForEach-Object { @($_.argv) -join " " }) -join " ")
         Check (-not (Holds-Value $argvAll)) "no value is ever an argument"
         Check (@($runs | Where-Object { $null -eq $_.config -or $_.config.namesTestBinding -or -not $_.config.appIndex -or $_.config.name -cne "relay" }).Count -eq 0) "every run is given the production config: the Worker relay, no test binding, the app's files beside it"
         $repoFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + "\"
         Check (@($runs | Where-Object { ([System.IO.Path]::GetFullPath($_.config.path)).StartsWith($repoFull, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) "the config wrangler is given lives outside the repository"
-        $appConfig = $runs[2].config.appConfig | ConvertFrom-Json
-        Check ($appConfig.transport -ceq "http" -and $appConfig.relayOrigin -ceq "") ("the app is built with the http transport at its own origin (" + $runs[2].config.appConfig + ")")
+        $appConfig = $runs[3].config.appConfig | ConvertFrom-Json
+        Check ($appConfig.transport -ceq "http" -and $appConfig.relayOrigin -ceq "") ("the app is built with the http transport at its own origin (" + $runs[3].config.appConfig + ")")
         Check (@($runs | Where-Object { $_.env.WRANGLER_SEND_METRICS -cne "false" -or $_.env.CI -cne "true" -or $null -ne $_.env.PSObject.Properties["HORDE_RELAY_TEST_AUTH"] }).Count -eq 0) "every run is quiet and non-interactive, and none carries the test binding"
     }
     $saidAll = $d.said -join "`n"
@@ -111,6 +119,17 @@ try {
     Clear-Log
     $d = Deploy
     Check ($d.answer.state -ceq "known" -and -not (($d.said -join "`n").Contains("note:"))) "with the return address listed, there is no note"
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ signInAllowlistOn = $true; signInAllowlist = "Founder@Example.com, 112233445566778899 ,second@example.org" }
+    Clear-Log
+    $d = Deploy
+    $runs = @(Read-Log)
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":true,"emails":["founder@example.com","second@example.org"],"subs":["112233445566778899"]}') ("one setting switches the allowlist on: its emails in lower case, its Google account ids apart (" + $(if ($runs.Count -ge 3) { $runs[2].stdin } else { $d.answer.reason }) + ")")
+    Check (-not (($d.said -join " ").Contains("founder@example.com"))) "and what the deploy says names nobody on it"
+    Set-Settings -Client (Write-Client -WithCallback) -More @{ signInAllowlistOn = $false; signInAllowlist = "founder@example.com" }
+    Clear-Log
+    $d = Deploy
+    $runs = @(Read-Log)
+    Check ($d.answer.state -ceq "known" -and $runs.Count -eq 4 -and $runs[2].stdin -ceq '{"on":false,"emails":["founder@example.com"],"subs":[]}') "switched off, the list is kept for the day it is switched on, and nobody is shut out"
 
     Write-Host ""
     Write-Host "--- 2. refusals, before wrangler is ever run ---" -ForegroundColor Cyan
@@ -123,10 +142,12 @@ try {
         @{ what = "a malformed client id"; client = (Write-Client -Name "badid.json" -Text ('{"web":{"client_id":"' + $clientSecret + '","client_secret":"' + $clientSecret + '"}}')); like = "no web.client_id" },
         @{ what = "no client secret"; client = (Write-Client -Name "nosecret.json" -Text ('{"web":{"client_id":"' + $clientId + '","client_secret":"short"}}')); like = "no web.client_secret" },
         @{ what = "a relative client path"; client = "secrets\client.json"; like = "absolute path" },
-        @{ what = "a wranglerScript that is not there"; client = (Write-Client); wrangler = (Join-Path $work "no-wrangler.js"); like = "wranglerScript names no file" }
+        @{ what = "a wranglerScript that is not there"; client = (Write-Client); wrangler = (Join-Path $work "no-wrangler.js"); like = "wranglerScript names no file" },
+        @{ what = "an allowlist entry that is neither an email nor an account id"; client = (Write-Client); more = @{ signInAllowlist = ("founder@example.com, not-an-address " + $clientSecret) }; like = "signInAllowlist" },
+        @{ what = "an allowlist switched on with nobody on it"; client = (Write-Client); more = @{ signInAllowlistOn = $true; signInAllowlist = "" }; like = "nobody could sign in" }
     )
     foreach ($c in $bad) {
-        Set-Settings -Client $c.client -Wrangler $(if ($c.ContainsKey("wrangler")) { $c.wrangler } else { $fake })
+        Set-Settings -Client $c.client -Wrangler $(if ($c.ContainsKey("wrangler")) { $c.wrangler } else { $fake }) -More $(if ($c.ContainsKey("more")) { $c.more } else { @{} })
         Clear-Log
         $d = Deploy
         Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains($c.like) -and @(Read-Log).Count -eq 0 -and -not (Holds-Value ("" + $d.answer.reason + ($d.said -join " ")))) ("" + $c.what + ": refused, wrangler never run, no value in the reason (" + $d.answer.reason + ")")
@@ -149,7 +170,7 @@ try {
     Clear-Log
     $env:HORDE_FAKE_WRANGLER_FAIL = "deploy"
     $d = Deploy
-    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("wrangler deploy failed (exit 7)") -and @(Read-Log).Count -eq 3) "a failed deploy says so, after both secrets"
+    Check ($d.answer.state -ceq "unknown" -and "$($d.answer.reason)".Contains("wrangler deploy failed (exit 7)") -and @(Read-Log).Count -eq 4) "a failed deploy says so, after the secrets"
     $env:HORDE_FAKE_WRANGLER_FAIL = ""
 
     Write-Host ""
@@ -166,7 +187,7 @@ try {
     Clear-Log
     $cliEnv = @{ HORDE_HOME = $hh; HORDE_FAKE_WRANGLER_LOG = $log; HORDE_FAKE_WRANGLER_FAIL = "" }
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy") -Env $cliEnv
-    Check ($r.code -eq 0 -and $r.out.Contains("deployed relay cloudflare: it answers at " + $dep.origin) -and @(Read-Log).Count -eq 3 -and -not (Holds-Value $r.out)) ("horde relay deploy deploys, says where, and prints no value (exit " + $r.code + ")")
+    Check ($r.code -eq 0 -and $r.out.Contains("deployed relay cloudflare: it answers at " + $dep.origin) -and @(Read-Log).Count -eq 4 -and -not (Holds-Value $r.out)) ("horde relay deploy deploys, says where, and prints no value (exit " + $r.code + ")")
     Clear-Log
     $cliEnv["HORDE_FAKE_WRANGLER_FAIL"] = "secret"
     $r = Invoke-HordeCliProcess -Root $root -HordeArgs @("relay", "deploy", "-Relay", "cloudflare") -Env $cliEnv
