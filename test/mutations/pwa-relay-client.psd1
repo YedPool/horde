@@ -35,5 +35,11 @@
         @{ Name = "transport-throw-escapes"
            Find = 'try { return await fn(); } catch (x) {'
            Replace = 'try { return await fn(); } finally { } if (false) { const x = null;' }
+        @{ Name = "http-watch-ending-message-read-as-items"
+           Find = '&& typeof body.error === "string") { finish(unknown('
+           Replace = '&& false) { finish(unknown(' }
+        @{ Name = "http-watch-relay-close-read-as-nothing"
+           Find = 'finish(event && event.code >= 4000 && event.code <= 4999 ?'
+           Replace = 'finish(false ?' }
     )
 }
