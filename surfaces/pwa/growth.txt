@@ -1,0 +1,3 @@
+# Increases to surfaces/pwa/allowlist.txt, one line each, append-only (CONTRIBUTING rule 14):
+# path | old -> new | YYYY-MM-DD | reason
+cli/RelayDeploy.ps1 | 0 -> 2 | 2026-10-11 | horde relay deploy builds the phone app for the hosted relay to serve, joining two ports that never name each other

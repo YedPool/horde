@@ -118,5 +118,18 @@
         @{ Name = "empty-read-resets-cursor"
            Find = '$next = $Since'
            Replace = '$next = [long]0' }
+        # --- deploying (a hosted relay's sixth block)
+        @{ Name = "every-relay-deployable"
+           Find = 'Where-Object { $null -ne $script:HordeRelays[$_].deploy }'
+           Replace = 'Where-Object { $true }' }
+        @{ Name = "deploy-without-an-app"
+           Find = 'if (-not (Test-Path -LiteralPath (Join-Path $Site "app\index.html") -PathType Leaf)) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "deploy-unknown-believed"
+           Find = 'if ($a.state -cne "known") { return (New-HordeUnknown -Reason ("relay ''" + $Name + "'' was not deployed: "'
+           Replace = 'if ($false) { return (New-HordeUnknown -Reason ("relay ''" + $Name + "'' was not deployed: "' }
+        @{ Name = "deploy-origin-may-be-plain-http"
+           Find = '-cnotmatch ''\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z'''
+           Replace = '-cnotmatch ''\Ahttps?://[a-z0-9.-]+(:[0-9]{1,5})?\z''' }
     )
 }

@@ -562,6 +562,60 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   check((await throwsAsync(async () => P.lineBody({ messageId: "x", horde: "work", machine: "a".repeat(32), session: "s", text: "t" }))) !== "", "a line body with a bad message id is refused before anything is signed");
 }
 
+// --- 10b. the hosted relay's transport speaks its mailbox API, and distrusts it like any other ---
+{
+  const calls = [];
+  const replies = [];
+  const fakeFetch = async (address, init) => {
+    calls.push({ address, init });
+    const r = replies.shift() || { status: 200, body: {} };
+    return { status: r.status, json: async () => { if (r.body === undefined) throw new Error("not JSON"); return r.body; } };
+  };
+  const sockets = [];
+  class FakeSocket { constructor(address) { this.address = address; this.closed = false; sockets.push(this); } close() { this.closed = true; } }
+  const t = R.httpTransport("https://relay.example.test", fakeFetch, FakeSocket);
+  replies.push({ status: 200, body: { seq: 7, duplicate: false } });
+  const p = await t.put("work/phone", "k-1", "a \"quoted\" text");
+  const c0 = calls[0];
+  check(p.state === "known" && p.value.seq === 7 && c0.address === "https://relay.example.test/v1/mailboxes/work/phone/items" && c0.init.method === "POST" && JSON.parse(c0.init.body).text === "a \"quoted\" text" && JSON.parse(c0.init.body).key === "k-1", "a put is a POST of { key, text } to the mailbox's items", JSON.stringify(c0));
+  check(c0.init.credentials === "same-origin" && c0.init.cache === "no-store" && c0.init.redirect === "error", "with the page's own credentials, never from a cache, and never followed elsewhere", JSON.stringify(c0.init));
+  replies.push({ status: 200, body: { items: [{ seq: 1, key: "a", text: "one" }] } });
+  const g = await t.get("work/phone", 0, 5);
+  check(g.state === "known" && g.value.items.length === 1 && calls[1].address === "https://relay.example.test/v1/mailboxes/work/phone/items?since=0&max=5" && calls[1].init.method === "GET", "a read is a GET of the items after the cursor", calls[1].address);
+  replies.push({ status: 401, body: { error: "x".repeat(500) } });
+  const no = await t.get("work/phone", 0, 5);
+  check(no.state === "unknown" && no.reason.indexOf("401") >= 0 && no.reason.length < 300, "a refusal is unknown, with its status and the relay's words cut short", no.reason);
+  replies.push({ status: 200, body: undefined });
+  check((await t.get("work/phone", 0, 5)).state === "unknown", "an answer that is not JSON is unknown");
+  replies.push({ status: 200, body: { through: 3 } });
+  const k = await t.ack("work/phone", 3);
+  check(k.state === "known" && calls[calls.length - 1].address.endsWith("/v1/mailboxes/work/phone/ack") && JSON.parse(calls[calls.length - 1].init.body).through === 3, "an ack is a POST of { through } to the mailbox's ack");
+  const w = t.watch("work/phone", 4, 9, 10000);
+  const s0 = sockets[0];
+  check(s0.address === "wss://relay.example.test/v1/mailboxes/work/phone/watch?since=4&max=9&timeoutMs=10000", "a watch opens a WebSocket on the mailbox's watch, at the same host", s0.address);
+  s0.onmessage({ data: JSON.stringify({ items: [{ seq: 5, key: "e", text: "five" }] }) });
+  const wv = await w;
+  check(wv.state === "known" && wv.value.items[0].seq === 5 && s0.closed, "the relay's one message is the watch's answer, and the socket is closed");
+  const quiet = await t.watch("work/phone", 4, 9, 30);
+  check(quiet.state === "known" && quiet.value.items.length === 0 && sockets[1].closed, "a watch that hears nothing in its time answers no items and closes its socket");
+  const broken = t.watch("work/phone", 4, 9, 10000);
+  sockets[2].onerror();
+  check((await broken).state === "unknown", "a watch whose socket fails is unknown");
+  const before = calls.length;
+  replies.push({ status: 200, body: { items: [] } });
+  await t.watch("work/phone", 4, 9, 0);
+  check(calls.length === before + 1 && sockets.length === 3 && calls[before].address.indexOf("/items?since=4&max=9") > 0, "a watch of 0 ms is a read, and opens no socket");
+  const liar = R.createRelayClient(t);
+  replies.push({ status: 200, body: { items: [{ seq: 2, key: "b", text: "two" }, { seq: 2, key: "b", text: "two" }, { seq: 1, key: "a", text: "caf" + String.fromCharCode(0xe9) }] } });
+  const lied = await liar.get("work/phone", 0, 5);
+  check(lied.state === "known" && lied.value.items.map((i) => i.seq).join(",") === "2" && lied.value.anomalies.length >= 2, "and the relay client distrusts what it answers as it distrusts any transport");
+  const host = { location: { origin: "https://relay.example.test" }, fetch: fakeFetch, WebSocket: FakeSocket };
+  check(R.transportFromConfig({ transport: "http", relayOrigin: "" }, host) !== null && R.transportFromConfig({ transport: "http", relayOrigin: "" }, {}) === null, "the config's http transport is the page's own origin, and none where the page has no fetch or WebSocket");
+  replies.push({ status: 200, body: { items: [] } });
+  await R.transportFromConfig({ transport: "http", relayOrigin: "" }, host).get("work/phone", 0, 1);
+  check(calls[calls.length - 1].address === "https://relay.example.test/v1/mailboxes/work/phone/items?since=0&max=1", "with no relay origin it speaks to the page's own origin", calls[calls.length - 1].address);
+}
+
 // --- 11. the icons the build draws are whole PNGs ---
 {
   const { inflateSync, crc32 } = await import("node:zlib");

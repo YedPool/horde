@@ -66,8 +66,9 @@ $script:HordePwaSiteFiles = [ordered]@{
 }
 # The transports the app knows by name (relay-client.js, transportFromConfig; the site suite holds the
 # two lists equal). memory: a relay inside the page, for a demonstration. binding: the local test
-# transport, carried by a test harness. The hosted relay's transport joins them in PR 8.
-$script:HordePwaTransports = @("memory", "binding")
+# transport, carried by a test harness. http: the hosted relay's mailbox API, at the relay origin, or
+# with none at the site's own origin - the deployed case, where one host serves the app and its relay.
+$script:HordePwaTransports = @("memory", "binding", "http")
 $script:HordePwaCspPlaceholder = "connect-src 'self'"
 $script:HordePwaVersionPlaceholder = 'const VERSION = "unbuilt";'
 $script:HordePwaShellPlaceholder = 'const SHELL = [];'

@@ -1,0 +1,5 @@
+{
+  "vars": {
+    "HORDE_RELAY_TEST_AUTH": "set-by-the-launcher"
+  }
+}
