@@ -20,6 +20,9 @@
         @{ Name = "rotation-unreachable"
            Find = 'if (url.pathname === ROTATION_PATH) return handleRotation(request, env, url, limits);'
            Replace = '' }
+        @{ Name = "put-charged-to-no-account"
+           Find = 'who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null'
+           Replace = 'null' }
         @{ Name = "full-mailbox-said-as-a-bad-request"
            Find = 'if (!done.ok) return done.code ? refusalOf(done) : refuse(400,'
            Replace = 'if (!done.ok) return refuse(400,' }

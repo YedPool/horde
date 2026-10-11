@@ -16,7 +16,9 @@
         @{ Name = "machines-per-account-changed"; Find = 'machinesPerAccount: 10,'; Replace = 'machinesPerAccount: 11,' }
         @{ Name = "phones-per-account-changed"; Find = 'phonesPerAccount: 5,'; Replace = 'phonesPerAccount: 6,' }
         @{ Name = "pairings-per-hour-changed"; Find = 'pairingsPerHour: 10,'; Replace = 'pairingsPerHour: 11,' }
-        @{ Name = "requests-per-day-changed"; Find = 'requestsPerDay: 5000,'; Replace = 'requestsPerDay: 50000,' }
+        @{ Name = "requests-per-day-changed"; Find = 'requestsPerDay: 20000,'; Replace = 'requestsPerDay: 5000,' }
+        @{ Name = "account-mailboxes-changed"; Find = 'accountMaxMailboxes: 50,'; Replace = 'accountMaxMailboxes: 51,' }
+        @{ Name = "account-chars-changed"; Find = 'accountMaxChars: 100 * 1024 * 1024,'; Replace = 'accountMaxChars: 100 * 1000 * 1000,' }
         @{ Name = "mailbox-items-changed"; Find = 'mailboxMaxItems: 2000,'; Replace = 'mailboxMaxItems: 2001,' }
         @{ Name = "mailbox-chars-changed"; Find = 'mailboxMaxChars: 20 * 1024 * 1024,'; Replace = 'mailboxMaxChars: 20 * 1000 * 1000,' }
         @{ Name = "puts-per-minute-changed"; Find = 'putsPerMinute: 60,'; Replace = 'putsPerMinute: 61,' }

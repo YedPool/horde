@@ -49,13 +49,13 @@ export function isApiPath(pathname) {
   return pathname === "/v1" || pathname.startsWith(API_ROOT);
 }
 
-async function put(request, box, limits) {
+async function put(request, box, limits, owner) {
   const { body, refusal } = await readJson(request, ["key", "text"], BODY_BYTES);
   if (refusal) return refusal;
   if (keyProblem(body.key)) return refuse(400, "the key is not 1 to 160 of A-Z, a-z, 0-9 and . _ : / -");
   if (typeof body.text === "string" && body.text.length > MAX_TEXT_CHARS) return refuse(413, "the text is longer than the " + MAX_TEXT_CHARS + " characters this relay holds");
   if (itemTextProblem(body.text)) return refuse(400, "the text is not 1 to " + MAX_TEXT_CHARS + " printable ASCII characters");
-  const done = await box.put(body.key, body.text, { now: Date.now(), limits });
+  const done = await box.put(body.key, body.text, { now: Date.now(), limits, owner });
   if (!done.ok) return done.code ? refusalOf(done) : refuse(400, "the mailbox refused the item");
   return answer(200, { seq: done.seq, duplicate: done.duplicate });
 }
@@ -119,7 +119,7 @@ export async function handleApi(request, env, url) {
     if (!g.ok) return refusalOf(g);
   }
   const box = mailboxOf(env, who.account, who.epoch, mailbox);
-  if (op === "put") return put(request, box, limits);
+  if (op === "put") return put(request, box, limits, who.gated ? { account: who.account, epoch: who.epoch, mailbox } : null);
   if (op === "get") return get(url, box);
   if (op === "watch") return watch(request, url, box, who.device);
   return ack(request, box);

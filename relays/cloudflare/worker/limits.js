@@ -12,8 +12,17 @@
 //   phonesPerAccount          5      phones signed in to one account at once (live sessions)
 //   pairingsPerHour           10     machine registrations an account may attempt in an hour (one a
 //                                    pairing): a bucket of 10, refilled at 10 an hour
-//   requestsPerDay            5000   mailbox requests one account's phones and machines make in a UTC
-//                                    day (the free plan allows 100,000 Worker requests a day in all)
+//   requestsPerDay            20000  mailbox requests one account's phones and machines make in a UTC
+//                                    day. Raised from the 5,000 first approved (coordinator, 2026-10-11):
+//                                    an always-on machine's runner is 1,440 a day here (its watch is 60 s:
+//                                    relays/cloudflare/Relay.ps1, the run watch), so three of them are
+//                                    4,320, about a fifth of it, with room for the phone and the puts.
+//                                    The free plan allows 100,000 Worker requests a day in all
+//   accountMaxMailboxes       50     mailboxes of one account holding unacked mail at once (a mailbox
+//                                    whose reader acked everything, or whose mail expired, is not one)
+//   accountMaxChars           100 MiB the characters of unacked text across all of one account's
+//                                    mailboxes - so an account cannot spread past a mailbox's own caps
+//                                    by naming more mailboxes
 // PER MAILBOX (mailbox.js):
 //   mailboxMaxItems           2000   unacked envelopes one mailbox holds
 //   mailboxMaxChars           20 MiB the characters of their texts (texts are ASCII: a character is a byte)
@@ -55,7 +64,9 @@ export const DEFAULTS = Object.freeze({
   machinesPerAccount: 10,
   phonesPerAccount: 5,
   pairingsPerHour: 10,
-  requestsPerDay: 5000,
+  requestsPerDay: 20000,
+  accountMaxMailboxes: 50,
+  accountMaxChars: 100 * 1024 * 1024,
   mailboxMaxItems: 2000,
   mailboxMaxChars: 20 * 1024 * 1024,
   putsPerMinute: 60,

@@ -63,6 +63,27 @@ function Invoke-NodeChecks {
 Invoke-NodeChecks -ArgList @((Join-Path $here "limits-units.mjs"), $root) -AtLeast 40 -What "the unit checks"
 
 Write-Host ""
+Write-Host "--- an always-on fleet's day, from the constants ---" -ForegroundColor Cyan
+# Three machines whose runners never stop: each quiet turn is one watch, and a watch on the hosted relay
+# waits its run watch (relays/cloudflare/Relay.ps1, through the port: cli/RelayRun.ps1's own
+# Get-HordeRelayRunWatchMs), so a day is 86,400,000 ms over it. That must leave the account's day
+# (worker/limits.js's requestsPerDay, read from the Worker's own module) at least half free, for the
+# phone, the puts and the acks. Computed, not run for 24 h.
+. (Join-Path $root "cli\RelayRun.ps1")
+$cf = Get-HordeRelay -Name "cloudflare"
+$runWatch = Get-HordeRelayRunWatchMs -SettingMs 25000 -Relay $cf
+$anySetting = @(0, 1000, 25000, 60000 | ForEach-Object { Get-HordeRelayRunWatchMs -SettingMs $_ -Relay $cf }) | Select-Object -Unique
+$defaultsRun = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @("--input-type=module", "-e", ('import { DEFAULTS } from "' + ([System.Uri](Join-Path $root "relays\cloudflare\worker\limits.js")).AbsoluteUri + '"; process.stdout.write(JSON.stringify(DEFAULTS));')) -WorkDir $work -TimeoutSeconds 60
+$defaults = $null
+try { $defaults = ("" + $defaultsRun.out) | ConvertFrom-Json } catch { $defaults = $null }
+Check ($runWatch -eq 60000 -and @($anySetting).Count -eq 1) ("a runner on the hosted relay watches 60 s, whatever its own watchMs setting (" + $runWatch + ")")
+Check ((Get-HordeRelayRunWatchMs -SettingMs 25000 -Relay (Get-HordeRelay -Name "local")) -eq 25000) "CONTROL: on a relay that declares no run watch, the setting still decides"
+$perMachine = [Math]::Ceiling(86400000 / $runWatch)
+$fleet = 3 * $perMachine
+Check ($null -ne $defaults -and $defaults.requestsPerDay -eq 20000) ("the account's day is 20,000 requests (" + $(if ($null -ne $defaults) { $defaults.requestsPerDay } else { $defaultsRun.err }) + ")")
+Check ($null -ne $defaults -and $fleet * 2 -le $defaults.requestsPerDay) ("three always-on machines make " + $fleet + " requests a day (" + $perMachine + " each), leaving more than half the account's day free")
+
+Write-Host ""
 Write-Host "--- 2. a dev with tight rates and caps ---" -ForegroundColor Cyan
 $tools = Install-HordeCloudflareRelayTools
 $store = Get-HordeRelayKeyStore
@@ -137,7 +158,7 @@ try {
     $site = Join-Path $work "site"
     $built = New-HordeRelayDeploySite -Out $site
     Check ($built.state -ceq "known") ("the phone app is built as the deploy builds it (" + $built.reason + ")")
-    $R = Start-Dev -Name "rates" -Limits '{"putBurst":5,"putsPerMinute":12,"readBurst":6,"readsPerMinute":12,"machinesPerAccount":2,"phonesPerAccount":2,"pairingsPerHour":4,"signInStartsPerMinute":3,"newAccountsPerDay":1,"refusedSignaturesPerMinutePerKey":3,"refusedSignaturesPerMinutePerAddress":5,"noncesPerKey":4,"mailboxMaxItems":8,"mailboxMaxChars":100}'
+    $R = Start-Dev -Name "rates" -Limits '{"accountMaxMailboxes":3,"accountMaxChars":200,"putBurst":5,"putsPerMinute":12,"readBurst":6,"readsPerMinute":12,"machinesPerAccount":2,"phonesPerAccount":2,"pairingsPerHour":4,"signInStartsPerMinute":3,"newAccountsPerDay":1,"refusedSignaturesPerMinutePerKey":3,"refusedSignaturesPerMinutePerAddress":5,"noncesPerKey":4,"mailboxMaxItems":8,"mailboxMaxChars":100}'
     $O = $R.origin
     $bearer = "Bearer " + $R.token
 
@@ -212,6 +233,30 @@ try {
     Check ($put6b.code -eq 200 -and (Get-Json $put6b).seq -eq 7) ("after the wait the refused put is taken, numbered straight after the others: a refusal takes no seq (" + $put6b.text + ")")
     $all = Get-Json (Send-To -Url ($mbx + "/items?since=0&max=10") -Cookie $rt.cookie)
     Check (((@($all.items) | ForEach-Object { $_.key }) -join ",") -ceq "k-1,k-2,k-3,k-4,k-5,k-other,k-6") "and the mailbox holds every put that was taken, once, in order"
+
+    Write-Host ""
+    Write-Host "--- an account's mailboxes and characters in all ---" -ForegroundColor Cyan
+    # Two phones of one account, so the puts are two devices' bursts (five each here).
+    $am1 = New-Phone -Dev $R -Sub "100000000000000000451"
+    $am2 = New-Phone -Dev $R -Sub "100000000000000000451"
+    $amPut = { param($Phone, [string]$Box, [string]$Key, [string]$Text) Send-To -Url ($O + "/v1/mailboxes/work/" + $Box + "/items") -Method "POST" -Body ('{"key":"' + $Key + '","text":"' + $Text + '"}') -Cookie $Phone.cookie -Origin $O }
+    $three = @(@("m1", "m2", "m3") | ForEach-Object { (& $amPut $am1 $_ "k" "x").code })
+    $fourth = & $amPut $am1 "m4" "k" "x"
+    Check (($three -join ",") -ceq "200,200,200" -and $fourth.code -eq 409 -and (Get-Code $fourth) -ceq "mailboxes-cap") ("an account of three mailboxes puts into three, and a fourth is refused, mailboxes-cap (" + $fourth.text + ")")
+    Check ((& $amPut $am2 "m2" "k2" "y").code -eq 200) "a mailbox it already has still takes more"
+    $null = Send-To -Url ($O + "/v1/mailboxes/work/m1/ack") -Method "POST" -Body '{"through":1}' -Cookie $am1.cookie -Origin $O
+    Check ((& $amPut $am2 "m4" "k" "x").code -eq 200) "once one is read and acked to empty, the fourth is taken"
+    $ac1 = New-Phone -Dev $R -Sub "100000000000000000452"
+    $ac2 = New-Phone -Dev $R -Sub "100000000000000000452"
+    $c60 = & $amPut $ac1 "a" "k1" ("x" * 60)
+    $c40 = & $amPut $ac1 "a" "k2" ("x" * 40)
+    $c100 = & $amPut $ac1 "b" "k1" ("x" * 100)
+    $over = & $amPut $ac1 "c" "k1" "x"
+    Check ($c60.code -eq 200 -and $c40.code -eq 200 -and $c100.code -eq 200 -and $over.code -eq 507 -and (Get-Code $over) -ceq "account-full") ("an account of 200 characters takes exactly 200 across two mailboxes, and one more is refused, account-full (" + $over.text + ")")
+    $heldA = Get-Json (Send-To -Url ($O + "/v1/mailboxes/work/a/items?since=0&max=10") -Cookie $ac2.cookie)
+    Check (@($heldA.items).Count -eq 2) "nothing was evicted to make room"
+    $null = Send-To -Url ($O + "/v1/mailboxes/work/a/ack") -Method "POST" -Body '{"through":1}' -Cookie $ac2.cookie -Origin $O
+    Check ((& $amPut $ac2 "c" "k1" ("x" * 60)).code -eq 200 -and (& $amPut $ac2 "c" "k2" "x").code -eq 507) "an ack gives its characters back: 60 freed are 60 taken, and not one more"
 
     Write-Host ""
     Write-Host "--- a full mailbox refuses, and never evicts ---" -ForegroundColor Cyan
@@ -299,7 +344,7 @@ try {
 
     Write-Host ""
     Write-Host "--- 3. a dev with a short day and a short retention ---" -ForegroundColor Cyan
-    $D = Start-Dev -Name "day" -Limits '{"requestsPerDay":6,"retentionMs":2500}'
+    $D = Start-Dev -Name "day" -Limits '{"requestsPerDay":6,"retentionMs":2500,"accountMaxChars":50}'
     $O = $D.origin
     $bearer = "Bearer " + $D.token
     $dp = New-Phone -Dev $D -Sub "100000000000000000801"
@@ -342,6 +387,12 @@ try {
     Check (@($gone.items).Count -eq 0 -and $goneAt -ge ($put2At + 2400) -and $goneAt -lt 20000) ("then the second at its own end: the alarm moved on to it (gone " + $goneAt + " ms after the first put)")
     $next = Send-To -Url ($ret + "/items") -Method "POST" -Body '{"key":"r-3","text":"after"}' -Authorization $bearer
     Check ($next.code -eq 200 -and (Get-Json $next).seq -eq 3) "and their seqs are never given again: the head stays where it was"
+    $ex = New-Phone -Dev $D -Sub "100000000000000000803"
+    $exFull = Send-To -Url ($O + "/v1/mailboxes/work/exp/items") -Method "POST" -Body ('{"key":"e-1","text":"' + ("x" * 50) + '"}') -Cookie $ex.cookie -Origin $O
+    $exOver = Send-To -Url ($O + "/v1/mailboxes/work/exp/items") -Method "POST" -Body '{"key":"e-2","text":"x"}' -Cookie $ex.cookie -Origin $O
+    Start-Sleep -Milliseconds 4000
+    $exAfter = Send-To -Url ($O + "/v1/mailboxes/work/exp/items") -Method "POST" -Body '{"key":"e-2","text":"x"}' -Cookie $ex.cookie -Origin $O
+    Check ($exFull.code -eq 200 -and $exOver.code -eq 507 -and $exAfter.code -eq 200) ("an account full of unacked mail is given its room back when that mail expires (" + (@($exFull.code, $exOver.code, $exAfter.code) -join ", ") + ")")
     $acked = $O + "/v1/mailboxes/ret/acked"
     $null = Send-To -Url ($acked + "/items") -Method "POST" -Body '{"key":"a-1","text":"read"}' -Authorization $bearer
     $null = Send-To -Url ($acked + "/ack") -Method "POST" -Body '{"through":1}' -Authorization $bearer

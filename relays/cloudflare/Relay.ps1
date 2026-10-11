@@ -66,6 +66,10 @@ $script:HordeCloudflareRelayConnectMs = 15000
 # The relay's own close codes (worker/mailbox.js), and what each means.
 $script:HordeCloudflareRelayCloseWords = @{ 4001 = "the relay replaced this watch with a newer one of this machine"; 4002 = "the relay closed the watch: the account was deleted" }
 $script:HordeCloudflareRelayRotationPath = "/v1/machines/rotation"
+# HOW LONG A RUNNER'S WATCH WAITS HERE (relays/Port.ps1, -RunWatchMs): the longest a watch may, 60 s, so
+# an always-on machine is 1,440 requests a day against its account's day (worker/limits.js), and a
+# fleet of three is under a quarter of it. The one place this interval is written.
+$script:HordeCloudflareRelayRunWatchMs = 60000
 # The most one answer may be: the Worker's batch budget (worker/rules.js, BATCH_CHARS) and the JSON
 # around it, with room. A longer answer is not this Worker's.
 $script:HordeCloudflareRelayAnswerBytes = 2097152
@@ -280,4 +284,5 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     -Deploy {
         param([string]$Site, [scriptblock]$Say, [string]$HordeHome)
         return (Publish-HordeCloudflareRelay -Site $Site -Say $Say -HordeHome $HordeHome)
-    }
+    } `
+    -RunWatchMs $script:HordeCloudflareRelayRunWatchMs

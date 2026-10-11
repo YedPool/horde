@@ -24,6 +24,12 @@
         @{ Name = "rotation-tried-again-and-again"
            Find = '    $State.rotationTried = $true'
            Replace = '' }
+        @{ Name = "run-watch-shortened"
+           Find = '$script:HordeCloudflareRelayRunWatchMs = 60000'
+           Replace = '$script:HordeCloudflareRelayRunWatchMs = 25000' }
+        @{ Name = "run-watch-not-declared"
+           Find = '-RunWatchMs $script:HordeCloudflareRelayRunWatchMs'
+           Replace = '-RunWatchMs 0' }
         @{ Name = "watch-ending-message-ignored"
            Find = 'if ($null -ne $parsed.PSObject.Properties["error"]) { return (New-HordeUnknown -Reason ("the relay ended the watch: "'
            Replace = 'if ($false) { return (New-HordeUnknown -Reason ("the relay ended the watch: "' }

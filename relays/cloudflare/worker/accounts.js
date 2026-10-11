@@ -14,7 +14,10 @@
 //   m:<key id>     a machine registered to it: { keyId, horde, label, registeredAt }
 //   p:<phone id>   a phone signed in: { id, signedInAt, expiresAt }; the id is its session object's
 //                  (sessions.js). An entry past its expiresAt is gone with its session, and is pruned
-//   b:<mailbox>    a mailbox it has put in, so deleting the account can find every one
+//   b:<mailbox>    a mailbox holding unacked mail, and the characters of it: so the account's caps
+//                  on mailboxes and characters are counted here, and deleting the account finds every
+//                  mailbox with something to wipe (one emptied by its acks or retention is dropped)
+//   usage          the characters of unacked mail across all its mailboxes
 //   day            { day, n }: its requests this UTC day (throttle.js)
 //   pairing        its pairing bucket (throttle.js)
 //   deleting       { account, epoch }: a deletion under way (remove, alarm)
@@ -32,7 +35,10 @@
 //     which only needs the account to be there;
 //   - the account's requests this UTC day - the mailbox operations only: its own Account screen, its
 //     phones and machines are still its to manage, and its deletion still its to make, over the day;
-//   - a put's mailbox is indexed, the first time, for deletion.
+// A PUT IS CHARGED, and an ack or an expiry credited, by the mailbox itself (mailbox.js, charge and
+// credit), which knows the text's length: the account refuses a put that would make one mailbox too
+// many (accountMaxMailboxes, 409 mailboxes-cap) or take its unacked characters past accountMaxChars
+// (507 account-full) - refused, never by dropping anything already held.
 // WHY ONE CALL A REQUEST. An account's day is counted across all its phones and machines, so it is
 // counted in one place, exactly, and that place is this object. It costs one Durable Object request on
 // each relay request (three in all with the principal's and the mailbox's; reckoned 2026-10-11 against
@@ -40,7 +46,8 @@
 // lease of the day's count from here now and then) would save most of those calls, but a lease one
 // device holds is a request another cannot make, so near the cap a machine would be refused while a
 // phone sat on unused requests; and the deletion fence and the mailbox index would then need calls
-// of their own anyway.
+// of their own anyway. A put costs one more (the mailbox charging the account), and so does an ack or
+// an expiry that frees mail (its credit): the account-wide caps are counted where the lengths are known.
 //
 // DELETION (remove) happens AT ONCE for everything that can reach the account: the profile goes first
 // (from that moment the gate refuses every request), then every phone's session is ended and every
@@ -63,6 +70,7 @@ const BOX = "b:";
 const DAY = "day";
 const PAIRING = "pairing";
 const DELETING = "deleting";
+const USAGE = "usage";
 const MINUTE_MS = 60000;
 const HOUR_MS = 3600000;
 // Mailboxes wiped in one alarm run: few enough that one run's calls stay well inside a Worker's
@@ -126,8 +134,38 @@ export class Account extends DurableObject {
       if (!c.ok) return { ok: false, status: 429, code: CODES.daily, reason: "this account made " + limits.requestsPerDay + " requests today, its most for a day: the count starts again at midnight UTC", retryAfterMs: c.retryAfterMs };
       await storage.put(DAY, c.state);
     }
-    if (put && (await storage.get(BOX + mailbox)) === undefined) await storage.put(BOX + mailbox, 1);
     return { ok: true };
+  }
+
+  // A put of chars characters into mailbox (mailbox.js): { ok } or a refusal - the account is gone, it
+  // would hold one mailbox too many, or too many characters. Counted only when ok.
+  async charge({ mailbox, chars, epoch, limits }) {
+    const storage = this.ctx.storage;
+    const p = await storage.get(PROFILE);
+    if (p === undefined || epoch !== p.epoch) return gone();
+    const held = await storage.get(BOX + mailbox);
+    if (held === undefined) {
+      const n = (await storage.list({ prefix: BOX })).size;
+      if (n >= limits.accountMaxMailboxes) return { ok: false, status: 409, code: CODES.mailboxes, reason: "this account has " + n + " mailboxes holding unacked mail, its most: nothing goes into another until one is read and acked" };
+    }
+    const usage = (await storage.get(USAGE)) || 0;
+    if (usage + chars > limits.accountMaxChars) return { ok: false, status: 507, code: CODES.accountFull, reason: "this account's mailboxes hold " + usage + " characters their readers have not acked; this text would take them past their most, " + limits.accountMaxChars };
+    await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars });
+    return { ok: true };
+  }
+
+  // Mail of chars characters left mailbox, by its ack or its expiry (mailbox.js); emptied when nothing
+  // is left in it. Nothing to do for an account that is gone: its deletion wipes the rest.
+  async credit({ mailbox, chars, emptied, epoch }) {
+    const storage = this.ctx.storage;
+    const p = await storage.get(PROFILE);
+    if (p === undefined || p.epoch !== epoch) return true;
+    const usage = (await storage.get(USAGE)) || 0;
+    const held = (await storage.get(BOX + mailbox)) || 0;
+    await storage.put(USAGE, Math.max(0, usage - chars));
+    if (emptied) await storage.delete(BOX + mailbox);
+    else await storage.put(BOX + mailbox, Math.max(0, held - chars));
+    return true;
   }
 
   // A machine registration is attempted (account-api.js): counted against pairingsPerHour.
@@ -197,7 +235,7 @@ export class Account extends DurableObject {
     const machines = await storage.list({ prefix: MACHINE });
     for (const [, ph] of phones) { const s = sessionByObjectId(this.env, ph.id); if (s) await s.end(); }
     for (const [, m] of machines) await machineKeyOf(this.env, m.keyId).release(account);
-    await storage.delete([...phones.keys(), ...machines.keys(), DAY, PAIRING]);
+    await storage.delete([...phones.keys(), ...machines.keys(), DAY, PAIRING, USAGE]);
     this.devices.clear();
     await storage.setAlarm(Date.now());
     return { ok: true };

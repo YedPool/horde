@@ -30,7 +30,8 @@ const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
 // --- 1. the approved numbers (the founder, 2026-10-11), in their one place ---
 {
   const approved = {
-    machinesPerAccount: 10, phonesPerAccount: 5, pairingsPerHour: 10, requestsPerDay: 5000,
+    machinesPerAccount: 10, phonesPerAccount: 5, pairingsPerHour: 10, requestsPerDay: 20000,
+    accountMaxMailboxes: 50, accountMaxChars: 100 * 1024 * 1024,
     mailboxMaxItems: 2000, mailboxMaxChars: 20 * 1024 * 1024,
     putsPerMinute: 60, putBurst: 20, readsPerMinute: 120, readBurst: 40,
     signInStartsPerMinute: 10, newAccountsPerDay: 5,

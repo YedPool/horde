@@ -57,6 +57,26 @@
         @{ Name = "wipe-ends-no-watch"
            Find = 'for (const ws of this.ctx.getWebSockets()) end(ws, DELETED, CODES.gone, "the account was deleted");'
            Replace = '' }
+        @{ Name = "put-not-charged"
+           Find = '    if (owner) {'
+           Replace = '    if (false) {' }
+        @{ Name = "charge-refusal-ignored"
+           Find = 'if (!charged.ok) return { ok: false, status: charged.status,'
+           Replace = 'if (false) return { ok: false, status: charged.status,' }
+        @{ Name = "owner-not-kept"
+           Find = 'if ((await storage.get(OWNER)) === undefined) await storage.put(OWNER, owner);'
+           Replace = '' }
+        @{ Name = "nothing-credited"
+           Find = 'if (owner && count > 0) await accountOf('
+           Replace = 'if (false) await accountOf(' }
+        @{ Name = "never-emptied"
+           Find = 'emptied: left.count === 0,'
+           Replace = 'emptied: false,' }
+        @{ Name = "put-not-serialized"
+           Find = 'return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner));'
+           Replace = 'return this.putNow(key, text, now, limits, owner);'
+           Expect = "survives"
+           Reason = "Only two puts to one mailbox racing while the first waits on its account's charge can interleave without it - a race no suite here places (the conformance suite's concurrent writers are the test principal, charged to no account, so nothing of theirs waits on another object)." }
         @{ Name = "name-without-the-epoch"
            Find = 'JSON.stringify([account, epoch, mailbox])'
            Replace = 'JSON.stringify([account, "", mailbox])' }

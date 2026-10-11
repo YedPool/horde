@@ -22,13 +22,19 @@
 //   size            { count, chars }: the items held and the characters of their texts, kept with
 //                   every put, ack and expiry, so the caps are checked without a list
 //   gone            the mailbox was deleted with its account (wipe): every put is refused, 410
+//   owner           { account, epoch, mailbox }: whose it is, kept with its first put, so its acks and
+//                   expiries are credited back to the account's caps (accounts.js, credit)
 // Writes made in one request with no other I/O between them are committed together (the platform's
 // write coalescing): a put's writes, and an ack's deletes and its floor, land whole or not at all.
 //
 // THE CAPS (limits.js): a put that would take the mailbox past mailboxMaxItems held items or
 // mailboxMaxChars characters is REFUSED, 507 mailbox-full - never taken by dropping an older item.
 // Unacked mail leaves only by its ack or by retention. A put of a key already held is still the yes it
-// always was (idempotent): it adds nothing, so it is taken even when the mailbox is full.
+// always was (idempotent): it adds nothing, so it is taken even when the mailbox is full. A put is then
+// charged to its account (accounts.js, charge: the account's own caps on mailboxes and characters),
+// and every ack or expiry credited back. The account's call is made inside blockConcurrencyWhile: an
+// object's other requests may otherwise run while it waits on another object, and a put's "read the
+// head, write the item" must not interleave with another's.
 //
 // RETENTION BY ALARM, NOT BY A SCHEDULE. Each item carries exp (its put plus retentionMs, 30 days), and
 // the object keeps ONE alarm, at the oldest held item's exp: when it fires, the items past their exp
@@ -62,6 +68,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { keyProblem, itemTextProblem, BATCH_CHARS } from "./rules.js";
 import { CODES } from "./answers.js";
+import { accountOf } from "./accounts.js";
 
 const HEAD = "head";
 const FLOOR = "floor";
@@ -70,6 +77,7 @@ const ITEM_END = "i;";
 const KEY = "k:";
 const SIZE = "size";
 const GONE = "gone";
+const OWNER = "owner";
 // The storage API deletes at most 128 keys in one call.
 const DELETE_BATCH = 128;
 // How long past its own timeout a waiting socket is kept for a client that never closed it.
@@ -98,8 +106,13 @@ export class Mailbox extends DurableObject {
   // Put one text under a key: { ok, seq, duplicate }, or { ok: false, status, code, reason }. The
   // Worker has checked both already; the object checks again, because it is the relay's own cap
   // (relays/Port.ps1, ADAPTER CONTRACT: "an adapter refuses a text over its own maxTextChars by itself
-  // too"). limits are the Worker's (limits.js), now the time of the put.
-  async put(key, text, { now, limits }) {
+  // too"). limits are the Worker's (limits.js), now the time of the put, owner { account, epoch,
+  // mailbox } the account it is charged to (null for the test principal, which has no account).
+  async put(key, text, { now, limits, owner }) {
+    return this.ctx.blockConcurrencyWhile(() => this.putNow(key, text, now, limits, owner));
+  }
+
+  async putNow(key, text, now, limits, owner) {
     const why = keyProblem(key) || itemTextProblem(text);
     if (why) return { ok: false, status: 400, reason: why };
     const storage = this.ctx.storage;
@@ -109,6 +122,11 @@ export class Mailbox extends DurableObject {
     const size = (await storage.get(SIZE)) || { count: 0, chars: 0 };
     if (size.count + 1 > limits.mailboxMaxItems) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.count + " envelopes its reader has not acked, its most: nothing more is taken until some are acked" };
     if (size.chars + text.length > limits.mailboxMaxChars) return { ok: false, status: 507, code: CODES.mailboxFull, reason: "this mailbox holds " + size.chars + " characters its reader has not acked; this text would take it past its most, " + limits.mailboxMaxChars };
+    if (owner) {
+      const charged = await accountOf(this.env, owner.account).charge({ mailbox: owner.mailbox, chars: text.length, epoch: owner.epoch, limits });
+      if (!charged.ok) return { ok: false, status: charged.status, code: charged.code, reason: charged.reason };
+      if ((await storage.get(OWNER)) === undefined) await storage.put(OWNER, owner);
+    }
     const seq = ((await storage.get(HEAD)) || 0) + 1;
     const exp = now + limits.retentionMs;
     await storage.put({ [ITEM + pad(seq)]: { key, text, exp }, [KEY + key]: seq, [HEAD]: seq, [SIZE]: { count: size.count + 1, chars: size.chars + text.length } });
@@ -141,12 +159,16 @@ export class Mailbox extends DurableObject {
     const size = (await storage.get(SIZE)) || { count: 0, chars: 0 };
     const left = { count: Math.max(0, size.count - count), chars: Math.max(0, size.chars - chars) };
     await storage.put(SIZE, left);
+    const owner = await storage.get(OWNER);
+    if (owner && count > 0) await accountOf(this.env, owner.account).credit({ mailbox: owner.mailbox, chars, emptied: left.count === 0, epoch: owner.epoch });
     return left;
   }
 
   // The reader has kept everything through `through`: { ok, through }, or { ok: false, head } when that
   // is past the head. An ack at or behind the floor changes nothing and is still a yes.
-  async ack(through) {
+  async ack(through) { return this.ctx.blockConcurrencyWhile(() => this.ackNow(through)); }
+
+  async ackNow(through) {
     const storage = this.ctx.storage;
     const head = (await storage.get(HEAD)) || 0;
     if (through > head) return { ok: false, head };
@@ -160,7 +182,9 @@ export class Mailbox extends DurableObject {
   }
 
   // Retention, or a deleted mailbox's tombstone ending (the header).
-  async alarm() {
+  async alarm() { return this.ctx.blockConcurrencyWhile(() => this.expire()); }
+
+  async expire() {
     const storage = this.ctx.storage;
     if (await storage.get(GONE)) { await storage.deleteAll(); return; }
     const now = Date.now();

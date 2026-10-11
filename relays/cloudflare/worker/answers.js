@@ -11,6 +11,8 @@ export const CODES = Object.freeze({
   mailboxFull: "mailbox-full",   // 507: the mailbox holds its most unacked envelopes or characters
   machines: "machines-cap",      // 409: the account has its most machines
   phones: "phones-cap",          // 409: the account has its most phones signed in
+  mailboxes: "mailboxes-cap",    // 409: the account has its most mailboxes holding unacked mail
+  accountFull: "account-full",   // 507: the account's mailboxes hold its most unacked characters
   gone: "account-gone",          // 401: the account was deleted (its device's request was in flight)
   mailboxGone: "mailbox-gone",   // 410: the mailbox was deleted with its account
   deleting: "account-deleting",  // 409: the account is being deleted; try again once it is gone

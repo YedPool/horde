@@ -46,9 +46,27 @@
         @{ Name = "day-counts-the-account-screen"
            Find = 'if (MAILBOX_OPS.has(op)) {'
            Replace = 'if (true) {' }
-        @{ Name = "mailbox-not-indexed"
-           Find = 'if (put && (await storage.get(BOX + mailbox)) === undefined) await storage.put(BOX + mailbox, 1);'
+        @{ Name = "mailboxes-cap-ignored"
+           Find = 'if (n >= limits.accountMaxMailboxes) return'
+           Replace = 'if (false) return' }
+        @{ Name = "mailboxes-cap-off-by-one"
+           Find = 'if (n >= limits.accountMaxMailboxes) return'
+           Replace = 'if (n > limits.accountMaxMailboxes) return' }
+        @{ Name = "account-chars-ignored"
+           Find = 'if (usage + chars > limits.accountMaxChars) return'
+           Replace = 'if (false) return' }
+        @{ Name = "account-chars-off-by-one"
+           Find = 'if (usage + chars > limits.accountMaxChars) return'
+           Replace = 'if (usage + chars >= limits.accountMaxChars) return' }
+        @{ Name = "charge-not-kept"
+           Find = 'await storage.put({ [BOX + mailbox]: (held || 0) + chars, [USAGE]: usage + chars });'
            Replace = '' }
+        @{ Name = "credit-gives-nothing-back"
+           Find = 'await storage.put(USAGE, Math.max(0, usage - chars));'
+           Replace = '' }
+        @{ Name = "emptied-mailbox-still-counted"
+           Find = 'if (emptied) await storage.delete(BOX + mailbox);'
+           Replace = 'if (false) await storage.delete(BOX + mailbox);' }
         @{ Name = "pairings-not-counted"
            Find = 'await storage.put(PAIRING, t.state);'
            Replace = '' }
