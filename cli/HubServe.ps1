@@ -259,7 +259,7 @@ function Receive-HordeHubFrame {
 }
 
 # DIALLED LINKS (remote plan R17c). A node behind NAT dials the hub's listener over ssh; the forced
-# command, R17a's clittach.ps1, dials the hub pipe for it and first writes one preamble line naming
+# command, R17a's cli\attach.ps1, dials the hub pipe for it and first writes one preamble line naming
 # the device its key is enrolled as, taken from its own argv, never from the node. The hub binds the
 # link to that device and refuses a hello claiming another.
 #

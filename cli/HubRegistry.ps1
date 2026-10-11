@@ -2,9 +2,9 @@
 # enroll` and `horde hub revoke`, read by `horde listen` and `horde hub serve`.
 #
 # WHY A REGISTER OF ITS OWN (issue #144, item 3; issue #147, item 4; remote plan R13b, "registry entries
-# written by horde hub enroll"). Before it, the transport's own file (for ssh, authorized_keys) was the
-# only record of whom the hub admitted, so a line written there by hand - under any device id - was
-# admitted by sshd and believed by the hub. Now two records, written together by the enrolment verbs and
+# written by horde hub enroll"). Before it, the transport's own file of admitted keys was the only
+# record of whom the hub admitted, so a line written there by hand - under any device id - was
+# admitted by the transport's server and believed by the hub. Now two records, written together by the enrolment verbs and
 # by nothing else, must agree before anything is admitted:
 #   - `horde listen` serves a key line only for a device this register holds, live, with that same key
 #     (the listener's Health re-checks it every second and stops on a line it does not hold);
@@ -48,10 +48,9 @@ function ConvertTo-HordeHubRegistryTime {
 }
 
 function Test-HordeHubExpired {
-    # Is an enrolment that runs to -Expires (YYYYMMDD) over at -Now? The transport's own rule: for ssh,
-    # sshd refuses an expiry-time="YYYYMMDD" key from 00:00 of that day, local time (sshd(8),
-    # AUTHORIZED_KEYS FILE FORMAT), so the register reads its expiry the same way. A date that does not
-    # parse is over.
+    # Is an enrolment that runs to -Expires (YYYYMMDD) over at -Now? The transport's own rule, which its
+    # adapter documents: a key dated YYYYMMDD is refused from 00:00 of that day, local time, so the
+    # register reads its expiry the same way. A date that does not parse is over.
     param([string]$Expires, [Parameter(Mandatory = $true)][datetime]$Now)
     $d = [datetime]::MinValue
     if (-not [datetime]::TryParseExact("$Expires", "yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) { return $true }
@@ -146,7 +145,7 @@ function Get-HordeHubEnrolledKey {
 
 function Get-HordeHubLiveKeys {
     # Every device the register holds live at -Now, as a hashtable: device id -> its key. What the
-    # listener holds authorized_keys to (transports/Listener.ps1). An entry that is not live, or cannot be
+    # listener holds its admitted key lines to (transports/Listener.ps1). An entry that is not live, or cannot be
     # read, is left out: it admits nothing.
     param([Parameter(Mandatory = $true)][string]$HordeHome, $Now = $null)
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
