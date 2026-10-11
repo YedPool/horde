@@ -15,11 +15,14 @@
 #   messengers/*/test/test-*.ps1    a messenger's own suites (remote plan R21; review of #102). Its
 #                                   test/Fixture.ps1 is not a suite: only test-*.ps1 is run.
 #   surfaces/*/test/test-*.ps1      a surface's own suites (decisions design 2026-10-06, decision 2)
+#   relays/*/test/test-*.ps1        a relay's own suites (relay PR 8a: the hosted relay's Worker suite
+#                                   lives beside it, so only its folder names the host). Its
+#                                   test/Fixture.ps1 is not a suite: only test-*.ps1 is run.
 #
 # NOT SUITES: anything under test/fixtures/. Those files are inputs that suites read or run as
 # fixtures - test/fixtures/ledger holds test-*.ps1 files on purpose, as the trees a ledger cites.
 
-$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test")
+$script:HordeSuiteFolders = @("test", "hosts/*/test", "transports/*/test", "agents/*/test", "messengers/*/test", "surfaces/*/test", "relays/*/test")
 $script:HordeSuiteDataFolder = "test/fixtures"
 
 # MACHINE-BOUND SUITES: the gate runs them, but only on a machine with the founder's interactive logon,
