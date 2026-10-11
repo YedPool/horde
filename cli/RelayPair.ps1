@@ -33,6 +33,9 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+# The machine's name for its offer (relay/Pairing.ps1, THE LABEL): the computer's, as a device name.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Device.ps1")
+
 # How many refused items one pairing mailbox may bring before the offer is given up: each costs an
 # ECDH, and a relay flooding the mailbox could otherwise keep the machine opening garbage until the
 # offer expires. An honest pairing brings one item, and a phone that sends again stores once (its key).
@@ -258,7 +261,8 @@ function Invoke-HordeRelayPair {
     if ($Label -cne "" -and (Test-HordeRelayRecordValue -Kind "label" -Value $Label) -cne "") { $done.reason = "-Label is 1 to 64 printable ASCII characters, no quote or backslash, no space at either end"; return $done }
     $where = Get-HordeRelayPairOrigin -HordeHome $HordeHome -RpId $RpId -Origin $Origin
     if ($where.state -cne "known") { $done.reason = $where.reason; return $done }
-    $o = New-HordeRelayPairingOffer -HordeHome $HordeHome -RpId $where.value.rpId -Origins $where.value.origins -TtlSeconds $TtlSeconds -Now (& $Clock)
+    # The machine's name, which a hosted relay's Account screen lists it by (relay/Pairing.ps1, THE LABEL).
+    $o = New-HordeRelayPairingOffer -HordeHome $HordeHome -RpId $where.value.rpId -Origins $where.value.origins -TtlSeconds $TtlSeconds -Now (& $Clock) -Label (ConvertTo-HordeDeviceName -Text "$env:COMPUTERNAME")
     if ($o.state -cne "known") { $done.reason = ("no offer was made: " + $o.reason); return $done }
     $offer = $o.value
     $done.offer = $offer

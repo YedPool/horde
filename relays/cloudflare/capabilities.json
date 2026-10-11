@@ -23,6 +23,6 @@
     "maxTextChars": 65536,
     "maxBatch": 256,
     "maxWatchMs": 60000,
-    "retentionSeconds": 0
+    "retentionSeconds": 2592000
   }
 }

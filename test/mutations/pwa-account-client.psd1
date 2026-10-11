@@ -11,7 +11,7 @@
     Suite  = "surfaces\pwa\test\test-pwa-site.ps1"
     Mutations = @(
         @{ Name = "registration-carries-the-whole-offer"
-           Find = 'call("POST", "/v1/account/machines", { horde: offer.horde, offer: offer.offer, machine: offer.machine, signPublic: offer.signPublic, expiresAt: offer.expiresAt, grant: offer.grant })'
+           Find = 'call("POST", "/v1/account/machines", { horde: offer.horde, offer: offer.offer, machine: offer.machine, label: offer.label, signPublic: offer.signPublic, expiresAt: offer.expiresAt, grant: offer.grant })'
            Replace = 'call("POST", "/v1/account/machines", offer)' }
         @{ Name = "any-removal-sent"
            Find = '(/^[0-9a-f]{32}$/.test(String(keyId)) ? call('
@@ -25,5 +25,11 @@
         @{ Name = "relay-words-uncut"
            Find = 'j.error.slice(0, 200)'
            Replace = 'j.error' }
+        @{ Name = "any-phone-sign-out-sent"
+           Find = '(/^[0-9a-f]{64}$/.test(String(phoneId)) ?'
+           Replace = '(true ?' }
+        @{ Name = "deletion-sent-without-its-words"
+           Find = 'call("DELETE", "/v1/account", { confirm: DELETE_CONFIRM })'
+           Replace = 'call("DELETE", "/v1/account", {})' }
     )
 }

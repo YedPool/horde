@@ -21,7 +21,8 @@
 # with main, base_dir and the app's folder made absolute, so wrangler's own scratch (.wrangler) lands
 # there too. A test run adds test-bindings.json's bindings with a fresh random token, points the
 # Worker's origin at the dev's own port (worker/site.js: what sign-in redirects to and machine
-# signatures cover), and may add a suite's own vars (the fake provider, a test client, an allowlist);
+# signatures cover), and may add a suite's own vars (the fake provider, a test client, an allowlist, the
+# test limits: worker/limits.js);
 # a production copy REFUSES a config that holds any HORDE_RELAY_TEST_ binding anywhere (worker/auth.js,
 # THE TEST AUTHENTICATOR; worker/oidc.js, THE TEST PROVIDER).
 #

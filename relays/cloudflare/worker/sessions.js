@@ -1,13 +1,16 @@
 // relays/cloudflare/worker/sessions.js - a signed-in phone's session, SERVER SIDE: one Durable Object per
-// session, named by the session's id, holding which account it is and until when. The cookie
-// (cookies.js) carries the id and nothing else, so nothing in it can be read, edited or forged into
-// another account; a session that ends here - signed out, expired - is over wherever its cookie still is.
+// session, named by the session's id, holding which account it is (with the account's epoch:
+// accounts.js) and until when. The cookie (cookies.js) carries the id and nothing else, so nothing in
+// it can be read, edited or forged into another account; a session that ends here - signed out,
+// ended by the account, expired - is over wherever its cookie still is.
 //
 // A SESSION LIVES SESSION_MS (30 days) from its sign-in, and no longer: no use extends it. A phone
 // signs in again after that, which is one tap when Google remembers it. The object deletes its record
 // at the end by an alarm, so an abandoned session leaves nothing behind; a read after the end and
-// before the alarm answers none all the same. Ending sessions early (account deletion, a lost phone) is
-// 8c's; signing out ends this one.
+// before the alarm answers none all the same. Signing out ends this one; the account ends any of its
+// phones early - one signed out from another phone's Account screen, or all of them when the account
+// is deleted (accounts.js) - by its object's id, which is no secret: it is derived one way from the
+// session's id, and names the phone on the Account screen (account-api.js).
 //
 // THE ID is 256 random bits, base64url (43 characters).
 import { DurableObject } from "cloudflare:workers";
@@ -18,7 +21,7 @@ const RECORD = "session";
 const ID = /^[A-Za-z0-9_-]{43}$/;
 
 export class Session extends DurableObject {
-  // Begin: { account, email, createdAt, expiresAt }.
+  // Begin: { account, epoch, email, createdAt, expiresAt }.
   async begin(record) {
     await this.ctx.storage.put(RECORD, record);
     await this.ctx.storage.setAlarm(record.expiresAt);
@@ -44,8 +47,16 @@ export class Session extends DurableObject {
 
 export function newSessionId() { return b64u(randomBytes(32)); }
 
-// The session's object, or null for an id that is not one this Worker makes.
+// The session's object, or null for an id that is not one this Worker makes. Its id (.id) names the
+// phone to its account.
 export function sessionOf(env, id) {
   if (typeof id !== "string" || !ID.test(id)) return null;
   return env.SESSION.get(env.SESSION.idFromName("session/" + id));
+}
+
+// The session object of a phone the account knows by its object's id (64 hex), or null.
+export const PHONE_ID = /^[0-9a-f]{64}$/;
+export function sessionByObjectId(env, objectId) {
+  if (typeof objectId !== "string" || !PHONE_ID.test(objectId)) return null;
+  return env.SESSION.get(env.SESSION.idFromString(objectId));
 }

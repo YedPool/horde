@@ -84,6 +84,11 @@
 # Publish-HordeRelay runs it and checks its answer as it checks every other; Get-HordeRelayDeployable
 # names the relays that have one.
 #
+# A RELAY THAT COUNTS REQUESTS (the hosted one: a request a day per account is its limit) may also hand
+# Register-HordeRelay -RunWatchMs: how long a long-running runner's watch waits on it (cli/RelayRun.ps1).
+# A runner's quiet turn is one watch, so this is what one always-on machine costs it a day. 0, the
+# default, declares none, and the runner's own setting applies. It is held to 1..maxWatchMs.
+#
 # No Set-StrictMode here (see core/Tristate.ps1): this file is dot-sourced. It runs under -Version Latest.
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
@@ -161,13 +166,15 @@ function Register-HordeRelay {
         [Parameter(Mandatory = $true)][scriptblock]$Get,
         [Parameter(Mandatory = $true)][scriptblock]$Watch,
         [Parameter(Mandatory = $true)][scriptblock]$Ack,
-        [scriptblock]$Deploy = $null
+        [scriptblock]$Deploy = $null,
+        [int]$RunWatchMs = 0
     )
     $capPath = Join-Path $Folder "capabilities.json"
     if (-not (Test-Path -LiteralPath $capPath -PathType Leaf)) { throw ("relay folder '" + $Folder + "' has no capabilities.json") }
     $caps = [System.IO.File]::ReadAllText($capPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $findings = @(Test-HordeRelayCapabilities -Capabilities $caps -Folder $Folder)
     if ($findings.Count -gt 0) { throw ("relay '" + (Split-Path -Leaf $Folder) + "' refused: " + ($findings -join "; ")) }
+    if ($RunWatchMs -lt 0 -or $RunWatchMs -gt [int]$caps.limits.maxWatchMs) { throw ("relay '" + (Split-Path -Leaf $Folder) + "' refused: -RunWatchMs is " + $RunWatchMs + ", not 0 to its maxWatchMs " + $caps.limits.maxWatchMs) }
     # Once per name: a second registration would silently swap the relay every caller resolves by that
     # name (the transport port's review of PR #42 found exactly that).
     if ($script:HordeRelays.ContainsKey("$($caps.relay)")) {
@@ -175,7 +182,7 @@ function Register-HordeRelay {
     }
     $r = [pscustomobject]@{ PSTypeName = "Horde.Relay"; name = "$($caps.relay)"; folder = $Folder; capabilities = $caps
         limits = [pscustomobject]@{ maxTextChars = [int]$caps.limits.maxTextChars; maxBatch = [int]$caps.limits.maxBatch; maxWatchMs = [int]$caps.limits.maxWatchMs; retentionSeconds = [long]$caps.limits.retentionSeconds }
-        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy }
+        connect = $Connect; put = $Put; get = $Get; watch = $Watch; ack = $Ack; deploy = $Deploy; runWatchMs = $RunWatchMs }
     $script:HordeRelays[$r.name] = $r
     return $r
 }

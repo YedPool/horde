@@ -82,7 +82,13 @@
            Find = 'if (BigInt("0x" + hex(sig.slice(32))) > P256_HALF_ORDER) return false;'
            Replace = '' }
         @{ Name = "grant-unbound-to-its-expiry"
-           Find = 'machine + "\n" + expiresAt); }'
-           Replace = 'machine + "\n"); }' }
+           Find = 'machine + "\n" + expiresAt + "\n" + label); }'
+           Replace = 'machine + "\n" + "\n" + label); }' }
+        @{ Name = "grant-unbound-to-its-label"
+           Find = 'expiresAt + "\n" + label); }'
+           Replace = 'expiresAt + "\n"); }' }
+        @{ Name = "offer-label-unchecked"
+           Find = 'if (!validLabel(o.label)) return no('
+           Replace = 'if (false) return no(' }
     )
 }

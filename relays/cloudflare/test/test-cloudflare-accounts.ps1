@@ -80,147 +80,7 @@ $script:homes = New-Object System.Collections.ArrayList
 $script:procs = New-Object System.Collections.ArrayList
 $devs = New-Object System.Collections.ArrayList
 
-function Start-FakeProvider {
-    # The fake provider (fake-oidc.mjs): { process; issuer }, once it says its port.
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $node
-    $psi.Arguments = '"' + (Join-Path $here "fake-oidc.mjs") + '" ' + $clientId + ' ' + $clientSecret
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
-    [void]$script:procs.Add($p)
-    $null = $p.StandardError.ReadToEndAsync()
-    $line = $p.StandardOutput.ReadLineAsync()
-    if (-not $line.Wait(30000) -or "" + $line.Result -cnotmatch '\APORT ([0-9]+)\z') { throw ("the fake provider did not start: " + $line.Result) }
-    return [pscustomobject]@{ process = $p; issuer = ("http://127.0.0.1:" + $Matches[1]) }
-}
-
-function New-TestHome {
-    param([string]$Horde = "work")
-    $h = Join-Path $env:TEMP ("horde-cf-accounts-home-" + [guid]::NewGuid().ToString("N"))
-    [void][System.IO.Directory]::CreateDirectory((Join-Path $h "settings"))
-    [void]$script:homes.Add($h)
-    [System.IO.File]::WriteAllText((Join-Path $h "settings\relay.json"), ('{"schemaVersion": 1, "settings": {"horde": "' + $Horde + '"}}'), $utf8)
-    $id = New-HordeRelayMachineIdentity -HordeHome $h -Provider "software"
-    if ($id.state -cne "known") { throw ("no identity: " + $id.reason) }
-    return [pscustomobject]@{ home = $h; identity = $id.value }
-}
-
-function Get-TestKeyNames {
-    param([string]$HordeHome)
-    $out = New-Object System.Collections.ArrayList
-    $dir = Join-Path $HordeHome "relay\identity"
-    if (-not (Test-Path -LiteralPath $dir)) { return @() }
-    foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter "machine-*.json")) {
-        $t = [System.IO.File]::ReadAllText($f.FullName)
-        $m = [regex]::Match($t, '"scope":"([a-z]+)","signName":"([a-z0-9-]+)".*"agreeName":"([a-z0-9-]+)"')
-        if ($m.Success) { [void]$out.Add(@{ n = $m.Groups[2].Value; s = $m.Groups[1].Value }); [void]$out.Add(@{ n = $m.Groups[3].Value; s = $m.Groups[1].Value }) }
-    }
-    return @($out)
-}
-
-$handler = New-Object System.Net.Http.HttpClientHandler
-$handler.AllowAutoRedirect = $false
-$handler.UseCookies = $false
-$http = New-Object System.Net.Http.HttpClient($handler)
-$http.Timeout = [TimeSpan]::FromSeconds(30)
-
-function Send-To {
-    # One request, as a browser or a machine would send it: { code; headers (lower-case name -> values);
-    # text; cookies (Set-Cookie values) }. -Cookie is the Cookie header, -Origin the Origin header.
-    param([string]$Url, [string]$Method = "GET", [string]$Body = $null, [string]$Cookie = "", [string]$Origin = "", [string]$Authorization = "")
-    $req = New-Object System.Net.Http.HttpRequestMessage((New-Object System.Net.Http.HttpMethod($Method)), $Url)
-    if ($Cookie -ne "") { [void]$req.Headers.TryAddWithoutValidation("Cookie", $Cookie) }
-    if ($Origin -ne "") { [void]$req.Headers.TryAddWithoutValidation("Origin", $Origin) }
-    if ($Authorization -ne "") { [void]$req.Headers.TryAddWithoutValidation("Authorization", $Authorization) }
-    if ($null -ne $Body -and $Body -ne "") {
-        $req.Content = New-Object System.Net.Http.ByteArrayContent(, ([System.Text.Encoding]::ASCII.GetBytes($Body)))
-        $req.Content.Headers.ContentType = New-Object System.Net.Http.Headers.MediaTypeHeaderValue("application/json")
-    }
-    $res = $http.SendAsync($req).GetAwaiter().GetResult()
-    try {
-        $h = @{}
-        foreach ($pair in @($res.Headers) + @($res.Content.Headers)) { $h[$pair.Key.ToLowerInvariant()] = @($pair.Value) }
-        $cookies = $(if ($h.ContainsKey("set-cookie")) { @($h["set-cookie"]) } else { @() })
-        return [pscustomobject]@{ code = [int]$res.StatusCode; headers = $h; text = $res.Content.ReadAsStringAsync().GetAwaiter().GetResult(); cookies = $cookies }
-    } finally { $res.Dispose(); $req.Dispose() }
-}
-
-function Get-Header { param($Answer, [string]$Name) if ($Answer.headers.ContainsKey($Name)) { return ("" + @($Answer.headers[$Name])[0]) }; return "" }
-
-function Get-CookieValue {
-    # The value a Set-Cookie list gives the cookie Name, or "" ("x" for a cleared one).
-    param($Answer, [string]$Name)
-    foreach ($c in @($Answer.cookies)) { if (("" + $c).StartsWith($Name + "=")) { return ("" + $c).Substring($Name.Length + 1).Split(";")[0] } }
-    return ""
-}
-
-function Set-Scenario { param([string]$Issuer, [hashtable]$Scenario = @{}) $null = Send-To -Url ($Issuer + "/scenario") -Method "POST" -Body ($Scenario | ConvertTo-Json -Compress) }
-
-function Invoke-SignIn {
-    # A whole sign-in through the dev and the fake provider, as a browser: { start; callback; session;
-    # refused } - session the __Host-horde-session value set, or "". -Mangle changes the callback first.
-    param($Dev, $Provider, [hashtable]$Scenario = @{}, [scriptblock]$Mangle = $null)
-    Set-Scenario -Issuer $Provider.issuer -Scenario $Scenario
-    $start = Send-To -Url ($Dev.origin + "/auth/google")
-    $signin = Get-CookieValue $start "__Host-horde-signin"
-    $auth = Send-To -Url (Get-Header $start "location")
-    $cb = Get-Header $auth "location"
-    $cookie = "__Host-horde-signin=" + $signin
-    if ($null -ne $Mangle) { $m = & $Mangle $cb $cookie; $cb = $m[0]; $cookie = $m[1] }
-    $back = Send-To -Url $cb -Cookie $cookie
-    return [pscustomobject]@{ start = $start; authorize = $auth; callbackUrl = $cb; signinCookie = $cookie; callback = $back; session = (Get-CookieValue $back "__Host-horde-session"); refused = (Get-Header $back "horde-signin-refused") }
-}
-
-function Get-UpgradeStatus {
-    # The status line of a WebSocket upgrade, read off the wire, with the given Cookie and Origin.
-    param([string]$Origin, [string]$Path, [string]$Cookie, [string]$PageOrigin)
-    $u = New-Object System.Uri($Origin)
-    $tcp = New-Object System.Net.Sockets.TcpClient($u.Host, $u.Port)
-    try {
-        $s = $tcp.GetStream()
-        $s.ReadTimeout = 10000
-        $req = "GET " + $Path + " HTTP/1.1`r`nHost: " + $u.Authority + "`r`nUpgrade: websocket`r`nConnection: Upgrade`r`nSec-WebSocket-Version: 13`r`nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==`r`nCookie: " + $Cookie + $(if ($PageOrigin -ne "") { "`r`nOrigin: " + $PageOrigin } else { "" }) + "`r`n`r`n"
-        $b = [System.Text.Encoding]::ASCII.GetBytes($req)
-        $s.Write($b, 0, $b.Length)
-        $buf = New-Object byte[] 4096
-        $n = $s.Read($buf, 0, $buf.Length)
-        return ([System.Text.Encoding]::ASCII.GetString($buf, 0, [Math]::Max(0, $n)).Split("`n")[0]).TrimEnd("`r")
-    } finally { $tcp.Close() }
-}
-
-function Get-Registration {
-    # The body a phone sends to register the machine of an offer (account-client.js), from its text.
-    param([string]$OfferText, [hashtable]$Over = @{})
-    $o = (Read-HordeRelayPairingOffer -Text $OfferText).value
-    $b = [ordered]@{ horde = $o.horde; offer = $o.offer; machine = $o.machine; signPublic = $o.signPublic; expiresAt = $o.expiresAt; grant = $o.grant }
-    foreach ($k in @($Over.Keys)) { $b[$k] = $Over[$k] }
-    return ($b | ConvertTo-Json -Compress)
-}
-
-function Get-Grant {
-    # A grant signed here by -Key for these values: for the refusals the machine's own offers never make.
-    param($Key, [string]$Horde, [string]$Offer, [string]$Machine, [long]$ExpiresAt)
-    return (ConvertTo-HordeRelayBase64Url -Bytes (New-HordeRelayEs256Signature -Key $Key -Bytes (Get-HordeRelayAccountGrantBytes -Horde $Horde -Offer $Offer -Machine $Machine -ExpiresAt $ExpiresAt)))
-}
-
-function ConvertTo-HighS {
-    # The high-S twin of a low-S Authorization's signature: s replaced by n - s.
-    param([string]$Authorization)
-    $m = [regex]::Match($Authorization, 'sig=([A-Za-z0-9_-]{86})\z')
-    $sig = ConvertFrom-HordeRelayBase64Url -Text $m.Groups[1].Value
-    $n = [System.Numerics.BigInteger]::Parse("0FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551", [System.Globalization.NumberStyles]::HexNumber)
-    $sBytes = New-Object byte[] 33
-    for ($i = 0; $i -lt 32; $i++) { $sBytes[$i] = $sig[63 - $i] }
-    $high = ($n - (New-Object System.Numerics.BigInteger -ArgumentList (, $sBytes))).ToByteArray()
-    $out = New-Object byte[] 64
-    [System.Array]::Copy($sig, 0, $out, 0, 32)
-    for ($i = 0; $i -lt 32; $i++) { $out[63 - $i] = $(if ($i -lt $high.Length) { $high[$i] } else { 0 }) }
-    return ($Authorization.Substring(0, $m.Groups[1].Index) + (ConvertTo-HordeRelayBase64Url -Bytes $out))
-}
+. (Join-Path $here "Harness.ps1")
 
 $partial = $false
 try {
@@ -229,7 +89,10 @@ try {
     $site = Join-Path $work "site"
     $built = New-HordeRelayDeploySite -Out $site
     Check ($built.state -ceq "known") ("the phone app is built as the deploy builds it (" + $built.reason + ")")
-    $vars = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret }
+    # This suite signs in many times from one address and one account: the limits on that are
+    # test-cloudflare-limits.ps1's, so here they are set out of its way (worker/limits.js).
+    $roomy = '{"signInStartsPerMinute":1000,"newAccountsPerDay":1000,"phonesPerAccount":100}'
+    $vars = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret; HORDE_RELAY_TEST_LIMITS = $roomy }
     $d = Start-HordeCloudflareRelayDev -Work (Join-Path $work "dev") -Site $site -Script $tools.value.script -ExtraVars $vars
     Check ($d.state -ceq "known") ("a local dev of the Worker answers (" + $d.reason + ")")
     if ($d.state -cne "known") { throw "no dev" }
@@ -450,14 +313,14 @@ try {
         # The first machine again, with a NEW offer - its old grant is spent, a new one is not - so the
         # app's Account screen has one machine to list and to remove.
         $again = Invoke-SignIn -Dev $dev -Provider $fake
-        $offer3 = New-HordeRelayPairingOffer -HordeHome $m1.home -RpId "relay.example.test" -Origins @("https://relay.example.test")
+        $offer3 = New-HordeRelayPairingOffer -HordeHome $m1.home -RpId "relay.example.test" -Origins @("https://relay.example.test") -Label "build-box"
         $back = Send-To -Url ($O + "/v1/account/machines") -Method "POST" -Body (Get-Registration -OfferText $offer3.value.text) -Cookie ("__Host-horde-session=" + $again.session) -Origin $O
         $mc3 = (Connect-HordeRelay -Name "cloudflare" -Options @{ origin = $O; hordeHome = $m1.home }).value
         Check ($back.code -eq 200 -and (Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0).state -ceq "known") "a removed machine paired again with a new offer is registered again, and reads"
-        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, $chrome, $profileDir, $kid) -WorkDir $work -TimeoutSeconds 180
+        $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "browser-signin.mjs"), $O, $fake.issuer, $chrome, $profileDir, "build-box") -WorkDir $work -TimeoutSeconds 180
         $lines = @(("" + $r.out) -split "`r?`n" | Where-Object { $_ -ne "" })
         foreach ($l in $lines) { if ($l -clike "[[]PASS[]] *") { Check $true $l.Substring(7) } elseif ($l -clike "[[]FAIL[]] *") { Check $false $l.Substring(7) } }
-        Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 11) ("the browser's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
+        Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 18) ("the browser's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
         $afterUi = Receive-HordeRelayItems -Connection $mc3 -Mailbox "work/phone" -Since 0
         Check ($afterUi.state -ceq "unknown" -and $afterUi.reason.Contains("401")) ("the machine removed on the app's screen is refused at its next request (" + $afterUi.reason + ")")
     }
@@ -465,7 +328,7 @@ try {
     Write-Host ""
     Write-Host "--- 3. the allowlist switched on ---" -ForegroundColor Cyan
     $list = '{"on":true,"emails":["founder@example.test"],"subs":["300000000000000000003"]}'
-    $vars2 = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret; HORDE_RELAY_SIGNIN_ALLOWLIST = $list }
+    $vars2 = @{ HORDE_RELAY_TEST_OIDC = $fake.issuer; GOOGLE_CLIENT_ID = $clientId; GOOGLE_CLIENT_SECRET = $clientSecret; HORDE_RELAY_SIGNIN_ALLOWLIST = $list; HORDE_RELAY_TEST_LIMITS = $roomy }
     $d2 = Start-HordeCloudflareRelayDev -Work (Join-Path $work "dev-allow") -Site $site -Script $tools.value.script -ExtraVars $vars2
     Check ($d2.state -ceq "known") ("a dev with the allowlist on answers (" + $d2.reason + ")")
     if ($d2.state -ceq "known") {

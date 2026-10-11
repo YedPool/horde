@@ -9,8 +9,8 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "nobody-vouched-is-let-in"
-           Find = 'if (!who || typeof who.may !== "function") return refuse(401,'
-           Replace = 'if (false) return refuse(401,' }
+           Find = 'if (!who || typeof who.may !== "function") {'
+           Replace = 'if (false) {' }
         @{ Name = "oversize-text-is-not-413"
            Find = 'body.text.length > MAX_TEXT_CHARS) return refuse(413,'
            Replace = 'body.text.length > MAX_TEXT_CHARS * 2) return refuse(413,' }

@@ -22,7 +22,7 @@
            Find = '  if (!s) return null;'
            Replace = '' }
         @{ Name = "stale-request-taken"
-           Find = 'if (!isFresh(a.time, Date.now())) return { refusal:'
+           Find = 'if (!isFresh(a.time, now)) return { refusal:'
            Replace = 'if (false) return { refusal:' }
         @{ Name = "another-origin-signed"
            Find = 'origin: siteOf(env).origin, method: request.method'
