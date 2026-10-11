@@ -84,5 +84,15 @@
         @{ Name = "refused-while-the-name-is-free"
            Find = '-Refused ($null -ne $st.server)'
            Replace = '-Refused $true' }
+        # --- the hub's own pipe (remote plan R17a) ---
+        @{ Name = "hub-endpoint-id-not-checked"
+           Find = 'if ($hub -cnotmatch $script:HordeLocalIdPattern) { return $null }'
+           Replace = '' }
+        @{ Name = "hub-endpoint-prefix-any-case"
+           Find = '$DeviceId.StartsWith($script:HordeLocalHubEndpointPrefix, [System.StringComparison]::Ordinal)'
+           Replace = '$DeviceId.StartsWith($script:HordeLocalHubEndpointPrefix, [System.StringComparison]::OrdinalIgnoreCase)' }
+        @{ Name = "hub-pipe-is-the-node-pipe"
+           Find = 'return ($script:HordeLocalHubPipePrefix + $hub)'
+           Replace = 'return ($script:HordeLocalPipePrefix + $hub)' }
     )
 }
