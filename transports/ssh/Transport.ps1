@@ -325,10 +325,14 @@ $null = Register-HordeTransport -Folder $script:HordeSshFolder `
             $job = [HordeSshNative]::NewKillOnCloseJob()
             $proc = Start-HordeSshProcess -Arguments (Join-HordeSshCommandLine -Argv (Get-HordeSshArgv -Endpoint $ep -Paths $paths)) -Job $job
             $startedAt = $proc.StartTime
+            # VERIFIED, BECAUSE NOTHING ELSE CARRIES A FRAME: ssh.exe refuses to open a session to a host
+            # whose key is not the one pinned under this alias (StrictHostKeyChecking=yes, Horde's own
+            # known_hosts only), so every byte this link carries comes from that host. Shown live in
+            # test/test-transport-conformance.ps1 against transports/ssh/test/FarEnd.ps1 (R17c-3).
             $peer = [pscustomobject]@{
-                verified = $false
+                verified = $true
                 identity = ($script:HordeSshHostKeyAliasPrefix + $ep.hubId)
-                how = "the hub's host key is pinned by StrictHostKeyChecking=yes against Horde's own known_hosts under this alias; no live sshd has demonstrated it yet (remote plan R16, R17)"
+                how = "the hub's host key is pinned by StrictHostKeyChecking=yes against Horde's own known_hosts under this alias; a link to any other host carries no frame"
             }
             $result = New-HordeSshResult -Ok $true -Channel (New-HordeSshChannel -Process $proc -Job $job) -Peer $peer
             $handed = $true

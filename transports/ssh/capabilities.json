@@ -4,16 +4,16 @@
   "maxFrameBytes": 1048576,
   "capabilities": {
     "auth.peer": {
-      "support": "unverified",
-      "evidence": "Argv pins the hub's host key (StrictHostKeyChecking=yes, HostKeyAlias=horde-hub-<hubId>, Horde's own known_hosts only, no global file) and offers only Horde's key, as ssh.exe -G reports in transports/ssh/test/test-ssh.ps1 (2026-10-02, OpenSSH_for_Windows 9.5p2). No live sshd has demonstrated a verified peer: that is remote plan R16 and R17."
+      "support": "yes",
+      "evidence": "Against a live sshd reading the hub's enrolment files (transports/ssh/test/FarEnd.ps1, run by test/test-transport-conformance.ps1, remote plan R17c-3): an enrolled key with the hub's host key pinned connects; a key never enrolled, a hub whose host key is not the pinned one, and a revoked key whose line was put back by hand are each refused. Argv pins the host key (StrictHostKeyChecking=yes, HostKeyAlias=horde-hub-<hubId>, Horde's own known_hosts only) and offers only Horde's key, as ssh.exe -G reports in transports/ssh/test/test-ssh.ps1."
     },
     "encrypt": {
       "support": "unverified",
       "evidence": "ssh encrypts the session by design, but no session to a live sshd has been run here (remote plan R16)."
     },
     "dial.out": {
-      "support": "unverified",
-      "evidence": "Open starts the System32 ssh.exe with the design's argv, and the byte channel round-trips a mebibyte frame through a stand-in child (transports/ssh/test/test-ssh.ps1); a link to a live sshd has not been run here (remote plan R16)."
+      "support": "yes",
+      "evidence": "A node-role Open through the port dials a live sshd, the hub's listener as R17a runs it, and frames round-trip through the enrolled key's forced command (transports/ssh/test/FarEnd.ps1, run by test/test-transport-conformance.ps1, remote plan R17c-3)."
     },
     "dial.in": {
       "support": "no",
