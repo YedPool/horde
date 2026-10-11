@@ -92,6 +92,19 @@ try {
         "-p", "2222", "horde-link@hub.example.net", "attach")
     Check ((@($argv) -join "|") -ceq ($want -join "|")) "argv is exactly the design's list, in order, from the endpoint and Horde's own paths"
     if ((@($argv) -join "|") -cne ($want -join "|")) { Write-Host ("         got: " + (@($argv) -join " ")) -ForegroundColor Red }
+    # MESH V1: A NODE DIALS THE HUB'S LAN ADDRESS AND PORT, AND THE PIN STILL HOLDS (node serve -Dial;
+    # the hub's listener on the office LAN, horde listen -Address). The address and port are only where to
+    # dial; the host key is checked against the pin of the hub's identity, never against the address.
+    $lanHub = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+    $lanEp = ConvertFrom-HordeSshEndpoint -Endpoint ("someone@192.168.1.182:2222/" + $lanHub)
+    Check ($lanEp.ok -and (Ord $lanEp.host "192.168.1.182") -and $lanEp.port -eq 2222 -and (Ord $lanEp.hubId $lanHub)) "a node takes the hub's LAN address and port, and the hub's device id as its identity"
+    $lanArgv = @(Get-HordeSshArgv -Endpoint $lanEp -Paths $paths)
+    $lanJoined = (@($lanArgv) -join "|")
+    Check ($lanJoined.Contains("|-p|2222|someone@192.168.1.182|attach") -and $lanArgv.Count -eq $want.Count) "argv dials that address and port, and nothing else changes"
+    Check ($lanJoined.Contains("|StrictHostKeyChecking=yes|") -and $lanJoined.Contains("|HostKeyAlias=horde-hub-" + $lanHub + "|") -and $lanJoined.Contains('|UserKnownHostsFile="C:\h h\node\known_hosts"|') -and $lanJoined.Contains("|GlobalKnownHostsFile=none|") -and $lanJoined.Contains("|UpdateHostKeys=no|") -and $lanJoined.Contains("|CheckHostIP=no|")) "and the host key is still pinned to the hub's identity, in Horde's known_hosts only, never learned from the address"
+    foreach ($bad in @(("someone@192.168.1.182/" + $lanHub), ("someone@192.168.1.182:2222"), ("someone@[fd00::1]:2222/" + $lanHub), ("someone@192.168.1.182:22222222/" + $lanHub))) {
+        Check (-not (ConvertFrom-HordeSshEndpoint -Endpoint $bad).ok) ("the LAN endpoint '" + $bad + "' is refused: an address, a port and the hub's identity, each required")
+    }
     Check (@($argv | Where-Object { $_ -like "*%*" -or $_ -like "*$*" }).Count -eq 0) "no argument holds a % or $ for anything to expand"
     # PATHS SSH WOULD READ AS SOMETHING ELSE (review of PR #68, F2): inside a -o value ssh expands %d,
     # %h and ${VAR}, cuts at #, and fails on a quote (measured with ssh -G, two review rounds). After the
