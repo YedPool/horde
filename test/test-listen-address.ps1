@@ -97,11 +97,16 @@ try {
             @{ a = @("-Address", "::"); want = "*every interface*" },
             @{ a = @("-Address", "my-hub"); want = "*not an IP address*" },
             @{ a = @("-Address", "192.168.254.253"); want = "*no interface of this machine*" },
-            @{ a = @("-Address", "127.0.0.1", "-AllowFrom", "192.168.1.156"); want = "*-AllowFrom goes with a network -Address*" })) {
+            @{ a = @("-Address", "127.0.0.1", "-AllowFrom", "192.168.1.156"); want = "*-AllowFrom goes with a network -Address*" },
+            @{ a = @("-Address", "127.0.0.1", "-AllowPublicProfile"); want = "*-AllowPublicProfile goes with a network -Address*" })) {
         $r = Invoke-HordeCliProcess -Root $root -HordeArgs (@("listen") + $case.a + @("-Seconds", "1")) -Env $envs
         Check ($r.code -eq 1 -and $r.out -like $case.want -and $r.out -notlike "*listening on*") ("horde listen " + ($case.a -join " ") + ": exit 1, refused before anything listens (exit " + $r.code + ": " + $r.out.Trim() + ")")
     }
     Check (-not (Test-Path -LiteralPath (Join-Path $tmp "hub\listen"))) "and nothing was ever written for a listener"
 } finally { if ((Split-Path -Leaf $tmp) -match '^horde-listen-address-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue } }
+
+$listenAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root "cli\commands\listen.ps1"), [ref]$null, [ref]$null)
+$openCalls = @($listenAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and "$($n.GetCommandName())" -ceq "Open-HordeListenFirewall" }, $true))
+Check ($openCalls.Count -eq 1 -and $openCalls[0].Extent.Text -clike "*-AllowPublicProfile:`$AllowPublicProfile*") "horde listen hands -AllowPublicProfile to its firewall step (the step itself is pinned in test-firewall-port.ps1)"
 
 Complete-HordeSuite -Success "the hub listens only on loopback or a private address this machine holds, and lets in only private addresses: never a public one"

@@ -6,6 +6,11 @@
 # - removed by that name, then made again - so a rule changed by hand is put back to the spec rather than
 # merged with. The rule has no program: the port's spec names no listener.
 #
+# CATEGORY, READ ONLY. The port asks which category the network holding the listen address is in: the
+# interface that holds the address (Get-NetIPAddress), then that interface's connection profile
+# (Get-NetConnectionProfile), its NetworkCategory returned as Windows names it. Nothing here sets a
+# category; the founder does that, if he chooses to, in Windows' own settings.
+#
 # NetSecurity is imported from Windows PowerShell's own module folder by its path, not found through
 # PSModulePath: a PSModulePath another shell left (PowerShell 7's) breaks module discovery in 5.1, and
 # the firewall must not depend on what the founder's shell set.
@@ -24,6 +29,18 @@ function Test-HordeWindowsFirewallElevated {
 function Import-HordeWindowsFirewallModule {
     # NetSecurity from Windows PowerShell's own module folder (header).
     if ($null -eq (Get-Module -Name NetSecurity)) { Import-Module -Name (Join-Path $PSHOME "Modules\NetSecurity") -ErrorAction Stop }
+}
+
+function Get-HordeWindowsNetworkCategory {
+    # The NetworkCategory of the connection profile on the interface that holds -Address, or $null when
+    # no interface holds it or that interface has no profile (header, CATEGORY).
+    param([Parameter(Mandatory = $true)][string]$Address)
+    foreach ($m in @("NetTCPIP", "NetConnection")) { if ($null -eq (Get-Module -Name $m)) { Import-Module -Name (Join-Path $PSHOME ("Modules" + $m)) -ErrorAction Stop } }
+    $ip = @(Get-NetIPAddress -IPAddress $Address -ErrorAction SilentlyContinue)
+    if ($ip.Count -eq 0) { return $null }
+    $c = @(Get-NetConnectionProfile -InterfaceIndex $ip[0].InterfaceIndex -ErrorAction SilentlyContinue)
+    if ($c.Count -eq 0) { return $null }
+    return ("" + $c[0].NetworkCategory)
 }
 
 function Get-HordeWindowsFirewallRule {
@@ -69,6 +86,7 @@ function Register-HordeWindowsFirewall {
         Get      = { param($Name) Get-HordeWindowsFirewallRule -Name $Name }
         Set      = { param($Spec) Set-HordeWindowsFirewallRule -Spec $Spec }
         Remove   = { param($Name) Remove-HordeWindowsFirewallRule -Name $Name }
+        Category = { param($Address) Get-HordeWindowsNetworkCategory -Address $Address }
     }
     Register-HordeFirewall @blocks
 }

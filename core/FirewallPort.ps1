@@ -4,7 +4,8 @@
 # WHY (mesh v1, 2026-10-11). On loopback the hub needs no rule. On the office LAN, Tailscale or
 # WireGuard it does, and the founder's rules say how wide: only TCP, only to the listen address and port,
 # only from the enrolled nodes' addresses (or the ones -AllowFrom names), only on the Private and Domain
-# profiles - never Public - and only while `horde listen` runs. A system's firewall is its own business,
+# profiles - Public only when the founder says so with -AllowPublicProfile - and only while `horde listen`
+# runs. A system's firewall is its own business,
 # so each system that has one supplies platform/<name>/Firewall.ps1, found by folder and registered here,
 # as platform/<name>/WindowFollow.ps1 registers with core/WindowFollowPort.ps1. A CALLER NAMES NO
 # PLATFORM.
@@ -26,8 +27,18 @@
 #   Get       param($Name)       -> $null when no rule has that name, or the rule in the spec's shape
 #   Set       param($Spec)       -> make the rule $Spec.name exactly $Spec (create it, or replace it whole)
 #   Remove    param($Name)       -> remove every rule with that name; none is not an error
+#   Category  param($Address)    -> the category of the network whose interface holds $Address, as the
+#                                   system names it ("Public", "Private", "DomainAuthenticated"), or $null
+#                                   when it has none; read only, never changed
 # A spec is { name; direction "Inbound"; action "Allow"; protocol "TCP"; localAddress; localPort;
-# remoteAddresses (sorted); profiles ("Domain", "Private") }: no program, so it names no listener.
+# remoteAddresses (sorted); profiles }: no program, so it names no listener.
+#
+# THE PROFILES (2026-10-11). Domain and Private by default. -AllowPublicProfile adds Public, and only
+# then: a hub whose office Wi-Fi is categorised Public would otherwise keep a rule that never applies,
+# and setting that network to Private would turn on every other Private-only inbound rule the system
+# ships (network discovery, remote assistance...). The rule is already held to one local address, one
+# port and the nodes' addresses, so adding Public to it opens far less. Get-HordeListenRuleProfiles is
+# the one place the profiles come from.
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
@@ -37,6 +48,9 @@
 if ($null -eq (Get-Variable -Name HordeFirewalls -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeFirewalls = New-Object System.Collections.ArrayList }
 $script:HordeListenRulePrefix = "Horde listen "
 $script:HordeListenRuleProfiles = @("Domain", "Private")
+$script:HordeListenRulePublicProfile = "Public"
+# A network category, as an adapter's Category answers it, to the firewall profile that applies on it.
+$script:HordeListenCategoryProfiles = @{ "DomainAuthenticated" = "Domain"; "Private" = "Private"; "Public" = "Public" }
 
 function Register-HordeFirewall {
     # Called by platform/<name>/Firewall.ps1 when it is dot-sourced. Re-registering a name replaces it.
@@ -46,11 +60,12 @@ function Register-HordeFirewall {
         [Parameter(Mandatory = $true)][scriptblock]$Elevated,
         [Parameter(Mandatory = $true)][scriptblock]$Get,
         [Parameter(Mandatory = $true)][scriptblock]$Set,
-        [Parameter(Mandatory = $true)][scriptblock]$Remove
+        [Parameter(Mandatory = $true)][scriptblock]$Remove,
+        [Parameter(Mandatory = $true)][scriptblock]$Category
     )
     if ($Name -cnotmatch '\A[a-z][a-z0-9-]*\z') { throw ("a platform name is lowercase letters, digits and hyphens: '" + $Name + "'") }
     foreach ($known in @($script:HordeFirewalls)) { if ($known.name -ceq $Name) { $script:HordeFirewalls.Remove($known) } }
-    [void]$script:HordeFirewalls.Add([pscustomobject]@{ name = $Name; applies = $Applies; elevated = $Elevated; get = $Get; set = $Set; remove = $Remove })
+    [void]$script:HordeFirewalls.Add([pscustomobject]@{ name = $Name; applies = $Applies; elevated = $Elevated; get = $Get; set = $Set; remove = $Remove; category = $Category })
 }
 
 function Get-HordeFirewallFiles {
@@ -79,18 +94,38 @@ function Get-HordeListenRuleName {
     return ($script:HordeListenRulePrefix + $HubId)
 }
 
+function Get-HordeListenRuleProfiles {
+    # The profiles the rule holds: Domain and Private, and Public too only with -AllowPublicProfile
+    # (header, THE PROFILES).
+    param([switch]$AllowPublicProfile)
+    if ($AllowPublicProfile) { return @(@($script:HordeListenRuleProfiles) + $script:HordeListenRulePublicProfile) }
+    return @($script:HordeListenRuleProfiles)
+}
+
+function Get-HordeListenNetworkProfile {
+    # The firewall profile that applies to the network holding -Address, through -Firewall (an adapter),
+    # as an answer: known "Domain", "Private" or "Public", or unknown with the reason.
+    param([Parameter(Mandatory = $true)]$Firewall, [Parameter(Mandatory = $true)][string]$Address)
+    $c = $null
+    try { $c = @(& $Firewall.category $Address) | Select-Object -Last 1 } catch { return (New-HordeUnknown -Reason ("the network of " + $Address + " could not be read: " + $_.Exception.Message)) }
+    $name = "$c".Trim()
+    if ($name -eq "") { return (New-HordeUnknown -Reason ("no network profile holds " + $Address)) }
+    foreach ($k in @($script:HordeListenCategoryProfiles.Keys)) { if ($k -ceq $name) { return (New-HordeKnown -Value $script:HordeListenCategoryProfiles[$k]) } }
+    return (New-HordeUnknown -Reason ("the network of " + $Address + " is of a category Horde does not know: '" + $name + "'"))
+}
+
 function New-HordeListenRuleSpec {
     # The rule as it should be, as an answer: known spec, or unknown with the reason. -Address is the
     # listen address (Resolve-HordeListenAddress's, never loopback: loopback needs no rule), -AllowFrom
-    # the nodes' addresses (Resolve-HordeAllowFrom). Pure.
-    param([Parameter(Mandatory = $true)][string]$HubId, [Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port, [string[]]$AllowFrom)
+    # the nodes' addresses (Resolve-HordeAllowFrom); -AllowPublicProfile adds the Public profile. Pure.
+    param([Parameter(Mandatory = $true)][string]$HubId, [Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port, [string[]]$AllowFrom, [switch]$AllowPublicProfile)
     $k = Get-HordeListenAddressKind -Address $Address
     if ($k.state -cne "known") { return $k }
     if ($k.value.loopback) { return (New-HordeUnknown -Reason ("'" + $Address + "' is loopback, which needs no firewall rule")) }
     if ($Port -lt 1 -or $Port -gt 65535) { return (New-HordeUnknown -Reason ("port " + $Port + " is not a TCP port")) }
     $from = Resolve-HordeAllowFrom -Addresses $AllowFrom
     if ($from.state -cne "known") { return $from }
-    return (New-HordeKnown -Value ([pscustomobject][ordered]@{ name = (Get-HordeListenRuleName -HubId $HubId); direction = "Inbound"; action = "Allow"; protocol = "TCP"; localAddress = $k.value.address; localPort = $Port; remoteAddresses = @($from.value); profiles = @($script:HordeListenRuleProfiles) }))
+    return (New-HordeKnown -Value ([pscustomobject][ordered]@{ name = (Get-HordeListenRuleName -HubId $HubId); direction = "Inbound"; action = "Allow"; protocol = "TCP"; localAddress = $k.value.address; localPort = $Port; remoteAddresses = @($from.value); profiles = @(Get-HordeListenRuleProfiles -AllowPublicProfile:$AllowPublicProfile) }))
 }
 
 function Test-HordeListenRuleSame {
@@ -144,10 +179,11 @@ function Remove-HordeListenRule {
 function Get-HordeListenElevationCommand {
     # The exact one line the founder runs in an elevated PowerShell to start this listener: Windows
     # PowerShell running this Horde's horde.ps1 with the same arguments. Never run by Horde itself.
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port, [string[]]$AllowFrom = @(), [int]$Seconds = 0)
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Address, [Parameter(Mandatory = $true)][int]$Port, [string[]]$AllowFrom = @(), [int]$Seconds = 0, [switch]$AllowPublicProfile)
     $line = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"" + (Join-Path $Root "horde.ps1") + "`" listen -Address " + $Address + " -Port " + $Port
     $from = @(@($AllowFrom) | Where-Object { "$_".Trim() -ne "" })
     if ($from.Count -gt 0) { $line = $line + " -AllowFrom " + ($from -join ",") }
     if ($Seconds -gt 0) { $line = $line + " -Seconds " + $Seconds }
+    if ($AllowPublicProfile) { $line = $line + " -AllowPublicProfile" }
     return $line
 }

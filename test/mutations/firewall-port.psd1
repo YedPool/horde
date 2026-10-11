@@ -45,6 +45,27 @@
         @{ Name = "other-system-adapter-used"
            Find = 'if ($here -is [bool] -and $here) { return (New-HordeKnown -Value $a) }'
            Replace = 'return (New-HordeKnown -Value $a)' }
+        @{ Name = "public-always-added"
+           Find = 'if ($AllowPublicProfile) { return @(@($script:HordeListenRuleProfiles) + $script:HordeListenRulePublicProfile) }'
+           Replace = 'return @(@($script:HordeListenRuleProfiles) + $script:HordeListenRulePublicProfile)' }
+        @{ Name = "public-switch-ignored-by-spec"
+           Find = 'profiles = @(Get-HordeListenRuleProfiles -AllowPublicProfile:$AllowPublicProfile) }'
+           Replace = 'profiles = @(Get-HordeListenRuleProfiles) }' }
+        @{ Name = "domain-network-read-as-public"
+           Find = '"DomainAuthenticated" = "Domain"'
+           Replace = '"DomainAuthenticated" = "Public"' }
+        @{ Name = "category-matched-loosely"
+           Find = 'if ($k -ceq $name) {'
+           Replace = 'if ($k -eq $name) {' }
+        @{ Name = "no-category-guessed-public"
+           Find = 'if ($name -eq "") { return (New-HordeUnknown -Reason ("no network profile holds "'
+           Replace = 'if ($name -eq "") { return (New-HordeKnown -Value "Public"); return (New-HordeUnknown -Reason ("no network profile holds "' }
+        @{ Name = "category-error-hidden"
+           Find = 'catch { return (New-HordeUnknown -Reason ("the network of " + $Address + " could not be read: "'
+           Replace = 'catch { return (New-HordeKnown -Value "Private"); return (New-HordeUnknown -Reason ("the network of " + $Address + " could not be read: "' }
+        @{ Name = "elevation-line-drops-public-profile"
+           Find = 'if ($AllowPublicProfile) { $line = $line + " -AllowPublicProfile" }'
+           Replace = '' }
         @{ Name = "elevation-line-drops-allow-from"
            Find = 'if ($from.Count -gt 0) { $line = $line + " -AllowFrom " + ($from -join ",") }'
            Replace = '' }
