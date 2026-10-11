@@ -11,8 +11,9 @@
 # (test/fixtures/node-serve/dial-peer.ps1), whose transport writes the preamble as attach will. The live
 # dial is R17c-3 (test-transport-conformance's live far end).
 #
-# R17a OWNS THE PREAMBLE CONTRACT (remote/LinkBinding.ps1, not yet merged): the preamble cases here are
-# that contract's wire form, and keep holding when cli/HubServe.ps1's stand-ins become calls to it.
+# R17a OWNS THE PREAMBLE CONTRACT (remote/LinkBinding.ps1, tested on its own by test/test-link-binding.ps1).
+# cli/HubServe.ps1 calls it and restates none of it (issue #144, item 7): the preamble cases here run
+# through the hub's own reader.
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
@@ -112,7 +113,7 @@ function Mirror-Of {
 try {
     Write-Host ""
     Write-Host "--- the preamble: one exact line, or nothing is bound ---" -ForegroundColor Cyan
-    $ok = Get-HordeHubPreambleDevice -Text ("horde-attach 1 " + $device)
+    $ok = Read-HordeAttachPreamble -Line ("horde-attach 1 " + $device)
     Check ($ok.state -ceq "known" -and $ok.value -ceq $device) "CONTROL: 'horde-attach 1 <device id>' binds that device"
     $bad = [ordered]@{
         "another version" = ("horde-attach 2 " + $device)
@@ -124,8 +125,8 @@ try {
         "nothing" = ""
     }
     foreach ($k in $bad.Keys) {
-        $r = Get-HordeHubPreambleDevice -Text $bad[$k]
-        Check ($r.state -ceq "unknown" -and "$($r.reason)" -clike "*not an attach preamble*") ("a first line of " + $k + " binds nothing, and says so")
+        $r = Read-HordeAttachPreamble -Line $bad[$k]
+        Check ($r.state -ceq "unknown" -and "$($r.reason)" -clike "*preamble*") ("a first line of " + $k + " binds nothing, and says so (" + $r.reason + ")")
     }
 
     Write-Host ""
@@ -154,15 +155,15 @@ try {
         $nd = Stop-Dialler $node
     } finally { Stop-HordeTransportListener -Listener $listener }
     $outs = @($rounds[0].outcomes)
-    Check (@($outs | Where-Object { $_ -clike ("*(" + $other + "): unreachable: *answered as device " + $device + "*bound to " + $other + "*") }).Count -eq 1) ("the hub refuses the hello, naming both devices (" + ($outs -join " | ") + ")")
+    Check (@($outs | Where-Object { $_ -clike ("*(" + $other + "): unreachable: *claims device '" + $device + "'*enrolled for device " + $other + "*") }).Count -eq 1) ("the hub refuses the hello, naming both devices (" + ($outs -join " | ") + ")")
     Check (-not (Test-Path -LiteralPath (Get-HordeHubMirrorPath -Root $mr -DeviceId $device))) "and writes nothing under the device the hello claimed"
     $bm = Mirror-Of -Root $mr -Id $other
-    Check ($bm.state -ceq "known" -and "$(Get-HordeLinkProp (Get-HordeLinkProp $bm.value 'lost') 'reason')" -clike "*bound to*" -and $null -eq (Get-HordeLinkProp $bm.value "inventory")) "the bound device's mirror records the failed round, never an inventory from the other"
+    Check ($bm.state -ceq "known" -and "$(Get-HordeLinkProp (Get-HordeLinkProp $bm.value 'lost') 'reason')" -clike "*enrolled for device*" -and $null -eq (Get-HordeLinkProp $bm.value "inventory")) "the bound device's mirror records the failed round, never an inventory from the other"
     Check ($null -ne $nd -and $nd.served -eq 1 -and "$(@($nd.endings)[0])" -clike "*closed by the protocol*") ("the node got the hub's bye (" + "$(@($nd.endings) -join ' | ')" + ")")
 
     Write-Host ""
     Write-Host "--- no preamble, or a wrong one, binds nothing and ends the link ---" -ForegroundColor Cyan
-    foreach ($case in @(@{ name = "a wrong version"; pre = ("horde-attach 2 " + $device); want = "*not an attach preamble*" }, @{ name = "no preamble"; pre = ""; want = "*no preamble came*" })) {
+    foreach ($case in @(@{ name = "a wrong version"; pre = ("horde-attach 2 " + $device); want = "*preamble is version '2'*" }, @{ name = "no preamble"; pre = ""; want = "*no preamble came*" })) {
         $mr = Join-Path $work ("mirror-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
         $listener = New-HubListener -Name $ep
         try {

@@ -9,9 +9,9 @@
         @{ Name = "preamble-not-required"
            Find = 'if ($dev.state -cne "known") { return ("a dialled link was refused: " + $dev.reason) }'
            Replace = 'if ($dev.state -cne "known") { $dev = New-HordeKnown -Value "0f8fad5b-d9cb-469f-a165-70867728950e" }' }
-        @{ Name = "preamble-any-shape"
-           Find = "'\Ahorde-attach 1 (?<id>"
-           Replace = "'horde-attach 1 (?<id>" }
+        @{ Name = "preamble-read-from-a-later-line"
+           Find = '$dev = Read-HordeAttachPreamble -Line "$($first.value)"'
+           Replace = '$dev = Read-HordeAttachPreamble -Line ("horde-attach 1 " + "$($first.value)".Split(" ")[-1])' }
         @{ Name = "dialled-link-left-open"
            Find = '    } finally { Close-HordeLink -Link $Link }'
            Replace = '    } finally { }' }

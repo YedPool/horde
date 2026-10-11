@@ -29,6 +29,9 @@
 #
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
+# The preamble and hello-binding rules of a dialled link (see DIALLED LINKS below).
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "remote\LinkBinding.ps1")
+
 # The one transport a node is served on before enrolment (cli/commands/node.ps1 serves on it).
 $script:HordeHubOwnTransport = "local"
 # How many copies of an unusable mirror are kept aside per node, newest first (review of PR #88).
@@ -256,35 +259,13 @@ function Receive-HordeHubFrame {
 }
 
 # DIALLED LINKS (remote plan R17c). A node behind NAT dials the hub's listener over ssh; the forced
-# command, R17a's cli\attach.ps1, dials the hub pipe for it and first writes one preamble line naming
+# command, R17a's clittach.ps1, dials the hub pipe for it and first writes one preamble line naming
 # the device its key is enrolled as, taken from its own argv, never from the node. The hub binds the
 # link to that device and refuses a hello claiming another.
 #
-# R17a OWNS THE CONTRACT (remote/LinkBinding.ps1: Read-HordeAttachPreamble, Test-HordeHelloBinding),
-# not yet merged. These two functions are this file's only use of it: each matches that contract and is
-# swapped for a call to it when R17a lands, with nothing else here changing.
-
-function Get-HordeHubPreambleDevice {
-    # The device a dialled link is bound to, from its first line: known <deviceId>, or unknown with the
-    # reason. R17a's wire form: ASCII "horde-attach 1 <deviceId>", the id a lowercase UUID; any other
-    # shape, version or casing is refused. Stand-in for Read-HordeAttachPreamble -Line.
-    param([AllowEmptyString()][string]$Text)
-    $m = [regex]::Match($Text, '\Ahorde-attach 1 (?<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\z')
-    if (-not $m.Success) {
-        $shown = $Text; if ($shown.Length -gt 80) { $shown = $shown.Substring(0, 80) + "..." }
-        return (New-HordeUnknown -Reason ("the link's first line is not an attach preamble ('horde-attach 1 <device id>'): '" + $shown + "'"))
-    }
-    return (New-HordeKnown -Value $m.Groups["id"].Value)
-}
-
-function Test-HordeHubHelloBound {
-    # "" when the hello -Frame claims device -BoundDeviceId; otherwise the refusal. Stand-in for
-    # Test-HordeHelloBinding -Frame -BoundDeviceId. A pulled link is bound to its registry entry's device,
-    # a dialled one to its preamble's.
-    param([Parameter(Mandatory = $true)]$Frame, [Parameter(Mandatory = $true)][string]$BoundDeviceId)
-    if ("$($Frame.hello.id)" -cne $BoundDeviceId) { return ("the node answered as device " + $Frame.hello.id + ", but this link is bound to " + $BoundDeviceId) }
-    return ""
-}
+# ONE COPY OF THE CONTRACT (issue #144, item 7): the preamble and the hello rule are
+# remote/LinkBinding.ps1's (Read-HordeAttachPreamble, Test-HordeHelloBinding), called here, never
+# restated. This file kept two stand-ins until R17a landed; a stand-in is a second copy that drifts.
 
 function Invoke-HordeHubPull {
     # One pull from one node: { ok; reason; nodeName; list; nodeSentAt; receivedAt; clock }. -Entry is a
@@ -318,7 +299,7 @@ function Invoke-HordeHubPull {
         $refusal = ""
         if ("$($f.kind)" -cne "hello") { $refusal = "the node answered the hello with a " + $f.kind + " frame" }
         elseif ("$($f.hello.role)" -cne "node") { $refusal = "the other end says its role is '" + $f.hello.role + "', not node" }
-        else { $refusal = Test-HordeHubHelloBound -Frame $f -BoundDeviceId "$($Entry.deviceId)" }
+        else { $refusal = (@(Test-HordeHelloBinding -Frame $f -BoundDeviceId "$($Entry.deviceId)") -join "; ") }
         if ($refusal -ne "") {
             $seq++
             $null = Send-HordeHubFrame -Link $link -Frame (New-HordeLinkBye -Code "refused" -Reason $refusal -Seq $seq -Contract $Contract) -Contract $Contract
@@ -434,7 +415,7 @@ function Invoke-HordeHubDialled {
     try {
         $first = Receive-HordeLinkFrame -Link $Link -TimeoutMs ([Math]::Min($TimeoutMs, 15000))
         if ($first.state -cne "known") { return ("a dialled link was refused: no preamble came: " + $first.reason) }
-        $dev = Get-HordeHubPreambleDevice -Text "$($first.value)"
+        $dev = Read-HordeAttachPreamble -Line "$($first.value)"
         if ($dev.state -cne "known") { return ("a dialled link was refused: " + $dev.reason) }
         $entry = [pscustomobject]@{ deviceId = "$($dev.value)"; deviceName = "(dialled)"; endpoint = "(dialled)"; transport = $null; transportError = "" }
         return (Update-HordeHubNode -Entry $entry -Root $Root -Hub $Hub -Contract $Contract -TimeoutMs $TimeoutMs -BudgetMs $BudgetMs -Link $Link)
