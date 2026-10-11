@@ -2,9 +2,9 @@
 // port (relays/Port.ps1) - put, get, watch, ack - over a PLUGGABLE TRANSPORT, with the port's distrust
 // of the far end written once here for every transport.
 //
-// WHY A PORT AND NOT A FETCH. The relay is untrusted, and the hosted one does not exist yet (the
-// Cloudflare adapter is the next pull request, PR plan item 8). So the app names no host and speaks to
-// no URL: it is handed a transport, picked by name from the deployment's config.json, and every answer
+// WHY A PORT AND NOT A FETCH. The relay is untrusted, and which one serves a deployment is the
+// deployment's choice. So the app names no host and speaks to no URL of its own: it is handed a
+// transport, picked by name from the deployment's config.json, and every answer
 // a transport gives is checked here as relays/Port.ps1 checks a relay's - the shape of each item,
 // items at or before the cursor dropped, a second item under one seq dropped, the batch put in seq
 // order, holes reported as gaps, and the cursor the caller gets is the last seq DELIVERED, never a
@@ -27,7 +27,9 @@
 // THE RULES ARE relays/Port.ps1's, copied: a mailbox is "<horde>/<reader>", each part 1 to 63 of
 // [a-z0-9-] starting with a letter or digit and never a Windows device name; a key 1 to 160 of
 // [A-Za-z0-9._:/-]; a text 1 to 1,414,507 printable ASCII characters; seq at most 2^53-1; a batch at
-// most 256; a watch at most 60 s.
+// most 256; a watch at most 60 s. THIS IS THE ONE COPY OF THEM IN JAVASCRIPT: the hosted relay's Worker
+// imports mailboxProblem, keyProblem and textProblem from here (with its own, lower, text limit) rather
+// than keep a second copy that could drift.
 const SEGMENT = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const DEVICE = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
 const KEY = /^[A-Za-z0-9._:/-]{1,160}$/;
@@ -45,6 +47,17 @@ export function mailboxProblem(mailbox) {
   return "";
 }
 
+// "" when key is one a relay holds, else why not.
+export function keyProblem(key) {
+  return typeof key === "string" && KEY.test(key) ? "" : "the key is not one a relay holds";
+}
+
+// "" when text is one a relay holding at most maxChars characters keeps, else why not.
+export function textProblem(text, maxChars = LIMITS.textChars) {
+  if (typeof text !== "string" || text.length === 0 || text.length > maxChars || !TEXT.test(text)) return "a relay holds printable ASCII texts of 1 to " + maxChars + " characters";
+  return "";
+}
+
 function checkAnswer(a, what) {
   if (!a || typeof a !== "object" || (a.state !== "known" && a.state !== "unknown")) return unknown("the relay's answer to " + what + " is not an answer");
   if (a.state !== "known") return unknown(String(a.reason || "the relay could not " + what));
@@ -58,7 +71,7 @@ function rebuild(items, since, max) {
   const bySeq = new Map();
   for (const it of Array.isArray(items) ? items : []) {
     if (!it || !Number.isSafeInteger(it.seq) || it.seq < 1 || it.seq > LIMITS.seqMax || typeof it.key !== "string" || typeof it.text !== "string") { anomalies.push("a malformed item was dropped"); continue; }
-    if (!KEY.test(it.key) || it.text.length === 0 || it.text.length > LIMITS.textChars || !TEXT.test(it.text)) { anomalies.push("item " + it.seq + " was dropped: its key or text is not one a relay holds"); continue; }
+    if (keyProblem(it.key) || textProblem(it.text)) { anomalies.push("item " + it.seq + " was dropped: its key or text is not one a relay holds"); continue; }
     if (it.seq <= since) { anomalies.push("item " + it.seq + " was dropped: it is at or before the cursor " + since); continue; }
     if (bySeq.has(it.seq)) { anomalies.push("a second item under seq " + it.seq + " was dropped"); continue; }
     bySeq.set(it.seq, { seq: it.seq, key: it.key, text: it.text });
@@ -79,8 +92,8 @@ export function createRelayClient(transport) {
     async put(mailbox, key, text) {
       const why = mailboxProblem(mailbox);
       if (why) return unknown(why);
-      if (typeof key !== "string" || !KEY.test(key)) return unknown("the key is not one a relay holds");
-      if (typeof text !== "string" || text.length === 0 || text.length > LIMITS.textChars || !TEXT.test(text)) return unknown("a relay holds printable ASCII texts of 1 to " + LIMITS.textChars + " characters");
+      const problem = keyProblem(key) || textProblem(text);
+      if (problem) return unknown(problem);
       const a = await call("put", () => transport.put(mailbox, key, text));
       const bad = checkAnswer(a, "put");
       if (bad) return bad;

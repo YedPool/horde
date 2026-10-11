@@ -15,8 +15,8 @@
            Find = 'if (bySeq.has(it.seq)) {'
            Replace = 'if (false) {' }
         @{ Name = "non-ascii-text-kept"
-           Find = '|| !TEXT.test(it.text)) { anomalies.push("item "'
-           Replace = ') { anomalies.push("item "' }
+           Find = '|| !TEXT.test(text)) return "a relay holds printable ASCII'
+           Replace = ') return "a relay holds printable ASCII' }
         @{ Name = "transport-throw-escapes"
            Find = 'try { return await fn(); } catch (x) {'
            Replace = 'try { return await fn(); } finally { } if (false) { const x = null;' }
