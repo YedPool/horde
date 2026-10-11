@@ -201,7 +201,12 @@ export function bindingTransport(host, name) {
 // under /v1/mailboxes/<horde>/<reader>/). Requests go with the page's own credentials and never from a
 // cache: an envelope is fetched fresh, and kept by nothing but the phone's memory. A refusal's words
 // are the relay's, cut to 200 characters, and only ever shown as text. A watch that has heard nothing
-// when its time is up closes its socket and answers no items, as a relay's watch does.
+// when its time is up closes its socket and answers no items, as a relay's watch does. A watch the
+// relay ended - its one message an { error } (replaced by a newer watch of this phone, or its account
+// deleted: the hosted relay's mailbox says so), or a close with a code of its own (4000 and up) - is a
+// failed watch, unknown, so the app pauses before it watches again instead of replacing the newer watch
+// in its turn.
+const RELAY_CLOSED = { 4001: "the relay replaced this watch with a newer one of this phone", 4002: "the relay closed the watch: the account was deleted" };
 export function httpTransport(origin, fetchFn, WebSocketCtor) {
   const url = (mailbox, op) => origin + "/v1/mailboxes/" + mailbox + "/" + op;
   const words = (body) => (body && typeof body.error === "string" ? ": " + body.error.slice(0, 200) : "");
@@ -238,10 +243,11 @@ export function httpTransport(origin, fetchFn, WebSocketCtor) {
       socket.onmessage = (event) => {
         let body = null;
         try { body = JSON.parse(String(event.data)); } catch (x) { body = null; }
+        if (body && typeof body === "object" && !Array.isArray(body) && typeof body.error === "string") { finish(unknown("the relay ended the watch: " + body.error.slice(0, 200))); return; }
         finish(body && typeof body === "object" && !Array.isArray(body) ? known(body) : unknown("the relay's watch message is not a JSON object"));
       };
       socket.onerror = () => finish(unknown("the relay's watch failed"));
-      socket.onclose = () => finish(known({ items: [] }));
+      socket.onclose = (event) => finish(event && event.code >= 4000 && event.code <= 4999 ? unknown(RELAY_CLOSED[event.code] || "the relay closed the watch (" + event.code + ")") : known({ items: [] }));
     })),
     ack: async (mailbox, through) => answerOf(await send("POST", url(mailbox, "ack"), { through }), "ack")
   };

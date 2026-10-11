@@ -134,6 +134,15 @@ try {
     Check ((Get-HordeHubLiveKeys -HordeHome (Join-Path $tmp "no-such-home") -Now $later).Count -eq 0) "a home with no register gives an empty table, never an error"
 
     Write-Host ""
+    Write-Host "--- the nodes horde nodes lists: the hub's own, then every live device of the register (the first live mesh link) ---" -ForegroundColor Cyan
+    $own = [pscustomobject]@{ deviceId = "99999999-8888-4777-8666-555555555555"; deviceName = "the-hub" }
+    $listed = @(Get-HordeHubListedNodes -Own @($own) -HordeHome $hh -Now $later)
+    Check ((($listed | ForEach-Object { "$($_.deviceId)=$($_.deviceName)" }) -join ",") -ceq ($own.deviceId + "=the-hub," + $third + "=(dialled)")) ("the hub's own node first, then the live dialled one; revoked, expired and unreadable ones are not listed (" + (($listed | ForEach-Object { $_.deviceId }) -join ", ") + ")")
+    $twice = @(Get-HordeHubListedNodes -Own @([pscustomobject]@{ deviceId = $third; deviceName = "self" }) -HordeHome $hh -Now $later)
+    Check ($twice.Count -eq 1 -and $twice[0].deviceName -ceq "self") "a device that is both the hub's own and in the register is listed once, as the hub's own"
+    Check (@(Get-HordeHubListedNodes -Own @($own) -HordeHome (Join-Path $tmp "no-such-home") -Now $later).Count -eq 1) "CONTROL: with no register, only the hub's own node"
+
+    Write-Host ""
     Write-Host "--- a node's last-known address (mesh v1): private only, kept on renewal, live devices only ---" -ForegroundColor Cyan
     $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $third -Transport "fake" -Key $key2 -Expires "20991231" -Now $later -Address "192.168.1.156"
     Check ((Read-HordeHubEnrolment -HordeHome $hh -DeviceId $third).value.address -ceq "192.168.1.156") "an enrolment with -Address records it"

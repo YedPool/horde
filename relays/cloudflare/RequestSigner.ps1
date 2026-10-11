@@ -41,7 +41,8 @@ function New-HordeCloudflareRelayMachineAuthorization {
 }
 
 function Open-HordeCloudflareRelaySigner {
-    # This machine's signing key, opened to sign requests: known { keyId; key } (the caller keeps it for
+    # This machine's signing key, opened to sign requests: known { keyId; key; horde; generation } (the
+    # caller keeps it for
     # the connection's life), or the identity's own answer - absent with no identity yet, unknown when it
     # is damaged - so the founder reads what to do. The agreement key is closed at once: it is not
     # needed here.
@@ -49,5 +50,5 @@ function Open-HordeCloudflareRelaySigner {
     $id = Get-HordeRelayMachineIdentity -HordeHome $HordeHome -Open
     if ($id.state -cne "known") { return $id }
     $id.value.agree.key.Dispose()
-    return (New-HordeKnown -Value ([pscustomobject]@{ keyId = $id.value.sign.keyId; key = $id.value.sign.key; horde = $id.value.horde }))
+    return (New-HordeKnown -Value ([pscustomobject]@{ keyId = $id.value.sign.keyId; key = $id.value.sign.key; horde = $id.value.horde; generation = $id.value.generation }))
 }

@@ -2,7 +2,7 @@
 #
 # Mesh v1 (2026-10-11). Off loopback, `horde listen` keeps one inbound rule named "Horde listen <hubId>":
 # TCP to the listen address and port only, from the enrolled nodes' last-known addresses or -AllowFrom
-# only, Private and Domain profiles only, removed when it stops (core/FirewallPort.ps1,
+# only, Private and Domain profiles only (Public too only with -AllowPublicProfile), removed when it stops (core/FirewallPort.ps1,
 # cli/ListenFirewall.ps1). It is idempotent and owned by name, never touches another rule, and never
 # elevates: without an administrator it refuses with the exact one line to run.
 #
@@ -25,8 +25,8 @@ $ours = "Horde listen " + $hub
 function New-FakeFirewall {
     # An in-memory firewall: { rules (name -> rule); calls; elevated; adapter }. It holds three rules that
     # are not ours, as a real one does.
-    param([bool]$Elevated = $true, [scriptblock]$OnSet = $null)
-    $st = [pscustomobject]@{ rules = [ordered]@{}; calls = (New-Object System.Collections.ArrayList); elevated = $Elevated; onSet = $OnSet }
+    param([bool]$Elevated = $true, [scriptblock]$OnSet = $null, [AllowEmptyString()][string]$Category = "Private")
+    $st = [pscustomobject]@{ rules = [ordered]@{}; calls = (New-Object System.Collections.ArrayList); elevated = $Elevated; onSet = $OnSet; category = $Category }
     $st.rules["RemoteDesktop-UserMode-In-TCP"] = [pscustomobject]@{ name = "RemoteDesktop-UserMode-In-TCP"; direction = "Inbound"; action = "Allow"; protocol = "TCP"; localAddress = "Any"; localPort = 3389; remoteAddresses = @("Any"); profiles = @("Domain", "Private", "Public"); enabled = $false }
     $st.rules["Some App In"] = [pscustomobject]@{ name = "Some App In"; direction = "Inbound"; action = "Allow"; protocol = "TCP"; localAddress = "Any"; localPort = 8080; remoteAddresses = @("Any"); profiles = @("Private"); enabled = $true }
     $st.rules[("Horde listen " + $otherHub)] = [pscustomobject]@{ name = ("Horde listen " + $otherHub); direction = "Inbound"; action = "Allow"; protocol = "TCP"; localAddress = "10.0.0.1"; localPort = 2222; remoteAddresses = @("10.0.0.9"); profiles = @("Domain", "Private"); enabled = $true }
@@ -37,6 +37,7 @@ function New-FakeFirewall {
         get = { param($Name) [void]$st.calls.Add("get " + $Name); if ($st.rules.Contains($Name)) { return $st.rules[$Name] } return $null }.GetNewClosure()
         set = { param($Spec) [void]$st.calls.Add("set " + $Spec.name); if ($null -ne $st.onSet) { & $st.onSet $Spec; return }; $st.rules[$Spec.name] = [pscustomobject]@{ name = $Spec.name; direction = $Spec.direction; action = $Spec.action; protocol = $Spec.protocol; localAddress = $Spec.localAddress; localPort = $Spec.localPort; remoteAddresses = @($Spec.remoteAddresses); profiles = @($Spec.profiles); enabled = $true } }.GetNewClosure()
         remove = { param($Name) [void]$st.calls.Add("remove " + $Name); if ($st.rules.Contains($Name)) { $st.rules.Remove($Name) } }.GetNewClosure()
+        category = { param($Address) [void]$st.calls.Add("category " + $Address); if ($st.category -eq "") { return $null }; return $st.category }.GetNewClosure()
     }
     $st | Add-Member -NotePropertyName adapter -NotePropertyValue $adapter
     return $st
@@ -46,13 +47,16 @@ $lan = [pscustomobject]@{ address = "192.168.1.182"; family = "v4"; kind = "priv
 $lo = [pscustomobject]@{ address = "127.0.0.1"; family = "v4"; kind = "loopback"; loopback = $true }
 
 Write-Host ""
-Write-Host "--- the rule as it should be: TCP, the listen address and port, the nodes only, never Public ---" -ForegroundColor Cyan
+Write-Host "--- the rule as it should be: TCP, the listen address and port, the nodes only, Public only when asked ---" -ForegroundColor Cyan
 $sp = New-HordeListenRuleSpec -HubId $hub -Address "192.168.1.182" -Port 2222 -AllowFrom @("192.168.1.156")
 Check ($sp.state -ceq "known") ("CONTROL: a rule for a LAN listener can be made (" + $sp.reason + ")")
 $s = $sp.value
 Check ($s.name -ceq $ours -and $s.direction -ceq "Inbound" -and $s.action -ceq "Allow" -and $s.protocol -ceq "TCP" -and $s.localAddress -ceq "192.168.1.182" -and $s.localPort -eq 2222) "named 'Horde listen <hubId>', inbound, allow, TCP, to the listen address and port only"
-Check ((@($s.remoteAddresses) -join ",") -ceq "192.168.1.156" -and (@($s.profiles) -join ",") -ceq "Domain,Private") "from the nodes' addresses only, on the Private and Domain profiles only, never Public"
+Check ((@($s.remoteAddresses) -join ",") -ceq "192.168.1.156" -and (@($s.profiles) -join ",") -ceq "Domain,Private") "from the nodes' addresses only, on the Private and Domain profiles only, never Public unasked"
 Check ($null -eq $s.PSObject.Properties["program"]) "it names no program: the port names no listener"
+$sPub = (New-HordeListenRuleSpec -HubId $hub -Address "192.168.1.182" -Port 2222 -AllowFrom @("192.168.1.156") -AllowPublicProfile).value
+Check ((@($sPub.profiles) -join ",") -ceq "Domain,Private,Public") ("-AllowPublicProfile adds the Public profile, and only it (" + (@($sPub.profiles) -join ",") + ")")
+Check ((@(Get-HordeListenRuleProfiles) -join ",") -ceq "Domain,Private" -and (@(Get-HordeListenRuleProfiles -AllowPublicProfile:$false) -join ",") -ceq "Domain,Private") "without the switch, or with it false, the profiles are Domain and Private"
 foreach ($bad in @(
         @{ a = "127.0.0.1"; p = 2222; f = @("192.168.1.156"); want = "*loopback*" },
         @{ a = "8.8.8.8"; p = 2222; f = @("192.168.1.156"); want = "*public address*" },
@@ -66,6 +70,20 @@ foreach ($bad in @(
 }
 $threw = ""; try { $null = Get-HordeListenRuleName -HubId "HUB" } catch { $threw = $_.Exception.Message }
 Check ($threw -like "*not a hub id*") "a rule is only ever named by a hub id"
+
+Write-Host ""
+Write-Host "--- the network's profile is read through the adapter, never guessed ---" -ForegroundColor Cyan
+foreach ($c in @(@{ c = "Public"; want = "Public" }, @{ c = "Private"; want = "Private" }, @{ c = "DomainAuthenticated"; want = "Domain" })) {
+    $n = Get-HordeListenNetworkProfile -Firewall (New-FakeFirewall -Category $c.c).adapter -Address "192.168.1.182"
+    Check ($n.state -ceq "known" -and $n.value -ceq $c.want) ("a " + $c.c + " network is the " + $c.want + " profile (" + $n.value + $n.reason + ")")
+}
+foreach ($c in @("", "public", "Unknown")) {
+    $n = Get-HordeListenNetworkProfile -Firewall (New-FakeFirewall -Category $c).adapter -Address "192.168.1.182"
+    Check ($n.state -ceq "unknown") ("a category of '" + $c + "' is unknown, never a guess (" + $n.reason + ")")
+}
+$boom = New-FakeFirewall
+$boom.adapter.category = { param($Address) throw "no such cmdlet" }
+Check ((Get-HordeListenNetworkProfile -Firewall $boom.adapter -Address "192.168.1.182").reason -like "*could not be read: no such cmdlet*") "a category that cannot be read is unknown, with the reason"
 
 Write-Host ""
 Write-Host "--- written idempotently, owned by name, touching nothing else ---" -ForegroundColor Cyan
@@ -126,10 +144,35 @@ $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\horde\horde.
 Check (-not $o.ok -and $o.reason.EndsWith("In an elevated PowerShell, run: " + $cmd) -and -not $plain.rules.Contains($ours)) ("not elevated: refused with the exact one line to run elevated, and no rule (" + $o.reason + ")")
 Check ((Get-HordeListenElevationCommand -Root "C:\horde" -Address "192.168.1.182" -Port 2222) -ceq 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\horde\horde.ps1" listen -Address 192.168.1.182 -Port 2222') "with no -AllowFrom and no -Seconds the line carries neither"
 $o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall $known -Known @("192.168.1.156", "192.168.1.160") -Root "C:\horde"
-Check ($o.ok -and $o.rule -ceq $ours -and (@($fw.rules[$ours].remoteAddresses) -join ",") -ceq "192.168.1.156,192.168.1.160" -and $o.said -like "*enrolled nodes' last-known addresses*Private and Domain profiles only*") ("with no -AllowFrom, the enrolled nodes' last-known addresses are let in (" + $o.said + ")")
+Check ($o.ok -and $o.rule -ceq $ours -and (@($fw.rules[$ours].remoteAddresses) -join ",") -ceq "192.168.1.156,192.168.1.160" -and (@($fw.rules[$ours].profiles) -join ",") -ceq "Domain,Private" -and $o.said -like "*enrolled nodes' last-known addresses), Domain and Private profiles only") ("with no -AllowFrom, the enrolled nodes' last-known addresses are let in (" + $o.said + ")")
 $o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall $known -AllowFrom @("192.168.1.156") -Known @("192.168.1.160") -Root "C:\horde"
 Check ($o.ok -and (@($fw.rules[$ours].remoteAddresses) -join ",") -ceq "192.168.1.156" -and $o.said -like "*(-AllowFrom)*") "-AllowFrom, when given, is the whole list"
 Check ((Close-HordeListenFirewall -Firewall $known -Rule $ours) -like "*removed*" -and -not $fw.rules.Contains($ours)) "and when horde listen stops, the rule is removed"
+
+Write-Host ""
+Write-Host "--- a Public network: refused without -AllowPublicProfile, the rule widened only with it ---" -ForegroundColor Cyan
+$pub = New-FakeFirewall -Category "Public"
+$pubBefore = Get-Others $pub
+$o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $pub.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde"
+Check (-not $o.ok -and -not $pub.rules.Contains($ours) -and @($pub.calls | Where-Object { $_ -like "set *" -or $_ -like "remove *" -or $_ -ceq "elevated" }).Count -eq 0) ("a Public network without the switch is refused before elevation is asked and before any rule is written (" + (@($pub.calls) -join "; ") + ")")
+Check ($o.reason -like "*192.168.1.182*treats as Public*Domain and Private profiles*-AllowPublicProfile*set that network to Private*every other inbound rule*") ("the refusal names the address and both choices, and what Private turns on (" + $o.reason + ")")
+Check ($o.reason -notmatch "[\r\n]") "the refusal is one paragraph"
+$plainPub = New-FakeFirewall -Elevated $false -Category "Public"
+$o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $plainPub.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde"
+Check (-not $o.ok -and $o.reason -like "*-AllowPublicProfile*" -and $o.reason -notlike "*elevated PowerShell*") "not elevated on a Public network: the Public refusal comes first, so nobody elevates for nothing"
+$o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $plainPub.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde" -AllowPublicProfile
+Check (-not $o.ok -and $o.reason.EndsWith(" listen -Address 192.168.1.182 -Port 2222 -AllowFrom 192.168.1.156 -AllowPublicProfile")) ("with the switch, the line to run elevated carries it (" + $o.reason + ")")
+$o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $pub.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde" -AllowPublicProfile
+Check ($o.ok -and (@($pub.rules[$ours].profiles) -join ",") -ceq "Domain,Private,Public" -and (@($pub.rules[$ours].remoteAddresses) -join ",") -ceq "192.168.1.156" -and $pub.rules[$ours].localAddress -ceq "192.168.1.182" -and $pub.rules[$ours].localPort -eq 2222) "with -AllowPublicProfile the rule adds Public, still held to the address, the port and the nodes"
+Check ($o.said -like "*, Domain, Private and Public profiles only") ("the said-line names the profiles actually used (" + $o.said + ")")
+Check ((Get-Others $pub) -ceq $pubBefore) "and no other rule is touched"
+$o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $pub.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde"
+Check (-not $o.ok -and (@($pub.rules[$ours].profiles) -join ",") -ceq "Domain,Private,Public") "run again without the switch on that Public network: refused, and the rule is not rewritten"
+foreach ($c in @("Private", "DomainAuthenticated", "", "Unknown")) {
+    $ok = New-FakeFirewall -Category $c
+    $o = Open-HordeListenFirewall -Where $lan -Port 2222 -HubId $hub -Firewall (New-HordeKnown -Value $ok.adapter) -AllowFrom @("192.168.1.156") -Root "C:\horde"
+    Check ($o.ok -and (@($ok.rules[$ours].profiles) -join ",") -ceq "Domain,Private" -and @($ok.calls | Where-Object { $_ -ceq "category 192.168.1.182" }).Count -eq 1) ("a network of category '" + $c + "' without the switch: listens, the rule never includes Public (" + $o.reason + ")")
+}
 Check ((Close-HordeListenFirewall -Firewall $known -Rule "") -ceq "") "with no rule made, nothing is removed"
 
 Write-Host ""
@@ -137,9 +180,9 @@ Write-Host "--- the port finds its adapter, and the Windows adapter only ever na
 $saved = @($script:HordeFirewalls)
 $script:HordeFirewalls.Clear()
 Check ((Get-HordeFirewall).state -ceq "unknown") "no adapter loaded: unknown, never a guess"
-Register-HordeFirewall -Name "elsewhere" -Applies { $false } -Elevated { $true } -Get { } -Set { } -Remove { }
+Register-HordeFirewall -Name "elsewhere" -Applies { $false } -Elevated { $true } -Get { } -Set { } -Remove { } -Category { }
 Check ((Get-HordeFirewall).state -ceq "unknown") "an adapter for another system is not used"
-Register-HordeFirewall -Name "here" -Applies { $true } -Elevated { $true } -Get { } -Set { } -Remove { }
+Register-HordeFirewall -Name "here" -Applies { $true } -Elevated { $true } -Get { } -Set { } -Remove { } -Category { }
 Check ((Get-HordeFirewall).value.name -ceq "here") "the adapter for this system is"
 $script:HordeFirewalls.Clear(); foreach ($x in $saved) { [void]$script:HordeFirewalls.Add($x) }
 $files = @(Get-HordeFirewallFiles -Root $root)
@@ -155,6 +198,8 @@ $filters = @($fwCalls | Where-Object { "$($_.GetCommandName())" -notlike "*-NetF
 Check (@($filters | Where-Object { "$($_.GetCommandName())" -notlike "Get-NetFirewall*Filter" }).Count -eq 0) "beyond the rule cmdlets it only reads that rule's filters"
 $text = [System.IO.File]::ReadAllText($files[0])
 Check ($text -notmatch '(?i)-DisplayName\s+\$Name|-Group|Set-NetFirewallProfile|Set-NetFirewallSetting|RunAs|Start-Process|-Verb') "it selects no rule by display name or group, changes no profile or setting, and starts nothing, elevated or not"
-Check ($text -notmatch '(?i)Public') "it never names the Public profile: the profiles are the spec's, Domain and Private"
+Check ($text -notmatch '(?i)Public') "it never names the Public profile: the profiles are the spec's, and Public only by -AllowPublicProfile"
+$netCalls = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and "$($n.GetCommandName())" -match '-Net(IPAddress|ConnectionProfile)$' }, $true) | ForEach-Object { "$($_.GetCommandName())" })
+Check ((($netCalls | Sort-Object) -join ",") -ceq "Get-NetConnectionProfile,Get-NetIPAddress") ("the category is only read: Get-NetIPAddress then Get-NetConnectionProfile, never set (" + ($netCalls -join ",") + ")")
 
 Complete-HordeSuite -Success "horde listen keeps one firewall rule of its own, only as wide as its nodes, removed when it stops, and never elevates or touches another rule"

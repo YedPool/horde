@@ -15,25 +15,27 @@
            Find = 'if (owner && owner.account !== account) return { ok: false, status: 409,'
            Replace = 'if (false) return { ok: false, status: 409,' }
         @{ Name = "spent-grant-taken-again"
-           Find = 'if (spent !== undefined && !owner) return { ok: false, status: 409,'
+           Find = 'if (spent !== undefined && !same) return { ok: false, status: 409,'
            Replace = 'if (false) return { ok: false, status: 409,' }
         @{ Name = "released-by-any-account"
            Find = 'if (!owner || owner.account !== account) return false;'
            Replace = 'if (!owner) return false;' }
         @{ Name = "signature-not-verified"
-           Find = 'if (!(await verifyMachineSignature(point, signed, sigBytes))) return { refused:'
-           Replace = 'if (false) return { refused:' }
+           Find = 'if (!(await verifyMachineSignature(point, signed, sigBytes))) return refused('
+           Replace = 'if (false) return refused(' }
         @{ Name = "replay-taken"
-           Find = 'if ((await storage.get(SEEN + nonce)) !== undefined) return { refused:'
-           Replace = 'if (false) return { refused:' }
+           Find = 'if ((await storage.get(SEEN + nonce)) !== undefined) return refused('
+           Replace = 'if (false) return refused(' }
         @{ Name = "nonce-not-kept"
            Find = 'await storage.put({ [SEEN + nonce]: now, [SEEN_AT + pad(now) + ":" + nonce]: nonce });'
            Replace = '' }
         @{ Name = "nonces-forgotten-at-once"
-           Find = 'await forgetNonces(storage, now - 2 * MAX_SKEW_MS - 1000);'
-           Replace = 'await forgetNonces(storage, now + 1);' }
+           Find = 'await forgetNonces(storage, now - 2 * MAX_SKEW_MS - 1000)'
+           Replace = 'await forgetNonces(storage, now + 1)'
+           Expect = "survives"
+           Reason = "Since relay PR 8c a request forgets the old nonces BEFORE it keeps its own (so the nonce bound counts what is kept), so a replay sent straight after its original - this suite's - still meets its nonce. cloudflare-worker-machines-limits.psd1 holds the same mutant against test-cloudflare-limits.ps1, which replays a request after four others, and catches it." }
         @{ Name = "registered-to-no-horde"
-           Find = 'return { account: owner.account, horde: owner.horde };'
-           Replace = 'return { account: owner.account, horde: "work" === owner.horde ? undefined : owner.horde };' }
+           Find = 'return { account: owner.account, epoch: owner.epoch, horde: owner.horde, label: owner.label };'
+           Replace = 'return { account: owner.account, epoch: owner.epoch, horde: "work" === owner.horde ? undefined : owner.horde, label: owner.label };' }
     )
 }

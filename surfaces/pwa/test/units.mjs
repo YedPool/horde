@@ -44,9 +44,9 @@ async function newMachine(horde) {
 }
 // relay/Pairing.ps1's offer, its members in their order.
 // Its account grant is the relay's to verify, so a phone reads only its shape: here, 64 zero bytes.
-function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = "A".repeat(86) } = {}) {
+function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = "A".repeat(86), label = "build-box" } = {}) {
   return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + id + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
-    '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
+    '","label":"' + label + '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
     '","pairMailbox":"' + (pairMailbox === null ? m.horde + "/pair-" + id : pairMailbox) + '","rpId":"' + rpId +
     '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + ',"grant":"' + grant + '"}';
 }
@@ -144,6 +144,8 @@ async function pairedApp(transport, m, opts = {}) {
   check(!(await P.readOffer(offerText(m, { agreeKeyId: "0".repeat(32) }))).ok, "an offer whose agreement key is not the one it names is refused");
   check(!(await P.readOffer(offerText(m).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
   check(!(await P.readOffer(offerText(m).replace(/,"grant":"[^"]*"/, ""))).ok, "an offer with no account grant is refused");
+  check((await P.readOffer(offerText(m))).value.label === "build-box", "an offer names its machine by the label its grant signs");
+  check(!(await P.readOffer(offerText(m).replace(/,"label":"[^"]*"/, ""))).ok && !(await P.readOffer(offerText(m, { label: " padded" }))).ok && !(await P.readOffer(offerText(m, { label: "x".repeat(65) }))).ok, "and one with no label, or a label a record cannot hold, is refused");
   check(!(await P.readOffer(offerText(m, { grant: "A".repeat(85) }))).ok && !(await P.readOffer(offerText(m, { grant: "A".repeat(84) + "+/" }))).ok, "and one whose grant is not 64 bytes of base64url");
   const app = newApp(R.memoryTransport());
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
@@ -153,8 +155,8 @@ async function pairedApp(transport, m, opts = {}) {
 // --- 3a. the account grant, and the machine signature check the hosted relay makes (relay/Pairing.ps1) ---
 {
   const m = await newMachine("work");
-  const g = { horde: "work", offer: "0123456789abcdef0123456789abcdef", machine: m.keyId, expiresAt: 1760000000000 };
-  check(P.fromUtf8(P.accountGrantBytes(g)) === "horde-relay/pairing/v1 account-grant\nwork\n0123456789abcdef0123456789abcdef\n" + m.keyId + "\n1760000000000", "the grant signs the domain, the horde, the offer, the machine and the expiry, one to a line");
+  const g = { horde: "work", offer: "0123456789abcdef0123456789abcdef", machine: m.keyId, expiresAt: 1760000000000, label: "build-box" };
+  check(P.fromUtf8(P.accountGrantBytes(g)) === "horde-relay/pairing/v1 account-grant\nwork\n0123456789abcdef0123456789abcdef\n" + m.keyId + "\n1760000000000\nbuild-box", "the grant signs the domain, the horde, the offer, the machine, the expiry and the label, one to a line");
   const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, P.accountGrantBytes(g)));
   const n = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
   const s = BigInt("0x" + P.hex(sig.slice(32)));
@@ -163,6 +165,7 @@ async function pairedApp(transport, m, opts = {}) {
   check(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low)), "a low-S signature by the machine's key verifies");
   check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(n - low))), "its high-S twin does not: one message, one signature");
   check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes({ ...g, expiresAt: g.expiresAt + 1 }), withS(low))), "nor does the signature over another expiry");
+  check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes({ ...g, label: "evil-box" }), withS(low))), "nor over another label");
   const other = await newMachine("work");
   check(!(await P.verifyMachineSignature(other.signPublic, P.accountGrantBytes(g), withS(low))), "nor under another machine's key");
   check(!(await P.verifyMachineSignature(m.signPublic.slice(1), P.accountGrantBytes(g), withS(low))) && !(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low).slice(1))), "and a key or a signature of the wrong length is false, not a throw");
@@ -193,7 +196,7 @@ async function pairedApp(transport, m, opts = {}) {
   const paired = await app.phone.pair({ offerText: text2, label: "Founder phone" });
   const sent = calls[calls.length - 1];
   check(paired.relayed === true && order.join(",") === "register,put", "signed in, the phone registers the machine first, then sends its response through the relay", order.join(","));
-  check(sent.horde === "work" && sent.offer === o2.offer && sent.machine === m.keyId && sent.signPublic === o2.signPublic && sent.expiresAt === o2.expiresAt && sent.grant === o2.grant, "with the offer's horde, id, machine, signing key, expiry and account grant", JSON.stringify(sent));
+  check(sent.horde === "work" && sent.offer === o2.offer && sent.machine === m.keyId && sent.label === "build-box" && sent.signPublic === o2.signPublic && sent.expiresAt === o2.expiresAt && sent.grant === o2.grant, "with the offer's horde, id, machine, label, signing key, expiry and account grant", JSON.stringify(sent));
   const bad = createPhone({ store: memoryStore(), authenticator: softAuthenticator({ origin, prf: true }), relay: R.createRelayClient(R.memoryTransport()), account: said({ state: "unknown", value: null, reason: "the relay answered 409: this machine's key is registered to another account", status: 409 }), origin });
   const why = await throwsAsync(() => bad.pair({ offerText: offerText(m), label: "Founder phone" }));
   check(why.indexOf("did not register") >= 0 && why.indexOf("409") < 0, "a registration the relay refuses stops the pairing, in the app's own words", why);
@@ -204,14 +207,19 @@ async function pairedApp(transport, m, opts = {}) {
   const sent = [];
   const fake = async (url, init) => { sent.push({ url, init }); return new Response(JSON.stringify({ keyId: "k" }), { status: 200 }); };
   const a = AC.accountClient(fake, "");
-  const offer = { horde: "work", offer: "0".repeat(32), machine: "1".repeat(32), signPublic: "AAAA", expiresAt: 5, grant: "G", code: "secret-code", agreePublic: "x", text: "whole" };
+  const offer = { horde: "work", offer: "0".repeat(32), machine: "1".repeat(32), label: "build-box", signPublic: "AAAA", expiresAt: 5, grant: "G", code: "secret-code", agreePublic: "x", text: "whole" };
   await a.registerMachine(offer);
   const r = sent[0];
   check(r.url === "/v1/account/machines" && r.init.method === "POST" && r.init.credentials === "same-origin" && r.init.redirect === "error", "the account client posts a registration to its own origin with the browser's cookie, and follows no redirect");
-  check(Object.keys(JSON.parse(r.init.body)).join(",") === "horde,offer,machine,signPublic,expiresAt,grant", "carrying exactly the six fields the relay takes - never the offer's code", r.init.body);
+  check(Object.keys(JSON.parse(r.init.body)).join(",") === "horde,offer,machine,label,signPublic,expiresAt,grant", "carrying exactly the seven fields the relay takes - never the offer's code", r.init.body);
   check((await a.removeMachine("../../v1/x")).state === "unknown" && sent.length === 1, "a removal of something that is not a key id is never sent");
   await a.removeMachine("2".repeat(32));
   check(sent[1].url === "/v1/account/machines/" + "2".repeat(32) && sent[1].init.method === "DELETE", "and a key id's removal is a DELETE of that machine");
+  check((await a.signOutPhone("../x")).state === "unknown" && sent.length === 2, "a phone's sign-out of something that is not a phone's id is never sent");
+  await a.signOutPhone("3".repeat(64));
+  check(sent[2].url === "/v1/account/phones/" + "3".repeat(64) && sent[2].init.method === "DELETE" && sent[2].init.credentials === "same-origin", "and a phone's id's sign-out is a DELETE of that phone");
+  await a.deleteAccount();
+  check(sent[3].url === "/v1/account" && sent[3].init.method === "DELETE" && JSON.parse(sent[3].init.body).confirm === AC.DELETE_CONFIRM && Object.keys(JSON.parse(sent[3].init.body)).join(",") === "confirm" && AC.DELETE_CONFIRM === "delete this account", "deleting the account is a DELETE of it carrying the words the relay asks for, and nothing else", sent[3].init.body);
   const no = AC.accountClient(async () => new Response(JSON.stringify({ error: "x".repeat(500) }), { status: 401 }), "");
   const n = await no.session();
   check(n.state === "unknown" && n.status === 401 && n.reason.length < 260, "a refusal comes back unknown with its status, the relay's words cut short");
@@ -674,6 +682,18 @@ const turn = (id, role, text, extra = {}) => ({ id, role, session: "sess-1", tex
   const broken = t.watch("work/phone", 4, 9, 10000);
   sockets[2].onerror();
   check((await broken).state === "unknown", "a watch whose socket fails is unknown");
+  const ended = t.watch("work/phone", 4, 9, 10000);
+  sockets[3].onmessage({ data: JSON.stringify({ error: "replaced by a newer watch of this device", code: "watch-replaced" }) });
+  const ev = await ended;
+  check(ev.state === "unknown" && ev.reason.indexOf("replaced") >= 0 && sockets[3].closed, "a watch the relay ends in its one message (replaced by a newer one) is a failed watch, never nothing come", JSON.stringify(ev));
+  const shut = t.watch("work/phone", 4, 9, 10000);
+  sockets[4].onclose({ code: 4001 });
+  const sv = await shut;
+  check(sv.state === "unknown" && sv.reason.indexOf("replaced") >= 0, "and so is one the relay closes with a code of its own, 4001", JSON.stringify(sv));
+  const done = t.watch("work/phone", 4, 9, 10000);
+  sockets[5].onclose({ code: 1000 });
+  check((await done).state === "known", "CONTROL: a plain close is still nothing come");
+  sockets.splice(3, 3);
   const before = calls.length;
   replies.push({ status: 200, body: { items: [] } });
   await t.watch("work/phone", 4, 9, 0);

@@ -279,7 +279,7 @@ export function credentialFromAttestation(attestationObject) {
 
 // --- pairing (relay/Pairing.ps1) ---
 
-const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "pairMailbox", "rpId", "origins", "issuedAt", "expiresAt", "grant"];
+const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "label", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "pairMailbox", "rpId", "origins", "issuedAt", "expiresAt", "grant"];
 const LABEL = /^[\x21\x23-\x5b\x5d-\x7e](?:[\x20\x21\x23-\x5b\x5d-\x7e]{0,62}[\x21\x23-\x5b\x5d-\x7e])?$/;
 export const PAIRING_CHALLENGE_DOMAIN = "horde-relay/pairing/v1 challenge\n";
 
@@ -304,6 +304,8 @@ export async function readOffer(text, now = Date.now()) {
   if (typeof o.offer !== "string" || !/^[0-9a-f]{32}$/.test(o.offer)) return no("the offer's id is not 32 lower-case hex");
   if (typeof o.code !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(o.code)) return no("the offer's code is not base64url");
   if (typeof o.machine !== "string" || !KEY_ID.test(o.machine) || typeof o.agreeKeyId !== "string" || !KEY_ID.test(o.agreeKeyId)) return no("the offer's key ids are not key ids");
+  // The machine's name, as its grant signs it (ACCOUNT GRANT, below): what the Account screen shows.
+  if (!validLabel(o.label)) return no("the offer's machine label is not a label");
   if (typeof o.mailbox !== "string" || o.mailbox !== o.horde + "/" + o.machine) return no("the offer's mailbox is not its horde and machine");
   // relay/Pairing.ps1's Get-HordeRelayPairingMailbox: the offer's own mailbox, so nothing in an offer
   // can send the response anywhere else.
@@ -363,8 +365,37 @@ export function pairingKey(offerId) { return "pairing/" + offerId; }
 // lines. A hosted relay with accounts takes the machine's signing key into the signed-in phone's account
 // only with a grant that verifies under that very key and has not expired, once per offer - so a key
 // whose public half is known is still not anyone's to register without a live offer of its machine.
+// The label is the machine's name (relay PR 8c), signed with the rest, so the name the Account screen
+// shows is the one the machine gave.
 export const ACCOUNT_GRANT_DOMAIN = "horde-relay/pairing/v1 account-grant\n";
-export function accountGrantBytes({ horde, offer, machine, expiresAt }) { return utf8(ACCOUNT_GRANT_DOMAIN + horde + "\n" + offer + "\n" + machine + "\n" + expiresAt); }
+export function accountGrantBytes({ horde, offer, machine, expiresAt, label }) { return utf8(ACCOUNT_GRANT_DOMAIN + horde + "\n" + offer + "\n" + machine + "\n" + expiresAt + "\n" + label); }
+
+// relay/Identity.ps1's RETIREMENT RECORD, read as a relay reads it (relay PR 8c): a rotated machine
+// hands the hosted relay the record its old signing key vouched for, and the relay moves the old key's
+// registration to the successor named in it (the hosted relay's rotation route). Its one canonical
+// form (relay/Records.ps1: these members, in this order, each of its kind; the vouch last), and the
+// bytes the vouch signs: the domain, then the record with an empty vouch. { ok, reason, value } with
+// value { horde, generation, signKeyId, successor, successorSignKeyId, successorSignPublic, vouch,
+// signed }; never throws.
+export const ROTATION_VOUCH_DOMAIN = "horde-relay/rotation/v1 vouch\n";
+const RECORD_INT = "(0|[1-9][0-9]{0,15})";
+const RETIRED = new RegExp("^\\{\"v\":1,\"kind\":\"horde-relay-machine-retired\",\"horde\":\"([a-z0-9][a-z0-9-]{0,62})\",\"generation\":" + RECORD_INT +
+  ",\"signKeyId\":\"([0-9a-f]{32})\",\"agreeKeyId\":\"([0-9a-f]{32})\",\"successor\":" + RECORD_INT +
+  ",\"successorSignKeyId\":\"([0-9a-f]{32})\",\"successorSignPublic\":\"([A-Za-z0-9_-]{87})\",\"successorAgreeKeyId\":\"([0-9a-f]{32})\",\"successorAgreePublic\":\"([A-Za-z0-9_-]{87})\"" +
+  ",\"reason\":\"([\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]{0,512})\",\"retiredAt\":" + RECORD_INT + ",\"agreeKeptUntil\":" + RECORD_INT + ",\"vouch\":\"([A-Za-z0-9_-]{0,8192})\"\\}$");
+export function readRetirement(text) {
+  const no = (reason) => ({ ok: false, reason, value: null });
+  if (typeof text !== "string" || text.length > 16384) return no("the retirement record is not a short text");
+  const m = RETIRED.exec(text);
+  if (!m) return no("the retirement record is not in its canonical form");
+  const vouch = m[13];
+  if (vouch === "") return no("the retirement record carries no vouch: the old key was lost, so the machine must be paired again");
+  const generation = Number(m[2]);
+  const successor = Number(m[5]);
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(successor) || successor <= generation) return no("the retirement record's successor does not come after it");
+  const signed = utf8(ROTATION_VOUCH_DOMAIN + text.slice(0, text.length - vouch.length - 2) + "\"}");
+  return { ok: true, reason: "", value: { horde: m[1], generation, signKeyId: m[3], successor, successorSignKeyId: m[6], successorSignPublic: m[7], vouch, signed } };
+}
 
 // relay/P256.ps1's Test-HordeRelayEs256Signature: does sig (64 bytes, r || s) verify over bytes under
 // the 65-byte point, with s <= n/2 (LOW-S there: a high-S twin is refused, so one message has one

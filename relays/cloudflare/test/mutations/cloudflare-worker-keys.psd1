@@ -8,7 +8,7 @@
     Environment = @{ HORDE_FAIL_FAST = "1" }
     Mutations = @(
         @{ Name = "trimmed-key-remembered"
-           Find = 'for (const [name, item] of doomed) names.push(name, KEY + item.key);'
-           Replace = 'for (const [name, item] of doomed) names.push(name);' }
+           Find = 'for (const [name, item] of listed) { names.push(name, KEY + item.key);'
+           Replace = 'for (const [name, item] of listed) { names.push(name);' }
     )
 }

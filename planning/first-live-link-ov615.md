@@ -100,7 +100,7 @@ level asked, the prompt only after it, the session closed and gone by pid and st
 
 | # | Where | Command | Expect |
 |---|-------|---------|--------|
-| 17 | hub | `horde hub revoke -Device <ov615Id>` | Within one round the hub refuses OV615's link (`... is not enrolled: device <ov615Id> was revoked ...`) and step 6's listener stops, saying the register no longer holds OV615. `horde nodes` says `[dialled, NOT ENROLLED: ...revoked...]`, and a `horde session spawn -Node <ov615Id> ...` is refused before anything is written. Enrol again with a NEW key (`horde node rotate-key` on OV615, then step 4 with its new line): a revoked key is never enrolled again. |
+| 17 | hub | `horde hub revoke -Device <ov615Id>` | Within one round the hub refuses OV615's link (`... is not enrolled: device <ov615Id> was revoked ...`) and step 6's listener stops, saying the register no longer holds OV615. `horde nodes` no longer lists OV615, and a `horde session spawn -Node <ov615Id> ...` is refused before anything is written. Enrol again with a NEW key (`horde node rotate-key` on OV615, then step 4 with its new line): a revoked key is never enrolled again. |
 
 ## 7. Stop
 

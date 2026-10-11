@@ -608,17 +608,17 @@ function ConvertTo-HordeNodesRecord {
 function ConvertTo-HordeNodesReport {
     # `horde nodes -Json`: the fleet view with every answer in its stored form (state, value, reason,
     # observedAt), so a reader never meets an answer without its state.
-    # -Enrolled is the hub's register (cli/HubRegistry.ps1's Get-HordeHubEnrolledDevices): a node it
-    # holds is dialled, and carries its enrolment { live; reason; expires; address } - a revoked or
-    # expired node is listed and said so, never dropped. Any other node is pulled (the hub's own).
-    param([Parameter(Mandatory = $true)]$Fleet, $Enrolled = @())
+    # -Listed is what `horde nodes` listed (cli/HubRegistry.ps1's Get-HordeHubListedNodes): a node listed
+    # with route "dialled" is one the hub's register holds live, and carries its enrolment { expires;
+    # address }. Any other node is pulled (the hub's own).
+    param([Parameter(Mandatory = $true)]$Fleet, $Listed = @())
     $nodes = @($Fleet.nodes | ForEach-Object {
         $id = "" + $_.deviceId
         $n = [ordered]@{ deviceId = $_.deviceId; deviceName = $_.deviceName; route = "pulled"; heard = (ConvertTo-HordeNodesRecord $_.heard); heardAt = $_.heardAt; complete = (ConvertTo-HordeNodesRecord $_.complete); listed = $_.listed; carried = $_.carried; clockFault = (ConvertTo-HordeNodesRecord $_.clockFault) }
-        $en = @(@($Enrolled) | Where-Object { $null -ne $_ -and "" + $_.deviceId -ceq $id })
+        $en = @(@($Listed) | Where-Object { $null -ne $_ -and "" + $_.deviceId -ceq $id -and "$(Get-HordeLinkProp $_ 'route')" -ceq "dialled" })
         if ($en.Count -ge 1) {
             $n["route"] = "dialled"
-            $n["enrolment"] = [ordered]@{ live = [bool]$en[0].live; reason = "" + $en[0].reason; expires = "" + $en[0].expires; address = "" + $en[0].address }
+            $n["enrolment"] = [ordered]@{ expires = "" + $en[0].expires; address = "" + $en[0].address }
         }
         $n
     })
@@ -639,14 +639,10 @@ function Format-HordeNodesText {
     $lines = New-Object System.Collections.ArrayList
     foreach ($n in @($Report.nodes)) {
         $who = $n.deviceName + " (" + $n.deviceId + ")"
-        # A dialled node says its enrolment first: a revoked one is refused whatever its mirror says.
+        # A dialled node says so, and its enrolment: how long it lasts, and where the node dials from.
         $how = ""
-        $en = $null
-        if ($n -is [System.Collections.IDictionary]) { if ($n.Contains("enrolment")) { $en = $n["enrolment"] } } elseif ($null -ne $n.PSObject.Properties["enrolment"]) { $en = $n.enrolment }
-        if ($null -ne $en) {
-            if ($en.live) { $how = " [dialled, enrolled until " + $en.expires + $(if ("" + $en.address -ne "") { ", from " + $en.address } else { "" }) + "]" }
-            else { $how = " [dialled, NOT ENROLLED: " + $en.reason + "]" }
-        }
+        $en = Get-HordeLinkProp $n "enrolment"
+        if ($null -ne $en) { $how = " [dialled, enrolled until " + $en.expires + $(if ("" + $en.address -ne "") { ", from " + $en.address } else { "" }) + "]" }
         # The node's own reason names it (remote/Mirror.ps1, Get-HordeMirrorNodeAnswer).
         if ($n.heard.state -cne "known") { [void]$lines.Add($n.heard.reason + $how); continue }
         $inv = "inventory partial: " + $n.complete.reason

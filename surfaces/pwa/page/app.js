@@ -335,6 +335,15 @@ $("announceBtn").addEventListener("click", async () => {
 
 // --- the account ---
 
+// A refused sign-in's words, by the code word the hosted relay's sign-in puts after #signin-refused
+// (a limit says which); anything else is the plain refusal.
+const SIGNIN_REFUSED = {
+  "": "Sign-in was refused: this account may not use this relay, or the sign-in took too long. Try again.",
+  ":busy": "Sign-in was refused: too many sign-ins were started from this network just now. Wait a minute and try again.",
+  ":new-accounts": "Sign-in was refused: too many new accounts were made from this network today. Try again tomorrow.",
+  ":phones": "Sign-in was refused: this account has the most phones signed in that it may. Sign one out on another phone's Account screen first.",
+  ":deleting": "Sign-in was refused: this account is being deleted. Try again in a minute."
+};
 async function isSignedIn() {
   if (!account) return true;
   const s = await account.session();
@@ -353,7 +362,9 @@ async function openAccount() {
   for (const m of machines) {
     const li = document.createElement("li");
     const what = document.createElement("span");
-    what.textContent = String(m.horde) + " - machine " + String(m.keyId).slice(0, 12);
+    // The machine's own name, which its grant signed (relay/Pairing.ps1); the key id's start when a
+    // registration carries none.
+    what.textContent = String(m.horde) + " - " + (typeof m.label === "string" && m.label ? m.label : "machine " + String(m.keyId).slice(0, 12));
     const rm = document.createElement("button");
     rm.type = "button";
     rm.textContent = "Remove";
@@ -368,10 +379,41 @@ async function openAccount() {
     list.appendChild(li);
   }
   $("machineEmpty").hidden = machines.length > 0;
+  const phoneList = $("phoneList");
+  while (phoneList.firstChild) phoneList.removeChild(phoneList.firstChild);
+  for (const p of Array.isArray(a.value.phones) ? a.value.phones : []) {
+    const li = document.createElement("li");
+    const what = document.createElement("span");
+    what.textContent = (p.current ? "This phone" : "A phone") + ", signed in " + new Date(Number(p.signedInAt)).toLocaleDateString();
+    li.appendChild(what);
+    if (!p.current) {
+      const out = document.createElement("button");
+      out.type = "button";
+      out.textContent = "Sign out";
+      out.addEventListener("click", async () => {
+        if (!window.confirm("Sign that phone out of your account? It reads nothing more until it signs in again.")) return;
+        const r = await account.signOutPhone(p.id);
+        if (r.state !== "known") say("action", "That phone could not be signed out just now; try again.");
+        await openAccount();
+      });
+      li.appendChild(out);
+    }
+    phoneList.appendChild(li);
+  }
   show("accountView");
 }
 $("accountBtn").addEventListener("click", openAccount);
 $("accountBack").addEventListener("click", () => pick(current || (hordes[0] && hordes[0].id) || ""));
+// DELETING THE ACCOUNT: asked twice in plain words, because nothing brings it back.
+$("deleteAccountBtn").addEventListener("click", async () => {
+  if (!window.confirm("Delete your account on this relay? Every mailbox and what is in it, every machine's registration and every phone's sign-in are deleted at once, for good.")) return;
+  if (!window.confirm("Are you sure? This cannot be undone. Your machines must be paired again to use this relay.")) return;
+  const r = await account.deleteAccount();
+  if (r.state !== "known") { say("action", "The account could not be deleted just now; try again."); return; }
+  await lockAll();
+  say("action", "The account is deleted.");
+  showSignIn();
+});
 $("signOutBtn").addEventListener("click", async () => {
   await lockAll();
   const r = await account.signOut();
@@ -461,8 +503,8 @@ async function resume() {
   await pick(current);
 }
 made.then(async () => {
-  if (window.location.hash === "#signin-refused") {
-    say("action", "Sign-in was refused: this account may not use this relay, or the sign-in took too long. Try again.");
+  if (window.location.hash.startsWith("#signin-refused")) {
+    say("action", SIGNIN_REFUSED[window.location.hash.slice("#signin-refused".length)] || SIGNIN_REFUSED[""]);
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
   if (!(await isSignedIn())) { showSignIn(); return; }

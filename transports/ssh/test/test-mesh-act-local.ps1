@@ -129,7 +129,7 @@ try {
             if ($heard.Count -eq 1) { break }
             Start-Sleep -Milliseconds 1000
         }
-        Check ($null -ne $heard -and $heard.Count -eq 1 -and "$($heard[0].route)" -ceq "dialled" -and $heard[0].enrolment.live -eq $true) ("horde nodes lists the node, dialled, enrolled and heard (" + $(if ($null -ne $node.process -and $node.process.HasExited) { "the node exited: " + (Get-ListenText $node.err) } else { "node running" }) + ")")
+        Check ($null -ne $heard -and $heard.Count -eq 1 -and "$($heard[0].route)" -ceq "dialled" -and "$($heard[0].enrolment.expires)" -ne "") ("horde nodes lists the node, dialled, enrolled and heard (" + $(if ($null -ne $node.process -and $node.process.HasExited) { "the node exited: " + (Get-ListenText $node.err) } else { "node running" }) + ")")
 
         Write-Host ""
         Write-Host "--- spawn, status, two at once, the cap, close: all over the node's one dialled link ---" -ForegroundColor Cyan
@@ -163,7 +163,7 @@ try {
         $nr = Invoke-Horde -HomeDir $hubHome -HordeArgs @($spawn + @("-Label", "J", "-Prompt", "fifth"))
         Check ($nr.code -ne 0 -and $nr.out -clike "*not enrolled live*revoked*" -and @(Get-ChildItem -LiteralPath (Join-Path $hubHome "hub\acts") -Filter "*.json" -File).Count -eq $before5) ("a spawn to the revoked node is refused, nothing written (" + $nr.out.Trim() + ")")
         $nt = Invoke-Horde -HomeDir $hubHome -HordeArgs @("nodes")
-        Check ($nt.out.Contains("[dialled, NOT ENROLLED: ")) ("horde nodes says the node is no longer enrolled (" + $nt.out.Trim() + ")")
+        Check ($nt.code -eq 0 -and -not $nt.out.Contains($nodeId)) ("horde nodes no longer lists the revoked node (" + $nt.out.Trim() + ")")
     }
 } finally {
     Write-Host ""

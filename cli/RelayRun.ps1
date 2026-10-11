@@ -46,6 +46,10 @@
 # (channels/chat) and race on them. The operating system closes a killed run's handle, so a crash never
 # leaves the home locked. The stop file above still obeys every run started before it.
 #
+# THE WATCH. A relay that counts requests declares how long a runner watches it (relays/Port.ps1,
+# -RunWatchMs: the hosted relay's is 60 s, so an always-on machine is 1,440 requests a day), and that is
+# the run's watch on it; on any other relay, the setting watchMs, never past the relay's maxWatchMs.
+#
 # THE SETTINGS are core/ModuleSettings.ps1's, module relay-run (<HORDE_HOME>\settings\relay-run.json),
 # read when the run starts. A file that fails its checks refuses the run, in its own words.
 #
@@ -70,6 +74,15 @@ $script:HordeRelayRunSettings = New-HordeModuleSettings -Module "relay-run" -Set
 )
 # The longest one sleep of the loop: a stop is asked between slices (A CLEAN STOP, above).
 $script:HordeRelayRunSliceMs = 500
+
+function Get-HordeRelayRunWatchMs {
+    # How long one turn's watch waits on -Relay (THE WATCH, in the header): the relay's own run watch
+    # when it declares one, else -SettingMs, never past the relay's maxWatchMs.
+    param([Parameter(Mandatory = $true)][long]$SettingMs, [Parameter(Mandatory = $true)]$Relay)
+    $declared = $Relay.PSObject.Properties["runWatchMs"]
+    if ($null -ne $declared -and [int]$declared.Value -gt 0) { return [int]$declared.Value }
+    return [int][System.Math]::Min([double]$SettingMs, [double]$Relay.limits.maxWatchMs)
+}
 
 function Get-HordeRelayRunSettings {
     # The run's settings: known values, or unknown with the findings of a refused file.
@@ -162,7 +175,7 @@ function Invoke-HordeRelayRun {
     $settings = Get-HordeRelayRunSettings -HordeHome $HordeHome
     if ($settings.state -cne "known") { $null = & $Say ("the run does not start: " + $settings.reason); return [pscustomobject]@{ turns = 0; failures = 0; stoppedBy = "settings" } }
     $set = $settings.value
-    $watchMs = [int][System.Math]::Min([double]$set.watchMs, [double]$Connection.relay.limits.maxWatchMs)
+    $watchMs = Get-HordeRelayRunWatchMs -SettingMs $set.watchMs -Relay $Connection.relay
     $lockPath = Get-HordeRelayRunLockPath -HordeHome $HordeHome
     $lock = $null
     try {

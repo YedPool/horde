@@ -107,7 +107,7 @@ function Get-OfferOf {
     $r = Read-HordeRelayPairingOffer -Text $line
     if (-not $r.ok) { return $null }
     $pend = Read-HordeRelayRecordText -Text ([System.IO.File]::ReadAllText((Join-Path $hh ("relay\pairing\offers\" + $r.value.offer + ".json")))) -Spec (Get-HordeRelayPendingSpec) -Kind "horde-relay-pairing-pending"
-    return [pscustomobject]@{ text = $line; offer = $r.value.offer; code = $r.value.code; pairMailbox = $r.value.pairMailbox; challenge = $pend.value.challenge; expiresAt = $r.value.expiresAt }
+    return [pscustomobject]@{ text = $line; offer = $r.value.offer; code = $r.value.code; pairMailbox = $r.value.pairMailbox; challenge = $pend.value.challenge; expiresAt = $r.value.expiresAt; label = $r.value.label }
 }
 function Get-Fingerprint {
     param($Offer, $Phone)
@@ -137,6 +137,7 @@ try {
         $pngLine = Wait-PairLine -Run $run -Like "Scan this QR code*"
         $offerA = Get-OfferOf $run
         Check ($null -ne $offerA) "the command prints its offer, as text, for the app's paste box"
+        Check ($null -ne $offerA -and $offerA.label -ceq (ConvertTo-HordeDeviceName -Text "$env:COMPUTERNAME")) ("and names the machine in it by the computer's own name, which a hosted relay's Account screen shows (" + $(if ($null -ne $offerA) { $offerA.label } else { "" }) + ")")
         $png = $(if ($null -ne $pngLine) { $pngLine.Substring($pngLine.LastIndexOf(": ") + 2) } else { "" })
         Check ($png -ne "" -and (Test-Path -LiteralPath $png) -and ([System.BitConverter]::ToString([System.IO.File]::ReadAllBytes($png), 0, 4) -ceq "89-50-4E-47")) ("and writes its QR code as a PNG to show (" + $png + ")")
         Check ($null -ne (Wait-PairLine -Run $run -Like ("Waiting for the phone's response through the relay 'local' (" + $offerA.pairMailbox + ")*"))) "it waits on the offer's own pairing mailbox"

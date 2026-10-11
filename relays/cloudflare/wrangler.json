@@ -24,12 +24,14 @@
       { "name": "MAILBOX", "class_name": "Mailbox" },
       { "name": "SESSION", "class_name": "Session" },
       { "name": "ACCOUNT", "class_name": "Account" },
-      { "name": "MACHINE_KEY", "class_name": "MachineKey" }
+      { "name": "MACHINE_KEY", "class_name": "MachineKey" },
+      { "name": "ADDRESS", "class_name": "Address" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Mailbox"] },
-    { "tag": "v2", "new_sqlite_classes": ["Session", "Account", "MachineKey"] }
+    { "tag": "v2", "new_sqlite_classes": ["Session", "Account", "MachineKey"] },
+    { "tag": "v3", "new_sqlite_classes": ["Address"] }
   ],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }]
 }

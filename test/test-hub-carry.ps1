@@ -16,8 +16,8 @@
 #   - only records marked dialled, for this device, still waiting, are carried; one that cannot be
 #     read is said and skipped;
 #   - `horde session` resolves a node in the hub's register, refuses an unknown or revoked one before
-#     anything is written, and queues for a live one; `horde nodes` lists the register's nodes, a
-#     revoked one said so.
+#     anything is written, and queues for a live one; `horde nodes` marks each live dialled node
+#     with its enrolment (Get-HordeHubListedNodes, the one listing).
 #
 # Without a server or a pipe: both ends on the in-process memory transport, the node in a second
 # runspace (test/fixtures/node-serve/dial-peer.ps1) acting through the REAL act path over the fakes of
@@ -320,7 +320,7 @@ try {
 
     Write-Host ""
     Write-Host "--- what the person reads: horde nodes for a heard dialled node; the wait for a carried answer ---" -ForegroundColor Cyan
-    $heardRep = [ordered]@{ nodes = @([ordered]@{ deviceId = $device; deviceName = "OFFICE1"; route = "dialled"; heard = [ordered]@{ state = "known"; value = $true }; heardAt = "2026-10-11T12:00:00.000Z"; complete = [ordered]@{ state = "known"; value = $true }; listed = 2; carried = 0; clockFault = [ordered]@{ state = "known"; value = $false }; enrolment = [ordered]@{ live = $true; reason = ""; expires = "20271011"; address = "192.168.1.156" } }); faults = @() }
+    $heardRep = [ordered]@{ nodes = @([ordered]@{ deviceId = $device; deviceName = "OFFICE1"; route = "dialled"; heard = [ordered]@{ state = "known"; value = $true }; heardAt = "2026-10-11T12:00:00.000Z"; complete = [ordered]@{ state = "known"; value = $true }; listed = 2; carried = 0; clockFault = [ordered]@{ state = "known"; value = $false }; enrolment = [ordered]@{ expires = "20271011"; address = "192.168.1.156" } }); faults = @() }
     $ht = @(Format-HordeNodesText -Report $heardRep)
     Check ($ht.Count -eq 1 -and $ht[0].Contains("OFFICE1 ($device): heard at") -and $ht[0].EndsWith("[dialled, enrolled until 20271011, from 192.168.1.156]")) ("a heard dialled node's line ends with its enrolment (" + ($ht -join " | ") + ")")
     $wd = Join-Path $work "acts-wait"
@@ -367,11 +367,11 @@ try {
     $rep = $null; try { $rep = (($nj.out -split "`n") | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -First 1) | ConvertFrom-Json } catch { }
     $dn = @($rep.nodes | Where-Object { "$($_.deviceId)" -ceq $device })
     $on = @($rep.nodes | Where-Object { "$($_.deviceId)" -ceq $other })
-    Check ($dn.Count -eq 1 -and "$($dn[0].route)" -ceq "dialled" -and $dn[0].enrolment.live -eq $true -and "$($dn[0].enrolment.address)" -ceq "192.168.1.156" -and "$($dn[0].heard.state)" -ceq "unknown") ("horde nodes lists the enrolled node, dialled, live, never heard yet (" + $nj.code + ")")
-    Check ($on.Count -eq 1 -and $on[0].enrolment.live -eq $false -and "$($on[0].enrolment.reason)" -clike "*revoked*") "and the revoked one, listed and said not live, never dropped"
+    Check ($dn.Count -eq 1 -and "$($dn[0].route)" -ceq "dialled" -and "$($dn[0].enrolment.expires)" -ceq "20991231" -and "$($dn[0].enrolment.address)" -ceq "192.168.1.156" -and "$($dn[0].heard.state)" -ceq "unknown") ("horde nodes lists the enrolled node, dialled, with its enrolment, never heard yet (" + $nj.code + ")")
+    Check ($on.Count -eq 0) "and not the revoked one: horde nodes lists what the register holds live (Get-HordeHubListedNodes)"
     Check (@($rep.nodes | Where-Object { "$($_.route)" -ceq "pulled" }).Count -eq 1) "CONTROL: beside the hub's own node, pulled"
     $nt = Invoke-HordeCliProcess -Root $root -HordeArgs @("nodes") -Env @{ HORDE_HOME = $hh }
-    Check ($nt.out.Contains("[dialled, enrolled until 20991231, from 192.168.1.156]") -and $nt.out -match '\[dialled, NOT ENROLLED: [^\]]*revoked') ("and as text, each dialled node's enrolment is said (" + $nt.out.Trim() + ")")
+    Check ($nt.out.Contains("[dialled, enrolled until 20991231, from 192.168.1.156]")) ("and as text, each dialled node's enrolment is said (" + $nt.out.Trim() + ")")
 } finally {
     if ((Split-Path -Leaf $work) -match '^horde-hub-carry-[0-9a-f]{32}$') { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }

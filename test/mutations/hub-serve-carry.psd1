@@ -21,12 +21,12 @@
         @{ Name = "report-route-not-dialled"
            Find = '            $n["route"] = "dialled"'
            Replace = '' }
-        @{ Name = "report-revoked-said-live"
-           Find = 'live = [bool]$en[0].live;'
-           Replace = 'live = $true;' }
-        @{ Name = "text-hides-not-enrolled"
-           Find = 'else { $how = " [dialled, NOT ENROLLED: " + $en.reason + "]" }'
-           Replace = 'else { $how = "" }' }
+        @{ Name = "report-enrolment-dropped"
+           Find = '            $n["enrolment"] = [ordered]@{ expires = "" + $en[0].expires; address = "" + $en[0].address }'
+           Replace = '' }
+        @{ Name = "report-pulled-said-dialled"
+           Find = '-and "$(Get-HordeLinkProp $_ ''route'')" -ceq "dialled" })'
+           Replace = '})' }
         @{ Name = "text-heard-hides-enrolment"
            Find = '[void]$lines.Add($line + $how)'
            Replace = '[void]$lines.Add($line)' }

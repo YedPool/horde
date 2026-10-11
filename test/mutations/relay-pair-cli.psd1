@@ -69,5 +69,8 @@
         @{ Name = "machine-label-not-passed"
            Find = '$c = Complete-HordeRelayPairing -HordeHome $HordeHome -Response $response -Label $Label -Now $Now'
            Replace = '$c = Complete-HordeRelayPairing -HordeHome $HordeHome -Response $response -Now $Now' }
+        @{ Name = "offer-names-no-machine"
+           Find = '-Now (& $Clock) -Label (ConvertTo-HordeDeviceName -Text "$env:COMPUTERNAME")'
+           Replace = '-Now (& $Clock)' }
     )
 }

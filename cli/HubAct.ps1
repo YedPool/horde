@@ -98,7 +98,7 @@ function Resolve-HordeHubCloseTarget {
 function Resolve-HordeHubActTarget {
     # The node -Target names, by device id or name, as an answer: known { deviceId; deviceName; route },
     # route "pulled" for a node in -Pulled (the registry the hub opens links to: its own node) and
-    # "dialled" for one in -Enrolled (the hub's register, cli/HubRegistry.ps1's Get-HordeHubEnrolledDevices,
+    # "dialled" for one in -Enrolled (the hub's register: cli/HubRegistry.ps1's Get-HordeHubListedNodes,
     # each with the deviceName its mirror last heard, or ""), whose requests the hub carries over the link
     # it dials in (cli/HubCarry.ps1). Unknown, with the reason, when nothing or more than one device
     # answers to -Target, or when the one that does is enrolled but not live (revoked, expired, an entry

@@ -31,17 +31,23 @@ $HordeCommand = @{
         $hordeHome = Get-HordeHome
         $actDir = Get-HordeHubActDir -HomeRoot $hordeHome
         $contract = Get-HordeLinkContract
-        # Every node a request may go to: the registry the hub opens links to (its own node), and the
-        # hub's register of enrolled nodes, which dial in (cli/HubRegistry.ps1), each named as its mirror
-        # last heard it.
+        # Every node a request may go to: what `horde nodes` lists (cli/HubRegistry.ps1's
+        # Get-HordeHubListedNodes) - the registry the hub opens links to (its own node), and every node the
+        # hub's register holds live, which dials in - each dialled one named as its mirror last heard it.
         $pulled = @(Get-HordeHubRegistry -Node $me)
         $mirrorRoot = Get-HordeHubMirrorRoot -HomeRoot $hordeHome
-        $enrolled = @(Get-HordeHubEnrolledDevices -HordeHome $hordeHome | ForEach-Object {
+        $enrolled = @(Get-HordeHubListedNodes -Own @() -HordeHome $hordeHome | ForEach-Object {
             $name = ""
             try { $m = Read-HordeHubMirror -Path (Get-HordeHubMirrorPath -Root $mirrorRoot -DeviceId $_.deviceId) -DeviceId $_.deviceId -Contract $contract; if ($m.state -ceq "known") { $name = "" + $m.value.deviceName } } catch { }
             if ($name -ceq "(dialled)") { $name = "" }
-            $_ | Add-Member -NotePropertyName deviceName -NotePropertyValue $name -PassThru
+            [pscustomobject]@{ deviceId = "" + $_.deviceId; deviceName = $name; live = $true; reason = "" }
         })
+        # A node the register holds but not live (revoked, expired) is named with why, so a request to it
+        # is refused saying so rather than "no such node".
+        if ($Node -cmatch '\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z' -and @($enrolled | Where-Object { $_.deviceId -ceq $Node }).Count -eq 0) {
+            $k = Get-HordeHubEnrolledKey -HordeHome $hordeHome -DeviceId $Node
+            if ($k.state -ceq "unknown") { $enrolled += [pscustomobject]@{ deviceId = $Node; deviceName = ""; live = $false; reason = "" + $k.reason } }
+        }
 
         # The request: written down first, or read back to be sent again.
         $rec = $null

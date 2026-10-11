@@ -59,7 +59,13 @@
   <p class="hint">Each machine reaches the relay with the key this phone registered when it paired. Remove one and it reaches nothing more, until it is paired again with a new offer.</p>
   <ul id="machineList"></ul>
   <p id="machineEmpty" class="hint" hidden>No machine yet: pairing registers one.</p>
+  <h2>Phones</h2>
+  <p class="hint">The phones signed in to this account. Sign one out and it reads nothing more until it signs in again.</p>
+  <ul id="phoneList"></ul>
   <div class="row"><button type="button" id="signOutBtn">Sign out</button> <button type="button" id="accountBack">Back</button></div>
+  <h2>Delete the account</h2>
+  <p class="hint">Deletes, at once and for good, everything this relay keeps for the account: every mailbox and what is in it, every machine's registration, and every phone's sign-in. The machines and this phone keep their own keys; to use this relay again, sign in and pair again.</p>
+  <div class="row"><button type="button" id="deleteAccountBtn">Delete this account</button></div>
 </section>
 
 <section id="pairView" hidden>
