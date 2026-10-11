@@ -35,6 +35,9 @@ $script:HordeHubOwnTransport = "local"
 $script:HordeHubAsideKept = 3
 # HRESULT 0x80070020, ERROR_SHARING_VIOLATION: another process holds the hub's run lock.
 $script:HordeHubSharingViolation = -2147024864
+# HRESULT 0x80070021, ERROR_LOCK_VIOLATION: another process has locked a range of the file. With the
+# sharing violation, the only failures read as a mirror "held open" (re-review of PR #88, F1).
+$script:HordeHubLockViolation = -2147024863
 # Each node's part of a round is bounded (issue #87, F10). 45 s: a node's sessions.list builds its
 # projection, 11.4 s measured 2026-10-02, and node serve is opted out of power throttling, so 45 s
 # is about four of those; nodes are pulled one after another, so a slow one costs the rest of the
@@ -107,10 +110,16 @@ function Read-HordeHubMirror {
         # HELD OPEN IS NOT BAD (review of PR #88): a file another process holds without sharing read
         # cannot be opened, but its content may be a good mirror. Such an answer is marked held, so the
         # round leaves the file as it is rather than moving it aside and writing over its name.
+        # HELD IS A SHARING OR LOCK VIOLATION ONLY (re-review of PR #88, F1): access denied, or any other
+        # failure to open the file, is marked refused and said as its own cause; it was said as "held
+        # open by another process", round after round, for a mirror its ACL denied.
         $inner = $_.Exception; while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
         $u = New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read") -ErrorRecord $_
-        $isHeld = ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException]))
+        $isHeld = ($inner -is [System.IO.IOException] -and ($inner.HResult -eq $script:HordeHubSharingViolation -or $inner.HResult -eq $script:HordeHubLockViolation))
+        $isRefused = ((-not $isHeld) -and ($inner -is [System.UnauthorizedAccessException] -or ($inner -is [System.IO.IOException] -and $inner -isnot [System.IO.FileNotFoundException] -and $inner -isnot [System.IO.DirectoryNotFoundException])))
         $u | Add-Member -NotePropertyName held -NotePropertyValue $isHeld
+        $u | Add-Member -NotePropertyName refused -NotePropertyValue $isRefused
+        $u | Add-Member -NotePropertyName cause -NotePropertyValue $inner.Message
         return $u
     }
     if ($null -eq $m) { return (New-HordeUnknown -Reason ("the mirror file " + $Path + " could not be read: it is empty")) }
@@ -218,10 +227,17 @@ function Get-HordeHubWaitMs {
     return [math]::Min($TimeoutMs, $left)
 }
 
+# A step that fails within this much of the bound's deadline failed because of the bound. A wait cut
+# to the bound ends on the receive's own reading of the clock, and [datetime]::UtcNow moves in steps
+# (0.5 to 6 ms measured here, 2026-10-07), so it could end a few ms short of the deadline and be said as
+# a plain timeout: "no frame within 2767 ms" on a 3 s bound (remote run c2-dial, 2026-10-07).
+$script:HordeHubBoundSlackMs = 50
+
 function Get-HordeHubPastBound {
-    # The reason a step failed, said as the bound when the bound is what ran out.
+    # The reason a step failed, said as the bound when the bound is what ran out (within
+    # $script:HordeHubBoundSlackMs of its deadline).
     param([Parameter(Mandatory = $true)]$Bound, [string]$Reason)
-    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
+    if ($Bound.deadline -ne [datetime]::MaxValue -and [datetime]::UtcNow -ge $Bound.deadline.AddMilliseconds(-$script:HordeHubBoundSlackMs)) { return ("the node's part of the round ran past its " + $Bound.seconds + " s bound: " + $Reason) }
     return $Reason
 }
 
@@ -333,6 +349,10 @@ function Update-HordeHubNode {
         # A mirror another process holds open is left as it is: this node's round is skipped, said so.
         if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["held"] -and $old.held -eq $true) {
             return ($who + ": its mirror is held open by another process (" + $old.reason + "); left as it is, nothing pulled or written this round")
+        }
+        # A mirror that cannot be opened for any other reason is left as it is too, and the cause is said.
+        if ($old.state -ceq "unknown" -and $null -ne $old.PSObject.Properties["refused"] -and $old.refused -eq $true) {
+            return ($who + ": its mirror could not be opened: " + $old.cause + "; left as it is, nothing pulled or written this round")
         }
         if ($old.state -ceq "known") { $m = $old.value }
         else {
