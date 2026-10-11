@@ -95,6 +95,16 @@ try { $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn
 Check ($err -eq "" -and $null -ne $r -and $r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -like "*no request journal*" -and (Sendable $r.reply)) ("a node with no request journal acts on nothing" + $(if ($err) { " (threw: " + $err + ")" } else { "" }))
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn))) -Data (Data -Journal $jr -Acts $false)
 Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "unsupported-verb") "a node that serves no acts refuses an act verb as unsupported"
+# READ-ONLY DECIDES BEFORE ANY ACT (R17c, 2026-10-07): handed an act AND -ReadOnly, the node acted, since
+# the act dispatch came before the read-only check. The flag, not what was passed, decides.
+$roData = (Data -Journal $jr)
+$roData | Add-Member -NotePropertyName readOnly -NotePropertyValue $true -Force
+$q = Req "session.spawn" (Spawn)
+$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line $q) -Data $roData
+Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -clike "*read verbs only*session.spawn is a spawn verb*" -and (Sendable $r.reply)) "a read-only node handed an act refuses a spawn as read-only, and asks for no act"
+Check ((Get-HordeJournalEntry -Root $jr -Id $q.requestId).state -ceq "absent") "and journals nothing for it"
+$r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.close" ([pscustomobject][ordered]@{ sessionId = $sid; expect = $expect; reason = "the founder asked" }))) -Data $roData
+Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -clike "*read verbs only*session.close*") "and a close the same way"
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn @{ prompt = [pscustomobject]@{ text = "a"; handoffRef = (New-HordeLinkFrameId) } }))) -Data (Data -Journal $jr)
 Check ($r.needAct -eq $false -and "$($r.reply.error.code)" -ceq "refused" -and "$($r.reply.error.reason)" -like "*text or a handoff reference, not both*") "a prompt with both text and a handoff reference is refused"
 $r = Invoke-HordeNodeFrame -State (Linked) -Line (Line (Req "session.spawn" (Spawn @{ prompt = [pscustomobject]@{} }))) -Data (Data -Journal $jr)
