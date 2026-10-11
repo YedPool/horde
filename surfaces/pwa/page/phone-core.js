@@ -13,6 +13,7 @@
 //                      -> { authenticatorData, clientDataJSON, signature (DER), prfFirst }
 //                    (webauthn.js: navigator's credentials; the suites: a software passkey)
 //     relay          a relay client (relay-client.js) over the deployment's transport
+//     account        the relay's accounts (account-client.js), or null when it has none
 //     origin         where this page is served (location.origin): the offer must name it
 //
 // ONE HORDE, ONE ENTRY. A horde is one Thrall's fleet; the app holds several (work, personal). Each
@@ -60,6 +61,12 @@
 // sendPairing() can send it again until the horde is announced; the plain response is handed back too,
 // for Copy and Share, the fallback when the relay cannot be reached.
 //
+// A RELAY WITH ACCOUNTS (account-client.js) knows a machine only by the signing key a signed-in phone
+// registered to its account. So pair() registers the offer's machine - with the offer's ACCOUNT GRANT,
+// relay/Pairing.ps1 - FIRST, before a passkey is made or anything is sent: a phone that is not signed in,
+// or a machine the relay will not take (another account's, a spent grant), is told so in this file's own
+// words, and nothing is left half made. Without accounts (a memory or binding relay) nothing changes.
+//
 // THE SEQUENCE OF WHAT THE PHONE SENDS is per channel, counted in the store with update() so two tabs
 // cannot spend one seq (the machine's journal refuses a seq at or below the last, relay/Journal.ps1).
 //
@@ -77,11 +84,13 @@ const ENTRY = "horde/";
 const RELAY_DOWN = "The relay could not be read just now; the phone will try again.";
 const RELAY_REFUSED = "The relay did not take it just now.";
 const relaySaid = (reason) => "the relay said: " + String(reason || "").slice(0, 200);
+const SIGN_IN_FIRST = "Sign in first: this relay lets in only a signed-in phone, and the machines it registers.";
+const NOT_REGISTERED = "The relay did not register this machine with your account, so the machine could not reach it. Make a new offer at the machine and pair again.";
 const NO_PRF = "Read only: this passkey gives no PRF, so this phone has nothing to keep this horde's key under, and a horde whose key the passkey does not hold is never answered from this phone. It can still be read: unlock with the recovery code. Answer at the machine, or pair again with a passkey that has PRF.";
 
 function originHost(origin) { const m = /^[a-z]+:\/\/([^:/]+)(:[0-9]+)?$/.exec(origin || ""); return m ? m[1] : ""; }
 
-export function createPhone({ store, authenticator, relay, origin, now = () => Date.now() }) {
+export function createPhone({ store, authenticator, relay, account = null, origin, now = () => Date.now() }) {
   const sessions = new Map();
   // Sealed pairing responses not yet known to have arrived, by horde id (THE PAIRING RESPONSE...).
   const pairings = new Map();
@@ -184,6 +193,10 @@ export function createPhone({ store, authenticator, relay, origin, now = () => D
       if (host !== o.rpId && !host.endsWith("." + o.rpId)) throw fail("this app at " + origin + " cannot make passkeys for " + o.rpId);
       if (!P.validLabel(label)) throw fail("name this phone in 1 to 64 plain characters, with no quote or backslash");
       for (const e of await store.list(ENTRY)) { if (e.horde === o.horde && e.machine === o.machine) throw fail("this phone is already paired with that machine of " + o.horde + "; forget that pairing first"); }
+      if (account) {
+        const reg = await account.registerMachine(o);
+        if (reg.state !== "known") { diagnostics.push(relaySaid(reg.reason)); throw fail(reg.status === 401 ? SIGN_IN_FIRST : NOT_REGISTERED); }
+      }
       const challenge = await P.pairingChallenge(o.text);
       const pk = await newPhoneKey();
       let made;

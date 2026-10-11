@@ -18,6 +18,7 @@ const P = await load("relay/protocol.js");
 const K = await load("app/keywrap.js");
 const R = await load("app/relay-client.js");
 const { createPhone } = await load("app/phone-core.js");
+const AC = await load("app/account-client.js");
 const { memoryStore } = await load("app/store.js");
 const { createBridge } = await load("surface/bridge.js");
 const { softAuthenticator } = await import(pathToFileURL(join(repoRoot, "test/fixtures/relay/phone/soft-passkey.mjs")).href);
@@ -42,11 +43,12 @@ async function newMachine(horde) {
   return m;
 }
 // relay/Pairing.ps1's offer, its members in their order.
-function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null } = {}) {
+// Its account grant is the relay's to verify, so a phone reads only its shape: here, 64 zero bytes.
+function offerText(m, { rpId = "relay.example.test", origins = ["https://relay.example.test"], expiresAt = Date.now() + 300000, mailbox = m.mailbox, agreeKeyId = m.agreeKeyId, id = P.hex(P.randomBytes(16)), pairMailbox = null, grant = "A".repeat(86) } = {}) {
   return '{"v":1,"kind":"horde-relay-pairing-offer","horde":"' + m.horde + '","offer":"' + id + '","code":"' + P.b64u(P.randomBytes(16)) + '","machine":"' + m.keyId +
     '","signPublic":"' + P.b64u(m.signPublic) + '","agreeKeyId":"' + agreeKeyId + '","agreePublic":"' + P.b64u(m.agreePublic) + '","mailbox":"' + mailbox +
     '","pairMailbox":"' + (pairMailbox === null ? m.horde + "/pair-" + id : pairMailbox) + '","rpId":"' + rpId +
-    '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + "}";
+    '","origins":[' + origins.map((o) => '"' + o + '"').join(",") + '],"issuedAt":' + (expiresAt - 300000) + ',"expiresAt":' + expiresAt + ',"grant":"' + grant + '"}';
 }
 // A machine's envelope: sealed to each phone key, signed ES256 (P1363), relay/Envelope.ps1's canonical text.
 async function machineEnvelope(m, { kind, channel, body, phones, seq = ++m.seq }) {
@@ -99,9 +101,9 @@ async function phoneKeyOf(transport, m) {
 }
 
 const origin = "https://relay.example.test";
-function newApp(transport, { prf = true, store = memoryStore(), authenticator = null } = {}) {
+function newApp(transport, { prf = true, store = memoryStore(), authenticator = null, account = null } = {}) {
   const auth = authenticator || softAuthenticator({ origin, prf });
-  return { store, auth, phone: createPhone({ store, authenticator: auth, relay: R.createRelayClient(transport), origin }) };
+  return { store, auth, phone: createPhone({ store, authenticator: auth, relay: R.createRelayClient(transport), account, origin }) };
 }
 async function pairedApp(transport, m, opts = {}) {
   const app = newApp(transport, opts);
@@ -141,9 +143,80 @@ async function pairedApp(transport, m, opts = {}) {
   check(!(await P.readOffer(offerText(m, { mailbox: "work/other" }))).ok, "an offer whose mailbox is not its horde and machine is refused");
   check(!(await P.readOffer(offerText(m, { agreeKeyId: "0".repeat(32) }))).ok, "an offer whose agreement key is not the one it names is refused");
   check(!(await P.readOffer(offerText(m).replace('{"v":1,', '{"v":1,"extra":1,'))).ok, "an offer with a member added is refused");
+  check(!(await P.readOffer(offerText(m).replace(/,"grant":"[^"]*"/, ""))).ok, "an offer with no account grant is refused");
+  check(!(await P.readOffer(offerText(m, { grant: "A".repeat(85) }))).ok && !(await P.readOffer(offerText(m, { grant: "A".repeat(84) + "+/" }))).ok, "and one whose grant is not 64 bytes of base64url");
   const app = newApp(R.memoryTransport());
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m, { origins: ["https://other.example.test"], rpId: "other.example.test" }), label: "x" }))).indexOf("not this app") >= 0, "an offer for another app's origin is refused before a passkey is made");
   check((await throwsAsync(() => app.phone.pair({ offerText: offerText(m), label: 'say "hi"' }))).indexOf("name this phone") >= 0, "a label the machine would refuse is refused first");
+}
+
+// --- 3a. the account grant, and the machine signature check the hosted relay makes (relay/Pairing.ps1) ---
+{
+  const m = await newMachine("work");
+  const g = { horde: "work", offer: "0123456789abcdef0123456789abcdef", machine: m.keyId, expiresAt: 1760000000000 };
+  check(P.fromUtf8(P.accountGrantBytes(g)) === "horde-relay/pairing/v1 account-grant\nwork\n0123456789abcdef0123456789abcdef\n" + m.keyId + "\n1760000000000", "the grant signs the domain, the horde, the offer, the machine and the expiry, one to a line");
+  const sig = new Uint8Array(await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, m.sign.privateKey, P.accountGrantBytes(g)));
+  const n = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+  const s = BigInt("0x" + P.hex(sig.slice(32)));
+  const low = s > n / 2n ? n - s : s;
+  const withS = (v) => { const out = sig.slice(); out.set(P.unhex(v.toString(16).padStart(64, "0")), 32); return out; };
+  check(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low)), "a low-S signature by the machine's key verifies");
+  check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(n - low))), "its high-S twin does not: one message, one signature");
+  check(!(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes({ ...g, expiresAt: g.expiresAt + 1 }), withS(low))), "nor does the signature over another expiry");
+  const other = await newMachine("work");
+  check(!(await P.verifyMachineSignature(other.signPublic, P.accountGrantBytes(g), withS(low))), "nor under another machine's key");
+  check(!(await P.verifyMachineSignature(m.signPublic.slice(1), P.accountGrantBytes(g), withS(low))) && !(await P.verifyMachineSignature(m.signPublic, P.accountGrantBytes(g), withS(low).slice(1))), "and a key or a signature of the wrong length is false, not a throw");
+}
+
+// --- 3c. accounts: the phone registers the machine with its account before anything else is made ---
+{
+  const m = await newMachine("work");
+  const calls = [];
+  const said = (answer) => ({ registerMachine: async (o) => { calls.push(o); return answer; } });
+  let made = 0;
+  const base = softAuthenticator({ origin, prf: true });
+  const counting = { create: async (a) => { made++; return base.create(a); }, get: (a) => base.get(a) };
+  const t = R.memoryTransport();
+  const outPhone = createPhone({ store: memoryStore(), authenticator: counting, relay: R.createRelayClient(t), account: said({ state: "unknown", value: null, reason: "the relay answered 401: who are you", status: 401 }), origin });
+  const text = offerText(m);
+  const o = (await P.readOffer(text)).value;
+  const refused = await throwsAsync(() => outPhone.pair({ offerText: text, label: "Founder phone" }));
+  check(refused.indexOf("Sign in") >= 0 && made === 0 && (await t.get(o.pairMailbox, 0, 10)).value.items.length === 0, "a phone not signed in is told to sign in, before a passkey is made or anything is sent", refused);
+  check(refused.indexOf("401") < 0 && refused.indexOf("who are you") < 0, "and the relay's own words are not on the screen", refused);
+  const t2 = R.memoryTransport();
+  const order = [];
+  const watched = { put: async (...a) => { order.push("put"); return t2.put(...a); }, get: (...a) => t2.get(...a), watch: (...a) => t2.watch(...a), ack: (...a) => t2.ack(...a) };
+  const acct = { registerMachine: async (x) => { order.push("register"); calls.push(x); return { state: "known", value: { keyId: x.machine, horde: x.horde, duplicate: false }, reason: "", status: 200 }; } };
+  const app = newApp(watched, { account: acct });
+  const text2 = offerText(m, { grant: "B".repeat(85) + "A" });
+  const o2 = (await P.readOffer(text2)).value;
+  const paired = await app.phone.pair({ offerText: text2, label: "Founder phone" });
+  const sent = calls[calls.length - 1];
+  check(paired.relayed === true && order.join(",") === "register,put", "signed in, the phone registers the machine first, then sends its response through the relay", order.join(","));
+  check(sent.horde === "work" && sent.offer === o2.offer && sent.machine === m.keyId && sent.signPublic === o2.signPublic && sent.expiresAt === o2.expiresAt && sent.grant === o2.grant, "with the offer's horde, id, machine, signing key, expiry and account grant", JSON.stringify(sent));
+  const bad = createPhone({ store: memoryStore(), authenticator: softAuthenticator({ origin, prf: true }), relay: R.createRelayClient(R.memoryTransport()), account: said({ state: "unknown", value: null, reason: "the relay answered 409: this machine's key is registered to another account", status: 409 }), origin });
+  const why = await throwsAsync(() => bad.pair({ offerText: offerText(m), label: "Founder phone" }));
+  check(why.indexOf("did not register") >= 0 && why.indexOf("409") < 0, "a registration the relay refuses stops the pairing, in the app's own words", why);
+  const plain = newApp(R.memoryTransport());
+  check((await plain.phone.pair({ offerText: offerText(m), label: "Founder phone" })).relayed === true, "with no accounts (a memory or binding relay), the phone pairs as it always did");
+}
+{
+  const sent = [];
+  const fake = async (url, init) => { sent.push({ url, init }); return new Response(JSON.stringify({ keyId: "k" }), { status: 200 }); };
+  const a = AC.accountClient(fake, "");
+  const offer = { horde: "work", offer: "0".repeat(32), machine: "1".repeat(32), signPublic: "AAAA", expiresAt: 5, grant: "G", code: "secret-code", agreePublic: "x", text: "whole" };
+  await a.registerMachine(offer);
+  const r = sent[0];
+  check(r.url === "/v1/account/machines" && r.init.method === "POST" && r.init.credentials === "same-origin" && r.init.redirect === "error", "the account client posts a registration to its own origin with the browser's cookie, and follows no redirect");
+  check(Object.keys(JSON.parse(r.init.body)).join(",") === "horde,offer,machine,signPublic,expiresAt,grant", "carrying exactly the six fields the relay takes - never the offer's code", r.init.body);
+  check((await a.removeMachine("../../v1/x")).state === "unknown" && sent.length === 1, "a removal of something that is not a key id is never sent");
+  await a.removeMachine("2".repeat(32));
+  check(sent[1].url === "/v1/account/machines/" + "2".repeat(32) && sent[1].init.method === "DELETE", "and a key id's removal is a DELETE of that machine");
+  const no = AC.accountClient(async () => new Response(JSON.stringify({ error: "x".repeat(500) }), { status: 401 }), "");
+  const n = await no.session();
+  check(n.state === "unknown" && n.status === 401 && n.reason.length < 260, "a refusal comes back unknown with its status, the relay's words cut short");
+  const host = { fetch: async () => new Response("{}") };
+  check(AC.accountFromConfig({ transport: "http" }, host) !== null && AC.accountFromConfig({ transport: "memory" }, host) === null && AC.accountFromConfig({ transport: "binding" }, host) === null && AC.accountFromConfig({ transport: "http", relayOrigin: "https://other.example.test" }, host) === null, "only a relay that is the app's own site has accounts");
 }
 
 // --- 3b. the pairing response goes to the machine through the relay, sealed (relay/Pairing.ps1) ---
