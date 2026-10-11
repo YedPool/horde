@@ -75,6 +75,11 @@
 #   Ack     param($State, [string]$Mailbox, [long]$Through)    -> known { through }
 # An adapter refuses a text over its own maxTextChars by itself too: the port's check protects the
 # adapter from this caller, not the relay from every caller.
+# A REFUSAL MAY SAY MORE THAN ITS REASON. An unknown answer may carry status (the relay's whole-number
+# status, 100 to 599: 401 refused, 429 rate-limited) and retryAfterMs (how long the relay asked to be
+# left, 0 to a day); the port passes each on, as a member of its own unknown, only when it holds. So a
+# caller can tell "the relay refuses this machine" from "the relay is down", and wait as long as asked,
+# without reading the relay's words (cli/RelayPair.ps1, the founder's first live use, 2026-10-11).
 #
 # DEPLOYING, FOR A RELAY THAT IS HOSTED. A relay that runs somewhere it must first be put (the hosted
 # one) also hands Register-HordeRelay a sixth block, -Deploy; a relay on this disk has none. The caller
@@ -108,6 +113,9 @@ $script:HordeRelayTextChars = 1414507
 $script:HordeRelayBatchMax = 256
 $script:HordeRelayWatchMsMax = 60000
 $script:HordeRelaySeqMax = [long]9007199254740991
+# The longest Retry-After a refusal may carry to the caller: a day. The relay is untrusted, and a caller
+# that waits as long as it asks must not be told to wait for ever; a longer one is left out.
+$script:HordeRelayRetryAfterMaxMs = [long]86400000
 $script:HordeRelaySegmentPattern = '\A[a-z0-9][a-z0-9-]{0,62}\z'
 # Windows device names, which a folder or file of that name (with any extension) would open instead.
 $script:HordeRelayDeviceNamePattern = '\A(con|prn|aux|nul|com[0-9]|lpt[0-9])\z'
@@ -381,7 +389,15 @@ function Invoke-HordeRelayAdapter {
     catch { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' failed the " + $What) -ErrorRecord $_) }
     if (-not (Test-HordeAnswer $a)) { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' answered the " + $What + " with something that is not an answer")) }
     if ($a.state -ceq "absent") { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' answered the " + $What + " absent, which says nothing")) }
-    if ($a.state -ceq "unknown") { return (New-HordeUnknown -Reason ("relay '" + $r.name + "' could not do the " + $What + ": " + $a.reason)) }
+    if ($a.state -ceq "unknown") {
+        $u = New-HordeUnknown -Reason ("relay '" + $r.name + "' could not do the " + $What + ": " + $a.reason)
+        # A REFUSAL'S STATUS AND RETRY-AFTER (the ADAPTER CONTRACT), carried only when they hold.
+        $st = $a.PSObject.Properties["status"]
+        if ($null -ne $st -and ($st.Value -is [int] -or $st.Value -is [long]) -and $st.Value -ge 100 -and $st.Value -le 599) { $u | Add-Member -NotePropertyName status -NotePropertyValue ([int]$st.Value) }
+        $ra = $a.PSObject.Properties["retryAfterMs"]
+        if ($null -ne $ra -and ($ra.Value -is [int] -or $ra.Value -is [long]) -and $ra.Value -ge 0 -and $ra.Value -le $script:HordeRelayRetryAfterMaxMs) { $u | Add-Member -NotePropertyName retryAfterMs -NotePropertyValue ([long]$ra.Value) }
+        return $u
+    }
     return $a
 }
 

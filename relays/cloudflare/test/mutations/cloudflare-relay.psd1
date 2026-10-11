@@ -12,8 +12,8 @@
            Find = 'return (''"'' + $Text.Replace(''\'', ''\\'').Replace(''"'', ''\"'') + ''"'')'
            Replace = 'return (''"'' + $Text + ''"'')' }
         @{ Name = "refusal-status-lost"
-           Find = 'return (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words)))'
-           Replace = 'return (New-HordeUnknown -Reason ("the relay refused the " + $What))' }
+           Find = '(New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words)))'
+           Replace = '(New-HordeUnknown -Reason ("the relay refused the " + $What))' }
         @{ Name = "no-default-origin"
            Find = 'if ($null -eq $origin -or "$origin" -eq "") { $origin = (Get-HordeCloudflareRelayDeployment).origin }'
            Replace = '' }

@@ -378,14 +378,61 @@ try {
         Check ((Revoke-HordeRelayTrust -HordeHome $hh -Subject "device" -Id $devF.id -Reason "suite cleanup").state -ceq "known") "CONTROL: that device is then revoked by hand"
     }
 
-    # A relay whose watch fails at once must not be hit in a tight loop: about a second between tries.
+    # A relay whose watch fails at once must not be hit in a tight loop: in real time, the first retry
+    # waits 5 s, so an offer of 3 s sees one watch.
     $script:watches = 0
     $downOffer = [pscustomobject]@{ offer = ("a" * 32); pairMailbox = "work/pair-" + ("a" * 32); expiresAt = [long]([System.DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 3000) }
     $down = & {
         function Wait-HordeRelayItems { param($Connection, $Mailbox, $Since, $TimeoutMs) $script:watches++; return (New-HordeUnknown -Reason "connection refused (a stand-in)") }
         Wait-HordeRelayPairResponse -HordeHome (Join-Path $work "no-such-home") -Offer $downOffer -Connection $hostile.value -Source (New-HordeRelayPairInput -InputFile (Join-Path $work "never-typed.txt")) -Label "" -Say { param($l) } -Clock { [datetime]::UtcNow }
     }
-    Check ((-not $down.ok) -and $down.reason.Contains("expired") -and $script:watches -ge 2 -and $script:watches -le 5) ("a relay that fails at once is tried about once a second, not in a loop (" + $script:watches + " watches in 3 s)")
+    Check ((-not $down.ok) -and $down.reason.Contains("expired") -and $script:watches -eq 1) ("a relay that fails at once is not tried again for 5 s, in real time (" + $script:watches + " watches in 3 s)")
+
+    # THE HOSTED RELAY REFUSES THIS MACHINE UNTIL THE PHONE REGISTERS IT (the founder's first live use,
+    # 2026-10-11): 401 until then, and a watch every 1 to 6 s tripped the Worker's refused-signature
+    # limit, 429, for about 90 s, with the raw 401 and 429 said on every try. Driven on a fake clock that
+    # the keyboard's wait moves: each watch's time is recorded, so the gaps between tries are measured.
+    function Invoke-RefusedWait {
+        # -Answer: one script block for every watch, by its number (1, 2, ...), returning the watch's answer.
+        # -Typed: the line the keyboard gives on its Nth wait, by N, a second into it. { result; gaps; said }.
+        param([scriptblock]$Answer, [hashtable]$Typed = @{}, [long]$LifeMs = 300000)
+        $script:fake = [datetime]::UtcNow
+        $script:at = New-Object System.Collections.ArrayList
+        $script:reads = 0
+        $script:answerOf = $Answer
+        $script:typedOf = $Typed
+        $saidHere = New-Object System.Collections.ArrayList
+        $o = [pscustomobject]@{ offer = ("c" * 32); pairMailbox = "work/pair-" + ("c" * 32); expiresAt = [long]((ConvertTo-HordeRelayRecordMs -Time $script:fake) + $LifeMs) }
+        $res = & {
+            function Wait-HordeRelayItems { param($Connection, $Mailbox, $Since, $TimeoutMs) [void]$script:at.Add((ConvertTo-HordeRelayRecordMs -Time $script:fake)); return (& $script:answerOf $script:at.Count) }
+            function Read-HordeRelayPairLine { param($Source, [int]$TimeoutMs = 0, [switch]$Block) $script:reads++; if ($script:typedOf.ContainsKey($script:reads)) { $script:fake = $script:fake.AddMilliseconds([System.Math]::Min(1000, $TimeoutMs)); return $script:typedOf[$script:reads] }; $script:fake = $script:fake.AddMilliseconds($TimeoutMs); return $null }
+            Wait-HordeRelayPairResponse -HordeHome (Join-Path $work "no-such-home") -Offer $o -Connection $hostile.value -Source $null -Label "" -Say { param($l) [void]$saidHere.Add($l) } -Clock { $script:fake }
+        }
+        $gaps = @()
+        for ($i = 1; $i -lt $script:at.Count; $i++) { $gaps += [long]($script:at[$i] - $script:at[$i - 1]) }
+        return [pscustomobject]@{ result = $res; gaps = $gaps; said = @($saidHere) }
+    }
+    function New-Refusal { param([int]$Status, [long]$RetryAfterMs = -1) $u = New-HordeUnknown -Reason ("relay 'hosted' could not do the watch: (" + $Status + ") a stand-in"); $u | Add-Member -NotePropertyName status -NotePropertyValue $Status; if ($RetryAfterMs -ge 0) { $u | Add-Member -NotePropertyName retryAfterMs -NotePropertyValue $RetryAfterMs }; return $u }
+    # 401 and 429 in turn, as the founder's log shows them: the fourth, a 429, asks for 40 s; the other
+    # 429s ask for 1 s, which never makes a retry sooner than its turn.
+    $rw = Invoke-RefusedWait -Answer { param($n) if ($n -eq 4) { return (New-Refusal -Status 429 -RetryAfterMs 40000) }; if ($n % 2 -eq 0) { return (New-Refusal -Status 429 -RetryAfterMs 1000) }; return (New-Refusal -Status 401) }
+    $first = ($rw.gaps | Select-Object -First 4) -join ","
+    $rest = @($rw.gaps | Select-Object -Skip 4 | Select-Object -SkipLast 1)
+    Check ($first -ceq "5000,10000,15000,40000") ("a relay that refuses is asked again after 5 s, then 10, then 15, and after its Retry-After when that is longer (" + $first + ")")
+    Check ($rest.Count -ge 10 -and @($rest | Where-Object { $_ -ne 15000 }).Count -eq 0) ("and every 15 s after that, never faster, until the offer expires (" + (($rest | Select-Object -First 12) -join ",") + ", ...)")
+    Check ((-not $rw.result.ok) -and $rw.result.reason.Contains("expired")) "and the offer still expires in words"
+    $waiting = @($rw.said | Where-Object { $_.Contains("waiting for the phone to register this machine") })
+    $raw = @($rw.said | Where-Object { $_.Contains("401") -or $_.Contains("429") -or $_.Contains("a stand-in") })
+    Check ($waiting.Count -eq 1 -and $raw.Count -eq 0) ("401 and 429 in turn are said once, plainly, as waiting for the phone to register this machine - not the relay's raw words on every try (" + ($rw.said -join " | ") + ")")
+    # A watch that works resets the wait: the next refusal waits 5 s again.
+    $rr = Invoke-RefusedWait -LifeMs 60000 -Answer { param($n) if ($n -eq 3) { return (New-HordeKnown -Value ([pscustomobject]@{ items = @(); anomalies = @() })) }; return (New-Refusal -Status 401) }
+    Check ((($rr.gaps | Select-Object -First 4) -join ",") -ceq "5000,10000,0,5000") ("a watch that works resets the wait, so the next refusal is asked again after 5 s (" + (($rr.gaps | Select-Object -First 6) -join ",") + ", ...)")
+    # Another failure is said in its own words, once; a refusal after it is said once again.
+    $ro = Invoke-RefusedWait -LifeMs 60000 -Answer { param($n) if ($n -le 2) { return (New-HordeUnknown -Reason "connection refused (a stand-in)") }; return (New-Refusal -Status 401) }
+    Check (@($ro.said | Where-Object { $_.Contains("connection refused (a stand-in)") }).Count -eq 1 -and @($ro.said | Where-Object { $_.Contains("waiting for the phone to register this machine") }).Count -eq 1) ("a relay that cannot be reached is said in its words once, and the refusal after it once (" + ($ro.said -join " | ") + ")")
+    # A line pasted while it waits is read at once, and does not bring the next watch forward.
+    $rp = Invoke-RefusedWait -LifeMs 60000 -Typed @{ 1 = "not a response" } -Answer { param($n) return (New-Refusal -Status 401) }
+    Check (@($rp.said | Where-Object { $_.Contains("refused: that is not a pairing response") }).Count -eq 1 -and $rp.gaps[0] -eq 5000) ("a line pasted while it waits is taken at once, and the next watch still waits its 5 s (" + (($rp.gaps | Select-Object -First 3) -join ",") + ", ...)")
 
     $script:pic = ""
     # Ctrl+C stops the pipeline, which unwinds through every finally block as a terminating error does;

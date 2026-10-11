@@ -58,8 +58,30 @@
            Find = '$rv = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "the number typed at the machine did not match the phone''s fingerprint three times" -Now (& $Clock)'
            Replace = '$null = Revoke-HordeRelayTrust -HordeHome $HordeHome -Subject "device" -Id $Device.id -Reason "x" -Now (& $Clock); $rv = [pscustomobject]@{ state = "known"; reason = "" }' }
         @{ Name = "fast-failing-relay-not-paced"
-           Find = '$line = Read-HordeRelayPairLine -Source $Source -TimeoutMs $left'
-           Replace = '$line = Read-HordeRelayPairLine -Source $Source -TimeoutMs 0' }
+           Find = '$retryAt = (ConvertTo-HordeRelayRecordMs -Time (& $Clock)) + (Get-HordeRelayPairRetryMs -Failures $failures -Answer $w)'
+           Replace = '$retryAt = 0' }
+        # --- the wait while the relay refuses (the founder's first live use, 2026-10-11)
+        @{ Name = "retry-not-backed-off"
+           Find = '[double]$script:HordeRelayPairRetryFirstMs * $Failures)'
+           Replace = '[double]$script:HordeRelayPairRetryFirstMs)' }
+        @{ Name = "retry-not-capped"
+           Find = '$script:HordeRelayPairRetryMostMs = 15000'
+           Replace = '$script:HordeRelayPairRetryMostMs = 150000' }
+        @{ Name = "retry-after-ignored"
+           Find = 'if ($null -ne $p -and [long]$p.Value -gt $ms) { $ms = [long]$p.Value }'
+           Replace = '$null = $p' }
+        @{ Name = "retry-after-shortens-the-wait"
+           Find = 'if ($null -ne $p -and [long]$p.Value -gt $ms) { $ms = [long]$p.Value }'
+           Replace = 'if ($null -ne $p) { $ms = [long]$p.Value }' }
+        @{ Name = "backoff-not-reset-by-a-watch-that-works"
+           Find = '                    $failures = 0'
+           Replace = '' }
+        @{ Name = "refusal-said-in-the-relay-words"
+           Find = 'if ($null -ne $p -and $script:HordeRelayPairRefusedStatuses -contains $p.Value) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "failure-said-on-every-try"
+           Find = 'if ($words -cne $lastDown) { $null = & $Say $words }'
+           Replace = '$null = & $Say $words' }
         @{ Name = "interrupted-offer-not-voided"
            Find = 'if (-not $ended) { $null = Close-HordeRelayPairingOffer -HordeHome $HordeHome -Offer $offer.offer }'
            Replace = '$null = $ended' }

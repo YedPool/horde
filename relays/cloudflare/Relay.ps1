@@ -82,6 +82,29 @@ function Get-HordeCloudflareRelayWords {
     return $t
 }
 
+function ConvertFrom-HordeCloudflareRelayRetryAfter {
+    # A Retry-After header's value in ms: whole seconds (what the Worker sends, worker/answers.js) or an
+    # HTTP date; -1 when it is neither.
+    param([string]$Text)
+    $t = $Text.Trim()
+    if ($t -cmatch '\A[0-9]{1,9}\z') { return ([long]$t * 1000) }
+    $when = [datetime]::MinValue
+    if ([datetime]::TryParseExact($t, "r", [System.Globalization.CultureInfo]::InvariantCulture, ([System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal), [ref]$when)) {
+        return ([long][System.Math]::Max(0, ($when - [datetime]::UtcNow).TotalMilliseconds))
+    }
+    return [long]-1
+}
+
+function Add-HordeCloudflareRelayRefusal {
+    # A REFUSAL MAY SAY MORE THAN ITS REASON (relays/Port.ps1): the relay's status, and its Retry-After
+    # in ms when it gave one that reads, as members of -Answer, an unknown. -Answer, for the return.
+    param($Answer, [int]$Status, [string]$RetryAfter = "")
+    if ($Status -gt 0) { $Answer | Add-Member -NotePropertyName status -NotePropertyValue $Status }
+    $ms = ConvertFrom-HordeCloudflareRelayRetryAfter -Text $RetryAfter
+    if ($ms -ge 0) { $Answer | Add-Member -NotePropertyName retryAfterMs -NotePropertyValue $ms }
+    return $Answer
+}
+
 function ConvertTo-HordeCloudflareRelayJsonString {
     # A JSON string of printable ASCII (a key or a text, already checked by the port): only the quote and
     # the backslash need escaping.
@@ -143,6 +166,7 @@ function Invoke-HordeCloudflareRelayHttp {
         try {
             $text = $res.Content.ReadAsStringAsync().GetAwaiter().GetResult()
             $code = [int]$res.StatusCode
+            $retryAfter = $(if ($null -ne $res.Headers.RetryAfter) { "" + $res.Headers.RetryAfter } else { "" })
         } finally { $res.Dispose() }
     } catch { return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " could not be reached for the " + $What) -ErrorRecord $_) }
     finally { $req.Dispose() }
@@ -151,7 +175,7 @@ function Invoke-HordeCloudflareRelayHttp {
     if ($code -eq 401 -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayHttp -State $State -Method $Method -Path $Path -Body $Body -What $What -Once) }
     if ($code -ne 200) {
         $words = $(if ($null -ne $parsed -and $parsed -is [System.Management.Automation.PSCustomObject] -and $null -ne $parsed.PSObject.Properties["error"]) { $parsed.error } else { $text })
-        return (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words)))
+        return (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay answered the " + $What + " with " + $code + ": " + (Get-HordeCloudflareRelayWords $words))) -Status $code -RetryAfter $retryAfter)
     }
     if ($null -eq $parsed -or $parsed -isnot [System.Management.Automation.PSCustomObject]) { return (New-HordeUnknown -Reason ("the relay answered the " + $What + " with something that is not a JSON object")) }
     return (New-HordeKnown -Value $parsed -ObservedAt ([datetime]::UtcNow))
@@ -205,6 +229,10 @@ function Invoke-HordeCloudflareRelayWatch {
     $socket = New-Object System.Net.WebSockets.ClientWebSocket
     try {
         $socket.Options.SetRequestHeader("Authorization", $auth.value)
+        # PowerShell 7 keeps a refused upgrade's status and headers only when asked to (.NET 7 and up);
+        # Windows PowerShell 5.1 has no such option, and keeps them on the inner WebException's response.
+        $collect = $socket.Options.PSObject.Properties["CollectHttpResponseDetails"]
+        if ($null -ne $collect) { $socket.Options.CollectHttpResponseDetails = $true }
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $cts = New-Object System.Threading.CancellationTokenSource($script:HordeCloudflareRelayConnectMs)
         try { $null = $socket.ConnectAsync($uri, $cts.Token).GetAwaiter().GetResult() }
@@ -212,9 +240,21 @@ function Invoke-HordeCloudflareRelayWatch {
             # The status is in the message under pwsh 7, and in an inner exception's under Windows
             # PowerShell 5.1 ("Unable to connect", then "(401) Unauthorized"): all of them are read.
             $why = ""
-            for ($e = $_.Exception; $null -ne $e; $e = $e.InnerException) { $why += $e.Message + " " }
+            $code = 0
+            $retryAfter = ""
+            for ($e = $_.Exception; $null -ne $e; $e = $e.InnerException) {
+                $why += $e.Message + " "
+                $resp = $e.PSObject.Properties["Response"]
+                if ($e -is [System.Net.WebException] -and $null -ne $resp -and $resp.Value -is [System.Net.HttpWebResponse]) {
+                    try { $code = [int]$resp.Value.StatusCode; $retryAfter = "" + $resp.Value.Headers["Retry-After"] } catch { }
+                }
+            }
+            if ($null -ne $collect -and [int]$socket.HttpStatusCode -gt 0) {
+                $code = [int]$socket.HttpStatusCode
+                if ($null -ne $socket.HttpResponseHeaders) { foreach ($h in $socket.HttpResponseHeaders) { if ($h.Key -ieq "Retry-After") { $retryAfter = (@($h.Value) -join ",") } } }
+            }
             if ($why.Contains("401") -and -not $Once -and (Send-HordeCloudflareRelayRotation -State $State)) { return (Invoke-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs -Once) }
-            return (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim())))
+            return (Add-HordeCloudflareRelayRefusal -Answer (New-HordeUnknown -Reason ("the relay at " + $State.origin + " did not open the watch: " + (Get-HordeCloudflareRelayWords $why.Trim()))) -Status $code -RetryAfter $retryAfter)
         }
         finally { $cts.Dispose() }
         # What is left of the timeout once the socket is open, and never less than a moment, so items
