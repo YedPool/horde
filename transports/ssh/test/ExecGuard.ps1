@@ -69,7 +69,9 @@ $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
 # Add-Type: only here, and only this source (SHA-256 of the C# with line endings as LF).
 $script:HordeSshGuardNativeFile = "Native.ps1"
 # Re-pinned 2026-10-07 (issue #147, item 1): LimitProcessMemory added, the listener job's per-process memory cap.
-$script:HordeSshGuardNativeSha = "AFB933CB7D43F3112384B833AD85134F2C91C21B43594D1EE2A2B2CEFFCF8E9E"
+# Re-pinned 2026-10-11 (mesh v1, issue #147 item 2): LimitProcessMemory became LimitListenerJob, which also
+# caps the job's memory as a whole and how many processes it may run.
+$script:HordeSshGuardNativeSha = "D4647A9BD504D220A357027B336397F478022F81335C5BD9820F87A772094229"
 $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", "Append", "Ceiling", "Close", "ConnectAsync", "Contains", "Copy", "Dispose", "EndsWith", "GetProcessById", "GetStream", "GetString", "IndexOf",
     "IsMatch", "Kill", "Match", "Max", "Min", "Assign", "Combine", "NewKillOnCloseJob", "ReadAllBytes", "ReadAllText", "ReadAsync", "Replace", "Split", "StartsWith", "Substring", "ToArray",
     "ToCharArray", "ToString", "Trim", "TrimEnd", "Wait", "WaitAny", "WaitForExit", "WriteAsync",
@@ -79,8 +81,8 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     "FromBase64String", "ComputeHash", "Create", "ToBase64String", "ReadAllLines", "WriteAllText", "CreateDirectory", "AddDays",
     # Listen.ps1 (R17a), measured 2026-10-07: its configuration file, the user's name, sshd's start time.
     "ToLowerInvariant", "WriteAllLines", "ToUniversalTime",
-    # Listen.ps1, issue #147: the per-process memory cap on the listener's job (Native.ps1).
-    "LimitProcessMemory",
+    # Listen.ps1, issue #147 items 1 and 2: the listener job's memory caps and process count (Native.ps1).
+    "LimitListenerJob",
     # Enroll.ps1, issue #144 item 3 (2026-10-11): an enrolment's expiry read as sshd reads it. None runs anything.
     "ParseExact", "ToLocalTime",
     # Files.ps1, issue #123 (2026-10-11): who owns and may write the link's files and their folders.

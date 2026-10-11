@@ -57,6 +57,16 @@ $script:HordeSshListenStartMs = 15000
 # 81 MB idle to 200 MB after 64 MiB. 320 MiB leaves about 1.5 times the relaying peak, and a never-ending
 # line reaches it after roughly 120 MiB.
 $script:HordeSshListenProcessBytes = 320MB
+# WHAT THE LISTENER'S PROCESSES MAY COMMIT TOGETHER, AND HOW MANY MAY RUN (mesh v1, issue #147 item 2;
+# Native.ps1, LimitListenerJob). One key opening many connections must not commit gigabytes: each
+# connection starts a PowerShell for attach before attach's one-link-per-device check can end it.
+# Measured 2026-10-11 on this machine through the real listener (transports/ssh/test/test-listen-local.ps1):
+# one open session is six processes under the listener's sshd, and attach commits 81 MB idle, 150 MB
+# starting and 207 MB relaying at the frame ceiling (2026-10-07, above). 1 GiB holds the listener and about
+# five links relaying at their peak at once, or a dozen idle; 64 processes hold ten sessions and the sshd.
+# A link past either fails to start and its node redials; nothing already up is touched.
+$script:HordeSshListenJobBytes = 1GB
+$script:HordeSshListenActiveProcesses = 64
 
 function Get-HordeSshListenFiles {
     # Where the listener's files live, all under Horde's home (the layout enrolment writes, R17b).
@@ -218,8 +228,9 @@ function Start-HordeSshListener {
     $handed = $false
     $proc = $null
     try {
-        # No process of the listener may commit more than the cap (Native.ps1, LimitProcessMemory).
-        [HordeSshNative]::LimitProcessMemory($job, [long]$script:HordeSshListenProcessBytes)
+        # No process of the listener may commit more than its cap, nor all of them together more than
+        # theirs, nor more of them run at once than the count (Native.ps1, LimitListenerJob).
+        [HordeSshNative]::LimitListenerJob($job, [long]$script:HordeSshListenProcessBytes, [long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)
         $proc = Start-HordeSshServer -Config $files.config -Job $job
         $listener = [pscustomobject]@{ process = $proc; startedAt = $proc.StartTime.ToUniversalTime().Ticks; job = $job; log = $proc.StandardError.ReadToEndAsync(); port = $port; config = $files.config; authorized = $files.authorized; root = "$($Request.root)" }
         $null = $proc.StandardOutput.ReadToEndAsync()

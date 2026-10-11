@@ -25,7 +25,13 @@
            Find = 'if (-not (Test-Path -LiteralPath $files.revoked -PathType Leaf)) { Write-HordeSshLines -Path $files.revoked -Lines @() }'
            Replace = 'if (-not (Test-Path -LiteralPath $files.revoked -PathType Leaf)) { [System.IO.File]::WriteAllText($files.revoked, "") }' }
         @{ Name = "no-memory-cap"
-           Find = '[HordeSshNative]::LimitProcessMemory($job, [long]$script:HordeSshListenProcessBytes)'
+           Find = '[HordeSshNative]::LimitListenerJob($job, [long]$script:HordeSshListenProcessBytes, [long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
            Replace = '' }
+        @{ Name = "no-job-memory-cap"
+           Find = '[long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
+           Replace = '[long]0x7FFFFFFFFFFF, [int]$script:HordeSshListenActiveProcesses)' }
+        @{ Name = "no-process-count"
+           Find = '[long]$script:HordeSshListenJobBytes, [int]$script:HordeSshListenActiveProcesses)'
+           Replace = '[long]$script:HordeSshListenJobBytes, [int]100000)' }
     )
 }

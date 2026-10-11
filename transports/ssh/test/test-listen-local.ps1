@@ -46,7 +46,9 @@ foreach ($f in @("Tristate", "Schema", "Home", "Device", "ReadShared", "FileAtom
 . (Join-Path $root "remote\LinkBinding.ps1")
 . (Join-Path $here "ListenFixture.ps1")
 
-$limitSeconds = 480
+# The whole suite's budget. 600 s since the job-limit cases (mesh v1, 2026-10-11) added about a minute to a
+# run that already came near 480 s on a loaded machine, where every wait shrinks toward the end (Left).
+$limitSeconds = 600
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 function Left { param([int]$Ms) return [int][Math]::Max(1, [Math]::Min($Ms, ($limitSeconds * 1000) - $clock.ElapsedMilliseconds - 10000)) }
 $tl = Get-HordeTransport -Name "local"
@@ -344,6 +346,55 @@ try {
             $null = Wait-AttachGone -Ms (Left 15000)
         } else { Check $false "a first link for the one-per-device case" }
 
+
+        Write-Host ""
+        Write-Host "--- the listener's job: how many processes, and how much memory together (mesh v1, issue #147 item 2) ---" -ForegroundColor Cyan
+        # A listener of this process's own, on its own port, so its job's limits can be set for the case:
+        # Listen.ps1's limits are script variables of this suite's scope (it dot-sources Listen.ps1).
+        $ad = Get-HordeListenerAdapter -Name "ssh"
+        $savedEndpoint = $endpoint
+        $limits = @{ count = $script:HordeSshListenActiveProcesses; bytes = $script:HordeSshListenJobBytes }
+        function Test-JobCase { param([string]$Name)
+            # Start a listener with the limits as they are now, try one node link, and say { opened; sessionProcs; serving }.
+            $pj = Get-ListenFreePort; [void]$ports.Add($pj)
+            $run = Start-HordeListener -Adapter $ad.value -HordeHome $hh -HubId $hubId -Root $root -Register { Get-HordeHubLiveKeys -HordeHome $hh } -Port $pj
+            if ($run.state -cne "known") { Write-Host ("         " + $Name + ": the listener did not start: " + $run.reason) -ForegroundColor DarkYellow; return $null }
+            $script:endpoint = $user + "@127.0.0.1:" + $pj + "/" + $hubId
+            $out = [pscustomobject]@{ opened = $false; sessionProcs = -1; serving = $false }
+            try {
+                $o = & $ts.open $script:endpoint (Left 15000)
+                if ($o.ok) {
+                    $n = New-HordeLink -Transport $ts -Role "node" -Endpoint $script:endpoint -Channel $o.channel -Peer $o.peer
+                    $a = Receive-HordeTransportLink -Listener $hubListener -TimeoutMs (Left 20000)
+                    if ($a.state -ceq "known") {
+                        $pre = Receive-HordeLinkFrame -Link (Get-HordeValue $a) -TimeoutMs (Left 15000)
+                        $out.opened = ($pre.state -ceq "known")
+                        # Every process under the listener's sshd: the session's own, counted once.
+                        $all = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
+                        $tree = New-Object System.Collections.ArrayList; [void]$tree.Add([int]$run.value.listener.process.Id)
+                        $grew = $true
+                        while ($grew) { $grew = $false; foreach ($p in $all) { if ($tree -contains [int]$p.ParentProcessId -and $tree -notcontains [int]$p.ProcessId) { [void]$tree.Add([int]$p.ProcessId); $grew = $true } } }
+                        $out.sessionProcs = $tree.Count - 1
+                        Close-HordeLink -Link (Get-HordeValue $a)
+                    }
+                    Close-HordeLink -Link $n
+                } else { Write-Host ("         " + $Name + ": no node link: " + $o.reason) -ForegroundColor DarkGray }
+                $out.serving = ((Test-HordeListenerServing -Running $run.value).value -eq $true)
+            } finally { $null = Stop-HordeListener -Running $run.value; $script:endpoint = $savedEndpoint }
+            return $out
+        }
+        $c = Test-JobCase -Name "control"
+        Check ($null -ne $c -and $c.opened -and $c.serving) "CONTROL: with its own limits, a node's link through the listener reaches the hub"
+        Check ($null -ne $c -and $c.sessionProcs -ge 2 -and $c.sessionProcs * 10 + 1 -le $limits.count) ("a session is " + $c.sessionProcs + " processes under the listener's sshd (six measured 2026-10-11), so the count of " + $limits.count + " holds at least ten sessions and sshd")
+        $script:HordeSshListenActiveProcesses = 2
+        $c = Test-JobCase -Name "two processes"
+        $script:HordeSshListenActiveProcesses = $limits.count
+        Check ($null -ne $c -and -not $c.opened -and $c.serving) "with room for two processes, a session cannot start: the job's count refuses it, and the listener still serves"
+        $script:HordeSshListenJobBytes = 96MB
+        $c = Test-JobCase -Name "96 MB"
+        $script:HordeSshListenJobBytes = $limits.bytes
+        Check ($null -ne $c -and -not $c.opened -and $c.serving) "with 96 MB for the whole job, attach (150 MB starting) cannot start: the job's memory refuses it, and the listener still serves"
+        $null = Wait-AttachGone -Ms (Left 15000)
 
         Write-Host ""
         Write-Host "--- a never-ending line: the job's memory cap ends that attach, and nothing else (issue #147) ---" -ForegroundColor Cyan
