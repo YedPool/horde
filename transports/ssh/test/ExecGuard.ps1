@@ -51,10 +51,18 @@
 # New-HordeSshKey in Enroll.ps1 and nowhere else; one canonical setup naming ssh-keygen.exe from the
 # system directory; and its argv assigned once, in one pinned expression, so no caller's flag reaches
 # it. Anything else that starts a program, anywhere in the folder, is a finding as before.
+#
+# A THIRD SANCTIONED START (remote plan R17a, coordinator's approval of 2026-10-07): the hub's listener
+# runs the System32 sshd.exe as `horde listen`'s child. Held the same way: one [Process]::Start, inside
+# Start-HordeSshServer in Listen.ps1 and nowhere else; one canonical setup naming sshd.exe from the
+# system directory; and its argv assigned once, in one pinned expression: -D -e -f and the
+# configuration Listen.ps1 wrote under Horde's home.
 
 $script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Path", "Test-Path", "New-Object", "Register-HordeTransport", "New-HordeUnknown", "New-HordeKnown", "Get-HordeHome", "Add-Type",
     # Enroll.ps1 (R17b): its own files under Horde's home, the key's ACL, and its registration.
-    "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment")
+    "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
+    # Listen.ps1 (R17a): its registration.
+    "Register-HordeListener")
 $script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
 # Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
 $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
@@ -67,7 +75,9 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     # Enroll.ps1 (R17b), measured 2026-10-06: paths, its own files, the key's ACL, the key's fingerprint
     # and the expiry date. None runs anything.
     "GetFullPath", "GetCurrent", "SetAccessRuleProtection", "SetOwner", "AddAccessRule", "GetAccessRules", "IsPathRooted", "ReadToEndAsync",
-    "FromBase64String", "ComputeHash", "Create", "ToBase64String", "ReadAllLines", "WriteAllText", "CreateDirectory", "AddDays")
+    "FromBase64String", "ComputeHash", "Create", "ToBase64String", "ReadAllLines", "WriteAllText", "CreateDirectory", "AddDays",
+    # Listen.ps1 (R17a), measured 2026-10-07: its configuration file, the user's name, sshd's start time.
+    "ToLowerInvariant", "WriteAllLines", "ToUniversalTime")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
@@ -101,6 +111,11 @@ $script:HordeSshGuardKeygenFile = "Enroll.ps1"
 $script:HordeSshGuardKeygenFunction = "New-HordeSshKey"
 $script:HordeSshGuardKeygenSetup = '[System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "ssh-keygen.exe"), $keygenArgs)'
 $script:HordeSshGuardKeygenArgv = '$keygenArgs = Join-HordeSshCommandLine -Argv @("-q", "-t", "ed25519", "-N", "", "-C", "horde", "-f", $full)' 
+# The third start (header): where it may be, how it is set up, and its one fixed argv.
+$script:HordeSshGuardServerFile = "Listen.ps1"
+$script:HordeSshGuardServerFunction = "Start-HordeSshServer"
+$script:HordeSshGuardServerSetup = '[System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "OpenSSH", "sshd.exe"), $serverArgs)'
+$script:HordeSshGuardServerArgv = '$serverArgs = Join-HordeSshCommandLine -Argv @("-D", "-e", "-f", $Config)'
 
 function Get-HordeSshExecFindings {
     # Every finding for the .ps1 files directly in -Dir, as "<file>:<line>: what". Empty means the
@@ -133,6 +148,9 @@ function Get-HordeSshExecFindings {
     $keygenStarts = New-Object System.Collections.ArrayList
     $keygenSetups = New-Object System.Collections.ArrayList
     $keygenArgvs = New-Object System.Collections.ArrayList
+    $serverStarts = New-Object System.Collections.ArrayList
+    $serverSetups = New-Object System.Collections.ArrayList
+    $serverArgvs = New-Object System.Collections.ArrayList
     foreach ($p in $parsed) {
         $ast = $p.ast
         function Add-At { param($Node, [string]$What) [void]$out.Add($p.name + ":" + $Node.Extent.StartLineNumber + ": " + $What) }
@@ -193,7 +211,8 @@ function Get-HordeSshExecFindings {
                 $isPsi = ($m.Static -and $m.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and $m.Expression.TypeName.FullName -ceq "System.Diagnostics.ProcessStartInfo" -and $null -ne $fn)
                 if ($isPsi -and $m.Extent.Text -ceq $script:HordeSshGuardStartSetup -and $fn.Name -ceq "Start-HordeSshProcess") { [void]$setups.Add($m) }
                 elseif ($isPsi -and $m.Extent.Text -ceq $script:HordeSshGuardKeygenSetup -and $fn.Name -ceq $script:HordeSshGuardKeygenFunction -and $p.name -ceq $script:HordeSshGuardKeygenFile) { [void]$keygenSetups.Add($m) }
-                else { Add-At $m "a ::new other than the canonical ProcessStartInfo in Start-HordeSshProcess or in New-HordeSshKey" }
+                elseif ($isPsi -and $m.Extent.Text -ceq $script:HordeSshGuardServerSetup -and $fn.Name -ceq $script:HordeSshGuardServerFunction -and $p.name -ceq $script:HordeSshGuardServerFile) { [void]$serverSetups.Add($m) }
+                else { Add-At $m "a ::new other than the canonical ProcessStartInfo in Start-HordeSshProcess, New-HordeSshKey or Start-HordeSshServer" }
                 continue
             }
             if ($mn -ceq "Start") {
@@ -201,7 +220,8 @@ function Get-HordeSshExecFindings {
                 $isProc = ($m.Static -and $m.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and $m.Expression.TypeName.FullName -ceq "System.Diagnostics.Process" -and $null -ne $fn)
                 if ($isProc -and $fn.Name -ceq "Start-HordeSshProcess") { [void]$starts.Add($m) }
                 elseif ($isProc -and $fn.Name -ceq $script:HordeSshGuardKeygenFunction -and $p.name -ceq $script:HordeSshGuardKeygenFile) { [void]$keygenStarts.Add($m) }
-                else { Add-At $m "a Start other than [System.Diagnostics.Process]::Start in Start-HordeSshProcess or in New-HordeSshKey" }
+                elseif ($isProc -and $fn.Name -ceq $script:HordeSshGuardServerFunction -and $p.name -ceq $script:HordeSshGuardServerFile) { [void]$serverStarts.Add($m) }
+                else { Add-At $m "a Start other than [System.Diagnostics.Process]::Start in Start-HordeSshProcess, New-HordeSshKey or Start-HordeSshServer" }
                 continue
             }
             if ($script:HordeSshGuardMethods -cnotcontains $mn) { Add-At $m ("the method " + $mn + " is not one the adapter calls") }
@@ -222,6 +242,7 @@ function Get-HordeSshExecFindings {
                 if (@("function", "alias", "variable") -contains $drive) { Add-At $a ("an assignment through the " + $drive + ": drive, which replaces a command or a variable by name"); continue }
                 if ($script:HordeSshGuardAutomatic -contains $bare) { Add-At $a ("an assignment to the automatic variable $" + $bare); continue }
                 if ($bare -ieq "keygenArgs") { [void]$keygenArgvs.Add($a) }
+                if ($bare -ieq "serverArgs") { [void]$serverArgvs.Add($a) }
             } elseif ($left -is [System.Management.Automation.Language.MemberExpressionAst]) {
                 $lm = $left.Member
                 if ($lm -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { Add-At $a "an assignment to a member named by an expression"; continue }
@@ -249,6 +270,13 @@ function Get-HordeSshExecFindings {
     if ($keygenStarts.Count -eq 1) {
         if ($keygenArgvs.Count -ne 1) { [void]$out.Add("ssh-keygen's argv is assigned " + $keygenArgvs.Count + " time(s); exactly once, in the pinned expression, is allowed") }
         elseif ($keygenArgvs[0].Extent.Text -cne $script:HordeSshGuardKeygenArgv) { [void]$out.Add("ssh-keygen's argv is not the pinned one: no caller's flag may reach it (" + $keygenArgvs[0].Extent.Text + ")") }
+    }
+    # The third start, the same way: optional, at most once, only with its pinned setup and argv.
+    if ($serverStarts.Count -gt 1) { [void]$out.Add("Start-HordeSshServer starts a program " + $serverStarts.Count + " times; at most once is allowed") }
+    if ($serverStarts.Count -ne $serverSetups.Count) { [void]$out.Add("Start-HordeSshServer starts a program " + $serverStarts.Count + " time(s) but sets up sshd.exe the canonical way " + $serverSetups.Count + " time(s)") }
+    if ($serverStarts.Count -eq 1) {
+        if ($serverArgvs.Count -ne 1) { [void]$out.Add("sshd's argv is assigned " + $serverArgvs.Count + " time(s); exactly once, in the pinned expression, is allowed") }
+        elseif ($serverArgvs[0].Extent.Text -cne $script:HordeSshGuardServerArgv) { [void]$out.Add("sshd's argv is not the pinned one: no caller's flag may reach it (" + $serverArgvs[0].Extent.Text + ")") }
     }
     return @($out)
 }
