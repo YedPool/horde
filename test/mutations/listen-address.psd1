@@ -34,7 +34,7 @@
            Find = 'if ($v4 -and $text -cnotmatch'
            Replace = 'if ($false -and $text -cnotmatch' }
         @{ Name = "family-ignored"
-           Find = 'if ($r.family -cne $family) { continue }'
+           Find = 'if ($Bytes.Length -ne $Prefix.Count) { return $false }'
            Replace = '' }
         @{ Name = "not-this-machines-taken"
            Find = 'return (New-HordeUnknown -Reason ("''" + $k.value.address + "'' is " + $k.value.kind + ", but no interface'

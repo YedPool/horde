@@ -48,6 +48,7 @@ $refused = [ordered]@{
     "100.63.255.255" = "*public address*"; "100.128.0.0" = "*public address*"
     "169.253.255.255" = "*public address*"; "126.255.255.255" = "*public address*"; "128.0.0.1" = "*public address*"
     "224.0.0.1" = "*public address*"; "255.255.255.255" = "*public address*"
+    "252.0.0.1" = "*public address*"; "254.128.0.1" = "*public address*"
     "2001:4860:4860::8888" = "*public address*"; "fbff::1" = "*public address*"; "fec0::1" = "*public address*"; "ff02::1" = "*public address*"
     "0.0.0.0" = "*every interface*"; "::" = "*every interface*"
     "::ffff:192.168.1.182" = "*IPv4 address in IPv6 form*"

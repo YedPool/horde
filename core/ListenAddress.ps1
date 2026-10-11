@@ -36,7 +36,7 @@ $script:HordeListenRanges = @(
 )
 
 function Test-HordeAddressInRange {
-    # Do the first -Bits bits of -Bytes equal those of -Prefix?
+    # Do the first -Bits bits of -Bytes equal those of -Prefix? Never for an address of another family.
     param([byte[]]$Bytes, [object[]]$Prefix, [int]$Bits)
     if ($Bytes.Length -ne $Prefix.Count) { return $false }
     for ($i = 0; $i -lt $Bits; $i++) {
@@ -65,8 +65,9 @@ function Get-HordeListenAddressKind {
     if (-not $v4 -and $ip.IsIPv4MappedToIPv6) { return (New-HordeUnknown -Reason ("'" + $text + "' is an IPv4 address in IPv6 form; write the IPv4 address itself")) }
     $family = "v6"; if ($v4) { $family = "v4" }
     $bytes = $ip.GetAddressBytes()
+    # An IPv4 address is never held to an IPv6 range, nor the other way: Test-HordeAddressInRange refuses
+    # prefixes of another length (252.0.0.1 would otherwise match fc00::/7).
     foreach ($r in $script:HordeListenRanges) {
-        if ($r.family -cne $family) { continue }
         if (Test-HordeAddressInRange -Bytes $bytes -Prefix $r.bytes -Bits $r.bits) {
             return (New-HordeKnown -Value ([pscustomobject]@{ address = $ip.ToString(); family = $family; kind = $r.name; loopback = [bool]($r.name -ceq "loopback") }))
         }

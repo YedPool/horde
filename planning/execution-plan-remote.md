@@ -432,6 +432,14 @@ D. The Windows listener (INSTALL; awaits the founder's OK)
     key line only for a device the register holds live with that key (#123, #147 item 4); the
     listener's job caps its processes' memory together as well as each, and how many may run (#147
     item 2); the hub reads preambles through `remote/LinkBinding.ps1` alone (#144 item 7).
+    Then the LAN listener (branch mesh/v1-listen-address): `horde listen -Address <ip>` binds one address,
+    loopback or a private one this machine holds (RFC 1918, CGNAT 100.64.0.0/10, link-local, IPv6 ULA),
+    never a public address or every interface (`core/ListenAddress.ps1`); off loopback it keeps one
+    firewall rule of its own, "Horde listen <hubId>", TCP to that address and port from the enrolled
+    nodes' last-known addresses (`horde hub enroll -Address`) or `-AllowFrom` only, Private and Domain
+    profiles only, removed when it stops (`core/FirewallPort.ps1`, `platform/windows/Firewall.ps1`); it
+    needs an administrator and never elevates itself. The operator's steps for the first live link are
+    `planning/first-live-link-ov615.md`. Still to build: the hub's act verbs over a dialled link.
 
 E. Acting over the link
 
