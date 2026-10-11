@@ -42,8 +42,8 @@
            Find = 'if (-not (Test-Path -LiteralPath $files.hostKey -PathType Leaf)) {'
            Replace = 'if ($false) {' }
         @{ Name = "keys-not-checked"
-           Find = 'if ($found.Count -gt 0) {'
-           Replace = 'if ($false) {' }
+           Find = 'if ($found.Count -gt 0) { return (New-HordeSshListenResult'
+           Replace = 'if ($false) { return (New-HordeSshListenResult' }
         # --- the configuration ---
         @{ Name = "listens-on-every-address"
            Find = '"ListenAddress 127.0.0.1",'
@@ -69,5 +69,18 @@
         @{ Name = "user-environment-allowed"
            Find = '"PermitUserEnvironment no",'
            Replace = '"PermitUserEnvironment yes",' }
+        # --- issue #147 ---
+        @{ Name = "connections-unbounded"
+           Find = '"MaxStartups 4:50:8",'
+           Replace = '' }
+        @{ Name = "unsafe-home-admitted"
+           Find = 'if ("$($Request.hordeHome)" -match ''[\s#%"]'') {'
+           Replace = 'if ($false) {' }
+        @{ Name = "keys-not-rechecked"
+           Find = 'if ($found.Count -gt 0) { return (New-HordeUnknown -Reason ("authorized_keys changed after'
+           Replace = 'if ($false) { return (New-HordeUnknown -Reason ("authorized_keys changed after' }
+        @{ Name = "keys-file-gone-ignored"
+           Find = 'if (-not (Test-Path -LiteralPath $Listener.authorized -PathType Leaf)) { return'
+           Replace = 'if ($false) { return' }
     )
 }

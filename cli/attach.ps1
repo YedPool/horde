@@ -19,6 +19,11 @@
 #
 # EXIT CODES: 0 the session ended (stdin closed, or the hub closed the pipe); 1 the relay could not
 # start or a line could not be relayed, with the reason on stderr; 2 -Device is not a device id.
+# EVERY EXIT IS [Environment]::Exit, NOT exit. This script mentions $input, so PowerShell waits after an
+# ordinary exit until stdin ends (the measurement above); a refused second link or a line over the
+# ceiling then lived on until the client hung up (measured 2026-10-07, issue #147's live cases). attach
+# is always a process of its own, the forced command of one session, so ending the process is right.
+# [Console]::Error.WriteLine is unbuffered, so nothing written before it is lost.
 
 param([string]$Device)
 
@@ -30,7 +35,7 @@ $private:root = Split-Path -Parent $PSScriptRoot
 $private:preamble = New-HordeAttachPreamble -DeviceId $Device
 if (-not $preamble.ok) {
     [Console]::Error.WriteLine("horde attach: " + $preamble.reason)
-    exit 2
+    [Environment]::Exit(2)
 }
 try {
     foreach ($f in @("Tristate", "Schema", "Home", "Device")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
@@ -42,10 +47,22 @@ try {
     $private:nodeFile = Join-Path (Get-HordeHome) "node\node.json"
     if (-not (Test-Path -LiteralPath $nodeFile -PathType Leaf)) { throw ("this hub has no device id yet (" + $nodeFile + " is missing)") }
     $private:hubId = (Read-HordeNodeFile -Path $nodeFile).deviceId
-    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -ExitWhenHubCloses
+    # ONE LINK PER DEVICE (issue #147, item 2). The listener's MaxSessions bounds sessions per connection, not
+    # connections per key, so an enrolled peer could open many, each a PowerShell. A device has one link
+    # to its hub at a time (the hub pulls it over that one link), so a second attach for the same device
+    # ends at once. A named mutex, held for this process's life: Windows frees it when the process ends,
+    # however it ends, so a dead link never blocks the next. Local\ is this logon session's namespace,
+    # where every session of this listener runs.
+    $private:oneLink = New-Object System.Threading.Mutex($false, ("Local\horde-attach-" + $hubId + "-" + $Device))
+    $private:held = $false
+    try { $held = $oneLink.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $held = $true }
+    if (-not $held) { throw ("device " + $Device + " already has a live link to this hub; a device has one at a time") }
+    # The longest line the relay passes on: no frame may be longer (issue #147, item 1).
+    $private:ceiling = [int](Get-HordeLinkLimits (Get-HordeSchema -Name "link-frame.v1"))["frameBytesCeiling"]
+    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -MaxLineBytes $ceiling -ExitWhenHubCloses
     if (-not $result.ok) { throw $result.reason }
 } catch {
     [Console]::Error.WriteLine("horde attach: " + $_.Exception.Message)
-    exit 1
+    [Environment]::Exit(1)
 }
-exit 0
+[Environment]::Exit(0)
