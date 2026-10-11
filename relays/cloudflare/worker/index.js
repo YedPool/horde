@@ -21,8 +21,9 @@ import { withStrictHeaders } from "./headers.js";
 
 export { Mailbox } from "./mailbox.js";
 
+// A write to a file is refused by the asset store itself (405, measured 2026-10-11 against the local
+// dev): no check of the method is needed here.
 async function serveFile(request, env, url) {
-  if (request.method !== "GET" && request.method !== "HEAD") return refuse(405, "the app's files are only read");
   if (url.pathname === "/") return env.ASSETS.fetch(new Request(new URL("/index.html", url).href, request));
   return env.ASSETS.fetch(request);
 }

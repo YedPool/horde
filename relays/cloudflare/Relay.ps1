@@ -19,8 +19,9 @@
 #
 # THE WIRE (worker/api.js has the whole list): put is POST .../items, read is GET .../items, ack is POST
 # .../ack, and a watch is a WebSocket on .../watch that the relay answers with one message of items the
-# moment there are any, or that this side closes when its timeout ends. A watch of 0 ms is a read: a
-# socket closed before its first message would lose items that were already there.
+# moment there are any, or that this side closes when its timeout ends. Once the socket is open it is
+# read for what is left of the timeout and never less than 250 ms, so a watch of 0 ms still gets the
+# items that were already there: the relay sends those the moment the socket opens.
 #
 # EVERY ANSWER IS THE FAR END'S, AND UNTRUSTED. A status other than 200, a body that is not the JSON
 # expected, a socket that fails: unknown, with the relay's own words cut to 200 printable characters,
@@ -188,10 +189,6 @@ $null = Register-HordeRelay -Folder $script:HordeCloudflareRelayAdapterFolder `
     } `
     -Watch {
         param($State, [string]$Mailbox, [long]$Since, [int]$Max, [int]$TimeoutMs)
-        if ($TimeoutMs -le 0) {
-            $a = Invoke-HordeCloudflareRelayHttp -State $State -Method "GET" -Path ((Get-HordeCloudflareRelayMailboxPath -Mailbox $Mailbox -Op "items") + "?since=" + $Since + "&max=" + $Max) -What "watch"
-            return (ConvertTo-HordeCloudflareRelayItems -Answer $a -What "watch")
-        }
         return (Invoke-HordeCloudflareRelayWatch -State $State -Mailbox $Mailbox -Since $Since -Max $Max -TimeoutMs $TimeoutMs)
     } `
     -Ack {

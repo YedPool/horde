@@ -18,6 +18,11 @@
 #        JSON, a member too many, a bad key, a non-ASCII text, malformed cursors, the wrong method, a
 #        watch that is not an upgrade, a device name, an ack past the head;
 #      - one answer's texts stop at a million characters, so a watch's one message fits a WebSocket's;
+#      - a key is remembered while its item is held, and free again once the item is trimmed;
+#      - the machine's adapter: quotes and backslashes round-trip, a refusal carries the relay's status
+#        and words, and with no origin given it connects to the production origin;
+#      - a dev run with test-bindings.json exactly as committed vouches for no one: the placeholder is
+#        too short to be a token, whatever a caller sends;
 #      - the phone's own relay client and http transport, run by node, against this Worker.
 #
 # NODE IS NEEDED, and the pinned wrangler (relays/cloudflare/Wrangler.ps1 installs it outside the
@@ -40,6 +45,15 @@ $work = Join-Path $env:TEMP ("horde-cf-worker-" + [guid]::NewGuid().ToString("N"
 [void][System.IO.Directory]::CreateDirectory($work)
 
 function Read-Text { param([string]$Path) return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) }
+function Get-Prop {
+    # A member of a parsed object, or $null when the object or the member is not there (strict mode
+    # would raise an error instead, and a check that raises is not a failed check).
+    param($Object, [string]$Name)
+    if ($null -eq $Object) { return $null }
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
 
 Write-Host ""
 Write-Host "--- 1. the configs: the production one can never turn the test authenticator on ---" -ForegroundColor Cyan
@@ -61,11 +75,11 @@ $pcText = $(if ($pc.state -ceq "known") { Read-Text $pc.value } else { "" })
 Check ($pc.state -ceq "known" -and $pcText -ne "" -and -not (Test-HordeCloudflareRelayHasTestBinding -Text $pcText)) "the config written for production carries no test binding"
 $pcObj = $(if ($pcText -ne "") { $pcText | ConvertFrom-Json } else { $null })
 $siteSlash = ([System.IO.Path]::GetFullPath($siteForConfig)) -replace '\\', '/'
-Check ($null -ne $pcObj -and $pcObj.assets.directory -ceq $siteSlash -and [System.IO.Path]::IsPathRooted($pcObj.main) -and (Test-Path -LiteralPath $pcObj.main) -and $pcObj.vars.HORDE_RELAY_ORIGIN -ceq $prod.vars.HORDE_RELAY_ORIGIN) "and points wrangler at the Worker and the app's folder by absolute paths, keeping wrangler.json's own vars"
+Check ($null -ne $pcObj -and (Get-Prop (Get-Prop $pcObj "assets") "directory") -ceq $siteSlash -and [System.IO.Path]::IsPathRooted($pcObj.main) -and (Test-Path -LiteralPath $pcObj.main) -and (Get-Prop (Get-Prop $pcObj "vars") "HORDE_RELAY_ORIGIN") -ceq $prod.vars.HORDE_RELAY_ORIGIN) "and points wrangler at the Worker and the app's folder by absolute paths, keeping wrangler.json's own vars"
 $tok = New-HordeCloudflareRelayToken
 $tc = New-HordeCloudflareRelayConfig -Out (Join-Path $work "test-config") -Site $siteForConfig -TestToken $tok
 $tcObj = $(if ($tc.state -ceq "known") { Read-Text $tc.value | ConvertFrom-Json } else { $null })
-Check ($null -ne $tcObj -and $tcObj.vars.HORDE_RELAY_TEST_AUTH -ceq $tok -and $tcObj.vars.HORDE_RELAY_ORIGIN -ceq $prod.vars.HORDE_RELAY_ORIGIN) "the config written for a test carries the binding with the run's own token, beside wrangler.json's vars"
+Check ($null -ne $tcObj -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_TEST_AUTH") -ceq $tok -and (Get-Prop (Get-Prop $tcObj "vars") "HORDE_RELAY_ORIGIN") -ceq $prod.vars.HORDE_RELAY_ORIGIN) "the config written for a test carries the binding with the run's own token, beside wrangler.json's vars"
 $short = New-HordeCloudflareRelayConfig -Out (Join-Path $work "short-config") -Site $siteForConfig -TestToken "abc"
 Check ($short.state -ceq "unknown") "a test token too short to count is refused before any config is written"
 Check ((New-HordeCloudflareRelayToken) -cne $tok -and $tok -cmatch '\A[0-9a-f]{64}\z') "each run's token is 64 fresh hex digits"
@@ -81,6 +95,11 @@ $probe = Join-Path $work "probe.ps1"
 $psExe = (Get-Process -Id $PID).Path
 $answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String).Trim()
 Check ((Test-HordeCloudflareRelayHasTestBinding -Text $doctored) -and $answer -clike "unknown|*must never carry the test binding*" -and -not (Test-Path -LiteralPath (Join-Path $work "doctored-out"))) ("a wrangler.json that carries the binding is refused, and nothing is written (" + $answer + ")")
+# The same copy with another Worker's name than its origin's first label: the origin is refused.
+[System.IO.File]::WriteAllText((Join-Path $copy "relays\cloudflare\wrangler.json"), $prodText.Replace('"name": "relay"', '"name": "other"'), $utf8)
+[System.IO.File]::WriteAllText($probe, ('. "' + (Join-Path $copy "relays\cloudflare\Wrangler.ps1") + '"' + "`n" + 'try { $d = Get-HordeCloudflareRelayDeployment; Write-Output ("taken|" + $d.origin) } catch { Write-Output ("refused|" + $_.Exception.Message) }' + "`n"), $utf8)
+$answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String).Trim()
+Check ($prodText.Contains('"name": "relay"') -and $answer -clike "refused|*is not https://other.*") ("a Worker name the origin does not start with is refused, so a deploy never sends machines to another Worker (" + $answer + ")")
 
 $dep = Get-HordeCloudflareRelayDeployment
 Check ($dep.name -ceq "relay" -and $dep.origin -clike ("https://" + $dep.name + ".*.workers.dev") -and $dep.callback -ceq "/auth/google/callback") ("the production origin is the Worker's own name under the account's subdomain, and sign-in's return path is reserved (" + $dep.origin + $dep.callback + ")")
@@ -121,6 +140,34 @@ function Send-Raw {
         foreach ($pair in @($res.Headers) + @($res.Content.Headers)) { $h[$pair.Key.ToLowerInvariant()] = (@($pair.Value) -join ", ") }
         return [pscustomobject]@{ code = [int]$res.StatusCode; headers = $h; text = $res.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
     } finally { $res.Dispose(); $req.Dispose() }
+}
+
+function Send-Chunked {
+    # A POST whose body goes in chunks with no Content-Length, written on the wire (HttpClient on .NET
+    # Framework still sends the length): the status line of the answer.
+    param([string]$Path, [string]$Body, [string]$Authorization)
+    $u = New-Object System.Uri($dev.value.origin)
+    $tcp = New-Object System.Net.Sockets.TcpClient($u.Host, $u.Port)
+    try {
+        $s = $tcp.GetStream()
+        $s.ReadTimeout = 30000
+        $head = "POST " + $Path + " HTTP/1.1`r`nHost: " + $u.Authority + "`r`nContent-Type: application/json`r`nTransfer-Encoding: chunked`r`nConnection: close`r`nAuthorization: " + $Authorization + "`r`n`r`n"
+        $b = [System.Text.Encoding]::ASCII.GetBytes($head)
+        $s.Write($b, 0, $b.Length)
+        try {
+            for ($i = 0; $i -lt $Body.Length; $i += 16384) {
+                $piece = $Body.Substring($i, [Math]::Min(16384, $Body.Length - $i))
+                $c = [System.Text.Encoding]::ASCII.GetBytes($piece.Length.ToString("x") + "`r`n" + $piece + "`r`n")
+                $s.Write($c, 0, $c.Length)
+            }
+            $end = [System.Text.Encoding]::ASCII.GetBytes("0`r`n`r`n")
+            $s.Write($end, 0, $end.Length)
+        } catch { }
+        $buf = New-Object byte[] 4096
+        $n = $s.Read($buf, 0, $buf.Length)
+        if ($n -le 0) { return "" }
+        return ([System.Text.Encoding]::ASCII.GetString($buf, 0, $n).Split("`n")[0]).TrimEnd("`r")
+    } finally { $tcp.Close() }
 }
 
 function Get-UpgradeHeaders {
@@ -209,6 +256,13 @@ try {
         Check ($quoted.code -eq 200) ("a text of 65536 quote marks, each written as two in JSON, is still taken: the body's cap counts the escapes (" + $quoted.code + ")")
         $flood = Send-Raw "POST" ($mbPath + "/items") ('{"key":"flood","text":"' + ("a" * (2 * $max + 2048)) + '"}') $bearer
         Check ($flood.code -eq 413) ("a body past the body cap is 413 before it is read (" + $flood.code + ")")
+        # Not JSON: read whole, it would be refused as malformed (400); only the count as it is read says 413.
+        $chunked = Send-Chunked -Path ($mbPath + "/items") -Body ("x" * (2 * $max + 2048)) -Authorization $bearer
+        $smallChunked = Send-Chunked -Path ($mbPath + "/items") -Body '{"key":"chunked-small","text":"small"}' -Authorization $bearer
+        Check ($smallChunked -clike "HTTP/1.1 200*") ("CONTROL: a small body sent in chunks is taken (" + $smallChunked + ")")
+        Check ($chunked -clike "HTTP/1.1 413*") ("and so is one sent in chunks, with no length to judge it by, stopped as it is read (" + $chunked + ")")
+        $badKey = Send-Raw "POST" ($mbPath + "/items") '{"key":"a key","text":"t"}' $bearer
+        Check ($badKey.code -eq 400 -and $badKey.text.Contains("the key is not")) ("a bad key is refused by the Worker itself, in its words, before the mailbox is asked (" + $badKey.text + ")")
         foreach ($c in @(
                 @{ what = "a body that is not JSON"; b = 'not json'; code = 400 },
                 @{ what = "a body with a member too many"; b = '{"key":"k","text":"t","extra":1}'; code = 400 },
@@ -257,11 +311,42 @@ try {
         Check ($wAll.state -ceq "known" -and @($wAll.value.items).Count -eq 15) ("a watch with 20 full items waiting gets 15 in its one message, not a message too large to send (" + $wAll.state + " " + $wAll.reason + ")")
 
         Write-Host ""
+        Write-Host "--- keys, and the machine's adapter ---" -ForegroundColor Cyan
+        $km = "worker-test/keys"
+        $k1 = Send-HordeRelayItem -Connection $conn -Mailbox $km -Text "keyed" -Key "same-key"
+        $null = Confirm-HordeRelayItems -Connection $conn -Mailbox $km -Through $(if ($k1.state -ceq "known") { $k1.value.seq } else { [long]0 })
+        $k2 = Send-HordeRelayItem -Connection $conn -Mailbox $km -Text "keyed again" -Key "same-key"
+        Check ($k1.state -ceq "known" -and $k2.state -ceq "known" -and $k1.value.seq -eq 1 -and $k2.value.duplicate -eq $false -and $k2.value.seq -eq 2) "a key is free again once its item is trimmed: the put after the ack is a new item, numbered on"
+        $odd = 'a "quoted" \ back\slashed \" text'
+        $po = Send-HordeRelayItem -Connection $conn -Mailbox "worker-test/odd" -Text $odd
+        $ro = Receive-HordeRelayItems -Connection $conn -Mailbox "worker-test/odd" -Since 0
+        Check ($po.state -ceq "known" -and $ro.state -ceq "known" -and @($ro.value.items).Count -eq 1 -and $ro.value.items[0].text -ceq $odd) "quotes and backslashes go through the adapter and come back as they were put"
+        $kp = Confirm-HordeRelayItems -Connection $conn -Mailbox "worker-test/odd" -Through 99
+        Check ($kp.state -ceq "unknown" -and "$($kp.reason)".Contains("409") -and "$($kp.reason)".Contains("past it")) ("a refusal reaches the caller with the relay's status and words (" + $kp.reason + ")")
+        $dc = Connect-HordeRelay -Name "cloudflare" -Options @{}
+        Check ($dc.state -ceq "known" -and $null -ne $dc.value -and $dc.value.state.origin -ceq (Get-HordeCloudflareRelayDeployment).origin) "with no origin given, the adapter connects to the production origin wrangler.json names"
+
+        Write-Host ""
         Write-Host "--- the phone's own client, over this Worker ---" -ForegroundColor Cyan
         $r = Invoke-HordeCloudflareRelayNode -Node $node -ArgList @((Join-Path $here "phone-over-worker.mjs"), $site, $dev.value.origin, $dev.value.token) -WorkDir $work -TimeoutSeconds 120
         $lines = @(("" + $r.out) -split "`r?`n" | Where-Object { $_ -ne "" })
         foreach ($l in $lines) { if ($l -clike "[[]PASS[]] *") { Check $true $l.Substring(7) } elseif ($l -clike "[[]FAIL[]] *") { Check $false $l.Substring(7) } }
         Check ($r.code -eq 0 -and @($lines | Where-Object { $_ -ceq "[DONE] 0" }).Count -eq 1 -and @($lines | Where-Object { $_ -clike "[[]PASS[]] *" }).Count -ge 7) ("the phone's checks ran to their end (" + $r.code + "; " + ("" + $r.err).Trim() + ")")
+
+        Write-Host ""
+        Write-Host "--- the committed placeholder vouches for no one ---" -ForegroundColor Cyan
+        $plain = Start-HordeCloudflareRelayDev -Work (Join-Path $work "dev-placeholder") -Site $site -Script $tools.value.script -CommittedTestBinding
+        try {
+            Check ($plain.state -ceq "known") ("a dev with test-bindings.json exactly as committed starts (" + $plain.reason + ")")
+            if ($plain.state -ceq "known") {
+                $pReq = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, ($plain.value.origin + $mbPath + "/items?since=0&max=1"))
+                [void]$pReq.Headers.TryAddWithoutValidation("Authorization", "Bearer " + $placeholder)
+                $pRes = $http.SendAsync($pReq).GetAwaiter().GetResult()
+                $pCode = [int]$pRes.StatusCode
+                $pRes.Dispose(); $pReq.Dispose()
+                Check ($pCode -eq 401) ("the placeholder sent as the token is 401: too short to count (" + $pCode + ")")
+            }
+        } finally { if ($plain.state -ceq "known") { Stop-HordeCloudflareRelayDev -Dev $plain.value } }
     }
 } finally {
     $http.Dispose()
