@@ -107,9 +107,20 @@ function Read-HordeHubEnrolment {
 function Add-HordeHubEnrolment {
     # Record that -Transport enrolled -DeviceId with -Key until -Expires. A fresh entry: a device enrolled
     # again (a renewal, or a new key after a revoke) is written whole, without a revokedAt.
-    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)][string]$Transport, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Expires, $Now = $null)
+    # -Address is the node's last-known address on the private network it reaches the hub by (mesh v1):
+    # a single private address, never loopback or public (core/ListenAddress.ps1, which the caller loads);
+    # "" keeps the address the device's entry already holds, if any.
+    param([Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$DeviceId, [Parameter(Mandatory = $true)][string]$Transport, [Parameter(Mandatory = $true)][string]$Key, [Parameter(Mandatory = $true)][string]$Expires, $Now = $null, [string]$Address = "")
     if ($null -eq $Now) { $Now = [datetime]::UtcNow }
     $entry = [pscustomobject][ordered]@{ schemaVersion = 1; deviceId = $DeviceId; transport = $Transport; key = $Key; expires = $Expires; enrolledAt = (ConvertTo-HordeHubRegistryTime -At $Now) }
+    if ($Address -ne "") {
+        $from = Resolve-HordeAllowFrom -Addresses @($Address)
+        if ($from.state -cne "known" -or @($from.value).Count -ne 1) { throw ("the node's address: " + $from.reason) }
+        $entry | Add-Member -NotePropertyName address -NotePropertyValue @($from.value)[0]
+    } else {
+        $old = Read-HordeHubEnrolment -HordeHome $HordeHome -DeviceId $DeviceId
+        if ($old.state -ceq "known" -and $null -ne $old.value.PSObject.Properties["address"]) { $entry | Add-Member -NotePropertyName address -NotePropertyValue "$($old.value.address)" }
+    }
     return (Write-HordeHubEnrolment -HordeHome $HordeHome -Entry $entry)
 }
 
@@ -158,6 +169,19 @@ function Get-HordeHubLiveKeys {
         if ($k.state -ceq "known") { $out[$id] = $k.value }
     }
     return $out
+}
+
+function Get-HordeHubLiveAddresses {
+    # The last-known addresses of every device the register holds live at -Now, sorted, each once: who
+    # `horde listen` on a network address lets in when -AllowFrom names nobody (mesh v1).
+    param([Parameter(Mandatory = $true)][string]$HordeHome, $Now = $null)
+    if ($null -eq $Now) { $Now = [datetime]::UtcNow }
+    $out = New-Object 'System.Collections.Generic.SortedSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($id in @((Get-HordeHubLiveKeys -HordeHome $HordeHome -Now $Now).Keys)) {
+        $e = Read-HordeHubEnrolment -HordeHome $HordeHome -DeviceId $id
+        if ($e.state -ceq "known" -and $null -ne $e.value.PSObject.Properties["address"]) { [void]$out.Add("$($e.value.address)") }
+    }
+    return @($out)
 }
 
 function Test-HordeHubAdmits {

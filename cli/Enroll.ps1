@@ -63,7 +63,7 @@ function Invoke-HordeNodeEnrollVerb {
 
 function Invoke-HordeHubEnrollVerb {
     # `horde hub init|enroll|revoke`. Returns the lines to print.
-    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][string]$Root, [string]$Device = "", [string]$Key = "", [int]$Days = 365, [string]$Transport = "")
+    param([Parameter(Mandatory = $true)][string]$Verb, [Parameter(Mandatory = $true)][string]$Root, [string]$Device = "", [string]$Key = "", [int]$Days = 365, [string]$Transport = "", [string]$Address = "")
     $e = Get-HordeEnrollTransport -Transport $Transport
     $node = Get-HordeNode
     $hh = Get-HordeHome
@@ -76,8 +76,10 @@ function Invoke-HordeHubEnrollVerb {
         }
         "enroll" {
             if ($Device -eq "" -or $Key -eq "") { throw "hub enroll needs -Device <device id> and -Key `"<key>`", exactly as horde node init printed them" }
+            # The node's address is checked before anything is written (mesh v1: a private address only).
+            if ($Address -ne "") { $a = Resolve-HordeAllowFrom -Addresses @($Address); if ($a.state -cne "known") { throw ("-Address: " + $a.reason) } }
             $r = Invoke-HordeEnrollStep -Op $e.hubEnroll -ArgList @($hh, $Device, $Key, $Root, $Days)
-            try { $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $Device -Transport $e.name -Key "$($r.key)" -Expires "$($r.expires)" }
+            try { $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $Device -Transport $e.name -Key "$($r.key)" -Expires "$($r.expires)" -Address $Address }
             catch { throw ("device " + $Device + "'s key is written for the " + $e.name + " transport, but the hub's register could not record it, so the hub admits it nowhere yet; run horde hub enroll again: " + $_.Exception.Message) }
             if ("$($r.said)" -ne "") { return @("$($r.said)") }
             return @(("device " + $Device + " is enrolled until " + $r.expires + "."))

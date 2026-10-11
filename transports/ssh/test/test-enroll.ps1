@@ -306,6 +306,12 @@ try {
     $regPath = Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json")
     $reg = $null; if (Test-Path -LiteralPath $regPath) { $reg = [System.IO.File]::ReadAllText($regPath) | ConvertFrom-Json }
     Check ($null -ne $reg -and $reg.key -ceq $enCmd.Groups["key"].Value -and $reg.transport -ceq "ssh" -and $auth.Contains('expiry-time="' + $reg.expires + '"') -and $null -eq $reg.PSObject.Properties["revokedAt"]) "and records the device in the hub's register: its key, its transport and the same expiry"
+    $ea = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "192.168.1.156") -Env $envs
+    $regA = [System.IO.File]::ReadAllText((Join-Path $ch ("hub\nodes\" + $enCmd.Groups["dev"].Value + ".json"))) | ConvertFrom-Json
+    Check ($ea.code -eq 0 -and $regA.address -ceq "192.168.1.156") ("horde hub enroll -Address records the node's last-known address in the hub's register (mesh v1) (exit " + $ea.code + ")")
+    $authBefore = [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys"))
+    $eb = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value, "-Address", "8.8.8.8") -Env $envs
+    Check ($eb.code -ne 0 -and $eb.out -clike "*-Address*public address*" -and [System.IO.File]::ReadAllText((Join-Path $ch "hub\listen\authorized_keys")) -ceq $authBefore) "a public -Address is refused before anything is written"
     $pn = Invoke-HordeCliProcess -Root $root -HordeArgs @("node", "pin", "-Hub", $pinCmd.Groups["hub"].Value, "-HostKey", $pinCmd.Groups["key"].Value) -Env $envs
     Check ($pn.code -eq 0 -and [System.IO.File]::ReadAllText((Join-Path $ch "node\known_hosts")) -clike ("horde-hub-" + $pinCmd.Groups["hub"].Value + " ssh-ed25519 *")) "horde node pin pins the hub's host key"
     $e1 = Invoke-HordeCliProcess -Root $root -HordeArgs @("hub", "enroll", "-Device", $enCmd.Groups["dev"].Value, "-Key", $enCmd.Groups["key"].Value) -Env $envs

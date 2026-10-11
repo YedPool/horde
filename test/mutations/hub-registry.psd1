@@ -52,6 +52,16 @@
         @{ Name = "live-keys-include-dead-entries"
            Find = 'if ($k.state -ceq "known") { $out[$id] = $k.value }'
            Replace = '$out[$id] = "" + $k.value' }
+        # --- mesh v1: a node's last-known address ---
+        @{ Name = "node-address-unchecked"
+           Find = 'if ($from.state -cne "known" -or @($from.value).Count -ne 1) { throw ("the node''s address: "'
+           Replace = 'if ($false) { throw ("the node''s address: "' }
+        @{ Name = "node-address-lost-on-renewal"
+           Find = 'if ($old.state -ceq "known" -and $null -ne $old.value.PSObject.Properties["address"]) {'
+           Replace = 'if ($false) {' }
+        @{ Name = "revoked-node-address-let-in"
+           Find = 'foreach ($id in @((Get-HordeHubLiveKeys -HordeHome $HordeHome -Now $Now).Keys)) {'
+           Replace = 'foreach ($id in @(Get-ChildItem -LiteralPath (Get-HordeHubRegistryRoot -HordeHome $HordeHome) -Filter "*-*-*-*-*.json" | ForEach-Object { $_.BaseName })) {' }
         # --- admission: both records must agree ---
         @{ Name = "register-not-asked"
            Find = 'if ($k.state -cne "known") { return ("device " + $DeviceId + " is not enrolled: " + $k.reason) }'
