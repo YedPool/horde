@@ -6,6 +6,13 @@
     Target = "transports\Listener.ps1"
     Suite  = "transports\ssh\test\test-listen.ps1"
     Mutations = @(
+        # --- mesh v1: the address, checked by the port before the adapter is asked ---
+        @{ Name = "port-binds-any-address"
+           Find = 'if ($where.state -cne "known") { return (New-HordeUnknown -Reason ("the listener did not start: " + $where.reason)) }'
+           Replace = '' }
+        @{ Name = "request-carries-loopback-always"
+           Find = 'register = $table.value; address = $where.value.address }'
+           Replace = 'register = $table.value; address = "127.0.0.1" }' }
         @{ Name = "health-not-given-a-fresh-register"
            Find = 'try { $a = & $Running.adapter.health $Running.listener $table.value }'
            Replace = 'try { $a = & $Running.adapter.health $Running.listener @{} }' }
@@ -19,7 +26,7 @@
            Find = 'if ($t -isnot [hashtable]) {'
            Replace = 'if ($false) {' }
         @{ Name = "register-not-handed-to-start"
-           Find = 'root = $Root; register = $table.value }'
-           Replace = 'root = $Root; register = @{} }' }
+           Find = 'root = $Root; register = $table.value; address'
+           Replace = 'root = $Root; register = @{}; address' }
     )
 }

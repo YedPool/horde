@@ -80,7 +80,11 @@ Check ($files.dir -ceq "C:\HordeHomeForTest\hub\listen" -and $files.authorized -
 $cfg = @(Get-HordeSshListenConfig -Files $files -Port 40123 -HordeHome $hh -User "someone")
 function Has { param([string]$Line) return (@($cfg | Where-Object { $_ -ceq $Line }).Count -eq 1) }
 Check (Has "Port 40123") "the port it was given"
-Check ((Has "ListenAddress 127.0.0.1") -and (Has "AddressFamily inet") -and @($cfg | Where-Object { $_ -like "ListenAddress*" }).Count -eq 1) "127.0.0.1 only: a node on another machine arrives through a tunnel, never through the firewall"
+Check ((Has "ListenAddress 127.0.0.1") -and (Has "AddressFamily inet") -and @($cfg | Where-Object { $_ -like "ListenAddress*" }).Count -eq 1) "with no address named, 127.0.0.1 only"
+$cfg4 = @(Get-HordeSshListenConfig -Files $files -Port 2222 -HordeHome $hh -User "someone" -Address "192.168.1.182" -Family "v4")
+Check (@($cfg4 | Where-Object { $_ -like "ListenAddress*" }) -join "|" -ceq "ListenAddress 192.168.1.182" -and @($cfg4 | Where-Object { $_ -ceq "AddressFamily inet" }).Count -eq 1) "with the hub's LAN address named (mesh v1), that one address only, IPv4"
+$cfg6 = @(Get-HordeSshListenConfig -Files $files -Port 2222 -HordeHome $hh -User "someone" -Address "fd7a:115c:a1e0::1" -Family "v6")
+Check (@($cfg6 | Where-Object { $_ -like "ListenAddress*" }) -join "|" -ceq "ListenAddress fd7a:115c:a1e0::1" -and @($cfg6 | Where-Object { $_ -ceq "AddressFamily inet6" }).Count -eq 1) "an IPv6 unique local address, IPv6 only"
 Check ((Has "HostKey C:/HordeHomeForTest/hub/listen/host_ed25519") -and (Has "AuthorizedKeysFile C:/HordeHomeForTest/hub/listen/authorized_keys") -and (Has "RevokedKeys C:/HordeHomeForTest/hub/listen/revoked_keys") -and (Has "PidFile C:/HordeHomeForTest/hub/listen/sshd.pid")) "every file it names is Horde's own, under its home"
 Check (@($cfg | Where-Object { $_.ToLowerInvariant().Contains("programdata") -or $_.Contains(".ssh") -or $_.Contains("%h") -or $_.Contains("%u") }).Count -eq 0) "and none is ProgramData\ssh, ~/.ssh or a per-user default"
 Check (@($cfg | Where-Object { $_ -like "ForceCommand*" -or $_ -like "Match*" -or $_ -like "Include*" }).Count -eq 0) "no ForceCommand (it would replace each key's -Device), no Match, no Include"
@@ -94,8 +98,14 @@ Check (@($cfg | Where-Object { $_ -cnotmatch '\A[\x20-\x7E]+\z' }).Count -eq 0) 
 Write-Host ""
 Write-Host "--- what it refuses before it starts anything ---" -ForegroundColor Cyan
 $tmp = Join-Path $env:TEMP ("horde-listen-pure-" + [guid]::NewGuid().ToString("N"))
-function Req { param([string]$HubId = $dev, $Port = 40123, [string]$HordeHome = $tmp) return [pscustomobject]@{ hordeHome = $HordeHome; hubId = $HubId; port = $Port; root = $root; register = $reg } }
+function Req { param([string]$HubId = $dev, $Port = 40123, [string]$HordeHome = $tmp, [string]$Address = "127.0.0.1") return [pscustomobject]@{ hordeHome = $HordeHome; hubId = $HubId; port = $Port; root = $root; register = $reg; address = $Address } }
 try {
+    # MESH V1, THE FOUNDER'S RULE 4: the port checks the address, and the adapter checks it again where it
+    # writes it - a public address, every interface or no address at all is refused before anything else.
+    foreach ($bad in @(@{ a = "8.8.8.8"; want = "*public address*" }, @{ a = "0.0.0.0"; want = "*every interface*" }, @{ a = "::"; want = "*every interface*" }, @{ a = ""; want = "*no address*" }, @{ a = "hub.local"; want = "*not an IP address*" })) {
+        $r = Start-HordeSshListener -Request (Req -Address $bad.a)
+        Check (-not $r.ok -and $r.reason -like ("*will not bind that address*" + $bad.want.TrimStart("*"))) ("the adapter itself refuses to bind '" + $bad.a + "' (" + $r.reason + ")")
+    }
     $noReg = Req; $noReg.register = $null
     $r = Start-HordeSshListener -Request $noReg
     Check (-not $r.ok -and $r.reason -like "*no register of enrolled devices*") "no register to hold keys to: it admits none"
@@ -226,7 +236,18 @@ $regBlock = { $readings["n"] = [int]$readings["n"] + 1; return $regNow }
 $s = Start-HordeListener -Adapter $fake -HordeHome "C:\h" -HubId $dev -Root $root -Register $regBlock -Port 0
 Check ($s.state -ceq "known" -and $seen.Count -eq 1 -and $seen[0].port -gt 0 -and $seen[0].port -le 65535 -and $seen[0].hubId -ceq $dev -and $seen[0].root -ceq $root -and $seen[0].hordeHome -ceq "C:\h") ("-Port 0 is turned into a free port before the adapter is asked, and the request carries the home, hub and root (" + $seen[0].port + ")")
 Check ($seen[0].register -is [hashtable] -and $seen[0].register[$dev] -ceq $pub) "and the hub's register, read by the port, as a table of device and key"
+Check ($seen[0].address -ceq "127.0.0.1") "and, with no address named, 127.0.0.1"
+$n = $seen.Count
+$s2 = Start-HordeListener -Adapter $fake -HordeHome "C:\h" -HubId $dev -Root $root -Register $regBlock -Port 2222 -Address "192.168.1.182" -LocalAddresses @("127.0.0.1", "192.168.1.182")
+Check ($s2.state -ceq "known" -and $seen.Count -eq $n + 1 -and $seen[-1].address -ceq "192.168.1.182" -and $seen[-1].port -eq 2222) "a private address this machine holds reaches the adapter as the address to bind (mesh v1)"
+foreach ($bad in @(@{ a = "8.8.8.8"; want = "*public address*" }, @{ a = "0.0.0.0"; want = "*every interface*" }, @{ a = "192.168.1.183"; want = "*no interface of this machine*" })) {
+    $s3 = Start-HordeListener -Adapter $fake -HordeHome "C:\h" -HubId $dev -Root $root -Register $regBlock -Port 2222 -Address $bad.a -LocalAddresses @("127.0.0.1", "192.168.1.182")
+    Check ($s3.state -ceq "unknown" -and $s3.reason -like $bad.want -and $seen.Count -eq $n + 1) ("the port refuses '" + $bad.a + "' before the adapter is asked (" + $s3.reason + ")")
+}
+$fp = Get-HordeListenerFreePort -Address "127.0.0.1"
+Check ($fp -gt 0 -and $fp -le 65535) "a free port is picked on the address asked"
 $regNow = @{ $other = $pub }
+$readings["n"] = 1
 Check ((Test-HordeListenerServing -Running $s.value).value -eq $true -and (Stop-HordeListener -Running $s.value) -ceq "bye") "health and stop go to the adapter"
 Check ($healthSaw.Count -eq 1 -and $healthSaw[0].ContainsKey($other) -and -not $healthSaw[0].ContainsKey($dev) -and [int]$readings["n"] -eq 2) "and health is given the register read again for that check, never the one read at start"
 $h = Test-HordeListenerServing -Running ([pscustomobject]@{ adapter = $fake; listener = "L"; register = { throw "the register folder is locked" } })
@@ -234,7 +255,7 @@ Check ($h.state -ceq "unknown" -and $h.reason -like "*register could not be read
 $h = Test-HordeListenerServing -Running ([pscustomobject]@{ adapter = $fake; listener = "L"; register = { return "not a table" } })
 Check ($h.state -ceq "unknown" -and $h.reason -like "*did not read as a table*") "a register that is not a table stops it too"
 $s = Start-HordeListener -Adapter $fake -HordeHome "C:\h" -HubId $dev -Root $root -Register { throw "no" } -Port 0
-Check ($s.state -ceq "unknown" -and $s.reason -like "*register could not be read*" -and $seen.Count -eq 1) "a register that cannot be read at start: nothing starts, the adapter is not asked"
+Check ($s.state -ceq "unknown" -and $s.reason -like "*register could not be read*" -and $seen.Count -eq $n + 1) "a register that cannot be read at start: nothing starts, the adapter is not asked"
 Check ((Start-HordeListener -Adapter $fake -HordeHome "C:\h" -HubId $dev -Root $root -Register $regBlock -Port 70000).state -ceq "unknown") "a port above 65535 is refused by the port itself"
 $null = Register-HordeListener -Folder "x:\failing" -Start { param($R) return [pscustomobject]@{ ok = $false; listener = $null; address = ""; reason = "it would not" } } -Health { param($L) return "not an answer" } -Stop { param($L) return "" }
 $failing = (Get-HordeListenerAdapter -Name "failing").value

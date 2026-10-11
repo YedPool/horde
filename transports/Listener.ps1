@@ -10,13 +10,16 @@
 # ADAPTER CONTRACT. transports/<name>/Listen.ps1 is dot-sourced at script level (so its helpers outlive
 # the call) and calls Register-HordeListener with three script blocks:
 #   Start   param($Request)  -> { ok; listener; address; reason }
-#           $Request is { hordeHome; hubId; port; root; register }: Horde's home (every file the server
-#           reads is under it), the hub's device id, the loopback port to bind (never 0:
+#           $Request is { hordeHome; hubId; port; root; register; address }: Horde's home (every file the
+#           server reads is under it), the hub's device id, the port to bind on address (never 0:
 #           Start-HordeListener picks one for -Port 0), the root of this Horde, whose attach every
 #           admitted key must be forced to (the server refuses to start while a key is not held to it),
 #           and register, the hub's register as this port read it just now: a hashtable, device id -> the
 #           key enrolled for it, live devices only (cli/HubRegistry.ps1). The server admits a key only for
 #           a device the register holds, with that key.
+#           address is the one address to bind, checked here first (core/ListenAddress.ps1): loopback,
+#           or a private address this machine holds, never a public one or every interface (mesh v1, the
+#           founder's rule 4); the adapter checks it again where it writes it.
 #   Health  is given the register afresh, read again by the port each time it asks (see Health below).
 #   Health  param($Listener, $Register) -> a tristate answer: known $true while it serves, or known
 #           $false with nothing to serve, or unknown with the reason. $Register is the hub's register as
@@ -26,6 +29,7 @@
 # No Set-StrictMode here: this file is dot-sourced (see core/Tristate.ps1).
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1")
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "core\ListenAddress.ps1")
 
 if ($null -eq (Get-Variable -Name HordeListeners -Scope Script -ErrorAction SilentlyContinue)) { $script:HordeListeners = @{} }
 
@@ -68,9 +72,10 @@ function Get-HordeListenerAdapter {
 }
 
 function Get-HordeListenerFreePort {
-    # A loopback port nothing listens on now: what -Port 0 asks for. Picked here, so an adapter is
+    # A port nothing listens on now on -Address: what -Port 0 asks for. Picked here, so an adapter is
     # always handed a real port and never opens a socket of its own to find one.
-    $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    param([string]$Address = "127.0.0.1")
+    $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Parse($Address), 0)
     $l.Start()
     $p = $l.LocalEndpoint.Port
     $l.Stop()
@@ -92,12 +97,16 @@ function Start-HordeListener {
     # unknown with the reason. Never throws for the server's failure.
     # -Register is param() -> the hub's register as a hashtable (header, Start); it is read here and
     # again at every health check, so a revoke reaches a running server within a check.
-    param([Parameter(Mandatory = $true)]$Adapter, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$HubId, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][scriptblock]$Register, [int]$Port = 0)
+    # -Address is the one address to bind (header); -LocalAddresses, this machine's (by default read from
+    # its interfaces), is given only by a suite.
+    param([Parameter(Mandatory = $true)]$Adapter, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$HubId, [Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][scriptblock]$Register, [int]$Port = 0, [string]$Address = "127.0.0.1", [string[]]$LocalAddresses = $null)
     if ($Port -lt 0 -or $Port -gt 65535) { return (New-HordeUnknown -Reason ("-Port " + $Port + " is not a TCP port")) }
+    $where = Resolve-HordeListenAddress -Address $Address -LocalAddresses $LocalAddresses
+    if ($where.state -cne "known") { return (New-HordeUnknown -Reason ("the listener did not start: " + $where.reason)) }
     $table = Read-HordeListenerRegister -Register $Register
     if ($table.state -cne "known") { return (New-HordeUnknown -Reason ("the listener did not start: " + $table.reason)) }
-    if ($Port -eq 0) { $Port = Get-HordeListenerFreePort }
-    $req = [pscustomobject]@{ hordeHome = $HordeHome; hubId = $HubId; port = $Port; root = $Root; register = $table.value }
+    if ($Port -eq 0) { $Port = Get-HordeListenerFreePort -Address $where.value.address }
+    $req = [pscustomobject]@{ hordeHome = $HordeHome; hubId = $HubId; port = $Port; root = $Root; register = $table.value; address = $where.value.address }
     try { $r = & $Adapter.start $req }
     catch { return (New-HordeUnknown -Reason ("the " + $Adapter.name + " listener did not start") -ErrorRecord $_) }
     if ($null -eq $r -or -not $r.ok) { return (New-HordeUnknown -Reason ("the " + $Adapter.name + " listener did not start: " + "$($r.reason)")) }

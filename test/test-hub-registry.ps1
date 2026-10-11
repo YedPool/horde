@@ -18,7 +18,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
 . (Join-Path $root "test\lib\Suite.ps1")
 trap { Register-HordeSuiteError $_; continue }
-foreach ($f in @("Tristate", "Schema", "ReadShared", "FileAtomic")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
+foreach ($f in @("Tristate", "Schema", "ReadShared", "FileAtomic", "ListenAddress")) { . (Join-Path $root ("core\" + $f + ".ps1")) }
 . (Join-Path $root "cli\HubRegistry.ps1")
 
 $tmp = Join-Path $env:TEMP ("horde-hub-registry-" + [guid]::NewGuid().ToString("N"))
@@ -132,6 +132,21 @@ try {
     $live = Get-HordeHubLiveKeys -HordeHome $hh -Now $later
     Check ($live -is [hashtable] -and $live.Count -eq 1 -and $live[$third] -ceq $key2) ("only the live device is in it, with its key; revoked, expired, unreadable and stray files are not (" + (@($live.Keys) -join ", ") + ")")
     Check ((Get-HordeHubLiveKeys -HordeHome (Join-Path $tmp "no-such-home") -Now $later).Count -eq 0) "a home with no register gives an empty table, never an error"
+
+    Write-Host ""
+    Write-Host "--- a node's last-known address (mesh v1): private only, kept on renewal, live devices only ---" -ForegroundColor Cyan
+    $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $third -Transport "fake" -Key $key2 -Expires "20991231" -Now $later -Address "192.168.1.156"
+    Check ((Read-HordeHubEnrolment -HordeHome $hh -DeviceId $third).value.address -ceq "192.168.1.156") "an enrolment with -Address records it"
+    $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $third -Transport "fake" -Key $key2 -Expires "20991231" -Now $later
+    Check ((Read-HordeHubEnrolment -HordeHome $hh -DeviceId $third).value.address -ceq "192.168.1.156") "a renewal that names none keeps it"
+    foreach ($bad in @("8.8.8.8", "0.0.0.0", "127.0.0.1", "any", "192.168.1.0/24")) {
+        $threw = ""; try { $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $third -Transport "fake" -Key $key2 -Expires "20991231" -Now $later -Address $bad } catch { $threw = $_.Exception.Message }
+        Check ($threw -like "*the node's address*" -and (Read-HordeHubEnrolment -HordeHome $hh -DeviceId $third).value.address -ceq "192.168.1.156") ("'" + $bad + "' is never recorded as a node's address, and the old one stands (" + $threw + ")")
+    }
+    $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $dev -Transport "fake" -Key $key -Expires "20991231" -Now $later -Address "192.168.1.157"
+    $null = Set-HordeHubEnrolmentRevoked -HordeHome $hh -DeviceId $dev -Now $later
+    $addrs = @(Get-HordeHubLiveAddresses -HordeHome $hh -Now $later)
+    Check (($addrs -join ",") -ceq "192.168.1.156") ("only live devices' addresses are let in: a revoked device's is not (" + ($addrs -join ",") + ")")
 } finally {
     if ((Split-Path -Leaf $tmp) -match '^horde-hub-registry-[0-9a-f]{32}$') { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

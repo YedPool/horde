@@ -6,11 +6,17 @@
     Suite  = "transports\ssh\test\test-enroll.ps1"
     Mutations = @(
         @{ Name = "enroll-leaves-register-unwritten"
-           Find = 'try { $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $Device -Transport $e.name -Key "$($r.key)" -Expires "$($r.expires)" }'
+           Find = 'try { $null = Add-HordeHubEnrolment -HordeHome $hh -DeviceId $Device -Transport $e.name -Key "$($r.key)" -Expires "$($r.expires)" -Address $Address }'
            Replace = 'try { }' }
         @{ Name = "register-failure-silent"
            Find = 'catch { throw ("device " + $Device + "''s key is written for the "'
            Replace = 'catch { $null = ("device " + $Device + "''s key is written for the "' }
+        @{ Name = "node-address-checked-after-the-write"
+           Find = 'if ($Address -ne "") { $a = Resolve-HordeAllowFrom -Addresses @($Address); if ($a.state -cne "known") { throw ("-Address: " + $a.reason) } }'
+           Replace = '' }
+        @{ Name = "node-address-not-recorded"
+           Find = '-Expires "$($r.expires)" -Address $Address }'
+           Replace = '-Expires "$($r.expires)" }' }
         @{ Name = "revoke-leaves-register-live"
            Find = '$why = Set-HordeHubEnrolmentRevoked -HordeHome $hh -DeviceId $Device'
            Replace = '$why = ""' }
