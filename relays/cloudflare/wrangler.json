@@ -20,8 +20,16 @@
     "not_found_handling": "none"
   },
   "durable_objects": {
-    "bindings": [{ "name": "MAILBOX", "class_name": "Mailbox" }]
+    "bindings": [
+      { "name": "MAILBOX", "class_name": "Mailbox" },
+      { "name": "SESSION", "class_name": "Session" },
+      { "name": "ACCOUNT", "class_name": "Account" },
+      { "name": "MACHINE_KEY", "class_name": "MachineKey" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Mailbox"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Mailbox"] },
+    { "tag": "v2", "new_sqlite_classes": ["Session", "Account", "MachineKey"] }
+  ],
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": false }]
 }

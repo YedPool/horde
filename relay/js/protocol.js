@@ -347,7 +347,7 @@ export function pairingResponseText({ offer, code, rawId, clientDataJSON, attest
 // offer names, the AAD binding the horde, the offer and that key, written as Get-HordeRelaySealedSpec
 // spells it. The machine refuses a response over 6000 characters (Get-HordeRelayPairingLimits), so a
 // longer one is refused here first. offer is readOffer's value.
-export const PAIRING_LIMITS = { maxResponseChars: 6000, maxSealedChars: 8600 };
+export const PAIRING_LIMITS = { maxResponseChars: 6000, maxSealedChars: 8600, maxTtlSeconds: 900 };
 export async function sealPairingResponse(offer, responseText) {
   if (typeof responseText !== "string" || !/^[\x20-\x7e]+$/.test(responseText) || responseText.length > PAIRING_LIMITS.maxResponseChars) throw new Error("a pairing response is 1 to 6000 printable ASCII characters");
   if (!offer || !(offer.agreePoint instanceof Uint8Array) || !/^[0-9a-f]{32}$/.test(offer.offer || "")) throw new Error("seal a response to an offer readOffer has read");

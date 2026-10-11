@@ -26,6 +26,10 @@ export const SEQ_MAX = LIMITS.seqMax;
 // The port takes fewer items than it asked for and reads on from its cursor (relays/Port.ps1). A read
 // keeps the same budget, so the two answer alike.
 export const BATCH_CHARS = 1000000;
+// THE BODY CAP: the longest put body there can be - a text of maxTextChars in which every character is
+// a quote or a backslash, so JSON writes each as two - and 1024 for the key and the punctuation. A body
+// past it is refused before it is all read (body.js), by the API and by a machine's signature check.
+export const BODY_BYTES = 2 * MAX_TEXT_CHARS + 1024;
 
 export function itemTextProblem(text) { return textProblem(text, MAX_TEXT_CHARS); }
 
