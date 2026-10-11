@@ -94,5 +94,8 @@
         @{ Name = "hub-pipe-is-the-node-pipe"
            Find = 'return ($script:HordeLocalHubPipePrefix + $hub)'
            Replace = 'return ($script:HordeLocalPipePrefix + $hub)' }
+        @{ Name = "hub-timeout-says-node"
+           Find = '{ "hub" } else { "node" }'
+           Replace = '{ "node" } else { "node" }' }
     )
 }

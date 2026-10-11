@@ -19,5 +19,8 @@
         @{ Name = "frame-terminator-dropped"
            Find = '$script:HordeLocalPipeRelayAscii.GetBytes("$line" + "`n")'
            Replace = '$script:HordeLocalPipeRelayAscii.GetBytes("$line")' }
+        @{ Name = "line-over-the-ceiling-passed"
+           Find = 'if ("$line".Length -gt $MaxLineBytes) {'
+           Replace = 'if ($false) {' }
     )
 }

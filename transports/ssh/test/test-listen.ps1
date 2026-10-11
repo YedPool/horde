@@ -66,7 +66,9 @@ Check ((Has "HostKey C:/HordeHomeForTest/hub/listen/host_ed25519") -and (Has "Au
 Check (@($cfg | Where-Object { $_.ToLowerInvariant().Contains("programdata") -or $_.Contains(".ssh") -or $_.Contains("%h") -or $_.Contains("%u") }).Count -eq 0) "and none is ProgramData\ssh, ~/.ssh or a per-user default"
 Check (@($cfg | Where-Object { $_ -like "ForceCommand*" -or $_ -like "Match*" -or $_ -like "Include*" }).Count -eq 0) "no ForceCommand (it would replace each key's -Device), no Match, no Include"
 Check ((Has "AllowUsers someone") -and (Has "PubkeyAuthentication yes") -and (Has "PasswordAuthentication no") -and (Has "KbdInteractiveAuthentication no")) "keys only, for this user only"
-Check ((Has "PermitTTY no") -and (Has "DisableForwarding yes") -and (Has "PermitTunnel no") -and (Has "PermitUserEnvironment no") -and (Has "Subsystem sftp none")) "no terminal, no forwarding of any kind, no tunnel, no user environment, no sftp"
+Check ((Has "PermitTTY no") -and (Has "DisableForwarding yes") -and (Has "PermitTunnel no") -and (Has "PermitUserEnvironment no")) "no terminal, no forwarding of any kind, no tunnel, no user environment"
+Check (@($cfg | Where-Object { $_ -like "Subsystem*" }).Count -eq 0) "no Subsystem line: none is offered, and every key's command= overrides a subsystem request anyway (issue #147, item 8)"
+Check (Has "MaxStartups 4:50:8") "MaxStartups bounds connections still authenticating (issue #147, item 2)"
 Check (Has 'SetEnv "HORDE_HOME=C:/HordeHomeForTest"') "HORDE_HOME is passed to the session, so attach finds this hub's device id"
 Check (@($cfg | Where-Object { $_ -cnotmatch '\A[\x20-\x7E]+\z' }).Count -eq 0) "every line is printable ASCII"
 
@@ -94,6 +96,36 @@ try {
     }
 } finally { if ((Split-Path -Leaf $tmp) -like "horde-listen-pure-*") { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue } }
 
+
+Write-Host ""
+Write-Host "--- a home sshd's configuration cannot name is refused up front (issue #147, item 3) ---" -ForegroundColor Cyan
+foreach ($bad in @("C:\Users\Some One\.horde", "C:\h#1\.horde", "C:\h%u\.horde", 'C:\h"q\.horde', ("C:\tab" + [char]9 + "x"))) {
+    $r = Start-HordeSshListener -Request ([pscustomobject]@{ hordeHome = $bad; hubId = $dev; port = 40123; root = $root })
+    Check (-not $r.ok -and $r.reason -like "*space, #, % or quote*") ("refused, saying why: '" + ($bad -replace "`t", "\t") + "'")
+}
+
+Write-Host ""
+Write-Host "--- health: sshd running AND every key still held to attach (issue #147, item 4) ---" -ForegroundColor Cyan
+$tmp2 = Join-Path $env:TEMP ("horde-listen-health-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmp2 | Out-Null
+try {
+    $ak = Join-Path $tmp2 "authorized_keys"
+    [System.IO.File]::WriteAllText($ak, ($good + "`n"))
+    $alive = [System.Diagnostics.Process]::GetCurrentProcess()
+    $L = [pscustomobject]@{ process = $alive; authorized = $ak; root = $root }
+    $h = Test-HordeSshListenerServing -Listener $L
+    Check ($h.state -ceq "known" -and $h.value -eq $true) "CONTROL: sshd running and every key held: it serves"
+    [System.IO.File]::AppendAllText($ak, ($pub.Replace("AAAA", "CCCC") + " horde-device-" + $other + "`n"))
+    $h = Test-HordeSshListenerServing -Listener $L
+    Check ($h.state -ceq "unknown" -and $h.reason -like "*changed after the listener started*line 2*") ("a bare key added after start is caught by the next health check (" + $h.reason + ")")
+    [System.IO.File]::WriteAllText($ak, ($good + "`n"))
+    Check ((Test-HordeSshListenerServing -Listener $L).value -eq $true) "and once the line is gone, it serves again"
+    Remove-Item -LiteralPath $ak
+    $h = $null; try { $h = Test-HordeSshListenerServing -Listener $L } catch { $h = [pscustomobject]@{ state = "threw"; reason = $_.Exception.Message } }
+    Check ($h.state -ceq "unknown" -and $h.reason -like "*authorized_keys is gone*") "authorized_keys removed: it stops"
+    $h = Test-HordeSshListenerServing -Listener ([pscustomobject]@{ process = [pscustomobject]@{ HasExited = $true }; authorized = $ak; root = $root })
+    Check ($h.state -ceq "known" -and $h.value -eq $false) "sshd ended: known not serving"
+} finally { if ((Split-Path -Leaf $tmp2) -like "horde-listen-health-*") { Remove-Item -LiteralPath $tmp2 -Recurse -Force -ErrorAction SilentlyContinue } }
 Write-Host ""
 Write-Host "--- the listener port, with a stand-in adapter ---" -ForegroundColor Cyan
 Check (@(Get-HordeListenerFiles | ForEach-Object { Split-Path -Leaf (Split-Path -Parent $_) }) -join "," -ceq "ssh") "CONTROL: the ssh transport is the one with a listener"

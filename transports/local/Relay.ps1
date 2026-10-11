@@ -18,6 +18,13 @@
 # line without its line break, and the relay sends it with LF, the frame terminator. A line that is
 # not ASCII ends the relay: the link carries only ASCII frames, and the relay never rewrites one.
 #
+# A LINE LONGER THAN ANY FRAME ENDS THE LINK (issue #147, item 1). No frame may exceed the link's
+# frameBytesCeiling (4 MiB, schema/link-frame.v1), so a longer line is not passed on: the relay ends,
+# and with it the session. What this does not bound: $input hands over a line only once its LF
+# arrives, so PowerShell's reader holds a line without one in memory until it ends. A peer that never
+# sends an LF grows attach's memory until the session ends; bounding that needs a memory limit on the
+# listener's job, recorded on issue #147 as the next step.
+#
 # THE OTHER DIRECTION RUNS ON ITS OWN. The hub may speak first and at any time, while the enumeration
 # of stdin blocks until the next line, so pipe-to-stdout is a .NET copy task (Stream.CopyToAsync) that
 # needs no PowerShell thread.
@@ -71,6 +78,8 @@ function Invoke-HordeLocalPipeRelay {
         [Parameter(Mandatory = $true)][string]$Preamble,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()]$Lines,
         [Parameter(Mandatory = $true)][System.IO.Stream]$Output,
+        # The longest line, in bytes without its LF, the relay passes on: the link's frameBytesCeiling.
+        [Parameter(Mandatory = $true)][ValidateRange(1, 4194304)][int]$MaxLineBytes,
         [int]$TimeoutMs = 10000,
         # End this process when the hub closes the pipe (WHEN IT ENDS). Only for a relay that is a process of its own.
         [switch]$ExitWhenHubCloses
@@ -91,6 +100,7 @@ function Invoke-HordeLocalPipeRelay {
         if ($ExitWhenHubCloses) { [HordeLocalPipeRelayEnd]::ExitWhenDone($pump) }
         foreach ($line in $Lines) {
             if ($pump.IsCompleted) { return (New-HordeLocalPipeRelayResult -Ok $true -Lines $sent -Ended "hub") }
+            if ("$line".Length -gt $MaxLineBytes) { return (New-HordeLocalPipeRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is " + "$line".Length + " bytes, over the link's ceiling of " + $MaxLineBytes + "; no frame can be that long, so the relay ended the link without passing it on")) }
             try { $bytes = $script:HordeLocalPipeRelayAscii.GetBytes("$line" + "`n") }
             catch { return (New-HordeLocalPipeRelayResult -Ok $false -Lines $sent -Ended "stdin" -Reason ("line " + ($sent + 1) + " of stdin is not ASCII; the link carries ASCII frames only, so the relay stopped")) }
             try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush() }
