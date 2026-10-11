@@ -8,9 +8,22 @@
         @{ Name = "ceiling-from-any-layer"
            Find = 'if ($script:HordeCeilingLayers -cnotcontains ("" + $s.layer)) {'
            Replace = 'if ($false) {' }
-        @{ Name = "default-ceiling-is-the-top"
-           Find = '$default = $names[$names.Count - 2]'
-           Replace = '$default = $names[$names.Count - 1]' }
+        # The founder's decision of 2026-10-11: the default is the top, not the level below it.
+        @{ Name = "default-ceiling-below-the-top"
+           Find = '$default = $names[$names.Count - 1]'
+           Replace = '$default = $names[$names.Count - 2]' }
+        @{ Name = "default-cap-is-no-cap"
+           Find = 'if ($null -eq $Policy.PSObject.Properties["dailySpawnCap"]) { return $script:HordeNodeSpawnCapDefault }'
+           Replace = 'if ($null -eq $Policy.PSObject.Properties["dailySpawnCap"]) { return $script:HordeNodeSpawnCapMax }' }
+        @{ Name = "default-cap-not-32"
+           Find = '$script:HordeNodeSpawnCapDefault = 32'
+           Replace = '$script:HordeNodeSpawnCapDefault = 31' }
+        @{ Name = "policy-without-cap-refused"
+           Find = 'if ($null -ne $doc.PSObject.Properties["dailySpawnCap"] -and $null -eq (ConvertTo-HordeNodeSpawnCap'
+           Replace = 'if ($null -eq (ConvertTo-HordeNodeSpawnCap' }
+        @{ Name = "owner-cap-ignored"
+           Find = '$capV = Get-HordeNodeSpawnCap -Policy $pol'
+           Replace = '$capV = $script:HordeNodeSpawnCapDefault' }
         @{ Name = "above-ceiling-not-refused"
            Find = 'elseif (-not $ok.value) {'
            Replace = 'elseif ($false) {' }
@@ -52,7 +65,9 @@
            Replace = 'if ($false) {' }
         @{ Name = "l4-may-raise"
            Find = 'if ($vals.Count -eq 1 -and [array]::IndexOf($names, $vals[0]) -lt [array]::IndexOf($names, $default)) {'
-           Replace = 'if ($vals.Count -eq 1) {' }
+           Replace = 'if ($vals.Count -eq 1) {'
+           Expect = "survives"
+           Reason = "equivalent since the default became the top (founder, 2026-10-11): no level is above it, so an L4 rule reaching this branch can only equal or lower the default, and the mutant only changes the from field of an equal one; L4 raising an L1 ceiling is the resolver's lower-only walk, held by 'a live rule (L4) may not raise it'" }
         @{ Name = "l4-disagreement-picks-one"
            Find = 'if ($vals.Count -gt 1) {'
            Replace = 'if ($false) {' }
