@@ -31,6 +31,16 @@
         @{ Name = "authorized-keys-not-checked"
            Find = '-Paths @($files.authorized, $files.revoked, $files.hostKey) -Top'
            Replace = '-Paths @($files.revoked, $files.hostKey) -Top' }
+        # --- mesh v1: the one address it binds (the founder's rule 4) ---
+        @{ Name = "adapter-binds-any-address"
+           Find = 'if ($where.state -cne "known") { return (New-HordeSshListenResult -Ok $false -Reason ("the listener will not bind that address: "'
+           Replace = 'if ($false) { return (New-HordeSshListenResult -Ok $false -Reason ("the listener will not bind that address: "' }
+        @{ Name = "config-ignores-address"
+           Find = '("ListenAddress " + $Address),'
+           Replace = '"ListenAddress 127.0.0.1",' }
+        @{ Name = "config-always-ipv4"
+           Find = '$af = "inet"; if ($Family -ceq "v6") { $af = "inet6" }'
+           Replace = '$af = "inet"' }
         @{ Name = "restrict-optional"
            Find = '",restrict(?:,expiry-time='
            Replace = '"(?:,restrict)?(?:,expiry-time=' }
@@ -69,7 +79,7 @@
            Replace = 'if ($false) { return (New-HordeSshListenResult' }
         # --- the configuration ---
         @{ Name = "listens-on-every-address"
-           Find = '"ListenAddress 127.0.0.1",'
+           Find = '("ListenAddress " + $Address),'
            Replace = '"ListenAddress 0.0.0.0",' }
         @{ Name = "forwarding-allowed"
            Find = '"DisableForwarding yes",'

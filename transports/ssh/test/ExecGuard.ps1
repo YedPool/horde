@@ -62,7 +62,9 @@ $script:HordeSshGuardCmdlets = @("Move-HordeFileAtomic", "Join-Path", "Split-Pat
     # Enroll.ps1 (R17b): its own files under Horde's home, the key's ACL, and its registration.
     "Remove-Item", "Move-Item", "Set-Acl", "Get-Acl", "Where-Object", "ForEach-Object", "Register-HordeEnrollment",
     # Listen.ps1 (R17a): its registration.
-    "Register-HordeListener")
+    "Register-HordeListener",
+    # Listen.ps1, mesh v1 (2026-10-11): the port's rule for which address the hub may listen on, applied again.
+    "Get-HordeListenAddressKind")
 $script:HordeSshGuardLoaders = @('. (Join-Path $PSScriptRoot "Argv.ps1")', '. (Join-Path $PSScriptRoot "Files.ps1")', '. (Join-Path $PSScriptRoot "Attach.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\FileAtomic.ps1")', '. (Join-Path $PSScriptRoot "Native.ps1")', '. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1")')
 # Every function the folder defines (header): no cmdlet, built-in function or alias has this shape.
 $script:HordeSshGuardFunctionName = '\A[A-Z][A-Za-z]+-HordeSsh[A-Za-z]+\z'
@@ -86,7 +88,9 @@ $script:HordeSshGuardMethods = @("GetRandomFileName", "Add", "AddMilliseconds", 
     # Enroll.ps1, issue #144 item 3 (2026-10-11): an enrolment's expiry read as sshd reads it. None runs anything.
     "ParseExact", "ToLocalTime",
     # Files.ps1, issue #123 (2026-10-11): who owns and may write the link's files and their folders.
-    "GetOwner", "Equals")
+    "GetOwner", "Equals",
+    # Listen.ps1, mesh v1 (2026-10-11): the address it binds and checks it answers on.
+    "Parse")
 $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datetime", "int", "long", "math", "pscustomobject", "regex", "string", "string[]",
     "system.collections.generic.list[byte]", "system.diagnostics.process", "system.diagnostics.processstartinfo", "system.io.file", "system.io.fileaccess",
     "system.io.path", "system.environment", "hordesshnative", "hordesshjob", "system.management.automation.pstypename", "system.net.sockets.socketerror",
@@ -96,7 +100,9 @@ $script:HordeSshGuardTypes = @("array", "bool", "byte", "byte[]", "char", "datet
     "system.security.principal.windowsidentity", "system.security.principal.securityidentifier", "system.convert",
     "system.security.cryptography.sha256", "system.io.directory", "switch", "system.globalization.cultureinfo",
     # Listen.ps1, issue #144 item 3 (2026-10-11): the hub's register, handed over as a table of device and key.
-    "hashtable")
+    "hashtable",
+    # Listen.ps1, mesh v1 (2026-10-11): the address it binds.
+    "system.net.ipaddress")
 $script:HordeSshGuardNewTypes = @("System.Diagnostics.ProcessStartInfo", "System.IO.FileStream", "byte[]", "System.Net.Sockets.TcpClient", "System.Text.StringBuilder",
     "System.Collections.Generic.List[byte]",
     # Enroll.ps1 (R17b): the key's ACL, and a list of lines.

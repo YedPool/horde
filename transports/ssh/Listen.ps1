@@ -5,8 +5,11 @@
 # disabled and nothing on port 22, and Horde never changes any of that. The listener is
 # C:\Windows\System32\OpenSSH\sshd.exe started by `horde listen`, in the foreground (-D -e), with
 # Horde's own configuration, host key and authorized_keys, all under <home>\hub\listen - never
-# C:\ProgramData\ssh, never ~/.ssh. It binds 127.0.0.1 only: a node on another machine arrives through
-# a tunnel to that address (R17d), so no firewall rule is ever needed. It runs as the user who runs
+# C:\ProgramData\ssh, never ~/.ssh. It binds ONE address, 127.0.0.1 unless `horde listen -Address` names
+# another: a private one this machine holds - the office LAN, Tailscale, WireGuard - and never a public
+# one or every interface (mesh v1, the founder's rule 4; core/ListenAddress.ps1, which the listener port
+# applies and this adapter applies again). On any address but loopback the inbound firewall rule is
+# horde listen's to keep, through core/FirewallPort.ps1; this file opens none. It runs as the user who runs
 # `horde listen`, and a Windows sshd that is not SYSTEM can admit only that same user (measured
 # 2026-10-05, R16): links run under the founder's own account, held by the key options.
 #
@@ -109,13 +112,16 @@ function Test-HordeSshListenKeys {
 
 function Get-HordeSshListenConfig {
     # The sshd_config text, as lines. Forward slashes: sshd reads its configuration the POSIX way.
-    param([Parameter(Mandatory = $true)]$Files, [Parameter(Mandatory = $true)][int]$Port, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$User)
+    # -Address is the one address to bind, already checked (Start-HordeSshListener), and -Family its
+    # family, "v4" or "v6".
+    param([Parameter(Mandatory = $true)]$Files, [Parameter(Mandatory = $true)][int]$Port, [Parameter(Mandatory = $true)][string]$HordeHome, [Parameter(Mandatory = $true)][string]$User, [string]$Address = "127.0.0.1", [string]$Family = "v4")
     $f = $Files.dir.Replace('\', '/')
+    $af = "inet"; if ($Family -ceq "v6") { $af = "inet6" }
     # Each entry in parentheses: in an array literal the comma binds tighter than + (R16, measured).
     return @(
         ("Port " + $Port),
-        "ListenAddress 127.0.0.1",
-        "AddressFamily inet",
+        ("ListenAddress " + $Address),
+        ("AddressFamily " + $af),
         ("HostKey " + $f + "/host_ed25519"),
         ("PidFile " + $f + "/sshd.pid"),
         ("AuthorizedKeysFile " + $f + "/authorized_keys"),
@@ -160,10 +166,10 @@ function Start-HordeSshServer {
 }
 
 function Test-HordeSshListenPort {
-    # Does something accept a TCP connection on 127.0.0.1:-Port within -Ms?
-    param([int]$Port, [int]$Ms)
-    $c = New-Object System.Net.Sockets.TcpClient
-    try { return ($c.ConnectAsync("127.0.0.1", $Port).Wait($Ms) -and $c.Connected) }
+    # Does something accept a TCP connection on -Address:-Port within -Ms?
+    param([int]$Port, [int]$Ms, [string]$Address = "127.0.0.1")
+    $c = New-Object System.Net.Sockets.TcpClient([System.Net.IPAddress]::Parse($Address).AddressFamily)
+    try { return ($c.ConnectAsync([System.Net.IPAddress]::Parse($Address), $Port).Wait($Ms) -and $c.Connected) }
     catch { return $false }
     finally { $c.Dispose() }
 }
@@ -200,8 +206,14 @@ function Test-HordeSshListenerServing {
 }
 
 function Start-HordeSshListener {
-    # The adapter's Start (transports/Listener.ps1). -Request is { hordeHome; hubId; port; root; register }.
+    # The adapter's Start (transports/Listener.ps1). -Request is { hordeHome; hubId; port; root; register;
+    # address }.
     param([Parameter(Mandatory = $true)]$Request)
+    # THE HUB NEVER LISTENS ON A PUBLIC ADDRESS (header): the port checked the address, and it is checked
+    # again here, where it is written into the server's configuration.
+    $where = Get-HordeListenAddressKind -Address "$($Request.address)"
+    if ($where.state -cne "known") { return (New-HordeSshListenResult -Ok $false -Reason ("the listener will not bind that address: " + $where.reason)) }
+    $bind = $where.value
     if ($Request.register -isnot [hashtable]) { return (New-HordeSshListenResult -Ok $false -Reason "the listener was given no register of enrolled devices to hold each key to, so it admits none") }
     if ("$($Request.hubId)" -cnotmatch ('\A' + $script:HordeSshListenDevicePattern + '\z')) { return (New-HordeSshListenResult -Ok $false -Reason ("'" + $Request.hubId + "' is not a hub id: one lowercase UUID, the hub's device id")) }
     $port = [int]$Request.port
@@ -223,7 +235,7 @@ function Start-HordeSshListener {
     # writes it: this user's alone.
     if (-not (Test-Path -LiteralPath $files.revoked -PathType Leaf)) { Write-HordeSshLines -Path $files.revoked -Lines @() }
     $user = [System.Environment]::UserName.ToLowerInvariant()
-    [System.IO.File]::WriteAllLines($files.config, [string[]](Get-HordeSshListenConfig -Files $files -Port $port -HordeHome $Request.hordeHome -User $user))
+    [System.IO.File]::WriteAllLines($files.config, [string[]](Get-HordeSshListenConfig -Files $files -Port $port -HordeHome $Request.hordeHome -User $user -Address $bind.address -Family $bind.family))
     $job = [HordeSshNative]::NewKillOnCloseJob()
     $handed = $false
     $proc = $null
@@ -236,13 +248,15 @@ function Start-HordeSshListener {
         $null = $proc.StandardOutput.ReadToEndAsync()
         $deadline = [datetime]::UtcNow.AddMilliseconds($script:HordeSshListenStartMs)
         $up = $false
-        while (-not $up -and -not $proc.HasExited -and [datetime]::UtcNow -lt $deadline) { $up = Test-HordeSshListenPort -Port $port -Ms 500 }
+        $shown = $bind.address + ":" + $port
+        if ($bind.family -ceq "v6") { $shown = "[" + $bind.address + "]:" + $port }
+        while (-not $up -and -not $proc.HasExited -and [datetime]::UtcNow -lt $deadline) { $up = Test-HordeSshListenPort -Port $port -Ms 500 -Address $bind.address }
         if (-not $up) {
             $said = (Stop-HordeSshListener -Listener $listener).Trim()
-            return (New-HordeSshListenResult -Ok $false -Reason ("sshd did not answer on 127.0.0.1:" + $port + " within " + $script:HordeSshListenStartMs + " ms: " + $said.Replace("`r", "").Replace("`n", " | ")))
+            return (New-HordeSshListenResult -Ok $false -Reason ("sshd did not answer on " + $shown + " within " + $script:HordeSshListenStartMs + " ms: " + $said.Replace("`r", "").Replace("`n", " | ")))
         }
         $handed = $true
-        return (New-HordeSshListenResult -Ok $true -Listener $listener -Address ("127.0.0.1:" + $port))
+        return (New-HordeSshListenResult -Ok $true -Listener $listener -Address $shown)
     } finally {
         if (-not $handed) { try { $job.Dispose() } catch { } }
     }
