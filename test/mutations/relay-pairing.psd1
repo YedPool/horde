@@ -96,5 +96,14 @@
         @{ Name = "window-not-the-setting"
            Find = '[long]$settings.value.values.pendingConfirmMinutes * 60000'
            Replace = '[long]10 * 60000' }
+        @{ Name = "grant-over-another-expiry"
+           Find = '-Machine $id.value.sign.keyId -ExpiresAt $expires))'
+           Replace = '-Machine $id.value.sign.keyId -ExpiresAt ($expires + 1)))' }
+        @{ Name = "grant-of-another-domain"
+           Find = '"horde-relay/pairing/v1 account-grant`n"'
+           Replace = '"horde-relay/pairing/v1 account-grant-v2`n"' }
+        @{ Name = "grant-check-takes-anything"
+           Find = 'return (Test-HordeRelayEs256Signature -Public $SignPublic -Bytes (Get-HordeRelayAccountGrantBytes'
+           Replace = 'return $true; (Test-HordeRelayEs256Signature -Public $SignPublic -Bytes (Get-HordeRelayAccountGrantBytes' }
     )
 }

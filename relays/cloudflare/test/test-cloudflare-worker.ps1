@@ -10,7 +10,7 @@
 #   2. A LOCAL DEV OF THE WORKER serving the built phone app (built by cli/RelayDeploy.ps1 exactly as
 #      the deploy builds it: the http transport at its own origin):
 #      - strict headers on every kind of answer: a page, a script, a missing file, a refusal, a mailbox
-#        answer, the reserved sign-in path, and a WebSocket upgrade (read off the wire);
+#        answer, the sign-in callback, and a WebSocket upgrade (read off the wire);
 #      - the header's policy is the built page's own policy line, plus frame-ancestors 'none';
 #      - deny by default: no token, a wrong token, and the right token sent to a name that is not this
 #        machine are all 401, even for a path that does not exist;
@@ -66,7 +66,8 @@ Check ($null -eq $prod.PSObject.Properties["env"]) "wrangler.json has no env sec
 $placeholder = "" + ($overlayText | ConvertFrom-Json).vars.HORDE_RELAY_TEST_AUTH
 Check ($placeholder.Length -gt 0 -and $placeholder.Length -lt 32) ("the binding's committed value is a placeholder too short to count (" + $placeholder.Length + " characters; the Worker wants 32)")
 $authJs = Read-Text (Join-Path $folder "worker\auth.js")
-Check ($authJs.Contains("const TEST_TOKEN_MIN = 32;") -and $authJs.Contains('const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);')) "CONTROL: the Worker's test authenticator wants 32 characters and this machine's own names"
+$siteJs = Read-Text (Join-Path $folder "worker\site.js")
+Check ($authJs.Contains("const TEST_TOKEN_MIN = 32;") -and $authJs.Contains("if (!isLoopback(url)) return null;") -and $siteJs.Contains('export const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);')) "CONTROL: the Worker's test authenticator wants 32 characters and this machine's own names"
 
 $siteForConfig = Join-Path $work "config-site"
 [void][System.IO.Directory]::CreateDirectory($siteForConfig)
@@ -95,6 +96,14 @@ $probe = Join-Path $work "probe.ps1"
 $psExe = (Get-Process -Id $PID).Path
 $answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String).Trim()
 Check ((Test-HordeCloudflareRelayHasTestBinding -Text $doctored) -and $answer -clike "unknown|*must never carry the test binding*" -and -not (Test-Path -LiteralPath (Join-Path $work "doctored-out"))) ("a wrangler.json that carries the binding is refused, and nothing is written (" + $answer + ")")
+# The same copy carrying only the test PROVIDER's binding (worker/oidc.js): refused as well - every
+# HORDE_RELAY_TEST_ binding is test-only, not just the authenticator's.
+$doctoredOidc = $prodText.Replace('"vars": {', '"vars": { "HORDE_RELAY_TEST_OIDC": "http://127.0.0.1:1",')
+[System.IO.File]::WriteAllText((Join-Path $copy "relays\cloudflare\wrangler.json"), $doctoredOidc, $utf8)
+$answer = (& $psExe -NoProfile -ExecutionPolicy Bypass -File $probe | Out-String).Trim()
+Check ($answer -clike "unknown|*must never carry the test binding*" -and -not (Test-Path -LiteralPath (Join-Path $work "doctored-out"))) ("a wrangler.json that carries the test provider's binding is refused too (" + $answer + ")")
+$oidcPlaceholder = "" + ($overlayText | ConvertFrom-Json).vars.HORDE_RELAY_TEST_OIDC
+Check ($oidcPlaceholder -cnotmatch '\Ahttp://127\.0\.0\.1:[0-9]{1,5}\z') ("the test provider's committed value is a placeholder no Worker takes for a provider (" + $oidcPlaceholder + ")")
 # The same copy with another Worker's name than its origin's first label: the origin is refused.
 [System.IO.File]::WriteAllText((Join-Path $copy "relays\cloudflare\wrangler.json"), $prodText.Replace('"name": "relay"', '"name": "other"'), $utf8)
 [System.IO.File]::WriteAllText($probe, ('. "' + (Join-Path $copy "relays\cloudflare\Wrangler.ps1") + '"' + "`n" + 'try { $d = Get-HordeCloudflareRelayDeployment; Write-Output ("taken|" + $d.origin) } catch { Write-Output ("refused|" + $_.Exception.Message) }' + "`n"), $utf8)
@@ -123,7 +132,10 @@ $built = New-HordeRelayDeploySite -Out $site
 Check ($built.state -ceq "known") ("the phone app is built with the http transport at its own origin, as the deploy builds it (" + $built.reason + ")")
 $dev = Start-HordeCloudflareRelayDev -Work (Join-Path $work "dev") -Site $site -Script $tools.value.script
 Check ($dev.state -ceq "known") ("a local dev of the Worker answers (" + $dev.reason + ")")
-$http = New-Object System.Net.Http.HttpClient
+# A redirect is an answer to check here (sign-in's), never one to follow.
+$handler = New-Object System.Net.Http.HttpClientHandler
+$handler.AllowAutoRedirect = $false
+$http = New-Object System.Net.Http.HttpClient($handler)
 $http.Timeout = [TimeSpan]::FromSeconds(30)
 
 function Send-Raw {
@@ -210,9 +222,9 @@ try {
             "a write to a file" = (Send-Raw "POST" "/app/index.html" "x")
             "a refusal (no sign-in)" = (Send-Raw "GET" ($mbPath + "/items?since=0&max=1"))
             "a mailbox answer" = (Send-Raw "GET" ($mbPath + "/items?since=0&max=1") $null $bearer)
-            "the reserved sign-in path" = (Send-Raw "GET" "/auth/google/callback?code=x")
+            "the sign-in callback, with no sign-in begun" = (Send-Raw "GET" "/auth/google/callback?code=x")
         }
-        $wantStatus = @{ "the app's page" = 200; "a script of the app" = 200; "the site's root" = 200; "a file that is not there" = 404; "a write to a file" = 405; "a refusal (no sign-in)" = 401; "a mailbox answer" = 200; "the reserved sign-in path" = 501 }
+        $wantStatus = @{ "the app's page" = 200; "a script of the app" = 200; "the site's root" = 200; "a file that is not there" = 404; "a write to a file" = 405; "a refusal (no sign-in)" = 401; "a mailbox answer" = 200; "the sign-in callback, with no sign-in begun" = 303 }
         foreach ($what in @($answers.Keys)) {
             $a = $answers[$what]
             $h = $a.headers
@@ -222,7 +234,7 @@ try {
             Check $ok ("strict headers on " + $what + " (" + $a.code + "; policy: " + $h["content-security-policy"] + ")")
         }
         Check ($answers["the site's root"].text.Contains("app/index.html")) "the site's root is its own index.html, which sends a visitor to app/index.html"
-        Check ("" + $answers["a mailbox answer"].headers["cache-control"] -ceq "no-store" -and "" + $answers["a refusal (no sign-in)"].headers["cache-control"] -ceq "no-store") "the mailbox API's answers are never cached"
+        Check ("" + $answers["a mailbox answer"].headers["cache-control"] -ceq "no-store" -and "" + $answers["a refusal (no sign-in)"].headers["cache-control"] -ceq "no-store" -and "" + $answers["the sign-in callback, with no sign-in begun"].headers["cache-control"] -ceq "no-store") "the mailbox API's answers, and sign-in's, are never cached"
         Check ("" + $answers["the app's page"].headers["cache-control"] -cne "no-store") "CONTROL: the app's files are not marked no-store, so the header above is the API's own"
         $up = Get-UpgradeHeaders -Path ($mbPath + "/watch?since=0&max=1&timeoutMs=1000") -Authorization $bearer
         Check ($up.status -clike "HTTP/1.1 101*" -and $up.headers["content-security-policy"] -ceq $wantCsp -and $up.headers["x-content-type-options"] -ceq "nosniff" -and $up.headers["strict-transport-security"] -ceq "max-age=63072000; includeSubDomains") ("strict headers on a WebSocket upgrade too (" + $up.status + ")")

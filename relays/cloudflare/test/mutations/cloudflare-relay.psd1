@@ -2,6 +2,7 @@
 #   powershell -File tools\Mutate.ps1 -Spec relays\cloudflare\test\mutations\cloudflare-relay.psd1
 # relays\cloudflare\test\test-cloudflare-worker.ps1 must fail for every one (it drives the adapter
 # against a local dev of the Worker, beside what the conformance suite does). Every find string occurs once.
+# The adapter's signing (relay PR 8b) is cloudflare-relay-signing.psd1's, against the accounts suite.
 @{
     Target = "relays\cloudflare\Relay.ps1"
     Suite  = "relays\cloudflare\test\test-cloudflare-worker.ps1"
@@ -16,11 +17,11 @@
         @{ Name = "no-default-origin"
            Find = 'if ($null -eq $origin -or "$origin" -eq "") { $origin = (Get-HordeCloudflareRelayDeployment).origin }'
            Replace = '' }
-        @{ Name = "request-not-signed"
-           Find = 'if ($State.authorization -ne "") { [void]$req.Headers.TryAddWithoutValidation("Authorization", $State.authorization) }'
+        @{ Name = "request-not-authorized"
+           Find = '[void]$req.Headers.TryAddWithoutValidation("Authorization", $auth.value)'
            Replace = '' }
-        @{ Name = "watch-not-signed"
-           Find = 'if ($State.authorization -ne "") { $socket.Options.SetRequestHeader("Authorization", $State.authorization) }'
+        @{ Name = "watch-not-authorized"
+           Find = '$socket.Options.SetRequestHeader("Authorization", $auth.value)'
            Replace = '' }
     )
 }

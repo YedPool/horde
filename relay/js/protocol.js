@@ -279,7 +279,7 @@ export function credentialFromAttestation(attestationObject) {
 
 // --- pairing (relay/Pairing.ps1) ---
 
-const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "pairMailbox", "rpId", "origins", "issuedAt", "expiresAt"];
+const OFFER_FIELDS = ["v", "kind", "horde", "offer", "code", "machine", "signPublic", "agreeKeyId", "agreePublic", "mailbox", "pairMailbox", "rpId", "origins", "issuedAt", "expiresAt", "grant"];
 const LABEL = /^[\x21\x23-\x5b\x5d-\x7e](?:[\x20\x21\x23-\x5b\x5d-\x7e]{0,62}[\x21\x23-\x5b\x5d-\x7e])?$/;
 export const PAIRING_CHALLENGE_DOMAIN = "horde-relay/pairing/v1 challenge\n";
 
@@ -312,6 +312,8 @@ export async function readOffer(text, now = Date.now()) {
   if (!Array.isArray(o.origins) || o.origins.length < 1 || o.origins.length > 8 || !o.origins.every((x) => typeof x === "string")) return no("the offer's origins are not a list of origins");
   if (!Number.isSafeInteger(o.issuedAt) || !Number.isSafeInteger(o.expiresAt)) return no("the offer's times are not whole numbers");
   if (now >= o.expiresAt) return no("the pairing offer has expired: ask the machine for a new one");
+  // The account grant (ACCOUNT GRANT, below) is the relay's to verify; here only its shape: 64 bytes.
+  if (typeof o.grant !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(o.grant)) return no("the offer's account grant is not a signature");
   let signPoint, agreePoint;
   try { signPoint = unb64u(o.signPublic); agreePoint = unb64u(o.agreePublic); } catch (x) { return no("the offer's keys are not base64url"); }
   try {
@@ -345,7 +347,7 @@ export function pairingResponseText({ offer, code, rawId, clientDataJSON, attest
 // offer names, the AAD binding the horde, the offer and that key, written as Get-HordeRelaySealedSpec
 // spells it. The machine refuses a response over 6000 characters (Get-HordeRelayPairingLimits), so a
 // longer one is refused here first. offer is readOffer's value.
-export const PAIRING_LIMITS = { maxResponseChars: 6000, maxSealedChars: 8600 };
+export const PAIRING_LIMITS = { maxResponseChars: 6000, maxSealedChars: 8600, maxTtlSeconds: 900 };
 export async function sealPairingResponse(offer, responseText) {
   if (typeof responseText !== "string" || !/^[\x20-\x7e]+$/.test(responseText) || responseText.length > PAIRING_LIMITS.maxResponseChars) throw new Error("a pairing response is 1 to 6000 printable ASCII characters");
   if (!offer || !(offer.agreePoint instanceof Uint8Array) || !/^[0-9a-f]{32}$/.test(offer.offer || "")) throw new Error("seal a response to an offer readOffer has read");
@@ -356,6 +358,26 @@ export async function sealPairingResponse(offer, responseText) {
 }
 // The relay key a sealed response is put under: one per offer, so a phone that sends again stores once.
 export function pairingKey(offerId) { return "pairing/" + offerId; }
+
+// relay/Pairing.ps1's ACCOUNT GRANT: the machine's ES256 signature, carried in the offer, over these
+// lines. A hosted relay with accounts takes the machine's signing key into the signed-in phone's account
+// only with a grant that verifies under that very key and has not expired, once per offer - so a key
+// whose public half is known is still not anyone's to register without a live offer of its machine.
+export const ACCOUNT_GRANT_DOMAIN = "horde-relay/pairing/v1 account-grant\n";
+export function accountGrantBytes({ horde, offer, machine, expiresAt }) { return utf8(ACCOUNT_GRANT_DOMAIN + horde + "\n" + offer + "\n" + machine + "\n" + expiresAt); }
+
+// relay/P256.ps1's Test-HordeRelayEs256Signature: does sig (64 bytes, r || s) verify over bytes under
+// the 65-byte point, with s <= n/2 (LOW-S there: a high-S twin is refused, so one message has one
+// signature)? Never throws: anything malformed is false.
+const P256_HALF_ORDER = 0x7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8n;
+export async function verifyMachineSignature(point, bytes, sig) {
+  try {
+    if (!(point instanceof Uint8Array) || point.length !== 65 || !(sig instanceof Uint8Array) || sig.length !== 64) return false;
+    if (BigInt("0x" + hex(sig.slice(32))) > P256_HALF_ORDER) return false;
+    const pub = await subtle.importKey("raw", point, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    return await subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pub, sig, bytes);
+  } catch (x) { return false; }
+}
 
 // --- the phone identity key (relay/Trust.ps1, PHONE KEYS; channels/trust/Channel.ps1) ---
 
