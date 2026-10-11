@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "claim": "About one message in ten crosses its counterpart, mostly on routes through the master.",
+  "metric": {
+    "what": "Pairs on the same route in opposite directions where the second was written before the first was read.",
+    "numbers": [
+      {
+        "name": "crossings",
+        "values": [
+          114
+        ]
+      },
+      {
+        "name": "messages",
+        "values": [
+          1113
+        ]
+      },
+      {
+        "name": "involvingMaster",
+        "values": [
+          83
+        ]
+      },
+      {
+        "name": "followUpsWithin5MinOfOwnLast",
+        "values": [
+          404
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "mail store"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Follows from G2 and G3: fewer hops and batched replies. Measure again after those.",
+  "confidence": "high",
+  "whyItGeneralises": "Crossed messages follow from latency and hop count in any asynchronous messaging; fewer hops reduce them anywhere."
+}

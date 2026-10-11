@@ -1,0 +1,11 @@
+# What identifies the relay on this machine's disk, local. tools/HostNames.ps1 fails
+# test/test-host-names.ps1 when any of these appears in a file outside relays/local/ (and outside the
+# prose under planning/, by rule) that relays/local/allowlist.txt does not list, exactly as often as it
+# lists (CONTRIBUTING rule 14; relay design 2026-10-09, PR plan item 3). Each is matched as a
+# case-insensitive substring, on every line and on the file's path.
+#
+# name | why it identifies this relay
+LocalRelay | the stem of every function and variable of this relay, the one thing nothing else names
+#
+# CONSIDERED AND LEFT OUT:
+#   local - an ordinary word in many files, and also the local pipe transport's folder.

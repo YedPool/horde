@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "claim": "Per-transcript usage metrics cannot answer fleet questions without lane, role and parent on each record.",
+  "metric": {
+    "what": "Fields present in the metrics summaries against the fields needed for every measure above.",
+    "numbers": [
+      {
+        "name": "summaries",
+        "values": [
+          180
+        ]
+      },
+      {
+        "name": "excludedAsBeforeConsent",
+        "values": [
+          59
+        ]
+      },
+      {
+        "name": "ofThoseStillGrowing",
+        "values": [
+          16
+        ]
+      },
+      {
+        "name": "callsOnUnpricedModels",
+        "values": [
+          980
+        ]
+      },
+      {
+        "name": "callsTotal",
+        "values": [
+          8567
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "metrics summaries",
+        "session transcripts"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Record lane, role and parent with each summary; add turn-trigger and time-in-send instruments; warn on unpriced models.",
+  "confidence": "high",
+  "whyItGeneralises": "Fleet questions need lane, role and parent on each record whatever the fleet; without them no reader can group usage by lane."
+}

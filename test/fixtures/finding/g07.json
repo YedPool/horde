@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "claim": "An order word with no defined scope ('hold') causes fleet-wide thrash when misread once.",
+  "metric": {
+    "what": "Messages sent by the master in the 5 minutes after the order, in the 19 minutes after the person's correction, and received in the following hour.",
+    "numbers": [
+      {
+        "name": "sentBeforeCorrection",
+        "values": [
+          10
+        ]
+      },
+      {
+        "name": "sentToUndo",
+        "values": [
+          30
+        ]
+      },
+      {
+        "name": "receivedAfter",
+        "values": [
+          52
+        ]
+      },
+      {
+        "name": "totalChars",
+        "values": [
+          163000
+        ]
+      },
+      {
+        "name": "minutesToCorrection",
+        "values": [
+          5
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "mail store"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "A hold is a record with scope, who it binds, what continues and what ends it. An unscoped hold from the person means 'stop bringing this to me'; the master confirms scope in one line before telling any lane.",
+  "confidence": "high",
+  "whyItGeneralises": "An order word with undefined scope is ambiguous for any fleet that relays orders through a coordinator; the cost grows with the number of lanes told.",
+  "limits": "One incident."
+}

@@ -30,9 +30,17 @@ function Start-HordeProcess {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [System.Diagnostics.Process]::Start($psi)
+    # THE TWO STREAMS ARE READ AT THE SAME TIME, never one to its end and then the other. A pipe holds
+    # 4,096 bytes: a child that writes more than that to stderr waits for a reader, and a reader still
+    # waiting for stdout to end waits for the child - for ever. An unknown command prints the whole help
+    # to stderr, so the help's size decided whether this suite ran. Measured 2026-10-07: at 3,591 bytes
+    # of help it passed; on a branch that added four verbs the help was 4,362 bytes and the suite stood
+    # still for 23 minutes at "an unknown command exits 2 and says so", until the child was stopped by
+    # hand. test\lib\Cli.ps1 reads the same way.
+    $errRead = $p.StandardError.ReadToEndAsync()
     $out = $p.StandardOutput.ReadToEnd()
-    $err = $p.StandardError.ReadToEnd()
     $p.WaitForExit()
+    $err = $errRead.Result
     return [pscustomobject]@{ code = $p.ExitCode; out = $out; err = $err }
 }
 
@@ -141,6 +149,35 @@ $literals = @($disp.FindAll({ param($n) $n -is [System.Management.Automation.Lan
 $named = @($real.commands | Where-Object { $_.name -ne "help" -and $literals -contains $_.name })
 Check ($named.Count -eq 0) "the dispatcher names no command, so adding one never means editing it"
 Check ($null -eq $disp.ParamBlock) "the dispatcher has no param block - the one that would strip switches from forwarded arguments"
+
+Write-Host ""
+Write-Host "--- this suite's own process helper reads both of a child's streams whole ---" -ForegroundColor Cyan
+
+# A CHILD THAT WRITES MORE TO STDERR THAN A PIPE HOLDS, between two writes to stdout. A helper that reads
+# one stream to its end before the other never returns from it: the child waits for a reader of stderr,
+# the reader waits for stdout to end. So the helper is called on a thread of its own and given a bound;
+# past the bound the child is stopped and the check FAILS BY NAME, where the suite used to stand still.
+# The bound is generous on purpose: a PowerShell child starts in 1 to 3 seconds here, and on a loaded
+# machine several times that; a helper that is right returns as soon as the child ends.
+$streamsBoundSeconds = 60
+$stderrBytes = 20000    # about five pipes' worth: a pipe holds 4,096 bytes
+$streamsMark = [guid]::NewGuid().ToString("N")
+$streamsChild = "-NoProfile -Command `"[Console]::Out.Write('first-" + $streamsMark + "'); [Console]::Error.Write(('e' * " + $stderrBytes + ")); [Console]::Out.Write('-last')`""
+$streamsShell = [powershell]::Create()
+[void]$streamsShell.AddScript("function Start-HordeProcess {" + ${function:Start-HordeProcess} + "}`r`nStart-HordeProcess -PowerShellArguments `$args[0]").AddArgument($streamsChild)
+$streamsWait = $streamsShell.BeginInvoke()
+$streamsDone = $streamsWait.AsyncWaitHandle.WaitOne($streamsBoundSeconds * 1000)
+$streamsRead = $null
+if ($streamsDone) { $streamsRead = @($streamsShell.EndInvoke($streamsWait))[0] }
+else {
+    # Stop the child, which lets the helper return, and then the thread.
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { "$($_.CommandLine)" -like ("*" + $streamsMark + "*") } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -Confirm:$false -ErrorAction SilentlyContinue }
+    $streamsShell.Stop()
+}
+$streamsShell.Dispose()
+Check ($streamsDone) ("a child that writes " + $stderrBytes + " bytes to stderr between two writes to stdout FINISHES: the helper returned within " + $streamsBoundSeconds + " seconds")
+Check ($null -ne $streamsRead -and $streamsRead.code -eq 0 -and $streamsRead.out -ceq ("first-" + $streamsMark + "-last")) "its stdout is read whole, both the part written before stderr and the part after"
+Check ($null -ne $streamsRead -and "$($streamsRead.err)".Length -eq $stderrBytes -and "$($streamsRead.err)" -ceq ("e" * $stderrBytes)) ("and its stderr is read whole: all " + $stderrBytes + " bytes")
 
 Write-Host ""
 Write-Host "--- the dispatcher, run as a real process ---" -ForegroundColor Cyan

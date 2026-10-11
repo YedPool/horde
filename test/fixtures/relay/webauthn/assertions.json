@@ -1,0 +1,233 @@
+{
+  "about": "WebAuthn ES256 assertions signed with WebCrypto (Node v24.18.0) by test/fixtures/relay/webauthn/make-fixtures.mjs. Only the public key is kept. expect is 'accepted' or a word the refusal reason must contain.",
+  "rpId": "relay.example.test",
+  "origin": "https://relay.example.test",
+  "publicKey": "BMk1lKXTKhGPMhBshd7btq3Fhm8ipFLLv5G9sWKOxiQQrxNegKPj_Pw3ehvDKU62onWLJNuP6YOqhh4KO7Fxeeg",
+  "cases": [
+    {
+      "name": "valid: user present and verified",
+      "expect": "accepted",
+      "requireUserVerification": true,
+      "challenge": "X24dKiLuty79TKB1-osoW8nboAepCucj6zzrSttRlwE",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWDI0ZEtpTHV0eTc5VEtCMS1vc29XOG5ib0FlcEN1Y2o2enpyU3R0Umx3RSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEQCIEX3gDo_duBDCSHi2p7nxynpUBzo9FIR9RfKWnFJMG4EAiBlE80hany9i0V3hBnnq2jxpZ9tqLe3LNMYTHl41En1PQ"
+    },
+    {
+      "name": "valid: present only, verification not required",
+      "expect": "accepted",
+      "requireUserVerification": false,
+      "challenge": "Iq_6O4pHcYaaUr66-lgQZ7yHHZFglcj-oehOU_nA5lE",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoBAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiSXFfNk80cEhjWWFhVXI2Ni1sZ1FaN3lISFpGZ2xjai1vZWhPVV9uQTVsRSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEYCIQCoiAbku6bQMxBpI9qBZ1GUegjeGnwPhG8D4HPduXe3AgIhAMvNsEBrSMW8AA4epZQZ8OE6Z5jnap1-PKY8fbHSVIdt"
+    },
+    {
+      "name": "refused: present only, verification required",
+      "expect": "user verification",
+      "requireUserVerification": true,
+      "challenge": "Z0yO_-6lqOtaO64qxU9bAIKVdM5T-2qgMD8cdAafXbg",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoBAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWjB5T18tNmxxT3RhTzY0cXhVOWJBSUtWZE01VC0ycWdNRDhjZEFhZlhiZyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIHokkegBTnqM4yFLLNy5kdHVAtVleRBx0oXCalHfqqZfAiEA_1uJDbWwAkxQTVYWqQeuke1ADM5WyOXynZ5PP70U-mc"
+    },
+    {
+      "name": "valid: a synced passkey (backup eligible and backed up), counter 0",
+      "expect": "accepted",
+      "requireUserVerification": true,
+      "challenge": "l1F1SEr2DPyzlrR174RFCYyqPHm09LoyJi_qUtFtGRY",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QodAAAAAA",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoibDFGMVNFcjJEUHl6bHJSMTc0UkZDWXlxUEhtMDlMb3lKaV9xVXRGdEdSWSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEYCIQDrrnACJkZmuv4sU0bUxlX0LFXq5Tpbhst7AgLxswIIiAIhAOUMPPfwA_SfqeBo7muxPNe5kj_ClKx-Z15mySPQ3wXm"
+    },
+    {
+      "name": "valid: extension data present and flagged",
+      "expect": "accepted",
+      "requireUserVerification": true,
+      "challenge": "0PNrsCsto9k2tkMqRw-lZwbxvhRQ6hLbivsl6jrvJ-k",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QqFAAAAB6A",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiMFBOcnNDc3RvOWsydGtNcVJ3LWxad2J4dmhSUTZoTGJpdnNsNmpydkotayIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIQD0i6gI9Q47mEdmBK8muefDm12AJelhmpLMoRxjtu_6HwIgJ6QryLn3rAR8RVZuOAvGe9NG3U5XoSY5gr5P38IRUaY"
+    },
+    {
+      "name": "valid: clientDataJSON members in another order",
+      "expect": "accepted",
+      "requireUserVerification": true,
+      "challenge": "zDWn391tF3BFSpbwvKUXapgDXNESsouGXJM6ilc3yWk",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJvcmlnaW4iOiJodHRwczovL3JlbGF5LmV4YW1wbGUudGVzdCIsImNyb3NzT3JpZ2luIjpmYWxzZSwiY2hhbGxlbmdlIjoiekRXbjM5MXRGM0JGU3Bid3ZLVVhhcGdEWE5FU3NvdUdYSk02aWxjM3lXayIsInR5cGUiOiJ3ZWJhdXRobi5nZXQifQ",
+      "signature": "MEUCIGgVeHpa1DimcZD1RGhR0gXlMMMXFwZRBrle3OJ4lcpnAiEAvnIQzwsERnZmowCy6LbqiKoJIZOaJ0RpmpO0BWcHuQM"
+    },
+    {
+      "name": "refused: type is webauthn.create",
+      "expect": "type",
+      "requireUserVerification": true,
+      "challenge": "W_AyX8mzFq_D-NAd0Ud_R5F9OS-K0N1O1ivlUff1cp8",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiV19BeVg4bXpGcV9ELU5BZDBVZF9SNUY5T1MtSzBOMU8xaXZsVWZmMWNwOCIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIFwaGqHdzlYNQd_koTMJ-Z26widfhrzueDha1GIX2d8DAiEAhQj8IiIQ0cPC2VXL-IS2IwFJcXPT4zJmbR9u1O6xWBY"
+    },
+    {
+      "name": "refused: the challenge is another one",
+      "expect": "challenge",
+      "requireUserVerification": true,
+      "challenge": "wyedRmLDgd3GfQWEMwHf3Hj85oq6xQOisbxz7sdyVbc",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNnBmeDVYUEs1b0lkcG1SSnhJdHRhUXVMM1FlMzR6OTgwOXNYT2dUZzNGcyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIFC1YX3yWTPASPmMPky-7mJv5L4gagaL0QwaKN4sF6ScAiEAly8YxB20c2YyOCRsgGW5m4bFOkGTVqeYu2PFTeLhcvs"
+    },
+    {
+      "name": "refused: the challenge is written with padding",
+      "expect": "challenge",
+      "requireUserVerification": true,
+      "challenge": "tI0tRRluOMGUOP3wrmpeUCNM6enXXdA09-TQrHeKcq4",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoidEkwdFJSbHVPTUdVT1Azd3JtcGVVQ05NNmVuWFhkQTA5LVRRckhlS2NxND0iLCJvcmlnaW4iOiJodHRwczovL3JlbGF5LmV4YW1wbGUudGVzdCIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+      "signature": "MEUCIQD2sLb-0a9nvwRk8Al-2kNauupkCvv6gK-mj5oYkSqhtgIgeONsHKRfYI4V5p_gnhFpyx2hvqqHwH9a8teiztXgdkQ"
+    },
+    {
+      "name": "refused: another origin",
+      "expect": "origin",
+      "requireUserVerification": true,
+      "challenge": "VfGMDIuqsCWCbV4RgAw9WChh4Zv8SoTZELqefAk87IM",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiVmZHTURJdXFzQ1dDYlY0UmdBdzlXQ2hoNFp2OFNvVFpFTHFlZkFrODdJTSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0LmV2aWwudGVzdCIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+      "signature": "MEUCIBOSug2cBZq3KU3R6qtM6kFln2F6VPCGLkRB0-whT0yaAiEA1DCj3IAbhS7cpNsW_kdKXcQSj6hwTuBxZ5jAnsaWtT4"
+    },
+    {
+      "name": "refused: a cross-origin request",
+      "expect": "crossOrigin",
+      "requireUserVerification": true,
+      "challenge": "bLf0L2et5dNykGJV2qJZWn6FBsDpUDnAikcX5aLXruk",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYkxmMEwyZXQ1ZE55a0dKVjJxSlpXbjZGQnNEcFVEbkFpa2NYNWFMWHJ1ayIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOnRydWV9",
+      "signature": "MEYCIQCIYLH-UY_3OkSJOBoi2NIcoJuVMtEQcCcOouyjZ22juwIhAL6AbN6ZxydrQo3NbMI4ugeVdINVtbdUN8U-koPKGKiP"
+    },
+    {
+      "name": "refused: a top origin is named",
+      "expect": "topOrigin",
+      "requireUserVerification": true,
+      "challenge": "Mu2ErvEGUXaCZdm4NjIFZyNRBV_OrO72XdSf_a1j1P4",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiTXUyRXJ2RUdVWGFDWmRtNE5qSUZaeU5SQlZfT3JPNzJYZFNmX2ExajFQNCIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlLCJ0b3BPcmlnaW4iOiJodHRwczovL2V2aWwuZXhhbXBsZS50ZXN0In0",
+      "signature": "MEUCIE09VR1I3MJp4KtufZ2zY3vJAuTLy7sUEowiO_qgrPU-AiEA_2bLjQ4c-cP9Av2n39qJ0jmHv0jSZNb0EVwtZry9Lvg"
+    },
+    {
+      "name": "refused: signed for another relying party",
+      "expect": "rpIdHash",
+      "requireUserVerification": true,
+      "challenge": "58I2TIsd09Zp61VrIvY2AinXieMyF_ZXCP5dRUgJp-M",
+      "authenticatorData": "7BLEjRZWRNZnjgG2IWorOh4Rkf8dKV1cTqMUOko_COgFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiNThJMlRJc2QwOVpwNjFWckl2WTJBaW5YaWVNeUZfWlhDUDVkUlVnSnAtTSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIEjxV3oQy89diWTfTHuvz_ew85qbvXlC5nQYkUcdZwAgAiEA84Ji4R_cdvASboFO7jej80goOv71w5YERyJmsX-QU_4"
+    },
+    {
+      "name": "refused: user not present",
+      "expect": "user presence",
+      "requireUserVerification": true,
+      "challenge": "r5GI4utE2ZaYnF6jzxDsO4fJXm3tupRfJm9nJOdgxPA",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoEAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicjVHSTR1dEUyWmFZbkY2anp4RHNPNGZKWG0zdHVwUmZKbTluSk9kZ3hQQSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEQCIEEeAqMdIlh9ObXDQIqgst9W5ASGge1q7t-uUZAf-EjqAiBfwG8jxq_1lp_K57ksQxMsx5WZLXfsA46WCW4K38W0NA"
+    },
+    {
+      "name": "refused: attested credential data in an assertion",
+      "expect": "attested credential data",
+      "requireUserVerification": true,
+      "challenge": "NECm6u2O8g54E4kzauw9pREsILj5-AkTLzivM9sbISM",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QpFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiTkVDbTZ1Mk84ZzU0RTRremF1dzlwUkVzSUxqNS1Ba1RMeml2TTlzYklTTSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEYCIQDYRrffRD8jNKJkispZLDdhCiRQ9lnAshQATn5EnYCWpgIhAKOzE0QXG_ivX4DyrVmGc7hLNnIMaoGBDCNHVHLVYpzG"
+    },
+    {
+      "name": "refused: backed up but not backup eligible",
+      "expect": "backup",
+      "requireUserVerification": true,
+      "challenge": "qqVpicuFwENZQRXqv3H4SU9XfGmj40iu9dvWTdT9xX0",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoVAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoicXFWcGljdUZ3RU5aUVJYcXYzSDRTVTlYZkdtajQwaXU5ZHZXVGRUOXhYMCIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIGPn3xV4eiui7IrFbDVToGFw6qTNnyacb-CowJ0vO3N9AiEAqs4YWyW1DGKR3RfGyG9AL3MxrW7ZhWEbdRuxTKrl0ck"
+    },
+    {
+      "name": "refused: bytes after the counter with no extension flag",
+      "expect": "extension",
+      "requireUserVerification": true,
+      "challenge": "zd_GvixkDMGITafMlTRBY5IbwQ5kiujrBPIqxxa38Co",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAAB6A",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiemRfR3ZpeGtETUdJVGFmTWxUUkJZNUlid1E1a2l1anJCUElxeHhhMzhDbyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCICprRuA7H8BePB1Sv_Jth0EyumKtxqXpeBaxfUWz0bNCAiEA17H5fzpel4A9BwyrNOY8bJhaURNcShugMLmGLJrRvh0"
+    },
+    {
+      "name": "refused: extension flag with no extension bytes",
+      "expect": "extension",
+      "requireUserVerification": true,
+      "challenge": "ILYyeYX5bH8Lwc1J6mVIIgQG4zrMcu5bIjNTVBJ9arQ",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QqFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiSUxZeWVZWDViSDhMd2MxSjZtVklJZ1FHNHpyTWN1NWJJak5UVkJKOWFyUSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIQDHbAEAZq41gV4kn-JXylI8ktzeEbsZvq2IJQI06vuhHQIgajNDaRgI2_bbW-CPsL2kL5or9mI8ITOCNxzDIq8vV2o"
+    },
+    {
+      "name": "refused: the signature is over other bytes",
+      "expect": "does not verify",
+      "requireUserVerification": true,
+      "challenge": "Kk1c3qMRuf7LYbUGYA81AuyijjDng6K7x-y0m-CH57w",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiS2sxYzNxTVJ1ZjdMWWJVR1lBODFBdXlpampEbmc2Szd4LXkwbS1DSDU3dyIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIHEZbIRGBfx2mfYhdVt4BvF5-k_cZQC95RzkJcmUwdu5AiEA5V16zSNrfHorcZPRImRGqIzXZBKRyLxMcxdUE-jJejc"
+    },
+    {
+      "name": "refused: signed by another key",
+      "expect": "does not verify",
+      "requireUserVerification": true,
+      "challenge": "HemYaDkXR84IUJS4ppaacvrLTvtj-2FDtIxFZk8bpeQ",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiSGVtWWFEa1hSODRJVUpTNHBwYWFjdnJMVHZ0ai0yRkR0SXhGWms4YnBlUSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEQCIDZV54NgKSIzSLRKtu9YIOMJsOLe85aqBgLlEGcyEgXiAiB5SMIrMI3xJ9luiriwTvJpvwJAHmyM8G7eKtlQdkxNoA"
+    },
+    {
+      "name": "refused: DER with a byte after the signature",
+      "expect": "DER",
+      "requireUserVerification": true,
+      "challenge": "Pmd9huB9rvNG1C72__vumZ-zTzUaKz90-azV0WQE2nA",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiUG1kOWh1Qjlydk5HMUM3Ml9fdnVtWi16VHpVYUt6OTAtYXpWMFdRRTJuQSIsIm9yaWdpbiI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZS50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+      "signature": "MEUCIQDL6LQMmz1QZcvU0Yl1FTg-zII5mPs1uBzcsEAih1MC1AIgDPP7Af4ef03yIhfQSoYCAlyWwk6OuJkl21R65vBi0m8A"
+    },
+    {
+      "name": "refused: a member repeated in clientDataJSON",
+      "expect": "more than once",
+      "requireUserVerification": true,
+      "challenge": "p7lwqgpBAuup1fnSdP207PJI3mWqh6teA5IrCJTWwvQ",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsImNoYWxsZW5nZSI6InA3bHdxZ3BCQXV1cDFmblNkUDIwN1BKSTNtV3FoNnRlQTVJckNKVFd3dlEiLCJvcmlnaW4iOiJodHRwczovL3JlbGF5LmV4YW1wbGUudGVzdCIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+      "signature": "MEUCIHynmKZTT8nWIpr5PGprrHN-NyzYgvf0WPDb6mLCpUGBAiEAtG3s1znFHZvFhiQVn_0uhubcArSDVw1Xg8zEfGCl5Lo"
+    },
+    {
+      "name": "refused: clientDataJSON that is not JSON",
+      "expect": "not JSON",
+      "requireUserVerification": true,
+      "challenge": "DsmFd51MCKmCPXZB_GE27jOwbFIJ2UaeZFsUqWqZjrc",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "dHlwZT13ZWJhdXRobi5nZXQ",
+      "signature": "MEUCIQD0nyukJndfjwxCWHhCuRs9lhJYselHM1PJbanh6K1pTAIgOPBR4xWZXoyxYnD05MnfvJV3CA8lBDzg3MKWibw722A"
+    },
+    {
+      "name": "refused: clientDataJSON that is not UTF-8",
+      "expect": "UTF-8",
+      "requireUserVerification": true,
+      "challenge": "z8tlIOeLhGFTI7f0F8dQbHRIYpCSek_egEFFIVTqk_Y",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "eyL_IjoxfQ",
+      "signature": "MEUCIQDoCCnE_XSLH0Madz3SlRB5r5iEY-fhn9f5pQqsBjfEXgIgTylBdYXueXxPtZ-zBMy-tI_age_YgVdIEsYimlUmeWg"
+    },
+    {
+      "name": "refused: clientDataJSON that is an array",
+      "expect": "object",
+      "requireUserVerification": true,
+      "challenge": "QY49HAoWC5xwngMvBOy6tQirzLspgw8yE5fHopOUDa0",
+      "authenticatorData": "hKYAEFZOEhqDPRxKdF0WaXg2lvBluKb2UjsOaVLa3QoFAAAABw",
+      "clientDataJSON": "WyJ3ZWJhdXRobi5nZXQiXQ",
+      "signature": "MEUCIAdk6PX_NxxaxDTAfwFQIetEsnQJkHMCSl09BKqTevX-AiEAvfmhDtdz911yxxbnNdfrAbq-NLD7Z3aDRg1nkQLyoz0"
+    }
+  ]
+}

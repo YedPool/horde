@@ -183,7 +183,52 @@ try {
     Refuses "own-folder-non-ascii" { Write-FakeBytes "hosts/zorbterm/adapter.ps1" ([System.Text.Encoding]::UTF8.GetBytes("# caf" + [char]0x00E9 + "`n")) } "not printable ASCII" "the host's own folder is held to ASCII too - rule 13 has no exemption"
     Passes "ascii-whitespace" { Write-FakeFile "core/ws.ps1" "`tif (`$x) {`r`n`t`t`$y`r`n}`r`n" } "CONTROL: tabs, CR and LF are printable enough, and pass"
     Passes "planning-prose-non-ascii" { Write-FakeBytes "planning/notes.md" ([System.Text.Encoding]::UTF8.GetBytes("caf" + [char]0x00E9 + "`n")) } "prose under planning/ is not scanned, so a non-ASCII letter there is not this suite's to refuse"
-    Passes "git" { Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
+    # A PINNED FILE IS THE ONE EXCEPTION (decisions design 2026-10-06, section 3.11): a program library an
+    # adapter cannot be written without sits in the adapter's folder beside a fingerprints.txt giving its
+    # SHA-256. It is not read as text; it is held to its fingerprint instead. Everything else about
+    # the ASCII rule stands: a binary no list names, and a list outside a port's folder, are refused.
+    $libBytes = [byte[]](0x4D, 0x5A, 0x00, 0xFF, 0x90, 0x00)
+    $libHasher = [System.Security.Cryptography.SHA256]::Create()
+    $libSha = -join ($libHasher.ComputeHash($libBytes) | ForEach-Object { $_.ToString("x2") })
+    $libHasher.Dispose()
+    $libLine = "zorb.dll | " + $libSha + " | the invented library the invented host cannot be written without`n"
+    Passes "pinned" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "a binary in a port's folder that a fingerprint list beside it names, with its SHA-256, is not read as text and passes"
+    Refuses "pinned-changed" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" ([byte[]](0x4D, 0x5A, 0x00, 0xFF, 0x90, 0x01)); Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "does not match its fingerprint" "one changed byte in a pinned file is refused"
+    Refuses "pinned-missing" { Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine } "is listed and is not there" "a listed file that is not there is refused"
+    Refuses "pinned-unlisted" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" $libLine; Write-FakeBytes "hosts/zorbterm/lib/other.dll" $libBytes } "not printable ASCII" "a binary beside the list that the list does not name is refused like any other"
+    Refuses "pinned-path" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ($libLine + "..\..\..\core\engine.ps1 | " + $libSha + " | a line reaching out of the list's own folder`n") } "is not a plain file name" "a list line that names a path, not a file in its own folder, is refused"
+    function RefusesPinnedOutsideAPort {
+        $f = @(Scan "pinned-outside" { Write-FakeBytes "core/lib/zorb.dll" $libBytes; Write-FakeFile "core/lib/fingerprints.txt" $libLine })
+        $ok = ((Says $f "outside a port's folder") -and (Says $f "not printable ASCII") -and $f.Count -eq 2)
+        Check $ok "a fingerprint list outside a port's folder pins nothing: the list is refused, and the binary beside it is refused as non-ASCII"
+        if (-not $ok) { Show $f }
+    }
+    RefusesPinnedOutsideAPort
+    # ONLY A PROGRAM LIBRARY IS EVER LEFT UNREAD. A list names files by name alone, so a script could be
+    # listed with its own fingerprint: the review of the surfaces pull request (2026-10-06) did that to
+    # a .ps1 holding a look-alike letter, and the scan passed it. The control is the same script with
+    # no list: whatever it is refused for then, it must still be refused for when a list names it.
+    function RefusesPinnedScript {
+        $scriptBytes = [System.Text.Encoding]::UTF8.GetBytes("# caf" + [char]0x00E9 + ": start a zorbcode process`n")
+        $scriptHasher = [System.Security.Cryptography.SHA256]::Create()
+        $scriptSha = -join ($scriptHasher.ComputeHash($scriptBytes) | ForEach-Object { $_.ToString("x2") })
+        $scriptHasher.Dispose()
+        $plain = @(Scan "script-unlisted" { Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes })
+        Check ($plain.Count -ge 1 -and (Says $plain "not printable ASCII")) ("CONTROL: a script in a port's folder with a byte that is not ASCII is refused when no list names it (" + $plain.Count + " finding(s))")
+        $listed = @(Scan "script-listed" { Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes; Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ("helper.ps1 | " + $scriptSha + " | a script listed with its own fingerprint, to get it past the scan`n") })
+        $kept = @($plain | Where-Object { $was = $_; @($listed | Where-Object { $_.path -ceq $was.path -and $_.problem -ceq $was.problem }).Count -eq 1 })
+        $ok = ($kept.Count -eq $plain.Count)
+        Check $ok "a fingerprint list cannot excuse a script: listed with its true fingerprint, it is still read as text and refused for everything it was refused for"
+        if (-not $ok) { Show $listed }
+        $named = ((Says $listed "is not a program library") -and $listed.Count -eq ($plain.Count + 1))
+        Check $named "and the list is refused for naming it: only a program library is ever left unread"
+        if (-not $named) { Show $listed }
+        $both = @(Scan "script-beside-library" { Write-FakeBytes "hosts/zorbterm/lib/zorb.dll" $libBytes; Write-FakeBytes "hosts/zorbterm/lib/helper.ps1" $scriptBytes
+            Write-FakeFile "hosts/zorbterm/lib/fingerprints.txt" ($libLine + "helper.ps1 | " + $scriptSha + " | a script listed beside a real library`n") })
+        Check ((Says $both "not printable ASCII") -and (Says $both "is not a program library") -and -not (Says $both "zorb.dll")) "beside a real library the script is still refused, and the library is still left unread"
+    }
+    RefusesPinnedScript
+    Passes "git"{ Write-FakeFile ".git/config" "[remote] zorbterm`n" } ".git/ is not scanned"
     Passes "git-file" { Write-FakeFile ".git" "gitdir: C:/code/zorbterm-worktrees/x/.git`n" } "nor is a worktree's .git file, which holds a path that can name anything"
     # MENTIONS, NOT LINES. The review of PR 21 appended "; zorbterm cli spawn" to a line that already
     # named the host, and a count of lines did not move. Each occurrence of each name counts.
@@ -659,7 +704,11 @@ $realTransports = @(Get-ChildItem -LiteralPath (Join-Path $root "transports") -D
 Check ($realTransports.Count -ge 1) ("CONTROL: this repository has at least one transport to check (" + $realTransports.Count + ")")
 $realMessengers = @(Get-ChildItem -LiteralPath (Join-Path $root "messengers") -Directory -ErrorAction SilentlyContinue)
 Check ($realMessengers.Count -ge 1) ("CONTROL: this repository has at least one messenger to check (" + $realMessengers.Count + ")")
-foreach ($h in @($realHosts + $realAgents + $realTransports + $realMessengers)) {
+$realSurfaces = @(Get-ChildItem -LiteralPath (Join-Path $root "surfaces") -Directory -ErrorAction SilentlyContinue)
+Check ($realSurfaces.Count -ge 1) ("CONTROL: this repository has at least one surface to check (" + $realSurfaces.Count + ")")
+$realRelays = @(Get-ChildItem -LiteralPath (Join-Path $root "relays") -Directory -ErrorAction SilentlyContinue)
+Check ($realRelays.Count -ge 1) ("CONTROL: this repository has at least one relay to check (" + $realRelays.Count + ")")
+foreach ($h in @($realHosts + $realAgents + $realTransports + $realMessengers + $realSurfaces + $realRelays)) {
     $port = Split-Path -Leaf (Split-Path -Parent $h.FullName)
     $np = Join-Path $h.FullName "names.txt"
     # NOT WRAPPED IN @(). Read-HordeHostTable returns its list as ONE object (`return , $rows`), so
