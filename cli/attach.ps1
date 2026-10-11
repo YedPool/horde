@@ -42,7 +42,7 @@ try {
     $private:nodeFile = Join-Path (Get-HordeHome) "node\node.json"
     if (-not (Test-Path -LiteralPath $nodeFile -PathType Leaf)) { throw ("this hub has no device id yet (" + $nodeFile + " is missing)") }
     $private:hubId = (Read-HordeNodeFile -Path $nodeFile).deviceId
-    $private:result = Invoke-HordeLocalRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -ExitWhenHubCloses
+    $private:result = Invoke-HordeLocalPipeRelay -HubId $hubId -Preamble $preamble.line -Lines $stdinLines -Output ([Console]::OpenStandardOutput()) -ExitWhenHubCloses
     if (-not $result.ok) { throw $result.reason }
 } catch {
     [Console]::Error.WriteLine("horde attach: " + $_.Exception.Message)
