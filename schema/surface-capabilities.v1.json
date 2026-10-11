@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/surface-capabilities.v1",
+  "title": "surface-capabilities v1",
+  "description": "What one surface says it can do, as data: surfaces/<name>/capabilities.json (decisions design 2026-10-06, decision 2). A surface shows a page that Horde owns - in a window, later in a file or across a link - and carries the page's requests to Horde; it knows nothing of what the page is about. Each capability is declared in the one vocabulary the host, transport and messenger capability files use - yes, no, declined or unverified - with its evidence; unverified counts as no, and a capability is yes only with evidence that was run. The list is closed: a surface declares every one, and nothing else.",
+  "type": "object",
+  "required": ["schemaVersion", "surface", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "enum": [1] },
+    "surface": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "Its folder name under surfaces/." },
+    "capabilities": {
+      "type": "object",
+      "required": ["page.local", "page.locked", "requests.closed", "push", "window.native", "picture"],
+      "additionalProperties": false,
+      "properties": {
+        "page.local": { "$ref": "#/definitions/capability", "description": "The page is loaded from folders on this machine with no web server and no listening port, so nothing else on the machine or the network can reach it." },
+        "page.locked": { "$ref": "#/definitions/capability", "description": "The page cannot leave: a navigation anywhere but the page's own folders is refused, and so is a request for a new window." },
+        "requests.closed": { "$ref": "#/definitions/capability", "description": "The page and Horde talk only through the closed list of named requests of surfaces/Port.ps1, each checked on arrival; the page is handed no object of Horde's to call." },
+        "push": { "$ref": "#/definitions/capability", "description": "Horde can hand the page a named event while it is shown, so the page redraws without being reloaded." },
+        "window.native": { "$ref": "#/definitions/capability", "description": "The surface is a window of this machine with a native handle, which a window follower can own and place beside another window." },
+        "picture": { "$ref": "#/definitions/capability", "description": "Horde can ask the surface to save a picture of the page exactly as it is drawn, so that what a person would see can be looked at without that person. Only Horde can ask: it is not one of the page's requests." }
+      }
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "support": { "type": "string", "enum": ["yes", "no", "declined", "unverified"] },
+        "evidence": { "type": "string", "pattern": "\\S", "description": "What was run or read, and when. Never blank." }
+      }
+    }
+  }
+}

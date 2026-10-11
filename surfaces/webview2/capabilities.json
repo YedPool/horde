@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "surface": "webview2",
+  "capabilities": {
+    "page.local": {
+      "support": "yes",
+      "evidence": "Every load a page makes is asked of the adapter by the engine and answered from the mounts' folders or refused; no web server is started and no port is opened. surfaces/webview2/test/test-webview2-window.ps1 opens a real hidden window on a page of its own, which uses its own files and another mount's by relative address, and reads Windows' table of listening ports for this process and every engine process under it: none listens, 2026-10-07."
+    },
+    "page.locked": {
+      "support": "yes",
+      "evidence": "A navigation to anything but a file of the start page's own mount is cancelled, every frame navigation is cancelled, a new-window request is marked handled, a download is cancelled and whatever the page asks the machine for is denied; a load of anything that is not a file of a mount is answered with a refusal; each is recorded as a refusal. surfaces/webview2/test/test-webview2-window.ps1 has a page try each in a real hidden window - an outside address, a host that only begins with its own, another mount's file, an address for another program, a frame on its own file and on an outside address, a new window, a download, the machine's place and its notices; a script, style sheet, image, font, call, beacon and event stream from outside, from the page and from a worker; five climbs out of the mounts - and finds the page where it was, each refusal recorded by the handler the engine called, and nothing arrived at a listener standing for outside, sockets included, 2026-10-07. NOT COVERED: WebRTC's own UDP was not measured; camera, microphone and clipboard asks were not tried in the real engine. The address rules are tested with no window in surfaces/webview2/test/test-webview2-surface.ps1."
+    },
+    "requests.closed": {
+      "support": "yes",
+      "evidence": "The page posts JSON text and is handed JSON text, in shapes both sides read from surfaces/bridge-messages.json. Every message goes through Invoke-HordeSurfaceRequest of surfaces/Port.ps1; a message whose source is not a file of the page's own mount is refused before that, and a page that sends more than the module's messagesPerSecond is not listened to for a second. No host object is added to the page: AddHostObjectToScript is never called (surfaces/webview2/test/test-webview2-surface.ps1 reads the adapter's syntax tree for it). In the real windows of surfaces/webview2/test/test-webview2-window.ps1 a request off the list is rejected without an echo, text posted behind the bridge is refused and recorded, the page finds no object of Horde's, a second window opened with another definition of the messages in force still talks, and 10,000 messages posted at once are recorded as one flood while the window goes on ticking, 2026-10-07."
+    },
+    "push": {
+      "support": "yes",
+      "evidence": "An event is posted to the page as one line of JSON. surfaces/webview2/test/test-webview2-window.ps1 pushes one to the open page of a real hidden window, and the page hands back the same text, another alphabet and markup included, without a reload, 2026-10-07."
+    },
+    "picture": {
+      "support": "yes",
+      "evidence": "The engine's own capture writes a PNG of the page as drawn. surfaces/webview2/test/test-webview2-window.ps1 has the real window save one while it stands where nobody sees it, and checks that it is a PNG with a size holding the page's own blocks of colour, and that a second ask while one is drawn is not taken, 2026-10-07."
+    },
+    "window.native": {
+      "support": "yes",
+      "evidence": "The surface is a top-level window of this process and hands its handle to the caller. surfaces/webview2/test/test-webview2-window.ps1 asks Windows about that handle while the window stands: it is a window, it belongs to this process, a hidden one stands at -32000,-32000 out of the taskbar, a free-standing one has its place in the taskbar, and neither took the keyboard as it appeared, 2026-10-07. That another window can own and place it is a follower's to prove, not this surface's."
+    }
+  }
+}

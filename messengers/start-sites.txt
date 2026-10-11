@@ -1,0 +1,27 @@
+# Every place code under messengers/ may start a program, run a script block or load code (remote plan
+# R21, slice 3b, merge condition 2; review of #102). tools/StartSites.ps1 finds every such site and
+# test/test-start-sites.ps1 fails on one this list does not have, and on a line no site matches. A line
+# allows ONE site, matched by file, function, kind and its exact text with white space made single.
+# Folders named test are not read.
+#
+# file | function | kind | text | why
+messengers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Tristate.ps1") | the port's loader line: core's answers
+messengers/Port.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent $PSScriptRoot) "core\Schema.ps1") | the port's loader line: core's schema reader
+messengers/Port.ps1 | Send-HordeMessengerMessage | call | & $Messenger.post $Message | the port calls the post of a messenger Register-HordeMessenger made, and no other
+messengers/Port.ps1 | Get-HordeMessengerStatus | call | & $Messenger.status $MessageId | the port calls the status of a messenger Register-HordeMessenger made, and no other
+messengers/wezfleet/Messenger.ps1 | Stop-HordeWezfleetMessengerProcess | type | [System.Diagnostics.Process] | the stop takes the one process the start made, by its handle
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | type | [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([System.Environment]::SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), (ConvertTo-HordeWezfleetMessengerCommandLine -Argv $all)) | THE ONE PROGRAM: the fixed PowerShell from the system folder, its arguments joined by the one quoting function
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | type | [System.Diagnostics.Process]::Start($psi) | THE ONE START, of the start info above
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | method | [System.Diagnostics.Process]::Start($psi) | the same start, seen as the method call it is
+messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Post parameter: a messenger registers its post as a script block, which only the port's call above runs
+messengers/Port.ps1 | Register-HordeMessenger | type | [scriptblock] | the -Status parameter, likewise
+messengers/wezfleet/Messenger.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\Home.ps1") | the messenger's loader line: Horde's home, where its body files are kept
+messengers/wezfleet/Messenger.ps1 | (top) | dot | . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "core\ModuleSettings.ps1") | the messenger's loader line: its own settings, where a person names the fleet's folder
+messengers/wezfleet/Messenger.ps1 | Send-HordeWezfleetMessengerPost | starter | Start-HordeWezfleetMessengerProcess -Argv $argv | the post's one call of the start: mail post, its arguments built as separate elements above it
+messengers/wezfleet/Messenger.ps1 | Get-HordeWezfleetMessengerStatus | starter | Start-HordeWezfleetMessengerProcess -Argv @("mail", "status", "-Id", $MessageId.Replace("-", ""), "-Json") | the status's one call of the start, its arguments fixed here
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.UseShellExecute = $false | the program is started directly, never through the shell's file associations
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.CreateNoWindow = $true | no console window
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardOutput = $true | its one line of JSON is read
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardError = $true | its errors are read into a reason
+messengers/wezfleet/Messenger.ps1 | Start-HordeWezfleetMessengerProcess | assign | $psi.RedirectStandardInput = $true | input held open and never written, so a prompt waits for the deadline instead of reading this console
+messengers/wezfleet/Messenger.ps1 | Get-HordeWezfleetMessengerDescendants | command | Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction Stop | a read of the process table, which starts nothing: it finds the processes the started command started, so a deadline stops the whole tree (review of #106, F7)

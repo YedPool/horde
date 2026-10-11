@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "claim": "A session spawned by the master without a registry label cannot be addressed by name; the first message to it fails.",
+  "metric": {
+    "what": "Sends from the master to a newly spawned helper by its tab name.",
+    "numbers": [
+      {
+        "name": "incidents",
+        "values": [
+          1
+        ]
+      },
+      {
+        "name": "firstMessageFailed",
+        "values": [
+          1
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "a report from the master, not a record"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Assign a registry label at spawn; a send to a name that is not a label fails with the nearest labels listed.",
+  "confidence": "low",
+  "whyItGeneralises": "A name that is not registered at spawn cannot be resolved by any addressing scheme; the failure is structural.",
+  "limits": "One incident, reported by the master; not independently measured."
+}

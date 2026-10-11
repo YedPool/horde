@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "claim": "With hub-and-spoke messaging the master saturates while most lanes are not working.",
+  "metric": {
+    "what": "Lanes with any session in a turn per 5-minute slot, over slots where anything was working; master's share of each hour in a turn; share of mail with the master as sender or recipient.",
+    "numbers": [
+      {
+        "name": "activeHours",
+        "values": [
+          25.8
+        ]
+      },
+      {
+        "name": "meanLanesInTurn",
+        "values": [
+          2.3
+        ]
+      },
+      {
+        "name": "lanes",
+        "values": [
+          8
+        ]
+      },
+      {
+        "name": "slotsWithOneOrNoLane",
+        "values": [
+          0.42
+        ]
+      },
+      {
+        "name": "slotsWithFourOrMore",
+        "values": [
+          0.2
+        ]
+      },
+      {
+        "name": "masterShareOfPeakHoursRange",
+        "values": [
+          0.83,
+          1.0
+        ]
+      },
+      {
+        "name": "mailWithMasterAtOneEnd",
+        "values": [
+          0.59
+        ]
+      },
+      {
+        "name": "mailLaneToLaneDirect",
+        "values": [
+          0.07
+        ]
+      },
+      {
+        "name": "mailTotal",
+        "values": [
+          1130
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "session transcripts",
+        "mail store"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Orchestrators message each other directly for facts, checks and answers, with a one-line copy to the master. Only decisions for the person, permission changes and disputes route through the master.",
+  "confidence": "medium",
+  "whyItGeneralises": "Hub-and-spoke routing makes one node the bottleneck in any message-passing system; the measure (lanes in a turn per slot, mail share at the hub) applies to any fleet with a coordinator."
+}

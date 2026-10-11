@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "horde/schema/conversation-turn.v1",
+  "title": "conversation-turn v1",
+  "description": "One turn of a Thrall's conversation, in the one shape every agent harness's adapter is turned into (relay design 2026-10-09, Q2 and PR plan item 9; conversations/Port.ps1). The port builds it - never an adapter - from what the adapter read: it checks every field, fills source from the source it located, and REDACTS the text (core/Secrets.ps1) before anything else sees it. A turn is what the founder reads: user and assistant TEXT, and a system line when the harness itself reports something to the reader (decision 8 of the design: text only; tool calls, their output and the harness's own bookkeeping are not turns). turnId is stable: the same turn read again, from any cursor, has the same turnId and the same text. groupId ties together turns the harness counts as one (one model response written as several text blocks, or one vendor turn holding several items): a reader may show a group as one bubble, and turns of one group can arrive in different reads.",
+  "type": "object",
+  "required": ["role", "text", "turnId", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "role": { "type": "string", "enum": ["user", "assistant", "system", "delivered"], "description": "user: words a person typed into the session. assistant: words the model wrote to the reader. system: a line the harness itself wrote for the reader, such as an API error. delivered: text a messenger handed to the session rather than a person typing it (a message from another session, or a founder's line from the phone); who sent it is the delivering side's to establish, never this turn's." },
+    "text": { "type": "string", "pattern": "\\S", "description": "The words, redacted: every stretch core/Secrets.ps1 finds is replaced by its marker. At most the port's turn ceiling (Get-HordeConversationCeilings textChars); a longer text is cut there and truncated is true." },
+    "time": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$", "description": "When the harness wrote it, in UTC to the millisecond. Present on every turn of an adapter that declares timestamps yes; absent, never guessed, when the harness did not say." },
+    "turnId": { "type": "string", "pattern": "^[\\x21-\\x7E]{1,200}$", "description": "The turn's own id, stable across reads: the harness's id for the item where it has one (stableTurnIds yes), else one the adapter derives from where the turn sits in its file." },
+    "groupId": { "type": "string", "pattern": "^[\\x21-\\x7E]{1,200}$", "description": "Optional. The harness's id for the response or vendor turn this turn belongs to, shared by every turn of it." },
+    "truncated": { "type": "boolean", "description": "Optional, and only ever true: the text was longer than the port's turn ceiling and was cut." },
+    "redactions": { "type": "integer", "minimum": 1, "description": "Optional: how many stretches of the text were hidden as secrets. Absent when none was." },
+    "source": {
+      "type": "object",
+      "required": ["vendor", "session", "fleet"],
+      "additionalProperties": false,
+      "properties": {
+        "vendor": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "description": "The adapter that read it: its folder name under agents/." },
+        "session": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$", "description": "The harness's session id. A new session (a cleared conversation) is a new id." },
+        "fleet": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$", "description": "The horde whose Thrall this is: one Thrall per horde." }
+      }
+    }
+  }
+}

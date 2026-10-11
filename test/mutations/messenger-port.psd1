@@ -5,6 +5,12 @@
     Target = "messengers\Port.ps1"
     Suite  = "test\test-messenger-port.ps1"
     Mutations = @(
+        @{ Name = "find-picks-one-of-several"
+           Find = 'if ($able.Count -eq 1) { return (New-HordeKnown -Value $able[0]) }'
+           Replace = 'if ($able.Count -ge 1) { return (New-HordeKnown -Value $able[0]) }' }
+        @{ Name = "find-ignores-what-is-required"
+           Find = '$missing = @($Require | Where-Object { -not (Test-HordeMessengerCapability -Messenger $m -Capability $_) }) | Select-Object -First 1'
+           Replace = '$missing = $null' }
         @{ Name = "node-requires-no-receiver-receipt"
            Find = '$script:HordeNodeMessengerRequires = @("body.untyped", "idempotent.post", "receipt.receiver")'
            Replace = '$script:HordeNodeMessengerRequires = @("body.untyped", "idempotent.post")' }

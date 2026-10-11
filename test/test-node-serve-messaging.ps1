@@ -32,6 +32,11 @@ foreach ($t in @(Get-HordeTransportFiles)) { . $t }
 . (Join-Path $root "cli\NodeAct.ps1")
 . (Join-Path $root "messengers\Port.ps1")
 foreach ($m in @(Get-HordeMessengerFiles -Root (Join-Path $root "messengers"))) { . $m }
+. (Join-Path $root "test\lib\MessengerPins.ps1")
+# PINNED (test\lib\MessengerPins.ps1): every messenger is loaded, and a messenger may find a real program
+# on its own (the wezfleet command on PATH). Under this home each has pinned itself to nothing, so no
+# case, and no child it starts, can post into a real fleet on a machine where one is installed.
+$pinned = Enter-HordeTestPinnedHome -Root $root
 
 $fx = Join-Path $root "test\fixtures\node-serve"
 $device = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -312,4 +317,5 @@ Check ("$($out.reply.result.value.stage)" -ceq "accepted") "CONTROL: with the by
 }
 Check (-not (Test-Path -LiteralPath $tmp)) "the temp root is gone"
 
+Exit-HordeTestPinnedHome -State $pinned
 Complete-HordeSuite -Success "the node delivers only past the rules' gate, journals once, reports from the journal and the messenger, and hands out mail forward only"

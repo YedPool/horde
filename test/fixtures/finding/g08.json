@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "claim": "Long-lived orchestrators carry about half a million tokens of context on every call, so trivial turns are expensive and slow.",
+  "metric": {
+    "what": "Input plus cache-read plus cache-write tokens per model call, per session with over 150 calls.",
+    "numbers": [
+      {
+        "name": "sessions",
+        "values": [
+          13
+        ]
+      },
+      {
+        "name": "meanContextTokensRange",
+        "values": [
+          331000,
+          598000
+        ]
+      },
+      {
+        "name": "masterMean",
+        "values": [
+          576000
+        ]
+      },
+      {
+        "name": "masterCalls",
+        "values": [
+          1027
+        ]
+      },
+      {
+        "name": "masterCompactions",
+        "values": [
+          2
+        ]
+      },
+      {
+        "name": "masterMailReadCalls",
+        "values": [
+          248
+        ]
+      }
+    ],
+    "countedFrom": {
+      "recordKinds": [
+        "session transcripts, per-call token usage"
+      ],
+      "window": {
+        "from": "2026-10-05T14:55Z",
+        "to": "2026-10-07T18:23Z"
+      },
+      "machine": "one Windows 11 machine; one master, 8 orchestrators, about 50 short-lived workers, one person",
+      "versions": [
+        "Windows PowerShell 5.1",
+        "agent harness as installed in the period (exact version not recorded)"
+      ]
+    }
+  },
+  "proposedChange": "Orchestrators hand over to a fresh session at a size limit, from a maintained lane-state file; batch mail so fewer calls pay for the history.",
+  "confidence": "high",
+  "whyItGeneralises": "Context carried on every call is a property of long-lived sessions on any model with per-call billing of history."
+}

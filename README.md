@@ -16,6 +16,9 @@ after the running fleet has used it for real work. Nothing here replaces anythin
 | Goblin  | a short-lived subsession doing one thing      | `goblin`   |
 | Horde   | the whole running system                      | `horde`    |
 
+Every warchief keeps one read-only fleet analyst, a goblin that measures the fleet and reports only
+to its warchief: [planning/roles/fleet-analyst.md](planning/roles/fleet-analyst.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

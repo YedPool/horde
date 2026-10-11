@@ -172,6 +172,30 @@ function Resolve-HordeMessenger {
     return (New-HordeKnown -Value $m)
 }
 
+function Find-HordeMessenger {
+    # THE ONE loaded messenger that has every capability in -Require, for a caller that names none (the
+    # decisions doorbell, decisions/Notify.ps1): it states what it needs, and whichever messenger is
+    # loaded that offers it is the answer, so a messenger that lands later is picked with no change to
+    # the caller. known: exactly one offers all. absent: none does, and the note says, for each loaded
+    # messenger, the first capability it lacks. unknown: two or more do - one is never chosen over
+    # another (core/SessionSeat.ps1 holds the same rule for two holders of a role); a caller that must
+    # pick between them names one, with Resolve-HordeMessenger.
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Require)
+    foreach ($c in $Require) { if ($script:HordeMessengerCapabilityNames -cnotcontains $c) { throw ("'" + $c + "' is not a messenger capability") } }
+    $able = New-Object System.Collections.ArrayList
+    $lacks = New-Object System.Collections.ArrayList
+    foreach ($name in @(Get-HordeMessengerNames)) {
+        $m = $script:HordeMessengers[$name]
+        $missing = @($Require | Where-Object { -not (Test-HordeMessengerCapability -Messenger $m -Capability $_) }) | Select-Object -First 1
+        if ($null -eq $missing) { [void]$able.Add($m) } else { [void]$lacks.Add($name + ": does not offer " + $missing + " (it says " + (Get-HordeMessengerSupport -Messenger $m -Capability $missing) + ")") }
+    }
+    if ($able.Count -eq 1) { return (New-HordeKnown -Value $able[0]) }
+    if ($able.Count -gt 1) { return (New-HordeUnknown -Reason ("" + $able.Count + " messengers each offer " + ($Require -join ", ") + " (" + (@($able | ForEach-Object { $_.name }) -join ", ") + "); one is never chosen over another")) }
+    $loaded = "no messenger is loaded"
+    if ($lacks.Count -gt 0) { $loaded = $lacks -join "; " }
+    return (New-HordeAbsent -Note ("no loaded messenger offers " + ($Require -join ", ") + ": " + $loaded))
+}
+
 function Resolve-HordeNodeMessenger {
     # The one way a node picks the messenger it delivers through. It requires the three capabilities
     # that make a delivery safe and its receipt true, so the in-process test messenger is never chosen.
