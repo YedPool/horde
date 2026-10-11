@@ -5,8 +5,8 @@ $HordeCommand = @{
     # 2026-10-02) and a busy background process is throttled about 7x after 3 s (core/Platform.ps1),
     # which could put a node past the hub's wait (review of PR #81, F2).
     sustained = $true
-    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly] [-Messenger <name>] | node init | node rotate-key | node pin -Hub <hub id> -HostKey <key> [-Replace] [-Transport <name>]"
-    summary = "serve: answer the hub over the local link: hello, node.info, sessions.list, session.get and request.status, and session.spawn and session.close as this node's policy allows, and messaging (session.deliver, delivery.status, mail.next, mail.receipt) (-ReadOnly: no acts); init, rotate-key, pin: this node's link key and the hub's pinned host key (enrolment, remote plan R17b)"
+    usage   = "node serve [-MaxLinks <n>] [-IdleSeconds <s>] [-ReadOnly] [-Messenger <name>] [-Dial <hub endpoint> [-Transport <name>]] | node init | node rotate-key | node pin -Hub <hub id> -HostKey <key> [-Replace] [-Transport <name>]"
+    summary = "serve: answer the hub over the local link: hello, node.info, sessions.list, session.get and request.status, and session.spawn and session.close as this node's policy allows, and messaging (session.deliver, delivery.status, mail.next, mail.receipt) (-ReadOnly: no acts); -Dial: dial the hub's listener instead and answer the same on that link, again and again (remote plan R17c); init, rotate-key, pin: this node's link key and the hub's pinned host key (enrolment, remote plan R17b)"
     run     = {
         [CmdletBinding()] param(
             [Parameter(Mandatory = $true, Position = 0)][ValidateSet("serve", "init", "rotate-key", "pin")][string]$Verb,
@@ -19,15 +19,19 @@ $HordeCommand = @{
             # The messenger a deliver goes through (messengers/<name>/), picked by the port's production
             # path; none, or one it refuses, and every deliver is refused with the reason.
             [string]$Messenger = "",
+            # serve: dial this hub endpoint instead of listening on the local link (a node behind NAT,
+            # remote plan R17c); -MaxLinks then counts dials. The endpoint's form is the transport's.
+            [string]$Dial = "",
             # pin: the hub's id and host key, as `horde hub init` printed them; -Replace a changed pin.
             [string]$Hub = "",
             [string]$HostKey = "",
             [switch]$Replace,
-            # init, rotate-key, pin: which transport's enrolment, when more than one has any.
+            # init, rotate-key, pin: which transport's enrolment, when more than one has any; serve -Dial:
+            # which transport dials, when more than one has an enrolment.
             [string]$Transport = ""
         )
         # A flag meant for another verb is refused, never silently ignored (cli/Commands.ps1, run blocks).
-        $verbFlags = @{ serve = @("MaxLinks", "IdleSeconds", "ReadOnly", "Messenger"); pin = @("Hub", "HostKey", "Replace", "Transport"); init = @("Transport"); "rotate-key" = @("Transport") }
+        $verbFlags = @{ serve = @("MaxLinks", "IdleSeconds", "ReadOnly", "Messenger", "Dial", "Transport"); pin = @("Hub", "HostKey", "Replace", "Transport"); init = @("Transport"); "rotate-key" = @("Transport") }
         foreach ($flag in @($PSBoundParameters.Keys)) { if ($flag -ne "Verb" -and $verbFlags[$Verb] -notcontains $flag) { throw ("-" + $flag + " does not belong to node " + $Verb) } }
         if ($Verb -ne "serve") {
             $root = Get-HordeRoot
@@ -59,6 +63,7 @@ $HordeCommand = @{
         foreach ($f in @(Get-HordeHostActorFiles -Root $root)) { . $f }
         if ($MaxLinks -lt 0) { throw "-MaxLinks must be 0 (serve until stopped) or more" }
         if ($IdleSeconds -lt 1) { throw "-IdleSeconds must be at least 1" }
+        if ($Transport -ne "" -and $Dial -eq "") { throw "-Transport goes with -Dial: without it, node serve listens on the local link" }
         $node = Get-HordeNode
         $platform = Get-HordeLocalPlatform
         $ns = Get-HordeLocalNamespace -DeviceId $node.deviceId -Platform $platform
@@ -98,6 +103,23 @@ $HordeCommand = @{
         if (-not $ReadOnly) {
             $messaging = New-HordeNodeMessaging -Root $root -HordeHome $hordeHome -GetView $getView -MessengerName $Messenger
             if ("$($messaging.MessengerError)" -ne "") { Write-Host ("every deliver is refused: " + $messaging.MessengerError) }
+        }
+        if ($Dial -ne "") {
+            # Which transport dials: -Transport, or the one that has an enrolment (the node's key and
+            # the hub's pin are that transport's), named by the port, never here (CONTRIBUTING 14).
+            if ($Transport -eq "") {
+                foreach ($t in @(Get-HordeEnrollmentFiles)) { . $t }
+                . (Join-Path $root "cli\Enroll.ps1")
+                $Transport = "$((Get-HordeEnrollTransport).name)"
+            }
+            $dt = Resolve-HordeLinkTransport -Name $Transport
+            if ($dt.state -cne "known") { throw ("this node cannot dial with " + $Transport + ": " + $dt.reason) }
+            Write-Host ("node " + $node.deviceId + " dialling " + $Transport + " " + $Dial)
+            $d = Invoke-HordeNodeDial -Transport $dt.value -Endpoint $Dial -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -Messaging $messaging -ReadOnly:$ReadOnly -MaxDials $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000)
+            Write-Output ("dialled " + $d.dials + " time(s); served " + $d.served + " link(s)")
+            foreach ($e in $d.endings) { Write-Output ("  " + $e) }
+            foreach ($f in $d.failures) { Write-Output ("  could not dial: " + $f) }
+            return
         }
         $r = Invoke-HordeNodeServe -Transport $localTransport -Endpoint $node.deviceId -Manifest $manifest -Namespace $ns -GetView $getView -JournalRoot $journalRoot -Act $act -MaxLinks $MaxLinks -IdleTimeoutMs ($IdleSeconds * 1000) -OnListening $say -Messaging $messaging -ReadOnly:$ReadOnly
         Write-Output ("served " + $r.served + " link(s)")
