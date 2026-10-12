@@ -265,6 +265,26 @@ $null = Reg "fixture-good" -Watch { param($s, $m, $since, $max, $ms) throw "watc
 $cx = Conn "fixture-good"
 $a = Wait-HordeRelayItems -Connection $cx -Mailbox $mb -Since 0 -TimeoutMs 10
 Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("watch broke")) "a relay whose watch throws is unknown with the reason"
+# A REFUSAL'S STATUS AND RETRY-AFTER are carried to the caller (the ADAPTER CONTRACT), so `horde relay
+# pair` can wait as long as the relay asks and say a refusal plainly (founder's first live use,
+# 2026-10-11); a value that is not a whole number in range is left out, never passed on.
+foreach ($c in @(
+        @{ what = "a 429 with its Retry-After"; status = 429; after = [long]7000; wantStatus = $true; wantAfter = $true },
+        @{ what = "a 401 with none"; status = 401; after = $null; wantStatus = $true; wantAfter = $false },
+        @{ what = "a status that is not one"; status = "429; drop"; after = [long]7000; wantStatus = $false; wantAfter = $true },
+        @{ what = "a status out of range"; status = 9999; after = $null; wantStatus = $false; wantAfter = $false },
+        @{ what = "a negative Retry-After"; status = 429; after = [long]-5; wantStatus = $true; wantAfter = $false },
+        @{ what = "a Retry-After over a day"; status = 429; after = [long]86400001; wantStatus = $true; wantAfter = $false })) {
+    $script:HordeRelays.Remove("fixture-good")
+    $script:refusal = $c
+    $null = Reg "fixture-good" -Watch { param($s, $m, $since, $max, $ms) $u = New-HordeUnknown -Reason "refused (a stand-in)"; $u | Add-Member -NotePropertyName status -NotePropertyValue $script:refusal.status; if ($null -ne $script:refusal.after) { $u | Add-Member -NotePropertyName retryAfterMs -NotePropertyValue $script:refusal.after }; return $u }
+    try { $a = Wait-HordeRelayItems -Connection (Conn "fixture-good") -Mailbox $mb -Since 0 -TimeoutMs 10 } catch { $a = New-HordeKnown -Value ("it threw: " + $_.Exception.Message) }
+    $s = $a.PSObject.Properties["status"]
+    $r = $a.PSObject.Properties["retryAfterMs"]
+    $okS = $(if ($c.wantStatus) { $null -ne $s -and $s.Value -eq $c.status } else { $null -eq $s })
+    $okR = $(if ($c.wantAfter) { $null -ne $r -and $r.Value -eq $c.after } else { $null -eq $r })
+    Check ($a.state -ceq "unknown" -and "$($a.reason)".Contains("refused (a stand-in)") -and $okS -and $okR -and (Test-HordeAnswer $a)) ("a watch refused with " + $c.what + " comes back unknown, carrying what holds (status " + $(if ($null -ne $s) { $s.Value } else { "-" }) + ", retryAfterMs " + $(if ($null -ne $r) { $r.Value } else { "-" }) + ")")
+}
 
 Write-Host ""
 Write-Host "--- the items a relay hands back are never believed ---" -ForegroundColor Cyan

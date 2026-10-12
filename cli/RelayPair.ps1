@@ -42,6 +42,17 @@
 $script:HordeRelayPairMaxRefused = 32
 # How long one watch of the pairing mailbox waits: short, so a paste is noticed within a second.
 $script:HordeRelayPairWatchMs = 1000
+# A WATCH THAT FAILED IS TRIED AGAIN AFTER 5 s, THEN 10, THEN EVERY 15 s, or after the relay's own
+# Retry-After when that is longer; one that works starts the count again. The wait is spent reading the
+# keyboard, so a paste still lands at once. Why (the founder's first live use, 2026-10-11): the hosted
+# relay answers 401 until the phone registers this machine, and a try every 1 to 6 s tripped the
+# Worker's refused-signature limit (10 a minute per key, in the hosted relay's worker limits), 429, for
+# about 90 s. Every 15 s is 4 a minute, under it.
+$script:HordeRelayPairRetryFirstMs = 5000
+$script:HordeRelayPairRetryMostMs = 15000
+# The relay's statuses that mean "it refuses this machine": not registered yet (401), and the limit
+# that refusing it trips (429). Said once, as waiting for the phone, never as the relay's raw words.
+$script:HordeRelayPairRefusedStatuses = @(401, 429)
 $script:HordeRelayPairTries = 3
 
 function New-HordeRelayPairInput {
@@ -152,6 +163,28 @@ function Receive-HordeRelayPairText {
     return [pscustomobject]@{ ok = $c.ok; reason = $c.reason; value = $c.value; spent = $spent }
 }
 
+function Get-HordeRelayPairRetryMs {
+    # How long after the -Failures-th failed watch in a row the relay is watched again (the header of
+    # this file): 5 s, 10 s, then 15 s - or -Answer's retryAfterMs, the relay's Retry-After carried by
+    # relays/Port.ps1, when that is longer.
+    param([int]$Failures, $Answer)
+    $ms = [long][System.Math]::Min([double]$script:HordeRelayPairRetryMostMs, [double]$script:HordeRelayPairRetryFirstMs * $Failures)
+    $p = $Answer.PSObject.Properties["retryAfterMs"]
+    if ($null -ne $p -and [long]$p.Value -gt $ms) { $ms = [long]$p.Value }
+    return $ms
+}
+
+function Get-HordeRelayPairDownWords {
+    # What to say of a failed watch: a relay that refuses this machine (its status, relays/Port.ps1) is
+    # waiting for the phone, in plain words; anything else is the relay's reason.
+    param($Answer, [string]$Relay)
+    $p = $Answer.PSObject.Properties["status"]
+    if ($null -ne $p -and $script:HordeRelayPairRefusedStatuses -contains $p.Value) {
+        return ("waiting for the phone to register this machine with the relay '" + $Relay + "': until it does, the relay refuses this machine, so it is asked again every 5 to 15 s; a pasted response works too")
+    }
+    return ("the relay could not be read (" + $Answer.reason + "); still waiting, and a pasted response works too")
+}
+
 function Wait-HordeRelayPairResponse {
     # Until the offer expires: watch its pairing mailbox (with -Connection) and the typed input, and
     # take the first response that completes. { ok; reason; value (Complete's) }.
@@ -159,30 +192,41 @@ function Wait-HordeRelayPairResponse {
     $cursor = [long]0
     $refused = 0
     $lastDown = ""
+    # Failed watches in a row, and when (ms) the relay is watched again (the header of this file).
+    $failures = 0
+    $retryAt = [long]0
     try {
         while ($true) {
             $now = & $Clock
             $nowMs = ConvertTo-HordeRelayRecordMs -Time $now
             if ($nowMs -gt $Offer.expiresAt) { return [pscustomobject]@{ ok = $false; reason = ("the offer expired at " + (Get-HordeRelayPairTime -Ms $Offer.expiresAt) + " with no response from the phone; nothing was enrolled. Run horde relay pair again for a new one"); value = $null } }
             $left = [int][System.Math]::Max(1, [System.Math]::Min([double]$script:HordeRelayPairWatchMs, [double]($Offer.expiresAt - $nowMs)))
+            if ($null -ne $Connection -and $nowMs -lt $retryAt) {
+                # Until the relay is watched again, the wait is spent reading the keyboard, so a paste
+                # still lands at once (review of a3cce1c: 6,691 watches in 3 s without a wait), and a
+                # line read early does not bring the next watch forward.
+                $line = Read-HordeRelayPairLine -Source $Source -TimeoutMs ([int][System.Math]::Max(1, [System.Math]::Min([double]($retryAt - $nowMs), [double]($Offer.expiresAt - $nowMs + 1))))
+                if ($null -ne $line -and $line.Trim() -cne "") {
+                    $r = Receive-HordeRelayPairText -HordeHome $HordeHome -Offer $Offer -Text $line -Label $Label -Now (& $Clock)
+                    if ($r.ok -or $r.spent) { return $r }
+                    $null = & $Say ("refused: " + $r.reason)
+                }
+                continue
+            }
             if ($null -ne $Connection) {
                 $w = Wait-HordeRelayItems -Connection $Connection -Mailbox $Offer.pairMailbox -Since $cursor -TimeoutMs ([int][System.Math]::Min([double]$left, [double]$Connection.relay.limits.maxWatchMs))
                 if ($w.state -cne "known") {
-                    # Said once per reason: a relay that stays down is not a line a second.
-                    if ($w.reason -cne $lastDown) { $null = & $Say ("the relay could not be read (" + $w.reason + "); still waiting, and a pasted response works too") }
-                    $lastDown = $w.reason
-                    # A relay that fails at once (refused, unreachable) is tried again after a watch's
-                    # length, not at once: the wait is spent reading the keyboard, so a paste still
-                    # lands (review of a3cce1c: 6,691 watches in 3 s without it).
-                    $line = Read-HordeRelayPairLine -Source $Source -TimeoutMs $left
-                    if ($null -ne $line -and $line.Trim() -cne "") {
-                        $r = Receive-HordeRelayPairText -HordeHome $HordeHome -Offer $Offer -Text $line -Label $Label -Now (& $Clock)
-                        if ($r.ok -or $r.spent) { return $r }
-                        $null = & $Say ("refused: " + $r.reason)
-                    }
+                    # Said once: a relay that stays down, or refuses with 401 and 429 in turn, is not a
+                    # line a try.
+                    $words = Get-HordeRelayPairDownWords -Answer $w -Relay $Connection.relay.name
+                    if ($words -cne $lastDown) { $null = & $Say $words }
+                    $lastDown = $words
+                    $failures++
+                    $retryAt = (ConvertTo-HordeRelayRecordMs -Time (& $Clock)) + (Get-HordeRelayPairRetryMs -Failures $failures -Answer $w)
                     continue
                 } else {
                     $lastDown = ""
+                    $failures = 0
                     foreach ($a in @($w.value.anomalies)) { $null = & $Say ("relay: " + $a) }
                     foreach ($item in @($w.value.items)) {
                         $cursor = $item.seq

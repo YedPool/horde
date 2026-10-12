@@ -131,5 +131,24 @@
         @{ Name = "deploy-origin-may-be-plain-http"
            Find = '-cnotmatch ''\Ahttps://[a-z0-9.-]+(:[0-9]{1,5})?\z'''
            Replace = '-cnotmatch ''\Ahttps?://[a-z0-9.-]+(:[0-9]{1,5})?\z''' }
+        # --- a refusal's status and Retry-After (the founder's first live use, 2026-10-11)
+        @{ Name = "refusal-status-not-carried"
+           Find = 'if ($null -ne $st -and ($st.Value -is [int]'
+           Replace = 'if ($false -and ($st.Value -is [int]' }
+        @{ Name = "refusal-status-type-unchecked"
+           Find = '($st.Value -is [int] -or $st.Value -is [long]) -and $st.Value -ge 100'
+           Replace = '$st.Value -ge 100' }
+        @{ Name = "refusal-status-range-unchecked"
+           Find = '$st.Value -ge 100 -and $st.Value -le 599'
+           Replace = '$true' }
+        @{ Name = "retry-after-not-carried"
+           Find = 'if ($null -ne $ra -and ($ra.Value -is [int]'
+           Replace = 'if ($false -and ($ra.Value -is [int]' }
+        @{ Name = "retry-after-may-be-negative"
+           Find = '$ra.Value -ge 0 -and $ra.Value -le $script:HordeRelayRetryAfterMaxMs'
+           Replace = '$ra.Value -le $script:HordeRelayRetryAfterMaxMs' }
+        @{ Name = "retry-after-unbounded"
+           Find = '$script:HordeRelayRetryAfterMaxMs = [long]86400000'
+           Replace = '$script:HordeRelayRetryAfterMaxMs = [long]::MaxValue' }
     )
 }
